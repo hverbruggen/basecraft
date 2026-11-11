@@ -824,7 +824,6 @@ fn strict_sequence_proposals_stage_invalid_batches_and_replay_one_undo_group() {
                 revision,
                 &[Op::Save {
                     path: "unsafe.fa".into(),
-                    writer: Default::default()
                 }],
                 &actor
             )

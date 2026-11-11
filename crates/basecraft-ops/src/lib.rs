@@ -32,5 +32,3 @@ mod contributions;
 #[cfg(test)]
 #[path = "../tests/support/isolated_profile.rs"]
 mod isolated_profile;
-
-pub mod writer_versions;

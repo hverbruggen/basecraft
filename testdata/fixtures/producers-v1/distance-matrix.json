@@ -1,0 +1,1 @@
+{"schema":1,"input_hash":"a3dfb8cd185a5c17128d503522147a9c58df1fd1325884c0c14330c5f07644f6","names":["a","b","c","d"],"columns":20,"model":"p","min_overlap":1,"gap_policy":"pairwise deletion; ACGTU valid; U=T","distances":[0.05,0.05,0.05,0.05,0.05,0.0],"shared_sites":[20,20,20,20,20,20],"variances":[0.002375,0.002375,0.002375,0.002375,0.002375,0.000625]}

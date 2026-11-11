@@ -90,10 +90,9 @@ fn retain_snapshot(tree: &Path, input: &Path, expected: &str) -> Result<PathBuf>
         Ok(())
     })?;
     if basecraft_io::hash_file(&snapshot)? != expected {
-        return Err(invalid(format!(
-            "alignment changed while retaining its snapshot; staged evidence remains at {}",
-            snapshot.display()
-        )));
+        return Err(crate::Error::ChangedOnDisk {
+            path: input.to_path_buf(),
+        });
     }
     Ok(snapshot)
 }
@@ -126,10 +125,7 @@ impl StagedLink {
             let run = link.evidence_run(from)?;
             let mut copied = link.clone();
             copied.source = relative_to(&link.source, to)?;
-            copied.extra.insert(
-                "analysis_run".into(),
-                serde_json::json!(relative_to(&run, to)?),
-            );
+            copied.analysis_run = Some(relative_to(&run, to)?);
             return Ok(Self {
                 snapshot: None,
                 metadata: serde_json::to_vec_pretty(&copied)?,
@@ -369,9 +365,8 @@ impl LinkEvidence for AlignmentLink {
 
     fn evidence_run(&self, tree_path: &Path) -> Result<PathBuf> {
         let name = self
-            .extra
-            .get("analysis_run")
-            .and_then(serde_json::Value::as_str)
+            .analysis_run
+            .as_deref()
             .ok_or_else(|| invalid("reference association has no artifact run"))?;
         let run = tree_path
             .parent()
@@ -496,12 +491,8 @@ impl AlignmentLinkExt for AlignmentLink {
             snapshot_hash: record.submitted_hash,
             alignment_version: version,
             inferred: true,
-            extra: [(
-                "analysis_run".into(),
-                serde_json::json!(relative_to(run.directory(), tree)?),
-            )]
-            .into_iter()
-            .collect(),
+            analysis_run: Some(relative_to(run.directory(), tree)?),
+            extra: BTreeMap::new(),
         };
         let metadata = hidden_sidecar(run.directory(), tree);
         crate::input_evidence::write_json(&metadata, &link)?;
@@ -536,6 +527,7 @@ impl AlignmentLinkExt for AlignmentLink {
             snapshot_hash,
             alignment_version: version,
             inferred,
+            analysis_run: None,
             extra: BTreeMap::new(),
         };
         let metadata = sidecar(tree);
@@ -664,10 +656,7 @@ impl AlignmentLinkExt for AlignmentLink {
         let mut link = self.clone();
         if self.schema == 2 {
             let run = self.evidence_run(from)?;
-            link.extra.insert(
-                "analysis_run".into(),
-                serde_json::json!(relative_to(&run, to)?),
-            );
+            link.analysis_run = Some(relative_to(&run, to)?);
             link.source = relative_to(&self.source, to)?;
             // Same-folder forest components share one run; no input copy.
             let metadata = hidden_sidecar(&run, to);

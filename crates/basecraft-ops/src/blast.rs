@@ -4,7 +4,6 @@ use std::path::Path;
 
 use basecraft_docs::SequenceDoc;
 use basecraft_protocol::{Feature, Strand};
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{Result, error::invalid};
@@ -38,16 +37,7 @@ pub fn suggested_alphabet(queries: &[Query]) -> &'static str {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Query {
-    pub name: String,
-    pub sequence: String,
-    #[serde(default)]
-    pub source: Value,
-}
-
-pub use basecraft_protocol::query_records::QueryPlan as Plan;
+pub use basecraft_protocol::query_records::{Query, QueryPlan as Plan};
 
 pub fn from_fasta(bytes: &[u8], source: &str) -> Result<Vec<Query>> {
     let index = basecraft_io::fasta::FastaIndex::build(bytes)?;

@@ -1,0 +1,399 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SandersonReport",
+  "type": "object",
+  "properties": {
+    "effective_settings": {
+      "$ref": "#/$defs/SandersonSettings"
+    },
+    "method": {
+      "type": "string"
+    },
+    "native_engine": {
+      "$ref": "#/$defs/SandersonEngine"
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/SandersonNode"
+      }
+    },
+    "observation_convention": {
+      "type": "string"
+    },
+    "received_parameters": true,
+    "result": {
+      "$ref": "#/$defs/SandersonResult"
+    },
+    "schema": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "source_newick": {
+      "type": "string"
+    },
+    "source_sha256": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "method",
+    "observation_convention",
+    "source_sha256",
+    "source_newick",
+    "received_parameters",
+    "effective_settings",
+    "native_engine",
+    "result",
+    "nodes"
+  ],
+  "$defs": {
+    "SandersonConstraint": {
+      "type": "object",
+      "properties": {
+        "max_age": {
+          "type": "number"
+        },
+        "min_age": {
+          "type": "number"
+        },
+        "node": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "node",
+        "min_age",
+        "max_age"
+      ]
+    },
+    "SandersonCrossValidation": {
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "log10_start": {
+          "type": "number"
+        },
+        "log10_step": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "log10_start",
+        "log10_step",
+        "count"
+      ]
+    },
+    "SandersonCvScore": {
+      "type": "object",
+      "properties": {
+        "chi_square_error": {
+          "type": "number",
+          "format": "double"
+        },
+        "lambda": {
+          "type": "number",
+          "format": "double"
+        },
+        "log10_lambda": {
+          "type": "number",
+          "format": "double"
+        },
+        "predictions": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "raw_squared_error": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "log10_lambda",
+        "lambda",
+        "raw_squared_error",
+        "chi_square_error",
+        "predictions"
+      ]
+    },
+    "SandersonEngine": {
+      "type": "object",
+      "properties": {
+        "binary_sha256": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "optimizer": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "binary_sha256",
+        "optimizer"
+      ]
+    },
+    "SandersonNode": {
+      "type": "object",
+      "properties": {
+        "age": {
+          "type": "number",
+          "format": "double"
+        },
+        "fitted_rate_per_site": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "original_length_text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "age"
+      ]
+    },
+    "SandersonPenalty": {
+      "type": "string",
+      "enum": [
+        "add",
+        "log"
+      ]
+    },
+    "SandersonResult": {
+      "type": "object",
+      "properties": {
+        "ages": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "cross_validation": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/SandersonCvScore"
+          }
+        },
+        "gradient_norm": {
+          "type": "number",
+          "format": "double"
+        },
+        "lambda": {
+          "type": "number",
+          "format": "double"
+        },
+        "objective": {
+          "type": "number",
+          "format": "double"
+        },
+        "observation_convention": {
+          "type": "string"
+        },
+        "optimizer": {
+          "type": "string"
+        },
+        "penalty": {
+          "$ref": "#/$defs/SandersonPenalty"
+        },
+        "rates_per_site": {
+          "type": "array",
+          "items": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        },
+        "root_age": {
+          "type": "number",
+          "format": "double"
+        },
+        "root_penalty": {
+          "type": "string"
+        },
+        "sites": {
+          "type": "number",
+          "format": "double"
+        },
+        "starts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SandersonStart"
+          }
+        }
+      },
+      "required": [
+        "ages",
+        "rates_per_site",
+        "objective",
+        "gradient_norm",
+        "lambda",
+        "penalty",
+        "sites",
+        "root_age",
+        "optimizer",
+        "starts",
+        "observation_convention",
+        "root_penalty"
+      ]
+    },
+    "SandersonSettings": {
+      "type": "object",
+      "properties": {
+        "branch_units": {
+          "type": "string"
+        },
+        "constraints": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SandersonConstraint"
+          }
+        },
+        "cross_validation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SandersonCrossValidation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lambda": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "max_iterations": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "max_seconds": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "penalty": {
+          "$ref": "#/$defs/SandersonPenalty"
+        },
+        "root_age": {
+          "type": "number"
+        },
+        "seed": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "sites": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "starts": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "time_unit": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "branch_units",
+        "sites",
+        "root_age",
+        "time_unit",
+        "penalty",
+        "starts",
+        "seed",
+        "constraints",
+        "max_iterations",
+        "max_seconds"
+      ]
+    },
+    "SandersonStart": {
+      "type": "object",
+      "properties": {
+        "gradient_norm": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "gradient_tolerance": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "iterations": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "objective": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "start": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "termination": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "start",
+        "termination"
+      ]
+    }
+  }
+}

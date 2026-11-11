@@ -1,8 +1,8 @@
-use basecraft_ops::{files, metadata, submission, writer_versions};
+use basecraft_ops::{files, metadata, submission};
 use std::path::Path;
 
 fn golden(format: &str, variant: &str, path: &Path, bytes: Vec<u8>) {
-    let version = writer_versions::for_path(path)[format];
+    let version = writer_versions(path)[format];
     let name = format!("{format}-{variant}-v{version}.bin");
     let target = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../testdata/fixtures/writers")
@@ -65,7 +65,7 @@ fn document_writer_bytes_require_a_version_bump() {
     }
     let mut bytes = Vec::new();
     files::write_delimitation_sidecar(&workspace, "b3:fixture", &mut bytes).unwrap();
-    golden("delimitation-sidecar", "legacy", &path, bytes);
+    golden("delimitation-sidecar", "without-base", &path, bytes);
     #[cfg(unix)]
     {
         let mut bytes = Vec::new();
@@ -220,22 +220,6 @@ fn replay_checks_saved_bytes_and_document_fingerprints() {
         .unwrap();
     drop(session);
     let entries = log::read_all(root.path()).unwrap();
-    let save = entries
-        .iter()
-        .find(|e| matches!(e.op, Op::Save { .. }))
-        .unwrap();
-    let Op::Save { writer, .. } = &save.op else {
-        unreachable!()
-    };
-    assert_eq!(writer["genbank"], 1);
-    let publication = basecraft_ops::provenance::inspect(&root.path().join("sample.gb")).unwrap();
-    assert!(
-        !serde_json::to_value(&publication)
-            .unwrap()
-            .as_object()
-            .unwrap()
-            .contains_key("writer")
-    );
     for damage_state in [false, true] {
         let replay_root = tempfile::tempdir().unwrap();
         let mut log = log::LogWriter::new(replay_root.path(), "fixture");
@@ -282,6 +266,24 @@ fn companion_record_types_round_trip_original_writer_bytes() {
     }
     check::<basecraft_protocol::companion_records::TreeSidecar>("tree-sidecar-tree-v1.bin");
     check::<basecraft_protocol::companion_records::DelimitationSidecar>(
-        "delimitation-sidecar-legacy-v1.bin",
+        "delimitation-sidecar-without-base-v1.bin",
     );
+}
+
+// Only current writer goldens are kept; the journal has no old-writer exceptions.
+fn writer_versions(path: &Path) -> std::collections::BTreeMap<String, u32> {
+    use basecraft_ops::files::Format;
+    let formats: &[(&str, u32)] = match Format::from_path(path) {
+        Ok(Format::Fasta) => &[("fasta", 1), ("gff3", 1)],
+        Ok(Format::GenBank) => &[("genbank", 1)],
+        Ok(Format::Tree) => &[("newick", 1), ("tree-sidecar", 1), ("alignment-link", 1)],
+        Ok(Format::Delimitation) => &[("spart", 1), ("delimitation-sidecar", 1)],
+        Ok(Format::Metadata) => &[("metadata-manifest", 1), ("metadata-tsv", 1)],
+        Ok(Format::Submission) => &[("submission", 1)],
+        Err(_) => &[],
+    };
+    formats
+        .iter()
+        .map(|(name, version)| ((*name).to_owned(), *version))
+        .collect()
 }

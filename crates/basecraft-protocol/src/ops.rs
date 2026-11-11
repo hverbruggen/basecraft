@@ -25,11 +25,7 @@ pub enum Op {
     CreateSequence { name: String, residues: String },
     /// Save a document. Records the hash of each file written.
     #[serde(rename = "doc.save")]
-    Save {
-        path: String,
-        #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
-        writer: std::collections::BTreeMap<String, u32>,
-    },
+    Save { path: String },
     /// Replace residues `start..end` with `residues`. Insertions and
     /// deletions are replacements with an empty side.
     #[serde(rename = "seq.replace")]

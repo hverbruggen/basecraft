@@ -230,6 +230,8 @@ pub struct AlignmentLink {
     pub alignment_version: u64,
     /// False for an explicitly associated imported tree: matching names is not inference provenance.
     pub inferred: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis_run: Option<PathBuf>,
     #[serde(default, flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
 }

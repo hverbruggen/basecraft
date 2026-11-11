@@ -14,6 +14,8 @@ pub struct QueryPlan {
     pub submitted_residues: usize,
     pub oversized: bool,
     pub records: Vec<QueryRecord>,
+    /// Omitted from the receipt copy, which retains the query hash.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub fasta: String,
     pub query_hash: String,
     pub approval_hash: String,
@@ -34,4 +36,13 @@ pub struct QueryRecord {
     pub submitted_length: usize,
     pub submitted_query_range: [usize; 2],
     pub submitted_source_ranges: Vec<Value>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Query {
+    pub name: String,
+    pub sequence: String,
+    #[serde(default)]
+    pub source: Value,
 }

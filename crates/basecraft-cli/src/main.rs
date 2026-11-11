@@ -612,6 +612,62 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     ),
                 ),
                 (
+                    "sanderson-report",
+                    schemars::schema_for!(basecraft_protocol::sanderson_records::SandersonReport),
+                ),
+                (
+                    "query-source",
+                    schemars::schema_for!(Vec<basecraft_protocol::query_records::Query>),
+                ),
+                (
+                    "haplotypes",
+                    schemars::schema_for!(basecraft_protocol::producer_records::Haplotypes),
+                ),
+                (
+                    "delimitation-progress",
+                    schemars::schema_for!(
+                        basecraft_protocol::producer_records::DelimitationProgress
+                    ),
+                ),
+                (
+                    "delimitation-report",
+                    schemars::schema_for!(basecraft_protocol::producer_records::DelimitationReport),
+                ),
+                (
+                    "mptp-failure",
+                    schemars::schema_for!(basecraft_protocol::producer_records::MptpFailure),
+                ),
+                (
+                    "blast-receipt",
+                    schemars::schema_for!(basecraft_protocol::producer_records::BlastReceipt),
+                ),
+                (
+                    "distance-matrix",
+                    schemars::schema_for!(basecraft_protocol::distance_records::DistanceMatrix),
+                ),
+                (
+                    "identified-distance-matrix",
+                    schemars::schema_for!(basecraft_protocol::distance_records::IdentifiedMatrix),
+                ),
+                (
+                    "distance-cache-header",
+                    schemars::schema_for!(basecraft_protocol::distance_records::CacheHeader),
+                ),
+                (
+                    "distance-bootstrap",
+                    schemars::schema_for!(basecraft_protocol::distance_records::BootstrapReport),
+                ),
+                (
+                    "distance-run-report",
+                    schemars::schema_for!(basecraft_protocol::distance_records::DistanceRunReport),
+                ),
+                (
+                    "distance-group-report",
+                    schemars::schema_for!(
+                        basecraft_protocol::distance_records::DistanceGroupReport
+                    ),
+                ),
+                (
                     "mafft-addition",
                     schemars::schema_for!(basecraft_protocol::producer_records::MafftAddition),
                 ),

@@ -1,5 +1,5 @@
 //! Existing saved Sanger review envelopes and embedded evidence.
-//! Data only: legacy versions, field order and unknown-field handling are unchanged.
+//! Data only; single and multi-call-set envelopes are both emitted by current writers.
 use crate::{provenance::InputReference, sanger::ReviewOp};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -69,54 +69,6 @@ pub struct ReviewSupport {
     pub extra: BTreeMap<String, serde_json::Value>,
     pub path: PathBuf,
     pub hash: String,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn writer_bytes<T: Serialize>(record: &T) -> Vec<u8> {
-        // The existing storage writer serializes through Value, whose map order
-        // is part of the captured pretty-JSON byte contract.
-        serde_json::to_vec_pretty(&serde_json::to_value(record).unwrap()).unwrap()
-    }
-
-    #[test]
-    fn captured_saved_reviews_keep_the_exact_writer_bytes() {
-        let single = include_bytes!("../../../testdata/fixtures/sanger-legacy/single.json");
-        let multi = include_bytes!("../../../testdata/fixtures/sanger-legacy/multi.json");
-        let one: SavedReview = serde_json::from_slice(single).unwrap();
-        let many: SavedCallSets = serde_json::from_slice(multi).unwrap();
-        assert_eq!(writer_bytes(&one), single);
-        assert_eq!(writer_bytes(&many), multi);
-        assert_eq!(one.version, 1);
-        assert_eq!(many.version, 2);
-        assert_eq!(many.sets.len(), 2);
-        assert!(
-            many.sets
-                .iter()
-                .any(|set| set.draft_sha256 == many.selected)
-        );
-    }
-
-    #[test]
-    fn extension_fields_and_call_set_rejection_keep_legacy_contracts() {
-        let mut one: serde_json::Value = serde_json::from_slice(include_bytes!(
-            "../../../testdata/fixtures/sanger-legacy/single.json"
-        ))
-        .unwrap();
-        one["future-review"] = serde_json::json!({"retain": [1, 2]});
-        one["evidence"]["future-evidence"] = serde_json::json!({"retain": true});
-        let typed: SavedReview = serde_json::from_value(one.clone()).unwrap();
-        assert_eq!(serde_json::to_value(typed).unwrap(), one);
-
-        let mut many: serde_json::Value = serde_json::from_slice(include_bytes!(
-            "../../../testdata/fixtures/sanger-legacy/multi.json"
-        ))
-        .unwrap();
-        many["future-envelope"] = serde_json::json!(true);
-        assert!(serde_json::from_value::<SavedCallSets>(many).is_err());
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]

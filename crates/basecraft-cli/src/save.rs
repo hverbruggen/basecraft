@@ -274,6 +274,36 @@ mod typed_error_tests {
     use super::*;
 
     #[test]
+    fn changed_input_and_record_budget_produce_distinct_codes() {
+        use basecraft_ops::links::{AlignmentLink, AlignmentLinkExt};
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source.afa");
+        let tree = root.path().join("tree.nwk");
+        std::fs::write(&source, b">a\nAC\n>b\nAT\n").unwrap();
+        std::fs::write(&tree, "(a,b);").unwrap();
+        let outputs = AlignmentLink::create(&tree, &source, &source, 0, true, None).unwrap();
+        let link = AlignmentLink::read(&tree).unwrap();
+        std::fs::write(&outputs[0], b">a\nTC\n>b\nTT\n").unwrap();
+        let changed = link
+            .checked_snapshot(&tree, &basecraft_ops::files::load_tree(&tree).unwrap().doc)
+            .unwrap_err();
+        let oversized = root.path().join("oversized.json");
+        std::fs::File::create(&oversized)
+            .unwrap()
+            .set_len((64 << 20) + 1)
+            .unwrap();
+        let limit = basecraft_ops::provenance::read_record(&oversized).unwrap_err();
+        for (error, code) in [(changed, "changed_on_disk"), (limit, "limit")] {
+            assert_eq!(error.code(), code);
+            assert_eq!(error_value(&error)["errors"][0]["code"], code);
+            assert_eq!(
+                basecraft_plugin_host::jobs::ops_error_code(&error).as_str(),
+                code
+            );
+        }
+    }
+
+    #[test]
     fn core_error_codes_survive_structured_adapters() {
         let cases = [
             (

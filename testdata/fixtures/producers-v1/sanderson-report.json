@@ -1,0 +1,122 @@
+{
+  "effective_settings": {
+    "branch_units": "substitutions_per_site",
+    "constraints": [
+      {
+        "max_age": 0.5,
+        "min_age": 0.5,
+        "node": 1
+      }
+    ],
+    "lambda": 2,
+    "max_iterations": 2000,
+    "max_seconds": 3600,
+    "penalty": "log",
+    "root_age": 1,
+    "seed": 7,
+    "sites": 953,
+    "starts": 2,
+    "time_unit": "relative units"
+  },
+  "method": "Sanderson penalized likelihood",
+  "native_engine": {
+    "binary_sha256": "fixture",
+    "name": "basecraft-sanderson-native",
+    "optimizer": "synthetic solver response",
+    "version": "0.1.0"
+  },
+  "nodes": [
+    {
+      "age": 1.0,
+      "fitted_rate_per_site": null,
+      "id": "N000001",
+      "label": "Root",
+      "original_length_text": null
+    },
+    {
+      "age": 0.5,
+      "fitted_rate_per_site": 0.1,
+      "id": "N000002",
+      "label": "Clade",
+      "original_length_text": "0.021"
+    },
+    {
+      "age": 0.0,
+      "fitted_rate_per_site": 0.2,
+      "id": "T000001",
+      "label": "A B",
+      "original_length_text": "0.011"
+    },
+    {
+      "age": 0.0,
+      "fitted_rate_per_site": 0.3,
+      "id": "T000002",
+      "label": "C",
+      "original_length_text": "0.012"
+    },
+    {
+      "age": 0.0,
+      "fitted_rate_per_site": 0.4,
+      "id": "T000003",
+      "label": "D",
+      "original_length_text": "0.03"
+    }
+  ],
+  "observation_convention": "continuous expected substitutions",
+  "received_parameters": {
+    "branch_units": "substitutions_per_site",
+    "constraints": [
+      {
+        "max_age": 0.5,
+        "min_age": 0.5,
+        "node": "Clade"
+      }
+    ],
+    "lambda": 2,
+    "penalty": "log",
+    "root_age": 1,
+    "seed": 7,
+    "sites": 953,
+    "starts": 2,
+    "time_unit": "relative units"
+  },
+  "result": {
+    "ages": [
+      1.0,
+      0.5,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "cross_validation": null,
+    "gradient_norm": 0.001,
+    "lambda": 2.0,
+    "objective": 3.5,
+    "observation_convention": "continuous expected substitutions",
+    "optimizer": "synthetic solver response",
+    "penalty": "log",
+    "rates_per_site": [
+      null,
+      0.1,
+      0.2,
+      0.3,
+      0.4
+    ],
+    "root_age": 1.0,
+    "root_penalty": "mean",
+    "sites": 953.0,
+    "starts": [
+      {
+        "gradient_norm": 0.001,
+        "gradient_tolerance": 0.001,
+        "iterations": 4,
+        "objective": 3.5,
+        "start": 0,
+        "termination": "fixture"
+      }
+    ]
+  },
+  "schema": 1,
+  "source_newick": "(('A B':0.011,C:0.012)Clade:0.021,D:0.03)Root;\n",
+  "source_sha256": "5b2fd148f41ea5ba4c456067850c2ac99eb0c276c3eb2b4a26f1ac321a3044f3"
+}

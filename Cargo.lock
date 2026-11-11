@@ -278,6 +278,7 @@ version = "0.0.0"
 dependencies = [
  "basecraft-io",
  "basecraft-platform",
+ "basecraft-protocol",
  "blake3",
  "clap",
  "rayon",

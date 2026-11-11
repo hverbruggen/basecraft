@@ -242,7 +242,6 @@ mod tests {
                 doc,
                 &[Op::Save {
                     path: "unsafe.spart".into(),
-                    writer: Default::default()
                 }]
             )
             .is_err()

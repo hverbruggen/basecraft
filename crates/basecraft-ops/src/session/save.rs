@@ -408,10 +408,7 @@ impl Session {
         let entry = self.entry(
             id,
             self.actor.clone(),
-            Op::Save {
-                path: key,
-                writer: crate::writer_versions::for_path(target),
-            },
+            Op::Save { path: key },
             OpResult {
                 hashes,
                 feature: None,

@@ -37,6 +37,8 @@ fn current_records_round_trip() {
         ("document-report", encode::<Report>, false),
         ("submission-package", encode::<SubmissionPackage>, true),
         ("submission-validation", encode::<ValidationSummary>, false),
+        ("sanger-saved-review", encode::<SavedReview>, true),
+        ("sanger-saved-call-sets", encode::<SavedCallSets>, true),
         ("sanger-request", encode::<SangerRequest>, true),
         ("sanger-execution", encode::<SangerJobRecord>, true),
         ("sanger-recovery", encode::<SangerJobRecord>, true),

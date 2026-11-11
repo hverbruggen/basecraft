@@ -379,7 +379,10 @@ fn recover_entries(
             }
             let doc = session.create_sequence_with_key(&entry.doc, name, residues)?;
             if !session.state(doc).matches_recorded(&entry.state) {
-                return Err(crate::error::invalid("created sequence state differs"));
+                return Err(crate::Error::Damaged {
+                    path: root.join("events.jsonl"),
+                    detail: "created sequence state differs".into(),
+                });
             }
             documents.insert(entry.doc.clone(), doc);
             continue;
@@ -417,10 +420,10 @@ fn recover_entries(
             }
         }
         if !session.state(doc).matches_recorded(&entry.state) {
-            return Err(crate::error::invalid(format!(
-                "recovery state differs at {}",
-                entry.id
-            )));
+            return Err(crate::Error::Damaged {
+                path: root.join("events.jsonl"),
+                detail: format!("recovery state differs at {}", entry.id),
+            });
         }
     }
     session.recovery_placement(staging.path().to_path_buf(), destination.clone());

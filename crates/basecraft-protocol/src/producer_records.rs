@@ -1,7 +1,10 @@
 //! Records emitted by the bundled analysis adapters.
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct MafftAddition {
@@ -105,4 +108,64 @@ pub struct IqtreeRecoveryArtifact {
     pub destination: PathBuf,
     pub staged: Option<PathBuf>,
     pub previous: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Haplotypes {
+    pub policy: String,
+    pub input_hash: String,
+    pub original_count: usize,
+    pub unique: Vec<(String, String)>,
+    pub members: BTreeMap<String, BTreeSet<String>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct DelimitationProgress {
+    pub completed: usize,
+    pub generation: u64,
+    pub job_id: String,
+    pub phase: String,
+    pub stage_job_id: String,
+    pub total: usize,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct DelimitationReport {
+    #[serde(flatten)]
+    pub result: crate::delimitation::DelimitationResult,
+    pub request: crate::delimitation::DelimitationRequest,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct MptpFailure {
+    pub job: crate::delimitation::JobRecord,
+    pub command: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct BlastReceipt {
+    pub schema: u32,
+    pub status: BlastStatus,
+    pub rid: String,
+    pub url: String,
+    pub query_hash: String,
+    pub approval_hash: String,
+    pub program: String,
+    pub database: String,
+    pub submitted_residues: usize,
+    pub plan: crate::query_records::QueryPlan,
+    pub request_fields: BTreeMap<String, String>,
+    pub submitted_at: String,
+    pub estimated_seconds: Option<u64>,
+    pub message: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BlastStatus {
+    Accepted,
+    Rejected,
+    Unknown,
+    Cancelled,
+    #[serde(untagged)]
+    Other(String),
 }

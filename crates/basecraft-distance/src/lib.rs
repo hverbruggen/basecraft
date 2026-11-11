@@ -251,59 +251,10 @@ struct Stats {
     search_s: f64,
     update_s: f64,
 }
-/// Triangular observed distances, in row order: (1,0), (2,0), (2,1), ... .
-/// JSON null denotes a missing value. This cache is never changed by tree inference.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct DistanceMatrix {
-    pub schema: u32,
-    pub input_hash: String,
-    pub names: Vec<String>,
-    pub columns: usize,
-    pub model: Model,
-    pub min_overlap: u64,
-    pub gap_policy: String,
-    #[serde(with = "nullable")]
-    pub distances: Vec<f64>,
-    pub shared_sites: Vec<u64>,
-    #[serde(with = "nullable")]
-    pub variances: Vec<f64>,
-}
+pub type DistanceMatrix = basecraft_protocol::distance_records::DistanceMatrix<Model>;
+type CacheHeader = basecraft_protocol::distance_records::CacheHeader<Model>;
+use basecraft_protocol::distance_records::IdentifiedMatrix;
 const CACHE_MAGIC: &[u8] = b"BASECRAFT-DISTANCES-1\n";
-#[derive(Serialize)]
-struct IdentifiedMatrix<'a> {
-    #[serde(flatten)]
-    matrix: &'a DistanceMatrix,
-    basecraft_identity: &'a serde_json::Value,
-}
-#[derive(Serialize, Deserialize)]
-struct CacheHeader {
-    schema: u32,
-    input_hash: String,
-    names: Vec<String>,
-    columns: usize,
-    model: Model,
-    min_overlap: u64,
-    gap_policy: String,
-    #[serde(default)]
-    basecraft_identity: serde_json::Value,
-}
-mod nullable {
-    use serde::{Deserialize, Deserializer, Serializer};
-    pub fn serialize<S: Serializer>(v: &[f64], s: S) -> std::result::Result<S::Ok, S::Error> {
-        use serde::ser::SerializeSeq;
-        let mut seq = s.serialize_seq(Some(v.len()))?;
-        for x in v {
-            seq.serialize_element(&x.is_finite().then_some(*x))?;
-        }
-        seq.end()
-    }
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Vec<f64>, D::Error> {
-        Ok(Vec::<Option<f64>>::deserialize(d)?
-            .into_iter()
-            .map(|x| x.unwrap_or(f64::NAN))
-            .collect())
-    }
-}
 /// Expands a triangle to a square within one allocation, mirroring in tiles so both sides
 /// of each copy stay in cache. The diagonal is zero.
 fn square_from_triangle(mut d: Vec<f64>, n: usize) -> Vec<f64> {
@@ -382,17 +333,39 @@ fn pool(threads: usize) -> Result<rayon::ThreadPool> {
         .num_threads(threads)
         .build()?)
 }
-impl DistanceMatrix {
-    pub fn calculate(
+pub trait DistanceMatrixExt: Sized {
+    fn calculate(a: &Alignment, model: Model, min_overlap: u64, threads: usize) -> Result<Self>;
+    fn calculate_retaining(
         a: &Alignment,
         model: Model,
         min_overlap: u64,
         threads: usize,
-    ) -> Result<Self> {
+        variances_needed: bool,
+    ) -> Result<Self>;
+    fn get(&self, i: usize, j: usize) -> Option<f64>;
+    fn validate(&self) -> Result<()>;
+    fn read(path: &Path) -> Result<Self>;
+    fn write(&self, path: &Path) -> Result<()>;
+    fn write_identified(&self, path: &Path, identity: &serde_json::Value) -> Result<()>;
+    fn write_compact(&self, path: &Path, identity: &serde_json::Value) -> Result<()>;
+    fn from_compact(bytes: &[u8]) -> Result<Self>;
+    fn matches(&self, a: &Alignment, model: Model, min_overlap: u64) -> bool;
+    fn export_tsv(&self, path: &Path) -> Result<()>;
+    fn export_tsv_threads(&self, path: &Path, threads: usize) -> Result<()>;
+    fn searchable_as_is(&self, method: Method) -> bool;
+    fn search(&self, d: Vec<f64>, threads: usize) -> Result<TreeResult>;
+    fn complete_upgma(&self, method: Method) -> bool;
+    fn upgma_search(&self, d: Vec<f64>) -> TreeResult;
+    fn take_tree(&mut self, method: Method, threads: usize) -> Result<TreeResult>;
+    fn tree(&self, method: Method, threads: usize) -> Result<TreeResult>;
+    fn groups(&self, assignments: &BTreeMap<String, String>) -> Result<Vec<GroupSummary>>;
+}
+impl DistanceMatrixExt for DistanceMatrix {
+    fn calculate(a: &Alignment, model: Model, min_overlap: u64, threads: usize) -> Result<Self> {
         Self::calculate_retaining(a, model, min_overlap, threads, true)
     }
     /// Without variances, the result can't be cached or used for MVR* or bootstrap.
-    pub fn calculate_retaining(
+    fn calculate_retaining(
         a: &Alignment,
         model: Model,
         min_overlap: u64,
@@ -435,15 +408,15 @@ impl DistanceMatrix {
             shared_sites,
         })
     }
-    pub fn get(&self, i: usize, j: usize) -> Option<f64> {
+    fn get(&self, i: usize, j: usize) -> Option<f64> {
         if i == j {
             return Some(0.);
         }
-        // Older caches can hold -0.
+        // Normalize signed zero for downstream text output.
         let d = self.distances[index(i, j)] + 0.;
         d.is_finite().then_some(d)
     }
-    pub fn validate(&self) -> Result<()> {
+    fn validate(&self) -> Result<()> {
         let n = self.names.len();
         let len = n
             .checked_mul(n.saturating_sub(1))
@@ -495,8 +468,8 @@ impl DistanceMatrix {
         }
         Ok(())
     }
-    /// Reads a compact cache, or a JSON cache from an earlier version or another program.
-    pub fn read(path: &Path) -> Result<Self> {
+    /// Reads either current compact or current JSON cache output.
+    fn read(path: &Path) -> Result<Self> {
         let bytes = fs::read(path)?;
         let m: Self = if bytes.starts_with(CACHE_MAGIC) {
             Self::from_compact(&bytes)?
@@ -511,11 +484,11 @@ impl DistanceMatrix {
         Ok(m)
     }
     /// Writes compact binary unless the path ends in `.json`, which stays readable by eye.
-    pub fn write(&self, path: &Path) -> Result<()> {
+    fn write(&self, path: &Path) -> Result<()> {
         self.write_identified(path, &serde_json::Value::Null)
     }
     /// `identity` is stored as given, for callers that bind a cache to its producer.
-    pub fn write_identified(&self, path: &Path, identity: &serde_json::Value) -> Result<()> {
+    fn write_identified(&self, path: &Path, identity: &serde_json::Value) -> Result<()> {
         self.validate()?;
         if self.variances.is_empty() && !self.distances.is_empty() {
             return Err("distance cache requires variances".into());
@@ -528,7 +501,7 @@ impl DistanceMatrix {
                 path,
                 &IdentifiedMatrix {
                     matrix: self,
-                    basecraft_identity: identity,
+                    basecraft_identity: identity.clone(),
                 },
             );
         }
@@ -620,18 +593,18 @@ impl DistanceMatrix {
                 .collect(),
         })
     }
-    pub fn matches(&self, a: &Alignment, model: Model, min_overlap: u64) -> bool {
+    fn matches(&self, a: &Alignment, model: Model, min_overlap: u64) -> bool {
         self.input_hash == a.hash()
             && self.model == model
             && self.min_overlap == min_overlap
             && self.gap_policy == "pairwise deletion; ACGTU valid; U=T"
     }
-    pub fn export_tsv(&self, path: &Path) -> Result<()> {
+    fn export_tsv(&self, path: &Path) -> Result<()> {
         self.export_tsv_threads(path, 1)
     }
     /// Rows are formatted in parallel and written in order, so the bytes don't depend on
     /// the worker count. Text formatting is the slowest part of exporting a large matrix.
-    pub fn export_tsv_threads(&self, path: &Path, threads: usize) -> Result<()> {
+    fn export_tsv_threads(&self, path: &Path, threads: usize) -> Result<()> {
         use std::fmt::Write as _;
         use std::io::Write as _;
         let workers = pool(threads)?;
@@ -701,7 +674,7 @@ impl DistanceMatrix {
         }
     }
     /// Takes the distances instead of copying them, for a caller that no longer needs them.
-    pub fn take_tree(&mut self, method: Method, threads: usize) -> Result<TreeResult> {
+    fn take_tree(&mut self, method: Method, threads: usize) -> Result<TreeResult> {
         self.validate()?;
         if self.searchable_as_is(method) {
             let d = std::mem::take(&mut self.distances);
@@ -713,7 +686,7 @@ impl DistanceMatrix {
         }
         self.tree(method, threads)
     }
-    pub fn tree(&self, method: Method, threads: usize) -> Result<TreeResult> {
+    fn tree(&self, method: Method, threads: usize) -> Result<TreeResult> {
         self.validate()?;
         if method == Method::Mvrstar && self.variances.is_empty() {
             return Err("MVR* requires retained variances".into());
@@ -831,7 +804,7 @@ impl DistanceMatrix {
         Ok(result)
     }
     /// Statistics use only observed finite distances. Missing comparisons are counted.
-    pub fn groups(&self, assignments: &BTreeMap<String, String>) -> Result<Vec<GroupSummary>> {
+    fn groups(&self, assignments: &BTreeMap<String, String>) -> Result<Vec<GroupSummary>> {
         self.validate()?;
         let mut groups: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
         for name in assignments.keys() {
@@ -927,28 +900,7 @@ fn length_text(x: f64) -> String {
 fn quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
-#[derive(Debug, Serialize)]
-pub struct TreeResult {
-    pub trees: Vec<String>,
-    pub components: usize,
-    pub unresolved: bool,
-    pub details: Vec<serde_json::Value>,
-}
-#[derive(Debug, Serialize)]
-pub struct GroupSummary {
-    pub group: String,
-    pub specimens: usize,
-    pub mean_within: Option<f64>,
-    pub max_within: Option<f64>,
-    pub min_between: Option<f64>,
-    pub nearest_group: Option<String>,
-    pub nearest_groups: Vec<String>,
-    pub observed_between: usize,
-    pub barcode_gap: Option<bool>,
-    pub observed_within: usize,
-    pub missing_within: usize,
-    pub missing_between: usize,
-}
+pub use basecraft_protocol::distance_records::{GroupSummary, TreeResult};
 pub fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
     use std::io::Write;
     write_atomic(path, |f| {
@@ -1434,7 +1386,7 @@ mod tests {
         assert!(!signed.0.contains("-0.0"));
     }
     #[test]
-    fn labels_from_old_negative_zero_caches_lose_the_sign() {
+    fn signed_zero_cache_labels_lose_the_sign() {
         for n in [2, 8] {
             let m = cache_with(vec![-0.; n * (n - 1) / 2]);
             for method in [Method::Sorted, Method::Upgma, Method::Njstar] {

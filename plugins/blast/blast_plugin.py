@@ -123,7 +123,7 @@ def write_receipt(path, receipt):
     temporary = path.with_name(path.name + ".tmp")
     try:
         with temporary.open("w") as stream:
-            json.dump(receipt, stream, ensure_ascii=False, allow_nan=False)
+            json.dump(receipt, stream, ensure_ascii=False, allow_nan=False, sort_keys=True)
             stream.flush()
             os.fsync(stream.fileno())
         temporary.replace(path)
