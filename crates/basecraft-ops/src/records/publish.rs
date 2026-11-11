@@ -1,6 +1,5 @@
 //! Provenance publication from a session's document history.
 use crate::error::invalid;
-use crate::session::Applied;
 use crate::{Error, Result};
 use basecraft_platform::settings::ProvenancePolicy;
 use basecraft_protocol::provenance::Publication;
@@ -16,10 +15,11 @@ pub(crate) struct History<'a> {
     pub(crate) root: &'a Path,
     pub(crate) storage_root: &'a Path,
     pub(crate) local_root: &'a Path,
-    pub(crate) events: &'a [LogEntry],
+    pub(crate) events: Vec<LogEntry>,
     pub(crate) pending: &'a [LogEntry],
     pub(crate) key: &'a str,
-    pub(crate) undo: &'a [Applied],
+    /// Every edit in effect, oldest first.
+    pub(crate) effective: Vec<basecraft_protocol::provenance::EditActivity>,
     pub(crate) origin: Option<&'a Publication>,
     pub(crate) origin_bundle: &'a Path,
     pub(crate) delimitation: bool,
@@ -372,14 +372,7 @@ impl History<'_> {
             }
             portable(event);
         }
-        let mut effective_edits: Vec<_> = self
-            .undo
-            .iter()
-            .map(|a| EditActivity {
-                id: a.entry_id.clone(),
-                operation: a.op.clone(),
-            })
-            .collect();
+        let mut effective_edits = self.effective.clone();
         if matches!(save.op, Op::ToolRun { .. }) {
             effective_edits.push(EditActivity {
                 id: save.id.clone(),

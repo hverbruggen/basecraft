@@ -58,21 +58,21 @@ impl Session {
                 "contributing activity parameters must be an object",
             ));
         }
-        for edit in edits {
-            if self.tracked
-                && !self.events.iter().any(|e| {
-                    e.id == *edit
-                        && e.doc == self.docs[id.0].key
-                        && e.actor == actor
-                        && matches!(
-                            e.op,
-                            Op::FeatureAdd { .. }
-                                | Op::FeatureUpdate { .. }
-                                | Op::TreeAddSupport { .. }
-                                | Op::SeqReplace { .. }
-                        )
-                })
-            {
+        if self.tracked {
+            let key = &self.docs[id.0].key;
+            let owned = self.events.matching(|e| {
+                edits.contains(&e.id)
+                    && e.doc == *key
+                    && e.actor == actor
+                    && matches!(
+                        e.op,
+                        Op::FeatureAdd { .. }
+                            | Op::FeatureUpdate { .. }
+                            | Op::TreeAddSupport { .. }
+                            | Op::SeqReplace { .. }
+                    )
+            })?;
+            if !edits.iter().all(|edit| owned.iter().any(|e| e.id == *edit)) {
                 return Err(invalid(
                     "activity names an unknown or differently owned edit",
                 ));

@@ -843,3 +843,35 @@ fn typing_bursts_undo_together_and_every_keystroke_recovers() {
     let gene = restored.iter().find(|p| p.ends_with("gene.fasta")).unwrap();
     assert_eq!(std::fs::read_to_string(gene).unwrap(), ">gene\nACGTTTC\n");
 }
+
+#[test]
+fn undo_reaches_a_fixed_depth_and_settled_edits_stay_in_effect() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("gene.fasta");
+    std::fs::write(&file, ">gene\nACGT\n").unwrap();
+    let mut session = Session::unlogged(dir.path());
+    let doc = session.open(&file).unwrap();
+    let edits = 12_600;
+    for i in 0..edits {
+        let residue = ["C", "G"][i % 2];
+        session
+            .apply(
+                doc,
+                Op::SeqReplace {
+                    start: 0,
+                    end: 1,
+                    residues: residue.into(),
+                },
+            )
+            .unwrap();
+    }
+    // Every edit stays in the record, undoable or not.
+    assert_eq!(session.document_record(doc).unwrap().effective.len(), edits);
+    let mut undone = 0;
+    while session.undo(doc).is_ok() {
+        undone += 1;
+    }
+    assert!((10_000..edits).contains(&undone), "{undone}");
+    // Back at the oldest undoable step, the document still differs from disk.
+    assert!(session.document_record(doc).unwrap().unsaved);
+}

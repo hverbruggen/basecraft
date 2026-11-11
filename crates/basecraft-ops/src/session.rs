@@ -29,6 +29,8 @@ mod history;
 mod open;
 use open::SavedMark;
 mod proposals;
+mod retained;
+use retained::Retained;
 #[cfg(test)]
 mod retention_tests;
 mod save;
@@ -68,6 +70,8 @@ struct Slot {
     pending_check: save_consent::PendingSaveCheck,
     undo: Vec<Applied>,
     redo: Vec<Applied>,
+    /// Edits older than the undo limit: still in effect, no longer undoable.
+    settled: Retained<basecraft_protocol::provenance::EditActivity>,
     baseline: Option<LogEntry>,
     baseline_logged: bool,
     accepted_hashes: Vec<(String, String)>,
@@ -82,6 +86,47 @@ struct Slot {
     origin_issue: Option<String>,
     origin_bundle: PathBuf,
     disk_stamp: basecraft_protocol::provenance::FileStamp,
+}
+
+/// Undo reaches back at least this many steps; older edits are settled.
+const UNDO_STEPS: usize = 10_000;
+/// Journal events kept in memory; older ones move to a temporary file.
+const EVENTS_IN_MEMORY: usize = 4_096;
+
+impl Slot {
+    /// Settle the oldest undo steps beyond the limit, whole groups at a time.
+    /// At least one step stays, so the saved mark still tells an edited
+    /// document from a clean one.
+    fn settle(&mut self) {
+        if self.undo.len() <= UNDO_STEPS + UNDO_STEPS / 4 {
+            return;
+        }
+        let mut count = self.undo.len() - UNDO_STEPS;
+        while count + 1 < self.undo.len()
+            && self.undo[count].group.is_some()
+            && self.undo[count].group == self.undo[count - 1].group
+        {
+            count += 1;
+        }
+        self.settled.extend(self.undo.drain(..count).map(|applied| {
+            basecraft_protocol::provenance::EditActivity {
+                id: applied.entry_id,
+                operation: applied.op,
+            }
+        }));
+    }
+
+    /// Every edit in effect, oldest first.
+    fn effective(&self) -> Result<Vec<basecraft_protocol::provenance::EditActivity>> {
+        let mut effective = self.settled.matching(|_| true)?;
+        effective.extend(self.undo.iter().map(|applied| {
+            basecraft_protocol::provenance::EditActivity {
+                id: applied.entry_id.clone(),
+                operation: applied.op.clone(),
+            }
+        }));
+        Ok(effective)
+    }
 }
 
 /// The typing burst the next keystroke may join: its document, actor, last
@@ -120,7 +165,7 @@ pub struct Session {
     write_publication: crate::documents::WritePublication,
     evidence_actions: Mutex<Vec<save_decision::EvidenceAction>>,
     replay_mode: ReplayMode,
-    events: Vec<LogEntry>,
+    events: Retained<LogEntry>,
     pending_baselines: Vec<LogEntry>,
     id: String,
     host: String,
@@ -150,7 +195,7 @@ impl Session {
             write_publication: crate::documents::WritePublication::Immediate,
             evidence_actions: Mutex::new(Vec::new()),
             replay_mode: ReplayMode::Live,
-            events: Vec::new(),
+            events: Retained::new(EVENTS_IN_MEMORY),
             pending_baselines: Vec::new(),
             root,
             id: ulid::Ulid::generate().to_string(),
@@ -454,10 +499,10 @@ impl Session {
             root: &self.root,
             storage_root: &self.storage_root,
             local_root: &self.local_provenance_root,
-            events: &self.events,
+            events: self.events.matching(|event| event.doc == slot.key)?,
             pending: &self.pending_baselines,
             key: &slot.key,
-            undo: &slot.undo,
+            effective: slot.effective()?,
             origin: slot.origin.as_ref(),
             origin_bundle: &slot.origin_bundle,
             delimitation: slot.content.kind() == files::Kind::Delimitation,
