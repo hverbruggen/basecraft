@@ -28,7 +28,7 @@ Item {
             verify(host.source.length > 0)
         }
         function harness() {
-            const functions = ["documentIsOpen", "retireDelimitationDocument", "requestDelimitation", "completeDelimitation"]
+            const functions = ["documentAt", "appendLegacy", "documentIsOpen", "retireDelimitationDocument", "requestDelimitation", "completeDelimitation"]
                 .map(name => host.block("function " + name + "(")).join("\n")
             return Qt.createQmlObject(`
                 import QtQuick
@@ -53,6 +53,7 @@ Item {
                     property alias keyboardTarget: editor
                     property alias lastResult: docs.lastResult
                     QtObject { id: tabs; property int currentIndex: 0 }
+                    QtObject { id: documentOpens; function track(path) { return path } function retire(token) {} }
                     QtObject {
                         id: ctl
                         signal workspaceCreated(string path)
