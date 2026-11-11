@@ -55,7 +55,10 @@ schemas-check:
     generated=$(mktemp -d)
     trap 'rm -rf "$generated"' EXIT
     cargo run --locked --offline -q -p basecraft-cli -- schemas "$generated"
-    diff -ru schemas "$generated"
+    # Hand-written docs live beside the generated files; compare only generated ones.
+    (cd "$generated" && find . -type f) | while read -r file; do
+        diff -u "schemas/$file" "$generated/$file"
+    done
 
 deny:
     cargo deny check
@@ -83,7 +86,7 @@ qml-test:
 
 # Replay tests for every operation type.
 replay:
-    cargo test -q -p basecraft-ops --test replay
+    python3 tools/isolated_tests.py -p basecraft-ops --test replay
 
 # Warm-cache headless timings. Run on the build host under its shared lock.
 bench *args:

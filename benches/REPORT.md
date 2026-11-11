@@ -8,13 +8,13 @@ and keeps the earlier three-sample shared-host results labelled `reference`.
 
 | Requirement or proxy | Result | Status |
 | --- | --- | --- |
-| Cold application start <300 ms | No target-machine cold launch measured | Unmeasured |
-| Idle application RSS <100 MB | Measurement wired into build receipt; no target receipt produced in this lane | Unmeasured |
+| Cold application start <300 ms | Offscreen software rendering on the build server, executable evicted, fresh profile: 467 ms spawn to first frame (QML loaded 442 ms after Rust main). Three samples at `74d6f68` | Missed in this proxy; desktop GPU start unmeasured |
+| Idle application RSS <100 MB | 170 MB, same offscreen process 1 s after first frame | Missed in this proxy |
 | Input to screen <16 ms | Edit 2.053 ms + first alignment frame 2.665 ms = 4.718 ms core proxy | Proxy met; end-to-end unmeasured |
 | 1 GB open to first paint <1 s | No display presentation measured | Unmeasured |
 | Constant-memory indexed browsing | Editable documents retain an owned input buffer | Not met by editable-document path; separate read-only design |
-| 100 MB core open | 49.057 ms | Headless gate met |
-| 1 GB core open | 484.610 ms | Headless gate met; first paint unmeasured |
+| 100 MB core open | 49.057 ms at `2a05000`; 61.6 ms warm and 70.6 ms with the input evicted from the page cache at `74d6f68` (three samples each) | Headless gate met |
+| 1 GB core open | 484.610 ms at `2a05000`; 634 ms warm and 768 ms evicted at `74d6f68` | Headless gate met; first paint unmeasured |
 | Compact core open / undo / save | 0.211 / 1.983 / 38.113 ms | Headless gates met |
 | 4K first frame, alignment / hidden alignment | 2.665 / 2.936 ms | Headless 16 ms gate met |
 | 4K first frame, linear / wrapped / hidden wrapped genome | 0.053 / 0.570 / 2.026 ms | Headless 16 ms gate met |
@@ -36,15 +36,21 @@ annotations. Save and Save As return a clear refusal before modifying any file.
 
 `just bench` runs the usable default scenarios; `--large` adds the 1 GB workload
 and verifies an edit and its undo outside the open timer. `just ci` runs a compact
-gross timing gate. `budgets.toml` contains absolute thresholds and relative gates;
+gross timing gate at twice the limits. `budgets.toml` contains absolute thresholds only;
 these generous regression thresholds do not replace the PRD's UI requirements.
 Configure the host's shared compile lock for isolated timing measurements.
 
-`--startup-trace` records Rust main entry, QML loading, and the first swapped
-frame. `tools/test_build.py` collects five launches and same-process idle RSS per
-rendering backend, medians and previous-build ratios. The trace excludes dynamic
-loader time, and uncontrolled filesystem caches do not qualify as a cold start.
-Offscreen test-window validation is distinct from desktop startup qualification.
+`just bench-record --cold` evicts the FASTA input with `POSIX_FADV_DONTNEED` before
+each sample and refuses the sample unless `/proc/self/io` shows the whole file read
+from storage. The build server has fast storage; a spinning disk will be slower.
+The `74d6f68` warm numbers are higher than at `2a05000`. Both runs held the
+compile lock, but the server was not otherwise idle, so I would not read the
+difference as a regression without a repeat run.
+
+`--startup` launches the real application with Qt offscreen software rendering and
+measures spawn to the first-frame trace line on the parent's clock, so loader time
+is included. Shared libraries stay in the page cache. These are proxies: no GPU,
+no window manager, no cold boot.
 
 The [draft source-storage ADR](ADR-owned-file-sources.md) recommends owned editable
 buffers and a separate investigation of lazy indexed read-only browsing. It does

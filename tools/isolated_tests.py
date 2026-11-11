@@ -3,7 +3,8 @@
 
 Tests register analysis stores in the profile. A shared profile lets one test's
 deleted temporary store change another test's save checks, so each test gets
-its own profile, state and cache folders. Extra arguments go to `cargo test`.
+its own profile, state and cache folders. Arguments select cargo test targets
+(default: the whole workspace).
 """
 from concurrent.futures import ThreadPoolExecutor
 import json
@@ -17,7 +18,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def executables(extra):
-    build = subprocess.run(["cargo", "test", "--workspace", "--no-run", "--message-format=json", *extra],
+    selection = extra or ["--workspace"]
+    build = subprocess.run(["cargo", "test", "--no-run", "--message-format=json", *selection],
                            cwd=ROOT, text=True, stdout=subprocess.PIPE, check=True)
     for row in map(json.loads, build.stdout.splitlines()):
         if row.get("reason") == "compiler-artifact" and row.get("executable") and row["profile"]["test"]:
