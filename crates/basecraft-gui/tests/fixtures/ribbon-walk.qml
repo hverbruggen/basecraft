@@ -102,6 +102,42 @@ Main {
 
     function plan() {
         const list = []
+        // A new profile is asked the first-launch questions once; answers
+        // apply at once and closing records that they were asked.
+        list.push(() => {
+            const welcome = dialog("firstLaunch").item
+            check(welcome && welcome.opened, "first launch did not ask its questions")
+            const theme = find(welcome.contentItem, i => i.objectName === "firstTheme")
+            check(theme, "first launch lost the theme question")
+            theme.activated(2)
+            check(preferenceValues.ui.theme === "dark", "theme answer not saved")
+            const notices = find(welcome.contentItem, i => i.objectName === "firstReleaseNotices")
+            check(notices && !notices.checked, "release notices must start off")
+            theme.activated(0)
+            welcome.close()
+        })
+        list.push(() => check(preferenceValues.ui.welcomed, "first launch would ask again"))
+        // One contact-details dialog: the submitter's email serves BLAST
+        // until BLAST gets its own.
+        list.push(() => { command("submission.submitter").trigger() })
+        list.push(() => {
+            const contacts = dialog("submitterDialog")
+            check(contacts.opened, "contact details did not open")
+            const field = name => find(contacts.contentItem, i => i.objectName === name)
+            for (const [name, text] of [["submitterFirstName", "Jane"], ["submitterLastName", "Doe"], ["submitterEmail", "jane@example.org"],
+                ["submitterInstitution", "Museum"], ["submitterCity", "Leiden"], ["submitterCountry", "Netherlands"]]) field(name).text = text
+            contacts.accept()
+        })
+        list.push(() => {
+            check(contactCheck.blast_contact() === "jane@example.org", "BLAST did not take the submission email")
+            command("submission.submitter").trigger()
+        })
+        list.push(() => {
+            const contacts = dialog("submitterDialog")
+            find(contacts.contentItem, i => i.objectName === "blastEmail").text = "lab@example.org"
+            contacts.accept()
+        })
+        list.push(() => check(contactCheck.blast_contact() === "lab@example.org", "BLAST email not kept separately"))
         for (const [width, scale] of sizes) {
             list.push(() => { walk.width = width; persistPreference("ribbonSizePercent", scale) })
             for (let index = 0; index < kinds.length; ++index) list.push(() => visit(index))
@@ -202,6 +238,7 @@ Main {
         list.push(() => { console.log("RIBBON_WALK passed"); Qt.quit() })
         return list
     }
+    AppOperations { id: contactCheck }
     Timer {
         interval: 30; repeat: true; running: true
         onTriggered: {

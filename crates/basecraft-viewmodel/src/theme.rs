@@ -55,6 +55,32 @@ impl Default for Theme {
 }
 
 impl Theme {
+    /// The built-in dark appearance, for users who choose dark without a
+    /// desktop theme to follow.
+    pub fn dark() -> Self {
+        let c = |s| hex(s).unwrap_or([0.5, 0.5, 0.5, 1.0]);
+        Self {
+            data_colors: None,
+            dark: true,
+            background: c("#1e1c19"),
+            surface: c("#2a2723"),
+            surface_strong: c("#36322c"),
+            foreground: c("#e8e3d8"),
+            foreground_muted: c("#a69d8f"),
+            accent: c("#e0915f"),
+            selection: c("#4a4234"),
+            muted: c("#8a7f6e"),
+            red: c("#e06c5f"),
+            orange: c("#e0915f"),
+            yellow: c("#d9b65b"),
+            green: c("#7fb48a"),
+            cyan: c("#6fb3b8"),
+            blue: c("#7f9ccf"),
+            magenta: c("#c97fa2"),
+            brown: c("#b08a62"),
+        }
+    }
+
     /// Apply an application display preference without changing scientific data.
     #[must_use]
     pub fn with_color_blind_friendly(mut self, enabled: bool) -> Self {

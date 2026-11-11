@@ -33,9 +33,31 @@ pub struct Preferences {
     pub customization: Customization,
     /// Contact details written to archive submission templates.
     pub submitter: Submitter,
+    /// Email addresses for other services, such as NCBI BLAST.
+    pub contacts: Contacts,
+}
+
+/// Email addresses for services other than GenBank submission. A service
+/// without its own address uses the submitter's email.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct Contacts {
+    pub service_emails: BTreeMap<String, String>,
+}
+
+impl Preferences {
+    /// The email to give `service`: its own, else the submitter's.
+    pub fn service_email(&self, service: &str) -> &str {
+        self.contacts
+            .service_emails
+            .get(service)
+            .filter(|email| !email.is_empty())
+            .unwrap_or(&self.submitter.email)
+    }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[allow(clippy::struct_excessive_bools)] // independent on/off preferences
 pub struct Ui {
     /// Optional data palette; its light/dark variant follows the active theme.
     pub data_color_scheme: DataColorScheme,
@@ -51,6 +73,20 @@ pub struct Ui {
     pub tick_box_size: u32,
     /// Height of number and text boxes, in pixels.
     pub input_box_height: u32,
+    /// Light, dark, or the desktop's theme.
+    pub theme: ThemeChoice,
+    /// Tell the user when a new release is out; asked at first launch.
+    pub release_notices: bool,
+    /// The first-launch questions have been answered.
+    pub welcomed: bool,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum ThemeChoice {
+    #[default]
+    FollowDesktop,
+    Light,
+    Dark,
 }
 impl Default for Ui {
     fn default() -> Self {
@@ -64,6 +100,9 @@ impl Default for Ui {
             ribbon_size_percent: 100,
             tick_box_size: 14,
             input_box_height: 20,
+            theme: ThemeChoice::FollowDesktop,
+            release_notices: false,
+            welcomed: false,
         }
     }
 }
@@ -191,6 +230,7 @@ impl Default for Preferences {
             compute: Compute::default(),
             customization: Customization::default(),
             submitter: Submitter::default(),
+            contacts: Contacts::default(),
         }
     }
 }
@@ -448,9 +488,24 @@ pub enum Change {
     RibbonCommandHidden { id: String, hidden: bool },
     ResetCustomization,
     Submitter(Box<Submitter>),
+    /// `None` makes the service use the submitter's email again.
+    ServiceEmail { service: String, email: Option<String> },
+    Theme(ThemeChoice),
+    ReleaseNotices(bool),
+    Welcomed,
 }
 impl Change {
     fn validate(&self) -> Result<(), Error> {
+        if let Self::ServiceEmail { service, email } = self {
+            if service.is_empty() || service.len() > 32 || !service.chars().all(|c| c.is_ascii_lowercase() || c == '-') {
+                return Err(Error::Invalid("invalid service name".into()));
+            }
+            if let Some(email) = email
+                && (!email.contains('@') || email.len() > 200 || email.trim() != email)
+            {
+                return Err(Error::Invalid("a service email needs an @, without surrounding spaces".into()));
+            }
+        }
         if let Self::Shortcut { id, .. }
         | Self::KeyHint { id, .. }
         | Self::RibbonCommandHidden { id, .. } = self
@@ -500,6 +555,15 @@ impl Change {
             }
             Self::ResetCustomization => prefs.customization = Customization::default(),
             Self::Submitter(v) => prefs.submitter = *v,
+            Self::ServiceEmail { service, email: Some(email) } => {
+                prefs.contacts.service_emails.insert(service, email);
+            }
+            Self::ServiceEmail { service, email: None } => {
+                prefs.contacts.service_emails.remove(&service);
+            }
+            Self::Theme(v) => prefs.ui.theme = v,
+            Self::ReleaseNotices(v) => prefs.ui.release_notices = v,
+            Self::Welcomed => prefs.ui.welcomed = true,
         }
     }
 }
@@ -749,6 +813,50 @@ mod tests {
         )
         .unwrap();
         assert!(store.load().is_err());
+    }
+
+    #[test]
+    fn service_emails_default_to_the_submitter_and_can_differ() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = store(&temp);
+        let submitter = Submitter {
+            email: "jane@example.org".into(),
+            ..Submitter::default()
+        };
+        store.update(Change::Submitter(Box::new(submitter))).unwrap();
+        assert_eq!(store.load().unwrap().service_email("blast"), "jane@example.org");
+        let lab = Change::ServiceEmail {
+            service: "blast".into(),
+            email: Some("lab@example.org".into()),
+        };
+        assert_eq!(store.update(lab).unwrap().service_email("blast"), "lab@example.org");
+        assert_eq!(store.load().unwrap().service_email("zenodo"), "jane@example.org");
+        for bad in [("blast", Some("no-at")), ("Bad Name", Some("a@b.org"))] {
+            let change = Change::ServiceEmail {
+                service: bad.0.into(),
+                email: bad.1.map(Into::into),
+            };
+            assert!(store.update(change).is_err());
+        }
+        let reset = Change::ServiceEmail {
+            service: "blast".into(),
+            email: None,
+        };
+        assert_eq!(store.update(reset).unwrap().service_email("blast"), "jane@example.org");
+    }
+
+    #[test]
+    fn first_launch_answers_persist() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = store(&temp);
+        let first = store.load().unwrap();
+        assert!(!first.ui.welcomed && !first.ui.release_notices);
+        assert_eq!(first.ui.theme, ThemeChoice::FollowDesktop);
+        store.update(Change::Theme(ThemeChoice::Dark)).unwrap();
+        store.update(Change::ReleaseNotices(true)).unwrap();
+        let answered = store.update(Change::Welcomed).unwrap();
+        assert!(answered.ui.welcomed && answered.ui.release_notices);
+        assert_eq!(answered.ui.theme, ThemeChoice::Dark);
     }
 
     #[test]

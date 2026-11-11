@@ -126,6 +126,7 @@ fn main() {
         "qml/ToolSettingsDialog.qml",
         "qml/OperationPickerDialog.qml",
         "qml/OnDemand.qml",
+        "qml/FirstLaunchDialog.qml",
         "qml/OperationParameters.qml",
         "qml/OperationParameterValue.qml",
         "qml/TextPromptDialog.qml",

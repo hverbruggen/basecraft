@@ -805,7 +805,7 @@ ApplicationWindow {
             }
         }
     }
-    OnDemand { id: preferencesWindow; sourceComponent: Component { PreferencesDialog { id: preferencesDialog; settings: preferences; commands: window.applicationCommands; defaultFontSizePoints: window.defaultFontSizePoints } } }
+    OnDemand { id: preferencesWindow; sourceComponent: Component { PreferencesDialog { id: preferencesDialog; settings: preferences; commands: window.applicationCommands; defaultFontSizePoints: window.defaultFontSizePoints; onContactDetailsRequested: window.showContacts() } } }
 
     // The one list of commands: keys, scopes, icons and why one is unavailable.
     AppCommands { id: commandList }
@@ -1509,7 +1509,7 @@ ApplicationWindow {
                         RibbonButton { commandId: "submission.open"; iconName: "open"; enabled: shell.project_dir.length > 0; onInvoked: submissionPicker.open() }
                         RibbonButton { commandId: "submission.prepare"; iconName: "edit"; tip: submissions.available ? "Rows, batch settings, reading frames, issues, package and accessions" : "Start or open a submission first"; enabled: submissions.available; onInvoked: window.showSubmission() }
                         RibbonButton { commandId: "submission.validate"; iconName: "accept"; enabled: submissions.available && !submissionJobs.busy; onInvoked: window.validateSubmission() }
-                        RibbonButton { commandId: "submission.submitter"; iconName: "project"; onInvoked: submitterDialog.show(JSON.parse(preferences.snapshot || "{}").submitter) }
+                        RibbonButton { commandId: "submission.submitter"; iconName: "project"; onInvoked: window.showContacts() }
                     }
                     Item { Layout.fillWidth: true }
                     HelpGroup {}
@@ -1634,6 +1634,7 @@ ApplicationWindow {
         sourceComponent: Component {
             SubmissionDialog {
                 id: submissionDialog
+                onContactDetailsRequested: window.showContacts()
                 document: JSON.parse(submissions.document || "null")
                 review: JSON.parse(submissions.review || '{"rows":[],"issues":[]}')
                 pkg: JSON.parse(submissions.package || "null")
@@ -1674,10 +1675,29 @@ ApplicationWindow {
             }
         }
     }
+    OnDemand { id: firstLaunch; objectName: "firstLaunch"; sourceComponent: Component { FirstLaunchDialog { settings: preferences; defaultFontSizePoints: window.defaultFontSizePoints } } }
+    // Opted in at first launch or in Preferences: ask GitHub for the latest
+    // release once per start and say if it is newer.
+    function checkRelease() {
+        const request = new XMLHttpRequest()
+        request.onreadystatechange = () => {
+            if (request.readyState !== XMLHttpRequest.DONE || request.status !== 200) return
+            const notice = preferences.release_notice(request.responseText)
+            if (notice.length) provenance.notification("", notice, "notify")
+        }
+        request.open("GET", preferences.release_url())
+        request.send()
+    }
+    // One contact-details dialog: the GenBank submitter, then other services.
+    function showContacts() {
+        const prefs = JSON.parse(preferences.snapshot || "{}")
+        submitterDialog.show(prefs.submitter, (prefs.contacts || {}).service_emails)
+    }
     SubmitterDialog {
         id: submitterDialog
-        onSaved: value => {
+        onSaved: (value, services) => {
             preferences.update("submitter", JSON.stringify(value))
+            preferences.update("serviceEmail", JSON.stringify({service: "blast", email: services.blast}))
             if (submissions.available) submissions.refresh_review()
         }
     }
@@ -2310,7 +2330,11 @@ ApplicationWindow {
     }
 
     AppOperations { id: blastBackend; onBusyChanged: if (!busy && blastWindow.item) blastWindow.item.completed() }
-    OnDemand { id: blastWindow; sourceComponent: Component { BlastDialog { id: blastDialog; backend: blastBackend; onCopyText: text => clipboard.put(text) } } }
+    OnDemand { id: blastWindow; sourceComponent: Component { BlastDialog {
+        id: blastDialog; backend: blastBackend; onCopyText: text => clipboard.put(text)
+        onSaveContact: email => preferences.update("serviceEmail", JSON.stringify({service: "blast", email: email}))
+        onContactDetailsRequested: window.showContacts()
+    } } }
     function beginBlast(mode, feature) {
         const controller = window.current
         mode = commandList.blast_source(window.alignmentOpen, mode, !window.alignmentOpen && controller.has_selection())
@@ -2712,6 +2736,8 @@ ApplicationWindow {
             if (arg("--font-size")) font.pixelSize = Number(arg("--font-size"))
         }
         loadPreferences()
+        if (preferenceValues.ui && !preferenceValues.ui.welcomed && !arg("--screenshot")) firstLaunch.dialog().open()
+        if (preferenceValues.ui && preferenceValues.ui.release_notices) checkRelease()
         updateRecentProjects(preferences.project_history())
         computeReady = true
         localCpuThreads = Math.max(1, Math.min(availableCpuThreads, localCpuThreads))

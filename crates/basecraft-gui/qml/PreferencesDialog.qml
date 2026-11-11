@@ -5,6 +5,7 @@ import org.kde.kirigami as Kirigami
 
 AppFormDialog {
     id: dialog
+    signal contactDetailsRequested
     title: "Preferences"
     standardButtons: Dialog.Close
     required property var settings
@@ -26,7 +27,7 @@ AppFormDialog {
     }
 
     Label { text: "Appearance"; font.bold: true }
-    Label { text: "Colours and the monospace font family follow the system theme. Appearance changes apply immediately."; wrapMode: Text.Wrap; Layout.fillWidth: true }
+    Label { text: "Colours follow the chosen theme; the monospace font family follows the desktop. Appearance changes apply immediately."; wrapMode: Text.Wrap; Layout.fillWidth: true }
     PreferenceSpinBox {
         objectName: "interfaceFontSize"
         Kirigami.FormData.label: "Interface font size (pt):"
@@ -47,6 +48,15 @@ AppFormDialog {
         onValueModified: dialog.change("ribbonSizePercent", value)
     }
     AppButton { objectName: "resetRibbonSize"; text: "Use default ribbon size (100%)"; onClicked: dialog.change("ribbonSizePercent", 100) }
+    AppComboBox {
+        objectName: "theme"
+        Kirigami.FormData.label: "Theme:"
+        Accessible.name: "Theme"
+        readonly property var choices: ["follow-desktop", "light", "dark"]
+        model: ["Follow the desktop", "Light", "Dark"]
+        currentIndex: Math.max(0, choices.indexOf(dialog.values.ui ? dialog.values.ui.theme : "follow-desktop"))
+        onActivated: index => dialog.change("theme", choices[index])
+    }
     PreferenceSpinBox {
         objectName: "tickBoxSize"
         Kirigami.FormData.label: "Tick box size (px):"
@@ -64,6 +74,8 @@ AppFormDialog {
         onValueModified: dialog.change("inputBoxHeight", value)
     }
     AppButton { objectName: "resetControlSizes"; text: "Use default control sizes (14 and 20 px)"; onClicked: { dialog.change("tickBoxSize", 14); dialog.change("inputBoxHeight", 20) } }
+    AppCheckBox { objectName: "releaseNotices"; text: "Tell me when a new version is out"; checked: !!dialog.values.ui && dialog.values.ui.release_notices === true; onToggled: dialog.change("releaseNotices", checked) }
+    AppButton { objectName: "contactDetails"; text: "Contact details…"; onClicked: dialog.contactDetailsRequested() }
     Label { text: "Files, provenance and recovery"; font.bold: true }
     Label { text: "These policy defaults are reserved for recovery and provenance workflows. They do not create history for existing files."; wrapMode: Text.Wrap; Layout.fillWidth: true }
     AppComboBox {

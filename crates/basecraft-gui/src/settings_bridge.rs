@@ -1,7 +1,7 @@
 //! QML boundary for the Qt-independent preferences service.
 use basecraft_platform::{
     paths::AppPaths,
-    settings::{Change, DataColorScheme, Preferences, SettingsStore},
+    settings::{Change, DataColorScheme, Preferences, SettingsStore, ThemeChoice},
 };
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::QString;
@@ -32,6 +32,13 @@ pub mod qobject {
         fn project_picker_directory(self: &AppSettings) -> QString;
         #[qinvokable]
         fn untitled_folder(self: &AppSettings, project: &QString) -> QString;
+        /// Where the latest release is described, for the release notice.
+        #[qinvokable]
+        fn release_url(self: &AppSettings) -> QString;
+        /// A notice when `response` (the latest release) is newer than this
+        /// build, else "".
+        #[qinvokable]
+        fn release_notice(self: &AppSettings, response: &QString) -> QString;
         #[qinvokable]
         fn project_is_directory(self: &AppSettings, path: &QString) -> bool;
     }
@@ -79,6 +86,27 @@ fn change(key: &str, value: &serde_json::Value) -> Result<Change, String> {
         } else {
             DataColorScheme::DesktopTheme
         }),
+        "serviceEmail" => Change::ServiceEmail {
+            service: value
+                .get("service")
+                .and_then(serde_json::Value::as_str)
+                .ok_or("serviceEmail requires a service")?
+                .into(),
+            email: match value.get("email") {
+                Some(serde_json::Value::String(email)) if !email.trim().is_empty() => {
+                    Some(email.trim().to_owned())
+                }
+                _ => None,
+            },
+        },
+        "theme" => Change::Theme(match value.as_str() {
+            Some("light") => ThemeChoice::Light,
+            Some("dark") => ThemeChoice::Dark,
+            Some("follow-desktop") => ThemeChoice::FollowDesktop,
+            _ => return Err("theme is light, dark or follow-desktop".into()),
+        }),
+        "releaseNotices" => Change::ReleaseNotices(boolean()?),
+        "welcomed" => Change::Welcomed,
         "showGc" => Change::ShowGc(boolean()?),
         "sidebarOpen" => Change::SidebarOpen(boolean()?),
         "orfMinCodons" => Change::OrfMinCodons(integer()?),
@@ -164,6 +192,14 @@ impl qobject::AppSettings {
             .directory(&load_project_history().unwrap_or_default(), &home);
         QString::from(folder.to_string_lossy().as_ref())
     }
+    fn release_url(&self) -> QString {
+        QString::from(&release_url(env!("CARGO_PKG_REPOSITORY")))
+    }
+    fn release_notice(&self, response: &QString) -> QString {
+        QString::from(
+            &release_notice(env!("CARGO_PKG_VERSION"), &response.to_string()).unwrap_or_default(),
+        )
+    }
     fn untitled_folder(&self, project: &QString) -> QString {
         let home = AppPaths::discover().ok().and_then(|paths| paths.home);
         let folder = untitled_folder(&project.to_string(), home.as_deref());
@@ -195,10 +231,63 @@ impl qobject::AppSettings {
             .map_err(|e| e.to_string())
             .and_then(|v| change(&key, &v))
             .and_then(|change| store()?.update(change).map_err(|e| e.to_string()));
-        if result.is_ok() && key == "colorBlindFriendly" {
+        if result.is_ok() && (key == "colorBlindFriendly" || key == "theme") {
             crate::appearance::preferences_changed();
         }
         self.publish(result)
+    }
+}
+
+/// GitHub's description of the latest release of `repository`.
+fn release_url(repository: &str) -> String {
+    let project = repository.trim_end_matches('/').trim_start_matches("https://github.com/");
+    format!("https://api.github.com/repos/{project}/releases/latest")
+}
+
+/// "Basecraft X is available: URL" when GitHub's latest release is newer
+/// than `current`.
+fn release_notice(current: &str, response: &str) -> Option<String> {
+    let release: serde_json::Value = serde_json::from_str(response).ok()?;
+    let tag = release["tag_name"].as_str()?;
+    let version = |text: &str| -> Option<Vec<u64>> {
+        text.trim_start_matches('v')
+            .split(['.', '-'])
+            .take(3)
+            .map(|part| part.parse().ok())
+            .collect()
+    };
+    let newer = version(tag)? > version(current)?;
+    newer.then(|| {
+        format!(
+            "Basecraft {} is available: {}",
+            tag.trim_start_matches('v'),
+            release["html_url"].as_str().unwrap_or("")
+        )
+    })
+}
+
+#[cfg(test)]
+mod release_tests {
+    use super::*;
+
+    #[test]
+    fn a_newer_release_gives_a_notice_and_others_do_not() {
+        assert_eq!(
+            release_url("https://github.com/someone/basecraft"),
+            "https://api.github.com/repos/someone/basecraft/releases/latest"
+        );
+        let release = |tag: &str| {
+            serde_json::json!({"tag_name": tag, "html_url": "https://example.org/r"}).to_string()
+        };
+        assert_eq!(
+            release_notice("0.5.0", &release("v0.6.0")).as_deref(),
+            Some("Basecraft 0.6.0 is available: https://example.org/r")
+        );
+        assert!(release_notice("0.5.0", &release("0.10.0")).is_some());
+        assert_eq!(release_notice("0.5.0", &release("v0.5.0")), None);
+        assert_eq!(release_notice("0.6.1", &release("v0.6.0")), None);
+        assert_eq!(release_notice("0.5.0", "not json"), None);
+        assert_eq!(release_notice("0.5.0", &release("nightly")), None);
     }
 }
 

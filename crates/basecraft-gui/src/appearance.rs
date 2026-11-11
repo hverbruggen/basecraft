@@ -3,7 +3,7 @@
 //! it when the desktop theme or font configuration changes, and the settings
 //! object reloads it after a preference changes. Every controller that follows
 //! it is updated on its window thread. Nothing polls.
-use basecraft_platform::paths::AppPaths;
+use basecraft_platform::{paths::AppPaths, settings::ThemeChoice};
 use basecraft_viewmodel::Theme;
 use std::{
     path::{Path, PathBuf},
@@ -47,12 +47,17 @@ impl Desktop {
     }
 }
 
-fn color_blind_at(preferences: &Path) -> bool {
+/// The colour-blind palette choice and the theme choice; unreadable
+/// preferences give the defaults.
+fn display_choices(preferences: &Path) -> (bool, ThemeChoice) {
     basecraft_platform::settings::SettingsStore::new(preferences.to_owned())
         .load()
-        .is_ok_and(|p| {
-            p.ui.data_color_scheme
-                == basecraft_platform::settings::DataColorScheme::ColorBlindFriendly
+        .map_or((false, ThemeChoice::FollowDesktop), |p| {
+            (
+                p.ui.data_color_scheme
+                    == basecraft_platform::settings::DataColorScheme::ColorBlindFriendly,
+                p.ui.theme,
+            )
         })
 }
 
@@ -72,12 +77,17 @@ impl Appearance {
     /// Colours from the desktop theme file (absent: the default theme) and the
     /// preferences file (absent or damaged: no colour-blind palette).
     fn load(desktop_theme: Option<&Path>, preferences: Option<&Path>, font: String) -> Self {
-        let color_blind = preferences.is_some_and(color_blind_at);
-        let theme = desktop_theme
-            .and_then(|folder| std::fs::read_to_string(folder.join("theme/colors.toml")).ok())
-            .map(|text| Theme::from_omarchy(&text))
-            .unwrap_or_default()
-            .with_color_blind_friendly(color_blind);
+        let (color_blind, choice) =
+            preferences.map_or((false, ThemeChoice::FollowDesktop), display_choices);
+        let theme = match choice {
+            ThemeChoice::Light => Theme::default(),
+            ThemeChoice::Dark => Theme::dark(),
+            ThemeChoice::FollowDesktop => desktop_theme
+                .and_then(|folder| std::fs::read_to_string(folder.join("theme/colors.toml")).ok())
+                .map(|text| Theme::from_omarchy(&text))
+                .unwrap_or_default(),
+        }
+        .with_color_blind_friendly(color_blind);
         Self {
             background: css(theme.background),
             foreground: css(theme.foreground),
@@ -323,6 +333,16 @@ mod tests {
             .unwrap();
         let desktop_colours = Appearance::load(Some(&desktop), Some(&preferences), "mono".into());
         assert!(desktop_colours.theme.data_colors.is_none());
+        // A chosen theme wins over the desktop's.
+        SettingsStore::new(preferences.clone())
+            .update(Change::Theme(basecraft_platform::settings::ThemeChoice::Light))
+            .unwrap();
+        let light = Appearance::load(Some(&desktop), Some(&preferences), "mono".into());
+        assert_eq!(light.theme, Theme::default());
+        SettingsStore::new(preferences.clone())
+            .update(Change::Theme(basecraft_platform::settings::ThemeChoice::Dark))
+            .unwrap();
+        assert!(Appearance::load(None, Some(&preferences), "mono".into()).theme.dark);
     }
 
     #[cfg(target_os = "linux")]

@@ -58,6 +58,7 @@ AppDialog {
     signal frameRequested(string record, int codonStart)
     signal confirmDetectedRequested
     signal undoRequested
+    signal contactDetailsRequested
     signal redoRequested
     signal exportRequested
     signal validateRequested
@@ -1028,10 +1029,11 @@ AppDialog {
                         }))
                     }
                     Label {
-                        text: "Submitter contact details are independent; set them with Export > Submitter."
+                        text: "The submitter's contact details are kept once for every submission."
                         wrapMode: Text.Wrap
                         Layout.fillWidth: true
                     }
+                    AppButton { objectName: "submissionContactDetails"; text: "Contact details…"; onClicked: dialog.contactDetailsRequested() }
                 }
             }
             ColumnLayout {

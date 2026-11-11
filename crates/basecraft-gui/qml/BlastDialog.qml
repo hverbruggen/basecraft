@@ -28,6 +28,8 @@ AppFormDialog {
     readonly property var programAlphabets: ["nucleotide", "nucleotide", "protein", "protein"]
     readonly property var programDatabases: ["nt", "nr", "nr", "nt"]
     signal copyText(string text)
+    signal saveContact(string email)
+    signal contactDetailsRequested
     required property var backend
     function show(provider, mode, isAlignment) {
         if (backend.busy) { open(); return }
@@ -148,6 +150,16 @@ AppFormDialog {
     Label {
         Layout.fillWidth: true; wrapMode: Text.Wrap; visible: contact.visible
         text: "NCBI asks API clients to include a contact email for service problems."
+    }
+    RowLayout {
+        visible: contact.visible
+        AppButton {
+            objectName: "saveBlastContact"
+            text: "Save as BLAST contact"
+            visible: contact.text.trim().indexOf("@") > 0 && contact.text.trim() !== dialog.configuredContact
+            onClicked: { dialog.saveContact(contact.text.trim()); dialog.configuredContact = contact.text.trim() }
+        }
+        AppButton { objectName: "blastContactDetails"; text: "Contact details…"; onClicked: dialog.contactDetailsRequested() }
     }
     CheckBox { id: options; text: "Search options"; enabled: !backend.busy && !dialog.submitted }
     TextField {

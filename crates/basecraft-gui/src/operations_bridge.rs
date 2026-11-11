@@ -190,8 +190,19 @@ impl qobject::AppOperations {
             QString::from("pending")
         }
     }
+    /// The email NCBI BLAST asks for: the BLAST contact in the contact
+    /// details, else the submitter's email.
     pub fn blast_contact(&self) -> QString {
-        QString::from(&std::env::var("BASECRAFT_BLAST_CONTACT_EMAIL").unwrap_or_default())
+        let email = basecraft_platform::paths::AppPaths::discover()
+            .ok()
+            .and_then(|paths| {
+                basecraft_platform::settings::SettingsStore::new(paths.preferences())
+                    .load()
+                    .ok()
+            })
+            .map(|prefs| prefs.service_email("blast").to_owned())
+            .unwrap_or_default();
+        QString::from(&email)
     }
     pub fn preview_blast(&self, queries: &QString, parameters: &QString) -> QString {
         let result = (|| -> basecraft_plugin_host::Result<_> {
