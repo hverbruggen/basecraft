@@ -402,9 +402,18 @@ pub struct OpResult {
     pub feature: Option<u32>,
 }
 
+/// Original files described by an open journal record.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SourceRecord {
+    pub root: std::path::PathBuf,
+    pub files: Vec<crate::provenance::InputReference>,
+}
+
 /// One line of the operation log.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct LogEntry {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<SourceRecord>,
     pub v: u32,
     /// ULID: unique, and sorts by time.
     pub id: String,
@@ -485,6 +494,7 @@ mod tests {
     #[test]
     fn entry_json_shape_and_roundtrip() {
         let e = LogEntry {
+            source: None,
             v: LOG_VERSION,
             id: "01JB9Q".into(),
             t: "2026-10-10T09:14:03.512Z".into(),

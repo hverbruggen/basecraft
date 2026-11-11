@@ -66,41 +66,6 @@ impl Session {
             .filter(|(_, stamp)| stamp.is_none())
             .map(|(path, _)| self.relative(path))
             .collect();
-        // Stage retained originals before returning to the interface. The staging
-        // directory shares the destination filesystem so promotion only renames.
-        let retained = if self.tracked && self.store_objects {
-            let mut ancestor = self.storage_root.as_path();
-            while !ancestor.is_dir() {
-                ancestor = ancestor.parent().ok_or_else(|| crate::Error::NotFound {
-                    path: self.storage_root.clone(),
-                })?;
-            }
-            let stage = tempfile::Builder::new()
-                .prefix(".basecraft-open-")
-                .tempdir_in(ancestor)?;
-            for (_, source, hash) in &captured.files {
-                if source.bytes().len() as u64 <= OBJECT_STORE_LIMIT {
-                    let dest = stage.path().join(hash.trim_start_matches("b3:"));
-                    basecraft_io::write_atomic(&dest, |w| w.write_all(source.bytes()))?;
-                }
-            }
-            Some(stage)
-        } else {
-            None
-        };
-        if self.tracked && !self.store_objects {
-            let mut objects = self
-                .memory_objects
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            for (_, source, hash) in &captured.files {
-                if source.bytes().len() as u64 <= OBJECT_STORE_LIMIT {
-                    objects
-                        .entry(hash.clone())
-                        .or_insert_with(|| source.clone());
-                }
-            }
-        }
         let (origin, mut origin_issue) = crate::document_record::read_origin(path, &hashes);
         if let Some(warning) = content.as_document().opening_warning() {
             origin_issue = Some(
@@ -109,6 +74,18 @@ impl Session {
             );
         }
         let kind = content.kind();
+        let source_files = captured
+            .files
+            .iter()
+            .map(|(path, _, hash)| {
+                Ok(basecraft_protocol::provenance::InputReference {
+                    path: self.relative(path),
+                    stamp: crate::input_evidence::stamp(path)?,
+                    hash: hash.clone(),
+                    extra: std::collections::BTreeMap::new(),
+                })
+            })
+            .collect::<Result<_>>()?;
         self.docs.push(Slot {
             key: key.clone(),
             content,
@@ -120,7 +97,6 @@ impl Session {
             baseline_logged: false,
             accepted_hashes: hashes.clone(),
             saved_at: Some(super::SavedMark(None)),
-            retained,
             source_stamps: captured.stamps,
             absent_sidecars,
             origin,
@@ -129,7 +105,7 @@ impl Session {
             disk_stamp,
         });
         let id = DocId(self.docs.len() - 1);
-        let entry = self.entry(
+        let mut entry = self.entry(
             id,
             self.actor.clone(),
             Op::Open { path: key },
@@ -138,53 +114,7 @@ impl Session {
                 feature: None,
             },
         );
-        let prepare = (|| -> Result<()> {
-            if self.log.is_some()
-                && let Some(stage) = &self.docs[id.0].retained
-            {
-                let baseline = serde_json::to_value(&entry)?;
-                let manifest = serde_json::to_vec_pretty(&serde_json::to_value(
-                    basecraft_protocol::records::RecoveryManifest {
-                        schema_version: 1,
-                        session: self.id.clone(),
-                        source_root: self.root.clone(),
-                        status: basecraft_protocol::records::RecoveryStatus::Unsaved,
-                        baseline,
-                        object_policy_limit: OBJECT_STORE_LIMIT,
-                        references: captured
-                            .files
-                            .iter()
-                            .filter(|(_, source, _)| {
-                                source.bytes().len() as u64 > OBJECT_STORE_LIMIT
-                            })
-                            .map(|(path, _, hash)| {
-                                Ok((
-                                    hash.clone(),
-                                    basecraft_protocol::provenance::InputReference {
-                                        path: crate::input_evidence::relative(
-                                            &self.storage_root,
-                                            &path.canonicalize()?,
-                                        )?,
-                                        stamp: crate::input_evidence::stamp(path)?,
-                                        hash: hash.clone(),
-                                        extra: std::collections::BTreeMap::new(),
-                                    },
-                                ))
-                            })
-                            .collect::<Result<_>>()?,
-                        extra: std::collections::BTreeMap::new(),
-                    },
-                )?)?;
-                basecraft_io::write_atomic(&stage.path().join("recovery.json"), |w| {
-                    w.write_all(&manifest)
-                })?;
-            }
-            Ok(())
-        })();
-        if let Err(error) = prepare {
-            self.docs.pop();
-            return Err(error);
-        }
+        entry.source.as_mut().expect("open source").files = source_files;
         self.docs[id.0].baseline = Some(entry);
         Ok((id, kind))
     }
@@ -208,31 +138,11 @@ impl Session {
                     return Err(crate::Error::ChangedOnDisk { path: path.clone() });
                 }
             }
-            if let Some(stage) = &self.docs[id.0].retained {
-                std::fs::create_dir_all(objects_dir(&self.storage_root))?;
-                for (_, hash) in &entry.result.hashes {
-                    let name = hash.trim_start_matches("b3:");
-                    let destination = objects_dir(&self.storage_root).join(name);
-                    if !destination.exists() && stage.path().join(name).exists() {
-                        std::fs::rename(stage.path().join(name), destination)?;
-                    }
-                }
-            }
-        }
-        if self.log.is_some()
-            && let Some(stage) = &self.docs[id.0].retained
-        {
-            std::fs::create_dir_all(&self.storage_root)?;
-            let manifest = stage.path().join("recovery.json");
-            if manifest.exists() && !self.storage_root.join("recovery.json").exists() {
-                std::fs::rename(manifest, self.storage_root.join("recovery.json"))?;
-            }
         }
         if !self.docs[id.0].baseline_logged {
             self.pending_baselines.push(entry);
         }
         self.docs[id.0].baseline = None;
-        self.docs[id.0].retained = None;
         Ok(())
     }
 
@@ -458,13 +368,6 @@ impl Session {
                 what: "exact input retention".into(),
                 limit: OBJECT_STORE_LIMIT,
             });
-        }
-        if self.tracked && !self.store_objects {
-            self.memory_objects
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .entry(hash.clone())
-                .or_insert_with(|| basecraft_io::Source::from_vec(bytes.to_vec()));
         }
         if self.store_objects && bytes.len() as u64 <= OBJECT_STORE_LIMIT {
             let dest = objects_dir(&self.storage_root).join(hash.trim_start_matches("b3:"));

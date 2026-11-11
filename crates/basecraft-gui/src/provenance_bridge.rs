@@ -301,37 +301,16 @@ impl qobject::AppProvenance {
                 if !entry.file_type().map_err(|e| e.to_string())?.is_dir() {
                     continue;
                 }
-                let manifest = entry.path().join("recovery.json");
-                if !manifest.is_file() {
+                if !basecraft_ops::log::log_dir(&entry.path()).is_dir() {
                     continue;
                 }
                 if sessions.len() >= 256 {
                     return Err("More than 256 recovery sessions; inspect the recovery directory with the CLI.".into());
                 }
-                let name = if std::fs::metadata(&manifest)
-                    .map_err(|e| e.to_string())?
-                    .len()
-                    <= 65536
-                {
-                    let mut bytes = Vec::new();
-                    std::fs::File::open(&manifest)
-                        .map_err(|e| e.to_string())?
-                        .take(65537)
-                        .read_to_end(&mut bytes)
-                        .map_err(|e| e.to_string())?;
-                    serde_json::from_slice::<serde_json::Value>(&bytes)
-                        .ok()
-                        .and_then(|value| {
-                            value
-                                .get("baseline")
-                                .and_then(|value| value.get("doc"))
-                                .and_then(serde_json::Value::as_str)
-                                .map(str::to_owned)
-                        })
-                        .unwrap_or_else(|| "Unreadable manifest; recovery will validate it".into())
-                } else {
-                    "Oversized manifest; recovery will validate it".into()
-                };
+                let name = basecraft_ops::log::read_all(&entry.path())
+                    .ok()
+                    .and_then(|entries| entries.first().map(|entry| entry.doc.clone()))
+                    .unwrap_or_else(|| "Damaged journal; recovery will validate it".into());
                 let path = entry.path();
                 let path = path.to_str().ok_or("Recovery path cannot be represented in this GUI; use the CLI with the native path")?;
                 sessions.push(serde_json::json!({"path": path, "id": entry.file_name().to_string_lossy(), "name": name}));

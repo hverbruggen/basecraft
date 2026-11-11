@@ -1944,6 +1944,7 @@ impl PreparedOperation {
         if self.document.is_none() && self.sequence.is_none() {
             let (actor, params) = self.tool_activity(outcome)?;
             let activity = basecraft_protocol::LogEntry {
+            source: None,
                 v: basecraft_protocol::ops::LOG_VERSION,
                 id: self.run.id().into(),
                 t: self.started.clone(),

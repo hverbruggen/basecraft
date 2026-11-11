@@ -511,7 +511,7 @@ fn main() {
             );
             assert_eq!(
                 (worker.sync_data, worker.sync_all, worker.unresolved_reads),
-                (0, 2, 0) // Original and recovery manifest are staged on the worker.
+                (0, 0, 0)
             );
             println!(
                 "GUI route {}: worker 1/{expected}, GUI 0, identical installed Session/DocId/generation/revision",

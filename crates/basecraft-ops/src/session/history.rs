@@ -8,6 +8,15 @@ use super::{
 impl Session {
     pub(super) fn entry(&self, doc: DocId, actor: Actor, op: Op, result: OpResult) -> LogEntry {
         LogEntry {
+            source: matches!(&op, Op::Open { .. } | Op::CreateSequence { .. }).then(|| {
+                basecraft_protocol::ops::SourceRecord {
+                    root: self
+                        .root
+                        .canonicalize()
+                        .unwrap_or_else(|_| self.root.clone()),
+                    files: Vec::new(),
+                }
+            }),
             v: LOG_VERSION,
             id: self.next_id(),
             t: basecraft_platform::now_rfc3339(),

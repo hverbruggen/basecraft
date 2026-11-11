@@ -16,6 +16,22 @@ fn copy(root: &Path, fixture: &str) -> PathBuf {
     target
 }
 
+fn files(root: &Path) -> std::collections::BTreeMap<PathBuf, Option<Vec<u8>>> {
+    let mut result = std::collections::BTreeMap::new();
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for entry in entries {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                result.insert(path.clone(), None);
+                result.extend(files(&path));
+            } else {
+                result.insert(path.clone(), Some(std::fs::read(path).unwrap()));
+            }
+        }
+    }
+    result
+}
+
 #[test]
 fn every_kind_reads_each_input_once() {
     let Ok(case) = std::env::var("BASECRAFT_OPEN_CASE") else {
@@ -96,6 +112,7 @@ fn every_kind_reads_each_input_once() {
     // Warm only discovery and caches. Fixture generation and Session setup are
     // excluded from open's allocation window, as in the large-file heap budget.
     Session::recoverable(&root).unwrap().open(&file).unwrap();
+    let before = files(&root);
     let mut session = Session::recoverable(&root).unwrap();
     counters::reset();
     let measurement = heap::Measurement::start().unwrap();
@@ -104,6 +121,7 @@ fn every_kind_reads_each_input_once() {
     let reads = counters::snapshot();
     assert_eq!(actual, kind);
     assert_eq!(reads.unresolved_reads, 0);
+    assert_eq!((reads.sync_all, reads.sync_data), (0, 0));
     assert_eq!(reads.reads.len(), input_count);
     let mut bytes_read = 0;
     for (path, count) in &reads.reads {
@@ -117,6 +135,17 @@ fn every_kind_reads_each_input_once() {
         "OPEN {case}: files={input_count} bytes_read={bytes_read} peak_extra_bytes={} live_extra_bytes={}",
         memory.incremental_peak_bytes,
         memory.live_bytes - memory.baseline_bytes
+    );
+    assert_eq!(
+        files(&root),
+        before,
+        "open must not write source, state or cache"
+    );
+    std::mem::forget(session); // A crash runs no Session destructor.
+    assert_eq!(
+        files(&root),
+        before,
+        "an open-only crash must leave no recovery folder"
     );
     // Same gross bound as the 100 MB test: one input copy plus decoded objects,
     // counters and fixed metadata. No second saved-form or recovery buffer.

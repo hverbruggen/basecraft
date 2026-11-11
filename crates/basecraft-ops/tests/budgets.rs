@@ -40,17 +40,12 @@ fn scenario(
         name,
         "open",
         &file,
-        (open_reads, open_reads * original_size, 0, 2),
+        (open_reads, open_reads * original_size, 0, 0),
     );
     for i in 0..3 {
         counters::reset();
         session.apply(doc, edit(i)).unwrap();
-        let expected = if i == 0 {
-            // Recovery bytes and manifest were staged by the open worker.
-            (0, 0, 1, 0)
-        } else {
-            (0, 0, 1, 0)
-        };
+        let expected = (0, 0, 1, 0);
         record(name, &format!("edit {}", i + 1), &file, expected);
     }
     counters::reset();

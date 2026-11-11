@@ -176,21 +176,15 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
 }
 
 fn recorded_source_root(root: &Path) -> Result<std::path::PathBuf> {
-    let manifest = root.join("recovery.json");
-    if !manifest.is_file() {
-        return Ok(root.to_path_buf());
-    }
-    let value: serde_json::Value =
-        serde_json::from_slice(&crate::provenance::read_record(&manifest)?)?;
-    if value["schema_version"] != 1 {
-        return Err(crate::Error::Unsupported(
-            "Unsupported recovery metadata".into(),
-        ));
-    }
-    value["source_root"]
-        .as_str()
-        .map(std::path::PathBuf::from)
-        .ok_or_else(|| crate::error::invalid("Recovery has no original source folder"))
+    let entries = log::read_all(root)?;
+    let source = entries
+        .iter()
+        .find_map(|entry| entry.source.as_ref())
+        .ok_or_else(|| crate::Error::Damaged {
+            path: root.to_path_buf(),
+            detail: "Recovery journal has no source record".into(),
+        })?;
+    Ok(root.join(&source.root))
 }
 
 /// Put each recorded input into `work` under its project-relative path.

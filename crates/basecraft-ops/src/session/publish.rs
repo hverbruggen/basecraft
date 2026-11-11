@@ -327,18 +327,8 @@ impl Session {
                 }
                 let mut source =
                     objects_dir(&self.storage_root).join(hash.trim_start_matches("b3:"));
-                if !self.store_objects {
-                    let objects = self
-                        .memory_objects
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    let bytes = objects
-                        .get(hash)
-                        .ok_or_else(|| invalid("original input snapshot unavailable"))?;
-                    source = bundle
-                        .join("artifacts")
-                        .join(hash.trim_start_matches("b3:"));
-                    basecraft_io::write_atomic(&source, |w| w.write_all(bytes.bytes()))?;
+                if !source.is_file() {
+                    source = self.resolve(key);
                 }
                 inputs.push(retain(
                     &source,
@@ -354,18 +344,8 @@ impl Session {
         }
         for (key, hash) in analysis_inputs {
             let mut source = objects_dir(&self.storage_root).join(hash.trim_start_matches("b3:"));
-            if !self.store_objects {
-                let objects = self
-                    .memory_objects
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                let bytes = objects
-                    .get(hash)
-                    .ok_or_else(|| invalid("submitted input snapshot unavailable"))?;
-                source = bundle
-                    .join("artifacts")
-                    .join(hash.trim_start_matches("b3:"));
-                basecraft_io::write_atomic(&source, |w| w.write_all(bytes.bytes()))?;
+            if !source.is_file() {
+                source = self.resolve(key);
             }
             inputs.push(retain(
                 &source,
@@ -419,6 +399,9 @@ impl Session {
                 event.actor = Actor::Human {
                     user: "redacted".into(),
                 };
+            }
+            if let Some(source) = &mut event.source {
+                source.root = PathBuf::from(".");
             }
             match &mut event.op {
                 Op::Open { path } | Op::Save { path } => path.clone_from(&event.doc),

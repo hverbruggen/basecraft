@@ -2001,6 +2001,16 @@
         "session": {
           "type": "string"
         },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceRecord"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "state": {
           "$ref": "#/$defs/DocState"
         },
@@ -3936,6 +3946,25 @@
       "required": [
         "document",
         "hash"
+      ]
+    },
+    "SourceRecord": {
+      "description": "Original files described by an open journal record.",
+      "type": "object",
+      "properties": {
+        "files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InputReference"
+          }
+        },
+        "root": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "root",
+        "files"
       ]
     },
     "SpreadsheetMapping": {
