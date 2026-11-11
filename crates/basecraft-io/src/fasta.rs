@@ -54,7 +54,7 @@ pub fn summary(path: &Path) -> Result<Summary> {
 
 // Shared by the index builder and streaming summary. Retain only enough line
 // state to apply the index's syntax, without buffering a line or a header.
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
 struct LineScan {
     first: Option<u8>,
     bytes: u64,
@@ -296,7 +296,11 @@ impl IndexBuilder {
                 }
                 self.line.bytes += fragment.len() as u64;
             } else {
-                self.line.push(fragment);
+                // A local copy keeps the per-byte state in registers; updating
+                // it through `self` cost about a quarter of FASTA open time.
+                let mut line = self.line;
+                line.push(fragment);
+                self.line = line;
             }
             if end == bytes.len() {
                 break;
