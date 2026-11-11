@@ -380,10 +380,75 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
             }
         }
         if let Some(workflow) = &descriptor.host_workflow
-            && (plugin != "basecraft.host"
-                || crate::delimitation_pipeline::workflow_fit(workflow).is_none())
+            && crate::delimitation_pipeline::workflow_fit(workflow).is_none()
         {
-            return Err(invalid("unsupported or unreserved host workflow"));
+            return Err(invalid("unsupported host workflow"));
+        }
+        if let Some(host) = &descriptor.host {
+            if host
+                .verify_inputs
+                .iter()
+                .any(|name| !descriptor.inputs.contains_key(name))
+            {
+                return Err(invalid("verified input is not a declared binding"));
+            }
+            if host
+                .ambient_credentials
+                .iter()
+                .any(|name| !descriptor.credentials.contains_key(name))
+            {
+                return Err(invalid("ambient credential is not declared"));
+            }
+            if host
+                .caller
+                .as_deref()
+                .is_some_and(|caller| caller != "single_trace")
+            {
+                return Err(invalid("unsupported caller service"));
+            }
+            for rule in &host.tree_support {
+                use basecraft_protocol::operation::ParameterCondition;
+                let parameter = match &rule.when {
+                    None => continue,
+                    Some(
+                        ParameterCondition::Equals { parameter, .. }
+                        | ParameterCondition::Positive { parameter },
+                    ) => parameter,
+                };
+                if !properties.contains_key(parameter) {
+                    return Err(invalid("tree support condition is not a parameter"));
+                }
+            }
+        }
+        if let Some(workflow) = &descriptor.host_workflow {
+            let stages = descriptor
+                .host
+                .as_ref()
+                .map(|host| &host.workflow_operations)
+                .ok_or_else(|| invalid("host workflow needs declared stage operations"))?;
+            for stage in ["prepare", "fit"]
+                .into_iter()
+                .chain((workflow != "asap_alignment").then_some("tree"))
+            {
+                let id = stages
+                    .get(stage)
+                    .ok_or_else(|| invalid("host workflow is missing a stage operation"))?;
+                let (package, local) = id
+                    .split_once('/')
+                    .ok_or_else(|| invalid("invalid workflow operation id"))?;
+                validate_plugin_id(package)?;
+                let (name, version) = local
+                    .split_once('@')
+                    .ok_or_else(|| invalid("workflow operation needs a major version"))?;
+                if !valid_name(name)
+                    || version
+                        .parse::<u16>()
+                        .ok()
+                        .is_none_or(|n| !(1..=9999).contains(&n))
+                {
+                    return Err(invalid("invalid workflow operation id"));
+                }
+            }
         }
         if let Some(adapter) = &descriptor.legacy_adapter {
             if adapter

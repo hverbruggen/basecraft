@@ -55,51 +55,28 @@ pub(crate) fn register_task_cancellation(
     CancellationRegistration(id)
 }
 
-/// Known producer support semantics, which must win over numeric-range guesses.
-/// `package` and `implementation` name the plugin and its operation.
-pub(crate) fn producer_support(
-    package: &str,
-    implementation: &str,
+/// Producer-declared support semantics win over numeric-range guesses.
+pub(crate) fn producer_support<'a>(
+    descriptor: &'a basecraft_protocol::operation::OperationDescriptor,
     params: &serde_json::Value,
-) -> Option<(&'static str, basecraft_protocol::SupportKind)> {
-    if implementation != "tree" {
-        return None;
-    }
-    match package {
-        "basecraft.distance"
-            if params
-                .get("bootstrap")
+) -> Option<(&'a str, basecraft_protocol::SupportKind)> {
+    use basecraft_protocol::operation::ParameterCondition;
+    descriptor
+        .host
+        .as_ref()?
+        .tree_support
+        .iter()
+        .find(|rule| match &rule.when {
+            None => true,
+            Some(ParameterCondition::Equals { parameter, value }) => {
+                params.get(parameter) == Some(value)
+            }
+            Some(ParameterCondition::Positive { parameter }) => params
+                .get(parameter)
                 .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0)
-                > 0 =>
-        {
-            Some(("Bootstrap", basecraft_protocol::SupportKind::Bootstrap))
-        }
-        "basecraft.fasttree" => Some((
-            "SH-like local support",
-            basecraft_protocol::SupportKind::Probability,
-        )),
-        "basecraft.iqtree" => iqtree_support(params.get("support")),
-        _ => None,
-    }
-}
-
-/// The built-in IQ-TREE form permits one support method per run. Both IQ-TREE
-/// bootstrap variants write percentages; their names preserve the distinction.
-fn iqtree_support(
-    selected: Option<&serde_json::Value>,
-) -> Option<(&'static str, basecraft_protocol::SupportKind)> {
-    match selected.and_then(serde_json::Value::as_str) {
-        Some("ufboot") => Some((
-            "Ultrafast bootstrap (UFBoot)",
-            basecraft_protocol::SupportKind::Bootstrap,
-        )),
-        Some("bootstrap") => Some((
-            "Standard bootstrap",
-            basecraft_protocol::SupportKind::Bootstrap,
-        )),
-        _ => None,
-    }
+                .is_some_and(|n| n > 0),
+        })
+        .map(|rule| (rule.name.as_str(), rule.kind))
 }
 
 /// Persist producer semantics only when the parsed tree has exactly one support
@@ -199,6 +176,46 @@ mod tests {
         assert_eq!(
             output_beside(&file, "mafft", "fasta"),
             dir.path().join("rbcL.mafft-2.fasta")
+        );
+    }
+}
+
+#[cfg(test)]
+mod descriptor_tests {
+    use super::*;
+    use basecraft_protocol::{SupportKind, operation::OperationContract};
+    use serde_json::json;
+
+    #[test]
+    fn support_semantics_follow_contract_for_any_package() {
+        let contract: OperationContract =
+            serde_json::from_str(include_str!("../../../plugins/distance/operations.json"))
+                .unwrap();
+        crate::contract::validate_contract("example.scientific-tool", &contract).unwrap();
+        let descriptor = contract
+            .operations
+            .iter()
+            .find(|op| op.name == "tree")
+            .unwrap();
+        assert_eq!(
+            producer_support(descriptor, &json!({"bootstrap": 10})),
+            Some(("Bootstrap", SupportKind::Bootstrap))
+        );
+        assert_eq!(producer_support(descriptor, &json!({"bootstrap": 0})), None);
+        let contract: OperationContract =
+            serde_json::from_str(include_str!("../../../plugins/iqtree/operations.json")).unwrap();
+        let descriptor = &contract.operations[0];
+        assert_eq!(
+            producer_support(descriptor, &json!({"support":"ufboot"})),
+            Some(("Ultrafast bootstrap (UFBoot)", SupportKind::Bootstrap))
+        );
+        assert_eq!(
+            producer_support(descriptor, &json!({"support":"bootstrap"})),
+            Some(("Standard bootstrap", SupportKind::Bootstrap))
+        );
+        assert_eq!(
+            producer_support(descriptor, &json!({"support":"none"})),
+            None
         );
     }
 }

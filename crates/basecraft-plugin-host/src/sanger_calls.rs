@@ -13,8 +13,6 @@ use basecraft_protocol::operation::{InvocationInputEvidence, OperationRequest, R
 use serde_json::json;
 use std::path::{Path, PathBuf};
 
-const OPERATION: &str = "basecraft.tracy-sanger/consensus@1";
-
 #[derive(Default)]
 pub struct SangerCaller {
     jobs: JobManager,
@@ -132,10 +130,20 @@ impl SangerCaller {
         }
         let registry = Registry::load(&RegistryConfig::discover().map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?;
-        let operation = registry
-            .operations
-            .get(OPERATION)
+        let mut callers = registry.operations.values().filter(|operation| {
+            operation
+                .descriptor
+                .host
+                .as_ref()
+                .and_then(|host| host.caller.as_deref())
+                == Some("single_trace")
+        });
+        let operation = callers
+            .next()
             .ok_or("Install the Tracy Sanger plugin to compute alternative calls")?;
+        if callers.next().is_some() {
+            return Err("More than one single-trace caller is installed".into());
+        }
         if !operation.package.enabled {
             return Err("Tracy Sanger plugin is disabled".into());
         }
@@ -152,7 +160,7 @@ impl SangerCaller {
             source: source.clone(),
             sha256: sha256.into(),
             query: CompletedResultQuery {
-                operation: OPERATION.into(),
+                operation: operation.id.clone(),
                 pins: operation.pins(&registry.generation),
                 effective_parameters: parameters.clone(),
                 inputs: std::collections::BTreeMap::from([(
@@ -176,7 +184,7 @@ impl SangerCaller {
                 Err(error) => self.lookup_diagnostics.push(error),
             }
         }
-        let request: OperationRequest = serde_json::from_value(json!({"operation":OPERATION,
+        let request: OperationRequest = serde_json::from_value(json!({"operation":operation.id,
             "inputs":{"reads":[{"kind":"file","path":source}]},"parameters":parameters,
             "pins":identity.query.pins}))
         .map_err(|e| e.to_string())?;
@@ -246,7 +254,7 @@ mod tests {
             source: source.clone(),
             sha256: basecraft_io::sha256_file(&source).unwrap(),
             query: CompletedResultQuery {
-                operation: OPERATION.into(),
+                operation: "example.caller/consensus@1".into(),
                 pins: pins.clone(),
                 effective_parameters: parameters.clone(),
                 inputs: std::collections::BTreeMap::default(),
@@ -265,7 +273,7 @@ mod tests {
         std::fs::write(&path, serde_json::to_vec(&draft).unwrap()).unwrap();
         let outcome = OperationOutcome {
             schema: 1,
-            operation: OPERATION.into(),
+            operation: "example.caller/consensus@1".into(),
             run_id: "run".into(),
             state: RuntimeState::Completed,
             pins,

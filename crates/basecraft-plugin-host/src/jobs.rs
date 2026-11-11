@@ -992,10 +992,13 @@ fn apply_target_results(
     let mut warning = None;
     // Only species analyses add hypotheses; a display tree run with a
     // workspace target is recorded in its history and nothing more.
-    let species = matches!(
-        job.prepared.operation.package.manifest.id.as_str(),
-        "basecraft.delimitation" | "basecraft.host"
-    );
+    let species = job
+        .prepared
+        .operation
+        .descriptor
+        .host
+        .as_ref()
+        .is_some_and(|host| host.species_workspace);
     if species && session.is_delimitation(target.doc) {
         if session.revision(target.doc) == progress.expected_revision.unwrap_or(target.revision) {
             let name = job.prepared.species_result_name();

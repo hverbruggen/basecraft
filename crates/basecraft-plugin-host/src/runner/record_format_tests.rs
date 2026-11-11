@@ -265,6 +265,13 @@ plugin.run()
     .unwrap();
     Arc::make_mut(&mut prepared.operation.package).manifest.id = "basecraft.host".into();
     prepared.operation.descriptor.host_workflow = Some("asap_alignment".into());
+    prepared.operation.descriptor.host = Some(basecraft_protocol::operation::HostServices {
+        workflow_operations: BTreeMap::from([
+            ("prepare".into(), "basecraft.delimitation/haplotypes@1".into()),
+            ("fit".into(), "basecraft.delimitation/asap@1".into()),
+        ]),
+        ..Default::default()
+    });
     prepared.workflow_registry = Some(Arc::new(stages));
     prepared.parameters["unique_haplotypes"] = json!(false);
     prepared.context.inputs.insert(

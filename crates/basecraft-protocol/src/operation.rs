@@ -60,6 +60,47 @@ pub struct OperationDescriptor {
     pub host_workflow: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub presentation: Option<String>,
+    /// Host services selected by this contract, available to any accepted plugin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<HostServices>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HostServices {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub species_workspace: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bootstrap_exports: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verify_inputs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tree_support: Vec<TreeSupportRule>,
+    /// Workflow stage name -> registered operation id, including major version.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub workflow_operations: BTreeMap<String, String>,
+    /// Ambient credentials are supplied only to bundled packages. Installed
+    /// packages still need an explicit grant bound to their accepted digests.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ambient_credentials: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caller: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TreeSupportRule {
+    pub name: String,
+    pub kind: crate::tree::SupportKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<ParameterCondition>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "test", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ParameterCondition {
+    Equals { parameter: String, value: Value },
+    Positive { parameter: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

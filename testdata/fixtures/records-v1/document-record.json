@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "document": "input.fasta",
+  "revision": "",
+  "unsaved": false,
+  "warnings": [
+    "Earlier processing before import is not recorded."
+  ],
+  "events": [],
+  "effective": []
+}

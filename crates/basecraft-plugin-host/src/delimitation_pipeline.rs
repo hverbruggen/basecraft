@@ -31,8 +31,7 @@ impl AlignmentWorkflow<'_> {
         if self.cancelled.load(Ordering::Acquire) {
             return Err(Error::Protocol("cancelled before workflow stage".into()));
         }
-        let operation = format!("{operation}@1");
-        let descriptor = &self.registry.resolve(&operation, None)?.descriptor;
+        let descriptor = &self.registry.resolve(operation, None)?.descriptor;
         // The workflow descriptor is the superset. Pass only parameters declared
         // by each stage, retaining the normalized nested settings in its receipt.
         let properties = descriptor.parameters["properties"]
@@ -124,6 +123,17 @@ impl AlignmentWorkflow<'_> {
         Ok(())
     }
 
+    fn stage_operation(&self, name: &str) -> Result<String> {
+        self.parent
+            .operation
+            .descriptor
+            .host
+            .as_ref()
+            .and_then(|host| host.workflow_operations.get(name))
+            .cloned()
+            .ok_or_else(|| Error::Protocol(format!("workflow has no {name} operation")))
+    }
+
     pub fn run(&mut self, method: &str, effective: Value) -> Result<InvokeResult> {
         let fit =
             workflow_fit(method).ok_or_else(|| Error::Protocol("unknown host workflow".into()))?;
@@ -137,7 +147,7 @@ impl AlignmentWorkflow<'_> {
             &source,
         )?;
         let prepare = self.stage(
-            "basecraft.delimitation/haplotypes",
+            &self.stage_operation("prepare")?,
             &json!({"alignment":[{"kind":"file","path":source}]}),
             &effective,
         )?;
@@ -211,7 +221,7 @@ impl AlignmentWorkflow<'_> {
             let mut tree_params = effective;
             tree_params["method"] = json!("upgma");
             let tree = self.stage(
-                "basecraft.distance/tree",
+                &self.stage_operation("tree")?,
                 &json!({"alignment":[{"kind":"file","path":alignment}]}),
                 &tree_params,
             )?;
@@ -221,7 +231,7 @@ impl AlignmentWorkflow<'_> {
             params["tree_inference"] =
                 json!("UPGMA equal-rate clustering from retained aligned sequences");
         }
-        let result = self.stage(&format!("basecraft.delimitation/{fit}"), &inputs, &params)?;
+        let result = self.stage(&self.stage_operation("fit")?, &inputs, &params)?;
         let target = Path::new(&self.parent.context.outputs["artifacts"]);
         // Keep nested stage results in their owned runs. The parent's stable fit
         // report is the one logical result consumed by every interface.
