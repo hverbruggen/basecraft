@@ -139,8 +139,16 @@ impl Candidate {
         #[cfg(all(test, feature = "test-counters"))]
         basecraft_io::counters::reset();
         let path = PathBuf::from(path);
-        let root = root.unwrap_or_else(|| crate::bridge::project_root(&path));
-        let mut session = Session::recoverable(&root)?;
+        // The project is the folder the user chose; opening never changes it.
+        let project = root
+            .as_deref()
+            .map(basecraft_ops::project::Project::new)
+            .transpose()?;
+        let root = project.as_ref().map_or_else(
+            || crate::bridge::file_folder(&path),
+            |project| project.root().to_path_buf(),
+        );
+        let mut session = Session::recoverable(&root)?.in_project(project);
         let (doc, kind) = session.open_classified(&path)?;
         if cancelled.load(Ordering::Acquire) {
             return Err(OpenError::Cancelled);

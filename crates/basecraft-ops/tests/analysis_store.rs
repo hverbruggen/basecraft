@@ -11,7 +11,6 @@ fn hidden_runs_reserve_stage_and_publish_without_replacing_files() {
     let temp = tempfile::tempdir().unwrap();
     let output = temp.path().join("result.nwk");
     let run = ArtifactRun::create(&output, "run-1").unwrap();
-    assert!(!temp.path().join(".basecraft/project.toml").exists());
     assert!(ArtifactRun::create(&output, "run-1").is_err());
     assert!(run.artifact("../escape").is_err());
     assert!(run.artifact("/escape").is_err());

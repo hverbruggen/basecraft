@@ -344,7 +344,6 @@ ApplicationWindow {
     function openPath(path, reviewMethods = false) {
         if (documentOpens.eligible(path)) {
             const existing = documentOpens.existing(path)
-            if (!existing.length && !shell.project_dir.length) shell.use_project_of(path)
             const token = documentOpens.request(path, shell.project_dir, reviewMethods)
             if (!token.length) { provenance.notification(path, "Could not allocate an open request", "fail"); return }
             if (existing.length) {
@@ -380,7 +379,6 @@ ApplicationWindow {
                 return
             }
         }
-        if (!shell.project_dir.length) shell.use_project_of(path)
         window.appendLegacy({ path: path, dirty: false, kind: kind })
         tabs.currentIndex = openFiles.count - 1
         if (reviewMethods) reviewLegacyDocument(tabs.currentIndex, path)
@@ -786,6 +784,7 @@ ApplicationWindow {
     }
     AppProvenance {
         id: provenance
+        project_dir: shell.project_dir
         onMessageChanged: if (message.length && message !== "notify: Working…") notification("", message, message.startsWith("fail:") ? "fail" : "done")
     }
     property var activeTasks: ({jobs: []})
@@ -2674,13 +2673,13 @@ ApplicationWindow {
         id: metadataTipLabels
         metadataController: specimenMetadata
         table: window.metadataTable
-        projectDir: shell.project_dir
+        project_dir: shell.project_dir
     }
     SpecimenRosterDialog {
         id: rosterConsumer
         metadataController: specimenMetadata
         table: window.metadataTable
-        projectDir: shell.project_dir
+        project_dir: shell.project_dir
     }
     TreeTipNameDialog {
         id: tipDialog
@@ -2981,7 +2980,6 @@ ApplicationWindow {
         const args = Qt.application.arguments
         for (let i = 1; i < args.length; i++) {
             if (args[i].startsWith("--")) { i++; continue }
-            shell.use_project_of(args[i])
             openPath(args[i])
         }
     }

@@ -140,7 +140,6 @@ pub mod qobject {
         /// Set `project_dir` to the project a file belongs to, without
         /// opening it.
         #[qinvokable]
-        fn use_project_of(self: Pin<&mut GenomeController>, path: &QString);
         #[qinvokable]
         fn resize(self: Pin<&mut GenomeController>, width: f64, height: f64);
         #[qinvokable]
@@ -679,16 +678,10 @@ pub(crate) fn plugin_dir(name: &str) -> PathBuf {
 
 /// The project a file belongs to: the nearest ancestor with a `.basecraft`
 /// directory, else the file's own directory.
-pub(crate) fn project_root(file: &Path) -> PathBuf {
-    let dir = file.parent().unwrap_or(Path::new(".")).to_path_buf();
-    let mut cur = Some(dir.as_path());
-    while let Some(d) = cur {
-        if d.join(".basecraft").is_dir() {
-            return d.to_path_buf();
-        }
-        cur = d.parent();
-    }
-    dir
+/// The folder holding a file. Sessions for loose files are rooted there; the
+/// project is only ever the folder the user chose.
+pub(crate) fn file_folder(file: &Path) -> PathBuf {
+    file.parent().map_or_else(PathBuf::new, Path::to_path_buf)
 }
 
 impl qobject::GenomeController {
@@ -1107,13 +1100,6 @@ impl qobject::GenomeController {
         self.as_mut().notify("");
         self.refresh();
         Ok(())
-    }
-
-    pub fn use_project_of(mut self: Pin<&mut Self>, path: &QString) {
-        let root = project_root(Path::new(&path.to_string()));
-        let abs = std::fs::canonicalize(&root).unwrap_or(root);
-        self.as_mut()
-            .set_project_dir(QString::from(&abs.to_string_lossy().into_owned()));
     }
 
     #[allow(clippy::cast_possible_truncation)]
@@ -1556,7 +1542,7 @@ impl qobject::GenomeController {
             .to_string()
             .lines()
             .filter(|l| !l.is_empty())
-            .map(|f| project_root(Path::new(f)))
+            .map(|f| file_folder(Path::new(f)))
             .collect();
         roots.sort();
         roots.dedup();
@@ -1580,7 +1566,7 @@ impl qobject::GenomeController {
             .strip_prefix(&project)
             .ok()
             .filter(|_| !project.as_os_str().is_empty())
-            .or_else(|| path.strip_prefix(project_root(&path)).ok())
+            .or_else(|| path.strip_prefix(file_folder(&path)).ok())
             .unwrap_or(&path);
         QString::from(&rel.to_string_lossy().into_owned())
     }

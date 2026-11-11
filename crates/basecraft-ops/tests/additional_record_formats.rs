@@ -48,7 +48,7 @@ fn metadata_report_and_query_original_writers() {
 }
 
 #[test]
-fn provenance_lookup_returns_existing_bundle_then_nearest_project_then_fallback() {
+fn provenance_lookup_uses_the_chosen_project_only() {
     crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let result = root.path().join("result.fa");
@@ -58,17 +58,25 @@ fn provenance_lookup_returns_existing_bundle_then_nearest_project_then_fallback(
         basecraft_ops::records::bundle_for_result(&result),
         standalone
     );
+    // A .basecraft folder makes nothing a project; only the user's choice does.
     std::fs::create_dir_all(root.path().join(".basecraft")).unwrap();
-    std::fs::write(root.path().join(".basecraft/project.toml"), "").unwrap();
-    let expected = root
-        .path()
+    assert_eq!(
+        basecraft_ops::records::bundle_for_result(&result),
+        standalone
+    );
+    let project = basecraft_ops::project::Project::new(root.path()).unwrap();
+    let expected = project
+        .root()
         .join(".basecraft/provenance")
         .join(basecraft_io::hash_bytes(b"result.fa").trim_start_matches("b3:"));
-    assert_eq!(basecraft_ops::records::bundle_for_result(&result), expected);
+    assert_eq!(
+        basecraft_ops::records::bundle_for_result_in(&result, Some(&project)),
+        expected
+    );
     std::fs::create_dir(&standalone).unwrap();
     std::fs::write(standalone.join("manifest.json"), "{}").unwrap();
     assert_eq!(
-        basecraft_ops::records::bundle_for_result(&result),
+        basecraft_ops::records::bundle_for_result_in(&result, Some(&project)),
         standalone
     );
 }

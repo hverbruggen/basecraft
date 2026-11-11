@@ -14,6 +14,7 @@ pub(crate) struct History<'a> {
     pub(crate) policy: ProvenancePolicy,
     pub(crate) tracked: bool,
     pub(crate) root: &'a Path,
+    pub(crate) project: Option<&'a crate::project::Project>,
     pub(crate) storage_root: &'a Path,
     pub(crate) local_root: &'a Path,
     pub(crate) events: &'a [LogEntry],
@@ -66,13 +67,11 @@ impl History<'_> {
                     crate::records::analysis_store::ArtifactRun::for_result(target)?
                 {
                     hidden
-                } else if self.root.join(".basecraft/project.toml").is_file() {
-                    self.root.join(".basecraft/provenance").join(
-                        basecraft_io::hash_bytes(
-                            crate::session::relative(self.root, target).as_bytes(),
-                        )
-                        .trim_start_matches("b3:"),
-                    )
+                } else if let Some(bundle) = self
+                    .project
+                    .and_then(|project| project.provenance_bundle(target))
+                {
+                    bundle
                 } else {
                     crate::records::provenance::companion(target)
                 }

@@ -41,7 +41,9 @@ fn absolute(path: PathBuf) -> std::io::Result<PathBuf> {
 pub fn run(command: DelimitationCommand) -> Result<()> {
     let value = match command {
         DelimitationCommand::LinkedAlignment { path, project } => {
-            let mut session = basecraft_ops::Session::unlogged(absolute(project)?);
+            let project = basecraft_ops::project::Project::new(absolute(project)?)?;
+            let mut session =
+                basecraft_ops::Session::unlogged(project.root()).in_project(Some(project));
             let doc = session.open(&absolute(path)?)?;
             serde_json::json!({"path": delimitation::linked_alignment(&session, doc)?})
         }

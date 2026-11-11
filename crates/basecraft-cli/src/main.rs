@@ -17,6 +17,10 @@ use clap::{Parser, Subcommand};
 #[derive(Parser)]
 #[command(name = "basecraft", version, about = "Basecraft command-line tool")]
 struct Cli {
+    /// The project folder you chose. Files inside it keep their history in the
+    /// project; without it every file is a loose file. Basecraft never guesses.
+    #[arg(long, global = true)]
+    project: Option<PathBuf>,
     #[command(flatten)]
     save_options: save::Options,
     #[command(subcommand)]
@@ -91,7 +95,7 @@ enum Command {
     },
     /// Serve a headless project session over MCP stdio (2025-11-25).
     Mcp {
-        #[arg(default_value = ".")]
+        /// The project folder: the session's root and access boundary.
         project: PathBuf,
         #[arg(long)]
         allow_writes: bool,
@@ -227,7 +231,28 @@ fn main() -> ExitCode {
 pub(crate) fn script_session(
     root: impl Into<PathBuf>,
 ) -> Result<basecraft_ops::Session, basecraft_ops::Error> {
-    let mut session = basecraft_ops::Session::recoverable(root)?;
+    let mut session = basecraft_ops::Session::recoverable(root)?.in_project(chosen_project());
+    session.set_actor(basecraft_protocol::Actor::Script {
+        client: "CLI".into(),
+    });
+    Ok(session)
+}
+
+static PROJECT: std::sync::OnceLock<Option<basecraft_ops::project::Project>> =
+    std::sync::OnceLock::new();
+
+/// The project given with `--project`, or none.
+pub(crate) fn chosen_project() -> Option<basecraft_ops::project::Project> {
+    PROJECT.get().cloned().flatten()
+}
+
+/// A CLI session for a command whose folder argument is the project.
+pub(crate) fn project_session(
+    project: &std::path::Path,
+) -> Result<basecraft_ops::Session, basecraft_ops::Error> {
+    let project = basecraft_ops::project::Project::new(project)?;
+    let mut session =
+        basecraft_ops::Session::recoverable(project.root())?.in_project(Some(project));
     session.set_actor(basecraft_protocol::Actor::Script {
         client: "CLI".into(),
     });
@@ -242,6 +267,12 @@ fn save_policy(name: &str) -> Result<basecraft_ops::records::SavePolicy, String>
 }
 
 fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
+    let project = cli
+        .project
+        .as_deref()
+        .map(basecraft_ops::project::Project::new)
+        .transpose()?;
+    let _ = PROJECT.set(project);
     let save_options = cli.save_options;
     match cli.command {
         Command::Delimitation { action } => delimitation::run(action)?,
@@ -250,7 +281,10 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Command::Metadata { action } => metadata::run(action, save_options)?,
         Command::Submission { action } => submission::run(action, save_options)?,
         Command::History { file, json } => {
-            let report = basecraft_ops::records::DocumentRecord::saved_report(&file)?;
+            let report = basecraft_ops::records::DocumentRecord::saved_report_in(
+                &file,
+                chosen_project().as_ref(),
+            )?;
             println!(
                 "{}",
                 if json {
@@ -261,7 +295,10 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         Command::Methods { file, json, output } => {
-            let report = basecraft_ops::records::DocumentRecord::saved_report(&file)?;
+            let report = basecraft_ops::records::DocumentRecord::saved_report_in(
+                &file,
+                chosen_project().as_ref(),
+            )?;
             if let Some(output) = output {
                 report.export(&output)?;
             }
@@ -303,22 +340,26 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             ProvenanceCommand::Inspect { result } => {
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&basecraft_ops::records::inspect(&result)?)?
+                    serde_json::to_string_pretty(&basecraft_ops::records::inspect_in(
+                        &result,
+                        chosen_project().as_ref()
+                    )?)?
                 );
             }
             ProvenanceCommand::Verify { result } => {
-                let issues = basecraft_ops::records::verify(&result)?;
+                let issues = basecraft_ops::records::verify_in(&result, chosen_project().as_ref())?;
                 if !issues.is_empty() {
                     return Err(issues.join("\n").into());
                 }
                 println!("done: recorded hashes verified; replay verification is a separate check");
             }
             ProvenanceCommand::Methods { result, output } => {
-                let publication = basecraft_ops::records::inspect(&result)?;
+                let publication =
+                    basecraft_ops::records::inspect_in(&result, chosen_project().as_ref())?;
                 basecraft_ops::records::write_reports(&output, &publication)?;
             }
             ProvenanceCommand::Package { result, output } => {
-                basecraft_ops::records::package(&result, &output)?;
+                basecraft_ops::records::package_in(&result, &output, chosen_project().as_ref())?;
             }
         },
         Command::NewSequence {

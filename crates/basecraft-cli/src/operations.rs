@@ -165,7 +165,7 @@ pub fn operations(command: OperationsCommand) -> Result<()> {
             }
             request.operation = operation;
             let policy = basecraft_plugin_host::policy::SessionPolicy::new(&project, true)?;
-            let mut session = crate::script_session(project.canonicalize()?)?;
+            let mut session = crate::project_session(&project)?;
             basecraft_platform::interrupt::install()?;
             run_foreground(&registry, &request, policy, "CLI", &mut session)?.0
         }

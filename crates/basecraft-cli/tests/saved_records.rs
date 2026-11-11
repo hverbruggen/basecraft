@@ -328,7 +328,8 @@ fn trees(project: &Path) -> (PathBuf, PathBuf) {
 }
 
 fn import_event(target: &Path) -> Value {
-    let publication = basecraft_ops::records::inspect(target).unwrap();
+    let project = basecraft_ops::project::Project::new(target.parent().unwrap()).unwrap();
+    let publication = basecraft_ops::records::inspect_in(target, Some(&project)).unwrap();
     let params = publication
         .events
         .iter()
@@ -425,8 +426,9 @@ fn support_import_runs_headlessly_with_the_same_reference_evidence() {
     mcp.close();
     let params = import_event(&target);
     assert_eq!(params["sets"], json!(["Bootstrap"]));
+    let chosen = basecraft_ops::project::Project::new(&project).unwrap();
     assert_eq!(
-        basecraft_ops::records::verify(&target).unwrap(),
+        basecraft_ops::records::verify_in(&target, Some(&chosen)).unwrap(),
         Vec::<String>::new()
     );
 }

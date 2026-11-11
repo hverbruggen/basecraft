@@ -1396,7 +1396,9 @@ fn verified_reports(
                 "validation artifact or publication evidence differs",
             ));
         }
-        let issues = crate::records::provenance::verify(&path)?;
+        // The submission's folder is the project the caller chose.
+        let project = crate::project::Project::new(root)?;
+        let issues = crate::records::provenance::verify_in(&path, Some(&project))?;
         if !issues.is_empty() {
             return Err(crate::Error::Damaged {
                 path: path.clone(),

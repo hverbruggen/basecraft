@@ -113,6 +113,8 @@ enum ReplayMode {
 
 pub struct Session {
     root: PathBuf,
+    /// The folder the user chose, or none. Set once, when the session is made.
+    project: Option<crate::project::Project>,
     storage_root: PathBuf,
     provenance_policy: basecraft_platform::settings::ProvenancePolicy,
     local_provenance_root: PathBuf,
@@ -152,6 +154,7 @@ impl Session {
             replay_mode: ReplayMode::Live,
             events: Vec::new(),
             pending_baselines: Vec::new(),
+            project: None,
             root,
             id: ulid::Ulid::generate().to_string(),
             host,
@@ -223,6 +226,18 @@ impl Session {
         s.log = None;
         s.store_objects = false;
         s
+    }
+
+    /// Give the session the project the user chose. Opening files never
+    /// changes it; without one, every file is a loose file.
+    #[must_use]
+    pub fn in_project(mut self, project: Option<crate::project::Project>) -> Self {
+        self.project = project;
+        self
+    }
+
+    pub fn project(&self) -> Option<&crate::project::Project> {
+        self.project.as_ref()
     }
 
     pub fn id(&self) -> &str {
@@ -452,6 +467,7 @@ impl Session {
             policy: self.provenance_policy,
             tracked: self.tracked,
             root: &self.root,
+            project: self.project.as_ref(),
             storage_root: &self.storage_root,
             local_root: &self.local_provenance_root,
             events: &self.events,

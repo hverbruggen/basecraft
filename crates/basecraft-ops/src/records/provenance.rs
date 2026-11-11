@@ -14,10 +14,15 @@ pub fn companion(path: &Path) -> PathBuf {
     PathBuf::from(name)
 }
 
-/// Select the existing binding, companion, project-derived or local history path.
+/// Select the existing binding, companion or local history path.
 /// The final fallback is the original companion spelling, even if it does not
 /// exist. Selection does not validate content or establish complete provenance.
 pub fn bundle_for_result(result: &Path) -> PathBuf {
+    bundle_for_result_in(result, None)
+}
+
+/// As `bundle_for_result`, also looking in the chosen project's provenance.
+pub fn bundle_for_result_in(result: &Path, project: Option<&crate::project::Project>) -> PathBuf {
     if let Ok(Some(hidden)) = crate::records::analysis_store::ArtifactRun::for_result(result)
         && hidden.join("manifest.json").is_file()
     {
@@ -53,15 +58,8 @@ pub fn bundle_for_result(result: &Path) -> PathBuf {
     let absolute = result
         .canonicalize()
         .unwrap_or_else(|_| result.to_path_buf());
-    for root in absolute.ancestors().skip(1) {
-        if root.join(".basecraft/project.toml").is_file()
-            && let Ok(relative) = absolute.strip_prefix(root)
-        {
-            return root.join(".basecraft/provenance").join(
-                basecraft_io::hash_bytes(relative.to_string_lossy().as_bytes())
-                    .trim_start_matches("b3:"),
-            );
-        }
+    if let Some(bundle) = project.and_then(|project| project.provenance_bundle(&absolute)) {
+        return bundle;
     }
     if let Ok(paths) = basecraft_platform::paths::AppPaths::discover()
         && let Ok(preferences) =
@@ -161,9 +159,14 @@ fn copy_atomic(source: &Path, target: &Path) -> Result<()> {
 }
 
 pub fn inspect(result: &Path) -> Result<Publication> {
+    inspect_in(result, None)
+}
+
+/// As `inspect`, for a result that may sit inside the chosen project.
+pub fn inspect_in(result: &Path, project: Option<&crate::project::Project>) -> Result<Publication> {
     // A damaged hidden binding is an error, never a reason to use stale legacy context.
     crate::records::analysis_store::ArtifactRun::for_result(result)?;
-    let bundle = bundle_for_result(result);
+    let bundle = bundle_for_result_in(result, project);
     let publication: Publication =
         serde_json::from_slice(&read_record(&bundle.join("manifest.json"))?)?;
     if publication.schema_version != 1 {
@@ -176,8 +179,13 @@ pub fn inspect(result: &Path) -> Result<Publication> {
 
 /// Validate exact retained bytes and the current result; never launch software.
 pub fn verify(result: &Path) -> Result<Vec<String>> {
-    let publication = inspect(result)?;
-    let bundle = bundle_for_result(result);
+    verify_in(result, None)
+}
+
+/// As `verify`, for a result that may sit inside the chosen project.
+pub fn verify_in(result: &Path, project: Option<&crate::project::Project>) -> Result<Vec<String>> {
+    let publication = inspect_in(result, project)?;
+    let bundle = bundle_for_result_in(result, project);
     let mut issues = verify_records(&bundle, &publication)?;
     if bundle.join("input.json").is_file() {
         if crate::records::input_evidence::read_input(&bundle)?.state
@@ -789,8 +797,19 @@ fn copy_tree(source: &Path, target: &Path) -> Result<()> {
 /// Result and complete retained bundle copied into a new directory. This is a
 /// data package, not a promise that external software can reproduce the result.
 pub fn package(result: &Path, destination: &Path) -> Result<()> {
+    package_in(result, destination, None)
+}
+
+/// As `package`, for a result that may sit inside the chosen project.
+pub fn package_in(
+    result: &Path,
+    destination: &Path,
+    project: Option<&crate::project::Project>,
+) -> Result<()> {
     if crate::records::analysis_store::ArtifactRun::for_result(result)?.is_some()
-        || bundle_for_result(result).join("input.json").is_file()
+        || bundle_for_result_in(result, project)
+            .join("input.json")
+            .is_file()
     {
         return crate::records::input_evidence::package(result, destination);
     }
@@ -828,7 +847,7 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
             &staging.path().join(name),
         )?;
     }
-    copy_tree(&bundle_for_result(result), &companion(&copied))?;
+    copy_tree(&bundle_for_result_in(result, project), &companion(&copied))?;
     let copied_issues = verify(&copied)?;
     if !copied_issues.is_empty() {
         return Err(invalid(copied_issues.join("; ")));

@@ -569,7 +569,7 @@ impl qobject::DelimitationController {
                     .map(|s| serde_json::from_str(&s))
                     .transpose()
                     .map_err(|e| e.to_string())?;
-            let mut session = Session::recoverable(crate::bridge::project_root(&output))
+            let mut session = Session::recoverable(crate::bridge::file_folder(&output))
                 .map_err(|e| e.to_string())?;
             basecraft_ops::delimitation::combine_to(&mut session, &paths, &output, keep.as_ref())
                 .map_err(|e| e.to_string())?;
@@ -599,7 +599,7 @@ impl qobject::DelimitationController {
             let display = basecraft_ops::delimitation::checked_display_tree(work)
                 .map_err(|e| e.to_string())?
                 .ok_or("No display tree")?;
-            let mut rooting_session = Session::recoverable(crate::bridge::project_root(&display))
+            let mut rooting_session = Session::recoverable(crate::bridge::file_folder(&display))
                 .map_err(|e| e.to_string())?;
             root_tree_copy(&mut rooting_session, &display, &method.to_string())
         })();
@@ -1442,7 +1442,7 @@ impl qobject::DelimitationController {
                     let adopted = (|| -> basecraft_ops::Result<_> {
                         let target = PathBuf::from(path.to_string());
                         let mut session =
-                            Session::recoverable(crate::bridge::project_root(&target))?;
+                            Session::recoverable(crate::bridge::file_folder(&target))?;
                         let doc = session.open(&target)?;
                         Ok((session, doc))
                     })();
