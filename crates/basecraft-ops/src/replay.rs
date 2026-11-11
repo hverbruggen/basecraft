@@ -183,7 +183,7 @@ fn recorded_source_root(root: &Path) -> Result<std::path::PathBuf> {
     let value: serde_json::Value =
         serde_json::from_slice(&crate::provenance::read_record(&manifest)?)?;
     if value["schema_version"] != 1 {
-        return Err(crate::error::invalid("Unsupported recovery metadata"));
+        return Err(crate::Error::Unsupported("Unsupported recovery metadata".into()));
     }
     value["source_root"]
         .as_str()
