@@ -62,12 +62,12 @@ fn damage(root: &Path, source: &Path) -> ArtifactRun {
     std::fs::write(&unrelated, ORIGINAL).unwrap();
     let run = reference(&folder(root, "distant"), &unrelated);
     assert_ne!(unrelated, source);
-    // The indexed source can no longer be statted, so alias coverage is unknown.
-    // A damaged ledger whose live source is provably unrelated must not warn.
-    std::fs::remove_file(&unrelated).unwrap();
     let original = std::fs::read(run.artifact("input.json").unwrap()).unwrap();
     std::fs::write(run.directory().join("test-original-input"), original).unwrap();
     std::fs::write(run.artifact("input.json").unwrap(), b"damaged a").unwrap();
+    // The index refresh cannot read the damaged ledger, so the store's coverage
+    // becomes unknown for every save until the ledger is repaired.
+    input_evidence::register(&run).unwrap();
     run
 }
 
@@ -109,11 +109,10 @@ fn assert_recovery(session: &mut Session, root: &Path) {
     let runs = root.join("distant/.basecraft/analyses-v1/runs");
     for entry in std::fs::read_dir(runs).unwrap() {
         let run = entry.unwrap().path();
-        std::fs::write(
-            run.join("input.json"),
-            std::fs::read(run.join("test-original-input")).unwrap(),
-        )
-        .unwrap();
+        let input: input_evidence::SubmittedInput =
+            serde_json::from_slice(&std::fs::read(run.join("test-original-input")).unwrap())
+                .unwrap();
+        input_evidence::write_json(&run.join("input.json"), &input).unwrap();
     }
     std::fs::write(root.join("unrelated.fasta"), ORIGINAL).unwrap();
     let outputs = replay::recover(session.recovery_root(), &root.join("recovered")).unwrap();
@@ -599,7 +598,8 @@ fn damaged_display_and_registry_entries_do_not_hide_known_conflicts() {
             std::fs::write(&registry, serde_json::to_vec(&value).unwrap()).unwrap();
             let check = required(session.save(doc, None).unwrap_err());
             assert_eq!(check.evidence().conflict.analyses.len(), 1);
-            assert!(check.evidence().issues.len() >= 2);
+            // The damaged registry entry is not read by saves; it hides nothing.
+            assert!(!check.evidence().issues.is_empty());
             assert_eq!(check.evidence().conflict.analyses[0].run, known.directory());
             assert_eq!(std::fs::read(&file).unwrap(), ORIGINAL);
             assert!(session.can_undo(doc));

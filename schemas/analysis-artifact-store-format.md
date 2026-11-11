@@ -111,22 +111,28 @@ acknowledging an incomplete check does not select a policy for known analyses.
 Stale or reused decisions return a fresh check. Successful overrides retain the
 inspection issues as warnings. GUI, CLI, Python and MCP use the same typed result.
 
-The current private index consists of a checksummed source catalogue,
-`analysis-input-index.json`, store summaries and one small shard per hashed source
-path below `analysis-inputs`. The source shard lists the connected stores that may
-own or depend on that input. Registration updates these records explicitly; there
-is no older-writer reconciliation or compatibility gate. A durable dirty marker
-records new direct-source paths so unrelated saves can continue. Pending dependency
-changes have unknown coverage until registration succeeds. The ledger directory is
-synced before the updated index can clear its marker. Index damage
-never authorizes an unchecked save.
+The private index lives in the profile's state folder. `analysis-input-index.json`
+is a checksummed catalogue of indexed stores and source keys, used by writers.
+Below `analysis-inputs`, `sources/<hash of path>` lists the connected stores that
+may own or depend on an input path (recorded and canonical spellings),
+`files/<hash of device:inode>` lists the source paths recorded for one file, and
+`stores/<hash of store path>` holds each store's identity, sources and
+dependencies. Registration updates these records explicitly. A durable dirty
+marker records the direct-source paths a pending ledger change can introduce, so
+unrelated saves continue; pending dependency changes have unknown coverage until
+registration succeeds. The ledger directory is synced before the updated index
+can clear its marker.
 
-Lookup stats live indexed source paths to detect external replacement and new
-hard-link aliases, then opens only the matching source shards and selected stores.
-No unrelated run or input ledger is opened. Missing source paths stay uncertain.
-Current stores carry an immutable identity file; discovery of the same identity
-at a new location retires the absent location. Registration updates ownership and
-dependency closures before releasing the relevant source/store reservations.
+A save reads only the shards for its own target: its path spellings, its file
+identity (which finds a source that was moved or hard-linked on the same disk),
+any pending dirty markers, and the store records of `.basecraft/analyses-v1`
+folders in its ancestor folders. An ancestor store the index does not cover at
+that location (moved or never registered) is scanned in full; its identity
+retires the vanished old location. Only a target with more than one hard link
+reads the catalogue, to compare against every indexed source. No unrelated run
+or input ledger, and no store registry, is opened. A deleted source or store
+elsewhere does not concern the save. A damaged shard or dirty marker makes the
+check incomplete and never authorizes an unchecked save.
 
 Saves and mutations reserve source paths, file identities and affected stores.
 Conflicting operations return Busy and can retry; unrelated saves may overlap.

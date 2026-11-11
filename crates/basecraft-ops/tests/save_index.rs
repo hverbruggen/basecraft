@@ -197,19 +197,45 @@ fn failed_dependency_update_cannot_hide_a_later_relinked_source() {
 }
 
 #[test]
-fn corrupt_cache_cannot_hide_a_reference() {
-    let Some(root) = isolated_profile::enter("corrupt_cache_cannot_hide_a_reference") else {
+fn damaged_catalogue_cannot_hide_a_reference() {
+    let Some(root) = isolated_profile::enter("damaged_catalogue_cannot_hide_a_reference") else {
         return;
     };
     let source = root.join("source.fasta");
     std::fs::write(&source, b">a\nACGT\n").unwrap();
-    reference(&root.join("analysis"), &source);
+    let run = reference(&root.join("analysis"), &source);
     let cache = basecraft_platform::paths::AppPaths::discover()
         .unwrap()
         .state
         .join("analysis-input-index.json");
-    std::fs::write(cache, b"broken cache").unwrap();
-    assert!(!evidence::check(&source).unwrap().is_complete());
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&cache).unwrap()).unwrap();
+    value["value"]["sources"] = serde_json::Value::Array(Vec::new());
+    for damaged in [serde_json::to_vec(&value).unwrap(), b"broken cache".to_vec()] {
+        std::fs::write(&cache, damaged).unwrap();
+        let check = evidence::check(&source).unwrap();
+        assert_eq!(check.conflict.analyses.len(), 1);
+        assert_eq!(check.conflict.analyses[0].run, run.directory());
+    }
+}
+
+#[test]
+fn deleted_project_does_not_concern_other_saves() {
+    let Some(root) = isolated_profile::enter("deleted_project_does_not_concern_other_saves")
+    else {
+        return;
+    };
+    let project = root.join("project");
+    std::fs::create_dir(&project).unwrap();
+    let source = project.join("source.fasta");
+    std::fs::write(&source, b">a\nACGT\n").unwrap();
+    reference(&project.join("analysis"), &source);
+    std::fs::remove_dir_all(&project).unwrap();
+    let other = root.join("other.fasta");
+    std::fs::write(&other, b">b\nAAAA\n").unwrap();
+    let check = evidence::check(&other).unwrap();
+    assert!(check.is_complete(), "{:?}", check.issues);
+    assert!(check.conflict.analyses.is_empty());
 }
 
 #[cfg(feature = "test-counters")]
@@ -356,27 +382,6 @@ fn measure_save(root: &Path, label: &str, residue: &str, interactive: bool) {
         counts.reads.values().map(|r| r.full_reads).sum::<u64>(),
         counts.reads.values().map(|r| r.bytes).sum::<u64>()
     );
-}
-
-#[test]
-fn parseable_but_modified_cache_cannot_hide_a_reference() {
-    let Some(root) =
-        isolated_profile::enter("parseable_but_modified_cache_cannot_hide_a_reference")
-    else {
-        return;
-    };
-    let source = root.join("source.fasta");
-    std::fs::write(&source, b">a\nACGT\n").unwrap();
-    reference(&root.join("analysis"), &source);
-    let cache = basecraft_platform::paths::AppPaths::discover()
-        .unwrap()
-        .state
-        .join("analysis-input-index.json");
-    let mut value: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&cache).unwrap()).unwrap();
-    value["value"]["sources"] = serde_json::Value::Array(Vec::new());
-    std::fs::write(cache, serde_json::to_vec(&value).unwrap()).unwrap();
-    assert!(!evidence::check(&source).unwrap().is_complete());
 }
 
 #[test]

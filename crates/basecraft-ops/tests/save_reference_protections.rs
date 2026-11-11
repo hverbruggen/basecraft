@@ -77,24 +77,6 @@ fn recoverable(session: &mut Session, doc: DocId, destination: &Path) {
     );
 }
 
-// An unresolved missing store/source cannot gain implicit consent merely because
-// replay writes to staging. Keep its journal and require an explicit next action.
-fn recovery_refused(session: &mut Session, doc: DocId, destination: &Path) {
-    assert!(session.document_record(doc).unwrap().unsaved);
-    assert!(session.can_undo(doc));
-    session.flush().unwrap();
-    let journal =
-        serde_json::to_value(basecraft_ops::log::read_all(session.recovery_root()).unwrap())
-            .unwrap();
-    let error = replay::recover(session.recovery_root(), destination).unwrap_err();
-    assert!(matches!(error, Error::SaveCheckRequired(check) if !check.evidence().is_complete()));
-    assert_eq!(
-        serde_json::to_value(basecraft_ops::log::read_all(session.recovery_root()).unwrap())
-            .unwrap(),
-        journal
-    );
-    assert!(!destination.exists());
-}
 
 #[test]
 fn registered_other_folder_policies_preserve_original_and_pending_edits() {
@@ -225,7 +207,7 @@ fn moved_project_store_is_discovered_with_stale_registry_location() {
             assert_eq!(found.analyses.len(), 1);
             assert_eq!(found.analyses[0].run, run);
             assert_eq!(std::fs::read(&source).unwrap(), ORIGINAL);
-            recovery_refused(&mut session, doc, &root.join("recovered"));
+            recoverable(&mut session, doc, &root.join("recovered"));
             session
                 .save_with_decision(doc, None, check.decide(SavePolicy::PreserveCopy, false))
                 .unwrap();
@@ -269,11 +251,8 @@ fn lexical_old_path_still_guards_missing_or_replaced_source() {
                 );
                 assert_eq!(std::fs::read(&source).ok(), before);
                 assert_eq!(std::fs::read(&moved).unwrap(), ORIGINAL);
-                if replaced {
-                    recoverable(&mut session, doc, &data.join("recovered"));
-                } else {
-                    recovery_refused(&mut session, doc, &data.join("recovered"));
-                }
+                // Recovery to a new path is not blocked by the missing source.
+                recoverable(&mut session, doc, &data.join("recovered"));
                 session
                     .save_with_evidence(doc, Some(&source), SavePolicy::BreakEvidence)
                     .unwrap();

@@ -1,5 +1,5 @@
 use super::*;
-use crate::access::{Access, AccessError, Denial, ResourceAction, ServiceAction, TrustedLegacy};
+use crate::access::{Access, AccessError, Denial, ResourceAction, TrustedLegacy};
 use std::{cell::Cell, io, path::PathBuf};
 
 struct Choice {
@@ -23,9 +23,6 @@ impl Access for Choice {
         self.calls.set(self.calls.get() + 1);
         self.result.clone().map_err(AccessError::Denied)
     }
-    fn service(&self, _action: ServiceAction) -> crate::access::Result<()> {
-        panic!("raw reader must not call services")
-    }
 }
 
 #[test]
@@ -33,7 +30,7 @@ fn denial_precedes_real_lower_reader_and_preserves_budget() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("readable");
     std::fs::write(&path, b"must not be read").unwrap();
-    for reason in [Denial::OutsideRoot, Denial::ServiceUnavailable] {
+    for reason in [Denial::OutsideRoot, Denial::ReadOnly] {
         let access = Choice {
             result: Err(reason),
             calls: Cell::new(0),
@@ -215,11 +212,11 @@ fn access_carrier_keeps_typed_denial_io_source_and_raw_os_code() {
     #[derive(Debug, thiserror::Error)]
     #[error("permission_denied is only text in this IO source")]
     struct Cause;
-    let denied: crate::Error = AccessError::Denied(Denial::ServiceUnavailable).into();
+    let denied: crate::Error = AccessError::Denied(Denial::ReadOnly).into();
     assert_eq!(denied.code(), "permission_denied");
     assert!(matches!(
         denied,
-        crate::Error::Access(AccessError::Denied(Denial::ServiceUnavailable))
+        crate::Error::Access(AccessError::Denied(Denial::ReadOnly))
     ));
     let conflict: crate::Error = AccessError::DestinationExists.into();
     assert_eq!(conflict.code(), "output_conflict");

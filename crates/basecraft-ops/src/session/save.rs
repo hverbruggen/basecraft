@@ -108,18 +108,6 @@ impl Session {
                 warnings,
             });
         }
-        // Cooperating Basecraft processes serialize the entire data + sidecar +
-        // provenance publication. External programs still require hash checks.
-
-        let _save_lock = if self.tracked
-            || matches!(
-                self.write_publication,
-                crate::documents::WritePublication::Recovery { .. }
-            ) {
-            Some(crate::save_guard::lock(&target)?)
-        } else {
-            None
-        };
         if new_sequence || (mode == SaveMode::NewDestination && path.is_some()) {
             crate::save_guard::Revision::check(None, &target)?;
         }
@@ -493,11 +481,6 @@ impl Session {
     /// open document's own file would discard its accepted revision.
     /// Known-input conflicts are resolved first, under both locks.
     pub(super) fn derived_target(&self, path: &Path) -> Result<DerivedTarget> {
-        let target = if self.tracked {
-            Some(crate::save_guard::lock(path)?)
-        } else {
-            None
-        };
         let mut evidence = crate::input_evidence::lock_save(path)?;
         let check = evidence.check(path)?;
         if !check.is_complete() {
@@ -514,7 +497,6 @@ impl Session {
             ));
         }
         Ok(DerivedTarget {
-            _target: target,
             _evidence: evidence,
         })
     }

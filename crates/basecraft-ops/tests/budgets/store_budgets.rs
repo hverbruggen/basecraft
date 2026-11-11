@@ -107,11 +107,17 @@ fn incomplete_decision_and_recheck() {
         return;
     };
     let (mut session, doc, source) = setup(&root);
+    // A deleted unrelated store is never visited. A store whose index refresh
+    // fails has unknown relevance and is visited by every save.
     let missing = store(&root, "missing");
     std::fs::remove_dir_all(&missing).unwrap();
-    let corrupt = store(&root, "corrupt");
+    std::fs::create_dir(root.join("corrupt")).unwrap();
+    let run = ArtifactRun::create(&root.join("corrupt/result.txt"), "reserved").unwrap();
+    input_evidence::register(&run).unwrap();
+    let corrupt = run.directory().parent().unwrap().parent().unwrap().to_path_buf();
     std::fs::write(corrupt.join("store.json"), b"damaged").unwrap();
-    let stores = [missing, corrupt];
+    input_evidence::register(&run).unwrap();
+    let stores = [corrupt];
     counters::reset();
     let check = match session.save(doc, None).unwrap_err() {
         basecraft_ops::Error::SaveCheckRequired(check) => check,

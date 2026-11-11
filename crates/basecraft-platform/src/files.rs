@@ -1,13 +1,6 @@
 //! Ordinary read-only evidence files, without blocking on Unix special files.
 use std::{fs::File, io, path::Path};
 
-mod namespace;
-pub use namespace::{
-    CheckedAbsence, CheckedRead, CheckedReadFile, DirectoryPromotionError, LockDirectoryMode,
-    LockNamespace, LockStep, NamespaceReadError, OpenedLock, PromotedDirectory, ReadNamespace,
-    TargetMetadata, TargetNamespace, inspect_lock_namespace, inspect_read_namespace,
-    inspect_target_namespace, namespace_lock_supported, namespace_read_supported,
-};
 
 /// An observed filesystem object, not a permanent or globally unique ID.
 /// IDs may be reused after deletion. All Windows identifier bits are retained.

@@ -15,8 +15,6 @@ fn scenario(
     name: &str,
     fixture: &str,
     open_reads: u64,
-    saved_reads: u64,
-    save_sync_all: u64,
     edit: impl Fn(u32) -> Op,
 ) {
     let Some(root) = child_profile(name) else {
@@ -59,20 +57,8 @@ fn scenario(
     }
     counters::reset();
     session.save(doc, None).unwrap();
-    // Saving reads twice before replacement and then retains the new bytes.
-    // Tree sidecar serialization also hashes the newly written tree once.
-    let saved_size = file.metadata().unwrap().len();
-    record(
-        name,
-        "save",
-        &file,
-        (
-            2 + saved_reads,
-            2 * original_size + saved_reads * saved_size,
-            1,
-            save_sync_all,
-        ),
-    );
+    // Saving reads the original once; history keeps fingerprints, not copies.
+    record(name, "save", &file, (1, original_size, 1, 0));
 }
 
 fn record(name: &str, stage: &str, file: &Path, expected: (u64, u64, u64, u64)) {
@@ -113,8 +99,6 @@ fn fasta() {
         "fasta",
         "alignment-editing/ambiguous-gappy.afa",
         2,
-        1,
-        12,
         |i| Op::AlnReplace {
             row: 0,
             start: u64::from(i),
@@ -126,7 +110,7 @@ fn fasta() {
 
 #[test]
 fn genbank() {
-    scenario("genbank", "sequences-annotations/locus.gb", 1, 1, 12, |i| {
+    scenario("genbank", "sequences-annotations/locus.gb", 1, |i| {
         Op::SeqReplace {
             start: u64::from(i),
             end: u64::from(i) + 1,
@@ -137,7 +121,7 @@ fn genbank() {
 
 #[test]
 fn newick() {
-    scenario("newick", "tree-inference/unrooted.nwk", 1, 2, 14, |i| {
+    scenario("newick", "tree-inference/unrooted.nwk", 1, |i| {
         Op::TreeRenameTip {
             from: if i == 0 { "a".into() } else { format!("a{i}") },
             to: format!("a{}", i + 1),

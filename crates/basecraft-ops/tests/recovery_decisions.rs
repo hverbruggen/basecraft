@@ -38,8 +38,9 @@ fn registry() -> PathBuf {
         .state
         .join("analysis-stores.json")
 }
+// An unreadable pending index update leaves every save's relevance unknown.
 fn damage() {
-    let path = registry();
+    let path = registry().with_file_name("analysis-inputs/dirty/unreadable");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, b"damaged inventory").unwrap();
 }
@@ -713,7 +714,8 @@ fn new_unsaved_sequence_has_final_only_issue_group_and_explicit_recovery() {
     let check = attempt.check(0).unwrap();
     let groups: Vec<_> = check.evidence_groups().collect();
     assert!(groups[0].is_complete());
-    assert!(!groups[1].is_complete());
+    // A missing recorded source does not concern the unrelated final destination.
+    assert!(groups[1].is_complete());
     assert!(!groups[0].conflict.analyses.is_empty());
     assert!(groups[1].conflict.analyses.is_empty());
     assert!(matches!(

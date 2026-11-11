@@ -323,31 +323,15 @@ fn r2_real_lock_failure_retains_empty_destination() {
     let jobs = tree(f.checkpoint.parent().unwrap().parent().unwrap());
     let dest = root.join("early");
     f.attempt(&dest, |review, target| {
-        let _guard = crate::save_guard::lock(target).unwrap();
+        let _guard = crate::save_guard::hold_elsewhere(target);
         let result = review.save_with_evidence(target, SavePolicy::Cancel);
-        assert!(
-            result
-                .as_ref()
-                .unwrap_err()
-                .contains("another Basecraft process is saving")
-        );
+        assert!(result.as_ref().unwrap_err().contains("retry shortly"));
         assert!(review.recovery_path().is_none());
         result
     });
     assert!(dest.is_dir());
     assert_eq!(fs::read_dir(&dest).unwrap().count(), 0);
     assert_eq!(tree(f.checkpoint.parent().unwrap().parent().unwrap()), jobs);
-    let digest = basecraft_io::hash_bytes(target(&f, &dest).as_os_str().as_encoded_bytes());
-    let locks = root.join(format!(
-        "basecraft-save-locks-{}",
-        basecraft_io::hash_bytes(basecraft_platform::username().as_bytes())
-            .trim_start_matches("b3:")
-    ));
-    assert!(
-        locks
-            .join(format!("{}.lock", digest.trim_start_matches("b3:")))
-            .is_file()
-    );
 }
 
 #[test]
@@ -356,26 +340,13 @@ fn r3_real_partial_registration_precedes_incomplete_refusal() {
         return;
     };
     let f = Fixture::new(&root, true);
-    let gone = root.join("gone");
-    fs::create_dir(&gone).unwrap();
-    let missing = gone.join("source.fa");
-    fs::write(&missing, b">gone\nACGT\n").unwrap();
-    let missing_run = inputs::reference_input_with_dependencies(
-        &gone.join("result.fa"),
-        &missing,
-        &basecraft_io::hash_file(&missing).unwrap(),
-        &[],
-        "missing store",
-    )
-    .unwrap();
-    let missing_store = missing_run
-        .directory()
-        .parent()
+    // An unreadable pending index update leaves every save's relevance unknown.
+    let dirty = basecraft_platform::paths::AppPaths::discover()
         .unwrap()
-        .parent()
-        .unwrap()
-        .to_owned();
-    fs::remove_dir_all(&gone).unwrap(); // only this test-owned intentional missing store
+        .state
+        .join("analysis-inputs/dirty");
+    fs::create_dir_all(&dirty).unwrap();
+    fs::write(dirty.join("unreadable"), b"damaged").unwrap();
     let dest = root.join("partial");
     let mut job = None;
     let error = f.attempt(&dest, |review, target| {
@@ -419,7 +390,6 @@ fn r3_real_partial_registration_precedes_incomplete_refusal() {
         .join("analysis-stores.json");
     let value: serde_json::Value = serde_json::from_slice(&fs::read(registry).unwrap()).unwrap();
     let stores: Vec<PathBuf> = serde_json::from_value(value["stores"].clone()).unwrap();
-    assert!(stores.contains(&missing_store));
     assert!(stores.contains(&dest.join(".basecraft/analyses-v1")));
 }
 

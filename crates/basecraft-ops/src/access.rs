@@ -36,19 +36,6 @@ impl ResourceAction {
     }
 }
 
-/// Finite service vocabulary, not paths supplied by callers. Service owners must
-/// discover and validate their exact namespace before use. Registry access never
-/// grants access to stores listed inside it. No cache or document provenance is
-/// a service. Registration also requires an owned-stage/final-placement context.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ServiceAction {
-    ReadPreferences,
-    ReadAnalysisRegistry,
-    LockAnalysisEvidence,
-    ReserveSaveTarget,
-    RegisterFinalStore,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Denial {
     #[error("path must not be empty or contain parent traversal")]
@@ -65,8 +52,6 @@ pub enum Denial {
     ResourceType,
     #[error("the session root cannot be replaced, moved or removed")]
     RootMutation,
-    #[error("service namespace validation is not available")]
-    ServiceUnavailable,
 }
 
 /// Kept distinct from ordinary IO and from the existing ops error taxonomy.
@@ -92,39 +77,6 @@ pub trait Access {
     /// additionally requires the attempt's actual prepublication stage ownership;
     /// path permission alone never authorizes deleting a project subtree.
     fn resource(&self, path: &Path, action: ResourceAction) -> Result<PathBuf>;
-
-    /// Fail closed until service owners can validate namespace integrity and the
-    /// operation's target/owned-store context. No caller-selected service paths.
-    fn service_read(
-        &self,
-        _request: &crate::service_reads::ServiceReadRequest<'_>,
-        _phase: crate::service_reads::ServiceReadPhase<'_>,
-    ) -> Result<()> {
-        Err(AccessError::Denied(Denial::ServiceUnavailable))
-    }
-
-    /// Contextual mutation services remain denied unless an explicitly bound
-    /// owner implements eligibility and every individual effect boundary.
-    fn service_context(
-        &self,
-        _request: &crate::service_reads::ServiceRequest<'_>,
-        _phase: crate::service_reads::ServicePhase<'_>,
-    ) -> Result<()> {
-        Err(AccessError::Denied(Denial::ServiceUnavailable))
-    }
-
-    /// Hand off the strict retained target observation, never a legacy path
-    /// check followed by another inspector. The response borrows this request.
-    fn service_target<'a>(
-        &self,
-        _request: &'a crate::service_reads::ServiceRequest<'a>,
-    ) -> Result<crate::service_reads::CheckedServiceTarget<'a>> {
-        Err(AccessError::Denied(Denial::ServiceUnavailable))
-    }
-
-    fn service(&self, _action: ServiceAction) -> Result<()> {
-        Err(AccessError::Denied(Denial::ServiceUnavailable))
-    }
 }
 
 /// Explicit compatibility mode for trusted legacy entry points only. No Default

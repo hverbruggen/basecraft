@@ -1,5 +1,5 @@
-//! Current-format source index. Saves stat source paths for external aliases,
-//! then open only the matching source shards. Writers replace the index explicitly.
+//! Analysis input index. Writers record, per input path and per file identity,
+//! the stores that can refer to it; a save reads only the shards for its target.
 use super::{
     ArtifactRun, BTreeMap, PROPOSAL_TARGET, Path, PathBuf, Result, lexical, read_input, registry,
     registry_lock, stamp, validate_input,
@@ -291,13 +291,32 @@ fn publish(store: &Path, entry: &IndexedAnalysisStore) -> Result<()> {
             }
         }
     }
+    // Each source is also found by its canonical spelling and file identity.
+    let mut keys = sources.clone();
+    let mut files: BTreeMap<PathBuf, BTreeSet<PathBuf>> = BTreeMap::new();
     for (source, stores) in &sources {
-        let path = shard("sources", source)?;
-        if read::<BTreeSet<PathBuf>>(&path).ok().as_ref() != Some(stores) {
-            write(&path, stores)?;
+        if let Ok(canonical) = source.canonicalize() {
+            keys.entry(canonical).or_default().extend(stores.iter().cloned());
+        }
+        if let Some(key) = file_key(source) {
+            files.entry(key).or_default().insert(source.clone());
         }
     }
-    index.sources = sources.into_keys().collect();
+    for (kind, entries) in [("sources", &keys), ("files", &files)] {
+        for (key, value) in entries {
+            let path = shard(kind, key)?;
+            if read::<BTreeSet<PathBuf>>(&path).ok().as_ref() != Some(value) {
+                write(&path, value)?;
+            }
+        }
+    }
+    for stale in index.sources.iter().filter(|p| !keys.contains_key(*p)) {
+        match std::fs::remove_file(shard("sources", stale)?) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error.into()),
+            _ => {}
+        }
+    }
+    index.sources = keys.into_keys().collect();
     write(&location()?, &index)?;
     let dirty = shard("dirty", store)?;
     if dirty.try_exists()? {
@@ -307,37 +326,74 @@ fn publish(store: &Path, entry: &IndexedAnalysisStore) -> Result<()> {
     Ok(())
 }
 
+fn file_key(path: &Path) -> Option<PathBuf> {
+    let stamp = stamp(path).ok()?;
+    Some(PathBuf::from(format!("{}:{}", stamp.device?, stamp.inode?)))
+}
+
+/// A missing shard means nothing is recorded for that key. A damaged one makes
+/// the check incomplete without hiding what other shards record.
+fn shard_or_issue<T: serde::de::DeserializeOwned + serde::Serialize>(
+    path: &Path,
+    inspection: &mut super::Inspection,
+) -> Option<T> {
+    match read(path) {
+        Ok(value) => Some(value),
+        Err(crate::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            inspection.issue(super::InspectionCode::RegistryUnavailable, path, error);
+            None
+        }
+    }
+}
+
+/// Stores that can refer to `target`: the shards for its path spellings and file
+/// identity, pending ledger changes, and ancestor stores the index does not cover.
+/// Only a target with several hard links compares against every indexed source.
 pub(super) fn select(
     target: &Path,
-    stores: &[PathBuf],
+    absolute: &Path,
+    nearby: &[PathBuf],
     inspection: &mut super::Inspection,
 ) -> Result<Vec<PathBuf>> {
-    let index = load()?;
-    let mut selected = BTreeSet::new();
-    let mut relocated = BTreeSet::new();
-    let target = lexical(target);
-    let target_stamp = stamp(&target).ok();
-    let matches = |source: &Path| {
-        source == target
-            || match (stamp(source), &target_stamp) {
-                (Ok(a), Some(b)) => {
-                    a.device.is_some() && a.device == b.device && a.inode == b.inode
-                }
-                (Ok(_), None) => false,
-                (Err(_), _) => true,
+    let identity = file_key(target);
+    let same_file = |path: &Path| identity.is_some() && file_key(path) == identity;
+    let mut sources = BTreeSet::from([target.to_path_buf(), lexical(absolute)]);
+    if let Some(key) = &identity {
+        // A moved or hard-linked source keeps the identity recorded at registration.
+        let recorded: Option<BTreeSet<PathBuf>> = shard_or_issue(&shard("files", key)?, inspection);
+        sources.extend(
+            recorded
+                .into_iter()
+                .flatten()
+                .filter(|path| path.try_exists().ok() == Some(false) || same_file(path)),
+        );
+        if basecraft_platform::files::link_count(target)? > 1 {
+            match load() {
+                Ok(index) => sources.extend(index.sources.into_iter().filter(|p| same_file(p))),
+                Err(error) => inspection.issue(
+                    super::InspectionCode::RegistryUnavailable,
+                    &location()?,
+                    error,
+                ),
             }
-    };
+        }
+    }
+    let mut selected = BTreeSet::new();
+    for source in &sources {
+        let stores: Option<BTreeSet<PathBuf>> =
+            shard_or_issue(&shard("sources", source)?, inspection);
+        selected.extend(stores.into_iter().flatten());
+    }
     let dirty = registry()?.with_file_name("analysis-inputs/dirty");
     let dirty_result = (|| -> Result<()> {
         if dirty.try_exists()? {
             for entry in std::fs::read_dir(&dirty)? {
                 let path = entry?.path();
                 let change: IndexChange = read(&path)?;
-                if change
-                    .sources
-                    .as_ref()
-                    .is_some_and(|sources| !sources.iter().any(|p| matches(p)))
-                {
+                if change.sources.as_ref().is_some_and(|pending| {
+                    !pending.iter().any(|p| sources.contains(p) || same_file(p))
+                }) {
                     continue;
                 }
                 inspection.record(&path)?;
@@ -354,34 +410,26 @@ pub(super) fn select(
     if let Err(error) = dirty_result {
         inspection.issue(super::InspectionCode::RegistryUnavailable, &dirty, error);
     }
-    for store in stores {
-        if index.stores.contains_key(store) {
+    let mut moved = Vec::new();
+    for store in nearby {
+        let Ok(identity) = std::fs::read_to_string(store.join("identity")) else {
+            selected.insert(store.clone());
             continue;
-        }
-        selected.insert(store.clone());
-        if let Ok(identity) = std::fs::read_to_string(store.join("identity")) {
-            // Moved current-format stores retain their immutable identity.
-            for (old, known) in &index.stores {
-                if *known == identity && old.try_exists().ok() == Some(false) {
-                    relocated.insert(old.clone());
-                }
-            }
+        };
+        let indexed: Option<IndexedAnalysisStore> =
+            shard_or_issue(&shard("stores", store)?, inspection);
+        if indexed.is_none_or(|entry| entry.identity != identity) {
+            selected.insert(store.clone());
+            moved.push(identity);
         }
     }
-    selected.retain(|path| !relocated.contains(path));
-    for source in &index.sources {
-        if matches(source) {
-            let path = shard("sources", source)?;
-            match read::<Vec<PathBuf>>(&path) {
-                Ok(stores) => {
-                    selected.extend(stores.into_iter().filter(|p| !relocated.contains(p)));
-                }
-                Err(error) => {
-                    inspection.issue(super::InspectionCode::RegistryUnavailable, &path, error);
-                }
-            }
-        }
-    }
+    // A store found in a new ancestor location replaces its vanished old one.
+    selected.retain(|store| {
+        moved.is_empty()
+            || store.try_exists().ok() != Some(false)
+            || read::<IndexedAnalysisStore>(&shard("stores", store).unwrap_or_default())
+                .is_ok_and(|entry| !moved.contains(&entry.identity))
+    });
     Ok(selected.into_iter().collect())
 }
 

@@ -125,7 +125,6 @@ pub struct Outcome {
 
 /// Target-save and evidence locks held while writing an export or extract.
 struct DerivedTarget {
-    _target: Option<std::fs::File>,
     _evidence: crate::input_evidence::SaveLock,
 }
 

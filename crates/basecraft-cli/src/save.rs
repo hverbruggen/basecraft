@@ -109,7 +109,6 @@ pub(crate) fn error_value(error: &Error) -> Value {
                 Denial::Hardlink => "hardlink",
                 Denial::ResourceType => "resource_type",
                 Denial::RootMutation => "root_mutation",
-                Denial::ServiceUnavailable => "service_unavailable",
             };
             value["access"] = json!({"kind":"policy_denied", "reason":reason});
         }
@@ -185,7 +184,7 @@ mod tests {
             serde_json::from_slice(&serde_json::to_vec(&value).unwrap()).unwrap();
         assert_eq!(transported, value);
         for cause in [
-            AccessError::Denied(Denial::ServiceUnavailable),
+            AccessError::Denied(Denial::ReadOnly),
             AccessError::Io(std::io::Error::from_raw_os_error(13)),
             AccessError::DestinationExists,
         ] {
@@ -215,7 +214,6 @@ mod tests {
             (Denial::Hardlink, "hardlink"),
             (Denial::ResourceType, "resource_type"),
             (Denial::RootMutation, "root_mutation"),
-            (Denial::ServiceUnavailable, "service_unavailable"),
         ] {
             let value = error_value(&AccessError::Denied(reason).into());
             let value: Value =

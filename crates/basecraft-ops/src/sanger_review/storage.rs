@@ -1254,13 +1254,8 @@ mod tests {
         );
         let mut saved_again = reopened;
         let target = moved.join("another.sanger-review.json");
-        assert!(saved_again.save(&target).is_err());
-        let check = saved_again.check_save(&target).unwrap();
-        assert!(!check.evidence().is_complete());
-        let outcome = saved_again
-            .save_with_decision(&target, check.decide(inputs::SavePolicy::Cancel, true))
-            .unwrap();
-        assert!(!outcome.warnings.is_empty());
+        // Save As to a new path is never blocked by the deleted original project.
+        saved_again.save(&target).unwrap();
         assert_eq!(
             SangerReviewSession::load(&target).unwrap().draft_json,
             exact
@@ -1503,44 +1498,8 @@ mod tests {
         let doc = session.open(&result).unwrap();
         let saved_again = package.join("saved-again.afa");
         let packaged_bytes = std::fs::read(&result).unwrap();
-        let refused = match session.save(doc, Some(&saved_again)).unwrap_err() {
-            crate::Error::SaveCheckRequired(check) => check,
-            error => panic!("expected incomplete-inspection consent, got {error}"),
-        };
-        assert!(!refused.evidence().is_complete());
-        assert!(!saved_again.exists());
-        assert_eq!(std::fs::read(&result).unwrap(), packaged_bytes);
-
-        // Inspect a fresh check, then explicitly acknowledge only this missing
-        // store on the same Session/document. Unknown inspection is independent
-        // of known-conflict policy; no known conflicts authorize a policy change.
-        let check = session.check_save(doc, Some(&saved_again)).unwrap();
-        assert_ne!(check.token(), refused.token());
-        assert_eq!(check.target(), saved_again);
-        assert!(check.evidence().conflict.analyses.is_empty());
-        assert!(matches!(
-            &check.evidence().issues[..],
-            [issue] if issue.code == inputs::InspectionCode::StoreUnavailable
-                && issue.relevance == inputs::InspectionRelevance::Unknown
-                && issue.location == folder.join(".basecraft/analyses-v1")
-        ));
-        let decision = session
-            .decide_save(
-                doc,
-                Some(&saved_again),
-                check.token(),
-                inputs::SavePolicy::Cancel,
-                true,
-            )
-            .unwrap();
-        let outcome = session
-            .save_with_decision(doc, Some(&saved_again), decision)
-            .unwrap();
-        assert!(matches!(
-            &outcome.warnings[..],
-            [crate::session::SaveWarning::EvidenceNotChecked { issues }]
-                if issues == &check.evidence().issues
-        ));
+        // Save As to a new path is never blocked by the deleted original project.
+        session.save(doc, Some(&saved_again)).unwrap();
         assert_eq!(std::fs::read(&saved_again).unwrap(), packaged_bytes);
         assert_eq!(
             crate::provenance::verify(&saved_again).unwrap(),

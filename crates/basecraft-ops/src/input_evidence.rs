@@ -30,40 +30,12 @@ pub fn reference_input_with_dependencies(
 /// Files remain separate atomic writes: failure may leave conservative partial
 /// evidence, and dropping this guard does not roll those writes back.
 pub struct Mutation {
-    lock: EvidenceLock,
-}
-
-enum EvidenceLock {
-    Resources { _locks: Locks },
-    Checked(Box<crate::service_reads::ServiceLockGuard>),
+    _locks: Locks,
 }
 
 impl Mutation {
     pub fn begin() -> Result<Self> {
-        Ok(Self {
-            lock: EvidenceLock::Resources { _locks: lock()? },
-        })
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn begin_with_access(
-        context: std::sync::Arc<crate::service_reads::ServiceContext>,
-        access: &dyn crate::access::Access,
-    ) -> Result<Self> {
-        crate::service_reads::acquire_lock(context, access, None).map(|guard| Self {
-            lock: EvidenceLock::Checked(Box::new(guard)),
-        })
-    }
-    /// Checks the retained confined guard. Ordinary mutations use resource locks.
-    #[allow(dead_code)]
-    pub fn reauthorize(&self, access: &dyn crate::access::Access) -> Result<()> {
-        match &self.lock {
-            EvidenceLock::Checked(guard) => guard.reauthorize(access),
-            EvidenceLock::Resources { .. } => Err(crate::access::AccessError::Denied(
-                crate::access::Denial::ServiceUnavailable,
-            )
-            .into()),
-        }
+        Ok(Self { _locks: lock()? })
     }
 
     pub fn read_input(&self, directory: &Path) -> Result<SubmittedInput> {
@@ -538,12 +510,6 @@ pub(crate) fn registry_location(paths: &basecraft_platform::paths::AppPaths) -> 
     paths.state.join("analysis-stores.json")
 }
 
-/// Shared lock covers registration and the entire guarded replacement, including
-/// copy/decision publication. It does not claim to lock external editors or sync.
-pub(crate) fn evidence_lock_path(state: &Path) -> PathBuf {
-    state.join("analysis-evidence.lock")
-}
-
 fn open_lock(path: &Path) -> Result<std::fs::File> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -674,7 +640,7 @@ impl Locks {
         }
         Ok(())
     }
-    fn source(&self, path: &Path) -> Result<()> {
+    pub(crate) fn source(&self, path: &Path) -> Result<()> {
         let absolute = lexical(&std::path::absolute(path)?);
         let mut keys = vec![absolute.clone()];
         if let Ok(canonical) = absolute.canonicalize() {
@@ -891,80 +857,25 @@ pub fn check(target: &Path) -> Result<EvidenceCheck> {
 
 fn selection(target: &Path) -> Result<(PathBuf, Vec<PathBuf>, Inspection)> {
     let mut inspection = Inspection::default();
-    let path = registry()?;
-    let result = inspection.record_bounded(&path, 1 << 20);
-    let mut all = match result {
-        Err(crate::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-        result => inspection.parse_registry(&path, result),
-    };
-    // Valid unrelated registry entries do not change this target's consent.
-    // Selected records and issues below bind all relevant changes; malformed
-    // registry bytes remain in the receipt because coverage is uncertain.
-    if inspection.issues.is_empty() {
-        inspection.observations.remove(&path);
-    }
-    let target = std::path::absolute(target)?;
-    let canonical = target.canonicalize().unwrap_or_else(|_| target.clone());
+    let absolute = std::path::absolute(target)?;
+    let canonical = absolute.canonicalize().unwrap_or_else(|_| absolute.clone());
+    let mut nearby = Vec::new();
     for parent in canonical.ancestors().skip(1) {
-        let nearby = parent.join(".basecraft/analyses-v1");
-        match nearby.try_exists() {
-            Ok(true) if !all.contains(&nearby) => all.push(nearby),
-            Err(error) => inspection.issue(InspectionCode::StoreUnavailable, &nearby, error),
+        let store = parent.join(".basecraft/analyses-v1");
+        match store.try_exists() {
+            Ok(true) => nearby.push(store),
+            Err(error) => inspection.issue(InspectionCode::StoreUnavailable, &store, error),
             _ => {}
         }
     }
-    let selected = match index::select(&canonical, &all, &mut inspection) {
+    let selected = match index::select(&canonical, &absolute, &nearby, &mut inspection) {
         Ok(selected) => selected,
         Err(error) => {
-            inspection.issue(InspectionCode::RegistryUnavailable, &path, error);
-            Vec::new()
+            inspection.issue(InspectionCode::RegistryUnavailable, &registry()?, error);
+            nearby
         }
     };
     Ok((canonical, selected, inspection))
-}
-
-impl Inspection {
-    fn parse_registry(&mut self, path: &Path, result: Result<Vec<u8>>) -> Vec<PathBuf> {
-        let mut all = Vec::new();
-        match result {
-            Ok(bytes) => {
-                let parsed = serde_json::from_slice::<serde_json::Value>(&bytes);
-                match parsed {
-                    Ok(value) if value["schema_version"] == 1 && value["stores"].is_array() => {
-                        if let Some(paths) = value["stores"].as_array() {
-                            if paths.len() > 4096 {
-                                self.issue(
-                                    InspectionCode::LimitExceeded,
-                                    path,
-                                    "known-store registry exceeds 4096 stores",
-                                );
-                            }
-                            for (index, entry) in paths.iter().take(4096).enumerate() {
-                                match entry.as_str().map(PathBuf::from) {
-                                    Some(store) if store.is_absolute() => all.push(store),
-                                    _ => self.issue(
-                                        InspectionCode::RegistryUnavailable,
-                                        path,
-                                        format!(
-                                            "known-store entry {index} must be an absolute path"
-                                        ),
-                                    ),
-                                }
-                            }
-                        }
-                    }
-                    Ok(_) => self.issue(
-                        InspectionCode::RegistryUnavailable,
-                        path,
-                        "unsupported known-store registry",
-                    ),
-                    Err(error) => self.issue(InspectionCode::RegistryUnavailable, path, error),
-                }
-            }
-            Err(error) => self.issue(InspectionCode::RegistryUnavailable, path, error),
-        }
-        all
-    }
 }
 
 #[derive(Default)]
