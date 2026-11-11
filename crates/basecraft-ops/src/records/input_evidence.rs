@@ -550,10 +550,34 @@ thread_local! {
     static HELD_LOCKS: std::cell::RefCell<std::rc::Weak<Scope>> = const { std::cell::RefCell::new(std::rc::Weak::new()) };
 }
 const RESERVATION_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+const BACKGROUND_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
+thread_local! {
+    static BACKGROUND: std::cell::RefCell<Option<std::sync::Arc<std::sync::atomic::AtomicBool>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// While alive, reservations on this thread wait up to a minute instead of
+/// 2 s, and stop early once `cancelled` is set. For background work such as
+/// publishing analysis results; a save a person makes keeps the short wait.
+pub struct BackgroundWait(());
+
+pub fn wait_in_background(
+    cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> BackgroundWait {
+    BACKGROUND.with(|slot| *slot.borrow_mut() = Some(cancelled));
+    BackgroundWait(())
+}
+
+impl Drop for BackgroundWait {
+    fn drop(&mut self) {
+        BACKGROUND.with(|slot| *slot.borrow_mut() = None);
+    }
+}
 
 /// A thread-confined mutation scope. Readers reserve shared, writers exclusive;
 /// nested operations reuse the scope. Cooperating writers hold keys briefly, so
-/// a reservation waits up to 2 s; contention then ends in Busy, never deadlock.
+/// a reservation waits up to 2 s (a minute in the background); contention then
+/// ends in Busy, never deadlock.
 pub struct Locks(HeldLocks);
 
 pub fn lock() -> Result<Locks> {
@@ -649,6 +673,12 @@ impl Locks {
     }
     fn acquire(file: &std::fs::File, exclusive: bool, path: &Path) -> Result<()> {
         let started = std::time::Instant::now();
+        let background = BACKGROUND.with(|slot| slot.borrow().clone());
+        let limit = if background.is_some() {
+            BACKGROUND_WAIT
+        } else {
+            RESERVATION_WAIT
+        };
         loop {
             let acquired = if exclusive {
                 file.try_lock_exclusive()?
@@ -658,7 +688,16 @@ impl Locks {
             if acquired {
                 return Ok(());
             }
-            if started.elapsed() > RESERVATION_WAIT {
+            if background
+                .as_ref()
+                .is_some_and(|cancelled| cancelled.load(std::sync::atomic::Ordering::Acquire))
+            {
+                return Err(crate::Error::Busy(format!(
+                    "cancelled while waiting for {}",
+                    path.display()
+                )));
+            }
+            if started.elapsed() > limit {
                 return Err(crate::Error::Busy(format!(
                     "an analysis or save is using {}; retry shortly",
                     path.display()

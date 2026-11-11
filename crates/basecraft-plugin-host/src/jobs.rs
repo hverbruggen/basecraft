@@ -126,6 +126,9 @@ fn cancel_job(job: &Job, strict: bool) -> Result<OperationOutcome> {
         return Err(Error::Protocol(
             "Cancellation is unavailable for this run".into(),
         ));
+    } else if outcome.state == RuntimeState::Finalizing {
+        // Publication cannot be undone, but its wait for a busy input stops.
+        job.cancelled.store(true, Ordering::Release);
     }
     Ok(outcome.clone())
 }
@@ -718,6 +721,8 @@ fn fail(job: &Job, code: OperationErrorCode, message: String) {
 }
 
 fn execute(job: &Job) {
+    // A worker waits patiently for another run or save to release an input.
+    let _wait = basecraft_ops::records::wait_in_background(job.cancelled.clone());
     {
         let mut outcome = job
             .outcome
