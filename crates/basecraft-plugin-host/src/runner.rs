@@ -141,20 +141,20 @@ pub fn verify_completed_result(
         return Err(Error::Protocol("completed receipt has no artifacts".into()));
     }
     let first = Path::new(&outcome.artifacts[0].path);
-    let bundle = basecraft_ops::records::bundle_for_result(first);
+    let bundle = basecraft_ops::records::bundle_for_result(first, None);
     if bundle.canonicalize()? != directory.canonicalize()? {
         return Err(Error::Protocol(
             "retained artifact is bound to a different run".into(),
         ));
     }
-    let issues = basecraft_ops::records::verify(first)?;
+    let issues = basecraft_ops::records::verify(first, None)?;
     if !issues.is_empty() {
         return Err(Error::Protocol(format!(
             "completed publication is not reusable: {}",
             issues.join("; ")
         )));
     }
-    let publication = basecraft_ops::records::inspect(first)?;
+    let publication = basecraft_ops::records::inspect(first, None)?;
     for artifact in &outcome.artifacts {
         let path = Path::new(&artifact.path);
         if !path.canonicalize()?.starts_with(directory.canonicalize()?)
@@ -426,7 +426,8 @@ impl PreparedOperation {
                     continue;
                 }
                 if let Some(artifact) = stage.artifacts.first() {
-                    let publication = basecraft_ops::records::inspect(Path::new(&artifact.path))?;
+                    let publication =
+                        basecraft_ops::records::inspect(Path::new(&artifact.path), None)?;
                     record.include_input(
                         &basecraft_ops::records::DocumentRecord::from_publication(&publication),
                     );

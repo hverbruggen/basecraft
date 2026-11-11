@@ -58,8 +58,8 @@ fn edit_undo_redo_save_move_verify_and_report() {
         session.undo(doc).unwrap();
         session.redo(doc).unwrap();
         session.save(doc, None).unwrap();
-        assert_eq!(records::verify(&file).unwrap(), Vec::<String>::new());
-        let publication = records::inspect(&file).unwrap();
+        assert_eq!(records::verify(&file, None).unwrap(), Vec::<String>::new());
+        let publication = records::inspect(&file, None).unwrap();
         assert_eq!(publication.effective_edits.len(), 1);
         assert_eq!(publication.inputs.len(), 1);
         assert!(!publication.completeness.ancestry_known);
@@ -73,11 +73,11 @@ fn edit_undo_redo_save_move_verify_and_report() {
     }
     assert!(!recovery.exists(), "clean close removes published recovery");
     let exported = dir.path().join("package");
-    records::package(&file, &exported).unwrap();
+    records::package(&file, &exported, None).unwrap();
     let moved = exported.join("gene.fasta");
     std::fs::remove_file(&file).unwrap();
     std::fs::remove_dir_all(records::companion(&file)).unwrap();
-    assert_eq!(records::verify(&moved).unwrap(), Vec::<String>::new());
+    assert_eq!(records::verify(&moved, None).unwrap(), Vec::<String>::new());
     let reports = records::companion(&moved).join("reports");
     assert!(
         std::fs::read_to_string(reports.join("methods.generated.md"))
@@ -87,7 +87,7 @@ fn edit_undo_redo_save_move_verify_and_report() {
     std::fs::write(reports.join("methods.md"), "My reviewed prose").unwrap();
     records::write_reports(
         &records::companion(&moved),
-        &records::inspect(&moved).unwrap(),
+        &records::inspect(&moved, None).unwrap(),
     )
     .unwrap();
     assert_eq!(
@@ -151,7 +151,7 @@ fn history_is_fingerprints_only_and_path_escape_is_detected() {
     let doc = session.open(&file).unwrap();
     session.apply(doc, edit()).unwrap();
     session.save(doc, None).unwrap();
-    let publication = records::inspect(&file).unwrap();
+    let publication = records::inspect(&file, None).unwrap();
     assert!(
         publication
             .inputs
@@ -164,7 +164,7 @@ fn history_is_fingerprints_only_and_path_escape_is_detected() {
             .map_or(true, |mut retained| retained.next().is_none())
     );
     assert_eq!(
-        records::verify(&file).unwrap(),
+        records::verify(&file, None).unwrap(),
         [] as [std::string::String; 0]
     );
     let mut publication = publication;
@@ -175,7 +175,7 @@ fn history_is_fingerprints_only_and_path_escape_is_detected() {
     )
     .unwrap();
     assert!(
-        records::verify(&file)
+        records::verify(&file, None)
             .unwrap()
             .iter()
             .any(|e| e.contains("unsafe"))
@@ -270,14 +270,14 @@ fn live_annotation_sidecar_is_verified_and_packaged() {
         )
         .unwrap();
     session.save(doc, None).unwrap();
-    let published = records::inspect(&file).unwrap();
+    let published = records::inspect(&file, None).unwrap();
     assert_eq!(published.outputs.len(), 2);
     let package = dir.path().join("package");
-    records::package(&file, &package).unwrap();
+    records::package(&file, &package, None).unwrap();
     assert!(package.join(&published.outputs[1].logical_name).is_file());
     let sidecar = dir.path().join(&published.outputs[1].logical_name);
     std::fs::write(sidecar, "{}").unwrap();
-    assert_ne!(records::verify(&file).unwrap(), Vec::<String>::new());
+    assert_ne!(records::verify(&file, None).unwrap(), Vec::<String>::new());
 }
 
 #[test]
@@ -371,7 +371,7 @@ fn reopen_and_save_as_preserve_contributing_ancestry() {
         session.apply(doc, edit()).unwrap();
         session.save(doc, None).unwrap();
     }
-    let first = records::inspect(&file).unwrap();
+    let first = records::inspect(&file, None).unwrap();
     let copy = dir.path().join("copy.fasta");
     {
         let mut session = Session::recoverable_with_paths(dir.path(), &paths(dir.path())).unwrap();
@@ -388,11 +388,11 @@ fn reopen_and_save_as_preserve_contributing_ancestry() {
             .unwrap();
         session.save(doc, Some(&copy)).unwrap();
     }
-    let publication = records::inspect(&copy).unwrap();
+    let publication = records::inspect(&copy, None).unwrap();
     assert_eq!(publication.parents, vec![first.id]);
     assert_eq!(publication.effective_edits.len(), 2);
     std::fs::remove_dir_all(records::companion(&file)).unwrap();
-    assert_eq!(records::verify(&copy).unwrap(), Vec::<String>::new());
+    assert_eq!(records::verify(&copy, None).unwrap(), Vec::<String>::new());
 }
 
 #[test]
@@ -472,7 +472,7 @@ fn ancestor_only_artifacts_and_duplicate_parent_references_are_checked() {
     let doc = session.open(&file).unwrap();
     session.apply(doc, edit()).unwrap();
     session.save(doc, None).unwrap();
-    let ancestor = records::inspect(&file).unwrap();
+    let ancestor = records::inspect(&file, None).unwrap();
     session
         .apply(
             doc,
@@ -492,10 +492,10 @@ fn ancestor_only_artifacts_and_duplicate_parent_references_are_checked() {
             .all(|artifact| artifact.retained.is_none())
     );
     assert_eq!(
-        records::verify(&file).unwrap(),
+        records::verify(&file, None).unwrap(),
         [] as [std::string::String; 0]
     );
-    let mut current = records::inspect(&file).unwrap();
+    let mut current = records::inspect(&file, None).unwrap();
     current.parents.push(current.parents[0].clone());
     let bytes = serde_json::to_vec(&current).unwrap();
     std::fs::write(bundle.join("manifest.json"), &bytes).unwrap();
@@ -505,7 +505,7 @@ fn ancestor_only_artifacts_and_duplicate_parent_references_are_checked() {
     )
     .unwrap();
     assert!(
-        records::verify(&file)
+        records::verify(&file, None)
             .unwrap_err()
             .to_string()
             .contains("duplicate parent")
@@ -582,8 +582,11 @@ fn reopened_ancestry_survives_multiple_saves_and_changed_disk_records() {
     )
     .unwrap();
     next.save(doc, None).unwrap();
-    assert_eq!(records::inspect(&file).unwrap().effective_edits.len(), 3);
-    assert_eq!(records::verify(&file).unwrap(), Vec::<String>::new());
+    assert_eq!(
+        records::inspect(&file, None).unwrap().effective_edits.len(),
+        3
+    );
+    assert_eq!(records::verify(&file, None).unwrap(), Vec::<String>::new());
     let record = next.document_record(doc).unwrap();
     std::fs::write(records::companion(&file).join("manifest.json"), "damaged").unwrap();
     assert_eq!(
@@ -635,9 +638,12 @@ fn analysis_uses_submission_record_even_after_source_undo() {
     session
         .publish_analysis_snapshot(doc, &output, &inputs, &frozen)
         .unwrap();
-    let publication = records::inspect(&output).unwrap();
+    let publication = records::inspect(&output, None).unwrap();
     assert_eq!(publication.effective_edits.len(), 2);
-    assert_eq!(records::verify(&output).unwrap(), Vec::<String>::new());
+    assert_eq!(
+        records::verify(&output, None).unwrap(),
+        Vec::<String>::new()
+    );
     assert!(session.document_record(doc).unwrap().effective.is_empty());
 }
 
@@ -655,7 +661,7 @@ fn two_input_records_preserve_distinct_origins_and_export_frozen_evidence() {
         let doc = session.open(&file).unwrap();
         session.apply(doc, edit()).unwrap();
         session.save(doc, None).unwrap();
-        records.push(DocumentRecord::from_file(&file).unwrap());
+        records.push(DocumentRecord::from_file(&file, None).unwrap());
     }
     let mut record = records[0].clone();
     record.include_input(&records[1]);
@@ -681,10 +687,13 @@ fn two_input_records_preserve_distinct_origins_and_export_frozen_evidence() {
     session
         .publish_analysis_snapshot(doc, &output, &inputs, &record)
         .unwrap();
-    let publication = records::inspect(&output).unwrap();
+    let publication = records::inspect(&output, None).unwrap();
     assert_eq!(publication.parents.len(), 2);
     assert_eq!(publication.effective_edits.len(), 3);
-    assert_eq!(records::verify(&output).unwrap(), Vec::<String>::new());
+    assert_eq!(
+        records::verify(&output, None).unwrap(),
+        Vec::<String>::new()
+    );
     let report = record.report().unwrap();
     let export = dir.path().join("reports");
     std::fs::create_dir(&export).unwrap();
@@ -733,11 +742,11 @@ fn provenance_works_with_recovery_disabled_and_preserves_frozen_reports() {
     session.redo(doc).unwrap();
     session.save(doc, None).unwrap();
     assert_eq!(
-        records::verify(&file).unwrap(),
+        records::verify(&file, None).unwrap(),
         [] as [std::string::String; 0]
     );
     assert!(
-        !records::inspect(&file)
+        !records::inspect(&file, None)
             .unwrap()
             .completeness
             .input_bytes_available
@@ -762,7 +771,7 @@ fn methods_use_frozen_plugin_metadata_and_reject_unmatched_contribution() {
     session
         .publish_analysis_snapshot(doc, &output, &inputs, &snapshot)
         .unwrap();
-    let publication = records::inspect(&output).unwrap();
+    let publication = records::inspect(&output, None).unwrap();
     let mut record = basecraft_ops::records::DocumentRecord::from_publication(&publication);
     let report = record.report().unwrap();
     assert!(report.methods.contains("RecordedTool (version 1.2)"));

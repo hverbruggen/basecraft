@@ -462,7 +462,11 @@ impl qobject::SubmissionController {
         if self.rust().project_dir.is_empty() {
             return Err("Choose a project folder first".into());
         }
-        let session = Session::recoverable(self.rust().project()).map_err(|e| e.to_string())?;
+        let project = basecraft_ops::project::Project::new(self.rust().project())
+            .map_err(|_| "The chosen project folder is missing".to_string())?;
+        let session = Session::recoverable(project.root())
+            .map_err(|e| e.to_string())?
+            .in_project(Some(project));
         self.as_mut().rust_mut().session = Some(session);
         Ok(())
     }

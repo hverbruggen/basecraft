@@ -55,13 +55,13 @@ fn provenance_lookup_uses_the_chosen_project_only() {
     std::fs::write(&result, ">sample\nACGT\n").unwrap();
     let standalone = basecraft_ops::records::companion(&result);
     assert_eq!(
-        basecraft_ops::records::bundle_for_result(&result),
+        basecraft_ops::records::bundle_for_result(&result, None),
         standalone
     );
     // A .basecraft folder makes nothing a project; only the user's choice does.
     std::fs::create_dir_all(root.path().join(".basecraft")).unwrap();
     assert_eq!(
-        basecraft_ops::records::bundle_for_result(&result),
+        basecraft_ops::records::bundle_for_result(&result, None),
         standalone
     );
     let project = basecraft_ops::project::Project::new(root.path()).unwrap();
@@ -69,14 +69,21 @@ fn provenance_lookup_uses_the_chosen_project_only() {
         .root()
         .join(".basecraft/provenance")
         .join(basecraft_io::hash_bytes(b"result.fa").trim_start_matches("b3:"));
+    // The project's bundle counts once it holds history.
     assert_eq!(
-        basecraft_ops::records::bundle_for_result_in(&result, Some(&project)),
+        basecraft_ops::records::bundle_for_result(&result, Some(&project)),
+        standalone
+    );
+    std::fs::create_dir_all(&expected).unwrap();
+    std::fs::write(expected.join("manifest.json"), "{}").unwrap();
+    assert_eq!(
+        basecraft_ops::records::bundle_for_result(&result, Some(&project)),
         expected
     );
     std::fs::create_dir(&standalone).unwrap();
     std::fs::write(standalone.join("manifest.json"), "{}").unwrap();
     assert_eq!(
-        basecraft_ops::records::bundle_for_result_in(&result, Some(&project)),
+        basecraft_ops::records::bundle_for_result(&result, Some(&project)),
         standalone
     );
 }
@@ -184,7 +191,7 @@ fn embedded_activity_original_records() {
     session
         .extract(doc, (1, 5), &[], false, &extracted)
         .unwrap();
-    let bundle = basecraft_ops::records::bundle_for_result(&extracted);
+    let bundle = basecraft_ops::records::bundle_for_result(&extracted, None);
     let input = basecraft_ops::records::read_input(&bundle).unwrap();
     assert_eq!(input.extra["extraction"]["schema_version"], 1);
     if std::env::var_os("BASECRAFT_CAPTURE_ADDITIONAL_RECORDS").is_some() {

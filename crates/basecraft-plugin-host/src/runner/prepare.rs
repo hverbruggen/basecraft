@@ -354,12 +354,17 @@ impl PreparedOperation {
         let parameters =
             contract::normalize_parameters(&operation.descriptor, &supplied_parameters)?;
         operation.package.verify()?;
+        let project = session
+            .as_deref()
+            .and_then(basecraft_ops::Session::project)
+            .cloned();
         let mut frozen = freeze_inputs(
             &operation,
             query_preparation,
             &parameters,
             &mut inputs,
             captured,
+            project.as_ref(),
         )?;
         let AllocatedRun {
             run,
@@ -462,6 +467,7 @@ fn freeze_inputs(
     parameters: &Value,
     inputs: &mut PreparationInputs,
     captured: &[basecraft_ops::sanger_review::CapturedInput],
+    project: Option<&basecraft_ops::project::Project>,
 ) -> Result<FrozenInputs> {
     let PreparationInputs {
         document,
@@ -500,6 +506,7 @@ fn freeze_inputs(
                 &path,
                 captured,
                 (!accepted_hashes.contains_key(&source)).then_some(&mut *input_record),
+                project,
             )?;
             if operation
                 .descriptor
@@ -507,7 +514,7 @@ fn freeze_inputs(
                 .as_ref()
                 .is_some_and(|host| host.verify_inputs.contains(&name))
             {
-                let issues = basecraft_ops::records::verify(&source)?;
+                let issues = basecraft_ops::records::verify(&source, project)?;
                 if !issues.is_empty() {
                     return Err(Error::Protocol(format!(
                         "input evidence is not reusable: {}",

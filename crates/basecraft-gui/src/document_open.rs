@@ -140,10 +140,7 @@ impl Candidate {
         basecraft_io::counters::reset();
         let path = PathBuf::from(path);
         // The project is the folder the user chose; opening never changes it.
-        let project = root
-            .as_deref()
-            .map(basecraft_ops::project::Project::new)
-            .transpose()?;
+        let project = root.map(basecraft_ops::project::Project::new).transpose()?;
         let root = project.as_ref().map_or_else(
             || crate::bridge::file_folder(&path),
             |project| project.root().to_path_buf(),

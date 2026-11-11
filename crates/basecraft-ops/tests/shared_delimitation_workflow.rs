@@ -103,7 +103,7 @@ fn selected_combination_preserves_sources_actor_lineage_and_replay() {
     for path in &paths {
         assert_eq!(std::fs::read_to_string(path).unwrap(), SPART);
     }
-    let record = basecraft_ops::records::inspect(&output).unwrap();
+    let record = basecraft_ops::records::inspect(&output, None).unwrap();
     assert!(
         record
             .events

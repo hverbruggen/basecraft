@@ -134,7 +134,7 @@ pub(crate) fn reference_input_locked(
         origin_run: None,
         extra: BTreeMap::new(),
     };
-    let source_bundle = crate::records::provenance::bundle_for_result(&source);
+    let source_bundle = crate::records::provenance::bundle_for_result(&source, None);
     let mut upstream = Vec::new();
     for dependency in dependencies.iter().chain(std::iter::once(&source_bundle)) {
         let manifest = dependency.join("manifest.json");
@@ -722,7 +722,7 @@ pub(crate) fn lock_save(
         selection(target)?
     };
     locks.reserve(selected.iter().cloned(), changes_stores)?;
-    let check = inspect_in(&canonical, &selected, inspection)?;
+    let check = inspect(&canonical, &selected, inspection)?;
     Ok(SaveLock {
         _locks: locks,
         check: Some(check),
@@ -896,7 +896,7 @@ pub fn check(target: &Path) -> Result<EvidenceCheck> {
     };
     let (canonical, selected, inspection) = selection(target)?;
     drop(catalogue);
-    inspect_in(&canonical, &selected, inspection)
+    inspect(&canonical, &selected, inspection)
 }
 
 fn selection(target: &Path) -> Result<(PathBuf, Vec<PathBuf>, Inspection)> {
@@ -1056,14 +1056,10 @@ pub fn conflicts_in(target: &Path, stores: &[PathBuf]) -> Result<EvidenceConflic
 }
 
 pub fn check_in(target: &Path, stores: &[PathBuf]) -> Result<EvidenceCheck> {
-    inspect_in(target, stores, Inspection::default())
+    inspect(target, stores, Inspection::default())
 }
 
-fn inspect_in(
-    target: &Path,
-    stores: &[PathBuf],
-    mut inspection: Inspection,
-) -> Result<EvidenceCheck> {
+fn inspect(target: &Path, stores: &[PathBuf], mut inspection: Inspection) -> Result<EvidenceCheck> {
     let mut scan = StoreScan::default();
     for store in stores {
         scan_store(store, target, &mut scan, &mut inspection);
@@ -1606,8 +1602,12 @@ pub fn relink(bundle: &Path, original: &Path) -> Result<()> {
 }
 
 /// Explicit portable export materializes referenced dependencies; ordinary analysis does not.
-pub fn package(result: &Path, destination: &Path) -> Result<()> {
-    let issues = crate::records::provenance::verify(result)?;
+pub fn package(
+    result: &Path,
+    destination: &Path,
+    project: Option<&crate::project::Project>,
+) -> Result<()> {
+    let issues = crate::records::provenance::verify(result, project)?;
     if !issues.is_empty() {
         return Err(invalid(issues.join("; ")));
     }
@@ -1622,8 +1622,8 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
     let staging = tempfile::Builder::new()
         .prefix(".basecraft-package-")
         .tempdir_in(parent)?;
-    let bundle = crate::records::provenance::bundle_for_result(result);
-    let mut publication = crate::records::provenance::inspect(result)?;
+    let bundle = crate::records::provenance::bundle_for_result(result, project);
+    let mut publication = crate::records::provenance::inspect(result, project)?;
     if let Some(index) = publication
         .outputs
         .iter()
@@ -1901,7 +1901,7 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
     if authored.is_file() {
         copy(&authored, &target_bundle.join("reports/methods.md"))?;
     }
-    let issues = crate::records::provenance::verify(&copied)?;
+    let issues = crate::records::provenance::verify(&copied, None)?;
     if !issues.is_empty() {
         return Err(crate::Error::Damaged {
             path: copied.clone(),

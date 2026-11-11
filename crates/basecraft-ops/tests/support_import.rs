@@ -58,12 +58,15 @@ fn imported_source_is_referenced_verified_and_survives_a_folder_move() {
     session.save(doc, None).unwrap();
     drop(session);
 
-    let publication = records::inspect(&target).unwrap();
+    let publication = records::inspect(&target, None).unwrap();
     assert!(publication.events.iter().any(|event| matches!(&event.op,
         Op::ToolRun { plugin, operation, params, input_run: Some(_), .. }
             if plugin == "basecraft.tree" && operation == "import_support"
                 && params["sets"][0] == "Bootstrap")));
-    assert_eq!(records::verify(&target).unwrap(), Vec::<String>::new());
+    assert_eq!(
+        records::verify(&target, None).unwrap(),
+        Vec::<String>::new()
+    );
     // Reference-first: the source bytes are not copied into any store.
     let source_hash = basecraft_io::hash_file(&source).unwrap();
     let copied = walk(&target.parent().unwrap().join(".basecraft"))
@@ -76,7 +79,10 @@ fn imported_source_is_referenced_verified_and_survives_a_folder_move() {
     let moved = dir.path().join("moved");
     std::fs::rename(target.parent().unwrap(), &moved).unwrap();
     let target = moved.join("target.nwk");
-    assert_eq!(records::verify(&target).unwrap(), Vec::<String>::new());
+    assert_eq!(
+        records::verify(&target, None).unwrap(),
+        Vec::<String>::new()
+    );
     // Reopening keeps the imported values and their names.
     let reopened = basecraft_ops::files::load_tree(&target).unwrap();
     assert_eq!(
@@ -86,7 +92,10 @@ fn imported_source_is_referenced_verified_and_survives_a_folder_move() {
 
     // A changed source is reported, never silently accepted.
     std::fs::write(moved.join("support.nwk"), "((A:1,B:1)10:1,(C:1,D:1)20:1);").unwrap();
-    assert_ne!(records::verify(&target).unwrap(), Vec::<String>::new());
+    assert_ne!(
+        records::verify(&target, None).unwrap(),
+        Vec::<String>::new()
+    );
 }
 
 #[test]

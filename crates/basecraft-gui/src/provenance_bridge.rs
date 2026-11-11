@@ -18,7 +18,6 @@ pub mod qobject {
         #[qproperty(QString, message)]
         #[qproperty(QString, text)]
         #[qproperty(QString, notifications)]
-        #[qproperty(QString, project_dir)]
         type AppProvenance = super::ProvenanceRust;
         #[qinvokable]
         fn relink_run(self: Pin<&mut AppProvenance>, run: &QString, original: &QString) -> bool;
@@ -68,8 +67,6 @@ pub mod qobject {
 #[derive(Default)]
 pub struct ProvenanceRust {
     busy: bool,
-    /// The project the user chose, or empty for none.
-    project_dir: QString,
     message: QString,
     text: QString,
     notifications: QString,
@@ -117,11 +114,11 @@ fn run(
                 ))
             }
             "history" => {
-                let publication = records::inspect_in(result, project)?;
+                let publication = records::inspect(result, project)?;
                 Ok(serde_json::to_string_pretty(&publication)?)
             }
             "verify" => {
-                let issues = records::verify_in(result, project)?;
+                let issues = records::verify(result, project)?;
                 if issues.is_empty() {
                     Ok("Recorded artifact hashes match. Replay verification has not been performed.".into())
                 } else {
@@ -132,7 +129,7 @@ fn run(
                 }
             }
             "methods" => {
-                let publication = records::inspect_in(result, project)?;
+                let publication = records::inspect(result, project)?;
                 records::write_reports(destination, &publication)?;
                 Ok(format!(
                     "Generated reports: {}\nUser-authored methods.md is preserved.",
@@ -140,7 +137,7 @@ fn run(
                 ))
             }
             "package" => {
-                records::package_in(result, destination, project)?;
+                records::package(result, destination, project)?;
                 Ok(format!(
                     "Package saved: {}\nThis contains retained data and recorded history; external-tool replay has not been verified.",
                     destination.display()
@@ -172,8 +169,9 @@ impl qobject::AppProvenance {
     fn relink_input(self: Pin<&mut Self>, result: &QString, original: &QString) -> bool {
         let result = (|| -> basecraft_ops::Result<()> {
             let result = std::path::PathBuf::from(result.to_string());
-            basecraft_ops::records::inspect(&result)?;
-            let run = basecraft_ops::records::bundle_for_result(&result);
+            let project = crate::chosen_project::chosen().map_err(basecraft_ops::Error::Invalid)?;
+            basecraft_ops::records::inspect(&result, project.as_ref())?;
+            let run = basecraft_ops::records::bundle_for_result(&result, project.as_ref());
             basecraft_ops::records::relink(&run, Path::new(&original.to_string()))
         })();
         let success = result.is_ok();
@@ -191,7 +189,11 @@ impl qobject::AppProvenance {
     }
     fn saved_report(&self, path: &QString) -> QString {
         report_json(
-            basecraft_ops::records::inspect(Path::new(&path.to_string()))
+            crate::chosen_project::chosen()
+                .map_err(basecraft_ops::Error::Invalid)
+                .and_then(|project| {
+                    basecraft_ops::records::inspect(Path::new(&path.to_string()), project.as_ref())
+                })
                 .and_then(|p| basecraft_ops::records::DocumentRecord::from_publication(&p).report())
                 .and_then(|r| serde_json::to_string(&r).map_err(Into::into))
                 .map_err(|e| e.to_string()),
@@ -314,10 +316,10 @@ impl qobject::AppProvenance {
 
     fn bundle_path(mut self: Pin<&mut Self>, result: &QString) -> QString {
         let path = std::path::PathBuf::from(result.to_string());
-        let project = self.project();
-        match basecraft_ops::records::inspect_in(&path, project.as_ref()) {
+        let project = crate::chosen_project::chosen().ok().flatten();
+        match basecraft_ops::records::inspect(&path, project.as_ref()) {
             Ok(_) => QString::from(
-                basecraft_ops::records::bundle_for_result_in(&path, project.as_ref())
+                basecraft_ops::records::bundle_for_result(&path, project.as_ref())
                     .to_string_lossy()
                     .as_ref(),
             ),
@@ -328,18 +330,17 @@ impl qobject::AppProvenance {
             }
         }
     }
-    /// The chosen project, when the window has one.
-    fn project(&self) -> Option<basecraft_ops::project::Project> {
-        let folder = self.rust().project_dir.to_string();
-        (!folder.is_empty())
-            .then(|| basecraft_ops::project::Project::new(&folder).ok())
-            .flatten()
-    }
     fn start(self: Pin<&mut Self>, operation: &QString, result: &QString, destination: &QString) {
         let operation = operation.to_string();
         let result = std::path::PathBuf::from(result.to_string());
         let destination = std::path::PathBuf::from(destination.to_string());
-        let project = self.project();
+        let project = match crate::chosen_project::chosen() {
+            Ok(project) => project,
+            Err(error) => {
+                self.set_message(QString::from(format!("fail: {error}").as_str()));
+                return;
+            }
+        };
         self.start_work(move || run(&operation, &result, &destination, project.as_ref()));
     }
     fn start_work(

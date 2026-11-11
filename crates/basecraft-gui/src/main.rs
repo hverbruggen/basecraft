@@ -13,6 +13,7 @@ mod alignment_bridge;
 mod app_bridge;
 mod application;
 mod bridge;
+mod chosen_project;
 mod delimitation_bridge;
 mod document_jobs;
 mod document_open;

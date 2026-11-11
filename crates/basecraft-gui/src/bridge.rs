@@ -137,9 +137,10 @@ pub mod qobject {
             publication: bool,
             width: f64,
         );
-        /// Set `project_dir` to the project a file belongs to, without
-        /// opening it.
+        /// The user chose a project folder (empty for none). The only place
+        /// the window's project changes.
         #[qinvokable]
+        fn choose_project(self: Pin<&mut GenomeController>, path: &QString);
         #[qinvokable]
         fn resize(self: Pin<&mut GenomeController>, width: f64, height: f64);
         #[qinvokable]
@@ -987,18 +988,26 @@ impl qobject::GenomeController {
         mut self: Pin<&mut Self>,
         name: &QString,
         text: &QString,
-        root: &QString,
+        _root: &QString,
     ) -> QString {
         if self.rust().session.is_some() || self.rust().busy {
             return QString::from("This controller already owns a document");
         }
         let result = (|| {
-            let root = if root.to_string().is_empty() {
-                std::env::current_dir().map_err(|e| e.to_string())?
-            } else {
-                PathBuf::from(root.to_string())
+            // A new sequence has no file yet: it lives in the chosen project,
+            // or in basecraft's own scratch folder until Save As.
+            let project = crate::chosen_project::chosen()?;
+            let root = match &project {
+                Some(project) => project.root().to_path_buf(),
+                None => {
+                    basecraft_platform::paths::AppPaths::discover()
+                        .map_err(|e| e.to_string())?
+                        .scratch
+                }
             };
-            let mut session = Session::recoverable(&root).map_err(|e| e.to_string())?;
+            let mut session = Session::recoverable(&root)
+                .map_err(|e| e.to_string())?
+                .in_project(project);
             let doc = session
                 .create_sequence(&name.to_string(), &text.to_string())
                 .map_err(|e| e.to_string())?;
@@ -1100,6 +1109,11 @@ impl qobject::GenomeController {
         self.as_mut().notify("");
         self.refresh();
         Ok(())
+    }
+
+    pub fn choose_project(self: Pin<&mut Self>, path: &QString) {
+        crate::chosen_project::choose(&path.to_string());
+        self.set_project_dir(path.clone());
     }
 
     #[allow(clippy::cast_possible_truncation)]

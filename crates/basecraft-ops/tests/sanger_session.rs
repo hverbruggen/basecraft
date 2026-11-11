@@ -217,7 +217,7 @@ fn structural_redo_keeps_decisions_and_shared_ancestry() {
         SangerReview::load(&path).unwrap().decision(0),
         Some(&ReviewChoice::Edit('N'))
     );
-    let first = basecraft_ops::records::inspect(&path).unwrap();
+    let first = basecraft_ops::records::inspect(&path, None).unwrap();
     let first_decision = first
         .events
         .iter()
@@ -229,7 +229,7 @@ fn structural_redo_keeps_decisions_and_shared_ancestry() {
     let id = session.open(&path).unwrap();
     edit(&mut session, id, 'A');
     session.save(id, None).unwrap();
-    let record = basecraft_ops::records::DocumentRecord::from_file(&path).unwrap();
+    let record = basecraft_ops::records::DocumentRecord::from_file(&path, None).unwrap();
     assert!(
         record
             .report()
@@ -275,7 +275,7 @@ fn support_survives_private_history_and_recovery_publication() {
             Some(&ReviewChoice::Edit('A'))
         );
         if policy == ProvenancePolicy::LocalOnly {
-            let record = basecraft_ops::records::DocumentRecord::from_file(&target).unwrap();
+            let record = basecraft_ops::records::DocumentRecord::from_file(&target, None).unwrap();
             assert!(
                 record
                     .events

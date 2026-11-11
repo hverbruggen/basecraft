@@ -381,20 +381,14 @@ pub(super) struct ReviewDocument {
 }
 impl ReviewDocument {
     pub fn new(review: &SangerReview) -> Result<Self, String> {
-        let root = review
-            .storage_anchor()
-            .parent()
-            .ok_or("Review has no parent")?;
-        let mut session = basecraft_ops::Session::recoverable(root).map_err(|e| e.to_string())?;
+        let mut session = crate::chosen_project::session_for(review.storage_anchor())?;
         let id = session
             .create_sanger_review(review)
             .map_err(|e| e.to_string())?;
         Ok(Self { session, id })
     }
     pub fn open(path: &Path) -> Result<Self, String> {
-        let mut session =
-            basecraft_ops::Session::recoverable(path.parent().ok_or("Review has no parent")?)
-                .map_err(|e| e.to_string())?;
+        let mut session = crate::chosen_project::session_for(path)?;
         let id = session.open(path).map_err(|e| e.to_string())?;
         session.sanger_review(id).map_err(|e| e.to_string())?;
         Ok(Self { session, id })

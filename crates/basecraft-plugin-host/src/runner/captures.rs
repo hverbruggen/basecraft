@@ -7,6 +7,7 @@ pub(super) fn freeze(
     destination: &Path,
     captures: &[CapturedInput],
     history: Option<&mut basecraft_ops::records::DocumentRecord>,
+    project: Option<&basecraft_ops::project::Project>,
 ) -> Result<String> {
     let canonical = source.canonicalize()?;
     if let Some(capture) = captures.iter().find(|c| c.path() == canonical) {
@@ -15,7 +16,7 @@ pub(super) fn freeze(
     } else {
         let hash = crate::file_tool::freeze_file(source, destination)?;
         if let Some(history) = history
-            && let Ok(record) = basecraft_ops::records::DocumentRecord::from_file(source)
+            && let Ok(record) = basecraft_ops::records::DocumentRecord::from_file(source, project)
         {
             history.include_input(&record);
             if basecraft_io::hash_file(source).map_err(basecraft_ops::Error::from)? != hash {

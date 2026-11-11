@@ -168,7 +168,7 @@ pub fn checked_alignment(
     }
     // Workspaces written before the owning field was introduced still have a
     // bound input ledger (or its Save As delegation / contributing ancestry).
-    let bundle = crate::records::provenance::bundle_for_result(workspace_path);
+    let bundle = crate::records::provenance::bundle_for_result(workspace_path, None);
     if bundle.join("input.json").is_file() {
         let mut candidates = vec![bundle.clone()];
         candidates.extend(

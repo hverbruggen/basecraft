@@ -281,7 +281,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Command::Metadata { action } => metadata::run(action, save_options)?,
         Command::Submission { action } => submission::run(action, save_options)?,
         Command::History { file, json } => {
-            let report = basecraft_ops::records::DocumentRecord::saved_report_in(
+            let report = basecraft_ops::records::DocumentRecord::saved_report(
                 &file,
                 chosen_project().as_ref(),
             )?;
@@ -295,7 +295,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         Command::Methods { file, json, output } => {
-            let report = basecraft_ops::records::DocumentRecord::saved_report_in(
+            let report = basecraft_ops::records::DocumentRecord::saved_report(
                 &file,
                 chosen_project().as_ref(),
             )?;
@@ -340,14 +340,14 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             ProvenanceCommand::Inspect { result } => {
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&basecraft_ops::records::inspect_in(
+                    serde_json::to_string_pretty(&basecraft_ops::records::inspect(
                         &result,
                         chosen_project().as_ref()
                     )?)?
                 );
             }
             ProvenanceCommand::Verify { result } => {
-                let issues = basecraft_ops::records::verify_in(&result, chosen_project().as_ref())?;
+                let issues = basecraft_ops::records::verify(&result, chosen_project().as_ref())?;
                 if !issues.is_empty() {
                     return Err(issues.join("\n").into());
                 }
@@ -355,11 +355,11 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
             ProvenanceCommand::Methods { result, output } => {
                 let publication =
-                    basecraft_ops::records::inspect_in(&result, chosen_project().as_ref())?;
+                    basecraft_ops::records::inspect(&result, chosen_project().as_ref())?;
                 basecraft_ops::records::write_reports(&output, &publication)?;
             }
             ProvenanceCommand::Package { result, output } => {
-                basecraft_ops::records::package_in(&result, &output, chosen_project().as_ref())?;
+                basecraft_ops::records::package(&result, &output, chosen_project().as_ref())?;
             }
         },
         Command::NewSequence {

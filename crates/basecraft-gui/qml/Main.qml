@@ -224,7 +224,7 @@ ApplicationWindow {
             recentProjectsError = result.error
             return
         }
-        shell.project_dir = path
+        shell.choose_project(path)
         recentProjects = result.projects
         recentProjectsError = ""
     }
@@ -784,7 +784,6 @@ ApplicationWindow {
     }
     AppProvenance {
         id: provenance
-        project_dir: shell.project_dir
         onMessageChanged: if (message.length && message !== "notify: Working…") notification("", message, message.startsWith("fail:") ? "fail" : "done")
     }
     property var activeTasks: ({jobs: []})
@@ -2673,13 +2672,13 @@ ApplicationWindow {
         id: metadataTipLabels
         metadataController: specimenMetadata
         table: window.metadataTable
-        project_dir: shell.project_dir
+        projectDir: shell.project_dir
     }
     SpecimenRosterDialog {
         id: rosterConsumer
         metadataController: specimenMetadata
         table: window.metadataTable
-        project_dir: shell.project_dir
+        projectDir: shell.project_dir
     }
     TreeTipNameDialog {
         id: tipDialog

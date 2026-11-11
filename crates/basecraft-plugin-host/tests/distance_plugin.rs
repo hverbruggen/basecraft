@@ -230,11 +230,11 @@ fn reference_tree_save_as_and_complete_export_retain_alignment_and_support() {
             .any(|name| name.ends_with(".alignment.afa"))
     );
     let package = root.path().join("portable");
-    basecraft_ops::records::package(&output, &package).unwrap();
+    basecraft_ops::records::package(&output, &package, None).unwrap();
     std::fs::remove_file(&source).unwrap();
     let exported = package.join("tree.nwk");
     assert_eq!(
-        basecraft_ops::records::verify(&exported).unwrap(),
+        basecraft_ops::records::verify(&exported, None).unwrap(),
         Vec::<String>::new()
     );
     let tree = basecraft_ops::files::load_tree(&exported).unwrap().doc;
@@ -299,7 +299,7 @@ fn registered_cache_reuses_distances_across_consumers_and_refuses_mismatch() {
             );
         }
         assert_eq!(
-            basecraft_ops::records::verify(&common::member(&outcome, report)).unwrap(),
+            basecraft_ops::records::verify(&common::member(&outcome, report), None).unwrap(),
             Vec::<String>::new()
         );
     }
@@ -365,7 +365,7 @@ fn bootstrap_destination_publishes_working_copy_and_repairs_late_collision() {
                 std::fs::read(retained).unwrap()
             );
             assert_eq!(
-                basecraft_ops::records::verify(&visible).unwrap(),
+                basecraft_ops::records::verify(&visible, None).unwrap(),
                 Vec::<String>::new()
             );
         }
@@ -389,7 +389,7 @@ fn bootstrap_destination_publishes_working_copy_and_repairs_late_collision() {
     std::fs::remove_file(&visible).unwrap();
     common::assert_completed(&manager.repair(&accepted.run_id).unwrap());
     assert_eq!(
-        basecraft_ops::records::verify(&visible).unwrap(),
+        basecraft_ops::records::verify(&visible, None).unwrap(),
         Vec::<String>::new()
     );
 }

@@ -21,6 +21,8 @@ mod application_test_bridge;
 #[path = "../src/bridge.rs"]
 #[allow(unused_imports)] // harness=false omits the included module's #[test] bodies.
 mod bridge;
+#[path = "../src/chosen_project.rs"]
+mod chosen_project;
 #[path = "controller_theme/mod.rs"]
 mod controller_theme;
 #[path = "../src/delimitation_bridge.rs"]

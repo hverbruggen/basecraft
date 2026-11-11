@@ -62,7 +62,7 @@ impl Session {
         self.docs.push(Slot::new(
             key.into(),
             content,
-            crate::records::provenance::bundle_for_result_in(
+            crate::records::provenance::bundle_for_result(
                 &self.resolve(key),
                 self.project.as_ref(),
             ),
@@ -133,7 +133,7 @@ impl Session {
         self.docs.push(Slot::new(
             key.into(),
             Loaded::SangerReview(Box::new(review)),
-            crate::records::provenance::bundle_for_result_in(
+            crate::records::provenance::bundle_for_result(
                 &self.resolve(key),
                 self.project.as_ref(),
             ),

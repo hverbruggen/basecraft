@@ -87,7 +87,7 @@ fn stdio_edits_are_version_checked_logged_and_project_scoped() {
             .unwrap()
             .contains("TCGT")
     );
-    let log = basecraft_ops::records::inspect_in(
+    let log = basecraft_ops::records::inspect(
         &d.path().join("input.afa"),
         Some(&project_of(&d.path().join("input.afa"))),
     )
@@ -97,7 +97,7 @@ fn stdio_edits_are_version_checked_logged_and_project_scoped() {
         |e| matches!(&e.actor,basecraft_protocol::Actor::Agent{model} if model=="test-agent")
     ));
     assert_eq!(
-        basecraft_ops::records::verify_in(
+        basecraft_ops::records::verify(
             &d.path().join("input.afa"),
             Some(&project_of(&d.path().join("input.afa")))
         )
@@ -167,7 +167,7 @@ fn script_clients_record_script_edits() {
         "{}",
         String::from_utf8_lossy(&edited.stderr)
     );
-    let events = basecraft_ops::records::inspect_in(&file, Some(&project_of(&file)))
+    let events = basecraft_ops::records::inspect(&file, Some(&project_of(&file)))
         .unwrap()
         .events;
     let actors: Vec<&Actor> = events
@@ -192,7 +192,7 @@ fn script_clients_record_script_edits() {
             .any(|e| matches!(e.actor, Actor::Agent { .. }))
     );
     assert_eq!(
-        basecraft_ops::records::verify_in(&file, Some(&project_of(&file))).unwrap(),
+        basecraft_ops::records::verify(&file, Some(&project_of(&file))).unwrap(),
         Vec::<String>::new()
     );
     // Read back through the history command: script edits show as script edits.
@@ -483,7 +483,7 @@ fn species_mcp_uses_the_canonical_workspace_contract() {
             .all(|h| h.name.starts_with("GMYC species hypothesis "))
     );
     assert_eq!(
-        basecraft_ops::records::verify_in(
+        basecraft_ops::records::verify(
             &root.join("species.spart"),
             Some(&project_of(&root.join("species.spart")))
         )
@@ -602,7 +602,7 @@ fn tree_mcp_routes_share_hidden_storage() {
         assert!(run.join("execution.json").is_file());
         assert!(basecraft_ops::records::AlignmentLink::read(&output).is_ok());
         assert_eq!(
-            basecraft_ops::records::verify_in(&output, Some(&project_of(&output))).unwrap(),
+            basecraft_ops::records::verify(&output, Some(&project_of(&output))).unwrap(),
             Vec::<String>::new()
         );
     }

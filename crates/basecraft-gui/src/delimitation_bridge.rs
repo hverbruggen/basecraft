@@ -569,8 +569,7 @@ impl qobject::DelimitationController {
                     .map(|s| serde_json::from_str(&s))
                     .transpose()
                     .map_err(|e| e.to_string())?;
-            let mut session = Session::recoverable(crate::bridge::file_folder(&output))
-                .map_err(|e| e.to_string())?;
+            let mut session = crate::chosen_project::session_for(&output)?;
             basecraft_ops::delimitation::combine_to(&mut session, &paths, &output, keep.as_ref())
                 .map_err(|e| e.to_string())?;
             Ok(())
@@ -599,8 +598,7 @@ impl qobject::DelimitationController {
             let display = basecraft_ops::delimitation::checked_display_tree(work)
                 .map_err(|e| e.to_string())?
                 .ok_or("No display tree")?;
-            let mut rooting_session = Session::recoverable(crate::bridge::file_folder(&display))
-                .map_err(|e| e.to_string())?;
+            let mut rooting_session = crate::chosen_project::session_for(&display)?;
             root_tree_copy(&mut rooting_session, &display, &method.to_string())
         })();
         match result {
@@ -1441,8 +1439,8 @@ impl qobject::DelimitationController {
                 if path != &self.rust().file_path {
                     let adopted = (|| -> basecraft_ops::Result<_> {
                         let target = PathBuf::from(path.to_string());
-                        let mut session =
-                            Session::recoverable(crate::bridge::file_folder(&target))?;
+                        let mut session = crate::chosen_project::session_for(&target)
+                            .map_err(basecraft_ops::Error::Invalid)?;
                         let doc = session.open(&target)?;
                         Ok((session, doc))
                     })();
@@ -2379,7 +2377,7 @@ mod naming_tests {
                 );
             }
             for result in [&first, &second] {
-                let publication = basecraft_ops::records::inspect(result).unwrap();
+                let publication = basecraft_ops::records::inspect(result, None).unwrap();
                 assert!(
                     publication
                         .inputs
@@ -2393,19 +2391,19 @@ mod naming_tests {
                         .any(|edit| edit.operation.name() == operation)
                 );
                 assert_eq!(
-                    basecraft_ops::records::verify(result).unwrap(),
+                    basecraft_ops::records::verify(result, None).unwrap(),
                     Vec::<String>::new()
                 );
             }
             // A supplied tree can itself have ancestry (including IQ-TREE's
             // inference). Save As must carry its contributing publication.
-            let parent = basecraft_ops::records::inspect(&first).unwrap();
+            let parent = basecraft_ops::records::inspect(&first, None).unwrap();
             let mut session = rooting_session(dir.path());
             let descendant = root_tree_copy(&mut session, &first, method).unwrap();
-            let publication = basecraft_ops::records::inspect(&descendant).unwrap();
+            let publication = basecraft_ops::records::inspect(&descendant, None).unwrap();
             assert!(publication.parents.contains(&parent.id));
             assert_eq!(
-                basecraft_ops::records::verify(&descendant).unwrap(),
+                basecraft_ops::records::verify(&descendant, None).unwrap(),
                 Vec::<String>::new()
             );
         }

@@ -449,7 +449,8 @@ impl qobject::MetadataController {
         // Creation has a fixed-size empty payload; callers can immediately
         // import into it. Existing project documents use the worker above.
         let result = metadata::create(&project).and_then(|path| {
-            let mut session = Session::recoverable(&project)?;
+            let chosen = basecraft_ops::project::Project::new(&project)?;
+            let mut session = Session::recoverable(&project)?.in_project(Some(chosen));
             let doc = session.open(&path)?;
             Ok((session, doc))
         });

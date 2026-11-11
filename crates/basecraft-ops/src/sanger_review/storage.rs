@@ -1259,7 +1259,7 @@ mod tests {
         let path = folder.join("specimen.sanger-review.json");
         review.save(&path).unwrap();
         assert_eq!(
-            crate::records::provenance::verify(&path).unwrap(),
+            crate::records::provenance::verify(&path, None).unwrap(),
             Vec::<String>::new()
         );
         assert_eq!(review.evidence.sources.len(), 1);
@@ -1295,7 +1295,7 @@ mod tests {
         assert_eq!(reopened.decision(0), Some(&ReviewChoice::Edit('G')));
         assert_eq!(reopened.decision(0), Some(&ReviewChoice::Edit('G')));
         assert_eq!(
-            crate::records::provenance::verify(&path).unwrap(),
+            crate::records::provenance::verify(&path, None).unwrap(),
             Vec::<String>::new()
         );
     }
@@ -1310,7 +1310,7 @@ mod tests {
         let path = folder.join("specimen.sanger-review.json");
         review.save(&path).unwrap();
         let authored =
-            crate::records::provenance::bundle_for_result(&path).join("reports/methods.md");
+            crate::records::provenance::bundle_for_result(&path, None).join("reports/methods.md");
         std::fs::write(
             &authored,
             "User-authored laboratory methods, preserved verbatim.\n",
@@ -1318,7 +1318,7 @@ mod tests {
         .unwrap();
         review.save(&path).unwrap();
         let package = tmp.path().join("package");
-        crate::records::provenance::package(&path, &package).unwrap();
+        crate::records::provenance::package(&path, &package, None).unwrap();
         std::fs::remove_dir_all(folder).unwrap();
         let moved = tmp.path().join("moved-export");
         std::fs::rename(&package, &moved).unwrap();
@@ -1336,7 +1336,7 @@ mod tests {
         assert_eq!(reopened.unresolved(), 1);
         assert!(reopened.working_draft().unwrap().inputs[0].path.is_file());
         assert_eq!(
-            crate::records::provenance::verify(&path).unwrap(),
+            crate::records::provenance::verify(&path, None).unwrap(),
             Vec::<String>::new()
         );
         let mut saved_again = reopened;
@@ -1361,17 +1361,17 @@ mod tests {
             .unwrap();
         review.export_consensus(&output, "sample").unwrap();
         assert_eq!(
-            crate::records::provenance::verify(&output).unwrap(),
+            crate::records::provenance::verify(&output, None).unwrap(),
             Vec::<String>::new()
         );
         let package = tmp.path().join("export");
-        crate::records::provenance::package(&output, &package).unwrap();
+        crate::records::provenance::package(&output, &package, None).unwrap();
         std::fs::remove_dir_all(folder).unwrap();
         let resumed = ReviewSession::load(&package.join("consensus.sanger-review.json")).unwrap();
         assert_eq!(resumed.resolved_sequence().as_deref(), Some("AC"));
         assert!(resumed.working_draft().is_ok());
         assert_eq!(
-            crate::records::provenance::verify(&package.join("consensus.fa")).unwrap(),
+            crate::records::provenance::verify(&package.join("consensus.fa"), None).unwrap(),
             Vec::<String>::new()
         );
     }
@@ -1386,7 +1386,8 @@ mod tests {
         std::fs::write(&trace, b"ABIFdifferent bytes").unwrap();
         assert!(ReviewSession::load(&path).unwrap().working_draft().is_err());
         assert!(
-            crate::records::provenance::package(&path, &tmp.path().join("bad-export")).is_err()
+            crate::records::provenance::package(&path, &tmp.path().join("bad-export"), None)
+                .is_err()
         );
         assert!(!tmp.path().join("bad-export").exists());
         std::fs::remove_file(&trace).unwrap();
@@ -1401,7 +1402,8 @@ mod tests {
         let resolved = reopened.working_draft().unwrap();
         assert_eq!(std::fs::read(&resolved.inputs[0].path).unwrap(), original);
         assert_eq!(std::fs::read(&trace).unwrap(), b"ABIFnew user data");
-        crate::records::provenance::package(&path, &tmp.path().join("preserved-export")).unwrap();
+        crate::records::provenance::package(&path, &tmp.path().join("preserved-export"), None)
+            .unwrap();
     }
 
     #[test]
@@ -1474,7 +1476,7 @@ mod tests {
         let path = folder.join("multi.sanger-review.json");
         review.save(&path).unwrap();
         let package = tmp.path().join("export");
-        crate::records::provenance::package(&path, &package).unwrap();
+        crate::records::provenance::package(&path, &package, None).unwrap();
         std::fs::remove_dir_all(folder).unwrap();
         let reopened = ReviewSession::load(&package.join("multi.sanger-review.json")).unwrap();
         assert_eq!(reopened.draft_json, review.draft_json);
@@ -1518,16 +1520,16 @@ mod tests {
         let result = folder.join("added.afa");
         session.save(doc, Some(&result)).unwrap();
         assert_eq!(
-            crate::records::provenance::verify(&result).unwrap(),
+            crate::records::provenance::verify(&result, None).unwrap(),
             Vec::<String>::new()
         );
         let package = tmp.path().join("export");
-        crate::records::provenance::package(&result, &package).unwrap();
+        crate::records::provenance::package(&result, &package, None).unwrap();
         drop(session);
         std::fs::remove_dir_all(&folder).unwrap();
         let result = package.join("added.afa");
         assert_eq!(
-            crate::records::provenance::verify(&result).unwrap(),
+            crate::records::provenance::verify(&result, None).unwrap(),
             Vec::<String>::new()
         );
         let mut session = crate::Session::recoverable(&package).unwrap();
@@ -1538,7 +1540,7 @@ mod tests {
         session.save(doc, Some(&saved_again)).unwrap();
         assert_eq!(std::fs::read(&saved_again).unwrap(), packaged_bytes);
         assert_eq!(
-            crate::records::provenance::verify(&saved_again).unwrap(),
+            crate::records::provenance::verify(&saved_again, None).unwrap(),
             Vec::<String>::new()
         );
     }

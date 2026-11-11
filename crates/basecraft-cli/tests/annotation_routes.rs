@@ -58,7 +58,7 @@ fn cli(profile: &Path) -> Command {
 }
 
 fn tool_run(file: &Path, plugin: &str) -> LogEntry {
-    let publication = records::inspect_in(file, Some(&project_of(file))).unwrap();
+    let publication = records::inspect(file, Some(&project_of(file))).unwrap();
     let mut runs: Vec<_> = publication
         .events
         .into_iter()
@@ -266,7 +266,7 @@ fn every_annotation_route_keeps_the_same_invocation_evidence() {
         assert_eq!(features(file), features(&gui), "{}", file.display());
         assert_eq!(features(file).len(), 1);
         assert_eq!(
-            records::verify_in(file, Some(&project_of(file))).unwrap(),
+            records::verify(file, Some(&project_of(file))).unwrap(),
             Vec::<String>::new(),
             "{}",
             file.display()

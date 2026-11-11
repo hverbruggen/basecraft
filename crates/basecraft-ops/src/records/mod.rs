@@ -23,9 +23,8 @@ pub use input_evidence::{
 };
 pub use links::{AlignmentLink, AlignmentLinkExt, metadata_present, sidecar, view_sidecar};
 pub use provenance::{
-    bundle_for_result, bundle_for_result_in, companion, inspect, inspect_in, package, package_in,
-    publish, publish_run, read_record, tool_actor, tool_run_entry, verify, verify_in,
-    write_reports,
+    bundle_for_result, companion, inspect, package, publish, publish_run, read_record, tool_actor,
+    tool_run_entry, verify, write_reports,
 };
 pub use replay::{
     PublishedWithFailure, RecoveryCompletion, RecoveryMode, RecoveryPhase, ReplayReport,

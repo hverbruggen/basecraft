@@ -80,7 +80,7 @@ impl Session {
         let mut slot = Slot::new(
             key.clone(),
             content,
-            crate::records::provenance::bundle_for_result_in(path, self.project.as_ref()),
+            crate::records::provenance::bundle_for_result(path, self.project.as_ref()),
             disk_stamp,
         );
         slot.accepted_hashes.clone_from(&hashes);
