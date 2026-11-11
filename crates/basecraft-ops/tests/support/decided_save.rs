@@ -1,5 +1,5 @@
 //! The save route users take: check, choose a policy for known analyses, save.
-use basecraft_ops::{DocId, Session, input_evidence::SavePolicy};
+use basecraft_ops::{DocId, Session, records::SavePolicy};
 use std::path::Path;
 
 pub fn save_with_policy(

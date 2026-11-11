@@ -450,7 +450,7 @@ fn hidden_workspace_moves_with_its_folder_and_passive_open_writes_nothing() {
     let run = basecraft_ops::delimitation::reference_input(&path, &tree, &hash).unwrap();
     // The generic writer extraction must retain species reference-only semantics
     // and its established publication origin; no automatic source snapshot.
-    let input = basecraft_ops::input_evidence::read_input(run.directory()).unwrap();
+    let input = basecraft_ops::records::read_input(run.directory()).unwrap();
     assert_eq!(
         input.state,
         basecraft_protocol::input_records::EvidenceState::Referenced
@@ -541,7 +541,7 @@ fn damaged_species_binding_refuses_legacy_fallback_and_foreign_store_refuses_sav
 
 #[test]
 fn referenced_display_preserve_copy_is_idempotent_and_never_uses_changed_bytes() {
-    use basecraft_ops::input_evidence::{SavePolicy, conflicts, resolve};
+    use basecraft_ops::records::{SavePolicy, conflicts, resolve};
     crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("species.spart");
@@ -654,12 +654,12 @@ fn application_state_replay_handles_hidden_baseline_and_missing_original_folder(
     let check = attempt.check(0).unwrap();
     assert_ne!(
         check.evidence().issues,
-        [] as [basecraft_ops::input_evidence::InspectionIssue; 0]
+        [] as [basecraft_ops::records::InspectionIssue; 0]
     );
     attempt
         .advance(
             0,
-            Some(check.decide(basecraft_ops::input_evidence::SavePolicy::Cancel, true)),
+            Some(check.decide(basecraft_ops::records::SavePolicy::Cancel, true)),
         )
         .unwrap();
     let completed = attempt.publish().unwrap();
@@ -719,7 +719,7 @@ fn combined_workspace_move_and_complete_export_keep_declared_source_evidence() {
         .map(|h| h.groups.clone())
         .collect::<Vec<_>>();
     assert!(
-        !basecraft_ops::input_evidence::conflicts(&second)
+        !basecraft_ops::records::conflicts(&second)
             .unwrap()
             .analyses
             .is_empty()

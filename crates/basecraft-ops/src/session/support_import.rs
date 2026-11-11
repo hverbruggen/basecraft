@@ -89,7 +89,7 @@ impl Session {
             && self.provenance_policy != basecraft_platform::settings::ProvenancePolicy::None
         {
             let anchor = self.resolve(self.doc_key(id)?);
-            let ledger = crate::input_evidence::reference_input_with_dependencies(
+            let ledger = crate::records::input_evidence::reference_input_with_dependencies(
                 &anchor,
                 &source,
                 &hash,

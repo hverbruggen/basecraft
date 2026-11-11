@@ -1,12 +1,12 @@
 //! Registry lookup keeps live alias protection without opening unrelated ledgers.
 #[path = "support/isolated_profile.rs"]
 mod isolated_profile;
-use basecraft_ops::{analysis_store::ArtifactRun, input_evidence as evidence};
+use basecraft_ops::{records, records::ArtifactRun};
 use std::path::Path;
 
 fn reference(root: &Path, source: &Path) -> ArtifactRun {
     std::fs::create_dir_all(root).unwrap();
-    evidence::reference_input_with_dependencies(
+    records::reference_input_with_dependencies(
         &root.join("result.txt"),
         source,
         &basecraft_io::hash_file(source).unwrap(),
@@ -31,7 +31,7 @@ fn external_replacement_and_new_alias_are_still_detected() {
     std::fs::rename(replacement, &source).unwrap();
     let alias = root.join("alias.fasta");
     std::fs::hard_link(&source, &alias).unwrap();
-    let check = evidence::check(&alias).unwrap();
+    let check = records::check(&alias).unwrap();
     assert_eq!(check.conflict.analyses.len(), 1);
     assert_eq!(check.conflict.analyses[0].run, run.directory());
 }
@@ -56,9 +56,9 @@ fn copied_identity_does_not_retire_the_live_original_store() {
         copied_store.join("identity"),
     )
     .unwrap();
-    evidence::register(&copied).unwrap();
+    records::register(&copied).unwrap();
     for path in [source, other] {
-        let check = evidence::check(&path).unwrap();
+        let check = records::check(&path).unwrap();
         assert!(check.is_complete());
         assert_eq!(check.conflict.analyses.len(), 1);
     }
@@ -87,7 +87,7 @@ fn corrupt_alias_shard_keeps_other_known_conflicts() {
         b"damaged",
     )
     .unwrap();
-    let check = evidence::check(&source).unwrap();
+    let check = records::check(&source).unwrap();
     assert!(!check.is_complete());
     assert!(
         check
@@ -111,7 +111,7 @@ fn corrupt_alias_shard_keeps_other_known_conflicts() {
     let decision = session
         .check_save(doc, None)
         .unwrap()
-        .decide(evidence::SavePolicy::Cancel, true);
+        .decide(records::SavePolicy::Cancel, true);
     assert!(session.save_with_decision(doc, None, decision).is_err());
     assert_eq!(std::fs::read(source).unwrap(), b">a\nACGT\n");
 }
@@ -126,23 +126,17 @@ fn current_writer_updates_source_index() {
     std::fs::write(&source, b">a\nACGT\n").unwrap();
     std::fs::write(&other, b">a\nTTTT\n").unwrap();
     let run = reference(&root.join("analysis"), &source);
-    assert!(
-        evidence::check(&other)
-            .unwrap()
-            .conflict
-            .analyses
-            .is_empty()
-    );
-    let mut input = evidence::read_input(run.directory()).unwrap();
+    assert!(records::check(&other).unwrap().conflict.analyses.is_empty());
+    let mut input = records::read_input(run.directory()).unwrap();
     let reference = input.source.as_mut().unwrap();
-    reference.path = evidence::relative(run.directory(), &other).unwrap();
-    reference.stamp = evidence::stamp(&other).unwrap();
+    reference.path = records::relative(run.directory(), &other).unwrap();
+    reference.stamp = records::stamp(&other).unwrap();
     reference.hash = basecraft_io::hash_file(&other).unwrap();
-    evidence::Mutation::begin()
+    records::Mutation::begin()
         .unwrap()
         .write_input(run.directory(), &input)
         .unwrap();
-    let check = evidence::check(&other).unwrap();
+    let check = records::check(&other).unwrap();
     assert!(check.is_complete());
     assert_eq!(check.conflict.analyses.len(), 1);
 }
@@ -162,27 +156,27 @@ fn failed_dependency_update_cannot_hide_a_later_relinked_source() {
     let dependent = reference(&root.join("dependent"), &a);
     let sibling = ArtifactRun::create(&root.join("dependent/result.txt"), "broken").unwrap();
     std::fs::write(sibling.directory().join("input.json"), b"damaged").unwrap();
-    let mut input = evidence::read_input(dependent.directory()).unwrap();
+    let mut input = records::read_input(dependent.directory()).unwrap();
     input.extra.insert(
         "upstream".into(),
         serde_json::json!([{
-            "bundle": evidence::relative(dependent.directory(), owner.directory()).unwrap()
+            "bundle": records::relative(dependent.directory(), owner.directory()).unwrap()
         }]),
     );
-    evidence::Mutation::begin()
+    records::Mutation::begin()
         .unwrap()
         .write_input(dependent.directory(), &input)
         .unwrap();
-    let mut input = evidence::read_input(owner.directory()).unwrap();
+    let mut input = records::read_input(owner.directory()).unwrap();
     let source = input.source.as_mut().unwrap();
-    source.path = evidence::relative(owner.directory(), &b).unwrap();
+    source.path = records::relative(owner.directory(), &b).unwrap();
     source.hash = basecraft_io::hash_file(&b).unwrap();
-    source.stamp = evidence::stamp(&b).unwrap();
-    evidence::Mutation::begin()
+    source.stamp = records::stamp(&b).unwrap();
+    records::Mutation::begin()
         .unwrap()
         .write_input(owner.directory(), &input)
         .unwrap();
-    let check = evidence::check(&b).unwrap();
+    let check = records::check(&b).unwrap();
     assert!(
         !check.is_complete(),
         "unpublished ancestry must remain uncertain"
@@ -216,7 +210,7 @@ fn damaged_catalogue_cannot_hide_a_reference() {
         b"broken cache".to_vec(),
     ] {
         std::fs::write(&cache, damaged).unwrap();
-        let check = evidence::check(&source).unwrap();
+        let check = records::check(&source).unwrap();
         assert_eq!(check.conflict.analyses.len(), 1);
         assert_eq!(check.conflict.analyses[0].run, run.directory());
     }
@@ -235,7 +229,7 @@ fn deleted_project_does_not_concern_other_saves() {
     std::fs::remove_dir_all(&project).unwrap();
     let other = root.join("other.fasta");
     std::fs::write(&other, b">b\nAAAA\n").unwrap();
-    let check = evidence::check(&other).unwrap();
+    let check = records::check(&other).unwrap();
     assert!(check.is_complete(), "{:?}", check.issues);
     assert!(check.conflict.analyses.is_empty());
 }
@@ -258,8 +252,8 @@ fn two_hundred_stores_fifty_runs_open_no_unrelated_ledgers() {
         let source = folder.join("source.fasta");
         std::fs::write(&source, b">a\nACGT\n").unwrap();
         let first = reference(&folder, &source);
-        let input = evidence::read_input(first.directory()).unwrap();
-        let _lock = evidence::lock().unwrap();
+        let input = records::read_input(first.directory()).unwrap();
+        let _lock = records::lock().unwrap();
         for run in 0..49 {
             let run =
                 ArtifactRun::create(&folder.join("result.txt"), &format!("run-{run}")).unwrap();
@@ -270,13 +264,13 @@ fn two_hundred_stores_fifty_runs_open_no_unrelated_ledgers() {
             )
             .unwrap();
         }
-        evidence::register(&first).unwrap();
+        records::register(&first).unwrap();
     }
     let target = root.join("unrelated.fasta");
     std::fs::write(&target, b">b\nAAAA\n").unwrap();
     basecraft_io::counters::reset();
     let started = std::time::Instant::now();
-    let check = evidence::check(&target).unwrap();
+    let check = records::check(&target).unwrap();
     let elapsed = started.elapsed();
     let counts = basecraft_io::counters::snapshot();
     assert!(check.is_complete());
@@ -407,10 +401,10 @@ fn stray_regular_file_does_not_make_an_unrelated_store_incomplete() {
         b"notes",
     )
     .unwrap();
-    let check = evidence::check(&other).unwrap();
+    let check = records::check(&other).unwrap();
     assert!(check.is_complete());
     assert!(check.conflict.analyses.is_empty());
-    assert_eq!(evidence::check(&source).unwrap().conflict.analyses.len(), 1);
+    assert_eq!(records::check(&source).unwrap().conflict.analyses.len(), 1);
 }
 
 #[cfg(feature = "test-counters")]
@@ -427,7 +421,7 @@ fn completed_registration_needs_no_unrelated_ledger_reads() {
     std::fs::write(&other, b">b\nAAAA\n").unwrap();
     let run = reference(&root.join("analysis"), &source);
     basecraft_io::counters::reset();
-    assert!(evidence::check(&other).unwrap().is_complete());
+    assert!(records::check(&other).unwrap().is_complete());
     assert!(
         basecraft_io::counters::snapshot()
             .reads
@@ -442,8 +436,8 @@ fn completed_registration_needs_no_unrelated_ledger_reads() {
     let record: basecraft_protocol::records::IndexFile<
         basecraft_protocol::records::AnalysisInputIndex,
     > = serde_json::from_slice(&bytes).unwrap();
-    let _lock = evidence::lock().unwrap();
-    evidence::register(&run).unwrap();
+    let _lock = records::lock().unwrap();
+    records::register(&run).unwrap();
     let restored: basecraft_protocol::records::IndexFile<
         basecraft_protocol::records::AnalysisInputIndex,
     > = serde_json::from_slice(&std::fs::read(cache).unwrap()).unwrap();
@@ -470,7 +464,7 @@ fn symlinked_folder_spelling_and_new_inode_are_still_detected() {
     let copy = real.join("restored.tmp");
     std::fs::copy(&real_file, &copy).unwrap();
     std::fs::rename(&copy, &real_file).unwrap();
-    let check = evidence::check(&real_file).unwrap();
+    let check = records::check(&real_file).unwrap();
     assert_eq!(check.conflict.analyses.len(), 1);
     assert_eq!(check.conflict.analyses[0].run, run.directory());
 }

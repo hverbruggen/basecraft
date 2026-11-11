@@ -1,7 +1,5 @@
 use crate::Result;
-use basecraft_ops::{
-    analysis_store::ArtifactRun, input_evidence::Mutation, sanger_review::CapturedInput,
-};
+use basecraft_ops::{records::ArtifactRun, records::Mutation, sanger_review::CapturedInput};
 use std::path::Path;
 
 pub(super) fn freeze(

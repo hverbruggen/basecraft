@@ -147,7 +147,7 @@ fn run(operation: &str, result: &Path, destination: &Path) -> Result<String, Str
 }
 impl qobject::AppProvenance {
     fn relink_run(self: Pin<&mut Self>, run: &QString, original: &QString) -> bool {
-        let result = basecraft_ops::input_evidence::relink(
+        let result = basecraft_ops::records::relink(
             Path::new(&run.to_string()),
             Path::new(&original.to_string()),
         );
@@ -166,7 +166,7 @@ impl qobject::AppProvenance {
             let result = std::path::PathBuf::from(result.to_string());
             basecraft_ops::records::inspect(&result)?;
             let run = basecraft_ops::records::bundle_for_result(&result);
-            basecraft_ops::input_evidence::relink(&run, Path::new(&original.to_string()))
+            basecraft_ops::records::relink(&run, Path::new(&original.to_string()))
         })();
         let success = result.is_ok();
         self.set_message(QString::from(

@@ -105,7 +105,7 @@ impl Document for SangerReview {
         &self,
         target: &Path,
         _hashes: &[(PathBuf, String)],
-        run: Option<&crate::analysis_store::ArtifactRun>,
+        run: Option<&crate::records::analysis_store::ArtifactRun>,
         _publication: &WritePublication,
     ) -> Result<()> {
         run.map_or(Ok(()), |run| SangerReview::bind_session_review(target, run))

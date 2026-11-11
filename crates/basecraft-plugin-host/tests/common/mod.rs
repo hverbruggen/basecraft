@@ -314,8 +314,8 @@ pub fn align_document(
 /// The analyses in a save conflict, without the reference ledger a registered
 /// run keeps for each of its inputs; that ledger is listed beside its run.
 pub fn analyses(
-    conflict: &basecraft_ops::input_evidence::EvidenceConflict,
-) -> Vec<&basecraft_ops::input_evidence::AffectedAnalysis> {
+    conflict: &basecraft_ops::records::EvidenceConflict,
+) -> Vec<&basecraft_ops::records::AffectedAnalysis> {
     conflict
         .analyses
         .iter()
@@ -326,6 +326,6 @@ pub fn analyses(
 /// Resolve the verified original through its shared input owner. Tests must not
 /// assume every backing ledger owns a separate physical preservation copy.
 pub fn verified_input(run: &Path) -> PathBuf {
-    let input = basecraft_ops::input_evidence::read_input(run).unwrap();
-    basecraft_ops::input_evidence::verified_source(run, input.source.as_ref().unwrap()).unwrap()
+    let input = basecraft_ops::records::read_input(run).unwrap();
+    basecraft_ops::records::verified_source(run, input.source.as_ref().unwrap()).unwrap()
 }

@@ -264,7 +264,7 @@ fn missing_inputs_report_filesystem_errors() {
 
 #[test]
 fn bound_tree_verifies_owned_snapshot_after_main_mutation_or_removal() {
-    use basecraft_ops::analysis_store::ArtifactRun;
+    use basecraft_ops::records::ArtifactRun;
     crate::isolated_profile::isolate!();
     let original = b"(a:1,b:2);\n(c:3,d:4);\n";
     for metadata in [false, true] {
@@ -324,7 +324,7 @@ fn bound_tree_verifies_owned_snapshot_after_main_mutation_or_removal() {
 #[test]
 fn bound_tree_session_with_missing_metadata_reads_main_once() {
     use basecraft_io::counters;
-    use basecraft_ops::analysis_store::ArtifactRun;
+    use basecraft_ops::records::ArtifactRun;
     crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("bound.nwk");
@@ -354,7 +354,7 @@ fn bound_tree_session_with_missing_metadata_reads_main_once() {
 
 #[test]
 fn bound_tree_snapshot_verification_keeps_binding_run_namespace_and_metadata_guards() {
-    use basecraft_ops::analysis_store::ArtifactRun;
+    use basecraft_ops::records::ArtifactRun;
     crate::isolated_profile::isolate!();
     let original = b"(a,b);\n";
     for fault in [

@@ -27,7 +27,7 @@ fn setup_alignment(
 
 /// The source of a run's referenced input, as its input evidence records it.
 fn referenced_hash(outcome: &basecraft_protocol::operation::OperationOutcome) -> String {
-    basecraft_ops::input_evidence::read_input(&common::evidence(outcome))
+    basecraft_ops::records::read_input(&common::evidence(outcome))
         .unwrap()
         .source
         .unwrap()
@@ -36,7 +36,7 @@ fn referenced_hash(outcome: &basecraft_protocol::operation::OperationOutcome) ->
 
 #[test]
 fn rereview_alignment_move_and_explicit_evidence_decisions() {
-    use basecraft_ops::input_evidence::{SavePolicy, conflicts, resolve};
+    use basecraft_ops::records::{SavePolicy, conflicts, resolve};
     isolated_profile::isolate!();
     for policy in [SavePolicy::BreakEvidence, SavePolicy::RemoveAnalysis] {
         let parent = tempfile::tempdir().unwrap();
@@ -79,7 +79,7 @@ fn rereview_alignment_move_and_explicit_evidence_decisions() {
 
 #[test]
 fn rereview_legacy_sidecar_break_and_remove_reach_combined_workspace() {
-    use basecraft_ops::input_evidence::{SavePolicy, conflicts, read_input, resolve};
+    use basecraft_ops::records::{SavePolicy, conflicts, read_input, resolve};
     isolated_profile::isolate!();
     for policy in [SavePolicy::BreakEvidence, SavePolicy::RemoveAnalysis] {
         let root = tempfile::tempdir().unwrap();
@@ -254,7 +254,7 @@ fn alignment_gmyc_export_preserves_display_and_declared_inputs() {
 
 #[test]
 fn preserved_tree_export_relocates_original_display_reference() {
-    use basecraft_ops::input_evidence::{SavePolicy, conflicts, resolve};
+    use basecraft_ops::records::{SavePolicy, conflicts, resolve};
     isolated_profile::isolate!();
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().join("working");
@@ -315,7 +315,7 @@ fn fitted_workspace_survives_folder_move_then_save_and_export() {
 
 #[test]
 fn preserved_alignment_remains_usable_by_workspace_default_input() {
-    use basecraft_ops::input_evidence::{SavePolicy, conflicts, resolve};
+    use basecraft_ops::records::{SavePolicy, conflicts, resolve};
     isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source.afa");
@@ -332,9 +332,7 @@ fn preserved_alignment_remains_usable_by_workspace_default_input() {
     assert!(!owner.join("preserved-input").exists());
     assert!(!owner.join("submitted.fasta").exists());
     assert_eq!(
-        basecraft_ops::input_evidence::read_input(&owner)
-            .unwrap()
-            .state,
+        basecraft_ops::records::read_input(&owner).unwrap().state,
         basecraft_protocol::input_records::EvidenceState::Referenced
     );
     assert_eq!(

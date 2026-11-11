@@ -1,6 +1,6 @@
 #![cfg(feature = "test-counters")]
 use basecraft_ops::{
-    input_evidence::Mutation,
+    records::Mutation,
     sanger_review::CapturedInput,
     sanger_review::{SangerRun, instrument_review},
 };
@@ -115,6 +115,6 @@ fn large_alignment_context_still_registers_as_streamed_evidence() {
     .unwrap();
     let request = run.artifact("request.json").unwrap();
     assert!(request.is_file());
-    let input = basecraft_ops::input_evidence::read_input(run.directory()).unwrap();
+    let input = basecraft_ops::records::read_input(run.directory()).unwrap();
     assert!(!input.submitted_hash.is_empty());
 }

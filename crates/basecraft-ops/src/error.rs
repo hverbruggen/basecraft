@@ -38,9 +38,9 @@ pub enum Error {
     #[error("invalid operation: {0}")]
     Invalid(String),
     #[error("{0}")]
-    EvidenceConflict(Box<crate::input_evidence::EvidenceConflict>),
+    EvidenceConflict(Box<crate::records::input_evidence::EvidenceConflict>),
     #[error("evidence_check_incomplete: could not check all analysis evidence")]
-    EvidenceCheckIncomplete(Box<crate::input_evidence::EvidenceCheck>),
+    EvidenceCheckIncomplete(Box<crate::records::input_evidence::EvidenceCheck>),
     #[error("evidence_check_incomplete: explicit save decision required")]
     SaveCheckRequired(Box<crate::session::SaveCheck>),
     #[error("save_decision_stale: review the refreshed save check")]

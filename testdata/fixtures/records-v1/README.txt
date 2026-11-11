@@ -61,7 +61,7 @@ run-referenced.json: reference_input_locked, Unicode anchor filename.
 run-null.json: same writer, non-UTF-8 anchor filename represented as null (Unix).
 run-generated.json: link_generated_input_locked, prepared document snapshot.
 run-saved.json: Session Delimitation Save As, saved status, outputs absent.
-run-completed.json / run-completed-empty.json: publish_referenced_analysis,
+run-completed.json / run-completed-empty.json: the former publish_referenced_analysis (no current writer),
   outputs present as one public ArtifactRevision / an empty array.
 run-prepared.json / run-prepared-no-export.json: runner prepare, exported name /
   operation ID label. No process execution is necessary for these captures.

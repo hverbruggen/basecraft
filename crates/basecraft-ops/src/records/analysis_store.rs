@@ -177,6 +177,26 @@ impl ArtifactRun {
         self.destination(ArtifactDestination::Metadata, name)
     }
 
+    /// Write this run's `run.json` with its status and the result it is named by.
+    pub fn write_run(
+        &self,
+        status: basecraft_protocol::records::AnalysisRunStatus,
+        result: Option<String>,
+    ) -> Result<()> {
+        crate::records::input_evidence::write_json(
+            &self.artifact("run.json")?,
+            // Sorted keys, as every run.json has been written.
+            &serde_json::to_value(basecraft_protocol::records::AnalysisRun {
+                schema_version: 1,
+                id: self.id().into(),
+                result,
+                status,
+                outputs: None,
+                extra: std::collections::BTreeMap::new(),
+            })?,
+        )
+    }
+
     pub fn destination(&self, location: ArtifactDestination, name: &str) -> Result<PathBuf> {
         component(name)?;
         Ok(match location {
@@ -282,7 +302,7 @@ impl ArtifactRun {
             && store.file_name().is_some_and(|n| n == "analyses-v1")
         {
             Self::validate_store(store)?;
-            let input = crate::input_evidence::read_input(&parent)?;
+            let input = crate::records::input_evidence::read_input(&parent)?;
             if input
                 .extra
                 .get("species_result")
@@ -417,7 +437,7 @@ impl ArtifactRun {
             .strip_prefix(&self.working_directory)
             .map_err(|_| invalid("binding result lies outside store working directory"))?;
         let key = basecraft_io::hash_bytes(name.as_os_str().as_encoded_bytes());
-        crate::input_evidence::write_json(
+        crate::records::input_evidence::write_json(
             &store.join("bindings").join(key.trim_start_matches("b3:")),
             &serde_json::to_value(basecraft_protocol::records::ResultBinding {
                 schema_version: 1,
@@ -468,7 +488,7 @@ pub(crate) fn retained_source(root: &Path, hash: &str) -> Result<Option<PathBuf>
         if !run.join("input.json").is_file() {
             continue;
         }
-        let input = crate::input_evidence::read_input(&run)?;
+        let input = crate::records::input_evidence::read_input(&run)?;
         // A delegating ledger is also Preserved but holds no bytes; keep looking.
         let retained = if input.state == basecraft_protocol::input_records::EvidenceState::Preserved
             && input.source.as_ref().is_some_and(|r| r.hash == hash)
@@ -515,7 +535,7 @@ pub(crate) fn publish_delimitation(
     placement: &crate::documents::WritePublication,
 ) -> Result<()> {
     if let Some(run) = new_run {
-        let input = crate::input_evidence::SubmittedInput {
+        let input = crate::records::input_evidence::SubmittedInput {
             schema_version: 1,
             source: None,
             submitted_hash: main_hash.to_owned(),
@@ -532,26 +552,19 @@ pub(crate) fn publish_delimitation(
             std::io::copy(&mut std::fs::File::open(target)?, w)?;
             Ok(())
         })?;
-        crate::input_evidence::write_json(&run.artifact("input.json")?, &input)?;
-        crate::input_evidence::write_json(
-            &run.artifact("run.json")?,
-            &serde_json::to_value(basecraft_protocol::records::AnalysisRun {
-                schema_version: 1,
-                id: run.id().into(),
-                result: target
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .map(str::to_owned),
-                status: basecraft_protocol::records::AnalysisRunStatus::Saved,
-                outputs: None,
-                extra: std::collections::BTreeMap::new(),
-            })?,
+        crate::records::input_evidence::write_json(&run.artifact("input.json")?, &input)?;
+        run.write_run(
+            basecraft_protocol::records::AnalysisRunStatus::Saved,
+            target
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(str::to_owned),
         )?;
         placement.register(run)?;
         run.bind(target)?;
     }
-    if let Some(run) = crate::analysis_store::ArtifactRun::for_result(target)? {
-        let mut input = crate::input_evidence::read_input(&run)?;
+    if let Some(run) = crate::records::analysis_store::ArtifactRun::for_result(target)? {
+        let mut input = crate::records::input_evidence::read_input(&run)?;
         let mut upstream = input.upstream.clone();
         for dependency in crate::delimitation::dependencies(work)? {
             let dependency = dependency.canonicalize()?;
@@ -562,8 +575,11 @@ pub(crate) fn publish_delimitation(
             let publication: basecraft_protocol::provenance::Publication =
                 serde_json::from_slice(&bytes)?;
             let reference = basecraft_protocol::input_records::UpstreamLink {
-                bundle: (crate::input_evidence::relative(&placement.logical(&run)?, &dependency)?)
-                    .into(),
+                bundle: (crate::records::input_evidence::relative(
+                    &placement.logical(&run)?,
+                    &dependency,
+                )?)
+                .into(),
                 id: publication.id.clone(),
                 hash: basecraft_io::hash_bytes(&bytes),
             };
@@ -574,7 +590,7 @@ pub(crate) fn publish_delimitation(
         if !upstream.is_empty() {
             input.upstream = upstream;
         }
-        crate::input_evidence::write_json(&run.join("input.json"), &input)?;
+        crate::records::input_evidence::write_json(&run.join("input.json"), &input)?;
     }
     Ok(())
 }

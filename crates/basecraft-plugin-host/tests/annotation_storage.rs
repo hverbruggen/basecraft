@@ -98,7 +98,7 @@ fn gui_annotation_keeps_its_invocation_in_the_hidden_store_and_skips_known_featu
     // The submitted snapshot and request live in the hidden run, not beside the file.
     let evidence = Path::new(first.evidence.as_ref().unwrap());
     assert!(evidence.starts_with(project.join(".basecraft").canonicalize().unwrap()));
-    let run = basecraft_ops::analysis_store::ArtifactRun::runs_for_anchor(&file, 64)
+    let run = basecraft_ops::records::ArtifactRun::runs_for_anchor(&file, 64)
         .unwrap()
         .into_iter()
         .find(|run| run.ends_with(&first.run_id))

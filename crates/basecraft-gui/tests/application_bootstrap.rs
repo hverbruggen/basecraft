@@ -563,7 +563,7 @@ fn main() {
                 "chosen.gb"
             });
             std::fs::write(&chosen, original).unwrap();
-            basecraft_ops::input_evidence::reference_input_with_dependencies(
+            basecraft_ops::records::reference_input_with_dependencies(
                 &folder.path().join("result.txt"),
                 &chosen,
                 &basecraft_io::hash_file(&chosen).unwrap(),
@@ -572,7 +572,7 @@ fn main() {
             )
             .unwrap();
             assert!(
-                !basecraft_ops::input_evidence::conflicts(&chosen)
+                !basecraft_ops::records::conflicts(&chosen)
                     .unwrap()
                     .analyses
                     .is_empty()
@@ -640,7 +640,7 @@ fn main() {
             let chosen = folder.path().join("chosen.gb");
             assert_eq!(std::fs::read(&chosen).unwrap(), original);
             assert!(
-                !basecraft_ops::input_evidence::conflicts(&chosen)
+                !basecraft_ops::records::conflicts(&chosen)
                     .unwrap()
                     .analyses
                     .is_empty(),

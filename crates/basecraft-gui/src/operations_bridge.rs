@@ -251,7 +251,7 @@ impl qobject::AppOperations {
                 .join(ulid::Ulid::generate().to_string());
             std::fs::create_dir_all(&root)?;
             let input = root.join("query-source.json");
-            basecraft_ops::input_evidence::write_json(&input, &queries)?;
+            basecraft_ops::records::write_json(&input, &queries)?;
             Ok((
                 root,
                 json!({"operation":"basecraft.blast/submit@1","inputs":{"queries":[{"kind":"file","path":"query-source.json"}]},"parameters":parameters}),

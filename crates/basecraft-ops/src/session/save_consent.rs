@@ -18,7 +18,7 @@ use std::sync::Mutex;
 use basecraft_platform::files::ObjectIdentity;
 use serde::Serialize;
 
-use crate::input_evidence::{EvidenceCheck, InspectionIssue, SavePolicy};
+use crate::records::input_evidence::{EvidenceCheck, InspectionIssue, SavePolicy};
 use crate::{Result, error::invalid};
 
 /// A fresh advisory check, or the fresh scope returned after refusing stale
@@ -149,7 +149,7 @@ impl SaveCheck {
                     completed: false,
                 });
             }
-            crate::input_evidence::resolve_group(&group.conflict, policy, &mut removed)?;
+            crate::records::input_evidence::resolve_group(&group.conflict, policy, &mut removed)?;
             if let Some(actions) = &mut actions
                 && let Some(action) = actions.last_mut()
             {
@@ -170,8 +170,8 @@ impl SaveCheck {
     }
 
     pub(super) fn target_is_current(&self, target: &Path) -> Result<bool> {
-        let same = crate::save_guard::target_path(target)? == self.scope.target
-            && crate::save_guard::change_stamp(target)?.map(|stamp| stamp.0)
+        let same = crate::records::save_guard::target_path(target)? == self.scope.target
+            && crate::records::save_guard::change_stamp(target)?.map(|stamp| stamp.0)
                 == self.scope.target_revision.as_ref().map(|r| r.stamp.clone());
         #[cfg(not(unix))]
         let same = same && target_revision(target)? == self.scope.target_revision;
@@ -348,13 +348,13 @@ pub(crate) fn target_revision(target: &Path) -> Result<Option<TargetRevision>> {
                     "save target must be an ordinary file".into(),
                 ));
             }
-            let stamp = crate::save_guard::change_stamp(target)?.ok_or_else(|| {
+            let stamp = crate::records::save_guard::change_stamp(target)?.ok_or_else(|| {
                 crate::Error::ChangedOnDisk {
                     path: target.into(),
                 }
             })?;
             let hash = basecraft_io::hash_file(target)?;
-            if crate::save_guard::change_stamp(target)?.as_ref() != Some(&stamp) {
+            if crate::records::save_guard::change_stamp(target)?.as_ref() != Some(&stamp) {
                 return Err(crate::Error::ChangedOnDisk {
                     path: target.into(),
                 });
@@ -373,7 +373,7 @@ pub(crate) fn target_revision(target: &Path) -> Result<Option<TargetRevision>> {
 /// modified some backing ledgers before failure; it is never a rollback claim.
 #[derive(Clone, Debug, Serialize)]
 pub struct EvidenceAction {
-    pub conflict: crate::input_evidence::EvidenceConflict,
+    pub conflict: crate::records::input_evidence::EvidenceConflict,
     pub policy: SavePolicy,
     pub completed: bool,
 }

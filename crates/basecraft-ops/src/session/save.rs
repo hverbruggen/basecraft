@@ -4,9 +4,12 @@ use super::{DerivedTarget, DocId, Error, Op, OpResult, Path, Result, files, inva
 use super::{SaveDecision, SaveOutcome, Session};
 
 use super::SaveWarning;
-use crate::input_evidence::SavePolicy;
+use crate::records::input_evidence::SavePolicy;
 
-type SourceStamps = Vec<(std::path::PathBuf, Option<crate::save_guard::ChangeStamp>)>;
+type SourceStamps = Vec<(
+    std::path::PathBuf,
+    Option<crate::records::save_guard::ChangeStamp>,
+)>;
 
 /// Where a save writes and what it may assume about that file.
 struct SaveTarget {
@@ -21,7 +24,7 @@ struct SaveTarget {
 /// Retaining the original by hard link changes only its change time.
 fn restamp_after_retention(mut stamps: SourceStamps) -> Result<SourceStamps> {
     for (source, stamp) in &mut stamps {
-        let now = crate::save_guard::change_stamp(source)?;
+        let now = crate::records::save_guard::change_stamp(source)?;
         if now.as_ref().map(|now| &now.0) != stamp.as_ref().map(|stamp| &stamp.0) {
             return Err(Error::ChangedOnDisk {
                 path: source.clone(),
@@ -47,7 +50,7 @@ impl Session {
         self.save_attempt(
             id,
             path,
-            crate::input_evidence::SavePolicy::Cancel,
+            crate::records::input_evidence::SavePolicy::Cancel,
             SaveMode::Replace,
             None,
         )
@@ -60,7 +63,7 @@ impl Session {
         self.save_attempt(
             id,
             None,
-            crate::input_evidence::SavePolicy::Cancel,
+            crate::records::input_evidence::SavePolicy::Cancel,
             SaveMode::History,
             None,
         )
@@ -74,7 +77,7 @@ impl Session {
         self.save_attempt(
             id,
             path,
-            crate::input_evidence::SavePolicy::Cancel,
+            crate::records::input_evidence::SavePolicy::Cancel,
             SaveMode::NewDestination,
             None,
         )
@@ -84,7 +87,7 @@ impl Session {
     /// Any spelling of the document's own file is an ordinary save, so its
     /// accepted-revision checks apply.
     pub(super) fn is_own_file(&self, id: DocId, path: &Path) -> bool {
-        crate::save_guard::same_target(path, &self.resolve(&self.docs[id.0].key))
+        crate::records::save_guard::same_target(path, &self.resolve(&self.docs[id.0].key))
     }
 
     pub(super) fn save_attempt(
@@ -116,8 +119,11 @@ impl Session {
 
         // 1. Find and reserve the analyses that may use the target.
         let written = Self::written_stores(&target.path)?;
-        let mut evidence_lock =
-            crate::input_evidence::lock_save(&target.path, policy != SavePolicy::Cancel, &written)?;
+        let mut evidence_lock = crate::records::input_evidence::lock_save(
+            &target.path,
+            policy != SavePolicy::Cancel,
+            &written,
+        )?;
         let evidence = evidence_lock.check(&target.path)?;
         let (stamps, revision) = self.observe_sources(id, &target)?;
         let before = revision.as_ref().map(|r| r.hash.clone());
@@ -178,7 +184,7 @@ impl Session {
             return Err(invalid("history publication requires a saved document"));
         }
         let target = self.resolve(&self.docs[id.0].key);
-        let _target = crate::save_guard::lock(&target)?;
+        let _target = crate::records::save_guard::lock(&target)?;
         self.check_save_source(id, None)?;
         self.track(id)?;
         // The intent lets a repair finish a history publication that failed.
@@ -243,7 +249,7 @@ impl Session {
 
     fn check_absent_target(&self, id: DocId, target: &SaveTarget) -> Result<()> {
         if target.must_be_absent && !self.check_previous_save_target(id, &target.path)? {
-            crate::save_guard::check_new_target(&target.path)?;
+            crate::records::save_guard::check_new_target(&target.path)?;
         }
         Ok(())
     }
@@ -268,7 +274,7 @@ impl Session {
             });
         let mut stamps = Vec::new();
         for source in std::iter::once(target.path.clone()).chain(companions) {
-            let stamp = crate::save_guard::change_stamp(&source)?;
+            let stamp = crate::records::save_guard::change_stamp(&source)?;
             stamps.push((source, stamp));
         }
         Ok((stamps, super::save_consent::target_revision(&target.path)?))
@@ -281,7 +287,7 @@ impl Session {
         &mut self,
         id: DocId,
         target: &SaveTarget,
-        evidence: crate::input_evidence::EvidenceCheck,
+        evidence: crate::records::input_evidence::EvidenceCheck,
         revision: Option<super::save_consent::TargetRevision>,
         decision: Option<(SaveDecision, bool)>,
         policy: SavePolicy,
@@ -318,7 +324,7 @@ impl Session {
         }
         if decision.is_none() && !recovery && evidence.is_complete() {
             check_source(self)?;
-            crate::input_evidence::resolve(&evidence.conflict, policy)?;
+            crate::records::input_evidence::resolve(&evidence.conflict, policy)?;
             return Ok((Vec::new(), None));
         }
         let check = self.save_check_scope(id, &target.path, evidence, revision)?;
@@ -406,7 +412,7 @@ impl Session {
             )));
         }
         for (source, stamp) in stamps {
-            if crate::save_guard::change_stamp(&source)? != stamp {
+            if crate::records::save_guard::change_stamp(&source)? != stamp {
                 return Err(Error::ChangedOnDisk { path: source });
             }
         }
@@ -419,7 +425,7 @@ impl Session {
                 self.check_save_source(id, None)?;
             }
             if let Some(hash) = before {
-                crate::save_guard::check_hash(&target.path, hash)?;
+                crate::records::save_guard::check_hash(&target.path, hash)?;
             }
         }
         #[cfg(unix)]
@@ -446,11 +452,11 @@ impl Session {
             }
             self.docs[id.0].saved_target = Some((
                 target.to_path_buf(),
-                crate::input_evidence::stamp(target)?,
+                crate::records::input_evidence::stamp(target)?,
                 expected[0].clone(),
             ));
             if own {
-                self.docs[id.0].disk_stamp = crate::input_evidence::stamp(target)?;
+                self.docs[id.0].disk_stamp = crate::records::input_evidence::stamp(target)?;
             }
             if self.log.is_some() {
                 #[cfg(test)]
@@ -491,7 +497,7 @@ impl Session {
             slot.accepted_hashes.retain(|(p, _)| *p != key);
             slot.accepted_hashes.push((key, hash));
         }
-        if main_written && let Ok(stamp) = crate::input_evidence::stamp(target) {
+        if main_written && let Ok(stamp) = crate::records::input_evidence::stamp(target) {
             if own {
                 self.docs[id.0].disk_stamp = stamp.clone();
             }
@@ -543,13 +549,13 @@ impl Session {
         for (key, hash) in &self.docs[id.0].accepted_hashes {
             let source = self.resolve(key);
             if let Some((_, actual)) =
-                checked.filter(|(path, _)| crate::save_guard::same_target(path, &source))
+                checked.filter(|(path, _)| crate::records::save_guard::same_target(path, &source))
             {
                 if actual != hash {
                     return Err(Error::ChangedOnDisk { path: source });
                 }
             } else {
-                crate::save_guard::check_hash(&source, hash)?;
+                crate::records::save_guard::check_hash(&source, hash)?;
             }
         }
         Ok(())
@@ -628,7 +634,7 @@ impl Session {
             .map(|(path, hash)| {
                 Ok(basecraft_protocol::provenance::InputReference {
                     path: path.clone(),
-                    stamp: crate::input_evidence::stamp(&self.resolve(path))?,
+                    stamp: crate::records::input_evidence::stamp(&self.resolve(path))?,
                     hash: hash.clone(),
                     extra: std::collections::BTreeMap::default(),
                 })
@@ -638,7 +644,10 @@ impl Session {
         // append. None becomes visible until the Save record is durable.
         let history = (self.tracked
             && self.provenance_policy != basecraft_platform::settings::ProvenancePolicy::None)
-            .then(|| self.prepare_save_history(id, target, &entry, &[], None));
+            .then(|| {
+                self.history(id)
+                    .and_then(|history| history.save(target, &entry, &[], None))
+            });
         let (prepared, mut history_error) = match history {
             Some(Ok(prepared)) => (prepared, None),
             Some(Err(error)) => (crate::documents::PreparedWrite::default(), Some(error)),
@@ -674,16 +683,19 @@ impl Session {
     /// open document's own file would discard its accepted revision.
     /// Known-input conflicts are resolved first, under both locks.
     pub(super) fn derived_target(&self, path: &Path) -> Result<DerivedTarget> {
-        let mut evidence = crate::input_evidence::lock_save(path, false, &[])?;
+        let mut evidence = crate::records::input_evidence::lock_save(path, false, &[])?;
         let check = evidence.check(path)?;
         if !check.is_complete() {
             return Err(Error::EvidenceCheckIncomplete(Box::new(check)));
         }
-        crate::input_evidence::resolve(&check.conflict, crate::input_evidence::SavePolicy::Cancel)?;
+        crate::records::input_evidence::resolve(
+            &check.conflict,
+            crate::records::input_evidence::SavePolicy::Cancel,
+        )?;
         if self
             .docs
             .iter()
-            .any(|slot| crate::save_guard::same_target(path, &self.resolve(&slot.key)))
+            .any(|slot| crate::records::save_guard::same_target(path, &self.resolve(&slot.key)))
         {
             return Err(invalid(
                 "this destination is an open document; choose another file",
@@ -740,7 +752,7 @@ impl Session {
     /// (binding, history) and the target folder's store (new hidden runs).
     /// They are reserved exclusively up front, never upgraded later.
     fn written_stores(target: &Path) -> Result<Vec<std::path::PathBuf>> {
-        let mut stores: Vec<_> = crate::analysis_store::ArtifactRun::for_result(target)?
+        let mut stores: Vec<_> = crate::records::analysis_store::ArtifactRun::for_result(target)?
             .and_then(|run| run.parent().and_then(Path::parent).map(Path::to_path_buf))
             .into_iter()
             .collect();
@@ -762,19 +774,19 @@ impl Session {
     }
 
     fn check_target_identity(&self, id: DocId, target: &Path) -> Result<()> {
-        crate::save_guard::reject_link_target(target)?;
+        crate::records::save_guard::reject_link_target(target)?;
         let slot = &self.docs[id.0];
         let expected = slot
             .saved_target
             .as_ref()
-            .filter(|(path, _, _)| crate::save_guard::same_target(path, target))
+            .filter(|(path, _, _)| crate::records::save_guard::same_target(path, target))
             .map(|(_, stamp, _)| stamp)
             .or_else(|| {
                 (!slot.accepted_hashes.is_empty() && self.is_own_file(id, target))
                     .then_some(&slot.disk_stamp)
             });
         if let Some(expected) = expected
-            && crate::input_evidence::stamp(target)? != *expected
+            && crate::records::input_evidence::stamp(target)? != *expected
         {
             return Err(Error::ChangedOnDisk {
                 path: target.into(),
@@ -791,18 +803,19 @@ impl Session {
         target: &std::path::Path,
     ) -> Result<bool> {
         if self.docs.iter().enumerate().any(|(index, slot)| {
-            index != id.0 && crate::save_guard::same_target(&self.resolve(&slot.key), target)
+            index != id.0
+                && crate::records::save_guard::same_target(&self.resolve(&slot.key), target)
         }) {
             return Ok(false);
         }
         let Some((_, _, hash)) = self.docs[id.0]
             .saved_target
             .as_ref()
-            .filter(|(path, _, _)| crate::save_guard::same_target(path, target))
+            .filter(|(path, _, _)| crate::records::save_guard::same_target(path, target))
         else {
             return Ok(false);
         };
-        crate::save_guard::check_hash(target, hash)?;
+        crate::records::save_guard::check_hash(target, hash)?;
         Ok(true)
     }
 }

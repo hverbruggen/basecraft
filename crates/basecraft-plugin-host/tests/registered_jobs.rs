@@ -875,7 +875,7 @@ fn canonical_alignment_evidence_preserves_order_headers_and_residues() {
     let outcome = wait(&manager, &accepted.run_id);
     assert_eq!(outcome.state, RuntimeState::Completed, "{outcome:#?}");
     let run = Path::new(outcome.evidence.as_ref().unwrap());
-    let record = basecraft_ops::input_evidence::read_input(run).unwrap();
+    let record = basecraft_ops::records::read_input(run).unwrap();
     assert_eq!(record.transformation, "canonical-fasta-v1");
     assert_eq!(
         record.source.unwrap().hash,
@@ -1007,10 +1007,9 @@ fn ungapped_alignment_input_accepts_unequal_lengths_without_padding() {
             }),
         );
         assert_eq!(outcome.state, RuntimeState::Completed, "{outcome:?}");
-        let record = basecraft_ops::input_evidence::read_input(Path::new(
-            outcome.evidence.as_ref().unwrap(),
-        ))
-        .unwrap();
+        let record =
+            basecraft_ops::records::read_input(Path::new(outcome.evidence.as_ref().unwrap()))
+                .unwrap();
         let first = if route == "edited" { "TCGT" } else { "ACGT" };
         let submitted = format!(">a\n{first}\n>b\nAC\n");
         assert_eq!(
@@ -1230,7 +1229,7 @@ fn retained_inputs_survive_job_drop_and_temporary_source_removal() {
 /// paths, ledgers and submitted transformations. Path ordering must not own data.
 #[test]
 fn equal_content_retention_keeps_exact_primary_owner_and_leaf_lifecycles() {
-    use basecraft_ops::input_evidence::{self, AffectedAnalysis, EvidenceConflict, SavePolicy};
+    use basecraft_ops::records::{self, AffectedAnalysis, EvidenceConflict, SavePolicy};
     crate::isolated_profile::isolate!();
     for retain_primary in [false, true] {
         for reverse_paths in [false, true] {
@@ -1287,7 +1286,7 @@ fn equal_content_retention_keeps_exact_primary_owner_and_leaf_lifecycles() {
                 assert_eq!(a["source_hash"], b["source_hash"]);
                 assert_ne!(a["submitted_hash"], a["source_hash"]);
                 assert_eq!(b["submitted_hash"], b["source_hash"]);
-                let primary = input_evidence::read_input(run).unwrap();
+                let primary = records::read_input(run).unwrap();
                 let source = primary.source.as_ref().unwrap();
                 assert_eq!(
                     run.join(&source.path).canonicalize().unwrap(),
@@ -1319,7 +1318,7 @@ fn equal_content_retention_keeps_exact_primary_owner_and_leaf_lifecycles() {
                         basecraft_protocol::input_records::EvidenceState::Referenced
                     );
                     assert_eq!(
-                        input_evidence::read_input(owner).unwrap().state,
+                        records::read_input(owner).unwrap().state,
                         basecraft_protocol::input_records::EvidenceState::Referenced
                     );
                 }
@@ -1363,8 +1362,8 @@ fn equal_content_retention_keeps_exact_primary_owner_and_leaf_lifecycles() {
                     options: vec![policy],
                 };
                 {
-                    let _mutation = input_evidence::Mutation::begin().unwrap();
-                    input_evidence::resolve(&conflict, policy).unwrap();
+                    let _mutation = records::Mutation::begin().unwrap();
+                    records::resolve(&conflict, policy).unwrap();
                 }
                 assert_eq!(std::fs::read(run.join("input.json")).unwrap(), before);
                 assert_eq!(
@@ -1373,21 +1372,19 @@ fn equal_content_retention_keeps_exact_primary_owner_and_leaf_lifecycles() {
                 );
                 if policy == SavePolicy::BreakEvidence {
                     assert_eq!(
-                        input_evidence::read_input(sibling).unwrap().state,
+                        records::read_input(sibling).unwrap().state,
                         basecraft_protocol::input_records::EvidenceState::Broken
                     );
                 } else {
                     assert!(!sibling.exists());
                 }
-                let leaf = input_evidence::read_input(owner).unwrap();
-                let live =
-                    input_evidence::verified_source(owner, leaf.source.as_ref().unwrap()).unwrap();
+                let leaf = records::read_input(owner).unwrap();
+                let live = records::verified_source(owner, leaf.source.as_ref().unwrap()).unwrap();
                 assert_eq!(std::fs::read(live).unwrap(), original);
                 if retain_primary {
                     std::fs::remove_file(temp.path().join(first)).unwrap();
                     let retained =
-                        input_evidence::verified_source(owner, leaf.source.as_ref().unwrap())
-                            .unwrap();
+                        records::verified_source(owner, leaf.source.as_ref().unwrap()).unwrap();
                     assert_eq!(std::fs::read(retained).unwrap(), original);
                 }
                 assert_eq!(std::fs::read(temp.path().join(other)).unwrap(), original);

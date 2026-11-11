@@ -5,7 +5,7 @@ mod common;
 #[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
 mod isolated_profile;
 
-use basecraft_ops::{Session, analysis_store::ArtifactRun, input_evidence, records};
+use basecraft_ops::{Session, records, records::ArtifactRun};
 use basecraft_plugin_host::registry::Registry;
 use basecraft_protocol::Op;
 use std::path::{Path, PathBuf};
@@ -40,7 +40,7 @@ fn dependencies_follow_save_as_delegation() {
     let downstream = dir.path().join("downstream.afa");
     analyse(&mut session, &registry, &copied, &downstream);
     let downstream_run = ArtifactRun::for_result(&downstream).unwrap().unwrap();
-    let conflict = input_evidence::conflicts(&source).unwrap();
+    let conflict = records::conflicts(&source).unwrap();
     assert!(
         conflict.analyses.iter().any(|a| a.run == downstream_run),
         "saving the original must list downstream evidence through Save As: {conflict:?}"
@@ -56,7 +56,7 @@ fn relinking_saved_copy_repairs_the_effective_reference() {
     let recovered = dir.path().join("recovered.afa");
     std::fs::rename(&source, &recovered).unwrap();
     let bundle = records::bundle_for_result(&copied);
-    input_evidence::relink(&bundle, &recovered).unwrap();
+    records::relink(&bundle, &recovered).unwrap();
     let issues = records::verify(&copied).unwrap();
     assert!(
         issues.is_empty(),
@@ -114,14 +114,14 @@ fn repeated_preserve_decision_never_replaces_verified_old_bytes() {
     crate::isolated_profile::isolate!();
     let (_dir, _session, _, source, first) = setup();
     let old = std::fs::read(&source).unwrap();
-    let conflict = input_evidence::conflicts(&source).unwrap();
-    input_evidence::resolve(&conflict, input_evidence::SavePolicy::PreserveCopy).unwrap();
+    let conflict = records::conflicts(&source).unwrap();
+    records::resolve(&conflict, records::SavePolicy::PreserveCopy).unwrap();
     let run = ArtifactRun::for_result(&first).unwrap().unwrap();
     assert_eq!(std::fs::read(common::verified_input(&run)).unwrap(), old);
     std::fs::write(&source, ">a\nTTTT\n>b\nTTTA\n").unwrap();
     // A retry of the same public decision must not overwrite the protected copy,
     // even if it rejects the now-stale source afterwards.
-    let _ = input_evidence::resolve(&conflict, input_evidence::SavePolicy::PreserveCopy);
+    let _ = records::resolve(&conflict, records::SavePolicy::PreserveCopy);
     assert_eq!(std::fs::read(common::verified_input(&run)).unwrap(), old);
 }
 
@@ -129,7 +129,7 @@ fn repeated_preserve_decision_never_replaces_verified_old_bytes() {
 fn overwrite_conflict_identifies_the_completed_result() {
     crate::isolated_profile::isolate!();
     let (_dir, _session, _, source, _first) = setup();
-    let conflict = input_evidence::conflicts(&source).unwrap();
+    let conflict = records::conflicts(&source).unwrap();
     let analyses = common::analyses(&conflict);
     assert_eq!(analyses.len(), 1);
     assert_eq!(analyses[0].result, "first.afa");

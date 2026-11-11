@@ -76,7 +76,7 @@ fn bootstrap_trees_are_retained_and_inputs_guarded() {
     visible.sort();
     assert_eq!(visible, [".basecraft", "bootstrap.nwk", "input.afa"]);
     assert!(
-        basecraft_ops::analysis_store::ArtifactRun::for_result(&output)
+        basecraft_ops::records::ArtifactRun::for_result(&output)
             .unwrap()
             .is_some()
     );

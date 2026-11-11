@@ -1,5 +1,5 @@
 //! Real evidence ledgers and original FASTA bytes, served over the actual CLI/MCP.
-use basecraft_ops::input_evidence;
+use basecraft_ops::records;
 use serde_json::json;
 use std::{path::Path, process::Command};
 
@@ -26,7 +26,7 @@ fn headless_save_conformance() {
         std::fs::write(&source, original).unwrap();
         let folder = root.join(format!("analysis-{name}"));
         std::fs::create_dir(&folder).unwrap();
-        let run = input_evidence::reference_input_with_dependencies(
+        let run = records::reference_input_with_dependencies(
             &folder.join("result.txt"),
             &source,
             &basecraft_io::hash_file(&source).unwrap(),
@@ -38,7 +38,7 @@ fn headless_save_conformance() {
     }
     let unrelated = root.join("unrelated.fasta");
     std::fs::write(&unrelated, original).unwrap();
-    let damaged = input_evidence::reference_input_with_dependencies(
+    let damaged = records::reference_input_with_dependencies(
         &root.join("distant-result.txt"),
         &unrelated,
         &basecraft_io::hash_file(&unrelated).unwrap(),
@@ -51,7 +51,7 @@ fn headless_save_conformance() {
     std::fs::write(&ledger, b"damaged ledger").unwrap();
     // The index refresh cannot read the damaged ledger, so its store's coverage
     // stays unknown for every save until the marker is cleared by a repair.
-    input_evidence::register(&damaged).unwrap();
+    records::register(&damaged).unwrap();
     let store = damaged.directory().parent().unwrap().parent().unwrap();
     let marker = basecraft_platform::paths::AppPaths::discover()
         .unwrap()

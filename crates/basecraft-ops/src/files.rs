@@ -298,7 +298,7 @@ pub(crate) fn capture_load(path: &Path, format: Format) -> Result<CapturedLoad> 
     if format == Format::GenBank {
         let stamps = vec![(
             path.to_path_buf(),
-            Some(crate::input_evidence::stamp(path)?),
+            Some(crate::records::input_evidence::stamp(path)?),
         )];
         let (first, hash) = genbank::open_hashed(path)?;
         return finish_capture(
@@ -330,7 +330,9 @@ pub(crate) fn capture_load(path: &Path, format: Format) -> Result<CapturedLoad> 
                 let error = io::Error::new(io::ErrorKind::InvalidInput, "not an ordinary file");
                 return Err(basecraft_io::Error::Io(error).into());
             }
-            Ok(metadata) => Some(crate::input_evidence::stamp_metadata(&file, &metadata)?),
+            Ok(metadata) => Some(crate::records::input_evidence::stamp_metadata(
+                &file, &metadata,
+            )?),
             Err(error) if error.kind() == io::ErrorKind::NotFound && file != path => None,
             Err(error) => return Err(error.into()),
         };
@@ -415,7 +417,9 @@ fn finish_capture(
     for (file, before) in &stamps {
         let after = match std::fs::metadata(file) {
             Ok(metadata) if !metadata.is_file() => None,
-            Ok(metadata) => Some(crate::input_evidence::stamp_metadata(file, &metadata)?),
+            Ok(metadata) => Some(crate::records::input_evidence::stamp_metadata(
+                file, &metadata,
+            )?),
             Err(error) if error.kind() == io::ErrorKind::NotFound => None,
             Err(error) => return Err(error.into()),
         };
@@ -556,7 +560,7 @@ pub fn gff_sidecar(path: &Path) -> PathBuf {
 
 /// A tree file's sidecar: `NAME.nwk.basecraft.json` beside `NAME.nwk`.
 pub fn tree_sidecar(path: &Path) -> PathBuf {
-    if let Ok(Some(run)) = crate::analysis_store::ArtifactRun::for_result(path) {
+    if let Ok(Some(run)) = crate::records::analysis_store::ArtifactRun::for_result(path) {
         let name = path.file_name().unwrap_or_default().to_string_lossy();
         return run.join(format!("{name}.basecraft.json"));
     }
@@ -614,7 +618,8 @@ fn load_tree_bytes(
             return Err(Error::Io(io::Error::other(issue)));
         }
         // Errors in a hidden association must never select an adjacent legacy file.
-        let run = crate::analysis_store::ArtifactRun::for_result_with_hash(path, exchange_hash)?;
+        let run =
+            crate::records::analysis_store::ArtifactRun::for_result_with_hash(path, exchange_hash)?;
         let bound = run.is_some();
         let (sidecar, side) = match run {
             Some(run) => {
@@ -1311,7 +1316,7 @@ fn load_delimitation_bytes(
         basecraft_io::spart::parse_text(text)?
     };
     // A damaged hidden binding must never silently select stale legacy data.
-    let hidden = crate::analysis_store::ArtifactRun::for_result(path)?;
+    let hidden = crate::records::analysis_store::ArtifactRun::for_result(path)?;
     if hidden.is_some() && captured_side.is_none() {
         return Err(crate::error::invalid(
             "Hidden species workspace metadata is missing; restore its folder context or explicitly open a standalone SPART copy",

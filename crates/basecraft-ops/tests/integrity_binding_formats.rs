@@ -1,7 +1,7 @@
 //! Original-literal byte oracles, executed before writer substitution.
 #[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
 mod isolated_profile;
-use basecraft_ops::analysis_store::ArtifactRun;
+use basecraft_ops::records::ArtifactRun;
 use serde_json::json;
 
 #[test]
