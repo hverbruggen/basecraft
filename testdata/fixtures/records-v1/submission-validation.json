@@ -1,0 +1,35 @@
+{
+  "input_hash": "b3:b35cf3c4fd04349bc367a91565cc7e63fd4c6ce48bc4df4215e69a3d0dec1dee",
+  "status": "errors",
+  "tool_version": "1.28.1094",
+  "run_id": "01M74NCX3GCNT12AVFWYT5DWD0",
+  "directory": "validation/b35cf3c4fd04349b/table2asn",
+  "errors": 1,
+  "warnings": 1,
+  "infos": 0,
+  "message": "table2asn 1.28.1094: 1 errors, 1 warnings",
+  "copies": {
+    "gbf": "b3:e71d6b9ef00ef404c7c1e7eb0e6395c650eb4e211cdac61066337e4d7ce6bc18",
+    "sqn": "b3:ff238d318df05c4b6eaea12592f0a014ad57cc43756970439bd605df658db8d1"
+  },
+  "issues": [
+    {
+      "severity": "blocking",
+      "source": "table2asn",
+      "code": "SEQ_FEAT.InternalStop",
+      "message": "2 internal stops. FEATURE: CDS: x [lcl|HV103_rbcL:<1->306]",
+      "record": "HV103_rbcL",
+      "specimen": "HV103",
+      "tool_severity": "Error"
+    },
+    {
+      "severity": "review",
+      "source": "table2asn",
+      "code": "SEQ_INST.TerminalNs",
+      "message": "N at end BIOSEQ: lcl|HV102_rbcL: raw",
+      "record": "HV102_rbcL",
+      "specimen": "HV102",
+      "tool_severity": "Warning"
+    }
+  ]
+}
