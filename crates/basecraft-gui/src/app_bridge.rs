@@ -1,8 +1,14 @@
-//! Qt transport for transient, new-tab canvas opens.
+//! The window's open documents: one row per tab, shown by QML as a list
+//! model, with the open, close, quit and cross-document decisions made in
+//! `basecraft_viewmodel::workspace`. Also the transport for opening a
+//! sequence, alignment or tree on a worker into a new tab.
 use crate::document_open::{Candidate, OpenError, Opens, Phase};
 use basecraft_ops::files::Kind;
+use basecraft_viewmodel::workspace::{self, Close, Delimit, Open, Quit, Target, Workspace};
 use cxx_qt::{CxxQtType, Threading, casting::Downcast};
-use cxx_qt_lib::QString;
+use cxx_qt_lib::{
+    QByteArray, QHash, QHashPair_i32_QByteArray, QList, QModelIndex, QString, QVariant,
+};
 use std::pin::Pin;
 
 #[cxx_qt::bridge]
@@ -14,11 +20,114 @@ pub mod qobject {
         include!(<QtCore/QObject>);
         #[cxx_name = "QObject"]
         type OpenObject = cxx_qt::QObject;
+        include!(<QtCore/QAbstractListModel>);
+        type QAbstractListModel;
+        include!("cxx-qt-lib/qmodelindex.h");
+        type QModelIndex = cxx_qt_lib::QModelIndex;
+        include!("cxx-qt-lib/qvariant.h");
+        type QVariant = cxx_qt_lib::QVariant;
+        include!("cxx-qt-lib/qhash.h");
+        type QHash_i32_QByteArray = cxx_qt_lib::QHash<cxx_qt_lib::QHashPair_i32_QByteArray>;
+        include!("cxx-qt-lib/qlist.h");
+        type QList_i32 = cxx_qt_lib::QList<i32>;
     }
     unsafe extern "RustQt" {
         #[qobject]
         #[qml_element]
+        #[base = QAbstractListModel]
+        #[qproperty(i32, count)]
         type DocumentOpens = super::OpenRust;
+
+        #[inherit]
+        #[cxx_name = "beginInsertRows"]
+        unsafe fn begin_insert_rows(
+            self: Pin<&mut DocumentOpens>,
+            parent: &QModelIndex,
+            first: i32,
+            last: i32,
+        );
+        #[inherit]
+        #[cxx_name = "endInsertRows"]
+        unsafe fn end_insert_rows(self: Pin<&mut DocumentOpens>);
+        #[inherit]
+        #[cxx_name = "beginRemoveRows"]
+        unsafe fn begin_remove_rows(
+            self: Pin<&mut DocumentOpens>,
+            parent: &QModelIndex,
+            first: i32,
+            last: i32,
+        );
+        #[inherit]
+        #[cxx_name = "endRemoveRows"]
+        unsafe fn end_remove_rows(self: Pin<&mut DocumentOpens>);
+        #[inherit]
+        fn index(self: &DocumentOpens, row: i32, column: i32, parent: &QModelIndex) -> QModelIndex;
+        #[inherit]
+        #[qsignal]
+        #[cxx_name = "dataChanged"]
+        fn data_changed(
+            self: Pin<&mut DocumentOpens>,
+            top_left: &QModelIndex,
+            bottom_right: &QModelIndex,
+            roles: &QList_i32,
+        );
+        #[cxx_override]
+        fn data(self: &DocumentOpens, index: &QModelIndex, role: i32) -> QVariant;
+        #[cxx_override]
+        #[cxx_name = "rowCount"]
+        fn row_count(self: &DocumentOpens, parent: &QModelIndex) -> i32;
+        #[cxx_override]
+        #[cxx_name = "roleNames"]
+        fn role_names(self: &DocumentOpens) -> QHash_i32_QByteArray;
+
+        #[qinvokable]
+        fn open(
+            self: Pin<&mut DocumentOpens>,
+            path: &QString,
+            context: &QString,
+            review: bool,
+        ) -> QString;
+        #[qinvokable]
+        fn add_tab(self: Pin<&mut DocumentOpens>, path: &QString, kind: &QString) -> i32;
+        #[qinvokable]
+        fn remove_tab(self: Pin<&mut DocumentOpens>, index: i32);
+        #[qinvokable]
+        fn index_of(self: &DocumentOpens, token: &QString) -> i32;
+        #[qinvokable]
+        fn target_index(self: &DocumentOpens, token: &QString, path: &QString) -> i32;
+        #[qinvokable]
+        fn path_at(self: &DocumentOpens, index: i32) -> QString;
+        #[qinvokable]
+        fn token_at(self: &DocumentOpens, index: i32) -> QString;
+        #[qinvokable]
+        fn set_dirty(self: Pin<&mut DocumentOpens>, index: i32, dirty: bool);
+        #[qinvokable]
+        fn close(self: &DocumentOpens, index: i32) -> QString;
+        #[qinvokable]
+        fn quit(self: Pin<&mut DocumentOpens>, drafts: bool) -> QString;
+        #[qinvokable]
+        fn discard_all(self: &DocumentOpens, consent: &QString) -> QString;
+        #[qinvokable]
+        fn save_all(self: Pin<&mut DocumentOpens>, consent: &QString) -> QString;
+        #[qinvokable]
+        fn quit_saved(self: Pin<&mut DocumentOpens>, success: bool) -> QString;
+        #[qinvokable]
+        fn begin_delimitation(self: Pin<&mut DocumentOpens>, index: i32);
+        #[qinvokable]
+        fn request_delimitation(
+            self: Pin<&mut DocumentOpens>,
+            source_path: &QString,
+            busy: bool,
+            analysis: &QString,
+        ) -> QString;
+        #[qinvokable]
+        fn creation_refused(self: Pin<&mut DocumentOpens>);
+        #[qinvokable]
+        fn workspace_created(
+            self: Pin<&mut DocumentOpens>,
+            source_path: &QString,
+            path: &QString,
+        ) -> QString;
         #[qinvokable]
         unsafe fn link_taxa(
             self: &DocumentOpens,
@@ -26,12 +135,6 @@ pub mod qobject {
             target: *mut OpenObject,
             names: &QString,
         );
-        #[qinvokable]
-        fn eligible(self: &DocumentOpens, path: &QString) -> bool;
-        #[qinvokable]
-        fn existing(self: &DocumentOpens, path: &QString) -> QString;
-        #[qinvokable]
-        fn track(self: Pin<&mut DocumentOpens>, path: &QString) -> QString;
         #[qinvokable]
         fn request(
             self: Pin<&mut DocumentOpens>,
@@ -84,6 +187,301 @@ pub mod qobject {
 #[derive(Default)]
 pub struct OpenRust {
     opens: Opens,
+    documents: Workspace,
+    count: i32,
+}
+
+/// Model roles; QML delegates read them as required properties.
+const PATH: i32 = 0x0100;
+const KIND: i32 = 0x0101;
+const DIRTY: i32 = 0x0102;
+const TOKEN: i32 = 0x0103;
+
+fn json(value: &serde_json::Value) -> QString {
+    QString::from(&value.to_string())
+}
+fn target_json(target: &Target) -> serde_json::Value {
+    serde_json::json!({"token": target.token.to_string(), "path": target.path})
+}
+fn targets(consent: &QString) -> Vec<Target> {
+    serde_json::from_str::<Vec<serde_json::Value>>(&consent.to_string())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|t| {
+            Some(Target {
+                token: t["token"].as_str()?.parse().ok()?,
+                path: t["path"].as_str()?.to_owned(),
+            })
+        })
+        .collect()
+}
+/// A quit step for QML: `drafts`, `ask` (with `error`), `save`, `stay` or `leave`.
+fn quit_json(step: &Quit) -> QString {
+    json(&match step {
+        Quit::Drafts => serde_json::json!({"drafts": true}),
+        Quit::Ask { targets, error } => serde_json::json!({
+            "ask": targets.iter().map(target_json).collect::<Vec<_>>(), "error": error
+        }),
+        Quit::Save(target) => serde_json::json!({"save": target_json(target)}),
+        Quit::Stay => serde_json::json!({"stay": true}),
+        Quit::Leave { drafts } => serde_json::json!({
+            "leave": drafts.iter().map(u64::to_string).collect::<Vec<_>>()
+        }),
+    })
+}
+fn row(index: i32) -> Option<usize> {
+    usize::try_from(index).ok()
+}
+fn as_row(index: usize) -> i32 {
+    i32::try_from(index).unwrap_or(i32::MAX)
+}
+
+impl qobject::DocumentOpens {
+    fn data(&self, index: &QModelIndex, role: i32) -> QVariant {
+        let Some(d) = row(index.row()).and_then(|i| self.rust().documents.documents().get(i))
+        else {
+            return QVariant::default();
+        };
+        match role {
+            PATH => QVariant::from(&QString::from(&d.path)),
+            KIND => QVariant::from(&QString::from(d.kind.name())),
+            DIRTY => QVariant::from(&d.dirty),
+            TOKEN => QVariant::from(&QString::from(&d.token.to_string())),
+            _ => QVariant::default(),
+        }
+    }
+    fn row_count(&self, _parent: &QModelIndex) -> i32 {
+        as_row(self.rust().documents.documents().len())
+    }
+    fn role_names(&self) -> QHash<QHashPair_i32_QByteArray> {
+        let mut roles = QHash::<QHashPair_i32_QByteArray>::default();
+        for (role, name) in [
+            (PATH, "path"),
+            (KIND, "kind"),
+            (DIRTY, "dirty"),
+            (TOKEN, "openToken"),
+        ] {
+            roles.insert(role, QByteArray::from(name));
+        }
+        roles
+    }
+    /// Append a tab row for `token`; returns its index.
+    fn insert_row(
+        mut self: Pin<&mut Self>,
+        token: u64,
+        path: String,
+        kind: workspace::Kind,
+    ) -> i32 {
+        let at = as_row(self.rust().documents.documents().len());
+        // SAFETY: rows are appended between the matching begin and end calls.
+        unsafe {
+            self.as_mut()
+                .begin_insert_rows(&QModelIndex::default(), at, at);
+        };
+        self.as_mut().rust_mut().documents.add(token, path, kind);
+        unsafe { self.as_mut().end_insert_rows() };
+        self.set_count(at + 1);
+        at
+    }
+    fn changed(mut self: Pin<&mut Self>, index: usize, role: i32) {
+        let at = self.index(as_row(index), 0, &QModelIndex::default());
+        let mut roles = QList::<i32>::default();
+        roles.append(role);
+        self.as_mut().data_changed(&at, &at, &roles);
+    }
+
+    /// Open `path`: switch to its tab, open it on a worker in a new tab, add a
+    /// tab for the views that open themselves, or name the project dialog.
+    fn open(mut self: Pin<&mut Self>, path: &QString, context: &QString, review: bool) -> QString {
+        let text = path.to_string();
+        if crate::document_open::eligible(&text) {
+            let fresh = self
+                .as_mut()
+                .rust_mut()
+                .opens
+                .requests
+                .iter()
+                .all(|(_, r)| r.path != text);
+            let token = self.as_mut().request(path, context, review);
+            let Some(id) = self::token(&token) else {
+                return json(&serde_json::json!({"error": "Could not allocate an open request"}));
+            };
+            if !fresh && let Some(index) = self.rust().documents.index(id) {
+                return json(
+                    &serde_json::json!({"switch": index, "token": token.to_string(), "activate": true}),
+                );
+            }
+            let index = self.as_mut().insert_row(id, text, workspace::Kind::Canvas);
+            self.as_mut().start(&token);
+            return json(&serde_json::json!({"new": index}));
+        }
+        let kind = crate::bridge::file_kind(std::path::Path::new(&text));
+        match self.rust().documents.open(&text, kind) {
+            Open::Project => json(&serde_json::json!({"project": kind})),
+            Open::Switch(index) => json(&serde_json::json!({"switch": index, "review": review})),
+            Open::New => {
+                let index = self.as_mut().add_tab(path, &QString::from(kind));
+                json(&serde_json::json!({"new": index, "review": review}))
+            }
+        }
+    }
+    /// A tab whose view opens its own file; returns its index, or -1.
+    fn add_tab(mut self: Pin<&mut Self>, path: &QString, kind: &QString) -> i32 {
+        match self.as_mut().rust_mut().opens.track(path.to_string()) {
+            Ok(id) => self.insert_row(
+                id,
+                path.to_string(),
+                workspace::Kind::parse(&kind.to_string()),
+            ),
+            Err(_) => -1,
+        }
+    }
+    fn remove_tab(mut self: Pin<&mut Self>, index: i32) {
+        let Some(token) = row(index)
+            .and_then(|i| self.rust().documents.documents().get(i))
+            .map(|d| d.token)
+        else {
+            return;
+        };
+        // SAFETY: the row is removed between the matching begin and end calls.
+        unsafe {
+            self.as_mut()
+                .begin_remove_rows(&QModelIndex::default(), index, index);
+        };
+        self.as_mut().rust_mut().documents.remove(token);
+        unsafe { self.as_mut().end_remove_rows() };
+        self.as_mut().rust_mut().opens.retire(token);
+        let count = as_row(self.rust().documents.documents().len());
+        self.set_count(count);
+    }
+    fn index_of(&self, token: &QString) -> i32 {
+        self::token(token)
+            .and_then(|id| self.rust().documents.index(id))
+            .map_or(-1, as_row)
+    }
+    fn target_index(&self, token: &QString, path: &QString) -> i32 {
+        let Some(token) = self::token(token) else {
+            return -1;
+        };
+        self.rust()
+            .documents
+            .target_index(&Target {
+                token,
+                path: path.to_string(),
+            })
+            .map_or(-1, as_row)
+    }
+    fn path_at(&self, index: i32) -> QString {
+        row(index)
+            .and_then(|i| self.rust().documents.documents().get(i))
+            .map_or_else(QString::default, |d| QString::from(&d.path))
+    }
+    fn token_at(&self, index: i32) -> QString {
+        row(index)
+            .and_then(|i| self.rust().documents.documents().get(i))
+            .map_or_else(QString::default, |d| QString::from(&d.token.to_string()))
+    }
+    fn set_dirty(mut self: Pin<&mut Self>, index: i32, dirty: bool) {
+        if let Some(i) = row(index)
+            && self.as_mut().rust_mut().documents.set_dirty(i, dirty)
+        {
+            self.changed(i, DIRTY);
+        }
+    }
+    /// The tab now shows `path` (Save As, or a review saved to a file).
+    fn renamed(mut self: Pin<&mut Self>, id: u64, path: &str) {
+        if let Some(i) = self
+            .as_mut()
+            .rust_mut()
+            .documents
+            .set_path(id, path.to_owned())
+        {
+            self.changed(i, PATH);
+        }
+    }
+    /// `{"ask": target}` when the tab has unsaved changes, else
+    /// `{"draft": bool}`: close it, deleting an empty species workspace.
+    fn close(&self, index: i32) -> QString {
+        match row(index).and_then(|i| self.rust().documents.close(i)) {
+            Some(Close::Ask(target)) => json(&serde_json::json!({"ask": target_json(&target)})),
+            Some(Close::Remove { draft }) => json(&serde_json::json!({"draft": draft})),
+            None => json(&serde_json::json!({})),
+        }
+    }
+    fn quit(mut self: Pin<&mut Self>, drafts: bool) -> QString {
+        quit_json(&self.as_mut().rust_mut().documents.quit(drafts))
+    }
+    fn discard_all(&self, consent: &QString) -> QString {
+        quit_json(&self.rust().documents.discard_all(&targets(consent)))
+    }
+    fn save_all(mut self: Pin<&mut Self>, consent: &QString) -> QString {
+        quit_json(
+            &self
+                .as_mut()
+                .rust_mut()
+                .documents
+                .save_all(targets(consent)),
+        )
+    }
+    fn quit_saved(mut self: Pin<&mut Self>, success: bool) -> QString {
+        quit_json(&self.as_mut().rust_mut().documents.quit_saved(success))
+    }
+    fn begin_delimitation(mut self: Pin<&mut Self>, index: i32) {
+        if let Some(i) = row(index) {
+            self.as_mut().rust_mut().documents.begin_delimitation(i);
+        }
+    }
+    /// "create" (ask the source to create a workspace), the token of the
+    /// workspace tab to run the analysis in, or "" to do nothing.
+    fn request_delimitation(
+        mut self: Pin<&mut Self>,
+        source_path: &QString,
+        busy: bool,
+        analysis: &QString,
+    ) -> QString {
+        let Ok(analysis) = serde_json::from_str(&analysis.to_string()) else {
+            return QString::default();
+        };
+        match self.as_mut().rust_mut().documents.request_delimitation(
+            &source_path.to_string(),
+            busy,
+            analysis,
+        ) {
+            Delimit::Create => QString::from("create"),
+            Delimit::InWorkspace(token) => QString::from(&token.to_string()),
+            Delimit::Refuse => QString::default(),
+        }
+    }
+    fn creation_refused(mut self: Pin<&mut Self>) {
+        self.as_mut().rust_mut().documents.creation_refused();
+    }
+    /// Open the new workspace in a tab and return the analysis to start in
+    /// it, with the tab's token; "" when nothing should open.
+    fn workspace_created(
+        mut self: Pin<&mut Self>,
+        source_path: &QString,
+        path: &QString,
+    ) -> QString {
+        let Some(analysis) = self
+            .as_mut()
+            .rust_mut()
+            .documents
+            .workspace_created(&source_path.to_string(), &path.to_string())
+        else {
+            return QString::default();
+        };
+        let index = self.as_mut().add_tab(path, &QString::from("delimitation"));
+        let Some(token) = row(index)
+            .and_then(|i| self.rust().documents.documents().get(i))
+            .map(|d| d.token)
+        else {
+            return QString::default();
+        };
+        self.as_mut().rust_mut().documents.mark_draft(token);
+        let mut reply = serde_json::to_value(&analysis).unwrap_or_default();
+        reply["token"] = serde_json::json!(token.to_string());
+        json(&reply)
+    }
 }
 fn token(value: &QString) -> Option<u64> {
     value.to_string().parse().ok()
@@ -184,36 +582,16 @@ impl qobject::DocumentOpens {
         path: &QString,
         installed_path: &QString,
     ) {
-        if let Some(id) = token(value)
-            && let Some(request) = self.as_mut().rust_mut().opens.requests.get_mut(&id)
+        let Some(id) = token(value) else { return };
+        if let Some(request) = self.as_mut().rust_mut().opens.requests.get_mut(&id)
             && request.phase == Phase::Ready
         {
             request.path = path.to_string();
             request.installed_path = installed_path.to_string();
         }
+        self.renamed(id, &path.to_string());
     }
 
-    fn track(mut self: Pin<&mut Self>, path: &QString) -> QString {
-        match self.as_mut().rust_mut().opens.track(path.to_string()) {
-            Ok(id) => QString::from(id.to_string()),
-            Err(_) => QString::default(),
-        }
-    }
-
-    fn eligible(&self, path: &QString) -> bool {
-        crate::document_open::eligible(&path.to_string())
-    }
-    fn existing(&self, path: &QString) -> QString {
-        self.rust()
-            .opens
-            .requests
-            .iter()
-            .find(|(_, r)| {
-                r.path == path.to_string()
-                    && !r.cancelled.load(std::sync::atomic::Ordering::Acquire)
-            })
-            .map_or_else(QString::default, |(id, _)| QString::from(id.to_string()))
-    }
     fn request(
         mut self: Pin<&mut Self>,
         path: &QString,

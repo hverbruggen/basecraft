@@ -219,7 +219,7 @@ Item {
                     property alias firstStarts: first.starts
                     property alias secondStarts: second.starts
                     QtObject { id: tabs; property int currentIndex: 0 }
-                    QtObject { id: openFiles; property int count: 2; function get(i) { return {path: i === 0 ? "one" : "two"} } }
+                    QtObject { id: documentOpens; property int count: 2; function path_at(i) { return i === 0 ? "one" : "two" } function add_tab(path, kind) { return 1 } }
                     function documentAt(i) { return i === 0 ? first : second }
                     QtObject {
                         id: first

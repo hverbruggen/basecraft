@@ -543,6 +543,26 @@ impl Default for ControllerRust {
 }
 crate::appearance::editor_follows_appearance!(qobject::GenomeController);
 
+/// What a file holds, as the tab and editor kinds name it.
+pub(crate) fn file_kind(path: &Path) -> &'static str {
+    if path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("ab1") || ext.eq_ignore_ascii_case("abi"))
+        || basecraft_ops::sanger_review::evidence_kind(path).is_some()
+    {
+        return "trace";
+    }
+    match basecraft_ops::files::kind(path) {
+        Ok(basecraft_ops::files::Kind::Alignment) => "alignment",
+        Ok(basecraft_ops::files::Kind::Tree) => "tree",
+        Ok(basecraft_ops::files::Kind::Delimitation) => "delimitation",
+        Ok(basecraft_ops::files::Kind::Metadata) => "metadata",
+        Ok(basecraft_ops::files::Kind::Submission) => "submission",
+        _ => "sequence",
+    }
+}
+
 pub(crate) fn css(c: [f32; 4]) -> String {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let b = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
@@ -1449,25 +1469,7 @@ impl qobject::GenomeController {
     }
 
     pub fn file_kind(&self, path: &QString) -> QString {
-        if Path::new(&path.to_string())
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("ab1") || ext.eq_ignore_ascii_case("abi"))
-        {
-            return QString::from("trace");
-        }
-        if basecraft_ops::sanger_review::evidence_kind(Path::new(&path.to_string())).is_some() {
-            return QString::from("trace");
-        }
-        let kind = basecraft_ops::files::kind(Path::new(&path.to_string()));
-        QString::from(match kind {
-            Ok(basecraft_ops::files::Kind::Alignment) => "alignment",
-            Ok(basecraft_ops::files::Kind::Tree) => "tree",
-            Ok(basecraft_ops::files::Kind::Delimitation) => "delimitation",
-            Ok(basecraft_ops::files::Kind::Metadata) => "metadata",
-            Ok(basecraft_ops::files::Kind::Submission) => "submission",
-            _ => "sequence",
-        })
+        QString::from(file_kind(Path::new(&path.to_string())))
     }
 
     /// Run `f` on the open document's session, if any.

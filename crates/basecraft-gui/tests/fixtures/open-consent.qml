@@ -65,7 +65,6 @@ Main {
             check(documentAt(0) === null, "A must still be pending when consent opens")
             b = documentAt(1).controller; c = documentAt(scenario === "quit-batch" ? 3 : 2).controller
             ownerB = documentTarget(1); ownerC = documentTarget(scenario === "quit-batch" ? 3 : 2)
-            check(targetIndex({token: ownerB.token, controller: c, path: ownerB.path}) === -1, "mismatched owner accepted")
             edit(b, "G"); pageB = b.accessible_page(0)
             if (scenario.includes("quit")) {
                 if (scenario === "quit-batch") {
@@ -73,8 +72,8 @@ Main {
                     edit(middle, "T"); middlePage = middle.accessible_page(0)
                 }
                 consent = dialog("quitDocumentsDialog"); quitConsent = consent
-                consent.ask(unsavedTabs()) // B (and batch C); the unrelated owner becomes dirty later.
-                check(consent.unsaved.length === (scenario === "quit-batch" ? 2 : 1) && consent.unsaved[0].controller === b, "quit snapshot did not capture its owners")
+                consent.ask(JSON.parse(documentOpens.quit(false)).ask || []) // B (and batch C); the unrelated owner becomes dirty later.
+                check(consent.unsaved.length === (scenario === "quit-batch" ? 2 : 1) && consent.unsaved[0].token === ownerB.token, "quit snapshot did not capture its owners")
             }
             edit(c, "T"); pageC = c.accessible_page(0)
             recordC = c.document_record(); revisionC = c.record_revision()
@@ -101,12 +100,12 @@ Main {
             }
             return
         }
-        if (stage === 2 && targetIndex(ownerB) === 0) {
+        if (stage === 2 && documentOpens.target_index(ownerB.token, ownerB.path) === 0) {
             stage = 3
-            check(targetIndex(ownerC) === (scenario === "quit-batch" ? 2 : 1), "unrelated owner did not shift after failed A")
+            check(documentOpens.target_index(ownerC.token, ownerC.path) === (scenario === "quit-batch" ? 2 : 1), "unrelated owner did not shift after failed A")
             if (scenario.includes("stale")) {
                 removeDocument(0)
-                check(targetIndex(ownerB) === -1 && targetIndex(ownerC) === 0, "retired owner was not rejected")
+                check(documentOpens.target_index(ownerB.token, ownerB.path) === -1 && documentOpens.target_index(ownerC.token, ownerC.path) === 0, "retired owner was not rejected")
             }
             if (scenario === "quit-batch") consent.choice("preserve_copy")
             else if (scenario.includes("close-discard")) consent.discarded()
@@ -128,14 +127,14 @@ Main {
             b.opened.connect(ready)
             return
         }
-        const ci = targetIndex(ownerC)
+        const ci = documentOpens.target_index(ownerC.token, ownerC.path)
         check(ci >= 0 && documentAt(ci).controller === c && c.dirty, "consent discarded or saved dirty C")
         check(c.accessible_page(0) === pageC && c.document_record() === recordC && c.record_revision() === revisionC, "consent changed C contents/records/revision")
         check(!closeConfirmed, "old quit consent covered newly dirty C")
         if (scenario.includes("stale")) {
             if (scenario.includes("evidence")) check(!completedSave && pendingEvidenceSave === null, "retired evidence owner executed")
         } else if (scenario.includes("close")) {
-            check(targetIndex(ownerB) === -1 && ci === 0, "close did not remove only B")
+            check(documentOpens.target_index(ownerB.token, ownerB.path) === -1 && ci === 0, "close did not remove only B")
             if (scenario.includes("save")) {
                 if (!checkFile(folder + "/B.gb", pageB)) return
             }

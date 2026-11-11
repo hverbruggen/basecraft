@@ -28,27 +28,30 @@ ApplicationWindow {
     readonly property int tickBoxSize: preferenceValues.ui && preferenceValues.ui.tick_box_size ? preferenceValues.ui.tick_box_size : 14
     readonly property int inputBoxHeight: preferenceValues.ui && preferenceValues.ui.input_box_height ? preferenceValues.ui.input_box_height : 20
 
-    // Closing the window (or Ctrl+Q) asks about unsaved changes first.
+    // Closing the window (or Ctrl+Q) asks about unsaved changes first; the
+    // open documents decide what to ask and in which order to save.
     property bool closeConfirmed: false
     property bool discardAuthoredOnQuit: false
-    function discardEmptyDrafts() {
-        for (let i = 0; i < openFiles.count; i++) discardEmptyDraft(window.documentAt(i))
-    }
     onClosing: (close) => {
-        if (closeConfirmed) { discardEmptyDrafts(); documentOpens.shutdown(); return }
-        if (!discardAuthoredOnQuit && documentRecord.unsavedDrafts().length) {
-            close.accepted = false
-            draftQuitDialog.open()
-            return
-        }
-        const unsaved = window.unsavedTabs()
-        if (unsaved.length === 0) { discardEmptyDrafts(); documentOpens.shutdown(); return }
+        if (closeConfirmed) { documentOpens.shutdown(); return }
+        const step = JSON.parse(documentOpens.quit(!discardAuthoredOnQuit && documentRecord.unsavedDrafts().length > 0))
+        if (step.leave) { leave(step.leave); documentOpens.shutdown(); return }
         close.accepted = false
-        quitDialog.ask(unsaved)
+        quitStep(step)
     }
-    function unsavedTabs() {
-        return Array.from({length: openFiles.count}, (_, i) => documentTarget(i))
-            .filter(target => target && target.controller.dirty)
+    // Delete the empty species workspaces the quit step names.
+    function leave(drafts) {
+        for (const token of drafts) {
+            const d = documentAt(documentOpens.index_of(token))
+            if (d) d.controller.discard_empty_workspace()
+        }
+    }
+    function quitStep(step) {
+        if (step.drafts) draftQuitDialog.open()
+        else if (step.ask) { quitDialog.ask(step.ask); quitError.text = step.error }
+        else if (step.save) saveTarget(documentTarget(documentOpens.target_index(step.save.token, step.save.path)), "",
+            success => quitStep(JSON.parse(documentOpens.quit_saved(success))))
+        else if (step.leave) { leave(step.leave); closeConfirmed = true; window.close() }
     }
 
     palette.window: shell.background
@@ -73,10 +76,9 @@ ApplicationWindow {
         tabBar: ribbonTabBar
         ribbon: ribbon
     }
-    // Open files, one tab each.
-    ListModel { id: openFiles }
+    // Open files, one tab each: the rows of documentOpens.
     function documentAt(index) {
-        if (index < 0 || index >= openFiles.count) return null
+        if (index < 0 || index >= documentOpens.count) return null
         const slot = docs.itemAt(index)
         return slot && slot.adoptedSlot === true ? (slot.ready ? slot.documentView : null) : slot
     }
@@ -84,31 +86,13 @@ ApplicationWindow {
     function documentTarget(index) {
         const document = documentAt(index)
         if (!document) return null
-        const row = openFiles.get(index)
-        return {token: row.openToken, controller: document.controller, path: row.path}
-    }
-    function targetIndex(target) {
-        if (!target || !target.controller) return -1
-        const index = requestIndex(target.token)
-        const document = documentAt(index)
-        return document && document.controller === target.controller && openFiles.get(index).path === target.path ? index : -1
-    }
-    function appendLegacy(row) {
-        row.openToken = documentOpens.track(row.path)
-        openFiles.append(row)
+        return {token: documentOpens.token_at(index), controller: document.controller, path: documentOpens.path_at(index)}
     }
     function removeDocument(index) {
-        if (index < 0 || index >= openFiles.count) return
-        documentOpens.retire(openFiles.get(index).openToken || "")
         const applying = applyingOpenFocus
         applyingOpenFocus = true
-        openFiles.remove(index)
+        documentOpens.remove_tab(index)
         applyingOpenFocus = applying
-    }
-    function requestIndex(token) {
-        for (let i = 0; i < openFiles.count; ++i)
-            if (openFiles.get(i).openToken === token) return i
-        return -1
     }
     property bool applyingOpenFocus: false
     onActiveFocusItemChanged: if (!applyingOpenFocus) documentOpens.revoke_focus()
@@ -116,20 +100,20 @@ ApplicationWindow {
     DocumentOpens {
         id: documentOpens
         onAcquired: (token, kind) => {
-            const index = window.requestIndex(token)
+            const index = documentOpens.index_of(token)
             const slot = index >= 0 ? docs.itemAt(index) : null
             if (slot && slot.adoptedSlot === true) slot.construct(kind)
             else documentOpens.retire(token)
         }
         onFailed: (token, message) => {
-            const index = window.requestIndex(token)
+            const index = documentOpens.index_of(token)
             if (index < 0) return
-            const path = openFiles.get(index).path
+            const path = documentOpens.path_at(index)
             window.removeDocument(index)
             provenance.notification(path, message, "fail")
         }
         onActivated: (token, review, installedPath) => {
-            const index = window.requestIndex(token)
+            const index = documentOpens.index_of(token)
             const document = index >= 0 ? window.documentAt(index) : null
             if (!document || !document.controller || document.controller.file_path !== installedPath) return
             window.applyingOpenFocus = true
@@ -338,48 +322,31 @@ ApplicationWindow {
 
     // Open a file in a tab, or switch to its tab if it's already open.
     function openPath(path, reviewMethods = false) {
-        if (documentOpens.eligible(path)) {
-            const existing = documentOpens.existing(path)
-            if (!existing.length && !shell.project_dir.length) shell.use_project_of(path)
-            const token = documentOpens.request(path, shell.project_dir, reviewMethods)
-            if (!token.length) { provenance.notification(path, "Could not allocate an open request", "fail"); return }
-            if (existing.length) {
-                applyingOpenFocus = true
-                tabs.currentIndex = requestIndex(token)
-                refreshCurrent(false)
-                applyingOpenFocus = false
-                documentOpens.activate(token)
-                return
-            }
-            applyingOpenFocus = true
-            openFiles.append({path: path, dirty: false, kind: "canvas", openToken: token})
-            tabs.currentIndex = openFiles.count - 1
-            applyingOpenFocus = false
-            documentOpens.start(token)
-            return
-        }
-        documentOpens.revoke_focus()
-        const kind = shell.file_kind(path)
-        // Project documents are edited on the Export tab.
-        if (kind === "metadata" || kind === "submission") {
+        const step = JSON.parse(documentOpens.open(path, shell.project_dir, reviewMethods))
+        if (step.error) { provenance.notification(path, step.error, "fail"); return }
+        if (step.project) {
+            // Project documents are edited on the Export tab.
+            documentOpens.revoke_focus()
             ribbonTabName = "Export"
-            if (kind === "metadata") specimenTable.open()
+            if (step.project === "metadata") specimenTable.open()
             else submissions.open(path)
             return
         }
-        focusOpenedDocument = true
-        for (let i = 0; i < openFiles.count; i++) {
-            if (openFiles.get(i).path === path) {
-                tabs.currentIndex = i
-                Qt.callLater(refreshCurrent)
-                if (reviewMethods) reviewLegacyDocument(i, path)
-                return
-            }
+        const index = step.new !== undefined ? step.new : step.switch
+        if (step.review === undefined) {
+            // Opened on a worker: the tab shows once the document arrives.
+            applyingOpenFocus = true
+            tabs.currentIndex = index
+            if (step.activate) refreshCurrent(false)
+            applyingOpenFocus = false
+            if (step.activate) documentOpens.activate(step.token)
+            return
         }
-        if (!shell.project_dir.length) shell.use_project_of(path)
-        window.appendLegacy({ path: path, dirty: false, kind: kind })
-        tabs.currentIndex = openFiles.count - 1
-        if (reviewMethods) reviewLegacyDocument(tabs.currentIndex, path)
+        documentOpens.revoke_focus()
+        focusOpenedDocument = true
+        tabs.currentIndex = index
+        if (step.switch !== undefined) Qt.callLater(refreshCurrent)
+        if (reviewMethods) reviewLegacyDocument(index, path)
     }
     function reviewLegacyDocument(index, path) {
         const document = window.documentAt(index)
@@ -387,76 +354,45 @@ ApplicationWindow {
         // Legacy trace acquisition retains its existing deferred completion.
         // The continuation still checks its original view/token and actual owner.
         Qt.callLater(() => {
-            const row = requestIndex(token)
+            const row = documentOpens.index_of(token)
             if (row < 0 || window.documentAt(row) !== document || !document || !document.controller.file_path.length) return
             documentOpens.path_changed(token, path, document.controller.file_path)
             documentOpens.activate(token)
         })
     }
 
+    // The controller the species dialog was opened for; the open documents
+    // decide whether its request runs, and open the workspace it creates.
     property var delimitationSource: null
-    property var delimitationDocument: null
-    property var delimitationRequest: null
-    function documentIsOpen(document, controller, path) {
-        if (!document || !controller || controller.file_path !== path) return false
-        for (let i = 0; i < openFiles.count; ++i)
-            if (window.documentAt(i) === document && document.controller === controller) return true
-        return false
-    }
-    function retireDelimitationDocument(document) {
-        if (delimitationDocument === document) {
-            delimitationSource = null
-            delimitationDocument = null
-        }
-        if (delimitationRequest && delimitationRequest.document === document)
-            delimitationRequest = null
-    }
     function beginDelimitation(method) {
-        if (delimitationRequest || !current || current.busy || !(alignmentOpen || treeOpen || delimitationOpen)
+        if (!current || current.busy || !(alignmentOpen || treeOpen || delimitationOpen)
                 || (method === "asap" && !alignmentOpen && !(delimitationOpen && current.linked_alignment.length))) return
         delimitationSource = current
-        delimitationDocument = window.documentAt(tabs.currentIndex)
+        documentOpens.begin_delimitation(tabs.currentIndex)
         speciesDialog.engineProblems = method === "ptp" ? JSON.parse(shell.delimitation_engines()) : ({})
         speciesDialog.show(method, alignmentOpen ? current.file_path : current.linked_alignment || "",
             treeOpen ? current.file_path : delimitationOpen ? current.display_path : "")
     }
     function requestDelimitation(method, input, rooted, settings, displayMethod) {
         const source = delimitationSource
-        const document = delimitationDocument
-        if (delimitationRequest || !source || !document || source.busy || !documentIsOpen(document, source, document.path)) return
-        if (document.kind === "delimitation") {
-            document.startAnalysis(method, input, rooted, settings, displayMethod)
-            return
-        }
-        if (document.kind !== "alignment" && document.kind !== "tree") return
-        // Only request context lives here. The backend owns the frozen input,
-        // execution state and created workspace, including failure diagnostics.
-        delimitationRequest = {source: source, document: document, path: source.file_path,
-            method: method, input: input, rooted: rooted, settings: settings, displayMethod: displayMethod,
-            usesOpenAlignment: document.kind === "alignment" && input === source.file_path}
-        if (!source.create_delimitation(method)) delimitationRequest = null
-    }
-    function completeDelimitation(request, path) {
-        if (!request || request !== delimitationRequest) return
-        delimitationRequest = null
-        if (!path.length || !documentIsOpen(request.document, request.source, request.path)) return
-        // Never reuse or overwrite an already opened result (including edits).
-        for (let i = 0; i < openFiles.count; ++i)
-            if (openFiles.get(i).path === path) return
-        window.appendLegacy({path: path, dirty: false, kind: "delimitation"})
-        const document = window.documentAt(openFiles.count - 1)
-        Qt.callLater(() => {
-            if (!documentIsOpen(request.document, request.source, request.path) ||
-                    !document || !documentIsOpen(document, document.controller, path)) return
-            document.draft = true
-            document.startAnalysis(request.method,
-                request.usesOpenAlignment ? document.controller.linked_alignment : request.input,
-                request.rooted, request.settings, request.displayMethod)
-        })
+        const step = documentOpens.request_delimitation(source ? source.file_path : "", !source || source.busy,
+            JSON.stringify({method: method, input: input, rooted: rooted, settings: settings, display: displayMethod}))
+        if (step === "create") { if (!source.create_delimitation(method)) documentOpens.creation_refused() }
+        else if (step.length) documentAt(documentOpens.index_of(step)).startAnalysis(method, input, rooted, settings, displayMethod)
     }
     Connections {
-        target: window.delimitationRequest ? window.delimitationRequest.source : null
-        function onWorkspaceCreated(path) { window.completeDelimitation(window.delimitationRequest, path) }
+        target: window.delimitationSource
+        ignoreUnknownSignals: true
+        function onWorkspaceCreated(path) {
+            const reply = documentOpens.workspace_created(window.delimitationSource.file_path, path)
+            if (!reply.length) return
+            const run = JSON.parse(reply)
+            Qt.callLater(() => {
+                const document = window.documentAt(documentOpens.index_of(run.token))
+                if (document) document.startAnalysis(run.method, run.uses_open_alignment ? document.controller.linked_alignment : run.input,
+                    run.rooted, run.settings, run.display)
+            })
+        }
     }
     DelimitationAnalysisDialog {
         id: speciesDialog
@@ -515,16 +451,14 @@ ApplicationWindow {
 
     function startTraceReview(paths, reference, target, cutoff = 20, forceNew = false) {
         let preserve = forceNew
-        for (let i = 0; i < openFiles.count; i++) {
+        for (let i = 0; i < documentOpens.count; i++) {
             const existing = window.documentAt(i)
-            if (openFiles.get(i).path !== paths[0] || !existing) continue
+            if (documentOpens.path_at(i) !== paths[0] || !existing) continue
             if (existing.kind === "trace" && existing.working) { tabs.currentIndex = i; return }
             if (existing.controller.dirty) preserve = true
         }
-        if (preserve) {
-            window.appendLegacy({ path: paths[0], dirty: false, kind: "trace" })
-            tabs.currentIndex = openFiles.count - 1
-        } else window.openPath(paths[0])
+        if (preserve) tabs.currentIndex = documentOpens.add_tab(paths[0], "trace")
+        else window.openPath(paths[0])
         const traceDocument = window.documentAt(tabs.currentIndex)
         Qt.callLater(() => {
             if (!traceDocument) return
@@ -544,15 +478,12 @@ ApplicationWindow {
     }
 
     // A species workspace created for an analysis that produced nothing is
-    // removed rather than left as an empty file beside the data.
-    function discardEmptyDraft(d) {
-        if (d && d.kind === "delimitation" && d.draft) d.controller.discard_empty_workspace()
-    }
+    // removed on close rather than left as an empty file beside the data.
     function closeTab(i) {
         documentOpens.revoke_focus()
-        const d = window.documentAt(i)
-        if (d && d.controller.dirty) { confirmClose.target = documentTarget(i); confirmClose.saveError = ""; confirmClose.open(); return }
-        discardEmptyDraft(d)
+        const step = JSON.parse(documentOpens.close(i))
+        if (step.ask) { confirmClose.target = documentTarget(i); confirmClose.saveError = ""; confirmClose.open(); return }
+        if (step.draft) window.documentAt(i).controller.discard_empty_workspace()
         window.removeDocument(i)
         Qt.callLater(refreshCurrent)
     }
@@ -608,9 +539,8 @@ ApplicationWindow {
             const pending = window.pendingSequence
             window.pendingSequence = null
             if (!pending) return
-            for (let i = 0; i < openFiles.count; ++i) {
-                if (openFiles.get(i).path === pending.path) { window.removeDocument(i); break }
-            }
+            const pendingIndex = documentOpens.index_of(pending.token)
+            if (pendingIndex >= 0) window.removeDocument(pendingIndex)
             tabs.currentIndex = pending.previous
         }
         onCreateRequested: (name, sequence) => {
@@ -618,9 +548,9 @@ ApplicationWindow {
             const error = shell.new_sequence_error(name, sequence)
             if (error.length) { validationMessage = error; return }
             const path = "untitled:" + (++window.nextSequence) + "/" + name.trim() + ".gb"
-            window.pendingSequence = {path: path, name: name, sequence: sequence, previous: tabs.currentIndex}
-            window.appendLegacy({path: path, dirty: false, kind: "sequence"})
-            tabs.currentIndex = openFiles.count - 1
+            const index = documentOpens.add_tab(path, "sequence")
+            window.pendingSequence = {path: path, name: name, sequence: sequence, previous: tabs.currentIndex, token: documentOpens.token_at(index)}
+            tabs.currentIndex = index
         }
     }
     function initializeSequence(document) {
@@ -2071,13 +2001,12 @@ ApplicationWindow {
         fileUrls: shell
         automatic: false
         dialogName: "evidenceSaveDialog"
-        valid: () => request && window.targetIndex(request.owner) >= 0
+        valid: () => request && documentOpens.target_index(request.owner.token, request.owner.path) >= 0
         chooseDestination: () => window.saveAs(request.owner, request.continuation)
         onFailed: message => provenance.notification(target || request.owner.path, message, "fail")
         onFinished: success => {
             const owner = request.owner
             if (success && target) {
-                openFiles.setProperty(window.targetIndex(owner), "path", target)
                 documentOpens.path_changed(owner.token, target, owner.controller.file_path)
                 owner.path = target
                 Qt.callLater(window.refreshCurrent)
@@ -2085,25 +2014,6 @@ ApplicationWindow {
             request.continuation && request.continuation(success)
         }
     }
-    function saveBeforeQuit(targets, offset) {
-        if (offset >= targets.length) {
-            const left = window.unsavedTabs()
-            if (left.length) {
-                quitDialog.ask(left)
-                quitError.text = "Some files could not be saved. Review their notifications and retry."
-            } else { window.closeConfirmed = true; window.close() }
-            return
-        }
-        if (targetIndex(targets[offset]) < 0) {
-            quitDialog.ask(window.unsavedTabs())
-            quitError.text = "The open documents changed. Review them before closing."
-            return
-        }
-        window.saveTarget(targets[offset], "", function(success) {
-            if (success) window.saveBeforeQuit(targets, offset + 1)
-        })
-    }
-
     // Save the active tab under a new name; the tab then shows the new file.
     function saveAs(owner = documentTarget(tabs.currentIndex), continuation = null) {
         if (!owner) return
@@ -2116,7 +2026,7 @@ ApplicationWindow {
 
     Shortcut { sequence: "Ctrl+Q"; onActivated: window.close() }
     // Close the active tab, asking first if it has unsaved changes.
-    Shortcut { sequence: "Ctrl+W"; onActivated: if (openFiles.count > 0) window.closeTab(tabs.currentIndex) }
+    Shortcut { sequence: "Ctrl+W"; onActivated: if (documentOpens.count > 0) window.closeTab(tabs.currentIndex) }
     // Undo and redo reach the open document wherever the focus is; a text
     // field being edited keeps its own. Trace review has its own undo.
     Shortcut { sequence: "Ctrl+Z"; enabled: !submissionDialog.opened && window.current !== null && !window.traceOpen; onActivated: window.current.undo() }
@@ -2234,10 +2144,10 @@ ApplicationWindow {
             TabBar {
                 id: tabs
                 Layout.fillWidth: true
-                visible: openFiles.count > 0
+                visible: documentOpens.count > 0
                 onCurrentIndexChanged: { if (!window.applyingOpenFocus) documentOpens.revoke_focus(); Qt.callLater(window.refreshCurrent) }
                 Repeater {
-                    model: openFiles
+                    model: documentOpens
                     AppTabButton {
                         required property int index
                         required property string path
@@ -2292,19 +2202,16 @@ ApplicationWindow {
 
             StackLayout {
                 id: stack
-                visible: openFiles.count > 0
+                visible: documentOpens.count > 0
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 currentIndex: tabs.currentIndex
 
                 Repeater {
                     id: docs
-                    model: openFiles
+                    model: documentOpens
                     onItemAdded: Qt.callLater(window.refreshCurrent)
-                    onItemRemoved: (index, item) => {
-                        window.retireDelimitationDocument(item.adoptedSlot === true ? item.documentView : item)
-                        Qt.callLater(window.refreshCurrent)
-                    }
+                    onItemRemoved: Qt.callLater(window.refreshCurrent)
                     // Each file opens in the editor for what it holds.
                     delegate: DelegateChooser {
                         role: "kind"
@@ -2345,9 +2252,9 @@ ApplicationWindow {
                                     if (!alive) return
                                     const token = openToken
                                     Qt.callLater(() => {
-                                        const row = window.requestIndex(token)
+                                        const row = documentOpens.index_of(token)
                                         if (row >= 0) {
-                                            provenance.notification(openFiles.get(row).path, "Could not construct the document view", "fail")
+                                            provenance.notification(documentOpens.path_at(row), "Could not construct the document view", "fail")
                                             window.removeDocument(row)
                                         }
                                     })
@@ -2371,7 +2278,7 @@ ApplicationWindow {
                                         documentOpens.activate(canvasSlot.openToken)
                                         window.refreshCurrent(false)
                                     }
-                                    function onDirtyChanged() { openFiles.setProperty(canvasSlot.index, "dirty", canvasLoader.item.dirty) }
+                                    function onDirtyChanged() { documentOpens.set_dirty(canvasSlot.index, canvasLoader.item.dirty) }
                                     function onActivate() { tabs.currentIndex = canvasSlot.index }
                                     function onOpenFile(path) { window.openPath(path) }
                                     function onReviewTraces(paths, reference) { window.startTraceReview(paths, reference, canvasLoader.item) }
@@ -2405,7 +2312,7 @@ ApplicationWindow {
                                 fileUrls: shell
                                 onCopyText: (text) => clipboard.put(text)
                                 onRedraft: (paths, reference, target, cutoff) => window.startTraceReview(paths, reference, target, cutoff, true)
-                                onDirtyChanged: openFiles.setProperty(index, "dirty", dirty)
+                                onDirtyChanged: documentOpens.set_dirty(index, dirty)
                             }
                         }
                         DelegateChoice {
@@ -2421,7 +2328,7 @@ ApplicationWindow {
                                 }
                                 onToggleInsert: window.alignmentInsert = !window.alignmentInsert
                                 onOpenFile: (path) => window.openPath(path)
-                                onDirtyChanged: openFiles.setProperty(index, "dirty", dirty)
+                                onDirtyChanged: documentOpens.set_dirty(index, dirty)
                                 onContextMenu: (info) => { alnMenu.info = info; alnMenu.popup() }
                                 onCopyText: (text) => clipboard.put(text)
                                 onToggleSidebar: window.sidebarOpen = !window.sidebarOpen
@@ -2437,7 +2344,7 @@ ApplicationWindow {
                                 id: treeDocument
                                 notificationSink: provenance
                                 onOpenFile: (path) => window.openPath(path)
-                                onDirtyChanged: openFiles.setProperty(index, "dirty", dirty)
+                                onDirtyChanged: documentOpens.set_dirty(index, dirty)
                                 onContextMenu: (info) => treeMenu.showFor(treeDocument.controller, info)
                                 onToggleSidebar: window.sidebarOpen = !window.sidebarOpen
                                 onRenameTip: tipDialog.ask()
@@ -2450,7 +2357,7 @@ ApplicationWindow {
                                 overviewEnabled: window.overviewEnabled
                                 notificationSink: provenance
                                 onOpenFile: (path) => window.openPath(path)
-                                onDirtyChanged: openFiles.setProperty(index, "dirty", dirty)
+                                onDirtyChanged: documentOpens.set_dirty(index, dirty)
                             }
                         }
                         DelegateChoice {
@@ -2460,7 +2367,7 @@ ApplicationWindow {
                                 notificationSink: provenance
                                 showGc: window.showGc
                                 defaultLayout: window.defaultLayout
-                                onDirtyChanged: openFiles.setProperty(index, "dirty", dirty)
+                                onDirtyChanged: documentOpens.set_dirty(index, dirty)
                                 onContextMenu: (info) => { menu.info = info; menu.popup() }
                                 onEditFeature: (id) => editor.openFeature(id)
                                 onEditSelected: editor.openSelected()
@@ -2475,7 +2382,7 @@ ApplicationWindow {
 
             EmptyWorkspaceBrand {
                 objectName: "emptyWorkspaceBrand"
-                visible: openFiles.count === 0 && shell.project_dir.length === 0
+                visible: documentOpens.count === 0 && shell.project_dir.length === 0
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 backgroundColor: shell.background
@@ -2485,7 +2392,7 @@ ApplicationWindow {
             }
 
             Item {
-                visible: openFiles.count === 0 && shell.project_dir.length > 0
+                visible: documentOpens.count === 0 && shell.project_dir.length > 0
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 EmptyView {
@@ -2500,7 +2407,7 @@ ApplicationWindow {
 
             // The status line belongs to the open file, under it only.
             Rectangle {
-                visible: openFiles.count > 0
+                visible: documentOpens.count > 0
                 Layout.fillWidth: true
                 implicitHeight: 20
                 color: Qt.alpha(shell.foreground, 0.06)
@@ -2874,21 +2781,8 @@ ApplicationWindow {
             }
             AppErrorLabel { id: quitError; visible: text.length > 0; color: shell.accent; wrapMode: Text.Wrap }
         }
-        onAccepted: {
-            window.saveBeforeQuit(unsaved, 0)
-        }
-        onDiscarded: {
-            const current = window.unsavedTabs()
-            if (unsaved.some(target => window.targetIndex(target) < 0) ||
-                    current.some(target => !unsaved.some(consent => consent.token === target.token && consent.controller === target.controller && consent.path === target.path))) {
-                ask(current)
-                quitError.text = "The open documents changed. Review them before closing."
-                return
-            }
-            close()
-            window.closeConfirmed = true
-            window.close()
-        }
+        onAccepted: window.quitStep(JSON.parse(documentOpens.save_all(JSON.stringify(unsaved))))
+        onDiscarded: { close(); window.quitStep(JSON.parse(documentOpens.discard_all(JSON.stringify(unsaved)))) }
     }
 
     AppFormDialog {
@@ -2907,9 +2801,9 @@ ApplicationWindow {
         }
         onAccepted: {
             const owner = target
-            if (window.targetIndex(owner) < 0) return
+            if (documentOpens.target_index(owner.token, owner.path) < 0) return
             window.saveTarget(owner, "", function(success) {
-                const row = window.targetIndex(owner)
+                const row = documentOpens.target_index(owner.token, owner.path)
                 if (row < 0) return
                 if (!success) {
                     confirmClose.target = owner
@@ -2923,7 +2817,7 @@ ApplicationWindow {
             })
         }
         onDiscarded: {
-            const row = window.targetIndex(target)
+            const row = documentOpens.target_index(target.token, target.path)
             close()
             if (row < 0) return
             window.removeDocument(row)
@@ -2957,7 +2851,6 @@ ApplicationWindow {
         const args = Qt.application.arguments
         for (let i = 1; i < args.length; i++) {
             if (args[i].startsWith("--")) { i++; continue }
-            shell.use_project_of(args[i])
             openPath(args[i])
         }
     }
@@ -3171,7 +3064,7 @@ ApplicationWindow {
             if (arg("--orfs")) console.log(window.current.find_orfs(Number(arg("--orfs")), arg("--select") !== undefined))
             if (arg("--activity")) {
                 const files = []
-                for (let i = 0; i < openFiles.count; i++) files.push(openFiles.get(i).path)
+                for (let i = 0; i < documentOpens.count; i++) files.push(documentOpens.path_at(i))
                 console.log("activity:", shell.activity_log(files.join("\n"), -new Date().getTimezoneOffset()))
             }
             if (arg("--distance-action")) c.run_form("distance", arg("--distance-action"), arg("--distance-options") || "{}")
