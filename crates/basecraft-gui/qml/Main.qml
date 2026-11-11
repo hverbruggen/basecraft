@@ -487,7 +487,7 @@ ApplicationWindow {
         commandId: "tools.installed-operations"
         iconName: "more"
         enabled: window.current !== null && window.currentPath.length > 0
-        onTriggered: operationPicker.show(shell.project_dir.length ? shell.project_dir : shell.local_file_path(shell.parent_folder_url(window.currentPath)), window.currentPath, !!window.current.dirty)
+        onTriggered: operationWindow.dialog().show(shell.project_dir.length ? shell.project_dir : shell.local_file_path(shell.parent_folder_url(window.currentPath)), window.currentPath, !!window.current.dirty)
     }
     Command {
         id: newSequenceCommand
@@ -575,7 +575,7 @@ ApplicationWindow {
         id: shortcutsCommand
         commandId: "help.shortcuts"
         iconName: "keyboard"
-        onTriggered: shortcuts.show("")
+        onTriggered: shortcutsWindow.dialog().show("")
     }
     Command {
         id: aboutCommand
@@ -588,7 +588,7 @@ ApplicationWindow {
         id: preferencesCommand
         commandId: "application.preferences"
         iconName: "settings"
-        onTriggered: preferencesDialog.open()
+        onTriggered: preferencesWindow.dialog().open()
     }
     Command {
         id: findCommand
@@ -613,7 +613,7 @@ ApplicationWindow {
         id: contextShortcutsCommand
         commandId: "help.context-shortcuts"
         iconName: "keyboard"
-        onTriggered: shortcuts.show(window.ribbonTab)
+        onTriggered: shortcutsWindow.dialog().show(window.ribbonTab)
     }
     Command {
         id: learnCommand
@@ -670,12 +670,17 @@ ApplicationWindow {
                 documentRecord.markDraftSaved(window.frozenDraftKey, window.frozenDraft)
         }
     }
-    TasksDialog {
-        id: tasksDialog
-        service: provenance
-        jobs: jobService
-        onOpenDocument: path => window.openPath(path)
-        onCopyText: text => clipboard.put(text)
+    OnDemand {
+        id: tasksWindow
+        sourceComponent: Component {
+            TasksDialog {
+                id: tasksDialog
+                service: provenance
+                jobs: jobService
+                onOpenDocument: path => window.openPath(path)
+                onCopyText: text => clipboard.put(text)
+            }
+        }
     }
     readonly property string savedRecordPath: window.traceOpen && window.current ? window.current.file_path : window.currentPath
     property string provenanceSource: ""
@@ -800,7 +805,7 @@ ApplicationWindow {
             }
         }
     }
-    PreferencesDialog { id: preferencesDialog; settings: preferences; commands: window.applicationCommands; defaultFontSizePoints: window.defaultFontSizePoints }
+    OnDemand { id: preferencesWindow; sourceComponent: Component { PreferencesDialog { id: preferencesDialog; settings: preferences; commands: window.applicationCommands; defaultFontSizePoints: window.defaultFontSizePoints } } }
 
     // The one list of commands: keys, scopes, icons and why one is unavailable.
     AppCommands { id: commandList }
@@ -946,7 +951,7 @@ ApplicationWindow {
                 AppButton {
                     text: jobService.running ? "Tasks (" + jobService.running + ")" : "Tasks" + (jobService.failed ? " · " + jobService.failed + " failed" : "")
                     Accessible.name: "Tasks and notifications, " + jobService.running + " active, " + jobService.failed + " failed"
-                    onClicked: tasksDialog.open()
+                    onClicked: tasksWindow.dialog().open()
                 }
             }
         }
@@ -1256,7 +1261,7 @@ ApplicationWindow {
                             commandId: "tree.rate-smoothing"
                             iconName: "tree-clock"
                             enabled: window.treeOpen && window.current !== null && window.currentPath.length > 0
-                            onInvoked: operationPicker.showOperation(shell.project_dir.length ? shell.project_dir : shell.local_file_path(shell.parent_folder_url(window.currentPath)), window.currentPath, !!window.current.dirty, "basecraft.sanderson/date_tree@1")
+                            onInvoked: operationWindow.dialog().showOperation(shell.project_dir.length ? shell.project_dir : shell.local_file_path(shell.parent_folder_url(window.currentPath)), window.currentPath, !!window.current.dirty, "basecraft.sanderson/date_tree@1")
                         }
                     }
                     ToolSeparator { Layout.fillHeight: true }
@@ -1458,7 +1463,7 @@ ApplicationWindow {
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
                         title: "Zenodo"
-                        RibbonButton { commandId: "export.zenodo"; iconName: "save-as"; tip: shell.project_dir.length ? "Prepare selected saved files for a Zenodo draft" : "Choose a project folder first"; enabled: shell.project_dir.length > 0; onInvoked: { if (zenodoDialog.ready || zenodoJobs.busy || zenodoDialog.attempted) zenodoDialog.open(); else zenodoPicker.open() } }
+                        RibbonButton { commandId: "export.zenodo"; iconName: "save-as"; tip: shell.project_dir.length ? "Prepare selected saved files for a Zenodo draft" : "Choose a project folder first"; enabled: shell.project_dir.length > 0; onInvoked: { const zenodo = zenodoWindow.item; if (zenodo && (zenodo.ready || zenodoJobs.busy || zenodo.attempted)) zenodo.open(); else zenodoPicker.open() } }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
@@ -1501,12 +1506,12 @@ ApplicationWindow {
 
     // Settings for every plugin run, drawn from the plugin's manifest.
     ToolSettingsDialog { id: toolSettings }
-    OperationPickerDialog { id: operationPicker; onOpenResult: (path) => window.openPath(path) }
+    OnDemand { id: operationWindow; sourceComponent: Component { OperationPickerDialog { id: operationPicker; onOpenResult: (path) => window.openPath(path) } } }
 
-    ShortcutsDialog { id: shortcuts; commands: window.applicationCommands }
+    OnDemand { id: shortcutsWindow; sourceComponent: Component { ShortcutsDialog { id: shortcuts; commands: window.applicationCommands } } }
 
-    AppOperations { id: zenodoJobs; onBusyChanged: if (!busy) zenodoDialog.completed() }
-    ZenodoDialog { id: zenodoDialog; backend: zenodoJobs; onChooseFiles: zenodoPicker.open() }
+    AppOperations { id: zenodoJobs; onBusyChanged: if (!busy && zenodoWindow.item) zenodoWindow.item.completed() }
+    OnDemand { id: zenodoWindow; sourceComponent: Component { ZenodoDialog { id: zenodoDialog; backend: zenodoJobs; onChooseFiles: zenodoPicker.open() } } }
     FileDialog {
         id: zenodoPicker
         title: "Choose saved files for a Zenodo draft"
@@ -1518,7 +1523,7 @@ ApplicationWindow {
                 const doc = JSON.parse(submissions.document || "{}")
                 defaults = {title: (doc.publication || {}).title || "", creators: doc.publication_authors_text || ""}
             }
-            zenodoDialog.show(Array.from(selectedFiles, url => shell.local_file_path(url)), shell.project_dir, defaults)
+            zenodoWindow.dialog().show(Array.from(selectedFiles, url => shell.local_file_path(url)), shell.project_dir, defaults)
         }
     }
 
@@ -1602,54 +1607,59 @@ ApplicationWindow {
     }
     function showSubmission() {
         submissions.refresh_review()
-        submissionDialog.open()
+        submissionWindow.dialog().open()
     }
     function validateSubmission() {
         if (!submissions.export_package()) { showSubmission(); return }
         const request = submissions.validation_request()
         if (request.length) submissionJobs.submit(shell.project_dir, request)
-        if (!submissionDialog.opened) showSubmission()
+        if (!submissionWindow.item || !submissionWindow.item.opened) showSubmission()
     }
     TextPromptDialog { id: submissionName }
-    SubmissionDialog {
-        id: submissionDialog
-        document: JSON.parse(submissions.document || "null")
-        review: JSON.parse(submissions.review || '{"rows":[],"issues":[]}')
-        pkg: JSON.parse(submissions.package || "null")
-        geneticCodes: JSON.parse(submissions.genetic_codes())
-        path: submissions.path
-        message: submissionJobs.busy ? submissionJobs.message : submissions.message
-        messageKind: submissions.message_kind
-        canUndo: submissions.can_undo
-        canRedo: submissions.can_redo
-        validating: submissionJobs.busy
-        reviewStage: submissions.review_stage
-        validationStage: submissionJobs.message
-        reviewing: submissions.reviewing
-        parseAuthors: text => JSON.parse(submissions.preview_authors(text))
-        onDetailsRequested: details => submissions.set_details(details)
-        onInclusionPreviewRequested: rule => { inclusionPlan = JSON.parse(submissions.preview_inclusion(rule)) }
-        onInclusionPresetsRequested: save => {
-            const result = JSON.parse(specimenMetadata.inclusion_presets(save))
-            presetError = result.error || ""
-            if (!result.error) inclusionPresets = result
+    OnDemand {
+        id: submissionWindow
+        sourceComponent: Component {
+            SubmissionDialog {
+                id: submissionDialog
+                document: JSON.parse(submissions.document || "null")
+                review: JSON.parse(submissions.review || '{"rows":[],"issues":[]}')
+                pkg: JSON.parse(submissions.package || "null")
+                geneticCodes: JSON.parse(submissions.genetic_codes())
+                path: submissions.path
+                message: submissionJobs.busy ? submissionJobs.message : submissions.message
+                messageKind: submissions.message_kind
+                canUndo: submissions.can_undo
+                canRedo: submissions.can_redo
+                validating: submissionJobs.busy
+                reviewStage: submissions.review_stage
+                validationStage: submissionJobs.message
+                reviewing: submissions.reviewing
+                parseAuthors: text => JSON.parse(submissions.preview_authors(text))
+                onDetailsRequested: details => submissions.set_details(details)
+                onInclusionPreviewRequested: rule => { inclusionPlan = JSON.parse(submissions.preview_inclusion(rule)) }
+                onInclusionPresetsRequested: save => {
+                    const result = JSON.parse(specimenMetadata.inclusion_presets(save))
+                    presetError = result.error || ""
+                    if (!result.error) inclusionPresets = result
+                }
+                onEditRequested: edit => submissions.edit(edit)
+                onPublicationRequested: (title, authors) => submissions.set_publication(title, authors)
+                onDecisionRequested: (record, decision, accession) => submissions.set_decision(record, decision, accession)
+                onFrameRequested: (record, codonStart) => submissions.set_frame(record, codonStart)
+                onConfirmDetectedRequested: submissions.confirm_detected()
+                onUndoRequested: submissions.undo()
+                onRedoRequested: submissions.redo()
+                onExportRequested: submissions.export_package()
+                onValidateRequested: window.validateSubmission()
+                onCancelValidationRequested: submissionJobs.cancel()
+                onAccessionsMatchRequested: text => {
+                    const plan = submissions.plan_accessions(text)
+                    submissionDialog.accessionPlan = plan.length ? JSON.parse(plan) : null
+                }
+                onAccessionsRecordRequested: accessions => submissions.record_accessions(accessions)
+                onAccessionTableRequested: accessionTableDestination.open()
+            }
         }
-        onEditRequested: edit => submissions.edit(edit)
-        onPublicationRequested: (title, authors) => submissions.set_publication(title, authors)
-        onDecisionRequested: (record, decision, accession) => submissions.set_decision(record, decision, accession)
-        onFrameRequested: (record, codonStart) => submissions.set_frame(record, codonStart)
-        onConfirmDetectedRequested: submissions.confirm_detected()
-        onUndoRequested: submissions.undo()
-        onRedoRequested: submissions.redo()
-        onExportRequested: submissions.export_package()
-        onValidateRequested: window.validateSubmission()
-        onCancelValidationRequested: submissionJobs.cancel()
-        onAccessionsMatchRequested: text => {
-            const plan = submissions.plan_accessions(text)
-            submissionDialog.accessionPlan = plan.length ? JSON.parse(plan) : null
-        }
-        onAccessionsRecordRequested: accessions => submissions.record_accessions(accessions)
-        onAccessionTableRequested: accessionTableDestination.open()
     }
     SubmitterDialog {
         id: submitterDialog
@@ -1872,8 +1882,8 @@ ApplicationWindow {
     Shortcut { sequence: "Ctrl+W"; onActivated: if (documentOpens.count > 0) window.closeTab(tabs.currentIndex) }
     // Undo and redo reach the open document wherever the focus is; a text
     // field being edited keeps its own. Trace review has its own undo.
-    Shortcut { sequence: "Ctrl+Z"; enabled: !submissionDialog.opened && window.current !== null && !window.traceOpen; onActivated: window.current.undo() }
-    Shortcut { sequences: ["Ctrl+Shift+Z", "Ctrl+Y"]; enabled: !submissionDialog.opened && window.current !== null && !window.traceOpen; onActivated: window.current.redo() }
+    Shortcut { sequence: "Ctrl+Z"; enabled: !(submissionWindow.item && submissionWindow.item.opened) && window.current !== null && !window.traceOpen; onActivated: window.current.undo() }
+    Shortcut { sequences: ["Ctrl+Shift+Z", "Ctrl+Y"]; enabled: !(submissionWindow.item && submissionWindow.item.opened) && window.current !== null && !window.traceOpen; onActivated: window.current.redo() }
     FileDialog {
         id: saveDialog
         objectName: "saveDocumentDialog"
@@ -2286,13 +2296,13 @@ ApplicationWindow {
         }
     }
 
-    AppOperations { id: blastBackend; onBusyChanged: if (!busy) blastDialog.completed() }
-    BlastDialog { id: blastDialog; backend: blastBackend; onCopyText: text => clipboard.put(text) }
+    AppOperations { id: blastBackend; onBusyChanged: if (!busy && blastWindow.item) blastWindow.item.completed() }
+    OnDemand { id: blastWindow; sourceComponent: Component { BlastDialog { id: blastDialog; backend: blastBackend; onCopyText: text => clipboard.put(text) } } }
     function beginBlast(mode, feature) {
         const controller = window.current
         mode = commandList.blast_source(window.alignmentOpen, mode, !window.alignmentOpen && controller.has_selection())
         const annotation = window.alignmentOpen ? -1 : (feature === undefined ? controller.selected_feature() : feature)
-        blastDialog.show(source => controller.blast_queries(source, annotation), mode, window.alignmentOpen)
+        blastWindow.dialog().show(source => controller.blast_queries(source, annotation), mode, window.alignmentOpen)
     }
 
     // Only what applies where you clicked: an annotation, or the selection.

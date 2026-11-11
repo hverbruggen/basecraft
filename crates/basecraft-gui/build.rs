@@ -125,6 +125,7 @@ fn main() {
         "qml/AppSpinBox.qml",
         "qml/ToolSettingsDialog.qml",
         "qml/OperationPickerDialog.qml",
+        "qml/OnDemand.qml",
         "qml/OperationParameters.qml",
         "qml/OperationParameterValue.qml",
         "qml/TextPromptDialog.qml",

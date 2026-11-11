@@ -176,6 +176,18 @@ Main {
             check(!find(options.contentItem, i => i.objectName === "svgSelection").visible, "tree export offers selection")
             options.reject()
         })
+        // Dialogs built on first use open from their commands.
+        for (const id of ["application.preferences", "help.shortcuts", "tools.installed-operations"]) {
+            list.push(() => {
+                check(command(id).enabled, id + " unavailable")
+                command(id).trigger()
+            })
+            list.push(() => {
+                const open = walk.contentData.filter(item => item && item.item && item.item.opened)
+                check(open.length === 1, id + " did not open its dialog")
+                open[0].item.close()
+            })
+        }
         list.push(() => { console.log("RIBBON_WALK passed"); Qt.quit() })
         return list
     }
