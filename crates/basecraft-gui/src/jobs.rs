@@ -3,10 +3,11 @@
 //! Work runs on its own thread with a [`Work`] handle: a cancel flag and a
 //! progress reporter. Its result arrives once, as a queued call on the window
 //! thread of the object that started it. When that object is gone (its tab
-//! closed), the result is dropped. Listed jobs (plugin runs) also tell every
-//! [`qobject::AppJobs`] when they start, report progress and finish, so the
-//! Tasks dialog and status bar update without a timer.
+//! closed), the result is dropped. Listed jobs (plugin runs and Sanger stages)
+//! also stay in this session's job list, which [`qobject::AppJobs`] shows: the
+//! status bar counts and the Tasks dialog bind to it.
 use basecraft_ops::{Session, work::Work};
+use cxx_qt_lib::QString;
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     pin::Pin,
@@ -15,34 +16,63 @@ use std::{
 
 #[cxx_qt::bridge]
 pub mod qobject {
+    unsafe extern "C++" {
+        include!("cxx-qt-lib/qstring.h");
+        type QString = cxx_qt_lib::QString;
+    }
     extern "RustQt" {
         #[qobject]
         #[qml_element]
-        #[qproperty(i32, revision)]
-        type AppJobs = super::JobList;
+        #[qproperty(QString, jobs)]
+        #[qproperty(i32, running)]
+        #[qproperty(i32, failed)]
+        type AppJobs = super::JobViews;
+        #[qinvokable]
+        fn cancel(self: &AppJobs, id: i32);
     }
     impl cxx_qt::Threading for AppJobs {}
     impl cxx_qt::Initialize for AppJobs {}
 }
 
-/// Counts changes to the listed jobs; QML refreshes job views when it moves.
-#[derive(Default)]
-pub struct JobList {
-    revision: i32,
+/// This session's listed jobs as the views show them.
+pub struct JobViews {
+    jobs: QString,
+    running: i32,
+    failed: i32,
+}
+impl Default for JobViews {
+    fn default() -> Self {
+        Self {
+            jobs: QString::from("[]"),
+            running: 0,
+            failed: 0,
+        }
+    }
 }
 
 impl cxx_qt::Initialize for qobject::AppJobs {
     fn initialize(self: Pin<&mut Self>) {
         use cxx_qt::Threading;
         let thread = self.qt_thread();
-        watch(move || {
-            thread
-                .queue(|mut jobs| {
-                    let next = jobs.revision().wrapping_add(1);
-                    jobs.as_mut().set_revision(next);
-                })
-                .is_ok()
-        });
+        watch(move || thread.queue(qobject::AppJobs::show).is_ok());
+        self.show();
+    }
+}
+
+impl qobject::AppJobs {
+    fn show(mut self: Pin<&mut Self>) {
+        let list = listed();
+        let count = |status: &str| {
+            i32::try_from(list.iter().filter(|e| e.status == status).count()).unwrap_or(i32::MAX)
+        };
+        let (running, failed) = (count("running") + count("cancelling"), count("failed"));
+        let text = serde_json::to_string(&list).unwrap_or_else(|_| "[]".into());
+        self.as_mut().set_running(running);
+        self.as_mut().set_failed(failed);
+        self.set_jobs(QString::from(&text));
+    }
+    fn cancel(&self, id: i32) {
+        cancel(u64::try_from(id).unwrap_or(u64::MAX));
     }
 }
 
@@ -58,23 +88,157 @@ impl<T: cxx_qt::Threading + 'static> Owner<T> for cxx_qt::CxxQtThread<T> {
     }
 }
 
-type Watcher = Box<dyn Fn() -> bool + Send>;
-static WATCHERS: Mutex<Vec<Watcher>> = Mutex::new(Vec::new());
-
-/// Call `notify` whenever a listed job starts, progresses or finishes, until
-/// it returns false.
-pub(crate) fn watch(notify: impl Fn() -> bool + Send + 'static) {
-    WATCHERS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .push(Box::new(notify));
+/// How a listed job is named in the job list.
+pub(crate) struct Listing {
+    pub operation: String,
+    pub source: String,
 }
 
-fn changed() {
-    WATCHERS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .retain(|notify| notify());
+/// What a finished listed job left: an error, or the file it made.
+#[derive(Default)]
+pub(crate) struct Ended {
+    pub error: Option<String>,
+    pub result: String,
+}
+
+/// A result type that a listed job returns.
+pub(crate) trait Outcome {
+    fn ended(&self) -> Ended;
+}
+
+impl Outcome for basecraft_protocol::operation::OperationOutcome {
+    fn ended(&self) -> Ended {
+        Ended {
+            error: (self.state != basecraft_protocol::operation::RuntimeState::Completed)
+                .then(|| crate::document_jobs::failure(self)),
+            result: self
+                .artifacts
+                .first()
+                .map(|artifact| artifact.path.clone())
+                .unwrap_or_default(),
+        }
+    }
+}
+
+/// Provenance actions report a text; finishing is success.
+impl Outcome for String {
+    fn ended(&self) -> Ended {
+        Ended::default()
+    }
+}
+
+#[derive(Clone, serde::Serialize)]
+struct Source {
+    path: String,
+}
+
+/// One row of the job list, in the shape the Tasks dialog reads.
+#[derive(Clone, serde::Serialize)]
+pub(crate) struct Entry {
+    id: u64,
+    operation: String,
+    source: Source,
+    pub status: &'static str,
+    pub progress: String,
+    diagnostics: String,
+    primary_output: String,
+    cancellable: bool,
+    #[serde(skip)]
+    work: Work,
+}
+
+type Watcher = Box<dyn Fn() -> bool + Send>;
+struct Board {
+    next: u64,
+    entries: Vec<Entry>,
+    watchers: Vec<Watcher>,
+}
+static BOARD: Mutex<Board> = Mutex::new(Board {
+    next: 0,
+    entries: Vec::new(),
+    watchers: Vec::new(),
+});
+
+fn board() -> std::sync::MutexGuard<'static, Board> {
+    BOARD.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Call `notify` whenever the job list changes, until it returns false.
+pub(crate) fn watch(notify: impl Fn() -> bool + Send + 'static) {
+    board().watchers.push(Box::new(notify));
+}
+
+/// Change the entry `id` and tell the watchers.
+fn update(id: u64, change: impl FnOnce(&mut Entry)) {
+    let mut board = board();
+    if let Some(entry) = board.entries.iter_mut().find(|e| e.id == id) {
+        change(entry);
+    }
+    board.watchers.retain(|notify| notify());
+}
+
+impl Entry {
+    #[cfg(test)]
+    pub(crate) fn operation_is(&self, operation: &str) -> bool {
+        self.operation == operation
+    }
+}
+
+/// This session's listed jobs, oldest first.
+pub(crate) fn listed() -> Vec<Entry> {
+    board().entries.clone()
+}
+
+pub(crate) fn cancel(id: u64) {
+    update(id, |entry| {
+        if entry.status == "running" {
+            entry.work.cancel();
+            entry.status = "cancelling";
+            entry.cancellable = false;
+        }
+    });
+}
+
+/// Add a running entry; its work reports progress into the entry.
+fn list(listing: Listing) -> (u64, Work) {
+    let id = {
+        let mut board = board();
+        board.next += 1;
+        board.next
+    };
+    let work = Work::new(move |text| {
+        let text = text.to_owned();
+        update(id, |entry| entry.progress = text);
+    });
+    let entry = Entry {
+        id,
+        operation: listing.operation,
+        source: Source {
+            path: listing.source,
+        },
+        status: "running",
+        progress: String::new(),
+        diagnostics: String::new(),
+        primary_output: String::new(),
+        cancellable: true,
+        work: work.clone(),
+    };
+    board().entries.push(entry);
+    update(id, |_| {});
+    (id, work)
+}
+
+fn finish(id: u64, cancelled: bool, ended: Ended) {
+    update(id, |entry| {
+        entry.cancellable = false;
+        entry.status = match (&ended.error, cancelled) {
+            (_, true) => "cancelled",
+            (Some(_), false) => "failed",
+            (None, false) => "completed",
+        };
+        entry.diagnostics = ended.error.unwrap_or_default();
+        entry.primary_output = ended.result;
+    });
 }
 
 const INTERRUPTED: &str = "Interrupted by an internal failure";
@@ -87,30 +251,53 @@ pub(crate) fn spawn(name: &str, body: impl FnOnce() + Send + 'static) -> std::io
         .map(|_| ())
 }
 
+type Summary<R> = Box<dyn Fn(&Result<R, String>) -> Ended + Send>;
+/// A session job's summary sees the returned session beside the result.
+type SessionSummary<R> = Summary<(Session, Result<R, String>)>;
+
 fn run<T, R: Send + 'static>(
     owner: impl Owner<T>,
-    listed: bool,
+    listing: Option<(Listing, Summary<R>)>,
     work: impl FnOnce(&Work) -> Result<R, String> + Send + 'static,
     done: impl FnOnce(Pin<&mut T>, Result<R, String>) + Send + 'static,
 ) -> std::io::Result<Work> {
-    let handle = if listed {
-        Work::new(|_| changed())
-    } else {
-        Work::default()
+    let (entry, handle, summary) = match listing {
+        Some((listing, summary)) => {
+            let (id, work) = list(listing);
+            (Some(id), work, Some(summary))
+        }
+        None => (None, Work::default(), None),
     };
     let worker = handle.clone();
     let started = spawn("basecraft-job", move || {
         let result = catch_unwind(AssertUnwindSafe(|| work(&worker)))
             .unwrap_or_else(|_| Err(INTERRUPTED.into()));
-        owner.deliver(move |object| done(object, result));
-        if listed {
-            changed();
+        if let (Some(id), Some(summary)) = (entry, &summary) {
+            finish(id, worker.cancelled(), summary(&result));
         }
+        owner.deliver(move |object| done(object, result));
     });
-    if listed {
-        changed();
+    if let (Err(error), Some(id)) = (&started, entry) {
+        finish(
+            id,
+            false,
+            Ended {
+                error: Some(error.to_string()),
+                result: String::new(),
+            },
+        );
     }
     started.map(|()| handle)
+}
+
+fn summarize<R: Outcome>(result: &Result<R, String>) -> Ended {
+    match result {
+        Ok(value) => value.ended(),
+        Err(error) => Ended {
+            error: Some(error.clone()),
+            result: String::new(),
+        },
+    }
 }
 
 /// Run `work` off the window thread; `done` gets its result on the window
@@ -120,25 +307,49 @@ pub(crate) fn start<T, R: Send + 'static>(
     work: impl FnOnce(&Work) -> Result<R, String> + Send + 'static,
     done: impl FnOnce(Pin<&mut T>, Result<R, String>) + Send + 'static,
 ) -> std::io::Result<Work> {
-    run(owner, false, work, done)
+    run(owner, None, work, done)
 }
 
-/// [`start`] for a plugin run that appears in the job views.
-pub(crate) fn start_listed<T, R: Send + 'static>(
+/// [`start`] for a job that appears in the job list.
+pub(crate) fn start_listed<T, R: Outcome + Send + 'static>(
     owner: impl Owner<T>,
+    listing: Listing,
     work: impl FnOnce(&Work) -> Result<R, String> + Send + 'static,
     done: impl FnOnce(Pin<&mut T>, Result<R, String>) + Send + 'static,
 ) -> std::io::Result<Work> {
-    run(owner, true, work, done)
+    run(owner, Some((listing, Box::new(summarize::<R>))), work, done)
 }
 
 /// Run `task` with the document's Session moved off the window thread. The
 /// Session comes back to `done` on the window thread, also when the task
 /// panics or the thread cannot start. Callers refuse edits while it is away.
-/// `listed` jobs appear in the job views.
 pub(crate) fn with_session<T, R: Send + 'static>(
     owner: impl Owner<T>,
-    listed: bool,
+    session: &mut Option<Session>,
+    task: impl FnOnce(&mut Session, &Work) -> Result<R, String> + Send + 'static,
+    done: impl FnOnce(Pin<&mut T>, Session, Result<R, String>) + Send + 'static,
+) -> Result<Work, String> {
+    session_job(owner, None, session, task, done)
+}
+
+/// [`with_session`] for a job that appears in the job list.
+pub(crate) fn with_session_listed<T, R: Outcome + Send + 'static>(
+    owner: impl Owner<T>,
+    listing: Listing,
+    session: &mut Option<Session>,
+    task: impl FnOnce(&mut Session, &Work) -> Result<R, String> + Send + 'static,
+    done: impl FnOnce(Pin<&mut T>, Session, Result<R, String>) + Send + 'static,
+) -> Result<Work, String> {
+    let summary: SessionSummary<R> = Box::new(|result| match result {
+        Ok((_, result)) => summarize(result),
+        Err(error) => summarize::<R>(&Err(error.clone())),
+    });
+    session_job(owner, Some((listing, summary)), session, task, done)
+}
+
+fn session_job<T, R: Send + 'static>(
+    owner: impl Owner<T>,
+    listing: Option<(Listing, SessionSummary<R>)>,
     session: &mut Option<Session>,
     task: impl FnOnce(&mut Session, &Work) -> Result<R, String> + Send + 'static,
     done: impl FnOnce(Pin<&mut T>, Session, Result<R, String>) + Send + 'static,
@@ -150,7 +361,7 @@ pub(crate) fn with_session<T, R: Send + 'static>(
     let worker_slot = slot.clone();
     let started = run(
         owner,
-        listed,
+        listing,
         move |work| {
             let mut session = worker_slot
                 .lock()
@@ -280,7 +491,6 @@ mod tests {
         let (tx, returned) = mpsc::channel();
         with_session(
             owner,
-            false,
             &mut session,
             |_, _| -> Result<(), String> { panic!("fixture") },
             move |_: Pin<&mut Probe>, session, result| {
@@ -300,30 +510,66 @@ mod tests {
     }
 
     #[test]
-    fn listed_jobs_notify_watchers_until_they_leave() {
+    fn a_listed_job_appears_reports_progress_and_finishes_in_the_list() {
         let seen = Arc::new(AtomicUsize::new(0));
         let count = seen.clone();
-        watch(move || count.fetch_add(1, Ordering::Relaxed) < 100);
+        watch(move || count.fetch_add(1, Ordering::Relaxed) < 1000);
         let (owner, queue) = window();
-        let temp = tempfile::tempdir().unwrap();
-        let mut session = Some(Session::unlogged(temp.path()));
-        with_session(
+        let (release, gate) = mpsc::channel::<()>();
+        let (reported, progress) = mpsc::channel::<()>();
+        let label = "fixture listing";
+        let work = start_listed(
             owner,
-            true,
-            &mut session,
-            |_, work| {
-                work.progress("half");
-                Ok(())
+            Listing {
+                operation: label.into(),
+                source: "/a.afa".into(),
             },
-            |_: Pin<&mut Probe>, _, _| {},
+            move |work| {
+                work.progress("half");
+                reported.send(()).unwrap();
+                gate.recv().unwrap();
+                Ok::<_, String>(String::from("done"))
+            },
+            |_: Pin<&mut Probe>, _| {},
+        )
+        .unwrap();
+        let row = || listed().into_iter().find(|e| e.operation == label).unwrap();
+        progress.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!((row().status, row().progress.as_str()), ("running", "half"));
+        cancel(row().id);
+        assert!(work.cancelled(), "cancelling the row cancels the work");
+        assert_eq!(row().status, "cancelling");
+        release.send(()).unwrap();
+        queue.recv_timeout(Duration::from_secs(5)).unwrap()(&mut Probe::default());
+        assert_eq!(row().status, "cancelled");
+        assert!(!row().cancellable);
+        assert!(
+            seen.load(Ordering::Relaxed) >= 4,
+            "start, progress, cancel, finish"
+        );
+    }
+
+    #[test]
+    fn a_failed_listed_job_keeps_its_error() {
+        let (owner, queue) = window();
+        start_listed(
+            owner,
+            Listing {
+                operation: "fixture failure".into(),
+                source: String::new(),
+            },
+            |_| Err::<String, _>("no plugin".into()),
+            |_: Pin<&mut Probe>, _| {},
         )
         .unwrap();
         queue.recv_timeout(Duration::from_secs(5)).unwrap()(&mut Probe::default());
-        // Start, progress and finish; other tests may add their own.
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while seen.load(Ordering::Relaxed) < 3 {
-            assert!(std::time::Instant::now() < deadline);
-            std::thread::yield_now();
-        }
+        let row = listed()
+            .into_iter()
+            .find(|e| e.operation == "fixture failure")
+            .unwrap();
+        assert_eq!(
+            (row.status, row.diagnostics.as_str()),
+            ("failed", "no plugin")
+        );
     }
 }

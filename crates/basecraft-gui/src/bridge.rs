@@ -68,6 +68,13 @@ pub mod qobject {
         #[qproperty(QString, status)]
         #[qproperty(QString, title)]
         #[qproperty(QString, find_status)]
+        #[qproperty(i32, find_count)]
+        #[qproperty(i32, find_row)]
+        #[qproperty(f64, find_hit_y)]
+        #[qproperty(bool, find_nucleotide)]
+        #[qproperty(QString, find_rows)]
+        #[qproperty(i32, find_reveals)]
+        #[qproperty(QString, history_revision)]
         #[qproperty(QString, message)]
         /// "ok", "error", or "" for a neutral hint.
         #[qproperty(QString, message_kind)]
@@ -93,7 +100,7 @@ pub mod qobject {
         #[qinvokable]
         fn find_query(self: Pin<&mut GenomeController>, query: &QString, reverse: bool);
         #[qinvokable]
-        fn find_step(self: Pin<&mut GenomeController>, direction: i32) -> QString;
+        fn find_step(self: Pin<&mut GenomeController>, direction: i32);
 
         #[qinvokable]
         fn document_record(self: &GenomeController) -> QString;
@@ -438,9 +445,18 @@ pub(crate) const SHIFT: i32 = 0x0200_0000;
 pub(crate) const CTRL: i32 = 0x0400_0000;
 pub(crate) const ALT: i32 = 0x0800_0000;
 
+// Independent generated QML properties describe document state and caller activity.
+#[allow(clippy::struct_excessive_bools)]
 pub struct ControllerRust {
     find: basecraft_viewmodel::find::Session,
     find_status: QString,
+    find_count: i32,
+    find_row: i32,
+    find_hit_y: f64,
+    find_nucleotide: bool,
+    find_rows: QString,
+    find_reveals: i32,
+    history_revision: QString,
     overview_content: QString,
     overview_matches: QString,
     overview_match_cache: basecraft_viewmodel::overview::Cache,
@@ -481,6 +497,13 @@ impl Default for ControllerRust {
         let c = Self {
             find: basecraft_viewmodel::find::Session::default(),
             find_status: QString::default(),
+            find_count: 0,
+            find_row: -1,
+            find_hit_y: 0.0,
+            find_nucleotide: false,
+            find_rows: QString::from("[]"),
+            find_reveals: 0,
+            history_revision: QString::default(),
             overview_content: QString::from("{\"shapes\":[]}"),
             overview_matches: QString::from("[]"),
             overview_match_cache: basecraft_viewmodel::overview::Cache::default(),
@@ -658,6 +681,8 @@ impl qobject::GenomeController {
     /// Rebuild the frame and status line.
     fn refresh(mut self: Pin<&mut Self>) {
         self.as_mut().find_update(false);
+        let history = self.record_revision();
+        self.as_mut().set_history_revision(history);
         if let Some(warning) =
             crate::document_open::recovery_notice(self.rust().session.as_ref(), self.rust().doc)
         {
@@ -1747,7 +1772,6 @@ impl qobject::GenomeController {
         let mut session = Some(session);
         let spawn = crate::jobs::with_session(
             qt_thread.clone(),
-            false,
             &mut session,
             move |session, _| {
                 Self::run_plugin_in_session(session, doc, &plugin, &operation, params, range)
@@ -1930,7 +1954,6 @@ impl qobject::GenomeController {
         let mut session = Some(session);
         let spawn = crate::jobs::with_session(
             qt_thread.clone(),
-            false,
             &mut session,
             move |session, _| {
                 let dir = source.parent().map(Path::to_path_buf).unwrap_or_default();

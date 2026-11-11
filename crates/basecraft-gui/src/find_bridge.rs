@@ -24,23 +24,55 @@ pub fn rows_key(rows: &[Row], identity: &str) -> String {
     basecraft_io::hash_bytes(&bytes)
 }
 
-pub fn status(find: &Session, y: f32) -> String {
-    let hit = find.hit();
-    serde_json::json!({
-        "busy":find.busy(), "count":find.results.hits.len(),
-        "current":hit.map_or(0, |_| find.current+1),
-        "label":hit.map_or("",|h|h.label.as_ref()),
-        "row":hit.map(|h|h.row), "start":hit.filter(|h|h.kind != basecraft_viewmodel::find::Kind::Name).map(|h|h.start+1),
-        "reverse":hit.is_some_and(|h|h.reverse), "y":y,
-        "nucleotide":find.results.nucleotide,
-        "limited":find.results.limited, "explanation":find.results.explanation,
-        // Text-only species rows use the same matching results as canvases.
-        "rows":find.results.hits.iter().filter(|h|h.kind == basecraft_viewmodel::find::Kind::Name).map(|h|h.row).collect::<Vec<_>>()
-    }).to_string()
+/// The find bar's status line for an active query.
+pub fn status_text(find: &Session) -> String {
+    if find.busy() {
+        return "Finding…".into();
+    }
+    let results = &find.results;
+    let mut text = find.hit().map_or_else(
+        || "No matches".to_owned(),
+        |hit| {
+            let limited = if results.limited {
+                " (limit reached; narrow query)"
+            } else {
+                ""
+            };
+            let start = if hit.kind == basecraft_viewmodel::find::Kind::Name {
+                String::new()
+            } else {
+                format!(" · {}", hit.start + 1)
+            };
+            let reverse = if hit.reverse { " · reverse" } else { "" };
+            format!(
+                "{} of {}{limited} · {}{start}{reverse}",
+                find.current + 1,
+                results.hits.len(),
+                hit.label
+            )
+        },
+    );
+    if !results.explanation.is_empty() {
+        text.push_str(" · ");
+        text.push_str(&results.explanation);
+    }
+    text
+}
+
+/// Rows of text-only name matches (species lists), as a JSON array.
+pub fn name_rows(find: &Session) -> String {
+    let rows: Vec<_> = find
+        .results
+        .hits
+        .iter()
+        .filter(|h| h.kind == basecraft_viewmodel::find::Kind::Name)
+        .map(|h| h.row)
+        .collect();
+    serde_json::to_string(&rows).unwrap_or_else(|_| "[]".into())
 }
 
 /// Find for a document controller. A scan runs as a job; when it finishes the
-/// controller reveals the first hit and sets `find_status`.
+/// controller reveals the first hit and publishes the find properties.
 /// `find_update(true)` starts the first scan for a query; `find_update(false)`,
 /// called from `refresh`, only rescans after the document changed.
 macro_rules! controller_find {
@@ -87,14 +119,12 @@ macro_rules! controller_find {
                     .rust_mut()
                     .find
                     .set_query(query.to_string(), reverse);
-                self.refresh();
+                self.as_mut().refresh();
+                self.find_publish(false);
             }
-            /// The current status after moving `direction` hits (0 stays),
-            /// starting the query's scan if it has not started.
-            pub fn find_step(
-                mut self: std::pin::Pin<&mut Self>,
-                direction: i32,
-            ) -> cxx_qt_lib::QString {
+            /// Move `direction` hits (0 stays), starting the query's scan if
+            /// it has not started.
+            pub fn find_step(mut self: std::pin::Pin<&mut Self>, direction: i32) {
                 $(if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
                     crate::bridge::checked_document!(sync self, session.$getter(doc));
                 })?
@@ -104,10 +134,30 @@ macro_rules! controller_find {
                     self.as_mut().find_reveal();
                     self.as_mut().refresh();
                 }
-                cxx_qt_lib::QString::from(&crate::find_bridge::status(
-                    &self.rust().find,
-                    self.find_y(),
-                ))
+                self.find_publish(direction != 0);
+            }
+            /// Show the find state; `reveal` asks the view to scroll to the
+            /// current hit.
+            fn find_publish(mut self: std::pin::Pin<&mut Self>, reveal: bool) {
+                let find = &self.rust().find;
+                let text = crate::find_bridge::status_text(find);
+                let rows = crate::find_bridge::name_rows(find);
+                let count = i32::try_from(find.results.hits.len()).unwrap_or(i32::MAX);
+                let row = find
+                    .hit()
+                    .map_or(-1, |hit| i32::try_from(hit.row).unwrap_or(i32::MAX));
+                let nucleotide = find.results.nucleotide;
+                let y = f64::from(self.find_y());
+                self.as_mut().set_find_status(cxx_qt_lib::QString::from(&text));
+                self.as_mut().set_find_count(count);
+                self.as_mut().set_find_row(row);
+                self.as_mut().set_find_hit_y(y);
+                self.as_mut().set_find_nucleotide(nucleotide);
+                self.as_mut().set_find_rows(cxx_qt_lib::QString::from(&rows));
+                if reveal && count > 0 {
+                    let next = self.find_reveals().wrapping_add(1);
+                    self.set_find_reveals(next);
+                }
             }
             fn find_start(
                 mut self: std::pin::Pin<&mut Self>,
@@ -116,16 +166,17 @@ macro_rules! controller_find {
                 let Some(scan) = scan else {
                     return;
                 };
+                let token = scan.token();
                 let started = crate::jobs::start(
                     self.qt_thread(),
                     move |_| Ok(scan.run()),
-                    |mut this, found| {
+                    move |mut this, found| {
                         let completed = {
                             let mut r = this.as_mut().rust_mut();
                             match found {
                                 Ok(found) => r.find.finish(found),
                                 Err(error) => {
-                                    r.find.failed(error);
+                                    r.find.failed(token, error);
                                     false
                                 }
                             }
@@ -134,18 +185,16 @@ macro_rules! controller_find {
                             this.as_mut().find_reveal();
                         }
                         this.as_mut().refresh();
-                        let status = crate::find_bridge::status(&this.rust().find, this.find_y());
-                        this.set_find_status(cxx_qt_lib::QString::from(&status));
+                        this.find_publish(completed);
                     },
                 );
                 if let Err(error) = started {
                     self.as_mut()
                         .rust_mut()
                         .find
-                        .failed(format!("Cannot start Find: {error}"));
+                        .failed(token, format!("Cannot start Find: {error}"));
                 }
-                let status = crate::find_bridge::status(&self.rust().find, self.find_y());
-                self.set_find_status(cxx_qt_lib::QString::from(&status));
+                self.find_publish(false);
             }
         }
     };
@@ -212,6 +261,29 @@ mod overview_tests {
         assert_eq!(
             overview_marks(&find, |_| panic!("closed search must not project hits")),
             "[]"
+        );
+    }
+
+    #[test]
+    fn status_line_reads_busy_hits_and_explanations() {
+        let mut find = Session::default();
+        find.set_query("A".into(), false);
+        assert_eq!(status_text(&find), "Finding…");
+        let scan = find.update("doc".into(), || {
+            basecraft_viewmodel::find::Input::Rows(vec![basecraft_viewmodel::find::Row {
+                id: 0,
+                name: "Row".into(),
+                bases: b"CACC".to_vec(),
+            }])
+        });
+        assert!(find.finish(scan.unwrap().run()));
+        assert_eq!(status_text(&find), "1 of 1 · Row · 2");
+        assert_eq!(name_rows(&find), "[]");
+        find.results.hits.clear();
+        find.results.explanation = "Protein symbols match literally".into();
+        assert_eq!(
+            status_text(&find),
+            "No matches · Protein symbols match literally"
         );
     }
 }

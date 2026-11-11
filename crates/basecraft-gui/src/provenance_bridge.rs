@@ -28,8 +28,6 @@ pub mod qobject {
             original: &QString,
         ) -> bool;
         #[qinvokable]
-        fn cancel_run(self: Pin<&mut AppProvenance>, id: &QString);
-        #[qinvokable]
         fn saved_report(self: &AppProvenance, path: &QString) -> QString;
         #[qinvokable]
         fn save_authored(
@@ -50,7 +48,7 @@ pub mod qobject {
         #[qinvokable]
         fn clear_notifications(self: Pin<&mut AppProvenance>);
         #[qinvokable]
-        fn jobs(self: &AppProvenance, previous: bool) -> QString;
+        fn retained_jobs(self: &AppProvenance) -> QString;
         #[qinvokable]
         fn start(
             self: Pin<&mut AppProvenance>,
@@ -72,27 +70,6 @@ pub struct ProvenanceRust {
     notifications: QString,
     notices: Vec<serde_json::Value>,
 }
-fn request_task_cancellation(id: &str) -> String {
-    match basecraft_plugin_host::file_tool::cancel_run(id) {
-        Ok(()) => "notify: Cancellation requested".into(),
-        Err(error) => format!("fail: {error}"),
-    }
-}
-
-// The capability comes from the live owner, never from a retained receipt.
-fn task_capabilities(data: &mut serde_json::Value, previous: bool) {
-    if let Some(jobs) = data["jobs"].as_array_mut() {
-        for job in jobs {
-            job["cancellable"] = serde_json::json!(
-                !previous
-                    && job["id"]
-                        .as_str()
-                        .is_some_and(basecraft_plugin_host::file_tool::can_cancel_run)
-            );
-        }
-    }
-}
-
 fn run(operation: &str, result: &Path, destination: &Path) -> Result<String, String> {
     use basecraft_ops::records;
     let outcome = (|| -> basecraft_ops::Result<String> {
@@ -178,9 +155,6 @@ impl qobject::AppProvenance {
         ));
         success
     }
-    fn cancel_run(self: Pin<&mut Self>, id: &QString) {
-        self.set_message(QString::from(&request_task_cancellation(&id.to_string())));
-    }
     fn saved_report(&self, path: &QString) -> QString {
         report_json(
             basecraft_ops::records::inspect(Path::new(&path.to_string()))
@@ -213,7 +187,7 @@ impl qobject::AppProvenance {
     fn export_report(self: Pin<&mut Self>, snapshot: &QString, directory: &QString) {
         let snapshot = snapshot.to_string();
         let directory = std::path::PathBuf::from(directory.to_string());
-        self.start_work(move || {
+        self.start_work("Export report", move || {
             let report: basecraft_ops::records::Report =
                 serde_json::from_str(&snapshot).map_err(|e| e.to_string())?;
             report
@@ -243,13 +217,11 @@ impl qobject::AppProvenance {
         self.as_mut().rust_mut().notices.clear();
         self.set_notifications(QString::from("[]"));
     }
-    fn jobs(&self, previous: bool) -> QString {
+    /// Runs from earlier sessions, from their records. None can be cancelled.
+    fn retained_jobs(&self) -> QString {
         report_json(
-            basecraft_ops::records::jobs(previous)
-                .map(|mut data| {
-                    task_capabilities(&mut data, previous);
-                    data.to_string()
-                })
+            basecraft_ops::records::jobs(true)
+                .map(|data| data.to_string())
                 .map_err(|e| e.to_string()),
         )
     }
@@ -323,10 +295,12 @@ impl qobject::AppProvenance {
         let operation = operation.to_string();
         let result = std::path::PathBuf::from(result.to_string());
         let destination = std::path::PathBuf::from(destination.to_string());
-        self.start_work(move || run(&operation, &result, &destination));
+        let label = format!("Records: {operation}");
+        self.start_work(&label, move || run(&operation, &result, &destination));
     }
     fn start_work(
         mut self: Pin<&mut Self>,
+        label: &str,
         work: impl FnOnce() -> Result<String, String> + Send + 'static,
     ) {
         if *self.busy() {
@@ -335,8 +309,13 @@ impl qobject::AppProvenance {
         self.as_mut().set_busy(true);
         self.as_mut().set_text(QString::default());
         self.as_mut().set_message(QString::from("notify: Working…"));
-        let spawn = crate::jobs::start(
+        let listing = crate::jobs::Listing {
+            operation: label.into(),
+            source: String::new(),
+        };
+        let spawn = crate::jobs::start_listed(
             self.qt_thread(),
+            listing,
             move |_| work(),
             |mut state, result| {
                 state.as_mut().set_busy(false);
@@ -407,74 +386,6 @@ pub(crate) fn session_revision(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn tasks_bridge_cancels_live_registered_run_and_refuses_retained_ids() {
-        use basecraft_plugin_host::{
-            jobs::JobManager,
-            policy::SessionPolicy,
-            registry::{Registry, RegistryConfig},
-        };
-        use basecraft_protocol::operation::RuntimeState;
-        use serde_json::json;
-        use std::time::{Duration, Instant};
-        let temp = tempfile::tempdir().unwrap();
-        for name in ["a.txt", "b.txt"] {
-            std::fs::write(temp.path().join(name), "a").unwrap();
-        }
-        let registry = Registry::load(&RegistryConfig {
-            bundled: Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures"),
-            packages: temp.path().join("plugins"),
-            index: temp.path().join("index.json"),
-        })
-        .unwrap();
-        let mut manager = JobManager::default().with_task_cancellation();
-        let request = serde_json::from_value(json!({
-            "operation":"org.example.registry-fixture/count@1",
-            "inputs":{"sources":[{"kind":"file","path":"a.txt"},{"kind":"file","path":"b.txt"}]},
-            "parameters":{"mode":"hang"},"destinations":{"report":"report.json"}
-        }))
-        .unwrap();
-        let accepted = manager
-            .submit(
-                &registry,
-                request,
-                SessionPolicy::new(temp.path(), true).unwrap(),
-                "GUI",
-            )
-            .unwrap();
-        let id = &accepted.run_id;
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while manager.get(id).unwrap().state == RuntimeState::Queued {
-            assert!(Instant::now() < deadline);
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        let mut rows = json!({"jobs":[{"id":id},{"id":"other-process"}]});
-        task_capabilities(&mut rows, false);
-        assert_eq!(rows["jobs"][0]["cancellable"], true);
-        assert_eq!(rows["jobs"][1]["cancellable"], false);
-        task_capabilities(&mut rows, true);
-        assert_eq!(rows["jobs"][0]["cancellable"], false);
-        assert!(request_task_cancellation("other-process").starts_with("fail:"));
-        assert_eq!(
-            request_task_cancellation(id),
-            "notify: Cancellation requested"
-        );
-        loop {
-            let outcome = manager.get(id).unwrap();
-            if outcome.state.terminal() {
-                assert_eq!(outcome.state, RuntimeState::Cancelled);
-                assert_eq!(outcome.artifacts, Vec::new());
-                break;
-            }
-            assert!(Instant::now() < deadline);
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        assert!(!temp.path().join("report.json").exists());
-        task_capabilities(&mut rows, false);
-        assert_eq!(rows["jobs"][0]["cancellable"], false);
-        assert!(request_task_cancellation(id).starts_with("fail:"));
-    }
 
     #[test]
     fn gui_provenance_exports_preserve_authored_methods_and_report_changed_results() {

@@ -534,19 +534,11 @@ impl SettingsStore {
         if text.len() as u64 > MAX_BYTES {
             return Err(Error::Invalid("file exceeds 1 MiB".into()));
         }
-        let mut raw: toml::Value =
-            toml::from_str(&text).map_err(|e| Error::Invalid(e.to_string()))?;
-        // Version 0 used the same fields without a schema declaration. Migration
-        // occurs in memory; the original is untouched until an explicit update.
-        if raw.get("schema_version").is_none()
-            || raw.get("schema_version").and_then(toml::Value::as_integer) == Some(0)
-        {
-            raw.as_table_mut()
-                .ok_or_else(|| Error::Invalid("expected a TOML table".into()))?
-                .insert(
-                    "schema_version".into(),
-                    toml::Value::Integer(i64::from(SCHEMA_VERSION)),
-                );
+        let raw: toml::Value = toml::from_str(&text).map_err(|e| Error::Invalid(e.to_string()))?;
+        if raw.get("schema_version").is_none() {
+            return Err(Error::Invalid(
+                "no schema_version; original file retained".into(),
+            ));
         }
         let prefs: Preferences = raw
             .clone()
@@ -840,7 +832,8 @@ mod tests {
         store.update(Change::InputBoxHeight(20)).unwrap();
         for invalid in [
             "schema_version = 999\n[ui]\nribbon_size_percent = 150\n",
-            "[ui]\nribbon_size_percent = 201\n",
+            "[ui]\nribbon_size_percent = 150\n",
+            "schema_version = 1\n[ui]\nribbon_size_percent = 201\n",
             "[ui]\nribbon_size_percent = '150'\n",
             "[ui]\nribbon_size_percent = 150.5\n",
         ] {

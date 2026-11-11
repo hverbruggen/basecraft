@@ -1,4 +1,3 @@
-import QtCore
 import QtQuick
 import QtQuick.Controls.Basic
 import org.kde.kirigami as Kirigami
@@ -272,7 +271,7 @@ ApplicationWindow {
 
     function fileName(path) { return path.split("/").pop() }
     function activeFolder() {
-        if (currentPath.startsWith("untitled:")) return shell.project_dir.length ? shell.local_file_url(shell.project_dir) : StandardPaths.writableLocation(StandardPaths.DocumentsLocation)
+        if (currentPath.startsWith("untitled:")) return shell.local_file_url(preferences.untitled_folder(shell.project_dir))
         const path = traceOpen && current && current.export_path ? current.export_path : current && current.file_path ? current.file_path : currentPath
         return path.length ? shell.parent_folder_url(path) : shell.local_file_url(shell.project_dir)
     }
@@ -785,13 +784,7 @@ ApplicationWindow {
         id: provenance
         onMessageChanged: if (message.length && message !== "notify: Working…") notification("", message, message.startsWith("fail:") ? "fail" : "done")
     }
-    property var activeTasks: ({jobs: []})
-    readonly property int runningTaskCount: (activeTasks.jobs || []).filter(job => ["queued", "running", "cancelling", "finalizing"].includes(job.status)).length
-    readonly property int failedTaskCount: (activeTasks.jobs || []).filter(job => job.status === "failed").length
-    AppJobs {
-        id: jobService
-        onRevisionChanged: window.activeTasks = JSON.parse(provenance.jobs(false))
-    }
+    AppJobs { id: jobService }
     property string frozenReport: ""
     property string frozenDraft: ""
     property string frozenDraftRevision: ""
@@ -1181,8 +1174,8 @@ ApplicationWindow {
                     }
                 }
                 AppButton {
-                    text: window.runningTaskCount ? "Tasks (" + window.runningTaskCount + ")" : "Tasks" + (window.failedTaskCount ? " · " + window.failedTaskCount + " failed" : "")
-                    Accessible.name: "Tasks and notifications, " + window.runningTaskCount + " active, " + window.failedTaskCount + " failed"
+                    text: jobService.running ? "Tasks (" + jobService.running + ")" : "Tasks" + (jobService.failed ? " · " + jobService.failed + " failed" : "")
+                    Accessible.name: "Tasks and notifications, " + jobService.running + " active, " + jobService.failed + " failed"
                     onClicked: tasksDialog.open()
                 }
             }

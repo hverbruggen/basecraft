@@ -68,6 +68,16 @@ impl Request {
             Self::Primers(_) => "primers",
         }
     }
+    /// The file the stage reads, for the job list.
+    fn source(&self) -> String {
+        match self {
+            Self::Prepare(reads, _) => reads.first(),
+            Self::Orient(path) | Self::Place(path) => Some(path),
+            Self::Single(_) | Self::Primers(_) => None,
+        }
+        .map(|path| path.display().to_string())
+        .unwrap_or_default()
+    }
     pub fn message(&self) -> &'static str {
         match self {
             Self::Prepare(..) | Self::Single(_) => "Processing AB1 with Tracy",
@@ -84,6 +94,14 @@ pub(super) struct Completion {
 }
 /// A running stage. Dropping it cancels the work; a replaced stage's result
 /// is ignored by its id.
+impl crate::jobs::Outcome for Completion {
+    fn ended(&self) -> crate::jobs::Ended {
+        crate::jobs::Ended {
+            error: None,
+            result: self.path.display().to_string(),
+        }
+    }
+}
 pub(super) struct Stage {
     pub id: u64,
     pub name: &'static str,
@@ -121,30 +139,28 @@ fn operation(
     let accepted = jobs
         .submit(&registry, request, policy, "GUI")
         .map_err(|e| e.to_string())?;
-    loop {
-        if cancelled.load(Ordering::Acquire) {
-            jobs.cancel(&accepted.run_id).map_err(|e| e.to_string())?;
-        }
-        let outcome = jobs.get(&accepted.run_id).map_err(|e| e.to_string())?;
-        if outcome.state.terminal() {
-            check(cancelled)?;
-            if outcome.state != RuntimeState::Completed {
-                return Err(format!(
-                    "{:?}: {}. Retained evidence: {}",
-                    outcome.state,
-                    outcome
-                        .errors
-                        .iter()
-                        .map(|e| e.message.as_str())
-                        .collect::<Vec<_>>()
-                        .join("; "),
-                    outcome.evidence.as_deref().unwrap_or("unavailable")
-                ));
-            }
-            return Ok(outcome);
-        }
-        std::thread::sleep(std::time::Duration::from_millis(20));
+    // The shared wait drives the run; a detached session owns no document.
+    let mut session = basecraft_ops::Session::detached(root);
+    let outcome = jobs
+        .wait_in_session(&accepted.run_id, &mut session, &|| {
+            cancelled.load(Ordering::Acquire)
+        })
+        .map_err(|e| e.to_string())?;
+    check(cancelled)?;
+    if outcome.state != RuntimeState::Completed {
+        return Err(format!(
+            "{:?}: {}. Retained evidence: {}",
+            outcome.state,
+            outcome
+                .errors
+                .iter()
+                .map(|e| e.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; "),
+            outcome.evidence.as_deref().unwrap_or("unavailable")
+        ));
     }
+    Ok(outcome)
 }
 fn artifact(outcome: &OperationOutcome, name: &str) -> Result<PathBuf, String> {
     outcome
@@ -190,8 +206,13 @@ pub(super) fn start(
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
     let name = request.name();
-    let work = crate::jobs::start(
+    let listing = crate::jobs::Listing {
+        operation: request.message().into(),
+        source: request.source(),
+    };
+    let work = crate::jobs::start_listed(
         owner,
+        listing,
         move |work| execute(request, session, work.flag()),
         move |this, result| this.stage_done(id, result),
     )

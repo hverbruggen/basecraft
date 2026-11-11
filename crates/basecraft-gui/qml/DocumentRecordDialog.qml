@@ -68,9 +68,9 @@ AppDialog {
     onSavedRevisionChanged: { token = ""; if (visible) refreshReport() }
     onControllerChanged: { token = ""; if (visible) refreshReport() }
     onClosed: rememberDraft()
-    // Every edit or finished run redraws the document or rewrites the workspace.
-    readonly property var redrawn: controller ? [controller.frame, controller.workspace_json] : []
-    onRedrawnChanged: if (visible) refreshReport()
+    // The controller moves this with every edit and recorded run.
+    readonly property string historyRevision: controller ? controller.history_revision : ""
+    onHistoryRevisionChanged: if (visible) refreshReport()
 
     contentItem: ColumnLayout {
         spacing: 8

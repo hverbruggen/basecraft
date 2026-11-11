@@ -6,7 +6,7 @@ import Basecraft
 FocusScope {
     id: doc
     property alias findBar: findBar
-    readonly property var findRows: new Set(findBar.result.rows || [])
+    readonly property var findRows: new Set(JSON.parse(findBar.controller.find_rows))
     function openFind() { findBar.openFind() }
     FindBar {
         id: findBar
@@ -402,7 +402,7 @@ FocusScope {
                                 required property var modelData
                                 required property int index
                                 property bool found: findBar.opened && findBar.controller === ctl && doc.findRows.has(index)
-                                background: Rectangle { visible: parent.found; color: "transparent"; border.color: doc.foreground; border.width: findBar.result.row === parent.index ? 2 : 1 }
+                                background: Rectangle { visible: parent.found; color: "transparent"; border.color: doc.foreground; border.width: findBar.controller.find_row === parent.index ? 2 : 1 }
                                 text: modelData.label
                                 checked: doc.selection.includes(modelData.id)
                                 onClicked: ctl.highlight_taxa(JSON.stringify(checked ? doc.selection.concat([modelData.id]) : doc.selection.filter(id => id !== modelData.id)))

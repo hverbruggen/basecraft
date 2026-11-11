@@ -417,6 +417,10 @@ pub struct Found {
 }
 
 impl Scan {
+    /// Identifies this scan to [`Session::finish`] and [`Session::failed`].
+    pub fn token(&self) -> u64 {
+        self.token
+    }
     pub fn run(self) -> Found {
         Found {
             token: self.token,
@@ -501,11 +505,20 @@ impl Session {
         self.current = 0;
         true
     }
-    /// The scan could not run; say so instead of staying busy.
-    pub fn failed(&mut self, explanation: String) {
+    /// The scan `token` could not run; say so instead of staying busy. A
+    /// failure of a replaced scan changes nothing.
+    pub fn failed(&mut self, token: u64, explanation: String) -> bool {
+        if self
+            .pending
+            .as_ref()
+            .is_none_or(|(pending, _)| *pending != token)
+        {
+            return false;
+        }
         self.revision = self.revision.wrapping_add(1);
         self.pending = None;
         self.results.explanation = explanation;
+        true
     }
     pub fn step(&mut self, backward: bool) {
         let n = self.results.hits.len();
@@ -717,6 +730,9 @@ mod tests {
                 .update("document:0".into(), || unreachable!())
                 .is_none()
         );
+        // A replaced scan's failure must not end the current scan.
+        assert!(!session.failed(scan.token().wrapping_add(7), "stale".into()));
+        assert!(session.busy());
         let found = std::thread::spawn(move || scan.run()).join().unwrap();
         assert!(session.finish(found));
         assert_eq!(session.results.hits.len(), 3);

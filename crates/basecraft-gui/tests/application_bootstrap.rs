@@ -878,6 +878,7 @@ fn main() {
     linked_taxa_journey(app.as_mut());
 
     controller_appearance::run(&app);
+    controller_appearance::closed_editor(&app);
 
     // Real QML-created controllers; inject invalid owned IDs without exposing
     // production invokables or constructing placeholder document payloads.
@@ -1131,16 +1132,23 @@ fn main() {
              OperationPickerDialog {{}} \
              OperationParameters {{ schema: ({{type: 'object', properties: {{age: {{type: 'number'}}}}, required: ['age']}}) }} \
              {sanger_qml} {figure_qml} {find_qml} \
-             Timer {{ interval: 1; running: sangerDone && speciesDone && findDone; onTriggered: Qt.quit() }} }}",
+             Timer {{ interval: 1; running: sangerDone && speciesDone && findDone; onTriggered: Qt.quit() }} \
+             }}",
         )),
         &QUrl::default(),
     );
-    std::thread::spawn(|| {
+    // Guards the event loop only; the checks after it may take longer.
+    let exited = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let watched = exited.clone();
+    std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_secs(15));
-        eprintln!("Bootstrap QML timer did not exit the event loop within 15 seconds");
-        std::process::exit(1);
+        if !watched.load(std::sync::atomic::Ordering::Acquire) {
+            eprintln!("Bootstrap QML timer did not exit the event loop within 15 seconds");
+            std::process::exit(1);
+        }
     });
     assert_eq!(app.as_mut().exec(), 0);
+    exited.store(true, std::sync::atomic::Ordering::Release);
     for index in 0..5 {
         let prefix = figure_folder.path().join(format!("figure-{index}"));
         let svg = std::fs::read_to_string(prefix.with_extension("svg")).unwrap();

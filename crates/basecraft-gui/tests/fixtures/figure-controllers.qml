@@ -20,9 +20,8 @@ Item {
     MetadataController { id: metadata; onOpened: success => figures.ready(success && available && !busy) }
     SubmissionController { id: submission; onOpened: success => figures.ready(success && available && !busy) }
     MetadataController { id: freshMetadata }
-    Connections {
-        target: delimitation
-        function onBusyChanged() {
+    Connections { target: delimitation; function onBusyChanged() { figures.settle() } }
+    function settle() {
             if (figures.opening !== 0 || delimitation.busy || figures.completed) return
             if (delimitation.preview_json !== figures.savedPreview) {
                 console.error("Rejected edits/cancellation lost the cut preview"); Qt.exit(2); return
@@ -32,7 +31,6 @@ Item {
                 console.error("Session was not restored after cancellation"); Qt.exit(2); return
             }
             figures.completed = true
-        }
     }
     Component.onCompleted: {
         function check(value, message) { if (!value) { console.error(message); Qt.exit(2) } }

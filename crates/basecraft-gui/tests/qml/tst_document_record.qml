@@ -13,6 +13,7 @@ Item {
         property string revision: "one"
         property string name: "alignment.fasta"
         function record_revision() { return name + revision }
+        readonly property string history_revision: name + revision
         function document_record() { return JSON.stringify({ document: name, revision: revision, unsaved: true, methods: "Sequences were aligned.", warnings: [], history: [
             {id:"a",time:"",summary:"Aligned sequences",status:"Contributing",contributing:true,details:"MAFFT settings"},
             {id:"b",time:"",summary:"Deleted columns",status:"Undone / not contributing",contributing:false,details:"Undone"}

@@ -215,3 +215,52 @@ pub(crate) fn run(app: &QApplication) {
     drop(engine);
     println!("Four real editors followed a preference change and finished Find without polling");
 }
+
+/// A real editor destroyed while its Find scan runs: the scan's result finds
+/// no window to go to and is dropped, without a crash.
+pub(crate) fn closed_editor(app: &QApplication) {
+    let profile = std::env::var_os("BASECRAFT_PROFILE_DIR").expect("isolated bootstrap profile");
+    let folder = tempfile::tempdir_in(&profile).unwrap();
+    let path = folder.path().join("large.afa");
+    let row = "ACGT".repeat(5000);
+    let text = (0..400)
+        .map(|i| format!(">r{i}\n{row}\n"))
+        .collect::<Vec<_>>()
+        .concat();
+    std::fs::write(&path, text).unwrap();
+    let created = Arc::new(Mutex::new(Vec::new()));
+    let sink = created.clone();
+    let mut engine = QQmlApplicationEngine::new();
+    engine
+        .pin_mut()
+        .on_object_created(move |_, object, _| sink.lock().unwrap().push(object as usize))
+        .release();
+    engine.pin_mut().load_data(
+        &QByteArray::from("import Basecraft; AlignmentController {}"),
+        &QUrl::default(),
+    );
+    let address = created.lock().unwrap()[0];
+    {
+        // SAFETY: the engine owns the controller until it is dropped below.
+        let object =
+            unsafe { std::pin::Pin::new_unchecked(&mut *(address as *mut cxx_qt::QObject)) };
+        let mut c = object
+            .downcast_pin::<alignment_bridge::qobject::AlignmentController>()
+            .unwrap();
+        c.as_mut().load(&path);
+        c.as_mut().find_query(&QString::from("A"), false);
+        c.as_mut().find_step(0);
+        assert_eq!(
+            c.find_status().to_string(),
+            "Finding…",
+            "the scan is running"
+        );
+    }
+    drop(engine);
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while std::time::Instant::now() < until {
+        app.process_events();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    println!("A destroyed editor dropped its running Find result");
+}

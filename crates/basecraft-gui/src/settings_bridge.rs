@@ -31,6 +31,8 @@ pub mod qobject {
         #[qinvokable]
         fn project_picker_directory(self: &AppSettings) -> QString;
         #[qinvokable]
+        fn untitled_folder(self: &AppSettings, project: &QString) -> QString;
+        #[qinvokable]
         fn project_is_directory(self: &AppSettings, path: &QString) -> bool;
     }
 }
@@ -162,6 +164,11 @@ impl qobject::AppSettings {
             .directory(&load_project_history().unwrap_or_default(), &home);
         QString::from(folder.to_string_lossy().as_ref())
     }
+    fn untitled_folder(&self, project: &QString) -> QString {
+        let home = AppPaths::discover().ok().and_then(|paths| paths.home);
+        let folder = untitled_folder(&project.to_string(), home.as_deref());
+        QString::from(folder.to_string_lossy().as_ref())
+    }
     fn project_is_directory(&self, path: &QString) -> bool {
         Path::new(&path.to_string()).is_dir()
     }
@@ -192,6 +199,44 @@ impl qobject::AppSettings {
             crate::appearance::preferences_changed();
         }
         self.publish(result)
+    }
+}
+
+/// Where a never-saved document is first offered: the chosen project, else
+/// the user's Documents folder, else the home folder.
+fn untitled_folder(project: &str, home: Option<&Path>) -> PathBuf {
+    if !project.is_empty() {
+        return PathBuf::from(project);
+    }
+    let Some(home) = home else {
+        return PathBuf::new();
+    };
+    let documents = home.join("Documents");
+    if documents.is_dir() {
+        documents
+    } else {
+        home.to_owned()
+    }
+}
+
+#[cfg(test)]
+mod untitled_tests {
+    use super::*;
+
+    #[test]
+    fn untitled_documents_start_in_the_project_then_documents_then_home() {
+        let home = tempfile::tempdir().unwrap();
+        assert_eq!(
+            untitled_folder("/project", Some(home.path())),
+            Path::new("/project")
+        );
+        assert_eq!(untitled_folder("", Some(home.path())), home.path());
+        std::fs::create_dir(home.path().join("Documents")).unwrap();
+        assert_eq!(
+            untitled_folder("", Some(home.path())),
+            home.path().join("Documents")
+        );
+        assert_eq!(untitled_folder("", None), PathBuf::new());
     }
 }
 

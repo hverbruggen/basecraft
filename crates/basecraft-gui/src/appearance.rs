@@ -158,9 +158,14 @@ fn replace(next: Appearance) {
     state.followers.retain(|follower| follower(&next));
 }
 
+/// Held from reading the files to publishing the result, so a reload that
+/// read older files can never land after one that read newer files.
+static LOADING: Mutex<()> = Mutex::new(());
+
 /// Reload after a preference changed. Runs off the window thread.
 pub(crate) fn preferences_changed() {
     let _ = crate::jobs::spawn("appearance", || {
+        let _loading = LOADING.lock().unwrap_or_else(PoisonError::into_inner);
         let desktop = Desktop::discover();
         let font = current().font.clone();
         replace(Appearance::load(
@@ -172,10 +177,12 @@ pub(crate) fn preferences_changed() {
 }
 
 fn reload(desktop: &Desktop) {
+    let font = read_font();
+    let _loading = LOADING.lock().unwrap_or_else(PoisonError::into_inner);
     replace(Appearance::load(
         desktop.theme.as_deref(),
         desktop.preferences.as_deref(),
-        read_font(),
+        font,
     ));
 }
 

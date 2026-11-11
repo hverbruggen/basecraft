@@ -21,6 +21,13 @@ pub mod qobject {
         #[qproperty(QString, file_path)]
         #[qproperty(QString, status)]
         #[qproperty(QString, find_status)]
+        #[qproperty(i32, find_count)]
+        #[qproperty(i32, find_row)]
+        #[qproperty(f64, find_hit_y)]
+        #[qproperty(bool, find_nucleotide)]
+        #[qproperty(QString, find_rows)]
+        #[qproperty(i32, find_reveals)]
+        #[qproperty(QString, history_revision)]
         #[qproperty(QString, message)]
         #[qproperty(QString, message_kind)]
         #[qproperty(QString, message_details)]
@@ -42,7 +49,7 @@ pub mod qobject {
         #[qinvokable]
         fn find_query(self: Pin<&mut DelimitationController>, query: &QString, reverse: bool);
         #[qinvokable]
-        fn find_step(self: Pin<&mut DelimitationController>, direction: i32) -> QString;
+        fn find_step(self: Pin<&mut DelimitationController>, direction: i32);
 
         #[qinvokable]
         fn accessible_page(self: &DelimitationController, page: i32) -> QString;
@@ -200,9 +207,18 @@ use std::{
     pin::Pin,
 };
 
+// Independent generated QML properties describe document state and caller activity.
+#[allow(clippy::struct_excessive_bools)]
 pub struct DelimitationRust {
     find: basecraft_viewmodel::find::Session,
     find_status: QString,
+    find_count: i32,
+    find_row: i32,
+    find_hit_y: f64,
+    find_nucleotide: bool,
+    find_rows: QString,
+    find_reveals: i32,
+    history_revision: QString,
     workspace_json: QString,
     selection_json: QString,
     preview_json: QString,
@@ -240,6 +256,13 @@ impl Default for DelimitationRust {
         Self {
             find: basecraft_viewmodel::find::Session::default(),
             find_status: QString::default(),
+            find_count: 0,
+            find_row: -1,
+            find_hit_y: 0.0,
+            find_nucleotide: false,
+            find_rows: QString::from("[]"),
+            find_reveals: 0,
+            history_revision: QString::default(),
             workspace_json: QString::from("{}"),
             selection_json: QString::from("[]"),
             preview_json: QString::from("[]"),
@@ -346,6 +369,8 @@ impl qobject::DelimitationController {
     }
     fn refresh(mut self: Pin<&mut Self>) {
         self.as_mut().find_update(false);
+        let history = self.record_revision();
+        self.as_mut().set_history_revision(history);
         if let Some(warning) =
             crate::document_open::recovery_notice(self.rust().session.as_ref(), self.rust().doc)
         {
@@ -1838,6 +1863,10 @@ impl qobject::DelimitationController {
             match state.doc {
                 Some(doc) => crate::document_jobs::run_operation(
                     thread,
+                    crate::jobs::Listing {
+                        operation: operation.clone(),
+                        source: state.file_path.to_string(),
+                    },
                     &mut state.session,
                     move |session| {
                         DocumentJob::submit_files(
@@ -2141,6 +2170,7 @@ fn generated_workspace(name: &str) -> bool {
 /// Entry actions run the same registered operation as the CLI, Python and MCP.
 pub(crate) fn create_workspace_in_session(
     session: &mut Session,
+    work: &basecraft_ops::work::Work,
     doc: DocId,
     method: &str,
 ) -> Result<String, String> {
@@ -2163,12 +2193,7 @@ pub(crate) fn create_workspace_in_session(
         json!({}),
         &[("workspace".into(), output.clone())],
     )?;
-    let outcome = loop {
-        if let Some(outcome) = job.poll(session)? {
-            break outcome;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    };
+    let outcome = job.wait(session, work, |_| {})?;
     if outcome.state != basecraft_protocol::operation::RuntimeState::Completed {
         return Err(failure(&outcome));
     }

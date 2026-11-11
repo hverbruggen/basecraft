@@ -157,8 +157,8 @@ Main {
             } else check(b.dirty, "quit discard unexpectedly saved B")
         }
         // Finish the existing asynchronous Find without changing its owner.
-        const found = c.find_step(0)
-        if (!found.length && c.overview_matches === "[]" || found.length && JSON.parse(found).busy) { Qt.callLater(verify); return }
+        c.find_step(0)
+        if (c.overview_matches === "[]" || c.find_status === "Finding…") { Qt.callLater(verify); return }
         check(c.overview_matches !== "[]", "C Find results were lost")
         c.undo(); check(c.accessible_page(0) !== pageC, "C undo was lost")
         c.redo(); check(c.accessible_page(0) === pageC && c.dirty, "C redo was lost")

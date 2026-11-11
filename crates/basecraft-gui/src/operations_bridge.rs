@@ -224,7 +224,7 @@ impl qobject::AppOperations {
         let queries = queries.to_string();
         let parameters = parameters.to_string();
         let approval = approval.to_string();
-        self.start_request(move || {
+        self.start_request("BLAST search", move || {
             let queries: Vec<basecraft_ops::blast::Query> =
                 serde_json::from_str(&queries)?;
             let mut parameters = blast_parameters(&parameters)?;
@@ -260,7 +260,11 @@ impl qobject::AppOperations {
     pub fn submit(self: Pin<&mut Self>, project: &QString, request: &QString) -> bool {
         let root = PathBuf::from(project.to_string());
         let request = request.to_string();
-        self.start_request(move || {
+        let operation = serde_json::from_str::<Value>(&request)
+            .ok()
+            .and_then(|value| value["operation"].as_str().map(str::to_owned))
+            .unwrap_or_else(|| "Operation".into());
+        self.start_request(&operation, move || {
             if request.len() > basecraft_protocol::operation::MAX_FRAME_BYTES {
                 return Err(basecraft_plugin_host::Error::Protocol(
                     "operation request exceeds byte limit".into(),
@@ -280,6 +284,7 @@ impl qobject::AppOperations {
         let request = request.to_string();
         let token = token.to_string();
         self.start_request_with_credential(
+            "Zenodo draft",
             move || {
                 if request.len() > basecraft_protocol::operation::MAX_FRAME_BYTES {
                     return Err(basecraft_plugin_host::Error::Protocol(
@@ -300,13 +305,15 @@ impl qobject::AppOperations {
 
     fn start_request(
         self: Pin<&mut Self>,
+        operation: &str,
         prepare: impl FnOnce() -> basecraft_plugin_host::Result<(PathBuf, Value)> + Send + 'static,
     ) -> bool {
-        self.start_request_with_credential(prepare, None)
+        self.start_request_with_credential(operation, prepare, None)
     }
 
     fn start_request_with_credential(
         mut self: Pin<&mut Self>,
+        operation: &str,
         prepare: impl FnOnce() -> basecraft_plugin_host::Result<(PathBuf, Value)> + Send + 'static,
         credential: Option<String>,
     ) -> bool {
@@ -320,6 +327,10 @@ impl qobject::AppOperations {
         let qt_thread = self.qt_thread();
         let started = crate::jobs::start_listed(
             self.qt_thread(),
+            crate::jobs::Listing {
+                operation: operation.into(),
+                source: String::new(),
+            },
             move |work| {
                 run_request(prepare, credential, work, &qt_thread).map_err(|e| e.to_string())
             },
@@ -410,35 +421,31 @@ fn run_request(
         state.as_mut().set_outcome(QString::from(text));
         state.set_message(QString::from("Running operation"));
     });
-    let mut shown = String::new();
-    let mut cancelling = false;
-    loop {
-        if work.cancelled() && !cancelling {
-            jobs.cancel(&accepted.run_id)?;
-            cancelling = true;
-        }
-        let outcome = jobs.get(&accepted.run_id)?;
-        if outcome.state.terminal() {
-            return Ok(outcome);
-        }
-        if let Some(evidence) = &outcome.evidence
+    // The run belongs to no open document; a detached session lets the
+    // shared wait drive it.
+    let mut session = basecraft_ops::Session::detached(&root);
+    let shown = std::cell::RefCell::new(String::new());
+    jobs.wait_in_session(&accepted.run_id, &mut session, &|| {
+        if let Ok(outcome) = jobs.get(&accepted.run_id)
+            && let Some(evidence) = &outcome.evidence
             && let Ok(file) = std::fs::File::open(PathBuf::from(evidence).join("progress"))
         {
             use std::io::Read;
             let mut stage = String::new();
+            let mut shown = shown.borrow_mut();
             if file.take(4096).read_to_string(&mut stage).is_ok()
                 && !stage.trim().is_empty()
-                && stage != shown
+                && *shown != stage
             {
                 shown.clone_from(&stage);
-                work.progress("");
+                work.progress(stage.trim());
                 let _ = owner.queue(move |state| {
                     state.set_message(QString::from(stage.trim()));
                 });
             }
         }
-        std::thread::sleep(std::time::Duration::from_millis(25));
-    }
+        work.cancelled()
+    })
 }
 
 #[cfg(test)]

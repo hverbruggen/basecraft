@@ -22,6 +22,13 @@ pub mod qobject {
         #[qproperty(QByteArray, frame)]
         #[qproperty(QString, status)]
         #[qproperty(QString, find_status)]
+        #[qproperty(i32, find_count)]
+        #[qproperty(i32, find_row)]
+        #[qproperty(f64, find_hit_y)]
+        #[qproperty(bool, find_nucleotide)]
+        #[qproperty(QString, find_rows)]
+        #[qproperty(i32, find_reveals)]
+        #[qproperty(QString, history_revision)]
         #[qproperty(QString, message)]
         #[qproperty(QString, message_kind)]
         #[qproperty(QString, ok_color)]
@@ -62,7 +69,7 @@ pub mod qobject {
         #[qinvokable]
         fn find_query(self: Pin<&mut SangerController>, query: &QString, reverse: bool);
         #[qinvokable]
-        fn find_step(self: Pin<&mut SangerController>, direction: i32) -> QString;
+        fn find_step(self: Pin<&mut SangerController>, direction: i32);
 
         #[qinvokable]
         fn cancel_stage(self: Pin<&mut SangerController>);
@@ -232,6 +239,13 @@ use work::{load_draft_review, session_view, sync_review_view};
 pub struct SangerRust {
     find: basecraft_viewmodel::find::Session,
     find_status: QString,
+    find_count: i32,
+    find_row: i32,
+    find_hit_y: f64,
+    find_nucleotide: bool,
+    find_rows: QString,
+    find_reveals: i32,
+    history_revision: QString,
     find_source_key: String,
     overview_content: QString,
     overview_matches: QString,
@@ -290,6 +304,13 @@ impl Default for SangerRust {
         Self {
             find: basecraft_viewmodel::find::Session::default(),
             find_status: QString::default(),
+            find_count: 0,
+            find_row: -1,
+            find_hit_y: 0.0,
+            find_nucleotide: false,
+            find_rows: QString::from("[]"),
+            find_reveals: 0,
+            history_revision: QString::default(),
             find_source_key: String::new(),
             overview_content: QString::from("{\"shapes\":[]}"),
             overview_matches: QString::from("[]"),
@@ -563,6 +584,8 @@ impl qobject::SangerController {
 
     fn refresh(mut self: std::pin::Pin<&mut Self>) {
         self.as_mut().find_update(false);
+        let history = self.record_revision();
+        self.as_mut().set_history_revision(history);
         let (bytes, status, zoom, review_mode, sequence, decision, unresolved, context) = {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
