@@ -167,18 +167,7 @@ impl ServiceContext {
         })
     }
 
-    pub(crate) fn registry_location(&self) -> &Path {
-        &self.registry
-    }
 
-    pub(crate) fn registry_input(&self, access: &dyn Access) -> crate::Result<CheckedRead> {
-        ServiceRequest {
-            context: self,
-            action: ServiceAction::ReadAnalysisRegistry,
-            target: None,
-        }
-        .read(access)
-    }
 }
 
 fn namespace_error(error: NamespaceReadError) -> AccessError {

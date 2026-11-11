@@ -1,10 +1,15 @@
 //! Shared save guards, writes, hashes and acceptance.
 use super::SaveCheck;
-use super::{
-    DerivedTarget, DocId, Error, LegacySave, Op, OpResult, Path, Result, SaveDisposition,
-    SaveHooks, SaveMilestone, SaveSite, files, invalid,
-};
+use super::{DerivedTarget, DocId, Error, Op, OpResult, Path, Result, files, invalid};
 use super::{SaveDecision, SaveOutcome, Session};
+
+/// The three supported save intents; history publication never writes document data.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum SaveMode {
+    Replace,
+    NewDestination,
+    History,
+}
 
 impl Session {
     /// Save a document to its own path, or to `path`.
@@ -15,13 +20,14 @@ impl Session {
     /// Persist newly recorded history for an already saved document without
     /// rewriting its data or sidecars. Uses the ordinary guarded save publisher.
     pub fn save_history(&mut self, id: DocId) -> Result<()> {
-        self.save_checked(
+        self.save_attempt(
             id,
             None,
             crate::input_evidence::SavePolicy::Cancel,
-            true,
-            true,
+            SaveMode::History,
+            None,
         )
+        .map(|_| ())
     }
 
     /// Headless callers choose a policy explicitly; default save returns a structured conflict.
@@ -31,20 +37,22 @@ impl Session {
         path: Option<&Path>,
         policy: crate::input_evidence::SavePolicy,
     ) -> Result<()> {
-        self.save_checked(id, path, policy, true, false)
+        self.save_attempt(id, path, policy, SaveMode::Replace, None)
+            .map(|_| ())
     }
 
     /// Save to the document's own file, or Save As to a destination that must
     /// not exist yet. For callers without an overwrite confirmation (agents,
     /// scripts): an existing other file is refused, never replaced.
     pub fn save_new(&mut self, id: DocId, path: Option<&Path>) -> Result<()> {
-        self.save_checked(
+        self.save_attempt(
             id,
             path,
             crate::input_evidence::SavePolicy::Cancel,
-            false,
-            false,
+            SaveMode::NewDestination,
+            None,
         )
+        .map(|_| ())
     }
 
     /// Any spelling of the document's own file is an ordinary save, so its
@@ -53,56 +61,21 @@ impl Session {
         crate::save_guard::same_target(path, &self.resolve(&self.docs[id.0].key))
     }
 
-    pub(super) fn save_checked(
-        &mut self,
-        id: DocId,
-        path: Option<&Path>,
-        policy: crate::input_evidence::SavePolicy,
-        overwrite: bool,
-        history_only: bool,
-    ) -> Result<()> {
-        self.save_attempt(id, path, policy, overwrite, history_only, None)
-            .map(|_| ())
-    }
-
     pub(super) fn save_attempt(
         &mut self,
         id: DocId,
         path: Option<&Path>,
         policy: crate::input_evidence::SavePolicy,
-        overwrite: bool,
-        history_only: bool,
+        mode: SaveMode,
         decision: Option<SaveDecision>,
     ) -> Result<SaveOutcome> {
-        self.save_attempt_with(
-            id,
-            path,
-            policy,
-            overwrite,
-            history_only,
-            decision,
-            &mut LegacySave,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn save_attempt_with(
-        &mut self,
-        id: DocId,
-        path: Option<&Path>,
-        policy: crate::input_evidence::SavePolicy,
-        overwrite: bool,
-        history_only: bool,
-        decision: Option<SaveDecision>,
-        hooks: &mut impl SaveHooks,
-    ) -> Result<SaveOutcome> {
-        hooks.at(SaveSite::Consent);
+        let history_only = mode == SaveMode::History;
         let valid_consent = decision
             .as_ref()
             .map(|decision| self.consume_save_check(decision))
             .transpose()?
             .unwrap_or(false);
-        hooks.at(SaveSite::Admission);
+
         if !self.is_open(id) {
             return Err(invalid("save document is not open"));
         }
@@ -116,14 +89,13 @@ impl Session {
         }
         let path = path.filter(|p| !self.is_own_file(id, p));
         let target = path.map_or_else(|| self.resolve(&self.docs[id.0].key), Path::to_path_buf);
-        hooks.at(SaveSite::CleanHashes);
+
         let clean = (history_only || (self.log.is_some() && path.is_none()))
             && self.save_hashes(id)? == self.docs[id.0].saved_state_hashes;
         if history_only && !clean {
             return Err(invalid("history publication requires a saved document"));
         }
         if decision.is_none() && !history_only && self.log.is_some() && path.is_none() && clean {
-            hooks.disposition(SaveDisposition::Clean);
             return Ok(SaveOutcome {
                 recovery_observation: None,
                 warnings,
@@ -131,7 +103,7 @@ impl Session {
         }
         // Cooperating Basecraft processes serialize the entire data + sidecar +
         // provenance publication. External programs still require hash checks.
-        hooks.at(SaveSite::TargetGuard);
+
         let _save_lock = if self.tracked
             || matches!(
                 self.write_publication,
@@ -141,10 +113,10 @@ impl Session {
         } else {
             None
         };
-        if new_sequence || (!overwrite && path.is_some()) {
+        if new_sequence || (mode == SaveMode::NewDestination && path.is_some()) {
             crate::save_guard::Revision::check(None, &target)?;
         }
-        hooks.at(SaveSite::Evidence);
+
         let _evidence_lock = crate::input_evidence::lock()?;
         if !history_only {
             let evidence = crate::input_evidence::check(&target)?;
@@ -181,15 +153,14 @@ impl Session {
         if history_only {
             self.check_save_source(id)?;
         }
-        hooks.at(SaveSite::OuterTrack);
+
         self.track(id)?;
-        hooks.at(SaveSite::OuterFlush);
+
         self.flush()?;
         let before = basecraft_io::hash_file(&target).ok();
-        hooks.at(SaveSite::ExpectedHashes);
+
         let expected = self.save_hashes_at(id, &target)?;
         if self.log.is_some() {
-            hooks.at(SaveSite::PendingEncode);
             let intent = serde_json::to_vec_pretty(&serde_json::to_value(
                 basecraft_protocol::records::PendingSave {
                     schema_version: 1,
@@ -202,16 +173,16 @@ impl Session {
                     extra: std::collections::BTreeMap::new(),
                 },
             )?)?;
-            hooks.at(SaveSite::PendingParent);
+
             std::fs::create_dir_all(&self.storage_root)?;
-            hooks.at(SaveSite::PendingWrite);
+
             basecraft_io::write_atomic(&self.storage_root.join("pending-save.json"), |w| {
                 w.write_all(&intent)
             })?;
         }
         // Preservation and pending-intent publication can take time. A decision
         // cannot authorize an externally replaced destination during that work.
-        hooks.at(SaveSite::Recheck);
+
         if let Some(check) = &target_check
             && !check.target_is_current(&target)?
         {
@@ -219,32 +190,25 @@ impl Session {
                 self.check_save(id, Some(&target))?,
             )));
         }
-        if new_sequence || (!overwrite && path.is_some()) {
+        if new_sequence || (mode == SaveMode::NewDestination && path.is_some()) {
             crate::save_guard::Revision::check(None, &target)?;
         }
         let outcome = if history_only {
-            hooks.disposition(SaveDisposition::History);
-            self.log_save_with(id, &target, self.docs[id.0].accepted_hashes.clone(), hooks)
+            self.log_save(id, &target, self.docs[id.0].accepted_hashes.clone())
         } else {
-            self.save_inner(id, path, hooks)
+            self.save_inner(id, path)
         };
         if outcome.is_ok() {
             if target == self.resolve(&self.docs[id.0].key) {
-                hooks.boundary(SaveSite::SavedHashes, self)?;
                 self.docs[id.0].saved_state_hashes = self.save_hashes_at(id, &target)?;
-                hooks.executed(SaveMilestone::SavedHashes);
-                hooks.boundary(SaveSite::DiskStamp, self)?;
+
                 self.docs[id.0].disk_stamp = crate::input_evidence::stamp(&target)?;
-                hooks.executed(SaveMilestone::DiskStamp);
             }
             if self.log.is_some() {
-                hooks.boundary(SaveSite::PendingRemove, self)?;
                 std::fs::remove_file(self.storage_root.join("pending-save.json"))?;
-                hooks.executed(SaveMilestone::PendingRemoved);
             }
         }
         outcome.map_err(|error| {
-            hooks.executed(SaveMilestone::Reconciled);
             if target == self.resolve(&self.docs[id.0].key) {
                 // Tables are replaced one by one before the manifest. Accept
                 // those already written, so a retry isn't refused as a
@@ -290,10 +254,10 @@ impl Session {
                             .push((key, expected_sidecar.clone()));
                     }
                 }
-                hooks.project(error, |error| invalid(format!(
+                invalid(format!(
                     "data saved; provenance or sidecar incomplete: {error}. Recovery remains at {}",
                     self.storage_root.display()
-                )))
+                ))
             } else {
                 error
             }
@@ -303,7 +267,6 @@ impl Session {
             crate::documents::WritePublication::Recovery { .. }
         ) {
             Some((|| -> Result<SaveCheck> {
-                hooks.boundary(SaveSite::Observation, self)?;
                 let mut observed = self.recovery_snapshot(id)?;
                 if target_check
                     .as_ref()
@@ -314,7 +277,7 @@ impl Session {
                 {
                     observed.require_final_decision();
                 }
-                hooks.returned(SaveSite::Observation);
+
                 Ok(observed)
             })())
         } else {
@@ -340,40 +303,21 @@ impl Session {
         Ok(())
     }
 
-    pub(super) fn save_inner(
-        &mut self,
-        id: DocId,
-        path: Option<&Path>,
-        hooks: &mut impl SaveHooks,
-    ) -> Result<()> {
-        hooks.at(SaveSite::InnerFlush);
+    pub(super) fn save_inner(&mut self, id: DocId, path: Option<&Path>) -> Result<()> {
         self.flush()?;
         let target = path.map_or_else(|| self.resolve(&self.docs[id.0].key), Path::to_path_buf);
         // An unchanged ordinary save neither rewrites data nor creates history.
-        hooks.at(SaveSite::InnerTrack);
+
         self.track(id)?;
         if target == self.resolve(&self.docs[id.0].key) {
-            hooks.at(SaveSite::SourceCheck);
             self.check_save_source(id)?;
         }
-        hooks.at(SaveSite::Format);
+
         let format = files::Format::from_path(&target)?;
         let original = self.resolve(&self.docs[id.0].key);
         let document = self.docs[id.0].content.as_document();
-        // Preserve the legacy observation marker; behaviour is delegated below.
-        if document.kind() == files::Kind::Tree {
-            hooks.at(SaveSite::OtherKind);
-        }
         let links = document.prepare_links(&original, &target, format)?;
-        let mut write = || {
-            hooks.write(
-                document,
-                &target,
-                format,
-                &self.storage_root,
-                &self.write_publication,
-            )
-        };
+        let write = || document.write(&target, format, &self.storage_root, &self.write_publication);
         let (hashes, outputs) = if let Some(links) = links {
             links.publish(write)?
         } else {
@@ -383,7 +327,7 @@ impl Session {
             .into_iter()
             .map(|(path, hash)| (self.relative(&path), hash))
             .collect();
-        self.log_save_with(id, &target, hashes, hooks)?;
+        self.log_save(id, &target, hashes)?;
         if !outputs.is_empty() {
             self.log_tool_run(
                 id,
@@ -397,12 +341,11 @@ impl Session {
         Ok(())
     }
 
-    pub(super) fn log_save_with(
+    pub(super) fn log_save(
         &mut self,
         id: DocId,
         target: &Path,
         hashes: Vec<(String, String)>,
-        hooks: &mut impl SaveHooks,
     ) -> Result<()> {
         let key = self.relative(target);
         let entry = self.entry(
@@ -414,29 +357,25 @@ impl Session {
                 feature: None,
             },
         );
-        hooks.record(self.log.is_some());
-        hooks.boundary(SaveSite::SaveRecord, self)?;
+
         self.write(&entry)?;
-        hooks.returned(SaveSite::SaveRecord);
+
         if target == self.resolve(&self.docs[id.0].key) {
             self.docs[id.0]
                 .accepted_hashes
                 .clone_from(&entry.result.hashes);
             self.docs[id.0].absent_sidecars.clear();
-            hooks.executed(SaveMilestone::AcceptedLog);
         }
         if self.tracked
             && self.provenance_policy != basecraft_platform::settings::ProvenancePolicy::None
         {
-            hooks.boundary(SaveSite::Provenance, self)?;
             self.publish_save(id, target, &entry, &[], None)
                 .map_err(|e| {
-                    hooks.project(e, |e| invalid(format!(
+                    invalid(format!(
                         "data saved; provenance incomplete: {e}. Recovery has been retained at {}",
                         self.storage_root.display()
-                    )))
+                    ))
                 })?;
-            hooks.returned(SaveSite::Provenance);
         }
         Ok(())
     }

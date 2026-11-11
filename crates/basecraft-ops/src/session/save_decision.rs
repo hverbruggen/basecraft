@@ -1,6 +1,7 @@
 //! Transient save decisions. No consent is written to disk or deserialised.
 use std::path::{Path, PathBuf};
 
+use super::save::SaveMode;
 pub use super::save_authority::{
     EvidenceAction, SaveCheck, SaveDecision, SaveOutcome, SaveWarning,
 };
@@ -120,7 +121,7 @@ impl Session {
         path: Option<&Path>,
         decision: SaveDecision,
     ) -> Result<SaveOutcome> {
-        self.save_attempt(id, path, decision.known, true, false, Some(decision))
+        self.save_attempt(id, path, decision.known, SaveMode::Replace, Some(decision))
     }
 
     /// The same decision boundary while retaining `save_new`'s no-overwrite rule.
@@ -130,7 +131,13 @@ impl Session {
         path: Option<&Path>,
         decision: SaveDecision,
     ) -> Result<SaveOutcome> {
-        self.save_attempt(id, path, decision.known, false, false, Some(decision))
+        self.save_attempt(
+            id,
+            path,
+            decision.known,
+            SaveMode::NewDestination,
+            Some(decision),
+        )
     }
 }
 
@@ -213,7 +220,13 @@ impl Session {
 impl Session {
     pub(crate) fn save_recovery(&mut self, id: DocId) -> Result<SaveOutcome> {
         let target = self.resolve(&self.docs[id.0].key);
-        self.save_attempt(id, Some(&target), SavePolicy::Cancel, true, false, None)
+        self.save_attempt(
+            id,
+            Some(&target),
+            SavePolicy::Cancel,
+            SaveMode::Replace,
+            None,
+        )
     }
 }
 

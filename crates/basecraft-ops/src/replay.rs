@@ -1404,8 +1404,6 @@ enum AdvanceSite {
     FirstArtifacts,
     Observation,
     FinalArtifacts,
-    #[cfg(test)]
-    Discard,
 }
 trait AdvanceHooks {
     fn at(&mut self, _: AdvanceSite) {}

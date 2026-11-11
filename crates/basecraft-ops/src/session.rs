@@ -8,11 +8,8 @@
 //! Alignment edits merge the same way: typing over residues along a row,
 //! gaps inserted one after another, a block slid step by step.
 
-pub(crate) mod save_attempt_observation;
-use save_attempt_observation::{
-    Disposition as SaveDisposition, Hooks as SaveHooks, Legacy as LegacySave,
-    Milestone as SaveMilestone, Site as SaveSite,
-};
+#[cfg(test)]
+mod save_failure_tests;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
