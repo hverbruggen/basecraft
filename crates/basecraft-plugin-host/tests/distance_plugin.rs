@@ -114,7 +114,6 @@ fn forest_members_share_one_alignment_snapshot() {
             .iter()
             .any(|name| name.ends_with(".alignment.afa"))
     );
-    session.flush().unwrap();
     assert!(basecraft_ops::records::replay(dir.path()).unwrap().ok());
 }
 
@@ -185,7 +184,6 @@ fn bootstrap_provenance_success_and_withheld_support_replay() {
             assert_eq!(run["effective"]["bootstrap"], 64);
             assert_eq!(run["effective"]["seed"], 71);
         }
-        session.flush().unwrap();
     }
     let replay = basecraft_ops::records::replay(root).unwrap();
     assert!(replay.ok(), "{:?}", replay.problems);

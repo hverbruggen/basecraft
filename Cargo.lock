@@ -360,7 +360,6 @@ dependencies = [
 name = "basecraft-platform"
 version = "0.0.0"
 dependencies = [
- "basecraft-io",
  "fs4",
  "memmap2",
  "rustix",
@@ -401,10 +400,6 @@ dependencies = [
  "serde",
  "serde_json",
 ]
-
-[[package]]
-name = "basecraft-py"
-version = "0.0.0"
 
 [[package]]
 name = "basecraft-query"

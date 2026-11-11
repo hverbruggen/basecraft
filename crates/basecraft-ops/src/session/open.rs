@@ -32,7 +32,6 @@ impl Session {
     }
 
     pub(super) fn open_inner(&mut self, path: &Path) -> Result<(DocId, files::Kind)> {
-        self.flush()?;
         let format = files::Format::from_path(path)?;
         let captured = files::capture_load(path, format)?;
         let content = captured.content;
@@ -128,7 +127,6 @@ impl Session {
                 });
             }
             if self.log.is_some() {
-                self.flush()?;
                 if let Some(entry) = self.recovery_checkpoint(id)? {
                     self.docs[id.0].recovery_boundary = Some(entry.id.clone());
                     self.pending_baselines.push(entry);
@@ -366,7 +364,7 @@ impl Session {
         ))
     }
 
-    /// Read-only evidence for this session's exact current revision, including pending edits.
+    /// Read-only evidence for this session's exact current revision.
     pub fn document_record(
         &self,
         id: DocId,
@@ -408,11 +406,6 @@ impl Session {
                 .filter(|e| e.doc == slot.key)
                 .cloned(),
         );
-        if let Some(pending) = &self.pending
-            && pending.doc == id
-        {
-            record.events.push(pending.entry.clone());
-        }
         record
             .effective
             .extend(slot.undo.iter().map(|a| EditActivity {

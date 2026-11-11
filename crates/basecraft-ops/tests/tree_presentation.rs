@@ -68,7 +68,6 @@ fn support_precision_scale_unknown_settings_save_undo_and_replay() {
     let reopened = files::load_tree(&path).unwrap().doc;
     assert_eq!(reopened.style(), &style);
     assert_eq!(reopened.to_newick(), original);
-    session.flush().unwrap();
     assert!(basecraft_ops::records::replay(dir.path()).unwrap().ok());
 }
 
@@ -157,7 +156,6 @@ fn changing_view_link_preserves_origin_and_save_as_rebases_both_links() {
             .contains("source changed")
     );
     assert_eq!(std::fs::read(&snapshot).unwrap(), snapshot_bytes);
-    session.flush().unwrap();
     assert!(basecraft_ops::records::replay(root).unwrap().ok());
 }
 
@@ -227,7 +225,6 @@ fn staged_support_removal_and_style_are_one_reversible_replayable_edit() {
     assert_eq!(reopened.supports().len(), 1);
     assert_eq!(reopened.supports()[0].name, "Support 2");
     assert_eq!(reopened.style(), &style);
-    session.flush().unwrap();
     assert!(basecraft_ops::records::replay(dir.path()).unwrap().ok());
 }
 

@@ -76,7 +76,8 @@
         "allocation": null
       },
       "host": {
-        "caller": "single_trace"
+        "caller": "single_trace",
+        "caller_engine": "tracy"
       }
     },
     {

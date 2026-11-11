@@ -75,6 +75,5 @@ fn trimal_and_iqtree_preserve_identifiers_and_provenance() {
         "{outcome:#?}"
     );
     assert_eq!(common::tool_runs(&session, doc).len(), 2);
-    session.flush().unwrap();
     assert!(basecraft_ops::records::replay(root).unwrap().ok());
 }

@@ -82,7 +82,6 @@ fn display_names_preserve_support_tip_identity_links_and_replay() {
             link
         );
         assert_eq!(std::fs::read(snapshot).unwrap(), snapshot_bytes);
-        session.flush().unwrap();
         let report = records::replay(root).unwrap();
         assert!(report.ok(), "{:#?}", report.problems);
     }

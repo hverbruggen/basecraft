@@ -98,6 +98,7 @@ fn reference_run(root: &std::path::Path, source: &std::path::Path, id: &str) -> 
             analysis_run: None,
             proposal_target: None,
             upstream: Vec::new(),
+            origin_run: None,
             extra: std::collections::BTreeMap::default(),
         },
     )

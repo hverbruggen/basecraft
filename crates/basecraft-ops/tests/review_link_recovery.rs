@@ -98,7 +98,6 @@ fn guarded_partial_save_supports_retry_and_manual_intended_recovery() {
                 }
             } else {
                 session.save(doc, Some(&output)).unwrap();
-                session.flush().unwrap();
                 let replay = basecraft_ops::records::replay(root).unwrap();
                 assert!(replay.ok(), "{:?}", replay.problems);
             }

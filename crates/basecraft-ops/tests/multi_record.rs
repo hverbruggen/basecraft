@@ -191,7 +191,6 @@ fn recovery_restores_every_record() {
     let mut session = Session::recoverable(&root).unwrap();
     let doc = session.open(&path).unwrap();
     session.apply(doc, replace()).unwrap();
-    session.flush().unwrap();
     let journal = session.recovery_root().to_path_buf();
     std::mem::forget(session);
     let recovered = basecraft_ops::records::recover(&journal, &root.join("recovered")).unwrap();
@@ -305,7 +304,6 @@ fn companion_details_survive_and_conflicting_copies_refuse() {
 
     // Recovery restores the main file and keeps the companion's other lines.
     session.apply(doc, replace()).unwrap();
-    session.flush().unwrap();
     let journal = session.recovery_root().to_path_buf();
     std::mem::forget(session);
     let recovered = basecraft_ops::records::recover(&journal, &root.join("recovered")).unwrap();

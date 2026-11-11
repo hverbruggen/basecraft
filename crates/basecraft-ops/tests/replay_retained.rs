@@ -81,7 +81,6 @@ fn repeated_open_with_edits_preserves_inputs_in_replay_and_recovery() {
                 )
                 .unwrap();
         }
-        session.flush().unwrap();
         drop(session);
         assert_eq!(fingerprint(&path), original);
         match source_state {
@@ -130,7 +129,6 @@ fn repeated_combine_save_and_refused_save_share_one_session() {
             session.save(doc, Some(&output)).unwrap();
         }
     }
-    session.flush().unwrap();
     drop(session);
     let recovered = parent.path().join("recovered");
     qualify(&root, &recovered);

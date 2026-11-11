@@ -1,4 +1,5 @@
-//! Single-read Tracy adapter using the public registry, shared jobs and retained receipts.
+//! Single-trace caller service: runs the one installed plugin that declares it,
+//! through the public registry, shared jobs and retained receipts.
 use crate::{
     jobs::JobManager,
     policy::SessionPolicy,
@@ -10,7 +11,9 @@ use crate::{
 };
 use basecraft_docs::sanger::SangerDraft;
 use basecraft_docs::sanger::SangerDraftExt;
-use basecraft_protocol::operation::{InvocationInputEvidence, OperationRequest, RuntimeState};
+use basecraft_protocol::operation::{
+    InputReference, InvocationInputEvidence, OperationRequest, RuntimeState,
+};
 use serde_json::json;
 use std::path::{Path, PathBuf};
 
@@ -22,6 +25,7 @@ pub struct SangerCaller {
 }
 
 struct Identity {
+    engine: String,
     capture: basecraft_ops::sanger_review::CapturedInput,
     source: PathBuf,
     sha256: String,
@@ -34,24 +38,27 @@ pub struct CalledDraft {
 }
 
 // Match the public SDK resolver: explicit override, interpreter prefix, then PATH.
-fn engine(interpreter: &Path) -> Result<PathBuf, String> {
+fn engine(interpreter: &Path, program: &str) -> Result<PathBuf, String> {
+    let setting = format!(
+        "BASECRAFT_{}",
+        program.to_ascii_uppercase().replace('-', "_")
+    );
     let mut paths = Vec::new();
-    if let Some(path) = std::env::var_os("BASECRAFT_TRACY") {
+    if let Some(path) = std::env::var_os(setting) {
         paths.push(PathBuf::from(path));
     } else {
         if let Some(parent) = interpreter.parent() {
-            paths.push(parent.join("tracy"));
+            paths.push(parent.join(program));
         }
         if let Some(path) = std::env::var_os("PATH") {
-            paths.extend(std::env::split_paths(&path).map(|folder| folder.join("tracy")));
+            paths.extend(std::env::split_paths(&path).map(|folder| folder.join(program)));
         }
     }
     paths
         .into_iter()
         .find(|path| path.is_file())
         .ok_or_else(|| {
-            "Tracy is unavailable. Install the Tracy dependency; instrument calls remain usable."
-                .into()
+            format!("{program} is unavailable. Install it; instrument calls remain usable.")
         })
 }
 
@@ -69,7 +76,7 @@ fn checked(verified: VerifiedOperationResult, identity: &Identity) -> Result<Cal
     let path = PathBuf::from(&artifact.path);
     let mut draft = SangerDraft::read(&path)?;
     if draft.inputs.len() != 1
-        || draft.engine != "Tracy"
+        || !draft.engine.eq_ignore_ascii_case(&identity.engine)
         || draft.inputs[0].sha256 != identity.sha256
         || draft.engine_sha256
             != identity.query.effective_parameters["engine_sha256"]
@@ -156,23 +163,31 @@ impl SangerCaller {
         });
         let operation = callers
             .next()
-            .ok_or("Install the Tracy Sanger plugin to compute alternative calls")?;
+            .ok_or("Install a single-trace caller plugin to compute alternative calls")?;
         if callers.next().is_some() {
             return Err("More than one single-trace caller is installed".into());
         }
+        let name = &operation.package.manifest.name;
         if !operation.package.enabled {
-            return Err("Tracy Sanger plugin is disabled".into());
+            return Err(format!("{name} is disabled"));
         }
         let interpreter = operation
             .package
             .interpreter
             .as_ref()
-            .ok_or("Tracy plugin Python runtime is unavailable")?;
-        let caller = engine(interpreter)?;
+            .ok_or_else(|| format!("{name} Python runtime is unavailable"))?;
+        let program = operation
+            .descriptor
+            .host
+            .as_ref()
+            .and_then(|host| host.caller_engine.clone())
+            .ok_or("Caller declares no engine program")?;
+        let caller = engine(interpreter, &program)?;
         let parameters = json!({"engine_sha256":basecraft_io::sha256_file(&caller).map_err(|e| e.to_string())?,
             "minimum_overlap":50,"minimum_identity":0.8,"signal_threshold":signal_threshold});
         let hash = capture.hash().to_owned();
         let identity = Identity {
+            engine: program,
             capture: capture.clone(),
             source: source.clone(),
             sha256,
@@ -205,7 +220,7 @@ impl SangerCaller {
             operation: operation.id.clone(),
             inputs: std::collections::BTreeMap::from([(
                 "reads".into(),
-                vec![basecraft_protocol::operation::InputReference::File {
+                vec![InputReference::File {
                     path: source.to_str().ok_or("AB1 path is not UTF-8")?.into(),
                 }],
             )]),
@@ -279,6 +294,7 @@ mod tests {
             descriptor_digest: "contract".into(),
         };
         let identity = Identity {
+            engine: "tracy".into(),
             capture: basecraft_ops::sanger_review::CapturedInput::open(&source).unwrap(),
             source: source.clone(),
             sha256: basecraft_io::sha256_file(&source).unwrap(),

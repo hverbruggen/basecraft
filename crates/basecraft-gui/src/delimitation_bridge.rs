@@ -161,8 +161,6 @@ pub mod qobject {
         #[qinvokable]
         fn analysis_running(self: &DelimitationController) -> bool;
         #[qinvokable]
-        fn flush(self: Pin<&mut DelimitationController>);
-        #[qinvokable]
         fn check_theme(self: Pin<&mut DelimitationController>);
         #[qinvokable]
         fn memory_report(self: &DelimitationController) -> QString;
@@ -2105,17 +2103,6 @@ impl qobject::DelimitationController {
             self.as_mut().set_message(QString::from(&text));
         }
         self.finish_analysis();
-    }
-    pub fn flush(mut self: Pin<&mut Self>) {
-        let result = self
-            .as_mut()
-            .rust_mut()
-            .session
-            .as_mut()
-            .map(Session::flush);
-        if let Some(Err(e)) = result {
-            self.fail(&e.to_string());
-        }
     }
     pub fn check_theme(mut self: Pin<&mut Self>) {
         let stamp = crate::bridge::theme_stamp();

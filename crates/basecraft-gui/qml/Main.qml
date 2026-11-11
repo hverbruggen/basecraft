@@ -3038,7 +3038,6 @@ ApplicationWindow {
                     d.controller.check_theme()
                     // The species view draws its tree with its own controller.
                     if (d.kind === "delimitation") d.treeController.check_theme()
-                    if (d.kind !== "trace") d.controller.flush()
                 }
             }
         }

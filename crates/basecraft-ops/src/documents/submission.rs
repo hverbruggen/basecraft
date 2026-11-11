@@ -56,19 +56,17 @@ impl Document for Submission {
                 op.name()
             )));
         };
-        // Preserve the existing whole-payload inverse. Submission carries
-        // settings and record decisions, not sequence data. Replacing this
-        // snapshot with edit-sized inverses is a separate migration.
-        let before = Box::new(self.clone());
+        let before = self.clone();
         basecraft_docs::submission::apply(self, edit).map_err(|e| invalid(e.0))?;
-        Ok((Inverse::Submission(before), None))
+        let undo = crate::session::SubmissionUndo::between(before, self);
+        Ok((Inverse::Submission(Box::new(undo)), None))
     }
 
     fn revert(&mut self, inverse: &Inverse) -> Result<()> {
-        let Inverse::Submission(before) = inverse else {
+        let Inverse::Submission(undo) = inverse else {
             return Err(invalid("undo of the wrong kind of edit"));
         };
-        *self = (**before).clone();
+        undo.undo(self);
         Ok(())
     }
 

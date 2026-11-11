@@ -199,7 +199,7 @@ fn assert_reopened_completion(workspace: &std::path::Path, run_id: &str, hypothe
         .filter(|event| {
             matches!(&event.op,
         basecraft_protocol::Op::JobFinished { report } if report.id == run_id
-            && report.status == basecraft_protocol::delimitation::JobStatus::Completed)
+            && report.status == basecraft_protocol::records::JobStatus::Completed)
         })
         .collect();
     assert_eq!(
@@ -232,7 +232,7 @@ fn assert_reopened_completion(workspace: &std::path::Path, run_id: &str, hypothe
             .iter()
             .filter(|event| matches!(&event.op,
         basecraft_protocol::Op::JobFinished { report } if report.id == run_id
-            && report.status == basecraft_protocol::delimitation::JobStatus::Completed))
+            && report.status == basecraft_protocol::records::JobStatus::Completed))
             .count(),
         1
     );
@@ -329,7 +329,7 @@ fn genuine_workspace_edit_keeps_new_results_as_artifacts_and_records_completion(
             .iter()
             .any(|event| matches!(&event.op,
         basecraft_protocol::Op::JobFinished { report } if report.id == outcome.run_id
-            && report.status == basecraft_protocol::delimitation::JobStatus::Completed))
+            && report.status == basecraft_protocol::records::JobStatus::Completed))
     );
 }
 

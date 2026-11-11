@@ -283,7 +283,6 @@ fn repeated_combine_and_refused_save_preserve_retained_objects_and_recover() {
     assert!(
         workflow::combine_to(&mut session, &paths, &dir.path().join("refused.fa"), None).is_err()
     );
-    session.flush().unwrap();
     // Checkpoints live in objects/, recovery links in originals/<entry>/.
     let snapshot = || {
         let mut found = std::collections::BTreeMap::new();
@@ -513,7 +512,6 @@ fn linked_alignment_observation_preserves_unsaved_undo_redo_journal_and_replay()
             },
         )
         .unwrap();
-    session.flush().unwrap();
     for step in 0..3 {
         let before = (
             session.delimitation(doc).unwrap().clone(),

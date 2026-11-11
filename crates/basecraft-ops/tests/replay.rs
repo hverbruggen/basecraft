@@ -40,7 +40,7 @@ fn record_session(root: &Path) {
     let path = root.join("seqs/test.gb");
     let mut s = Session::new(root);
     let d = s.open(&path).unwrap();
-    // A typing burst: merges into one entry.
+    // A typing burst: one undo step, one journal entry per keystroke.
     for (i, c) in "GATTACA".chars().enumerate() {
         s.apply(d, replace(15 + i as u64, 15 + i as u64, &c.to_string()))
             .unwrap();
@@ -97,9 +97,9 @@ fn recorded_session_replays_exactly() {
     let entries = basecraft_ops::log::read_all(root).unwrap();
     let inserts = entries
         .iter()
-        .filter(|e| matches!(&e.op, Op::SeqReplace { start: 15, .. }))
+        .filter(|e| matches!(&e.op, Op::SeqReplace { start, end, .. } if (15..22).contains(start) && start == end))
         .count();
-    assert_eq!(inserts, 1, "typing burst should be one entry");
+    assert_eq!(inserts, 7, "each keystroke is journaled");
 
     // The original was overwritten by the save; replay uses the stored copy.
     let report = records::replay(root).unwrap();
@@ -470,17 +470,15 @@ fn alignment_session_replays_exactly() {
     }
     let entries = basecraft_ops::log::read_all(root).unwrap();
     let names: Vec<&str> = entries.iter().map(|e| e.op.name()).collect();
-    assert_eq!(
-        names.iter().filter(|n| **n == "aln.replace").count(),
-        1,
-        "{names:?}"
-    );
-    assert_eq!(names.iter().filter(|n| **n == "aln.insert_gaps").count(), 1);
-    // Typing along row 3, and the letter typed into a block.
-    assert_eq!(names.iter().filter(|n| **n == "aln.insert").count(), 2);
-    assert_eq!(names.iter().filter(|n| **n == "aln.fill").count(), 1);
-    assert_eq!(names.iter().filter(|n| **n == "tool.run").count(), 1);
-    assert_eq!(names.iter().filter(|n| **n == "aln.shift").count(), 1);
+    // Bursts share undo steps; the journal keeps every keystroke.
+    let count = |name: &str| names.iter().filter(|n| **n == name).count();
+    assert_eq!(count("aln.replace"), 2, "{names:?}");
+    assert_eq!(count("aln.insert_gaps"), 2);
+    // Typing along row 3 (two keys), and the letter typed into a block.
+    assert_eq!(count("aln.insert"), 3);
+    assert_eq!(count("aln.fill"), 1);
+    assert_eq!(count("tool.run"), 1);
+    assert_eq!(count("aln.shift"), 2);
     let saved = std::fs::read_to_string(root.join("x.aln.fasta")).unwrap();
     assert!(saved.starts_with(">dee\n"), "{saved}");
     assert!(saved.contains(">a first row\n"), "{saved}");
@@ -765,13 +763,11 @@ fn automatic_root_error_keeps_document_and_history() {
     let mut session = Session::new(dir.path());
     let doc = session.open(&path).unwrap();
     let before = session.tree(doc).unwrap().to_newick();
-    session.flush().unwrap();
     let entries = basecraft_ops::log::read_all(dir.path()).unwrap().len();
     for op in [Op::TreeMidpointRoot {}, Op::TreeMinimumVarianceRoot {}] {
         assert!(session.apply(doc, op).is_err());
         assert_eq!(session.tree(doc).unwrap().to_newick(), before);
         assert!(!session.can_undo(doc).unwrap());
-        session.flush().unwrap();
         assert_eq!(
             basecraft_ops::log::read_all(dir.path()).unwrap().len(),
             entries
@@ -841,7 +837,6 @@ fn strict_sequence_proposals_stage_invalid_batches_and_replay_one_undo_group() {
     assert_eq!(session.doc(doc).unwrap().features().count(), 0);
     session.redo(doc).unwrap();
     assert_eq!(session.doc(doc).unwrap().read(0, 8), b"TCGTACGT");
-    session.flush().unwrap();
     assert!(records::replay(temp.path()).unwrap().ok());
     assert_eq!(std::fs::read(&path).unwrap(), b">sequence\nACGTACGT\n");
 }

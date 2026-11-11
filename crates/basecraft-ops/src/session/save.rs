@@ -197,7 +197,6 @@ impl Session {
         hooks.at(SaveSite::OuterTrack);
         self.track(id)?;
         hooks.at(SaveSite::OuterFlush);
-        self.flush()?;
         let before = basecraft_io::hash_file(&target).ok();
         hooks.at(SaveSite::ExpectedHashes);
         let expected = self.save_hashes_at(id, &target)?;
@@ -410,7 +409,6 @@ impl Session {
         hooks: &mut impl SaveHooks,
     ) -> Result<()> {
         hooks.at(SaveSite::InnerFlush);
-        self.flush()?;
         let target = path.map_or_else(|| self.resolve(&self.docs[id.0].key), Path::to_path_buf);
         // An unchanged ordinary save neither rewrites data nor creates history.
         hooks.at(SaveSite::InnerTrack);

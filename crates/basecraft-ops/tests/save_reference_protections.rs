@@ -67,7 +67,6 @@ fn conflict(error: Error) -> EvidenceConflict {
 fn recoverable(session: &mut Session, doc: DocId, destination: &Path) {
     assert!(session.document_record(doc).unwrap().unsaved);
     assert!(session.can_undo(doc).unwrap());
-    session.flush().unwrap();
     let outputs = records::recover(session.recovery_root(), destination).unwrap();
     assert_eq!(outputs.len(), 1);
     assert!(
@@ -82,7 +81,6 @@ fn recoverable(session: &mut Session, doc: DocId, destination: &Path) {
 fn recovery_refused(session: &mut Session, doc: DocId, destination: &Path) {
     assert!(session.document_record(doc).unwrap().unsaved);
     assert!(session.can_undo(doc).unwrap());
-    session.flush().unwrap();
     let journal =
         serde_json::to_value(basecraft_ops::log::read_all(session.recovery_root()).unwrap())
             .unwrap();

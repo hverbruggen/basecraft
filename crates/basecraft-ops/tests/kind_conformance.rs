@@ -72,11 +72,13 @@ fn scenario<T: Debug + PartialEq>(
     assert!(!session.can_undo(doc).unwrap());
     assert!(!session.can_redo(doc).unwrap());
     let first = session.apply(doc, ops[0].clone()).unwrap();
-    session.flush().unwrap(); // Distinct undo steps even for mergeable typing.
     assert_eq!(snapshot(&session, doc), expected[1]);
     assert_ne!(expected[0], expected[1]);
+    // A command group keeps the second edit its own undo step even when it
+    // would continue a typing burst.
+    session.begin_group();
     let second = session.apply(doc, ops[1].clone()).unwrap();
-    session.flush().unwrap();
+    session.end_group();
     assert_eq!(snapshot(&session, doc), expected[2]);
     assert_ne!(expected[1], expected[2]);
     assert_ne!(first.entry_id, second.entry_id);
@@ -92,7 +94,6 @@ fn scenario<T: Debug + PartialEq>(
     assert_checked_access(&session, doc, kind);
     let fingerprint = session.state(doc).unwrap();
     session.save(doc, None).unwrap();
-    session.flush().unwrap();
     assert_eq!(snapshot(&session, doc), expected[2]);
     drop(session);
 

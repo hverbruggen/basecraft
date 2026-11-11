@@ -139,7 +139,6 @@ pub fn run(scenario: &str, root: &Path) -> Result<()> {
         if session.tree(id)?.to_newick_with_rooting() != after {
             return Err("redo did not reproduce midpoint result".into());
         }
-        session.flush()?;
         let entries = log::read_all(session.recovery_root())?;
         if !entries
             .iter()

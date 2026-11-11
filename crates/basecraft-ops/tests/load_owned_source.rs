@@ -526,7 +526,6 @@ fn captured_multirecord_writer_and_retained_replay_inputs_match_legacy() {
             },
         )
         .unwrap();
-    session.flush().unwrap();
     for bytes in [main.as_slice(), gff.as_slice()] {
         assert!(retained(dir.path()).contains(&bytes.to_vec()));
     }
@@ -536,7 +535,6 @@ fn captured_multirecord_writer_and_retained_replay_inputs_match_legacy() {
         legacy.doc.to_genbank()
     );
     session.redo(id).unwrap();
-    session.flush().unwrap();
     // Replay must use the exact retained source and companion after both vanish.
     std::fs::remove_file(&path).unwrap();
     std::fs::remove_file(&sidecar).unwrap();

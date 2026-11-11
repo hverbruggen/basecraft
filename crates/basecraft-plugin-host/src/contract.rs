@@ -429,6 +429,16 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
             {
                 return Err(invalid("unsupported caller service"));
             }
+            if host.caller.is_some()
+                != host.caller_engine.as_deref().is_some_and(|program| {
+                    !program.is_empty()
+                        && program
+                            .bytes()
+                            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+                })
+            {
+                return Err(invalid("a caller service needs one engine program name"));
+            }
             for rule in &host.tree_support {
                 use basecraft_protocol::operation::ParameterCondition;
                 let parameter = match &rule.when {

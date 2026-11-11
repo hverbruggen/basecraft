@@ -277,7 +277,6 @@ fn journal_checksum_and_torn_tail_expose_only_verified_prefix() {
     let mut session = Session::new(dir.path());
     let doc = session.open(&file).unwrap();
     session.apply(doc, edit()).unwrap();
-    session.flush().unwrap();
     let host = std::fs::read_dir(basecraft_ops::log::log_dir(dir.path()))
         .unwrap()
         .next()
@@ -773,4 +772,51 @@ fn partial_save_as_can_retry_its_verified_output() {
     std::fs::remove_file(bundle.join("artifacts")).unwrap();
     session.save_new(id, Some(&target)).unwrap();
     assert!(std::fs::read_to_string(target).unwrap().contains("ATGT"));
+}
+
+#[test]
+fn typing_bursts_undo_together_and_every_keystroke_recovers() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("gene.fasta");
+    let other = dir.path().join("other.fasta");
+    std::fs::write(&file, ">gene\nACGT\n").unwrap();
+    std::fs::write(&other, ">other\nAAAA\n").unwrap();
+    let insert = |at: u64, residues: &str| Op::SeqReplace {
+        start: at,
+        end: at,
+        residues: residues.into(),
+    };
+    let recovery;
+    {
+        let mut session = Session::recoverable_with_paths(dir.path(), &paths(dir.path())).unwrap();
+        recovery = session.recovery_root().to_path_buf();
+        let doc = session.open(&file).unwrap();
+        let second = session.open(&other).unwrap();
+        session.apply(doc, insert(4, "T")).unwrap();
+        session.apply(doc, insert(5, "T")).unwrap();
+        // A cursor jump starts a new burst.
+        session.apply(doc, insert(0, "G")).unwrap();
+        session.undo(doc).unwrap();
+        assert_eq!(session.doc(doc).unwrap().read(0, 6), b"ACGTTT");
+        session.undo(doc).unwrap();
+        assert_eq!(session.doc(doc).unwrap().read(0, 4), b"ACGT");
+        session.redo(doc).unwrap();
+        assert_eq!(session.doc(doc).unwrap().read(0, 6), b"ACGTTT");
+        // Typing in another document ends the burst, even where it continues.
+        session.apply(doc, insert(6, "C")).unwrap();
+        session.apply(second, insert(4, "C")).unwrap();
+        session.apply(doc, insert(7, "C")).unwrap();
+        session.undo(doc).unwrap();
+        assert_eq!(session.doc(doc).unwrap().read(0, 7), b"ACGTTTC");
+    }
+    let inserts = log::read_all(&recovery)
+        .unwrap()
+        .into_iter()
+        .filter(|entry| matches!(&entry.op, Op::SeqReplace { start, end, .. } if start == end))
+        .count();
+    assert_eq!(inserts, 6, "each keystroke is journaled");
+    let destination = dir.path().join("restored");
+    let restored = records::recover(&recovery, &destination).unwrap();
+    let gene = restored.iter().find(|p| p.ends_with("gene.fasta")).unwrap();
+    assert_eq!(std::fs::read_to_string(gene).unwrap(), ">gene\nACGTTTC\n");
 }

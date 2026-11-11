@@ -91,7 +91,6 @@ fn save_as_unlinked_document_clears_both_destination_associations_and_keeps_evid
     for (path, bytes) in previous {
         assert_eq!(std::fs::read(path).unwrap(), bytes);
     }
-    session.flush().unwrap();
     assert!(basecraft_ops::records::replay(root).unwrap().ok());
 }
 
@@ -214,7 +213,6 @@ fn save_as_with_explicit_view_remains_portable_and_preserves_source_hashes() {
     let original_metadata = std::fs::read(records::sidecar(&input)).unwrap();
     let output = folder.join("copy.nwk");
     session.save(doc, Some(&output)).unwrap();
-    session.flush().unwrap();
     assert_eq!(
         std::fs::read(records::sidecar(&input)).unwrap(),
         original_metadata
@@ -270,6 +268,5 @@ fn save_as_over_symlink_to_original_replaces_alias_associations() {
         std::fs::read(records::sidecar(&input)).unwrap(),
         previous_origin
     );
-    session.flush().unwrap();
     assert!(basecraft_ops::records::replay(root).unwrap().ok());
 }

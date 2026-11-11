@@ -215,7 +215,6 @@ fn publication_worker() {
                 },
             )
             .unwrap();
-        session.flush().unwrap();
         if mode != "save-first" {
             let paths = basecraft_platform::paths::AppPaths::discover().unwrap();
             let file = std::fs::OpenOptions::new()
@@ -400,10 +399,8 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
             assert!(mutation.preserve_input(&source).is_err());
             assert!(mutation.write_input(&source, &primary).is_err());
         } else {
-            primary.extra.insert(
-                "origin_run".into(),
-                json!(input_evidence::relative(owner.directory(), leaf.directory()).unwrap()),
-            );
+            primary.origin_run =
+                Some(input_evidence::relative(owner.directory(), leaf.directory()).unwrap());
             primary.state = "preserved".into();
             mutation.write_input(owner.directory(), &primary).unwrap();
         }
@@ -424,8 +421,8 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
         );
         if mode == "retain-preserve" {
             assert_eq!(
-                primary.extra["origin_run"],
-                input_evidence::relative(owner.directory(), leaf.directory()).unwrap()
+                primary.origin_run,
+                Some(input_evidence::relative(owner.directory(), leaf.directory()).unwrap())
             );
             assert!(!owner.directory().join("preserved-input").exists());
         }
@@ -442,7 +439,6 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
                 },
             )
             .unwrap();
-        session.flush().unwrap();
         let save_first = mode == "retain-break" || mode == "retain-remove";
         if !save_first {
             let paths = basecraft_platform::paths::AppPaths::discover().unwrap();

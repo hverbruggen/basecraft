@@ -48,7 +48,6 @@ impl Session {
         text: &str,
     ) -> Result<DocId> {
         let (name, residues) = Self::validate_new_sequence(name, text)?;
-        self.flush()?;
         let content = Loaded::Sequence(Opened {
             doc: SequenceDoc::new(
                 name.clone(),
@@ -122,7 +121,6 @@ impl Session {
         key: &str,
         record: &basecraft_protocol::sanger_records::ReviewRecord,
     ) -> Result<DocId> {
-        self.flush()?;
         let snapshot = crate::sanger_review::read_journal_record(record)?;
         let record = self.retain_review_record(&snapshot)?;
         let review = crate::sanger_review::SangerReview::from_session_snapshot(

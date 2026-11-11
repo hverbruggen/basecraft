@@ -520,7 +520,15 @@ secret and must not write it to its own artifacts or transmit it elsewhere.
 
 An optional `host` object declares services independently of package identity:
 `species_workspace`, `bootstrap_exports`, `verify_inputs`, `tree_support`,
-`workflow_operations`, `ambient_credentials`, and `caller`. A tree support rule
+`workflow_operations`, `ambient_credentials`, `caller` and `caller_engine`.
+`caller: "single_trace"` makes the operation the one single-trace caller; it
+must name its program in `caller_engine` (lowercase letters, digits, `-`). The
+host finds that program through `BASECRAFT_<PROGRAM>`, the plugin runtime and
+then PATH, passes its SHA-256 as `engine_sha256`, and accepts only a draft whose
+engine matches the program name. `bootstrap_exports` lets a run with a positive
+`bootstrap` parameter and `bootstrap_destination: "working"` export its
+`bootstrap-<run>.nex` members into the folder of its `artifacts/tree.nwk`
+destination. A tree support rule
 names its support kind and optionally a parameter equality or positive-integer
 condition. Alignment workflows bind `prepare`, `fit`, and (when needed) `tree`
 to complete registered operation ids. Third-party packages may declare the same
