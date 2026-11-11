@@ -103,20 +103,20 @@ pub fn verify_completed_result(
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
         return Err(Error::Protocol("unsafe completed run directory".into()));
     }
-    let execution: Value = serde_json::from_slice(&basecraft_ops::records::read_record(
-        &directory.join("execution.json"),
-    )?)?;
-    if execution["schema"] != 1
-        || execution["operation"] != query.operation
-        || execution["package_digest"] != query.pins.package_digest
-        || execution["descriptor_digest"] != query.pins.descriptor_digest
-        || execution["effective_parameters"] != query.effective_parameters
+    let execution: ExternalExecution = serde_json::from_slice(
+        &basecraft_ops::records::read_record(&directory.join("execution.json"))?,
+    )?;
+    if execution.schema != 1
+        || execution.operation != query.operation
+        || execution.package_digest != query.pins.package_digest
+        || execution.descriptor_digest != query.pins.descriptor_digest
+        || execution.effective_parameters != query.effective_parameters
     {
         return Err(Error::Protocol(
             "execution specification differs from receipt".into(),
         ));
     }
-    let context: InvocationContext = serde_json::from_value(execution["context"].clone())?;
+    let context = execution.context;
     if context.schema != 1
         || context.operation != query.operation
         || context.run_id != outcome.run_id
@@ -332,13 +332,10 @@ impl PreparedOperation {
                             && record.source_hash.as_ref() == Some(&source.hash)
                     })
             {
-                input.extra.insert(
-                    "origin_run".into(),
-                    json!(input_evidence::relative(
-                        self.run.directory(),
-                        Path::new(&owner.run_directory)
-                    )?),
-                );
+                input.origin_run = Some(input_evidence::relative(
+                    self.run.directory(),
+                    Path::new(&owner.run_directory),
+                )?);
                 input.state = basecraft_protocol::input_records::EvidenceState::Preserved;
                 mutation.write_input(self.run.directory(), &input)?;
             }
@@ -886,17 +883,17 @@ fn verify_collection(root: &Path, expected: &BTreeMap<PathBuf, String>) -> Resul
 /// A pre-rename inode receipt proves which file this run created. Matching
 /// bytes alone never authorize adopting somebody else's existing file.
 fn verify_member_receipt(destination: &Path, hash: &str, intent: &Path) -> Result<()> {
-    let receipt: Value = serde_json::from_slice(&basecraft_ops::records::read_record(intent)?)?;
+    let receipt: MemberExportReceipt =
+        serde_json::from_slice(&basecraft_ops::records::read_record(intent)?)?;
     let metadata = std::fs::symlink_metadata(destination)?;
     if !metadata.is_file()
         || metadata.file_type().is_symlink()
         || link_count(destination)? != 1
-        || receipt["schema"] != 1
-        || receipt["destination"] != json!(destination)
-        || receipt["hash"] != hash
-        || receipt["device"].as_u64() != Some(identity(destination)?.0)
-        || receipt["inode"].as_u64() != Some(identity(destination)?.1)
-        || receipt["size"].as_u64() != Some(metadata.len())
+        || receipt.schema != 1
+        || receipt.destination != destination
+        || receipt.hash != hash
+        || (receipt.device, receipt.inode) != identity(destination)?
+        || receipt.size != metadata.len()
         || basecraft_io::hash_file(destination)? != hash
     {
         return Err(Error::Protocol(

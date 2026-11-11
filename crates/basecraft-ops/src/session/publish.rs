@@ -211,13 +211,10 @@ impl Session {
                 input.upstream = upstream;
             }
             if input.source.is_some() {
-                input.extra.insert(
-                    "origin_run".into(),
-                    serde_json::json!(crate::input_evidence::relative(
-                        &bundle.canonicalize()?,
-                        &previous_bundle.canonicalize()?
-                    )?),
-                );
+                input.origin_run = Some(crate::input_evidence::relative(
+                    &bundle.canonicalize()?,
+                    &previous_bundle.canonicalize()?,
+                )?);
             } else if previous_bundle.join("submitted.fasta").is_file() {
                 basecraft_io::write_atomic(&bundle.join("submitted.fasta"), |w| {
                     std::io::copy(
@@ -665,10 +662,8 @@ impl Session {
                 );
                 std::fs::create_dir_all(bundle.join("artifacts"))?;
                 let mut local_input = input.clone();
-                local_input.extra.insert(
-                    "origin_run".into(),
-                    serde_json::json!(crate::input_evidence::relative(&bundle, run.directory())?),
-                );
+                local_input.origin_run =
+                    Some(crate::input_evidence::relative(&bundle, run.directory())?);
                 crate::input_evidence::write_json(&bundle.join("input.json"), &local_input)?;
                 if input.source.is_none() {
                     basecraft_io::write_atomic(&bundle.join("submitted.fasta"), |w| {

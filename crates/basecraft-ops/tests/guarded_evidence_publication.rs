@@ -400,10 +400,8 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
             assert!(mutation.preserve_input(&source).is_err());
             assert!(mutation.write_input(&source, &primary).is_err());
         } else {
-            primary.extra.insert(
-                "origin_run".into(),
-                json!(input_evidence::relative(owner.directory(), leaf.directory()).unwrap()),
-            );
+            primary.origin_run =
+                Some(input_evidence::relative(owner.directory(), leaf.directory()).unwrap());
             primary.state = "preserved".into();
             mutation.write_input(owner.directory(), &primary).unwrap();
         }
@@ -424,8 +422,8 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
         );
         if mode == "retain-preserve" {
             assert_eq!(
-                primary.extra["origin_run"],
-                input_evidence::relative(owner.directory(), leaf.directory()).unwrap()
+                primary.origin_run,
+                Some(input_evidence::relative(owner.directory(), leaf.directory()).unwrap())
             );
             assert!(!owner.directory().join("preserved-input").exists());
         }

@@ -1274,7 +1274,7 @@ fn equal_content_retention_keeps_exact_primary_owner_and_leaf_lifecycles() {
                 // This ownership assertion fails on the former hash-only lookup
                 // when only the equal-byte sibling binding is retained.
                 if retain_primary {
-                    let origin = primary.extra["origin_run"].as_str().unwrap();
+                    let origin = primary.origin_run.as_deref().unwrap();
                     assert_eq!(
                         run.join(origin).canonicalize().unwrap(),
                         owner.canonicalize().unwrap()
@@ -1289,7 +1289,7 @@ fn equal_content_retention_keeps_exact_primary_owner_and_leaf_lifecycles() {
                     );
                 } else {
                     assert!(
-                        !primary.extra.contains_key("origin_run"),
+                        primary.origin_run.is_none(),
                         "unretained primary delegated to a distinct equal-byte original"
                     );
                     assert_eq!(

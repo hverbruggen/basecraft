@@ -138,6 +138,7 @@ fn reference_input_locked(
         analysis_run: None,
         proposal_target: None,
         upstream: Vec::new(),
+        origin_run: None,
         extra: BTreeMap::new(),
     };
     let source_bundle = crate::records::provenance::bundle_for_result(&source);
@@ -1455,12 +1456,9 @@ fn depends_on_inspected(
             return Err(invalid("ancestor input evidence is unavailable"));
         }
         let input = inspection.input(&location)?;
-        let Some(value) = input.extra.get("origin_run") else {
+        let Some(origin) = &input.origin_run else {
             return Ok(false);
         };
-        let origin = value
-            .as_str()
-            .ok_or_else(|| invalid("origin run location is invalid"))?;
         location = lexical(&location.join(origin));
     }
     Err(invalid("input evidence ancestry exceeds 32 references"))
@@ -1605,10 +1603,7 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
                     }
                     if let Some(owner) = preserved.get(&reference.hash) {
                         verify_preserved(&owner.join("preserved-input"), reference)?;
-                        input.extra.insert(
-                            "origin_run".into(),
-                            serde_json::json!(relative(&affected.run, owner)?),
-                        );
+                        input.origin_run = Some(relative(&affected.run, owner)?);
                         input.state = "preserved".into();
                         input
                             .extra
@@ -1699,11 +1694,7 @@ fn owning_ledger(bundle: &Path) -> Result<(PathBuf, SubmittedInput)> {
     let mut input = read_input(&location)?;
     let mut visited = std::collections::HashSet::from([location.clone()]);
     for _ in 0..32 {
-        let Some(origin) = input
-            .extra
-            .get("origin_run")
-            .and_then(serde_json::Value::as_str)
-        else {
+        let Some(origin) = &input.origin_run else {
             break;
         };
         location = location.join(origin).canonicalize()?;
@@ -1712,7 +1703,7 @@ fn owning_ledger(bundle: &Path) -> Result<(PathBuf, SubmittedInput)> {
         }
         input = read_input(&location)?;
     }
-    if input.extra.contains_key("origin_run") {
+    if input.origin_run.is_some() {
         return Err(invalid("input evidence ancestry exceeds 32 references"));
     }
     Ok((location, input))
@@ -1814,7 +1805,7 @@ pub fn relink(bundle: &Path, original: &Path) -> Result<()> {
         }
         let mut ledger = read_input(&directory)?;
         if ledger.state == basecraft_protocol::input_records::EvidenceState::Broken
-            || ledger.extra.contains_key("origin_run")
+            || ledger.origin_run.is_some()
         {
             continue;
         }
@@ -2373,11 +2364,7 @@ pub(crate) fn ancestors(
             continue;
         }
         let input = read_input(&location)?;
-        if let Some(origin) = input
-            .extra
-            .get("origin_run")
-            .and_then(serde_json::Value::as_str)
-        {
+        if let Some(origin) = &input.origin_run {
             stack.push((location.join(origin), false));
         }
         if let Some(upstream) = Some(&input.upstream) {
@@ -2477,6 +2464,7 @@ pub(crate) fn link_generated_input_locked(
             analysis_run: None,
             proposal_target: None,
             upstream,
+            origin_run: None,
             extra: BTreeMap::new(),
         },
     )?;
@@ -2517,6 +2505,7 @@ mod store_scan_tests {
                 analysis_run: None,
                 proposal_target: None,
                 upstream: Vec::new(),
+                origin_run: None,
                 extra: BTreeMap::new(),
             },
         )

@@ -52,6 +52,7 @@ impl Session {
                     analysis_run: None,
                     proposal_target: None,
                     upstream: Vec::new(),
+                    origin_run: None,
                     extra: BTreeMap::default(),
                 },
                 ArtifactRevision {
@@ -87,6 +88,7 @@ impl Session {
                     analysis_run: None,
                     proposal_target: None,
                     upstream: Vec::new(),
+                    origin_run: None,
                     extra: BTreeMap::default(),
                 },
                 ArtifactRevision {

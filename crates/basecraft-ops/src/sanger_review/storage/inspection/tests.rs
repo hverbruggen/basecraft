@@ -473,7 +473,7 @@ fn existing_sources_use_real_verification_without_reselection() {
     let cycle = root.join("cycle");
     fs::create_dir(&cycle).unwrap();
     let mut cyclic = input.clone();
-    cyclic.extra.insert("origin_run".into(), ".".into());
+    cyclic.origin_run = Some(".".into());
     crate::input_evidence::write_json(&cycle.join("input.json"), &cyclic).unwrap();
     s.evidence.sources[0].ledger = Some(cycle);
     unchanged(&root, &s, &target, |r| {
@@ -486,8 +486,7 @@ fn existing_sources_use_real_verification_without_reselection() {
         fs::create_dir(&dir).unwrap();
         let mut link = input.clone();
         if i < 33 {
-            link.extra
-                .insert("origin_run".into(), format!("../chain{}", i + 1).into());
+            link.origin_run = Some(format!("../chain{}", i + 1));
         }
         crate::input_evidence::write_json(&dir.join("input.json"), &link).unwrap();
     }

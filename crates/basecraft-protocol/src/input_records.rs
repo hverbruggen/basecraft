@@ -22,6 +22,9 @@ pub struct SubmittedInput {
     pub proposal_target: Option<bool>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub upstream: Vec<UpstreamLink>,
+    /// The earlier run, relative to this one, that holds the preserved original.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_run: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
 }
