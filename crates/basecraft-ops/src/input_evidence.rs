@@ -170,6 +170,7 @@ fn reference_input_locked(
     crate::input_evidence::register(&run)?;
     let publication = Publication {
         schema_version: 1,
+        writer: std::collections::BTreeMap::new(),
         id: run.id().into(),
         session: run.id().into(),
         parents: vec![],
@@ -798,7 +799,7 @@ mod service_registry {
             }
             std::fs::write(path, vec![b' '; (1 << 20) + 1]).unwrap();
             assert!(
-                matches!(store_registry_with_access(&context, &Bound(&context)), Err(crate::Error::Invalid(s)) if s == "known-store registry exceeds 1 MiB")
+                matches!(store_registry_with_access(&context, &Bound(&context)), Err(crate::Error::Limit { limit, .. }) if limit == 1 << 20)
             );
             let mut inspection = Inspection::default();
             let mut budget = 1 << 22;
@@ -807,7 +808,8 @@ mod service_registry {
                 .unwrap();
             assert_eq!(budget, 1 << 22); // metadata rejection precedes content
             assert!(
-                inspection.observations[path].contains("provenance record exceeds reading limit")
+                inspection.observations[path]
+                    .contains("provenance record reading exceeds the limit of 1048576")
             );
         }
 
@@ -2327,12 +2329,14 @@ fn export_history(
         basecraft_io::write_atomic(&target.join(&name), |w| w.write_all(&bytes))?;
         let old_id = publication.id.clone();
         publication.id = ulid::Ulid::generate().to_string();
-        mapping.push(basecraft_protocol::export_records::ProvenanceExportMapping {
-            original_id: old_id.clone(),
-            original_hash: hash.clone(),
-            export_id: publication.id.clone(),
-            extra: BTreeMap::new(),
-        });
+        mapping.push(
+            basecraft_protocol::export_records::ProvenanceExportMapping {
+                original_id: old_id.clone(),
+                original_hash: hash.clone(),
+                export_id: publication.id.clone(),
+                extra: BTreeMap::new(),
+            },
+        );
         archives.push(ArtifactRevision {
             id: format!("{}:original-record", publication.id),
             logical_name: format!("original-record-{old_id}.json"),

@@ -147,10 +147,7 @@ fn store_writer_bytes_and_validation() {
     );
     std::fs::write(&registry, vec![b' '; 1024 * 1024 + 1]).unwrap();
     assert!(
-        input_evidence::register(&run)
-            .unwrap_err()
-            .to_string()
-            .contains("exceeds 1 MiB")
+        matches!(input_evidence::register(&run), Err(basecraft_ops::Error::Limit { limit, .. }) if limit == 1 << 20)
     );
     std::fs::write(&registry, b"{broken").unwrap();
     assert!(input_evidence::register(&run).is_err());

@@ -5,6 +5,7 @@ use basecraft_protocol::provenance::Completeness;
 fn publication(id: &str, parents: &[&str]) -> Publication {
     Publication {
         schema_version: 1,
+        writer: Default::default(),
         id: id.into(),
         session: "synthetic-session".into(),
         parents: parents.iter().map(|s| (*s).into()).collect(),

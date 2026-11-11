@@ -255,7 +255,7 @@ impl Session {
                 operation: a.op.clone(),
             }));
         record.deduplicate();
-        crate::contributions::project(&record.events, &mut record.effective);
+        crate::contributions::project(&record.data.events, &mut record.data.effective);
         Ok(record)
     }
 

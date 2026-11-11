@@ -103,7 +103,7 @@ impl Session {
         input
             .extra
             .insert("upstream".into(), serde_json::json!(upstream));
-        input.extra.insert("extraction".into(), serde_json::json!({"schema_version":1,"source_revision":snapshot.revision,"selection":activity.op,"coordinates":"zero-based-half-open; segments in biological order; reverse-complement after splicing"}));
+        input.extra.insert("extraction".into(), serde_json::to_value(basecraft_protocol::records::ExtractionRecord { schema_version: 1, source_revision: snapshot.revision.clone(), selection: activity.op.clone(), coordinates: "zero-based-half-open; segments in biological order; reverse-complement after splicing".into(), extra: BTreeMap::new() })?);
         crate::input_evidence::write_json(&bundle.join("input.json"), &input)?;
         if let Some(run) = &run {
             crate::input_evidence::write_json(
@@ -126,6 +126,7 @@ impl Session {
         let hash = basecraft_io::hash_file(path)?;
         let publication = Publication {
             schema_version: 1,
+            writer: std::collections::BTreeMap::new(),
             id: activity.id.clone(),
             session: self.id.clone(),
             parents: Vec::new(),

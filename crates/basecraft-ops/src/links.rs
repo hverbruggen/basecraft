@@ -398,7 +398,7 @@ impl LinkEvidence for AlignmentLink {
         if self.schema == 2 {
             let run = self.evidence_run(tree_path)?;
             let input = crate::input_evidence::read_input(&run)?;
-            if input.state == "broken" {
+            if input.state == basecraft_protocol::input_records::EvidenceState::Broken {
                 return Err(invalid("alignment evidence explicitly broken"));
             }
             let source = if let Some(reference) = &input.source {
@@ -569,7 +569,9 @@ impl AlignmentLinkExt for AlignmentLink {
         }
         let mut link: Self = serde_json::from_value(metadata)?;
         if !matches!(link.schema, 1 | 2) {
-            return Err(invalid("unsupported tree–alignment link version"));
+            return Err(crate::Error::Unsupported(
+                "unsupported tree–alignment link version".into(),
+            ));
         }
         if link.source.is_relative() {
             link.source = tree
@@ -604,13 +606,21 @@ impl AlignmentLinkExt for AlignmentLink {
                 .evidence_run(tree_path)
                 .and_then(|run| crate::input_evidence::read_input(&run).map(|input| (run, input)))
             {
-                Ok((_, input)) if input.state == "generated" => {
+                Ok((_, input))
+                    if input.state
+                        == basecraft_protocol::input_records::EvidenceState::Generated =>
+                {
                     format!("{status}; exact submitted input retained")
                 }
-                Ok((_, input)) if input.state == "preserved" => {
+                Ok((_, input))
+                    if input.state
+                        == basecraft_protocol::input_records::EvidenceState::Preserved =>
+                {
                     format!("{status}; original preserved (verify before use)")
                 }
-                Ok((_, input)) if input.state == "broken" => {
+                Ok((_, input))
+                    if input.state == basecraft_protocol::input_records::EvidenceState::Broken =>
+                {
                     format!("{status}; evidence explicitly broken")
                 }
                 Ok((run, input)) => {

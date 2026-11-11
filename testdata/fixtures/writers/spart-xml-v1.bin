@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root>
+<individuals>
+<individual id="specimen_01"/>
+<individual id="specimen_02"/>
+<individual id="specimen_03"/>
+<individual id="specimen_04"/>
+<individual id="specimen_05"/>
+<individual id="specimen_06"/>
+<individual id="specimen_07"/>
+<individual id="specimen_08"/>
+</individuals>
+<spartitions>
+<spartition label="construction"><subsets>
+<subset label="1">
+<individual ref="specimen_01"/>
+<individual ref="specimen_02"/>
+</subset>
+<subset label="2">
+<individual ref="specimen_03"/>
+<individual ref="specimen_04"/>
+<individual ref="specimen_05"/>
+</subset>
+<subset label="3">
+<individual ref="specimen_06"/>
+<individual ref="specimen_07"/>
+<individual ref="specimen_08"/>
+</subset>
+</subsets></spartition>
+<spartition label="partial_review"><subsets>
+<subset label="1">
+<individual ref="specimen_01"/>
+<individual ref="specimen_02"/>
+</subset>
+<subset label="2">
+<individual ref="specimen_03"/>
+<individual ref="specimen_04"/>
+<individual ref="specimen_05"/>
+</subset>
+<subset label="3">
+<individual ref="specimen_06"/>
+<individual ref="specimen_07"/>
+</subset>
+</subsets></spartition>
+</spartitions>
+</root>

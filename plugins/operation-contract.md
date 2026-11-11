@@ -526,3 +526,8 @@ condition. Alignment workflows bind `prepare`, `fit`, and (when needed) `tree`
 to complete registered operation ids. Third-party packages may declare the same
 services. Ambient credentials are populated only for bundled packages; installed
 packages still need explicit grants bound to their accepted package and contract.
+
+`host.lifecycle` selects bundled remote-service behavior (`external_submission`,
+`retained_receipt`, or `remote_draft`). It governs cooperative cancellation,
+contact spacing and receipt verification; omission keeps ordinary process
+cancellation. Installed packages cannot grant themselves these bundled services.

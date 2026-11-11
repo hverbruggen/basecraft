@@ -368,7 +368,7 @@ impl Session {
                 };
             }
             match &mut event.op {
-                Op::Open { path } | Op::Save { path } => path.clone_from(&event.doc),
+                Op::Open { path } | Op::Save { path, .. } => path.clone_from(&event.doc),
                 _ => {}
             }
             redact_operation_paths(&mut event.op);
@@ -488,6 +488,10 @@ impl Session {
         crate::contributions::project(&events, &mut effective_edits);
         let publication = Publication {
             schema_version: 1,
+            writer: match &save.op {
+                Op::Save { writer, .. } => writer.clone(),
+                _ => std::collections::BTreeMap::new(),
+            },
             id: save.id.clone(),
             session: self.id.clone(),
             parents,
@@ -659,7 +663,8 @@ impl Session {
         }
         let (events, effective) = portable_analysis_activity(snapshot, &activity);
         let publication = Publication {
-            schema_version: 1, id: activity.id, session: self.id.clone(), parents: Vec::new(), parent_hashes: std::collections::BTreeMap::new(),
+            schema_version: 1,
+            writer: std::collections::BTreeMap::new(), id: activity.id, session: self.id.clone(), parents: Vec::new(), parent_hashes: std::collections::BTreeMap::new(),
             created: activity.t, origin: "Referenced source; submitted transformation recorded in input.json. Declared immutable upstream records are referenced without copying input bytes. Earlier history before import remains unknown.".into(),
             inputs, outputs: artifacts, events, effective_edits: effective,
             completeness: Completeness { ancestry_known: false, input_bytes_available: input.state != "broken", execution_specification_available: false, replay_verified: false }, report_template_version: 2,

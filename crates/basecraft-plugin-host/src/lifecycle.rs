@@ -29,11 +29,17 @@ impl Lifecycle {
     pub fn for_operation(operation: &RegisteredOperation) -> Result<Self> {
         operation.package.verify()?;
         Ok(if operation.package.origin == Origin::Bundled {
-            match operation.id.as_str() {
-                "basecraft.blast/submit@1" => Self::ExternalSubmission,
-                "basecraft.blast/receipt@1" => Self::RetainedReceipt,
-                "basecraft.zenodo/draft@1" => Self::RemoteDraft,
-                _ => Self::Ordinary,
+            use basecraft_protocol::operation::LifecyclePolicy;
+            match operation
+                .descriptor
+                .host
+                .as_ref()
+                .and_then(|host| host.lifecycle)
+            {
+                Some(LifecyclePolicy::ExternalSubmission) => Self::ExternalSubmission,
+                Some(LifecyclePolicy::RetainedReceipt) => Self::RetainedReceipt,
+                Some(LifecyclePolicy::RemoteDraft) => Self::RemoteDraft,
+                None => Self::Ordinary,
             }
         } else {
             Self::Ordinary
@@ -56,8 +62,14 @@ impl Lifecycle {
         if self != Self::RetainedReceipt {
             return Ok(Vec::new());
         }
-        let receipt = &inputs["receipt"][0];
-        let query = &inputs["query"][0];
+        let required = |name| {
+            inputs
+                .get(name)
+                .and_then(|paths| paths.first())
+                .ok_or_else(|| Error::Protocol(format!("retained receipt needs {name} input")))
+        };
+        let receipt = required("receipt")?;
+        let query = required("query")?;
         let run = query
             .parent()
             .ok_or_else(|| Error::Protocol("missing query evidence directory".into()))?;
@@ -234,5 +246,48 @@ impl ContactPermit {
             .as_secs_f64();
         basecraft_ops::input_evidence::write_json(&self.stamp, &now)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lifecycle_follows_the_descriptor_and_requires_bundled_origin() {
+        use crate::registry::{Registry, RegistryConfig};
+        let root = tempfile::tempdir().unwrap();
+        let registry = Registry::load(&RegistryConfig {
+            bundled: Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins"),
+            packages: root.path().join("packages"),
+            index: root.path().join("plugins.json"),
+        })
+        .unwrap();
+        let mut checked = 0;
+        for original in registry.operations.values().filter(|op| {
+            op.descriptor
+                .host
+                .as_ref()
+                .is_some_and(|host| host.lifecycle.is_some())
+        }) {
+            let expected = Lifecycle::for_operation(original).unwrap();
+            assert_ne!(expected, Lifecycle::Ordinary);
+            let mut renamed = original.clone();
+            renamed.id = "example.renamed/operation@1".into();
+            assert_eq!(Lifecycle::for_operation(&renamed).unwrap(), expected);
+            let mut undeclared = original.clone();
+            undeclared.descriptor.host.as_mut().unwrap().lifecycle = None;
+            assert_eq!(
+                Lifecycle::for_operation(&undeclared).unwrap(),
+                Lifecycle::Ordinary
+            );
+            std::sync::Arc::make_mut(&mut renamed.package).origin = Origin::Editable;
+            assert_eq!(
+                Lifecycle::for_operation(&renamed).unwrap(),
+                Lifecycle::Ordinary
+            );
+            checked += 1;
+        }
+        assert_eq!(checked, 3);
     }
 }

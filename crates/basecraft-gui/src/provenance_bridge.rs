@@ -1,4 +1,5 @@
 //! Asynchronous, read-only inspection and explicit provenance exports.
+use basecraft_ops::document_record::ReportExt;
 use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::QString;
 use std::{io::Read, path::Path, pin::Pin};

@@ -238,7 +238,8 @@ mod tests {
                 &mut session,
                 doc,
                 &[Op::Save {
-                    path: "unsafe.spart".into()
+                    path: "unsafe.spart".into(),
+                    writer: Default::default()
                 }]
             )
             .is_err()

@@ -70,6 +70,17 @@
             "null"
           ]
         },
+        "lifecycle": {
+          "description": "Cooperative cancellation and receipt rules for a bundled remote service.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LifecyclePolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "species_workspace": {
           "type": "boolean"
         },
@@ -196,6 +207,14 @@
       "required": [
         "role",
         "path"
+      ]
+    },
+    "LifecyclePolicy": {
+      "type": "string",
+      "enum": [
+        "external_submission",
+        "retained_receipt",
+        "remote_draft"
       ]
     },
     "OperationDescriptor": {

@@ -42,7 +42,8 @@ fn finished(session: &Session, doc: basecraft_ops::DocId) -> Vec<(String, JobSta
         .document_record(doc)
         .unwrap()
         .events
-        .into_iter()
+        .iter()
+        .cloned()
         .filter_map(|event| match event.op {
             basecraft_protocol::Op::JobFinished { report } => Some((report.id, report.status)),
             _ => None,
@@ -133,6 +134,16 @@ fn exact_identity_precedes_public_tree_inference_and_restores_specimens() {
             common::read_json(&common::evidence(&outcome).join("stages.json")),
         )
         .unwrap();
+        if std::env::var_os("BASECRAFT_CAPTURE_WORKFLOW_RECORDS").is_some() {
+            let fixtures =
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/records-v1");
+            for (file, name) in [
+                ("stages.json", "workflow-stages.json"),
+                ("validated-artifacts.json", "validated-artifacts.json"),
+            ] {
+                std::fs::copy(common::evidence(&outcome).join(file), fixtures.join(name)).unwrap();
+            }
+        }
         assert_eq!(stages.len(), 3);
         for stage in &stages {
             common::assert_completed(stage);
@@ -215,6 +226,15 @@ fn exact_identity_precedes_public_tree_inference_and_restores_specimens() {
         &find(&common::evidence(&outcome), "fit.json.run.json").expect("unavailable report"),
     );
     assert_eq!(report["job"]["status"], "unavailable");
+    let bytes =
+        std::fs::read(find(&common::evidence(&outcome), "fit.json.run.json").unwrap()).unwrap();
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../testdata/fixtures/records-v1/workflow-failure.json");
+    if std::env::var_os("BASECRAFT_CAPTURE_WORKFLOW_RECORDS").is_some() {
+        std::fs::write(fixture, bytes).unwrap();
+    } else {
+        assert_eq!(bytes, std::fs::read(fixture).unwrap());
+    }
     assert!(!root.path().join("single.spart").exists());
     drop(session);
     let result = replay::replay(root.path()).unwrap();

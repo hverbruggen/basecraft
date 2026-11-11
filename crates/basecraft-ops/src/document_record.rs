@@ -1,58 +1,29 @@
 //! Revision-scoped evidence and deterministic, readable reports. Queries never write files.
 use std::{collections::HashSet, fmt::Write as _, path::Path};
 
-use basecraft_protocol::{
-    Actor, LogEntry, Op,
-    provenance::{EditActivity, Publication},
-};
+use basecraft_protocol::{Actor, LogEntry, Op, provenance::Publication};
 use serde::{Deserialize, Serialize};
+
+use basecraft_protocol::report_records::DocumentRecord as RecordData;
+pub use basecraft_protocol::report_records::{HistoryRow, MethodsParagraph, Report};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DocumentRecord {
-    pub schema_version: u32,
-    pub document: String,
-    pub revision: String,
-    pub unsaved: bool,
-    pub warnings: Vec<String>,
-    pub events: Vec<LogEntry>,
-    pub effective: Vec<EditActivity>,
-    /// In-memory locations of immutable parents; paths are not part of portable reports.
+    #[serde(flatten)]
+    pub(crate) data: RecordData,
     #[serde(skip)]
     pub(crate) origins: Vec<(std::path::PathBuf, Publication)>,
 }
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct HistoryRow {
-    pub id: String,
-    pub time: String,
-    pub summary: String,
-    pub status: String,
-    pub contributing: bool,
-    pub details: String,
+impl std::ops::Deref for DocumentRecord {
+    type Target = RecordData;
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
 }
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct MethodsParagraph {
-    pub activity_ids: Vec<String>,
-    pub text: String,
-    pub parameters: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Report {
-    pub schema_version: u32,
-    pub template_version: u32,
-    pub document: String,
-    pub revision: String,
-    pub unsaved: bool,
-    pub warnings: Vec<String>,
-    pub history: Vec<HistoryRow>,
-    pub paragraphs: Vec<MethodsParagraph>,
-    pub methods: String,
-    pub history_text: String,
-    pub raw: String,
-    #[serde(default)]
-    pub citations: Vec<String>,
+impl std::ops::DerefMut for DocumentRecord {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.data
+    }
 }
 
 pub fn read_origin(
@@ -123,13 +94,15 @@ impl DocumentRecord {
 
     pub fn empty(document: &str) -> Self {
         Self {
-            schema_version: 1,
-            document: document.into(),
-            revision: String::new(),
-            unsaved: false,
-            warnings: vec!["Earlier processing before import is not recorded.".into()],
-            events: Vec::new(),
-            effective: Vec::new(),
+            data: RecordData {
+                schema_version: 1,
+                document: document.into(),
+                revision: String::new(),
+                unsaved: false,
+                warnings: vec!["Earlier processing before import is not recorded.".into()],
+                events: Vec::new(),
+                effective: Vec::new(),
+            },
             origins: Vec::new(),
         }
     }
@@ -171,7 +144,7 @@ impl DocumentRecord {
         record.revision.clone_from(&p.id);
         record.events.clone_from(&p.events);
         record.effective.clone_from(&p.effective_edits);
-        crate::contributions::project(&record.events, &mut record.effective);
+        crate::contributions::project(&record.data.events, &mut record.data.effective);
         if record.events.iter().any(|event| matches!(&event.op,
             Op::ToolRun { outputs, params, .. } if outputs.is_empty() && params.get("contributions").is_none())) {
             record.warnings.push("Retained contribution ownership is unknown for legacy no-output activities; historical invocation evidence was not reassigned to current edits.".into());
@@ -474,71 +447,75 @@ fn check_report_folder(directory: &Path) -> crate::Result<()> {
     )))
 }
 
-impl Report {
-    pub fn export(&self, directory: &Path) -> crate::Result<()> {
+pub trait ReportExt {
+    fn export(&self, directory: &Path) -> crate::Result<()>;
+}
+
+impl ReportExt for Report {
+    fn export(&self, directory: &Path) -> crate::Result<()> {
         check_report_folder(directory)?;
-        self.write_files(directory).map_err(|error| {
+        write_report_files(self, directory).map_err(|error| {
             crate::error::invalid(format!(
                 "report export to {} is incomplete ({error}); files there may mix this report with an earlier one",
                 directory.display()
             ))
         })
     }
+}
 
-    fn write_files(&self, directory: &Path) -> crate::Result<()> {
-        std::fs::create_dir_all(directory)?;
-        for (name, text) in [
-            ("methods.generated.md", self.methods.as_str()),
-            ("history.md", self.history_text.as_str()),
-            ("record.json", self.raw.as_str()),
-        ] {
-            basecraft_io::write_atomic(&directory.join(name), |w| w.write_all(text.as_bytes()))?;
-        }
-        let source_map: Vec<_> = self
-            .paragraphs
-            .iter()
-            .enumerate()
-            .map(|(i, p)| {
-                serde_json::to_value(basecraft_protocol::report_records::ReportSourceMapEntry {
-                    paragraph: i + 1,
-                    activities: p.activity_ids.clone(),
-                })
-            })
-            .collect::<serde_json::Result<Vec<_>>>()?;
-        let mut parameters = String::from("paragraph\tactivity_ids\tparameters_json\n");
-        for (i, p) in self.paragraphs.iter().enumerate() {
-            let _ = writeln!(
-                parameters,
-                "{}\t{}\t{}",
-                i + 1,
-                p.activity_ids.join(","),
-                serde_json::to_string(&p.parameters)?
-            );
-        }
-        let manifest =
-            serde_json::to_value(basecraft_protocol::report_records::ReportExportManifest {
-                schema_version: 1,
-                revision: self.revision.clone(),
-                document: self.document.clone(),
-                unsaved: self.unsaved,
-                template_version: self.template_version,
-                coordinates: "raw zero-based half-open; summaries one-based".into(),
-            })?;
-        for (name, bytes) in [
-            ("parameters.tsv", parameters.into_bytes()),
-            ("source-map.json", serde_json::to_vec_pretty(&source_map)?),
-            (
-                "citations.json",
-                serde_json::to_vec_pretty(&self.citations)?,
-            ),
-            ("manifest.json", serde_json::to_vec_pretty(&manifest)?),
-        ] {
-            basecraft_io::write_atomic(&directory.join(name), |w| w.write_all(&bytes))?;
-        }
-        let bytes = serde_json::to_vec_pretty(self)?;
-        basecraft_io::write_atomic(&directory.join("report.json"), |w| w.write_all(&bytes))?;
-        Ok(())
+fn write_report_files(report: &Report, directory: &Path) -> crate::Result<()> {
+    std::fs::create_dir_all(directory)?;
+    for (name, text) in [
+        ("methods.generated.md", report.methods.as_str()),
+        ("history.md", report.history_text.as_str()),
+        ("record.json", report.raw.as_str()),
+    ] {
+        basecraft_io::write_atomic(&directory.join(name), |w| w.write_all(text.as_bytes()))?;
     }
+    let source_map: Vec<_> = report
+        .paragraphs
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            serde_json::to_value(basecraft_protocol::report_records::ReportSourceMapEntry {
+                paragraph: i + 1,
+                activities: p.activity_ids.clone(),
+            })
+        })
+        .collect::<serde_json::Result<Vec<_>>>()?;
+    let mut parameters = String::from("paragraph\tactivity_ids\tparameters_json\n");
+    for (i, p) in report.paragraphs.iter().enumerate() {
+        let _ = writeln!(
+            parameters,
+            "{}\t{}\t{}",
+            i + 1,
+            p.activity_ids.join(","),
+            serde_json::to_string(&p.parameters)?
+        );
+    }
+    let manifest =
+        serde_json::to_value(basecraft_protocol::report_records::ReportExportManifest {
+            schema_version: 1,
+            revision: report.revision.clone(),
+            document: report.document.clone(),
+            unsaved: report.unsaved,
+            template_version: report.template_version,
+            coordinates: "raw zero-based half-open; summaries one-based".into(),
+        })?;
+    for (name, bytes) in [
+        ("parameters.tsv", parameters.into_bytes()),
+        ("source-map.json", serde_json::to_vec_pretty(&source_map)?),
+        (
+            "citations.json",
+            serde_json::to_vec_pretty(&report.citations)?,
+        ),
+        ("manifest.json", serde_json::to_vec_pretty(&manifest)?),
+    ] {
+        basecraft_io::write_atomic(&directory.join(name), |w| w.write_all(&bytes))?;
+    }
+    let bytes = serde_json::to_vec_pretty(report)?;
+    basecraft_io::write_atomic(&directory.join("report.json"), |w| w.write_all(&bytes))?;
+    Ok(())
 }
 
 /// Retained job evidence is independent of open tabs. Reading creates no directories.
@@ -1015,6 +992,7 @@ mod tests {
             .unwrap();
         let mut publication = Publication {
             schema_version: 1,
+            writer: Default::default(),
             id: "registered".into(),
             session: "current".into(),
             parents: vec![],

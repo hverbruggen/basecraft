@@ -175,8 +175,11 @@ impl Server {
             }
             "replay" => {
                 let report = basecraft_ops::replay::replay(self.session.root())?;
+                let writer_mismatches: Vec<_> = report.writer_mismatches.iter().map(|mismatch| {
+                    json!({"code":mismatch.code(),"entry":mismatch.entry,"message":mismatch.message(),"recorded":mismatch.recorded,"current":mismatch.current})
+                }).collect();
                 Ok(
-                    json!({"sessions":report.sessions,"entries":report.entries,"problems":report.problems}),
+                    json!({"sessions":report.sessions,"entries":report.entries,"problems":report.problems,"writer_mismatches":writer_mismatches}),
                 )
             }
             "read" => {

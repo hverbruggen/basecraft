@@ -83,10 +83,13 @@ impl LogWriter {
         }
         let mut line = Vec::new();
         for (offset, entry) in entries.iter().enumerate() {
-            let mut value = serde_json::to_value(entry)?;
+            let value = serde_json::to_value(entry)?;
             let checksum = basecraft_io::hash_bytes(&serde_json::to_vec(&value)?);
-            value["_checksum"] = serde_json::json!(checksum);
-            value["_sequence"] = serde_json::json!(self.sequence + offset as u64);
+            let value = serde_json::to_value(basecraft_protocol::records::JournalEntry {
+                checksum,
+                sequence: self.sequence + offset as u64,
+                entry: value,
+            })?;
             serde_json::to_writer(&mut line, &value)?;
             line.push(b'\n');
             if line.len() > 8 << 20 {
@@ -208,16 +211,22 @@ fn read_entries(root: &Path, lenient: bool) -> Result<(Vec<LogEntry>, usize)> {
                             if let Some(sequence) = value["_sequence"].as_u64() {
                                 let expected = sequences.entry(e.session.clone()).or_insert(0);
                                 if sequence != *expected {
-                                    return Err(crate::error::invalid(
-                                        "journal sequence gap or reordered segment",
-                                    ));
+                                    return Err(crate::Error::Damaged {
+                                        path: file.clone(),
+                                        detail: "journal sequence gap or reordered segment".into(),
+                                    });
                                 }
                                 *expected += 1;
                             }
                             entries.push(e);
                         }
                         Err(_) if lenient => skipped += 1,
-                        Err(e) => return Err(e.into()),
+                        Err(e) => {
+                            return Err(crate::Error::Damaged {
+                                path: file.clone(),
+                                detail: e.to_string(),
+                            });
+                        }
                     }
                 }
             }
@@ -334,9 +343,10 @@ pub fn verified_session_prefix(root: &Path) -> Result<VerifiedPrefix> {
             prefix.entries.extend(segment.entries);
             prefix.verified_bytes += segment.verified_bytes;
             if prefix.verified_bytes > 128 << 20 {
-                return Err(crate::error::invalid(
-                    "journal exceeds the 128 MiB session reading limit",
-                ));
+                return Err(crate::Error::Limit {
+                    what: "journal session reading".into(),
+                    limit: 128 << 20,
+                });
             }
             if let Some(problem) = segment.problem {
                 prefix.problem = Some(format!("{}: {problem}", file.display()));

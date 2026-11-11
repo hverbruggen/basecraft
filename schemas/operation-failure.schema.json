@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OperationFailure",
+  "description": "Structured rejection before a run has an outcome or durable identity.",
+  "type": "object",
+  "properties": {
+    "errors": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/OperationError"
+      }
+    },
+    "operation": {
+      "type": "string"
+    },
+    "schema": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "state": {
+      "$ref": "#/$defs/RuntimeState"
+    }
+  },
+  "required": [
+    "schema",
+    "operation",
+    "state",
+    "errors"
+  ],
+  "$defs": {
+    "OperationError": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/OperationErrorCode"
+        },
+        "evidence": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "field": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "operation": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "operation"
+      ]
+    },
+    "OperationErrorCode": {
+      "type": "string",
+      "enum": [
+        "changed_on_disk",
+        "wrong_document_kind",
+        "unknown_document",
+        "not_found",
+        "damaged",
+        "limit",
+        "unsupported",
+        "busy",
+        "invalid_arguments",
+        "incompatible_contract",
+        "plugin_disabled",
+        "plugin_unavailable",
+        "plugin_changed",
+        "permission_denied",
+        "stale_revision",
+        "output_conflict",
+        "unsupported_input",
+        "plugin_protocol_violation",
+        "tool_failure",
+        "cancelled",
+        "timeout",
+        "publication_incomplete",
+        "evidence_incomplete"
+      ]
+    },
+    "RuntimeState": {
+      "type": "string",
+      "enum": [
+        "queued",
+        "running",
+        "cancelling",
+        "finalizing",
+        "completed",
+        "failed",
+        "cancelled",
+        "interrupted",
+        "partial"
+      ]
+    }
+  }
+}

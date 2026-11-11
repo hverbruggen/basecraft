@@ -7,6 +7,9 @@ use super::{SangerReviewSession, StoredReview};
 use crate::{analysis_store::ArtifactRun, error::invalid, input_evidence as inputs};
 use basecraft_docs::sanger::{SangerDraft, SangerPlacement};
 use basecraft_protocol::provenance::{ArtifactRevision, Completeness, Publication};
+use basecraft_protocol::sanger_records::{
+    SangerJobRecord, SangerJobSource, SangerJobStatus, SangerRequest,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -191,6 +194,7 @@ fn carry_authored(dependencies: &[PathBuf], run: &ArtifactRun) -> crate::Result<
 fn publication(run: &ArtifactRun, origin: &str, artifacts: Vec<ArtifactRevision>) -> Publication {
     Publication {
         schema_version: 1,
+        writer: std::collections::BTreeMap::new(),
         id: run.id().into(),
         session: run.id().into(),
         parents: vec![],
@@ -237,8 +241,10 @@ impl SangerRun {
             .filter_map(|s| s.ledger.clone())
             .collect();
         dependencies.extend_from_slice(ancestors);
-        let payload =
-            serde_json::to_vec(&serde_json::json!({"operation":operation,"sources":paths}))?;
+        let payload = serde_json::to_vec(&serde_json::to_value(SangerRequest {
+            operation: operation.into(),
+            sources: paths.to_vec(),
+        })?)?;
         inputs::write_json(
             &run.artifact("request.json")?,
             &serde_json::from_slice::<serde_json::Value>(&payload)?,
@@ -253,7 +259,7 @@ impl SangerRun {
             terminal: std::cell::Cell::new(false),
             started: basecraft_platform::now_rfc3339(),
         };
-        result.status("running", None, None)?;
+        result.status(SangerJobStatus::Running, None, None)?;
         Ok(result)
     }
 
@@ -280,14 +286,26 @@ impl SangerRun {
 
     fn status(
         &self,
-        status: &str,
+        status: SangerJobStatus,
         result: Option<&Path>,
         diagnostic: Option<&str>,
     ) -> crate::Result<()> {
-        let value = serde_json::json!({"schema_version":1,"id":self.run.id(),"owner_instance":basecraft_platform::process_instance(),
-            "status":status,"operation":self.operation,"started":self.started,
-            "source":{"path":self.evidence.sources.first().map(|s| &s.path)},"outputs":{},"primary_output":result,
-            "diagnostics":diagnostic,"artifact_run":self.run.directory()});
+        let value = serde_json::to_value(SangerJobRecord {
+            schema_version: 1,
+            id: self.run.id().into(),
+            owner_instance: basecraft_platform::process_instance().into(),
+            status,
+            operation: self.operation.clone(),
+            started: self.started.clone(),
+            source: SangerJobSource {
+                path: self.evidence.sources.first().map(|s| s.path.clone()),
+            },
+            outputs: std::collections::BTreeMap::new(),
+            primary_output: result.map(Path::to_path_buf),
+            diagnostics: diagnostic.map(str::to_owned),
+            artifact_run: Some(self.run.directory().to_path_buf()),
+            extra: std::collections::BTreeMap::new(),
+        })?;
         inputs::write_json(&self.run.artifact("execution.json")?, &value)?;
         let path = self.job_path()?;
         std::fs::create_dir_all(path.parent().ok_or_else(|| invalid("job has no parent"))?)?;
@@ -298,7 +316,7 @@ impl SangerRun {
         if self.terminal.get() {
             return Err(invalid("Sanger run already terminated"));
         }
-        self.status("failed", None, Some(diagnostic))?;
+        self.status(SangerJobStatus::Failed, None, Some(diagnostic))?;
         self.terminal.set(true);
         Ok(())
     }
@@ -307,7 +325,7 @@ impl SangerRun {
         if self.terminal.get() {
             return Err(invalid("Sanger run already terminated"));
         }
-        self.status("cancelled", None, Some(diagnostic))?;
+        self.status(SangerJobStatus::Cancelled, None, Some(diagnostic))?;
         self.terminal.set(true);
         Ok(())
     }
@@ -339,7 +357,7 @@ impl SangerRun {
             ),
         )?;
         self.evidence.runs.push(self.directory().into());
-        self.status("support_retained", None, None)?;
+        self.status(SangerJobStatus::SupportRetained, None, None)?;
         self.terminal.set(true);
         Ok(self)
     }
@@ -351,7 +369,7 @@ impl Drop for SangerRun {
             // Best effort during unwinding/early validation failure. The durable
             // reservation and pre-execution record survive even if this write fails.
             let _ = self.status(
-                "interrupted",
+                SangerJobStatus::Interrupted,
                 None,
                 Some("Sanger support was not published; owned files retained"),
             );
@@ -719,10 +737,34 @@ impl SangerReviewSession {
         self.write_embedded(path).map_err(|e| e.to_string())?;
         let directory = path.parent().ok_or("Recovery has no parent")?;
         let manifest = directory.join("manifest.json");
-        inputs::write_json(&manifest, &serde_json::json!({"schema_version":1,"id":directory.file_name().unwrap_or_default().to_string_lossy(),
-            "owner_instance":basecraft_platform::process_instance(),"operation":"Sanger review recovery","status":"review_requires_attention",
-            "started":basecraft_platform::now_rfc3339(),"source":{"path":self.anchor},"outputs":{},"primary_output":path,
-            "diagnostics":format!("{} unresolved columns; recoverable review, not accepted consensus", self.unresolved())})).map_err(|e|e.to_string())
+        let record = SangerJobRecord {
+            schema_version: 1,
+            id: directory
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into(),
+            owner_instance: basecraft_platform::process_instance().into(),
+            operation: "Sanger review recovery".into(),
+            status: SangerJobStatus::ReviewRequiresAttention,
+            started: basecraft_platform::now_rfc3339(),
+            source: SangerJobSource {
+                path: Some(self.anchor.clone()),
+            },
+            outputs: std::collections::BTreeMap::new(),
+            primary_output: Some(path.clone()),
+            diagnostics: Some(format!(
+                "{} unresolved columns; recoverable review, not accepted consensus",
+                self.unresolved()
+            )),
+            artifact_run: None,
+            extra: std::collections::BTreeMap::new(),
+        };
+        inputs::write_json(
+            &manifest,
+            &serde_json::to_value(record).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())
     }
 
     pub(super) fn save_durable(

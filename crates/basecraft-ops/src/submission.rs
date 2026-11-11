@@ -9,6 +9,9 @@
 //! and [`record_validation`] reads its reports back into the package.
 //! Everything here is local preparation: a clean table2asn report is not
 //! archive acceptance.
+use basecraft_protocol::submission_records::{
+    PackageDocument, PackageIssues, PackageRecord, PackageTools, SubmissionPackage,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -47,16 +50,21 @@ pub fn is_submission(path: &Path) -> bool {
 
 /// Read a submission document.
 pub fn load(path: &Path) -> Result<Submission> {
-    let value: Value = serde_json::from_slice(&std::fs::read(path)?)
-        .map_err(|e| invalid(format!("{} is not valid JSON: {e}", path.display())))?;
+    let value: Value =
+        serde_json::from_slice(&std::fs::read(path)?).map_err(|e| crate::Error::Damaged {
+            path: path.to_path_buf(),
+            detail: format!("not valid JSON: {e}"),
+        })?;
     let version = value["version"].as_u64().unwrap_or(0);
     if version > u64::from(SUBMISSION_VERSION) {
-        return Err(invalid(format!(
+        return Err(crate::Error::Unsupported(format!(
             "this submission was written by a newer Basecraft (format version {version}); this version reads version {SUBMISSION_VERSION}"
         )));
     }
-    let sub: Submission = serde_json::from_value(value)
-        .map_err(|e| invalid(format!("{} is not a submission: {e}", path.display())))?;
+    let sub: Submission = serde_json::from_value(value).map_err(|e| crate::Error::Damaged {
+        path: path.to_path_buf(),
+        detail: format!("not a submission: {e}"),
+    })?;
     model::validate(&sub).map_err(|e| invalid(e.0))?;
     Ok(sub)
 }
@@ -607,22 +615,7 @@ fn ascii_issues(
 
 // The package.
 
-/// What an export wrote.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PackageSummary {
-    pub directory: String,
-    /// Hash of the four table2asn input files together; a validation run
-    /// belongs to exactly this hash.
-    pub input_hash: String,
-    pub records: usize,
-    pub blocking: usize,
-    pub review: usize,
-    /// `draft` (blocking issues remain), `prepared` (no local blocking
-    /// issues; not yet validated), `validated` (table2asn reported no
-    /// errors for these exact files) or `validation_errors`.
-    pub status: String,
-    pub files: BTreeMap<String, String>,
-}
+pub use basecraft_protocol::submission_records::PackageSummary;
 
 fn tsv(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
@@ -1150,24 +1143,41 @@ pub fn export(
             &readme(&summary, &sub, &review.prepared.issues, validation.as_ref()),
         )?,
     );
-    let package = json!({
-        "schema": PACKAGE_SCHEMA,
-        "version": 1,
-        "destination": "genbank",
-        "note": DISCLAIMER,
-        "status": summary.status,
-        "submission": {"document": session.doc_key(doc), "hash": basecraft_io::hash_bytes(&encode(&sub)?)},
-        "source": sub.source,
-        "metadata_manifest_hash": review.metadata_hash,
-        "batch": sub.batch,
-        "export": sub.export,
-        "input_hash": hash,
-        "records": review.prepared.exported().map(|r| json!({"export_id": r.export_id, "record": r.record, "row": r.row + 1, "specimen": r.specimen})).collect::<Vec<_>>(),
-        "issues": {"blocking": summary.blocking, "review": summary.review},
-        "files": files,
-        "validation": validation,
-        "tools": {"table2asn": validation.as_ref().map(|v| v.tool_version.clone())},
-    });
+    let package = serde_json::to_value(SubmissionPackage {
+        schema: PACKAGE_SCHEMA.into(),
+        version: 1,
+        destination: "genbank".into(),
+        note: DISCLAIMER.into(),
+        status: summary.status.clone(),
+        submission: PackageDocument {
+            document: session.doc_key(doc).into(),
+            hash: basecraft_io::hash_bytes(&encode(&sub)?),
+        },
+        source: sub.source.clone(),
+        metadata_manifest_hash: review.metadata_hash.clone(),
+        batch: sub.batch.clone(),
+        export: sub.export.clone(),
+        input_hash: hash,
+        records: review
+            .prepared
+            .exported()
+            .map(|r| PackageRecord {
+                export_id: r.export_id.clone(),
+                record: r.record.clone(),
+                row: r.row + 1,
+                specimen: r.specimen.clone(),
+            })
+            .collect(),
+        issues: PackageIssues {
+            blocking: summary.blocking,
+            review: summary.review,
+        },
+        files,
+        tools: PackageTools {
+            table2asn: validation.as_ref().map(|v| v.tool_version.clone()),
+        },
+        validation,
+    })?;
     let mut bytes = serde_json::to_vec_pretty(&package)?;
     bytes.push(b'\n');
     session.export(doc, &manifest, "genbank-submission-package", |w| {
@@ -1203,28 +1213,7 @@ fn status(blocking: usize, validation: Option<&ValidationSummary>) -> String {
 
 // Validation.
 
-/// A table2asn run, as recorded in the package.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct ValidationSummary {
-    pub input_hash: String,
-    /// `passed` (completed, a report was read and it has no errors),
-    /// `errors`, `unavailable` (the tool could not run: nothing is known
-    /// about the sequences) or `failed`.
-    pub status: String,
-    pub tool_version: String,
-    pub run_id: String,
-    /// Package-relative folder with the raw reports.
-    pub directory: String,
-    pub errors: usize,
-    pub warnings: usize,
-    pub infos: usize,
-    pub message: String,
-    /// Hashes of the `.sqn` and `.gbf` copied into `genbank/`.
-    #[serde(default)]
-    pub copies: BTreeMap<String, String>,
-    #[serde(default)]
-    pub issues: Vec<Issue>,
-}
+pub use basecraft_protocol::submission_records::ValidationSummary;
 
 fn read_validation(package: &Path, input_hash: &str) -> Result<Option<ValidationSummary>> {
     let path = validation_dir(package, input_hash).join("summary.json");

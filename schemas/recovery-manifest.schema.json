@@ -2075,6 +2075,14 @@
               "properties": {
                 "path": {
                   "type": "string"
+                },
+                "writer": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                  }
                 }
               },
               "required": [

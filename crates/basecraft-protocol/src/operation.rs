@@ -85,6 +85,17 @@ pub struct HostServices {
     pub ambient_credentials: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caller: Option<String>,
+    /// Cooperative cancellation and receipt rules for a bundled remote service.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lifecycle: Option<LifecyclePolicy>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LifecyclePolicy {
+    ExternalSubmission,
+    RetainedReceipt,
+    RemoteDraft,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -336,6 +347,15 @@ pub struct ProposalOutcome {
     pub document: Option<String>,
     pub applied: usize,
     pub rejected: Vec<String>,
+}
+
+/// Structured rejection before a run has an outcome or durable identity.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct OperationFailure {
+    pub schema: u32,
+    pub operation: String,
+    pub state: RuntimeState,
+    pub errors: Vec<OperationError>,
 }
 
 /// Session-owned runtime view, independent of historical scientific `JobStatus`.

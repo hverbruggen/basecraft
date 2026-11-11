@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use basecraft_docs::{AlignmentDoc, SequenceDoc, TreeDoc};
 use basecraft_io::{Source, cache, fasta, genbank, gff3, newick};
 use basecraft_protocol::{CladeAnnotation, Feature, Location, Qualifier, Segment, TreeStyle};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::{Error, Result};
 
@@ -364,35 +364,7 @@ pub fn tree_sidecar(path: &Path) -> PathBuf {
     path.with_file_name(name)
 }
 
-/// What a tree's Newick can't hold.
-#[derive(Default, Serialize, Deserialize)]
-struct TreeSidecar {
-    #[serde(default)]
-    schema_version: u32,
-    /// Canonical topology, raw support and node ordering of the first tree.
-    #[serde(default)]
-    tree_hash: String,
-    /// Exact exchange bytes, including every forest component, when file-backed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    exchange_hash: Option<String>,
-    /// Support set names and sources, in the order their values are joined
-    /// in the Newick labels.
-    #[serde(default)]
-    supports: Vec<SupportName>,
-    #[serde(default)]
-    annotations: BTreeMap<u32, CladeAnnotation>,
-    #[serde(default)]
-    style: TreeStyle,
-}
-
-#[derive(Serialize, Deserialize)]
-struct SupportName {
-    name: String,
-    #[serde(default)]
-    source: String,
-    #[serde(default)]
-    kind: basecraft_protocol::SupportKind,
-}
+use basecraft_protocol::companion_records::{DelimitationSidecar, SupportName, TreeSidecar};
 
 /// Read the first tree of a Newick or NEXUS file, with its sidecar.
 pub fn load_tree(path: &Path) -> Result<OpenedTree> {
@@ -1107,16 +1079,6 @@ fn extract_range(doc: &SequenceDoc, start: u64, end: u64) -> genbank::Record {
         features,
         sequence: doc.read(start, end),
     }
-}
-
-/// A portable SPART file plus its versioned Basecraft workspace sidecar.
-#[derive(Serialize, Deserialize)]
-struct DelimitationSidecar {
-    version: u32,
-    exchange_hash: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    path_base: Option<PathBuf>,
-    workspace: basecraft_protocol::delimitation::DelimitationWorkspace,
 }
 
 pub fn load_delimitation(

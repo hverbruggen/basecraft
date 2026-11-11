@@ -1,5 +1,9 @@
 //! Local execution stage. Preparation and publication do not launch processes.
-use super::*;
+use super::{
+    Arc, AtomicBool, BTreeMap, Error, ExternalExecution, HostWorkflowExecution, InvokeResult,
+    Ordering, Path, PluginArtifact, PluginProcess, PreparedOperation, Result, Value, contract,
+    input_evidence, link_count,
+};
 
 impl PreparedOperation {
     pub fn execute(&self, cancelled: Arc<AtomicBool>) -> Result<InvokeResult> {

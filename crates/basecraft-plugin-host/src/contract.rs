@@ -385,6 +385,29 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
             return Err(invalid("unsupported host workflow"));
         }
         if let Some(host) = &descriptor.host {
+            use basecraft_protocol::operation::LifecyclePolicy;
+            match host.lifecycle {
+                Some(LifecyclePolicy::RetainedReceipt)
+                    if ["receipt", "query"].iter().any(|role| {
+                        descriptor
+                            .inputs
+                            .get(*role)
+                            .is_none_or(|binding| binding.min != 1 || binding.max != 1)
+                    }) =>
+                {
+                    return Err(invalid(
+                        "retained receipt requires one receipt and query input",
+                    ));
+                }
+                Some(LifecyclePolicy::ExternalSubmission | LifecyclePolicy::RemoteDraft)
+                    if descriptor.outputs.get("receipt").is_none_or(|binding| {
+                        binding.collection || binding.min != 1 || binding.max != 1
+                    }) =>
+                {
+                    return Err(invalid("remote lifecycle requires one receipt output"));
+                }
+                _ => {}
+            }
             if host
                 .verify_inputs
                 .iter()

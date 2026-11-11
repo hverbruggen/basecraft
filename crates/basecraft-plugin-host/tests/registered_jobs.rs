@@ -525,7 +525,7 @@ fn committed_proposals_stay_partial_and_repair_requires_recorded_session_activit
                 .document_record(doc)
                 .unwrap()
                 .events
-                .into_iter()
+                .iter()
                 .filter(|event| matches!(event.op, basecraft_protocol::Op::ToolRun { .. }))
                 .count()
         };

@@ -169,7 +169,15 @@ impl AlignmentWorkflow<'_> {
                 "GMYC unavailable: fewer than two retained haplotypes; no tree or fit was invented";
             basecraft_ops::input_evidence::write_json(
                 &Path::new(&self.parent.context.outputs["artifacts"]).join("fit.json.run.json"),
-                &json!({"version":1,"job":{"status":"unavailable","diagnostics":[diagnostic]},"workspace":null,"metrics":{}}),
+                &serde_json::to_value(basecraft_protocol::records::WorkflowFailure {
+                    version: 1,
+                    job: basecraft_protocol::records::WorkflowFailureJob {
+                        status: basecraft_protocol::delimitation::JobStatus::Unavailable,
+                        diagnostics: vec![diagnostic.into()],
+                    },
+                    workspace: None,
+                    metrics: std::collections::BTreeMap::new(),
+                })?,
             )?;
             return Err(Error::Protocol(diagnostic.into()));
         }

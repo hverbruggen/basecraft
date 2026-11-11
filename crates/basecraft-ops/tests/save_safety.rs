@@ -4,6 +4,7 @@
 #[path = "support/isolated_profile.rs"]
 mod isolated_profile;
 
+use basecraft_ops::document_record::ReportExt;
 use basecraft_ops::{Session, delimitation, log, replay};
 use basecraft_protocol::{
     Op,

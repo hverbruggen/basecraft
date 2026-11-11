@@ -206,7 +206,8 @@ pub fn tool_runs(session: &Session, doc: DocId) -> Vec<Value> {
         .document_record(doc)
         .unwrap()
         .events
-        .into_iter()
+        .iter()
+        .cloned()
         .filter_map(|event| match event.op {
             basecraft_protocol::Op::ToolRun { params, .. } => Some(params),
             _ => None,
@@ -220,7 +221,8 @@ pub fn tool_run_events(session: &Session, doc: DocId) -> Vec<basecraft_protocol:
         .document_record(doc)
         .unwrap()
         .events
-        .into_iter()
+        .iter()
+        .cloned()
         .filter(|event| matches!(event.op, basecraft_protocol::Op::ToolRun { .. }))
         .collect()
 }

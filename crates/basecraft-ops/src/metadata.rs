@@ -14,7 +14,7 @@ use basecraft_docs::metadata::{
 };
 use basecraft_protocol::metadata::{
     Cell, CellChange, ChangeSet, Column, FieldTarget, HeaderPattern, Identification,
-    ImportSettings, METADATA_VERSION, ProjectMetadata, RecordLink, Row, Taxon,
+    METADATA_VERSION, ProjectMetadata, RecordLink, Row, Taxon,
 };
 use serde::{Deserialize, Serialize};
 
@@ -72,34 +72,7 @@ pub fn files(manifest: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-#[derive(Serialize, Deserialize)]
-struct TableEntry {
-    file: String,
-    hash: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    columns: Vec<Column>,
-}
-
-#[derive(Serialize, Deserialize)]
-struct Tables {
-    specimens: TableEntry,
-    taxa: TableEntry,
-    identifications: TableEntry,
-    records: TableEntry,
-}
-
-#[derive(Serialize, Deserialize)]
-struct Manifest {
-    format: String,
-    version: u32,
-    tables: Tables,
-    #[serde(default)]
-    import: ImportSettings,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    partitions: Vec<basecraft_protocol::delimitation::Hypothesis>,
-    #[serde(flatten)]
-    extra: BTreeMap<String, serde_json::Value>,
-}
+use basecraft_protocol::metadata_records::{MetadataManifest as Manifest, TableEntry, Tables};
 
 /// A metadata document as opened: its contents and anything noticed while
 /// reading it.
@@ -118,8 +91,13 @@ fn optional(text: &str) -> Option<String> {
 /// Read a metadata document from its manifest.
 pub fn load(manifest_path: &Path) -> Result<OpenedMetadata> {
     let dir = manifest_path.parent().unwrap_or(Path::new("."));
-    let value: serde_json::Value = serde_json::from_slice(&std::fs::read(manifest_path)?)
-        .map_err(|e| invalid(format!("{MANIFEST} is not valid JSON: {e}")))?;
+    let value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(manifest_path)?).map_err(|e| {
+            crate::Error::Damaged {
+                path: manifest_path.to_path_buf(),
+                detail: format!("not valid JSON: {e}"),
+            }
+        })?;
     if value["format"] != FORMAT {
         return Err(invalid(format!(
             "{MANIFEST} is not a Basecraft metadata manifest"
@@ -127,17 +105,19 @@ pub fn load(manifest_path: &Path) -> Result<OpenedMetadata> {
     }
     let version = value["version"].as_u64().unwrap_or(0);
     if version > u64::from(METADATA_VERSION) {
-        return Err(invalid(format!(
+        return Err(crate::Error::Unsupported(format!(
             "this project's metadata was written by a newer Basecraft (format version {version}); this version reads version {METADATA_VERSION}"
         )));
     }
     if version != u64::from(METADATA_VERSION) {
-        return Err(invalid(format!(
+        return Err(crate::Error::Unsupported(format!(
             "metadata format version {version} is not supported"
         )));
     }
-    let manifest: Manifest = serde_json::from_value(value)
-        .map_err(|e| invalid(format!("{MANIFEST} is malformed: {e}")))?;
+    let manifest: Manifest = serde_json::from_value(value).map_err(|e| crate::Error::Damaged {
+        path: manifest_path.to_path_buf(),
+        detail: format!("{MANIFEST} is malformed: {e}"),
+    })?;
     let mut notices = Vec::new();
     let mut read = |entry: &TableEntry, expected: &str| -> Result<basecraft_io::table::Sheet> {
         if entry.file != expected {

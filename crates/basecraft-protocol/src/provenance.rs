@@ -39,6 +39,8 @@ pub struct Completeness {
 #[serde(deny_unknown_fields)]
 pub struct Publication {
     pub schema_version: u32,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub writer: std::collections::BTreeMap<String, u32>,
     pub id: String,
     pub session: String,
     pub parents: Vec<String>,

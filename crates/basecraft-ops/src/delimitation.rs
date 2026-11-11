@@ -130,9 +130,9 @@ pub(crate) fn dependencies(
                     .ok_or_else(|| invalid("Species report has no path"))?,
             );
             if report["hash"].as_str() != Some(basecraft_io::hash_file(path)?.as_str()) {
-                return Err(invalid(
-                    "Species analysis report changed; saved evidence was not replaced",
-                ));
+                return Err(crate::Error::ChangedOnDisk {
+                    path: path.to_path_buf(),
+                });
             }
             if let Some(run) = crate::analysis_store::ArtifactRun::for_result(path)? {
                 runs.insert(run);
@@ -189,16 +189,14 @@ pub fn checked_alignment(
     }
     let path = PathBuf::from(path);
     if basecraft_io::hash_file(&path)? != *hash {
-        return Err(invalid(
-            "The retained alignment changed; select an intact input explicitly",
-        ));
+        return Err(crate::Error::ChangedOnDisk { path: path.clone() });
     }
     Ok(Some(path))
 }
 
 fn checked_workspace_input(run: &std::path::Path, hash: &str) -> Result<PathBuf> {
     let input = crate::input_evidence::read_input(run)?;
-    if input.state == "broken" {
+    if input.state == basecraft_protocol::input_records::EvidenceState::Broken {
         return Err(invalid("Workspace input evidence was explicitly broken"));
     }
     let source = if let Some(reference) = &input.source {
@@ -207,9 +205,9 @@ fn checked_workspace_input(run: &std::path::Path, hash: &str) -> Result<PathBuf>
         run.join("submitted.fasta")
     };
     if basecraft_io::hash_file(&source)? != hash {
-        return Err(invalid(
-            "Workspace input changed; select an unchanged input explicitly",
-        ));
+        return Err(crate::Error::ChangedOnDisk {
+            path: source.clone(),
+        });
     }
     Ok(source)
 }
@@ -232,7 +230,7 @@ pub fn checked_display_tree(
     };
     let run = std::path::Path::new(run);
     let input = crate::input_evidence::read_input(run)?;
-    if input.state == "broken" {
+    if input.state == basecraft_protocol::input_records::EvidenceState::Broken {
         return Err(invalid("Display tree evidence was explicitly broken"));
     }
     let source = if let Some(reference) = &input.source {

@@ -34,3 +34,50 @@ pub struct ReportSourceMapEntry {
     pub paragraph: usize,
     pub activities: Vec<String>,
 }
+
+use crate::{LogEntry, provenance::EditActivity};
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct DocumentRecord {
+    pub schema_version: u32,
+    pub document: String,
+    pub revision: String,
+    pub unsaved: bool,
+    pub warnings: Vec<String>,
+    pub events: Vec<LogEntry>,
+    pub effective: Vec<EditActivity>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct HistoryRow {
+    pub id: String,
+    pub time: String,
+    pub summary: String,
+    pub status: String,
+    pub contributing: bool,
+    pub details: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct MethodsParagraph {
+    pub activity_ids: Vec<String>,
+    pub text: String,
+    pub parameters: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct Report {
+    pub schema_version: u32,
+    pub template_version: u32,
+    pub document: String,
+    pub revision: String,
+    pub unsaved: bool,
+    pub warnings: Vec<String>,
+    pub history: Vec<HistoryRow>,
+    pub paragraphs: Vec<MethodsParagraph>,
+    pub methods: String,
+    pub history_text: String,
+    pub raw: String,
+    #[serde(default)]
+    pub citations: Vec<String>,
+}

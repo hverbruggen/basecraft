@@ -1,3 +1,4 @@
+use basecraft_ops::document_record::ReportExt;
 use basecraft_ops::{Session, provenance};
 use basecraft_protocol::Op;
 use std::path::Path;

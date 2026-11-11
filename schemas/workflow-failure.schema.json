@@ -1,0 +1,682 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WorkflowFailure",
+  "type": "object",
+  "properties": {
+    "job": {
+      "$ref": "#/$defs/WorkflowFailureJob"
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "workspace": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DelimitationWorkspace"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "version",
+    "job",
+    "metrics"
+  ],
+  "$defs": {
+    "ColumnStyle": {
+      "description": "How one hypothesis column is drawn. Unset fields follow the theme.",
+      "type": "object",
+      "properties": {
+        "colors": {
+          "description": "Group ID to `#rrggbb`.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "gap": {
+          "description": "Pixels between the previous column and this one; the first column\nhas none. Unset: 1.5 bar widths.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "names": {
+          "description": "Write the species names to the right of the bars.",
+          "type": "boolean"
+        },
+        "spacing": {
+          "description": "Pixels between one species' bar and the next down the column.\nUnset: 0.65 bar widths.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "width": {
+          "description": "Bar width in pixels.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      }
+    },
+    "DelimitationView": {
+      "type": "object",
+      "properties": {
+        "columns": {
+          "description": "Hypothesis ID to its bar column style.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/ColumnStyle"
+          }
+        },
+        "display_tree": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "selected": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "tree_edits": {
+          "description": "How the display tree is drawn here: the tree editor's own drawing\nedits, replayed in order on the display tree. Its file is not changed.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TreeDrawingEdit"
+          }
+        },
+        "visible": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "visible",
+        "selected"
+      ]
+    },
+    "DelimitationWorkspace": {
+      "type": "object",
+      "properties": {
+        "exchange_fields": {
+          "description": "Unsupported interchange fields retained verbatim when possible.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "hypotheses": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Hypothesis"
+          }
+        },
+        "name": {
+          "type": "string"
+        },
+        "specimens": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Specimen"
+          }
+        },
+        "version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "view": {
+          "$ref": "#/$defs/DelimitationView",
+          "default": {
+            "display_tree": null,
+            "selected": [],
+            "visible": []
+          }
+        }
+      },
+      "required": [
+        "version",
+        "name",
+        "specimens",
+        "hypotheses"
+      ]
+    },
+    "Group": {
+      "type": "object",
+      "properties": {
+        "attributes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "color": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "individual_scores": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Score"
+            }
+          },
+          "default": {}
+        },
+        "label": {
+          "type": "string"
+        },
+        "members": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "scores": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Score"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "color",
+        "members"
+      ]
+    },
+    "Hypothesis": {
+      "type": "object",
+      "properties": {
+        "attributes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Group"
+          }
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "origin": {
+          "$ref": "#/$defs/HypothesisOrigin"
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "scores": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Score"
+          }
+        },
+        "unassigned": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "origin",
+        "groups",
+        "unassigned",
+        "provenance"
+      ]
+    },
+    "HypothesisOrigin": {
+      "type": "string",
+      "enum": [
+        "manual",
+        "imported",
+        "inferred",
+        "derived",
+        "manual_cut"
+      ]
+    },
+    "JobStatus": {
+      "type": "string",
+      "enum": [
+        "completed",
+        "failed",
+        "cancelled",
+        "unavailable"
+      ]
+    },
+    "Provenance": {
+      "type": "object",
+      "properties": {
+        "analysis_tree": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "diagnostics": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "haplotypes": {
+          "description": "Representative ID to original specimen IDs; never likelihood weights.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          },
+          "default": {}
+        },
+        "inputs": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "method": {
+          "type": "string"
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": true,
+          "default": {}
+        },
+        "seed": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JobStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "version": {
+          "type": "string"
+        },
+        "workers": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "method",
+        "version"
+      ]
+    },
+    "Score": {
+      "type": "object",
+      "properties": {
+        "interpretation": {
+          "type": "string"
+        },
+        "method": {
+          "type": "string"
+        },
+        "scale": {
+          "type": "string"
+        },
+        "value": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "value",
+        "method",
+        "scale",
+        "interpretation"
+      ]
+    },
+    "Specimen": {
+      "description": "IDs refer to source records, never current tree row positions.",
+      "type": "object",
+      "properties": {
+        "attributes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "sources": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ]
+    },
+    "SupportPlacement": {
+      "description": "Where support values sit relative to their branch.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "above",
+            "below"
+          ]
+        },
+        {
+          "description": "Above branches that go up from their parent, below those that go\ndown.",
+          "type": "string",
+          "const": "natural"
+        }
+      ]
+    },
+    "SupportSymbols": {
+      "description": "Support shown as filled circles at nodes: dark at or above `high`\npercent, grey at or above `low`, white below, as in many published\ntrees. Proportions count as percentages, as for `support_min`.",
+      "type": "object",
+      "properties": {
+        "high": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "low": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "set": {
+          "description": "The support set the circles show.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "set",
+        "high",
+        "low"
+      ]
+    },
+    "TreeDrawingEdit": {
+      "description": "A tree editor edit that changes only how a tree is drawn. Written as the\nmatching operation (`tree.rotate`, `tree.ladderize`, `tree.style`).",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.rotate"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "clade": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "clade"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.ladderize"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "small_first": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "small_first"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.style"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "style": {
+                  "$ref": "#/$defs/TreeStyle"
+                }
+              },
+              "required": [
+                "style"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        }
+      ]
+    },
+    "TreeStyle": {
+      "description": "How a tree is drawn. Sizes are pixels at 100 % zoom.",
+      "type": "object",
+      "properties": {
+        "branch_width": {
+          "type": "integer",
+          "format": "uint32",
+          "default": 1,
+          "minimum": 0
+        },
+        "scale_bar": {
+          "type": "boolean",
+          "default": true
+        },
+        "support_decimals": {
+          "description": "Decimal places per set; missing entries use the support semantics. Maximum 10.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0
+          },
+          "default": {}
+        },
+        "support_font": {
+          "type": "integer",
+          "format": "uint32",
+          "default": 10,
+          "minimum": 0
+        },
+        "support_fraction": {
+          "description": "Display conversion only: true renders fractions, false percentages.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "default": {}
+        },
+        "support_legend": {
+          "description": "Show an ordered legend when more than one support set is displayed.",
+          "type": "boolean",
+          "default": true
+        },
+        "support_min": {
+          "description": "Hide support values below this percentage. Known producer metadata sets\nthe scale; ambiguous imported sets with all finite values in 0–1 use\nproportions. Legacy `support_proportions` overrides only Unknown imports. 0 shows all.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 0,
+          "minimum": 0
+        },
+        "support_minimums": {
+          "description": "Per-set thresholds in percent, falling back to `support_min`.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "default": {}
+        },
+        "support_placement": {
+          "$ref": "#/$defs/SupportPlacement",
+          "default": "natural"
+        },
+        "support_proportions": {
+          "description": "Legacy source-unit interpretation for Unknown imports only (true means 0–1).",
+          "type": "object",
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "default": {}
+        },
+        "support_shown": {
+          "description": "Support sets shown at nodes, in order, joined with \"/\". Empty shows\nevery set.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "symbols": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SupportSymbols"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "tip_font": {
+          "type": "integer",
+          "format": "uint32",
+          "default": 13,
+          "minimum": 0
+        },
+        "tip_labels": {
+          "description": "Display-only labels keyed by original tip identity.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "vertical_bar_labels": {
+          "description": "Write clade labels beside bars top to bottom, rather than across.",
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "WorkflowFailureJob": {
+      "type": "object",
+      "properties": {
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "status": {
+          "$ref": "#/$defs/JobStatus"
+        }
+      },
+      "required": [
+        "status",
+        "diagnostics"
+      ]
+    }
+  }
+}

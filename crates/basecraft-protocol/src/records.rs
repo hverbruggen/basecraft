@@ -254,3 +254,55 @@ pub struct AlignmentLink {
     #[serde(default, flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
 }
+
+/// Checksummed JSONL envelope. Its flattened entry already carries log version `v`.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct JournalEntry<T = crate::LogEntry> {
+    #[serde(rename = "_checksum")]
+    pub checksum: String,
+    #[serde(rename = "_sequence")]
+    pub sequence: u64,
+    #[serde(flatten)]
+    pub entry: T,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct WorkflowFailure {
+    pub version: u32,
+    pub job: WorkflowFailureJob,
+    pub workspace: Option<crate::delimitation::DelimitationWorkspace>,
+    pub metrics: BTreeMap<String, Value>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct WorkflowFailureJob {
+    pub status: crate::delimitation::JobStatus,
+    pub diagnostics: Vec<String>,
+}
+
+/// Embedded provenance for an activity's exact submitted input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct ActivityInputRun {
+    pub schema_version: u32,
+    pub id: String,
+    pub hash: String,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct ActivityContributions {
+    pub schema_version: u32,
+    pub edits: Vec<String>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct ExtractionRecord {
+    pub schema_version: u32,
+    pub source_revision: String,
+    pub selection: crate::Op,
+    pub coordinates: String,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}

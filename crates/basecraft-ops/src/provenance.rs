@@ -14,216 +14,43 @@ pub fn companion(path: &Path) -> PathBuf {
 /// The final fallback is the original companion spelling, even if it does not
 /// exist. Selection does not validate content or establish complete provenance.
 pub fn bundle_for_result(result: &Path) -> PathBuf {
-    resolve_bundle(result, &mut None).0
-}
-
-// Intentionally unwired: observation is not an access/consent capability.
-#[allow(dead_code)]
-#[derive(Debug)]
-pub(crate) struct BundleObservation {
-    pub selected: PathBuf,
-    pub selected_by: BundleSelection,
-    /// Ordered attempted stages. An absent stage is `NotAttempted`, not absent on
-    /// disk: an earlier selection or a failed/skipped prerequisite prevented it.
-    pub steps: Vec<ResolverStep>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BundleSelection {
-    Binding,
-    Companion,
-    Project,
-    Local,
-    CompanionFallback,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ResolverStage {
-    Binding,
-    HiddenManifest,
-    CompanionManifest,
-    Canonicalize,
-    ProjectMarker,
-    ProjectRelative,
-    Discover,
-    Settings,
-    LocalManifest,
-}
-
-#[allow(dead_code)]
-#[derive(Debug)]
-pub(crate) enum ResolverStep {
-    /// None is opaque owner output, not proof that no binding exists.
-    Binding(Result<Option<PathBuf>>),
-    /// Following metadata only: `NotFound` can include a dangling link or missing
-    /// ancestor; a regular file need not be readable or remain the same object.
-    Metadata(ResolverStage, PathBuf, std::io::Result<std::fs::Metadata>),
-    /// Failure retains original spelling for all subsequent calculations.
-    Canonicalize(std::io::Result<PathBuf>),
-    ProjectRelative(
-        PathBuf,
-        std::result::Result<PathBuf, std::path::StripPrefixError>,
-    ),
-    Discover(std::result::Result<(), basecraft_platform::paths::PathError>),
-    /// Successful policy has unknown origin: load can return defaults on missing
-    /// preferences. Non-LocalOnly policy skips the local manifest stage.
-    Settings(
-        std::result::Result<
-            basecraft_platform::settings::ProvenancePolicy,
-            basecraft_platform::settings::Error,
-        >,
-    ),
-}
-
-#[allow(dead_code)]
-pub(crate) fn observe_bundle_for_result(result: &Path) -> BundleObservation {
-    let mut steps = Some(Vec::new());
-    let (selected, selected_by) = resolve_bundle(result, &mut steps);
-    BundleObservation {
-        selected,
-        selected_by,
-        steps: steps.unwrap_or_default(),
-    }
-}
-
-// The closure is never evaluated on the legacy route: no diagnostic path
-// copies, vector allocation, error clones or additional probes on that route.
-fn resolver_record(steps: &mut Option<Vec<ResolverStep>>, step: impl FnOnce() -> ResolverStep) {
-    if let Some(steps) = steps {
-        steps.push(step());
-    }
-}
-
-fn resolver_call(stage: ResolverStage) {
-    #[cfg(test)]
-    resolver_observation_tests::called(stage);
-    #[cfg(not(test))]
-    let _ = stage;
-}
-
-fn resolver_file(path: &Path, stage: ResolverStage, steps: &mut Option<Vec<ResolverStep>>) -> bool {
-    resolver_call(stage);
-    let metadata = std::fs::metadata(path);
-    let is_file = metadata.as_ref().is_ok_and(std::fs::Metadata::is_file);
-    resolver_record(steps, || {
-        ResolverStep::Metadata(stage, path.to_path_buf(), metadata)
-    });
-    is_file
-}
-
-fn resolve_bundle(
-    result: &Path,
-    steps: &mut Option<Vec<ResolverStep>>,
-) -> (PathBuf, BundleSelection) {
-    resolver_call(ResolverStage::Binding);
-    let binding = crate::analysis_store::ArtifactRun::for_result(result);
-    // The selected candidate must be owned by both return and observation only
-    // when collecting. Errors are moved exactly once, never reconstructed.
-    let hidden = match binding {
-        Ok(hidden) => {
-            resolver_record(steps, || ResolverStep::Binding(Ok(hidden.clone())));
-            hidden
-        }
-        Err(error) => {
-            resolver_record(steps, || ResolverStep::Binding(Err(error)));
-            None
-        }
-    };
-    if let Some(hidden) = hidden
-        && resolver_file(
-            &hidden.join("manifest.json"),
-            ResolverStage::HiddenManifest,
-            steps,
-        )
+    if let Ok(Some(hidden)) = crate::analysis_store::ArtifactRun::for_result(result)
+        && hidden.join("manifest.json").is_file()
     {
-        return (hidden, BundleSelection::Binding);
+        return hidden;
     }
     let standalone = companion(result);
-    if resolver_file(
-        &standalone.join("manifest.json"),
-        ResolverStage::CompanionManifest,
-        steps,
-    ) {
-        return (standalone, BundleSelection::Companion);
+    if standalone.join("manifest.json").is_file() {
+        return standalone;
     }
-    resolver_call(ResolverStage::Canonicalize);
-    let absolute = match result.canonicalize() {
-        Ok(path) => {
-            resolver_record(steps, || ResolverStep::Canonicalize(Ok(path.clone())));
-            path
-        }
-        Err(error) => {
-            resolver_record(steps, || ResolverStep::Canonicalize(Err(error)));
-            result.to_path_buf()
-        }
-    };
+    let absolute = result
+        .canonicalize()
+        .unwrap_or_else(|_| result.to_path_buf());
     for root in absolute.ancestors().skip(1) {
-        if resolver_file(
-            &root.join(".basecraft/project.toml"),
-            ResolverStage::ProjectMarker,
-            steps,
-        ) {
-            resolver_call(ResolverStage::ProjectRelative);
-            let relative = match absolute.strip_prefix(root) {
-                Ok(relative) => {
-                    resolver_record(steps, || {
-                        ResolverStep::ProjectRelative(
-                            root.to_path_buf(),
-                            Ok(relative.to_path_buf()),
-                        )
-                    });
-                    Some(relative)
-                }
-                Err(error) => {
-                    resolver_record(steps, || {
-                        ResolverStep::ProjectRelative(root.to_path_buf(), Err(error))
-                    });
-                    None
-                }
-            };
-            if let Some(relative) = relative {
-                let key = relative.to_string_lossy();
-                return (
-                    root.join(".basecraft/provenance")
-                        .join(basecraft_io::hash_bytes(key.as_bytes()).trim_start_matches("b3:")),
-                    BundleSelection::Project,
-                );
-            }
+        if root.join(".basecraft/project.toml").is_file()
+            && let Ok(relative) = absolute.strip_prefix(root)
+        {
+            return root.join(".basecraft/provenance").join(
+                basecraft_io::hash_bytes(relative.to_string_lossy().as_bytes())
+                    .trim_start_matches("b3:"),
+            );
         }
     }
-    resolver_call(ResolverStage::Discover);
-    match basecraft_platform::paths::AppPaths::discover() {
-        Ok(paths) => {
-            resolver_record(steps, || ResolverStep::Discover(Ok(())));
-            resolver_call(ResolverStage::Settings);
-            match basecraft_platform::settings::SettingsStore::new(paths.preferences()).load() {
-                Ok(preferences) => {
-                    let policy = preferences.files.provenance;
-                    resolver_record(steps, || ResolverStep::Settings(Ok(policy)));
-                    if policy == basecraft_platform::settings::ProvenancePolicy::LocalOnly {
-                        let local = paths.state.join("provenance").join(
-                            basecraft_io::hash_bytes(absolute.as_os_str().as_encoded_bytes())
-                                .trim_start_matches("b3:"),
-                        );
-                        if resolver_file(
-                            &local.join("manifest.json"),
-                            ResolverStage::LocalManifest,
-                            steps,
-                        ) {
-                            return (local, BundleSelection::Local);
-                        }
-                    }
-                }
-                Err(error) => resolver_record(steps, || ResolverStep::Settings(Err(error))),
-            }
+    if let Ok(paths) = basecraft_platform::paths::AppPaths::discover()
+        && let Ok(preferences) =
+            basecraft_platform::settings::SettingsStore::new(paths.preferences()).load()
+        && preferences.files.provenance == basecraft_platform::settings::ProvenancePolicy::LocalOnly
+    {
+        let local = paths.state.join("provenance").join(
+            basecraft_io::hash_bytes(absolute.as_os_str().as_encoded_bytes())
+                .trim_start_matches("b3:"),
+        );
+        if local.join("manifest.json").is_file() {
+            return local;
         }
-        Err(error) => resolver_record(steps, || ResolverStep::Discover(Err(error))),
     }
-    (standalone, BundleSelection::CompanionFallback)
+    standalone
 }
-
-#[cfg(test)]
-mod resolver_observation_tests;
 
 fn safe_relative(root: &Path, name: &str) -> Result<PathBuf> {
     let p = Path::new(name);
@@ -257,23 +84,9 @@ pub(crate) fn read_record_with_access(
     remaining: &mut u64,
     access: &dyn crate::access::Access,
 ) -> Result<Vec<u8>> {
-    read_record_with_access_open(path, remaining, access, |path| {
-        let file = basecraft_platform::files::open_regular_read(path)?;
-        let length = file.metadata()?.len();
-        Ok((file, length))
-    })
-}
-
-// One bounded body for both entry points; the opener seam permits observing
-// denial ordering and partial read errors without a second test algorithm.
-fn read_record_with_access_open<R: std::io::Read>(
-    path: &Path,
-    remaining: &mut u64,
-    access: &dyn crate::access::Access,
-    open: impl FnOnce(&Path) -> std::io::Result<(R, u64)>,
-) -> Result<Vec<u8>> {
     let checked = access.resource(path, crate::access::ResourceAction::ReadFile)?;
-    let (file, length) = open(&checked)?;
+    let file = basecraft_platform::files::open_regular_read(&checked)?;
+    let length = file.metadata()?.len();
     read_record_from_open(file, length, remaining, 64 << 20, RecordLimit::Provenance)
 }
 
@@ -283,10 +96,10 @@ pub(crate) enum RecordLimit {
     Registry,
 }
 impl RecordLimit {
-    fn message(self) -> &'static str {
+    fn label(self) -> &'static str {
         match self {
-            Self::Provenance => "provenance record exceeds reading limit (at most 64 MiB)",
-            Self::Registry => "known-store registry exceeds 1 MiB",
+            Self::Provenance => "provenance record reading",
+            Self::Registry => "known-store registry",
         }
     }
 }
@@ -301,14 +114,20 @@ pub(crate) fn read_record_from_open(
     use std::io::Read as _;
     let limit = (*remaining).min(64 << 20).min(cap);
     if length > limit {
-        return Err(invalid(label.message()));
+        return Err(crate::Error::Limit {
+            what: label.label().into(),
+            limit,
+        });
     }
     let mut bytes = Vec::new();
     let result = file.take(limit + 1).read_to_end(&mut bytes);
     *remaining = remaining.saturating_sub(bytes.len() as u64);
     result?;
     if bytes.len() as u64 > limit {
-        return Err(invalid(label.message()));
+        return Err(crate::Error::Limit {
+            what: label.label().into(),
+            limit,
+        });
     }
     Ok(bytes)
 }
@@ -333,7 +152,9 @@ pub fn inspect(result: &Path) -> Result<Publication> {
     let publication: Publication =
         serde_json::from_slice(&read_record(&bundle.join("manifest.json"))?)?;
     if publication.schema_version != 1 {
-        return Err(invalid("unsupported provenance schema version"));
+        return Err(crate::Error::Unsupported(
+            "unsupported provenance schema version".into(),
+        ));
     }
     Ok(publication)
 }
@@ -443,9 +264,10 @@ pub(crate) fn verify_records(bundle: &Path, current: &Publication) -> Result<Vec
         let path = safe_relative(bundle, &format!("records/{id}.json"))?;
         record_bytes = record_bytes.saturating_add(std::fs::metadata(&path)?.len());
         if record_bytes > 128 << 20 {
-            return Err(invalid(
-                "provenance ancestry exceeds 128 MiB record verification limit",
-            ));
+            return Err(crate::Error::Limit {
+                what: "provenance ancestry record verification".into(),
+                limit: 128 << 20,
+            });
         }
         let bytes = read_record(&path)?;
         let hash = basecraft_io::hash_bytes(&bytes);
@@ -662,7 +484,9 @@ fn link_selected_inputs(bundle: &Path, publication: &Publication) -> Result<()> 
             continue;
         }
         if dependency["schema_version"] != 1 {
-            return Err(invalid("Unsupported selected input dependency"));
+            return Err(crate::Error::Unsupported(
+                "Unsupported selected input dependency".into(),
+            ));
         }
         let id = dependency["id"]
             .as_str()

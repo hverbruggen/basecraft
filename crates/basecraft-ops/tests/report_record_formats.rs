@@ -1,4 +1,5 @@
 //! Original writer oracles intentionally use literal JSON, independently of protocol types.
+use basecraft_ops::document_record::ReportExt;
 use basecraft_ops::{
     Session,
     document_record::{DocumentRecord, MethodsParagraph, Report},
@@ -95,6 +96,7 @@ fn check_provenance(publication: &Publication, directory: &Path, capture: Option
 fn empty_publication() -> Publication {
     Publication {
         schema_version: 1,
+        writer: Default::default(),
         id: "publication-λ-\"\\\n".into(),
         session: "fixture".into(),
         parents: vec![],

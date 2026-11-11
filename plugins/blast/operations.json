@@ -161,6 +161,9 @@
       "effects": {
         "document_write": false,
         "artifact_write": true
+      },
+      "host": {
+        "lifecycle": "external_submission"
       }
     },
     {
@@ -274,6 +277,9 @@
       "effects": {
         "document_write": false,
         "artifact_write": false
+      },
+      "host": {
+        "lifecycle": "retained_receipt"
       }
     }
   ]

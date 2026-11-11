@@ -19,7 +19,7 @@
       ]
     },
     "state": {
-      "type": "string"
+      "$ref": "#/$defs/EvidenceState"
     },
     "submitted_hash": {
       "type": "string"
@@ -43,6 +43,23 @@
     "state"
   ],
   "$defs": {
+    "EvidenceState": {
+      "description": "Unknown states remain readable and serialize without losing their spelling.",
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "referenced",
+            "generated",
+            "preserved",
+            "broken"
+          ]
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
     "FileStamp": {
       "description": "Cheap change signal captured during an existing verified read. Matching time\nand length alone do not prove content identity.",
       "type": "object",

@@ -19,6 +19,31 @@ pub struct Report {
     pub sessions: usize,
     pub entries: usize,
     pub problems: Vec<String>,
+    /// Save entries whose writer versions differ. Fingerprints are still checked.
+    pub writer_mismatches: Vec<WriterMismatch>,
+}
+
+#[derive(Debug)]
+pub struct WriterMismatch {
+    pub entry: String,
+    pub recorded: std::collections::BTreeMap<String, u32>,
+    pub current: std::collections::BTreeMap<String, u32>,
+}
+impl WriterMismatch {
+    pub fn code(&self) -> &'static str {
+        "writer_version_mismatch"
+    }
+    pub fn message(&self) -> &'static str {
+        if self.recorded.iter().all(|(format, version)| {
+            self.current
+                .get(format)
+                .is_some_and(|current| version <= current)
+        }) {
+            "written by an older writer; content check skipped"
+        } else {
+            "written by a different writer; content check skipped"
+        }
+    }
 }
 
 impl Report {
@@ -101,11 +126,26 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
         match &e.op {
             // Species metadata records the original folder as its relocation
             // base. Hash against that destination, not replay's disposable root.
-            Op::Save { path } => match session.save_hashes_at(doc, &source_root.join(path)) {
+            Op::Save { path, writer }
+                if !writer.is_empty()
+                    && writer != &crate::writer_versions::for_path(Path::new(path)) =>
+            {
+                report.writer_mismatches.push(WriterMismatch {
+                    entry: e.id.clone(),
+                    recorded: writer.clone(),
+                    current: crate::writer_versions::for_path(Path::new(path)),
+                });
+            }
+            Op::Save { path, writer } => match session.save_hashes_at(doc, &source_root.join(path))
+            {
                 Ok(got) => {
                     let want: Vec<&String> = e.result.hashes.iter().map(|(_, h)| h).collect();
                     if got.iter().collect::<Vec<_>>() != want {
-                        let legacy = session.legacy_delimitation_hashes(doc, Path::new(path))?;
+                        let legacy = if writer.is_empty() {
+                            session.legacy_delimitation_hashes(doc, Path::new(path))?
+                        } else {
+                            None
+                        };
                         if legacy
                             .as_ref()
                             .is_none_or(|hashes| hashes.iter().collect::<Vec<_>>() != want)
@@ -183,7 +223,9 @@ fn recorded_source_root(root: &Path) -> Result<std::path::PathBuf> {
     let value: serde_json::Value =
         serde_json::from_slice(&crate::provenance::read_record(&manifest)?)?;
     if value["schema_version"] != 1 {
-        return Err(crate::Error::Unsupported("Unsupported recovery metadata".into()));
+        return Err(crate::Error::Unsupported(
+            "Unsupported recovery metadata".into(),
+        ));
     }
     value["source_root"]
         .as_str()

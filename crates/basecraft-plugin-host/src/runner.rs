@@ -340,7 +340,7 @@ impl PreparedOperation {
                         Path::new(&owner.run_directory)
                     )?),
                 );
-                input.state = "preserved".into();
+                input.state = basecraft_protocol::input_records::EvidenceState::Preserved;
                 mutation.write_input(self.run.directory(), &input)?;
             }
         }

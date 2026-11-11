@@ -296,6 +296,12 @@ fn package_is_deterministic_and_validation_is_tied_to_its_inputs() {
     .map(|n| bytes(n))
     .collect();
     assert_eq!(before, after);
+    if let Some(capture) = std::env::var_os("BASECRAFT_CAPTURE_SUBMISSION_RECORDS") {
+        let capture = Path::new(&capture);
+        std::fs::create_dir_all(capture).unwrap();
+        std::fs::write(capture.join("submission-package.json"), &before[0]).unwrap();
+    }
+
     let fsa = String::from_utf8(bytes("genbank/submission.fsa")).unwrap();
     assert!(
         fsa.starts_with(">HV101_rbcL [mol_type=genomic DNA] [location=chloroplast] [gcode=11]\n"),
@@ -354,6 +360,17 @@ fn package_is_deterministic_and_validation_is_tied_to_its_inputs() {
     submission_run::retain(root, &request, &mut outcome);
     let summary = submission::record_validation(root, &package, &outcome).unwrap();
     assert_eq!(summary.status, "errors");
+    if let Some(capture) = std::env::var_os("BASECRAFT_CAPTURE_SUBMISSION_RECORDS") {
+        std::fs::write(
+            Path::new(&capture).join("submission-validation.json"),
+            std::fs::read(
+                submission::validation_dir(&package, &summary.input_hash).join("summary.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    }
+
     assert_eq!((summary.errors, summary.warnings), (1, 1));
     let stop = &summary.issues[0];
     assert_eq!(stop.record.as_deref(), Some("HV103_rbcL"));

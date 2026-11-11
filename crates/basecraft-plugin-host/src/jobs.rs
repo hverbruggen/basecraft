@@ -1097,7 +1097,20 @@ pub fn error_value(
     code: OperationErrorCode,
     message: impl Into<String>,
 ) -> serde_json::Value {
-    json!({"schema":1,"operation":operation,"state":"failed","errors":[OperationError {code,message:message.into(),field:None,operation:operation.into(),run_id:None,evidence:None}]})
+    serde_json::to_value(basecraft_protocol::operation::OperationFailure {
+        schema: 1,
+        operation: operation.into(),
+        state: RuntimeState::Failed,
+        errors: vec![OperationError {
+            code,
+            message: message.into(),
+            field: None,
+            operation: operation.into(),
+            run_id: None,
+            evidence: None,
+        }],
+    })
+    .expect("operation errors contain only JSON values")
 }
 
 pub fn error_code(error: &Error) -> OperationErrorCode {
@@ -1134,7 +1147,6 @@ pub fn ops_error_code(error: &basecraft_ops::Error) -> OperationErrorCode {
         Core::WrongKind { .. } => OperationErrorCode::WrongDocumentKind,
         Core::UnknownDocument { .. } => OperationErrorCode::UnknownDocument,
         Core::NotFound { .. } => OperationErrorCode::NotFound,
-        Core::Damaged { .. } => OperationErrorCode::Damaged,
         Core::Limit { .. } => OperationErrorCode::Limit,
         Core::Unsupported(_) | Core::UnknownFormat(_) => OperationErrorCode::Unsupported,
         Core::Busy(_) => OperationErrorCode::Busy,
@@ -1156,7 +1168,7 @@ pub fn ops_error_code(error: &basecraft_ops::Error) -> OperationErrorCode {
             std::io::ErrorKind::PermissionDenied => OperationErrorCode::PermissionDenied,
             _ => OperationErrorCode::ToolFailure,
         },
-        Core::Json(_) | Core::Format(_) => OperationErrorCode::Damaged,
+        Core::Damaged { .. } | Core::Json(_) | Core::Format(_) => OperationErrorCode::Damaged,
         Core::Empty(_) | Core::Invalid(_) | Core::NothingTo(_) => {
             OperationErrorCode::InvalidArguments
         }

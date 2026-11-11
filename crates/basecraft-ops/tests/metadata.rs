@@ -439,7 +439,7 @@ fn document_interface_preserves_metadata_bytes_and_rejections() {
     .unwrap();
     assert_eq!(
         serde_json::to_string(&s.state(doc)).unwrap(),
-        r#"{"len":2,"features":0,"rows":0}"#
+        r#"{"len":2,"features":0,"rows":0,"counts":{"kind":"metadata","specimens":2,"identifications":0,"links":0}}"#
     );
     assert_eq!(s.save_hashes(doc).unwrap(), expected_hashes);
     // Historical hashing ignores the target's format; writing rejects it.

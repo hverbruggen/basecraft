@@ -1,5 +1,12 @@
 //! Publish validated artifacts and retain an outcome for repair.
-use super::*;
+use super::{
+    ArtifactDestination, ArtifactRevision, BTreeMap, CollectionExportIntent, CollectionIntent,
+    Completeness, Error, InvokeResult, OperationOutcome, Path, PathBuf, PreparedOperation,
+    Publication, PublishedArtifact, Result, export_collection, export_member, file_tool,
+    input_evidence, verify_collection, verify_member_receipt,
+};
+
+type PublishedFiles = Vec<(String, PathBuf, String)>;
 
 impl PreparedOperation {
     pub fn finalize(
@@ -24,7 +31,7 @@ impl PreparedOperation {
         validated: &[(String, PathBuf, String)],
         outcome: &mut OperationOutcome,
         repair: bool,
-    ) -> Result<(BTreeMap<String, PathBuf>, Vec<(String, PathBuf, String)>)> {
+    ) -> Result<(BTreeMap<String, PathBuf>, PublishedFiles)> {
         let mut collections = BTreeMap::new();
         // Visible copies are publication outputs too, so verifying one checks
         // its bytes; they come first, as the run's primary results.
@@ -421,6 +428,7 @@ impl PreparedOperation {
             .and_then(|bytes| serde_json::from_slice::<Publication>(&bytes).ok());
         let publication = Publication {
             schema_version: 1,
+            writer: BTreeMap::new(),
             id: self.run.id().into(),
             session: basecraft_platform::process_instance().into(),
             parents: vec![],

@@ -358,253 +358,37 @@ fn error_outcome(error: Error) -> Value {
     }
 }
 
-fn reader_case(config: &RegistryConfig, cases: &mut Vec<Value>, name: &str, input: &str) {
-    std::fs::write(&config.index, input).unwrap();
-    cases.push(json!({"case":name,"input":input,"outcome":outcome(load_index(config))}));
-}
-
-fn runtime_input() -> Value {
-    // Independent old-reader input, not serialized from a production Runtime.
-    json!({"schema":1,"executables":["z","a","z"],"root":"portable/é\"\\root","interpreter":"bin/python","lock_digest":"lock","manifest_digest":"manifest","package_digest":"package"})
-}
-
 #[test]
-fn original_load_index_reader_observations() {
+fn committed_index_reader_cases() {
     let temp = tempfile::tempdir().unwrap();
     let config = config(temp.path());
-    let mut cases = vec![json!({"case":"missing-file", "outcome":outcome(load_index(&config))})];
-    assert!(!config.index.parent().unwrap().exists());
     std::fs::create_dir_all(config.index.parent().unwrap()).unwrap();
-    for (name, input) in [
-        ("empty-object", "{}"),
-        ("null", "null"),
-        ("bool", "true"),
-        ("string", "\"index\""),
-        ("number", "1"),
-        ("empty-input", ""),
-        ("malformed", "{\n  \"schema\": }"),
-        ("trailing", "{} {}"),
-        ("schema-one", "{\"schema\":1}"),
-        ("schema-zero", "{\"schema\":0}"),
-        ("schema-future", "{\"schema\":2}"),
-        ("schema-max", "{\"schema\":4294967295}"),
-        ("schema-negative", "{\"schema\":-1}"),
-        ("schema-overflow", "{\"schema\":4294967296}"),
-        ("schema-float", "{\"schema\":1.0}"),
-        ("schema-string", "{\"schema\":\"1\"}"),
-        ("schema-null", "{\"schema\":null}"),
-        ("duplicate-known", "{\"schema\":1,\"schema\":1}"),
-        ("duplicate-unknown", "{\"extra\":1,\"extra\":2}"),
-        (
-            "duplicate-map-key",
-            "{\"active\":{\"p\":\"first\",\"p\":\"last\"}}",
-        ),
-        (
-            "duplicate-sets",
-            "{\"disabled\":[\"z\",\"a\",\"z\"],\"editable\":[\"z\",\"a\",\"z\"]}",
-        ),
-        (
-            "top-extras",
-            "{\"a-extra\":null,\"middle\":[1,true],\"z-extra\":{\"z\":1,\"a\":2}}",
-        ),
-        (
-            "escaped-native-paths",
-            r#"{"editable":["C:\\portable\\é\"file","\\\\server\\share","line\nbreak"]}"#,
-        ),
-        ("invalid-escape", r#"{"editable":["\q"]}"#),
-        ("unpaired-surrogate", r#"{"editable":["\ud800"]}"#),
-        ("index-sequence-empty", "[]"),
-        ("index-sequence-schema", "[1]"),
-        ("index-sequence-full", "[1,{},{},[],[],{}]"),
-        ("index-sequence-five", "[1,{},{},[],[]]"),
-        ("index-sequence-extra", "[1,{},{},[],[],{},0]"),
-    ] {
-        reader_case(&config, &mut cases, name, input);
-    }
-    for field in ["active", "runtimes", "disabled", "editable"] {
-        for (label, value) in [
-            ("null", json!(null)),
-            ("bool", json!(false)),
-            ("string", json!("x")),
-            ("number", json!(1)),
-            ("array", json!([])),
-            ("object", json!({})),
-        ] {
-            reader_case(
-                &config,
-                &mut cases,
-                &format!("index-{field}-{label}"),
-                &json!({field:value}).to_string(),
-            );
+    let cases: Vec<Value> = serde_json::from_str(include_str!(
+        "../../../../testdata/fixtures/records-v1/installation-index-reader-observations.json"
+    ))
+    .unwrap();
+    for case in cases {
+        match case["case"].as_str().unwrap() {
+            "missing-file" => {}
+            "input-exact-limit" | "input-over-limit-before-parse" => {
+                let mut bytes = b"{}".to_vec();
+                bytes.resize(MAX_DESCRIPTOR_BYTES, b' ');
+                if case["case"] == "input-over-limit-before-parse" {
+                    bytes.push(b'!');
+                }
+                std::fs::write(&config.index, bytes).unwrap();
+            }
+            _ => {
+                std::fs::write(&config.index, case["input"].as_str().unwrap()).unwrap();
+            }
         }
-    }
-    for (name, value) in [
-        ("active-null-value", json!({"active":{"p":null}})),
-        ("active-array-value", json!({"active":{"p":[]}})),
-        ("disabled-null-element", json!({"disabled":[null]})),
-        ("disabled-number-element", json!({"disabled":[1]})),
-        ("editable-null-element", json!({"editable":[null]})),
-        ("editable-array-element", json!({"editable":[[]]})),
-        ("runtime-null-value", json!({"runtimes":{"unused":null}})),
-        ("runtime-string-value", json!({"runtimes":{"unused":"x"}})),
-        (
-            "future-plus-malformed-runtime",
-            json!({"schema":2,"runtimes":{"unused":{"schema":null}}}),
-        ),
-    ] {
-        reader_case(&config, &mut cases, name, &value.to_string());
-    }
-    for field in [
-        "schema",
-        "executables",
-        "root",
-        "interpreter",
-        "lock_digest",
-        "manifest_digest",
-        "package_digest",
-        "reported_versions",
-        "executable_digests",
-    ] {
-        let mut input = runtime_input();
-        input.as_object_mut().unwrap().remove(field);
-        reader_case(
-            &config,
-            &mut cases,
-            &format!("runtime-{field}-missing"),
-            &json!({"runtimes":{"unused":input}}).to_string(),
-        );
-        for (label, value) in [
-            ("null", json!(null)),
-            ("bool", json!(false)),
-            ("number", json!(1)),
-            ("string", json!("x")),
-            ("array", json!([])),
-            ("object", json!({})),
-        ] {
-            let mut input = runtime_input();
-            input[field] = value;
-            reader_case(
-                &config,
-                &mut cases,
-                &format!("runtime-{field}-{label}"),
-                &json!({"runtimes":{"unused":input}}).to_string(),
-            );
-        }
-    }
-    for (label, value) in [
-        ("zero", json!(0)),
-        ("future", json!(2)),
-        ("max", json!(4294967295u32)),
-        ("negative", json!(-1)),
-        ("overflow", json!(4294967296u64)),
-        ("float", json!(1.0)),
-    ] {
-        let mut input = runtime_input();
-        input["schema"] = value;
-        reader_case(
-            &config,
-            &mut cases,
-            &format!("runtime-schema-{label}"),
-            &json!({"runtimes":{"unused":input}}).to_string(),
+        assert_eq!(
+            outcome(load_index(&config)),
+            case["outcome"],
+            "{}",
+            case["case"]
         );
     }
-    for (label, active) in [("unused", json!({})), ("selected", json!({"p":"runtime"}))] {
-        let mut input = runtime_input();
-        input["extra"] = json!("forbidden");
-        reader_case(
-            &config,
-            &mut cases,
-            &format!("runtime-unknown-{label}"),
-            &json!({"active":active,"runtimes":{"runtime":input}}).to_string(),
-        );
-        reader_case(
-            &config,
-            &mut cases,
-            &format!("runtime-malformed-{label}"),
-            &json!({"active":active,"runtimes":{"runtime":{"schema":1}}}).to_string(),
-        );
-    }
-    for (label, field, value) in [
-        ("executables-null-element", "executables", json!([null])),
-        (
-            "executables-duplicate",
-            "executables",
-            json!(["z", "z", "a"]),
-        ),
-        ("versions-bad-value", "reported_versions", json!({"x":1})),
-        ("digests-bad-value", "executable_digests", json!({"x":null})),
-    ] {
-        let mut input = runtime_input();
-        input[field] = value;
-        reader_case(
-            &config,
-            &mut cases,
-            &format!("runtime-{label}"),
-            &json!({"runtimes":{"unused":input}}).to_string(),
-        );
-    }
-    // Raw duplicate fields must reach the original named Runtime decoder.
-    let valid = r#"{"schema":1,"executables":[],"root":"","interpreter":"","lock_digest":"l","manifest_digest":"m","package_digest":"p"}"#;
-    for (label, runtime) in [
-        (
-            "duplicate-known",
-            valid.replacen("\"schema\":1", "\"schema\":1,\"schema\":1", 1),
-        ),
-        (
-            "duplicate-map-key",
-            valid.replace(
-                "\"package_digest\":\"p\"",
-                "\"package_digest\":\"p\",\"reported_versions\":{\"x\":\"first\",\"x\":\"last\"}",
-            ),
-        ),
-    ] {
-        reader_case(
-            &config,
-            &mut cases,
-            &format!("runtime-{label}"),
-            &format!("{{\"runtimes\":{{\"unused\":{runtime}}}}}"),
-        );
-    }
-    reader_case(
-        &config,
-        &mut cases,
-        "duplicate-runtime-map-key",
-        &format!("{{\"runtimes\":{{\"unused\":{valid},\"unused\":{valid}}}}}"),
-    );
-    let sequence = [
-        json!(1),
-        json!(["z", "a", "z"]),
-        json!("root"),
-        json!("python"),
-        json!("lock"),
-        json!("manifest"),
-        json!("package"),
-        json!({"z":"2","a":"1"}),
-        json!({"z":"hash"}),
-    ];
-    for length in 0..=10 {
-        let mut elements = sequence[..length.min(9)].to_vec();
-        if length == 10 {
-            elements.push(json!("extra"));
-        }
-        reader_case(
-            &config,
-            &mut cases,
-            &format!("runtime-sequence-{length}"),
-            &json!({"runtimes":{"unused":elements}}).to_string(),
-        );
-    }
-    let mut at_limit = b"{}".to_vec();
-    at_limit.resize(MAX_DESCRIPTOR_BYTES, b' ');
-    std::fs::write(&config.index, &at_limit).unwrap();
-    cases.push(json!({"case":"input-exact-limit", "input_recipe":"{} followed by ASCII spaces to MAX_DESCRIPTOR_BYTES", "bytes":at_limit.len(), "outcome":outcome(load_index(&config))}));
-    at_limit.push(b'!');
-    std::fs::write(&config.index, &at_limit).unwrap();
-    cases.push(json!({"case":"input-over-limit-before-parse", "input_recipe":"exact-limit input followed by !", "bytes":at_limit.len(), "outcome":outcome(load_index(&config))}));
-    fixture(
-        "installation-index-reader-observations",
-        &serde_json::to_vec_pretty(&cases).unwrap(),
-    );
 }
 
 #[cfg(unix)]

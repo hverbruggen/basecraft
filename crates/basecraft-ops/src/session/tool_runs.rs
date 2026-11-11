@@ -101,9 +101,20 @@ impl Session {
                 .directory()
                 .join("records")
                 .join(format!("{}.json", ledger.id()));
-            params["input_run"] = serde_json::json!({"schema_version":1,"id":ledger.id(),"hash":basecraft_io::hash_file(&record)?});
+            params["input_run"] =
+                serde_json::to_value(basecraft_protocol::records::ActivityInputRun {
+                    schema_version: 1,
+                    id: ledger.id().into(),
+                    hash: basecraft_io::hash_file(&record)?,
+                    extra: std::collections::BTreeMap::new(),
+                })?;
         }
-        params["contributions"] = serde_json::json!({"schema_version":1,"edits":edits});
+        params["contributions"] =
+            serde_json::to_value(basecraft_protocol::records::ActivityContributions {
+                schema_version: 1,
+                edits: edits.to_vec(),
+                extra: std::collections::BTreeMap::new(),
+            })?;
         self.log_tool_run(id, actor, activity, params, inputs, &[])
     }
 

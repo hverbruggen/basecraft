@@ -1,0 +1,227 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Array_of_OperationOutcome",
+  "type": "array",
+  "items": {
+    "$ref": "#/$defs/OperationOutcome"
+  },
+  "$defs": {
+    "OperationError": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/OperationErrorCode"
+        },
+        "evidence": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "field": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "operation": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "operation"
+      ]
+    },
+    "OperationErrorCode": {
+      "type": "string",
+      "enum": [
+        "changed_on_disk",
+        "wrong_document_kind",
+        "unknown_document",
+        "not_found",
+        "damaged",
+        "limit",
+        "unsupported",
+        "busy",
+        "invalid_arguments",
+        "incompatible_contract",
+        "plugin_disabled",
+        "plugin_unavailable",
+        "plugin_changed",
+        "permission_denied",
+        "stale_revision",
+        "output_conflict",
+        "unsupported_input",
+        "plugin_protocol_violation",
+        "tool_failure",
+        "cancelled",
+        "timeout",
+        "publication_incomplete",
+        "evidence_incomplete"
+      ]
+    },
+    "OperationOutcome": {
+      "description": "Session-owned runtime view, independent of historical scientific `JobStatus`.",
+      "type": "object",
+      "properties": {
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PublishedArtifact"
+          }
+        },
+        "data": true,
+        "effective_parameters": true,
+        "errors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/OperationError"
+          }
+        },
+        "evidence": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operation": {
+          "type": "string"
+        },
+        "pins": {
+          "$ref": "#/$defs/OperationPins"
+        },
+        "proposals": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProposalOutcome"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requested_parameters": true,
+        "run_id": {
+          "type": "string"
+        },
+        "schema": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "state": {
+          "$ref": "#/$defs/RuntimeState"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "schema",
+        "operation",
+        "run_id",
+        "state",
+        "pins",
+        "requested_parameters",
+        "effective_parameters",
+        "artifacts",
+        "warnings",
+        "errors"
+      ]
+    },
+    "OperationPins": {
+      "type": "object",
+      "properties": {
+        "descriptor_digest": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "string"
+        },
+        "package_digest": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "generation",
+        "package_digest",
+        "descriptor_digest"
+      ]
+    },
+    "ProposalOutcome": {
+      "type": "object",
+      "properties": {
+        "applied": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "document": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rejected": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "applied",
+        "rejected"
+      ]
+    },
+    "PublishedArtifact": {
+      "type": "object",
+      "properties": {
+        "digest": {
+          "description": "Algorithm-qualified digest, e.g. b3:hex; never reinterpret old hashes.",
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "path",
+        "digest"
+      ]
+    },
+    "RuntimeState": {
+      "type": "string",
+      "enum": [
+        "queued",
+        "running",
+        "cancelling",
+        "finalizing",
+        "completed",
+        "failed",
+        "cancelled",
+        "interrupted",
+        "partial"
+      ]
+    }
+  }
+}

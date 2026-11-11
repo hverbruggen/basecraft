@@ -7,6 +7,7 @@ mod operations;
 mod save;
 mod submission;
 
+use basecraft_ops::document_record::ReportExt;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
@@ -421,6 +422,14 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
         Command::Replay { project } => {
             let report = basecraft_ops::replay::replay(&project)?;
+            for mismatch in &report.writer_mismatches {
+                println!(
+                    "{} {}: {}",
+                    mismatch.code(),
+                    mismatch.entry,
+                    mismatch.message()
+                );
+            }
             for p in &report.problems {
                 println!("problem: {p}");
             }
@@ -539,6 +548,84 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     schemars::schema_for!(
                         Vec<basecraft_protocol::report_records::ReportSourceMapEntry>
                     ),
+                ),
+                (
+                    "metadata-manifest",
+                    schemars::schema_for!(basecraft_protocol::metadata_records::MetadataManifest),
+                ),
+                (
+                    "query-preparation",
+                    schemars::schema_for!(basecraft_protocol::query_records::QueryPlan),
+                ),
+                (
+                    "document-record",
+                    schemars::schema_for!(basecraft_protocol::report_records::DocumentRecord),
+                ),
+                (
+                    "document-report",
+                    schemars::schema_for!(basecraft_protocol::report_records::Report),
+                ),
+                (
+                    "validated-artifacts",
+                    schemars::schema_for!(Vec<(String, std::path::PathBuf, String)>),
+                ),
+                (
+                    "workflow-stages",
+                    schemars::schema_for!(Vec<basecraft_protocol::operation::OperationOutcome>),
+                ),
+                (
+                    "submission-package",
+                    schemars::schema_for!(
+                        basecraft_protocol::submission_records::SubmissionPackage
+                    ),
+                ),
+                (
+                    "submission-validation",
+                    schemars::schema_for!(
+                        basecraft_protocol::submission_records::ValidationSummary
+                    ),
+                ),
+                (
+                    "operation-failure",
+                    schemars::schema_for!(basecraft_protocol::operation::OperationFailure),
+                ),
+                (
+                    "activity-input-run",
+                    schemars::schema_for!(basecraft_protocol::records::ActivityInputRun),
+                ),
+                (
+                    "activity-contributions",
+                    schemars::schema_for!(basecraft_protocol::records::ActivityContributions),
+                ),
+                (
+                    "extraction-record",
+                    schemars::schema_for!(basecraft_protocol::records::ExtractionRecord),
+                ),
+                (
+                    "journal-entry",
+                    schemars::schema_for!(basecraft_protocol::records::JournalEntry),
+                ),
+                (
+                    "workflow-failure",
+                    schemars::schema_for!(basecraft_protocol::records::WorkflowFailure),
+                ),
+                (
+                    "tree-sidecar",
+                    schemars::schema_for!(basecraft_protocol::companion_records::TreeSidecar),
+                ),
+                (
+                    "delimitation-sidecar",
+                    schemars::schema_for!(
+                        basecraft_protocol::companion_records::DelimitationSidecar
+                    ),
+                ),
+                (
+                    "sanger-request",
+                    schemars::schema_for!(basecraft_protocol::sanger_records::SangerRequest),
+                ),
+                (
+                    "sanger-job-record",
+                    schemars::schema_for!(basecraft_protocol::sanger_records::SangerJobRecord),
                 ),
                 ("report-citations", schemars::schema_for!(Vec<String>)),
                 (

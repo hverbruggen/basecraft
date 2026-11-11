@@ -1,5 +1,10 @@
 //! Preparation stages: capture session bindings, freeze input bytes, then allocate ledgers.
-use super::*;
+use super::{
+    Arc, ArtifactRevision, ArtifactRun, BTreeMap, DocumentTarget, Error, ExecutionFamily,
+    InputReference, InputView, InvocationContext, InvocationInputEvidence, OperationRequest, Path,
+    PathBuf, PreparedOperation, RegisteredOperation, Result, SequenceTarget, SessionPolicy, Value,
+    contract, file_tool, input_evidence, json, sources_from_upstream,
+};
 
 struct GeneratedInput {
     position: usize,
@@ -338,7 +343,7 @@ impl PreparedOperation {
         let parameters =
             contract::normalize_parameters(&operation.descriptor, &supplied_parameters)?;
         operation.package.verify()?;
-        let mut frozen = freeze_inputs(&operation, &lifecycle, &parameters, &mut inputs)?;
+        let mut frozen = freeze_inputs(&operation, lifecycle, &parameters, &mut inputs)?;
         let AllocatedRun {
             run,
             ledger_inputs,
@@ -429,7 +434,7 @@ impl PreparedOperation {
 
 fn freeze_inputs(
     operation: &RegisteredOperation,
-    lifecycle: &crate::lifecycle::Lifecycle,
+    lifecycle: crate::lifecycle::Lifecycle,
     parameters: &Value,
     inputs: &mut PreparationInputs,
 ) -> Result<FrozenInputs> {
@@ -576,8 +581,8 @@ fn freeze_inputs(
         .ok_or_else(|| Error::Protocol("document input was not submitted".into()))?;
     }
     let submission_plan = if lifecycle.external() {
-        let plan = basecraft_ops::blast::prepare(&submission_queries, &parameters)?;
-        basecraft_ops::blast::authorize(&plan, &parameters)?;
+        let plan = basecraft_ops::blast::prepare(&submission_queries, parameters)?;
+        basecraft_ops::blast::authorize(&plan, parameters)?;
         Some(plan)
     } else {
         None

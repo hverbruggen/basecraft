@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "QueryPlan",
+  "type": "object",
+  "properties": {
+    "alphabet": {
+      "type": "string"
+    },
+    "approval_hash": {
+      "type": "string"
+    },
+    "database": {
+      "type": "string"
+    },
+    "fasta": {
+      "type": "string"
+    },
+    "limit": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "original_residues": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "oversized": {
+      "type": "boolean"
+    },
+    "program": {
+      "type": "string"
+    },
+    "query_hash": {
+      "type": "string"
+    },
+    "records": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/QueryRecord"
+      }
+    },
+    "schema": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "submitted_residues": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "truncation": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "schema",
+    "alphabet",
+    "program",
+    "database",
+    "original_residues",
+    "limit",
+    "submitted_residues",
+    "oversized",
+    "records",
+    "fasta",
+    "query_hash",
+    "approval_hash",
+    "truncation"
+  ],
+  "$defs": {
+    "QueryRecord": {
+      "description": "The sorted field order retains the original Value-based writer bytes.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "omitted": {
+          "type": "boolean"
+        },
+        "original_length": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "removed_gaps_or_whitespace": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "shortened": {
+          "type": "boolean"
+        },
+        "source": true,
+        "submitted_input_ranges": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              }
+            ]
+          }
+        },
+        "submitted_length": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "submitted_query_range": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "submitted_source_ranges": {
+          "type": "array",
+          "items": true
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "omitted",
+        "original_length",
+        "removed_gaps_or_whitespace",
+        "shortened",
+        "source",
+        "submitted_input_ranges",
+        "submitted_length",
+        "submitted_query_range",
+        "submitted_source_ranges"
+      ]
+    }
+  }
+}
