@@ -794,7 +794,8 @@ mod moved_and_failed_recovery_tests {
         draft.engine = "Tracy".into();
         draft.mode = "basecall".into();
         draft.version_output = "caller".into();
-        let mut alternative = ReviewSession::new(&SangerReview::from_draft(draft, &source).unwrap());
+        let mut alternative =
+            ReviewSession::new(&SangerReview::from_draft(draft, &source).unwrap());
         alternative
             .apply(ReviewOp::Set {
                 columns: vec![0],

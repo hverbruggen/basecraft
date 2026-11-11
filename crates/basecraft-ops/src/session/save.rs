@@ -114,8 +114,13 @@ impl Session {
                 "Choose a destination with Save as for this new sequence",
             ));
         }
-        let requested = path.map_or_else(|| self.resolve(&self.docs[id.0].key), Path::to_path_buf);
-        self.check_target_identity(id, &requested)?;
+        // Reviews keep the link and identity guards their former payload owned.
+        let review = self.docs[id.0].content.kind() == files::Kind::SangerReview;
+        if review {
+            let requested =
+                path.map_or_else(|| self.resolve(&self.docs[id.0].key), Path::to_path_buf);
+            self.check_target_identity(id, &requested)?;
+        }
         let path = path.filter(|p| !self.is_own_file(id, p));
         let target = path.map_or_else(|| self.resolve(&self.docs[id.0].key), Path::to_path_buf);
         hooks.at(SaveSite::CleanHashes);
@@ -144,7 +149,7 @@ impl Session {
             None
         };
         if (new_sequence || (!overwrite && path.is_some()))
-            && !self.check_previous_save_target(id, &target)?
+            && !(review && self.check_previous_save_target(id, &target)?)
         {
             crate::save_guard::check_new_target(&target)?;
         }
@@ -216,7 +221,9 @@ impl Session {
         // Preservation and pending-intent publication can take time. A decision
         // cannot authorize an externally replaced destination during that work.
         hooks.at(SaveSite::Recheck);
-        self.check_target_identity(id, &target)?;
+        if review {
+            self.check_target_identity(id, &target)?;
+        }
         if let Some(check) = &target_check
             && !check.target_is_current(&target)?
         {
@@ -225,7 +232,7 @@ impl Session {
             )));
         }
         if (new_sequence || (!overwrite && path.is_some()))
-            && !self.check_previous_save_target(id, &target)?
+            && !(review && self.check_previous_save_target(id, &target)?)
         {
             crate::save_guard::check_new_target(&target)?;
         }
@@ -236,15 +243,19 @@ impl Session {
             self.save_inner(id, path, before.is_none(), hooks)
         };
         if outcome.is_ok() {
-            self.docs[id.0].saved_state_hashes = self.save_hashes(id)?;
-            self.docs[id.0].saved_target = Some((
-                target.clone(),
-                crate::input_evidence::stamp(&target)?,
-                expected[0].clone(),
-            ));
+            if review {
+                self.docs[id.0].saved_state_hashes = self.save_hashes(id)?;
+                self.docs[id.0].saved_target = Some((
+                    target.clone(),
+                    crate::input_evidence::stamp(&target)?,
+                    expected[0].clone(),
+                ));
+            }
             if target == self.resolve(&self.docs[id.0].key) {
                 hooks.boundary(SaveSite::SavedHashes, self)?;
-
+                if !review {
+                    self.docs[id.0].saved_state_hashes = self.save_hashes_at(id, &target)?;
+                }
                 hooks.executed(SaveMilestone::SavedHashes);
                 hooks.boundary(SaveSite::DiskStamp, self)?;
                 self.docs[id.0].disk_stamp = crate::input_evidence::stamp(&target)?;
@@ -277,7 +288,8 @@ impl Session {
                 }
             }
             let now = basecraft_io::hash_file(&target).ok();
-            if now.as_ref() == expected.first()
+            if review
+                && now.as_ref() == expected.first()
                 && let Ok(stamp) = crate::input_evidence::stamp(&target)
             {
                 if self.is_own_file(id, &target) {

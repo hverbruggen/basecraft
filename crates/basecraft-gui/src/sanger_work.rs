@@ -1,7 +1,10 @@
 //! Sanger continuations run outside Qt. Scientific execution and receipts belong
 //! exclusively to the registry/JobManager; this module only adapts review state.
 use super::{Path, PathBuf, ReviewChoice, ReviewOp, SangerReview, SangerReviewView};
-use basecraft_docs::{AlignmentDoc, sanger::{SangerDraft, SangerDraftExt}};
+use basecraft_docs::{
+    AlignmentDoc,
+    sanger::{SangerDraft, SangerDraftExt},
+};
 use basecraft_io::abif;
 use basecraft_plugin_host::{
     jobs::JobManager,

@@ -3,11 +3,11 @@
 mod sanger_fixture;
 
 use basecraft_ops::{Session, replay, sanger_review::SangerReview};
+use basecraft_platform::settings::{Change, ProvenancePolicy, SettingsStore};
 use basecraft_protocol::{
     Op,
     sanger::{ReviewChoice, ReviewOp},
 };
-use basecraft_platform::settings::{Change, ProvenancePolicy, SettingsStore};
 use std::path::Path;
 #[path = "support/isolated_profile.rs"]
 mod isolated_profile;

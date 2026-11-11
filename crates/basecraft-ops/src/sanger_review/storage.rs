@@ -112,7 +112,10 @@ impl SourceAccess for Source {
         let path = match (&self.ledger, &self.reference) {
             (Some(ledger), Some(reference)) => {
                 let path = inputs::source_location(ledger, reference)?;
-                if !path.try_exists()? && inputs::read_input(ledger)?.state == basecraft_protocol::input_records::EvidenceState::Referenced {
+                if !path.try_exists()?
+                    && inputs::read_input(ledger)?.state
+                        == basecraft_protocol::input_records::EvidenceState::Referenced
+                {
                     self.path.clone()
                 } else {
                     path
@@ -1245,7 +1248,10 @@ mod tests {
             "columns":[{"column":1,"consensus":"A","support":[{"read":1,"base":"A","kind":"call"}],"conflict":false,"review":true},{"column":2,"consensus":"C","support":[{"read":1,"base":"C","kind":"call"}],"conflict":false,"review":true}]});
         let path = folder.join("draft.json");
         std::fs::write(&path, serde_json::to_vec_pretty(&json).unwrap()).unwrap();
-        (ReviewSession::new(&SangerReview::new(&path).unwrap()), trace)
+        (
+            ReviewSession::new(&SangerReview::new(&path).unwrap()),
+            trace,
+        )
     }
 
     fn edit(session: &mut ReviewSession) {

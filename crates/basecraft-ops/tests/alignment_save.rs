@@ -279,10 +279,14 @@ fn alignment_interface_rejections_normalization_and_hashes() {
             residue: "AC".into(),
         },
     ] {
-        assert!(matches!(
-            session.apply(doc, op),
-            Err(basecraft_ops::Error::Invalid(_))
-        ));
+        // Operations of another document kind are unsupported, not invalid.
+        let wrong_kind = matches!(op, Op::SeqReplace { .. });
+        let result = session.apply(doc, op);
+        assert!(
+            matches!(result, Err(basecraft_ops::Error::Unsupported(_))) == wrong_kind
+                && matches!(result, Err(basecraft_ops::Error::Invalid(_))) != wrong_kind,
+            "{result:?}"
+        );
         assert_eq!(session.revision(doc).unwrap(), original_revision);
         assert_eq!(session.save_hashes(doc).unwrap(), original_hashes);
         assert!(!session.can_undo(doc).unwrap());

@@ -443,17 +443,22 @@ fn bound_tree_snapshot_verification_keeps_binding_run_namespace_and_metadata_gua
             }
             _ => {}
         }
-        if fault == "metadata-legacy" {
-            let files::Loaded::Tree(tree) = files::load_from(&path, source).unwrap() else {
-                panic!("expected tree");
-            };
-            assert!(tree.metadata_warning.is_some());
+        // Faulty or mismatched bindings leave the given bytes open without metadata.
+        let files::Loaded::Tree(tree) = files::load_from(&path, source).unwrap() else {
+            panic!("expected tree");
+        };
+        let warning = tree.metadata_warning.unwrap_or_default();
+        assert!(
+            warning.starts_with("Tree metadata was ignored"),
+            "{fault}: {warning}"
+        );
+        assert!(tree.doc.supports().is_empty(), "{fault}");
+        let expected = if fault == "snapshot" {
+            "(other,tree);"
         } else {
-            assert!(
-                files::load_from(&path, source).is_err(),
-                "guard was bypassed: {fault}"
-            );
-        }
+            "(a,b);"
+        };
+        assert_eq!(tree.doc.to_newick().trim(), expected, "{fault}");
     }
 }
 

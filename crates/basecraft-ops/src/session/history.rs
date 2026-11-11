@@ -118,12 +118,17 @@ impl Session {
             });
         }
         self.flush()?;
+        // A refused edit restores identical content, so its saved hashes stay valid.
+        let cached = self.docs[doc.0].current_saved_hashes.get().cloned();
         let (inverse, feature) = self.docs[doc.0]
             .content_mut()
             .as_document_mut()
             .apply(&op)?;
         if let Err(error) = self.track(doc) {
             restore_inverse(self.docs[doc.0].content_mut(), &inverse)?;
+            if let Some(hashes) = cached {
+                let _ = self.docs[doc.0].current_saved_hashes.set(hashes);
+            }
             return Err(error);
         }
         self.docs[doc.0].generation += 1;
