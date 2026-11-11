@@ -265,9 +265,12 @@ record. No secret belongs in parameters, settings or provenance.
 `host` names services the host runs around an operation:
 
 - `species_workspace`: the result holds species hypotheses for a workspace.
-- `caller`: `{"kind": "single_trace", "engine": "<program>"}`, the base caller
-  the Sanger review asks for alternative calls. The host finds the program
-  through `BASECRAFT_<PROGRAM>`, the plugin runtime, then PATH.
+- `caller`: `single_trace`, the base caller the Sanger review asks for
+  alternative calls. It has one input, its primary output is the Sanger draft,
+  and its contract answers the `engine` query with `{"name", "sha256",
+  "problem"}`. The host passes `engine_sha256` and `signal_threshold`, reuses a
+  retained result for the same read and settings, and checks the draft against
+  the read before showing it.
 - `remote`: a service that sends data elsewhere. `lifecycle` is
   `external_submission`, `retained_receipt` or `remote_draft`; submissions name
   a `query_preparation` and receipts a `retained_query_transformation`. Only

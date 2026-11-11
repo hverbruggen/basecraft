@@ -99,20 +99,13 @@ pub struct HostServices {
     /// The result holds species hypotheses for the target workspace.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub species_workspace: bool,
+    /// The operation is a base caller the Sanger review asks for alternative
+    /// calls. Its contract answers the `engine` query with the program's name
+    /// and SHA-256, and its primary output is the draft.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub caller: Option<Caller>,
+    pub caller: Option<CallerKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote: Option<RemoteService>,
-}
-
-/// A base caller the Sanger review asks for alternative calls.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Caller {
-    pub kind: CallerKind,
-    /// Program the caller runs. The host finds it through `BASECRAFT_<PROGRAM>`,
-    /// the plugin runtime, then PATH, and pins its hash.
-    pub engine: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

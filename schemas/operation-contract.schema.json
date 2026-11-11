@@ -48,24 +48,6 @@
         "time"
       ]
     },
-    "Caller": {
-      "description": "A base caller the Sanger review asks for alternative calls.",
-      "type": "object",
-      "properties": {
-        "engine": {
-          "description": "Program the caller runs. The host finds it through `BASECRAFT_<PROGRAM>`,\nthe plugin runtime, then PATH, and pins its hash.",
-          "type": "string"
-        },
-        "kind": {
-          "$ref": "#/$defs/CallerKind"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "kind",
-        "engine"
-      ]
-    },
     "CallerKind": {
       "type": "string",
       "enum": [
@@ -99,9 +81,10 @@
       "type": "object",
       "properties": {
         "caller": {
+          "description": "The operation is a base caller the Sanger review asks for alternative\ncalls. Its contract answers the `engine` query with the program's name\nand SHA-256, and its primary output is the draft.",
           "anyOf": [
             {
-              "$ref": "#/$defs/Caller"
+              "$ref": "#/$defs/CallerKind"
             },
             {
               "type": "null"

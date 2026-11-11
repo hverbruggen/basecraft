@@ -428,17 +428,20 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
                 ));
             }
         }
-        if let Some(caller) = descriptor
+        if descriptor
             .host
             .as_ref()
-            .and_then(|host| host.caller.as_ref())
-            && (caller.engine.is_empty()
-                || !caller
-                    .engine
-                    .bytes()
-                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'))
+            .is_some_and(|host| host.caller.is_some())
+            && (!contract.queries.iter().any(|query| query.name == "engine")
+                || descriptor.inputs.len() != 1
+                || !descriptor
+                    .outputs
+                    .values()
+                    .any(|output| output.primary.is_some()))
         {
-            return Err(invalid("a caller names one engine program"));
+            return Err(invalid(
+                "a caller has one input, a primary output and an engine query",
+            ));
         }
         for rule in descriptor
             .outputs

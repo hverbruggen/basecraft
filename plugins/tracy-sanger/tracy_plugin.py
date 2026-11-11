@@ -89,5 +89,16 @@ def primers(params, context):
     }
 
 
+@plugin.query("engine")
+def engine():
+    """The program the consensus runs, for the host's single-trace caller service."""
+    try:
+        tracy = executable(("tracy",), "BASECRAFT_TRACY")
+    except FileNotFoundError:
+        return {"name": "Tracy", "sha256": None,
+                "problem": "tracy is unavailable. Install it; instrument calls remain usable."}
+    return {"name": "Tracy", "sha256": file_hash(Path(tracy)), "problem": None}
+
+
 if __name__ == "__main__":
     plugin.run()
