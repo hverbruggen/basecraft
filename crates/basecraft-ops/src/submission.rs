@@ -133,9 +133,7 @@ pub fn describe(edit: &SubmissionEdit) -> String {
         SubmissionEdit::SetSource { source } => format!("Submission source {}", source.document),
         SubmissionEdit::SetRows { rows } => format!("Submission decisions for {} rows", rows.len()),
         SubmissionEdit::ConfirmSelection { .. } => "Confirmed submission row selection".into(),
-        SubmissionEdit::SetBatch { .. } => {
-            "Submission batch settings".into()
-        }
+        SubmissionEdit::SetBatch { .. } => "Submission batch settings".into(),
         SubmissionEdit::SetFrames { frames, clear } => format!(
             "Reading frames: {} set, {} cleared",
             frames.len(),
@@ -1344,7 +1342,8 @@ fn verified_reports(
             .original_path
             .as_deref()
             .ok_or_else(|| invalid("validation input has no source path"))?;
-        let ledger = crate::records::input_evidence::read_input(&run.join(&evidence.run_directory))?;
+        let ledger =
+            crate::records::input_evidence::read_input(&run.join(&evidence.run_directory))?;
         if run.join(original).canonicalize()? != current.canonicalize()?
             || evidence.source_hash.as_deref() != Some(expected.as_str())
             || evidence.submitted_hash != expected

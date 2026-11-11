@@ -155,10 +155,8 @@ fn the_caller_service_returns_checks_reuses_and_refuses_drafts() {
     future.schema = 99;
     assert!(verify_completed_result(&future, &query).is_err());
     let fake = basecraft_ops::records::ArtifactRun::create(&source, "0000-future").unwrap();
-    basecraft_ops::records::write_json(&fake.artifact("runtime.json").unwrap(), &future)
-        .unwrap();
-    let corrupt =
-        basecraft_ops::records::ArtifactRun::create(&source, "0001-corrupt").unwrap();
+    basecraft_ops::records::write_json(&fake.artifact("runtime.json").unwrap(), &future).unwrap();
+    let corrupt = basecraft_ops::records::ArtifactRun::create(&source, "0001-corrupt").unwrap();
     std::fs::write(
         corrupt.artifact("runtime.json").unwrap(),
         b"corrupt receipt",
