@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "operations": [
     {
       "name": "submit",
@@ -163,11 +163,13 @@
         "document_write": false,
         "artifact_write": true
       },
+      "needs": {
+        "contact_email": "contact_email"
+      },
       "host": {
-        "lifecycle": "external_submission",
-        "query_preparation": "blast",
-        "parameter_environment": {
-          "contact_email": "BASECRAFT_BLAST_CONTACT_EMAIL"
+        "remote": {
+          "lifecycle": "external_submission",
+          "query_preparation": "blast"
         }
       }
     },
@@ -284,8 +286,10 @@
         "artifact_write": false
       },
       "host": {
-        "lifecycle": "retained_receipt",
-        "retained_query_transformation": "blast-query-preparation-v1"
+        "remote": {
+          "lifecycle": "retained_receipt",
+          "retained_query_transformation": "blast-query-preparation-v1"
+        }
       }
     }
   ]

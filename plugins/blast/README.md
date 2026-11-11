@@ -31,7 +31,7 @@ invented effective database version. Check NCBI's page for the effective databas
 E-value defaults to 0.05; maximum hits to 100. Scoring fields are explicit in
 `request_fields`. Megablast is available for nucleotide/nt only.
 
-Set `BASECRAFT_BLAST_CONTACT_EMAIL` in your local launch environment, or supply
+Set `BASECRAFT_CONTACT_EMAIL` in your local launch environment, or supply
 `contact_email` for a submission. The GUI allows entering the authorized service
 contact and hides it under Search options when already configured. NCBI's
 [API usage guidance](https://blast.ncbi.nlm.nih.gov/doc/blast-help/developerinfo.html#usage-guidelines)

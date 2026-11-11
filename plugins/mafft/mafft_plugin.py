@@ -1,7 +1,7 @@
 """Align sequences with MAFFT, using its default strategy (FFT-NS-2).
 
-The host passes an unaligned FASTA file and the path to write the
-alignment to. Residue case is kept as it was in the input.
+The host passes an unaligned FASTA file; the alignment goes to
+`artifacts/alignment.afa`. Residue case is kept as it was in the input.
 """
 
 import os
@@ -36,10 +36,9 @@ def mafft_version(exe: str) -> str:
 
 
 @plugin.operation("align")
-def align(snapshot, params):
-    """Align the sequences in `input` and write the alignment to `output`."""
-    source = Path(params["input"])
-    target = Path(params["output"])
+def align(params, context):
+    source = Path(context.input("alignment"))
+    target = Path(context.output("artifacts", "alignment.afa"))
     count = sum(1 for line in source.open("rb") if line.startswith(b">"))
     if count < 2:
         raise ValueError("MAFFT needs at least two sequences")
@@ -49,12 +48,8 @@ def align(snapshot, params):
     argv = [exe, "--preservecase", "--thread", str(threads), str(source)]
     with partial.open("wb") as out:
         run = subprocess.run(argv, stdout=out, stderr=subprocess.PIPE, check=False)
-    diagnostics = []
-    if allocation := params.get("analysis_artifacts"):
-        log = Path(allocation["metadata_directory"]) / "mafft.stderr.txt"
-        from basecraft.tools import write_atomic
-        write_atomic(log, run.stderr.decode(errors="replace"))
-        diagnostics.append(str(log))
+    from basecraft.tools import write_atomic
+    write_atomic(Path(context.output("artifacts", "mafft.stderr.txt")), run.stderr.decode(errors="replace"))
     if run.returncode != 0 or partial.stat().st_size == 0:
         partial.unlink(missing_ok=True)
         detail = run.stderr.decode(errors="replace").strip().splitlines()
@@ -63,38 +58,37 @@ def align(snapshot, params):
     return {
         "ops": [],
         "message": f"Aligned {count} sequences",
-        "outputs": [str(target), *diagnostics],
         "tool": {"name": "mafft", "version": mafft_version(exe)},
         "execution": {"argv": argv, "resolved_parameters": {"threads": threads, "preserve_case": True}, "preprocessing": [], "environment": {}, "methods_template": "mafft.align.v1", "methods": {"description": "Sequences were aligned", "citations": ["Katoh and Standley (2013), MAFFT version 7. https://doi.org/10.1093/molbev/mst010"]}},
     }
 
 
 @plugin.operation("place_sanger")
-def place_sanger(snapshot, params):
+def place_sanger(params, context):
     """Map a draft Sanger fragment to columns in a frozen source MSA."""
     from sanger_place import place
 
-    source = Path(params["input"])
-    target = Path(params["output"])
+    source = Path(context.input("alignment"))
+    target = Path(context.output("artifacts", "placement.json"))
     result = place(source, str(params["fragment"]), target, mafft_executable(), threads=params.get("threads"))
-    return {"ops": [], "outputs": [str(target)],
+    return {"ops": [],
             "message": f"Placed {len(result['fragment'])} bases; "
                        f"{result['insertions']} insertion anchors",
             "tool": {"name": "mafft", "version": result["version"]}}
 
 
 @plugin.operation("add_sequences")
-def add_sequences(snapshot, params):
+def add_sequences(params, context):
     from add_sequences import run_add
 
-    result = run_add(Path(params["input"]), params["rows"], Path(params["output"]),
+    result = run_add(Path(context.input("alignment")), params["rows"],
+                     Path(context.output("artifacts", "addition.json")),
                      mafft_executable(), orientation=bool(params.get("orientation", False)),
                      keep=bool(params.get("keep", True)), threads=params.get("threads"))
-    return {"ops": [], "outputs": [params["output"]],
+    return {"ops": [],
             "message": f"Placed {len(result['rows'])} new sequences",
             "tool": {"name": "mafft", "version": mafft_version(mafft_executable())}}
 
 
 if __name__ == "__main__":
-    plugin.contract()
     plugin.run()

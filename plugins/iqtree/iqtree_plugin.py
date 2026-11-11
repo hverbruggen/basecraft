@@ -10,7 +10,6 @@ from pathlib import Path
 from basecraft.plugin import Plugin
 from basecraft.tools import (
     allocated_cpus,
-    bootstrap_collection_path,
     executable,
     quote_newick,
     read_alignment,
@@ -22,13 +21,10 @@ plugin = Plugin("basecraft.iqtree", "0.1.0")
 
 
 @plugin.operation("tree")
-def tree(snapshot, params):
-    source, target = Path(params["input"]).resolve(), Path(params["output"]).resolve()
-    if source == target:
-        raise ValueError("Output must differ from input")
-    def cancelled():
-        return params.get("cancel_file") and Path(params["cancel_file"]).exists()
-
+def tree(params, context):
+    source = Path(context.input("alignment"))
+    target = Path(context.output("artifacts", "tree.nwk"))
+    cancelled = context.cancelled
     if cancelled():
         raise RuntimeError("IQ-TREE cancelled before inference")
     records = read_alignment(source, minimum=4)
@@ -52,7 +48,6 @@ def tree(snapshot, params):
         raise ValueError("Bootstrap needs at least one replicate")
     support_text = {"none": "not requested", "ufboot": f"ultrafast bootstrap, {replicates} replicates", "bootstrap": f"standard bootstrap, {replicates} replicates"}[support]
     exe = executable(("iqtree3", "iqtree2", "iqtree"), "BASECRAFT_IQTREE")
-    outputs = []
     selected_model = None
     with tempfile.TemporaryDirectory(prefix="basecraft-iqtree-") as work:
         renamed, prefix = Path(work) / "input.fa", Path(work) / "analysis"
@@ -138,7 +133,7 @@ def tree(snapshot, params):
         boottrees = prefix.with_suffix(".boottrees")
         replicate_trees = None
         if support == "bootstrap" and boottrees.exists():
-            replicate_trees = bootstrap_collection_path(params)
+            replicate_trees = Path(context.output("artifacts", f"bootstrap-{context.run_id}.nex"))
             lines = [line.strip() for line in boottrees.read_text().splitlines() if line.strip()]
             # Replicates may leave out identical sequences, so names are
             # restored label by label rather than checked as a full set.
@@ -155,13 +150,10 @@ def tree(snapshot, params):
         if cancelled():
             raise RuntimeError("IQ-TREE cancelled before publication")
         publish_artifacts(artifacts)
-        outputs = [str(path) for path, payload in artifacts if payload is not None]
         if replicate_trees is not None:
             write_atomic(replicate_trees, nexus)
-            outputs.append(str(replicate_trees))
     return {
         "ops": [],
-        "outputs": outputs,
         "message": f"Built an IQ-TREE tree of {len(records)} sequences ({model})",
         "execution": {"argv": args, "resolved_parameters": {"requested_model": model, "selected_model": selected_model, "threads": threads, "seed": seed, "support": support_text, "keep_identical": params.get("keep_identical", False), "tree_role": params.get("tree_role", "phylogenetic inference"), "units": "substitutions per site"}, "preprocessing": ["Sequence identifiers mapped to neutral t0..tN identifiers and restored in Newick"], "environment": {}, "methods_template": "iqtree.tree.v1", "methods": {"description": "A phylogenetic tree was inferred", "citations": ["IQ-TREE citations by software version and method: https://www.iqtree.org/doc/Home"]}},
         "tool": {
@@ -172,5 +164,4 @@ def tree(snapshot, params):
 
 
 if __name__ == "__main__":
-    plugin.contract()
     plugin.run()

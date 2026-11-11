@@ -14,10 +14,10 @@ import time
 from pathlib import Path
 from basecraft.plugin import Plugin
 plugin = Plugin("basecraft.fasttree", "test")
-@plugin.context_operation("tree")
-def tree(_snapshot, _parameters, context):
+@plugin.operation("tree")
+def tree(_parameters, context):
     time.sleep(0.3)
-    root = Path(context["outputs"]["artifacts"])
+    root = Path(context.outputs["artifacts"])
     (root / "tree.nwk").write_text("((a:0.1,b:0.2)0.9:0.1,c:0.3);\n")
     return {"artifacts":[{"role":"artifacts","path":"tree.nwk"}]}
 plugin.run()

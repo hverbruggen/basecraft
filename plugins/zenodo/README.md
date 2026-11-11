@@ -61,7 +61,7 @@ using the host's memory-only grant bound to the accepted operation and exact
 package/descriptor digests. The documented ambient token is a compatibility
 provider for the reserved bundled Zenodo draft operation only; declarations or
 matching names in another plugin do not grant access. Every other plugin launch,
-including initialization and direct/legacy launches, strips Basecraft credential
+including initialization and direct launches, strips Basecraft credential
 variables. Granted token values are redacted from captured output and RPC replies.
 This is credential hygiene, not an OS sandbox for explicitly trusted plugin code.
 

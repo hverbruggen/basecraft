@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "operations": [
     {
       "name": "tree",
@@ -101,7 +101,8 @@
           "view": "bytes",
           "media_type": "application/octet-stream",
           "min": 0,
-          "max": 1
+          "max": 1,
+          "verify": true
         }
       },
       "outputs": {
@@ -110,46 +111,32 @@
           "min": 1,
           "max": 1024,
           "visibility": "result",
-          "collection": true
+          "collection": true,
+          "primary": "tree.nwk",
+          "tree_support": [
+            {
+              "name": "Bootstrap",
+              "kind": "bootstrap",
+              "when": {
+                "test": "positive",
+                "parameter": "bootstrap"
+              }
+            }
+          ],
+          "bootstrap_exports": true,
+          "facts": {
+            "branch_lengths": "substitutions"
+          }
         }
       },
       "effects": {
         "document_write": false,
         "artifact_write": true
       },
-      "cpu_parameters": [
-        "threads",
-        "tree_threads"
-      ],
-      "legacy_adapter": {
-        "primary_input": "alignment",
-        "inputs": {
-          "alignment": "input",
-          "cache": "cache_input"
-        },
-        "input_arrays": [],
-        "outputs": {
-          "output": {
-            "role": "artifacts",
-            "path": "tree.nwk"
-          }
-        },
-        "allocation": "artifacts"
-      },
-      "host": {
-        "verify_inputs": [
-          "cache"
-        ],
-        "bootstrap_exports": true,
-        "tree_support": [
-          {
-            "name": "Bootstrap",
-            "kind": "bootstrap",
-            "when": {
-              "test": "positive",
-              "parameter": "bootstrap"
-            }
-          }
+      "needs": {
+        "cpu_parameters": [
+          "threads",
+          "tree_threads"
         ]
       }
     },
@@ -203,7 +190,8 @@
           "view": "bytes",
           "media_type": "application/octet-stream",
           "min": 0,
-          "max": 1
+          "max": 1,
+          "verify": true
         }
       },
       "outputs": {
@@ -212,37 +200,20 @@
           "min": 1,
           "max": 1024,
           "visibility": "result",
-          "collection": true
+          "collection": true,
+          "primary": "distances.tsv",
+          "bootstrap_exports": true
         }
       },
       "effects": {
         "document_write": false,
         "artifact_write": true
       },
-      "cpu_parameters": [
-        "threads",
-        "tree_threads"
-      ],
-      "legacy_adapter": {
-        "primary_input": "alignment",
-        "inputs": {
-          "alignment": "input",
-          "cache": "cache_input"
-        },
-        "input_arrays": [],
-        "outputs": {
-          "output": {
-            "role": "artifacts",
-            "path": "distances.tsv"
-          }
-        },
-        "allocation": "artifacts"
-      },
-      "host": {
-        "verify_inputs": [
-          "cache"
-        ],
-        "bootstrap_exports": true
+      "needs": {
+        "cpu_parameters": [
+          "threads",
+          "tree_threads"
+        ]
       }
     },
     {
@@ -307,7 +278,8 @@
           "view": "bytes",
           "media_type": "application/octet-stream",
           "min": 0,
-          "max": 1
+          "max": 1,
+          "verify": true
         }
       },
       "outputs": {
@@ -316,38 +288,20 @@
           "min": 1,
           "max": 1024,
           "visibility": "result",
-          "collection": true
+          "collection": true,
+          "primary": "groups.tsv",
+          "bootstrap_exports": true
         }
       },
       "effects": {
         "document_write": false,
         "artifact_write": true
       },
-      "cpu_parameters": [
-        "threads",
-        "tree_threads"
-      ],
-      "legacy_adapter": {
-        "primary_input": "alignment",
-        "inputs": {
-          "alignment": "input",
-          "groups": "groups",
-          "cache": "cache_input"
-        },
-        "input_arrays": [],
-        "outputs": {
-          "output": {
-            "role": "artifacts",
-            "path": "groups.tsv"
-          }
-        },
-        "allocation": "artifacts"
-      },
-      "host": {
-        "verify_inputs": [
-          "cache"
-        ],
-        "bootstrap_exports": true
+      "needs": {
+        "cpu_parameters": [
+          "threads",
+          "tree_threads"
+        ]
       }
     }
   ]

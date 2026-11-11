@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import blast_plugin as blast
+from basecraft.plugin import local_context
 
 
 class Submission(unittest.TestCase):
@@ -23,8 +24,7 @@ class Submission(unittest.TestCase):
                          "oversized": False, "truncation": False, "submitted_residues": 8, "records": []}
         self.source = self.root / "query.json"
         self.source.write_text(json.dumps(self.plan))
-        self.context = {"inputs": {"queries": [str(self.source)]}, "outputs": {"receipt": str(self.root / "receipt")},
-                            "cancel_file": str(self.root / "cancel")}
+        self.context = local_context(self.root, {"queries": [str(self.source)]}, {"receipt": "receipt"})
         self.params = {"contact_email": "test@example.org", "expect": 0.05, "max_hits": 100, "megablast": False, "truncate": False}
         self.calls = []
 
@@ -55,7 +55,7 @@ class Submission(unittest.TestCase):
             self.assertEqual(fields["HITLIST_SIZE"], "100")
 
     def test_cancel_before_upload_and_cancel_accept_race(self):
-        cancel = Path(self.context["cancel_file"])
+        cancel = Path(self.context.cancel_file)
         cancel.touch()
         result = blast.submit_prepared(self.params, self.context, self.transport)
         self.assertEqual(result["data"]["status"], "cancelled")

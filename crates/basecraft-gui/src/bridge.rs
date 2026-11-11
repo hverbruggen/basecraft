@@ -761,10 +761,9 @@ impl qobject::GenomeController {
                         let mut plugin = basecraft_plugin_host::PluginProcess::spawn(&manifest)
                             .map_err(|e| e.to_string())?;
                         plugin
-                            .invoke("engines", json!({}), None)
-                            .map_err(|e| e.to_string())?
-                            .message
-                            .ok_or_else(|| "No engine report".into())
+                            .query("engines")
+                            .map(|report| report.to_string())
+                            .map_err(|e| e.to_string())
                     })()
                     .unwrap_or_else(|error| {
                         json!({"asap":error,"ptp":error,"mptp":error}).to_string()

@@ -45,7 +45,7 @@ def main():
     env = dict(os.environ, BASECRAFT=str(binary), BASECRAFT_PROFILE_DIR=str(root / 'profile'),
                BASECRAFT_PLUGINS=str(package.parent), BASECRAFT_PYTHON=sys.executable,
                BASECRAFT_PYTHONPATH=str(repository / 'python/src'),
-               BASECRAFT_BLAST_CONTACT_EMAIL='test@example.org', BLAST_MOCK_CONTACTS=str(contacts))
+               BASECRAFT_CONTACT_EMAIL='test@example.org', BLAST_MOCK_CONTACTS=str(contacts))
     os.environ.update(env)
     sys.path.insert(0, str(repository / 'python/src'))
     sys.path.insert(0, str(repository / 'crates/basecraft-cli/tests'))

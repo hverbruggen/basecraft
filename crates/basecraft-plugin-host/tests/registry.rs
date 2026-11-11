@@ -130,7 +130,7 @@ fn editable_changes_duplicates_and_reserved_namespace_are_diagnostic() {
         .replace("org.example.registry-fixture", "basecraft.impostor");
     std::fs::write(source.join("plugin.toml"), text).unwrap();
     assert!(registry::install(&config, &source).is_err());
-    let generation = Registry::load(&config).unwrap();
+    let generation = Registry::reload(&config).unwrap();
     assert_eq!(generation.operations.len(), 1);
     assert_eq!(generation.diagnostics.len(), 1);
 }
@@ -187,24 +187,41 @@ fn one_binding_resolver_checks_arrays_traversal_links_and_collisions() {
 }
 
 #[test]
-fn schema_one_stays_legacy_and_schema_two_contract_path_cannot_escape() {
+fn schema_one_is_refused_and_the_contract_path_cannot_escape() {
     crate::isolated_profile::isolate!();
-    let legacy =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/legacy-plugin");
-    assert!(
-        Manifest::load(&legacy)
-            .unwrap()
-            .operation_contract()
-            .unwrap()
-            .is_none()
-    );
+    let manifest = std::fs::read_to_string(fixture().join("plugin.toml")).unwrap();
+    for text in [
+        manifest.replace("schema = 2", "schema = 1"),
+        manifest.replace("operations.json", "../operations.json"),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("plugin.toml"), text).unwrap();
+        assert!(Manifest::load(temp.path()).is_err());
+    }
+}
+
+#[test]
+fn the_registry_is_read_again_only_after_an_install_change() {
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
-    std::fs::write(
-        temp.path().join("plugin.toml"),
-        std::fs::read_to_string(fixture().join("plugin.toml"))
-            .unwrap()
-            .replace("operations.json", "../operations.json"),
-    )
-    .unwrap();
-    assert!(Manifest::load(temp.path()).is_err());
+    let config = config(temp.path());
+    let source = temp.path().join("editable");
+    std::fs::create_dir(&source).unwrap();
+    for file in ["plugin.toml", "operations.json", "plugin.py"] {
+        std::fs::copy(fixture().join(file), source.join(file)).unwrap();
+    }
+    registry::register_editable(&config, &source).unwrap();
+    let name = "org.example.registry-fixture/count@1";
+    let title = |registry: Registry| registry.operations[name].descriptor.title.clone();
+    let first = title(Registry::load(&config).unwrap());
+    let mut contract: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(source.join("operations.json")).unwrap()).unwrap();
+    contract["operations"][0]["title"] = "Count again".into();
+    std::fs::write(source.join("operations.json"), contract.to_string()).unwrap();
+    // No install change: the host does not read the registry again.
+    assert_eq!(title(Registry::load(&config).unwrap()), first);
+    assert_eq!(title(Registry::load(&config).unwrap()), first);
+    // Disabling rewrites the index; the next load reads the registry once.
+    registry::set_enabled(&config, "org.example.registry-fixture", false).unwrap();
+    assert_eq!(title(Registry::load(&config).unwrap()), "Count again");
 }

@@ -47,7 +47,7 @@ impl PreparedOperation {
             if members.is_empty() {
                 continue;
             }
-            let staging = PathBuf::from(&self.context.outputs[role]);
+            let staging = self.run_path(&self.context.outputs[role]);
             let retained = if self.operation.descriptor.host_workflow.is_some() {
                 staging.clone()
             } else {
@@ -155,15 +155,7 @@ impl PreparedOperation {
                     }
                 }
             }
-            if role == "artifacts"
-                && self
-                    .operation
-                    .descriptor
-                    .host
-                    .as_ref()
-                    .is_some_and(|host| host.bootstrap_exports)
-                && self.parameters["bootstrap_destination"] == "working"
-            {
+            if binding.bootstrap_exports && self.parameters["bootstrap_destination"] == "working" {
                 for (member, hash) in &expected {
                     let name = member.to_string_lossy();
                     if name.starts_with(&format!("bootstrap-{}", self.run.id()))
@@ -197,7 +189,7 @@ impl PreparedOperation {
             let name = role.clone();
             if let Some(retained) = collections.get(role) {
                 let relative = path
-                    .strip_prefix(Path::new(&self.context.outputs[role]))
+                    .strip_prefix(self.run_path(&self.context.outputs[role]))
                     .map_err(|_| Error::Protocol("collection member escapes allocation".into()))?;
                 let retained = retained.join(relative);
                 publication_outputs.push(ArtifactRevision {

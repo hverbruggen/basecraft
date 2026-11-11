@@ -648,7 +648,7 @@ fn reconcile_task_receipt(
     run: &mut serde_json::Value,
     budget: &mut TaskReadBudget,
 ) -> crate::Result<()> {
-    use basecraft_protocol::operation::{CONTRACT_VERSION, OperationOutcome};
+    use basecraft_protocol::operation::OperationOutcome;
     let path = run["runtime_record"]
         .as_str()
         .filter(|path| !path.is_empty())
@@ -661,7 +661,7 @@ fn reconcile_task_receipt(
         ));
     }
     let outcome: OperationOutcome = serde_json::from_slice(&budget.read(Path::new(path))?)?;
-    if outcome.schema != CONTRACT_VERSION {
+    if outcome.schema != 1 {
         return Err(crate::error::invalid(
             "unsupported operation receipt schema",
         ));
@@ -739,9 +739,9 @@ fn task_primary_output(
         ));
     }
     let primary = descriptor
-        .legacy_adapter
-        .as_ref()
-        .and_then(|adapter| adapter.outputs.get("output"));
+        .outputs
+        .iter()
+        .find_map(|(role, output)| output.primary.as_ref().map(|member| (role, member)));
     for retained_only in [false, true] {
         for output in &publication.outputs {
             let logical = Path::new(&output.logical_name);
@@ -767,17 +767,10 @@ fn task_primary_output(
                     .as_deref()
                     .map(Path::new)
                     .filter(|path| normal_task_path(path));
-                let matches_primary = primary.is_some_and(|primary| {
-                    if primary.role != artifact.role || !normal_task_path(Path::new(&primary.path))
-                    {
-                        return false;
-                    }
-                    let expected = if binding.is_some_and(|binding| binding.collection) {
-                        Path::new(&primary.role).join(&primary.path)
-                    } else {
-                        Path::new(&primary.role).to_path_buf()
-                    };
-                    retained.is_some_and(|retained| retained == expected)
+                let matches_primary = primary.is_some_and(|(role, member)| {
+                    role == &artifact.role
+                        && normal_task_path(Path::new(member))
+                        && retained.is_some_and(|retained| retained == Path::new(role).join(member))
                 });
                 if !retained_only {
                     return visible

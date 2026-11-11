@@ -12,14 +12,14 @@ if sentinel := os.environ.get("BASECRAFT_FIXTURE_SENTINEL"):
 plugin = Plugin("org.example.registry-fixture", "1.0.0")
 
 
-@plugin.context_operation("count")
-def count(_snapshot, parameters, context):
+@plugin.operation("count")
+def count(parameters, context):
     mode = parameters["mode"]
     if mode == "delayed":
         time.sleep(0.3)
     if mode == "slow":
         for _ in range(300):
-            if Path(context["cancel_file"]).exists():
+            if Path(context.cancel_file).exists():
                 raise RuntimeError("cancelled")
             time.sleep(0.1)
     if mode == "crash":
@@ -32,19 +32,19 @@ def count(_snapshot, parameters, context):
     if mode == "fail":
         raise RuntimeError("requested fixture failure")
     size = 0
-    for path in context["inputs"]["sources"]:
+    for path in context.inputs["sources"]:
         content = Path(path).read_bytes()
         if not parameters["include_newlines"]:
             content = content.replace(b"\n", b"")
         size += len(content)
     data = {"bytes": size if mode != "invalid_data" else "invalid"}
-    destination = Path(context["outputs"]["report"])
+    destination = Path(context.outputs["report"])
     if mode == "extra_output":
         destination.with_name("undeclared.txt").write_text("unexpected")
     if mode == "symlink_output":
-        destination.symlink_to(context["inputs"]["sources"][0])
+        destination.symlink_to(context.inputs["sources"][0])
         return {"data": data, "artifacts": [{"role": "report", "path": "."}]}
-    Path(context["outputs"]["report"]).write_text(json.dumps(data) + "\n")
+    Path(context.outputs["report"]).write_text(json.dumps(data) + "\n")
     return {"data": data, "artifacts": [{"role": "report", "path": "."}]}
 
 

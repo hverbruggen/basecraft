@@ -23,22 +23,22 @@ def transport(method, url, token, context, **kwargs):
     meta = z.metadata(PARAMETERS)
     if method == 'POST':
         if PARAMETERS['title'] == 'cancel':
-            Path(context['progress_file']).write_text('remote accepted')
+            Path(context.progress_file).write_text('remote accepted')
         return dict(id=123,submitted=False,metadata=meta,files=[],links=dict(bucket='https://sandbox.zenodo.org/api/files/test'))
     if method == 'PUT':
         if PARAMETERS['title'] == 'cancel':
             deadline=time.monotonic()+10
-            while not Path(context['cancel_file']).exists() and time.monotonic()<deadline: time.sleep(.01)
+            while not Path(context.cancel_file).exists() and time.monotonic()<deadline: time.sleep(.01)
             z.check_cancel(context)
         f=z.digest_file(kwargs['file'], context)
         return dict(key='source.fa',size=f['size'],checksum='md5:'+f['md5'])
     raise ValueError('unexpected request')
 
-def draft(snapshot, params, context):
+def draft(params, context):
     global PARAMETERS
     PARAMETERS=params
     return z.upload(params, context, transport)
-z.plugin._context_ops['draft']=draft
+z.plugin._ops['draft']=draft
 z.plugin.run()
 ";
 fn registry(root: &Path) -> Registry {

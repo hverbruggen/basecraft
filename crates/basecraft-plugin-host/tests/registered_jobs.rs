@@ -1205,11 +1205,9 @@ fn retained_inputs_survive_job_drop_and_temporary_source_removal() {
             .unwrap(),
     )
     .unwrap();
-    let inputs: Vec<_> = execution["context"]["inputs"]["sources"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|v| std::path::PathBuf::from(v.as_str().unwrap()))
+    let run = Path::new(outcome.evidence.as_ref().unwrap());
+    let inputs: Vec<_> = (0..execution["inputs"]["sources"].as_array().unwrap().len())
+        .map(|index| run.join(format!("submitted-sources-{index}")))
         .collect();
     drop(jobs);
     std::fs::remove_file(temp.path().join("a.txt")).unwrap();
@@ -1275,12 +1273,11 @@ fn equal_content_retention_keeps_exact_primary_owner_and_leaf_lifecycles() {
                 let execution: serde_json::Value =
                     serde_json::from_slice(&std::fs::read(run.join("execution.json")).unwrap())
                         .unwrap();
-                let context = &execution["context"];
-                let evidence = &context["input_evidence"];
+                let evidence = &execution["inputs"];
                 let a = &evidence["a_primary"][0];
                 let b = &evidence["sources"][0];
-                let owner = Path::new(a["run_directory"].as_str().unwrap());
-                let sibling = Path::new(b["run_directory"].as_str().unwrap());
+                let owner = &run.join(a["run_directory"].as_str().unwrap());
+                let sibling = &run.join(b["run_directory"].as_str().unwrap());
                 assert_ne!(owner, sibling);
                 assert_ne!(a["original_path"], b["original_path"]);
                 assert_eq!(a["source_hash"], b["source_hash"]);
@@ -1326,18 +1323,19 @@ fn equal_content_retention_keeps_exact_primary_owner_and_leaf_lifecycles() {
                     std::fs::read(sibling.join("preserved-input")).unwrap(),
                     original
                 );
-                let submitted = Path::new(context["inputs"]["a_primary"][0].as_str().unwrap());
-                let basecraft_ops::files::Loaded::Alignment(loaded) =
-                    basecraft_ops::files::load(&temp.path().join(first)).unwrap()
-                else {
-                    panic!("fixture alignment")
-                };
-                let mut expected = Vec::new();
-                basecraft_ops::files::write_ungapped(&loaded.doc, &mut expected).unwrap();
-                assert_eq!(std::fs::read(submitted).unwrap(), expected);
+                if retain_primary {
+                    let basecraft_ops::files::Loaded::Alignment(loaded) =
+                        basecraft_ops::files::load(&temp.path().join(first)).unwrap()
+                    else {
+                        panic!("fixture alignment")
+                    };
+                    let mut expected = Vec::new();
+                    basecraft_ops::files::write_ungapped(&loaded.doc, &mut expected).unwrap();
+                    let submitted = run.join("submitted-a_primary-0");
+                    assert_eq!(std::fs::read(submitted).unwrap(), expected);
+                }
                 assert_eq!(
-                    std::fs::read(Path::new(context["inputs"]["sources"][0].as_str().unwrap()))
-                        .unwrap(),
+                    std::fs::read(run.join("submitted-sources-0")).unwrap(),
                     original
                 );
                 assert_eq!(
@@ -1391,40 +1389,6 @@ fn equal_content_retention_keeps_exact_primary_owner_and_leaf_lifecycles() {
             }
         }
     }
-}
-
-#[test]
-fn gui_scientific_calls_cannot_reintroduce_direct_plugin_invocation() {
-    crate::isolated_profile::isolate!();
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../basecraft-gui/src");
-    for entry in std::fs::read_dir(root).unwrap() {
-        let path = entry.unwrap().path();
-        if path.extension().is_none_or(|e| e != "rs") {
-            continue;
-        }
-        let source = std::fs::read_to_string(&path).unwrap();
-        // The sole metadata query is off-thread engine discovery. Scientific
-        // calls must use registered operations, including newly added bridges.
-        let source = source.replace(".invoke(\"engines\",", ".metadata_query(");
-        assert!(
-            !source.contains(".invoke("),
-            "{} bypasses registered operations",
-            path.display()
-        );
-        assert!(
-            !source.contains("FileJob"),
-            "{} reintroduced the retired executor",
-            path.display()
-        );
-    }
-    let cli = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../basecraft-cli/src/main.rs"),
-    )
-    .unwrap();
-    assert!(
-        !cli.contains(".invoke("),
-        "CLI plugin entry must use the registered runner"
-    );
 }
 
 #[test]

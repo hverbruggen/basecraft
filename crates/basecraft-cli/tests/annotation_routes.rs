@@ -275,24 +275,26 @@ fn every_annotation_route_keeps_the_same_invocation_evidence() {
 }
 
 /// A schema-1 package has no typed contract: refuse it before executing Python
-/// or opening/mutating the document, with an actionable migration explanation.
+/// or opening/mutating the document.
 #[test]
 fn schema_one_plugin_call_is_rejected_without_execution_or_mutation() {
     crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let profile = temp.path().join("profile");
-    let package = temp.path().join("legacy");
+    let package = temp.path().join("old-package");
     std::fs::create_dir(&package).unwrap();
-    let fixture =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/legacy-plugin");
-    std::fs::copy(fixture.join("plugin.toml"), package.join("plugin.toml")).unwrap();
+    std::fs::write(
+        package.join("plugin.toml"),
+        "schema = 1\nid = \"org.example.old\"\nname = \"Old\"\nversion = \"1.0.0\"\n[entry]\noperation = \"python:plugin.py\"\n",
+    )
+    .unwrap();
     let sentinel = package.join("executed");
     std::fs::write(
         package.join("plugin.py"),
         "from pathlib import Path\nPath(__file__).with_name('executed').touch()\n",
     )
     .unwrap();
-    let file = project(temp.path(), "legacy-project");
+    let file = project(temp.path(), "old-project");
     let original = std::fs::read(&file).unwrap();
     let output = cli(&profile)
         .args([
@@ -307,11 +309,7 @@ fn schema_one_plugin_call_is_rejected_without_execution_or_mutation() {
         .unwrap();
     assert!(!output.status.success());
     let error = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        error.contains("versioned operation contract (schema 2)"),
-        "{error}"
-    );
-    assert!(error.contains("migrate/install"), "{error}");
+    assert!(error.contains("unsupported schema 1"), "{error}");
     assert!(
         !sentinel.exists(),
         "Rejected package entry point was executed"

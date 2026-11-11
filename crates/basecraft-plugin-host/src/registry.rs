@@ -122,9 +122,49 @@ fn load_index(config: &RegistryConfig) -> Result<InstallationIndex> {
     Ok(index)
 }
 
+/// Registries this process has read, by configuration, with the index bytes
+/// they were read under.
+type Cache = Vec<((PathBuf, PathBuf, PathBuf), Vec<u8>, Registry)>;
+static CACHE: std::sync::Mutex<Cache> = std::sync::Mutex::new(Vec::new());
+
 impl Registry {
-    /// Build a new immutable generation; listing creates no directories or records.
+    /// The registry for `config`. It is read once and again only after an
+    /// install, update, removal or enable change rewrites the plugin index,
+    /// in this process or another. Listing creates no directories or records.
     pub fn load(config: &RegistryConfig) -> Result<Self> {
+        let stamp = match std::fs::read(&config.index) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(e) => return Err(e.into()),
+        };
+        let key = (
+            config.bundled.clone(),
+            config.packages.clone(),
+            config.index.clone(),
+        );
+        let mut cache = CACHE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((_, _, registry)) = cache.iter().find(|(k, s, _)| k == &key && s == &stamp) {
+            return Ok(registry.clone());
+        }
+        let registry = Self::read(config)?;
+        cache.retain(|(k, _, _)| k != &key);
+        cache.push((key, stamp, registry.clone()));
+        Ok(registry)
+    }
+
+    /// Read the registry from disk again, for an explicit refresh after an
+    /// editable package changed.
+    pub fn reload(config: &RegistryConfig) -> Result<Self> {
+        CACHE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|(key, _, _)| key.2 != config.index);
+        Self::load(config)
+    }
+
+    fn read(config: &RegistryConfig) -> Result<Self> {
         let index = load_index(config)?;
         let mut candidates = Vec::new();
         let mut diagnostics = Vec::new();
@@ -181,9 +221,7 @@ impl Registry {
                         "installed package identity mismatch".into(),
                     ));
                 }
-                let descriptors = manifest
-                    .operation_contract()?
-                    .map_or_else(Vec::new, |c| c.operations);
+                let descriptors = manifest.operation_contract()?.operations;
                 let digest = package_digest(&path)?;
                 let enabled = !index.disabled.contains(&manifest.id);
                 let interpreter = if manifest.runtime.is_some() {
@@ -584,8 +622,7 @@ fn configured_python(origin: Origin) -> Option<PathBuf> {
     })
 }
 
-/// Every invocation route, including explicit legacy facades, honors the same
-/// local disabled choice. This reads configuration without creating it.
+/// Every invocation route honors the same local disabled choice. This reads configuration without creating it.
 pub fn require_enabled(id: &str) -> Result<()> {
     let config = RegistryConfig::discover()?;
     if load_index(&config)?.disabled.contains(id) {

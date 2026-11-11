@@ -133,7 +133,7 @@ def write_receipt(path, receipt):
 
 def submit_prepared(parameters, context, transport=post):
     # Runner replaces inputs with one shared, validated immutable preparation.
-    paths = context["inputs"]["queries"]
+    paths = context.inputs["queries"]
     if len(paths) != 1:
         raise ValueError("BLAST requires shared host query preparation")
     plan = json.loads(Path(paths[0]).read_text())
@@ -146,7 +146,7 @@ def submit_prepared(parameters, context, transport=post):
     if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
         raise ValueError("An authorized NCBI maintainer contact email is required")
     fields = fields_for(plan, parameters)
-    cancel = Path(context["cancel_file"])
+    cancel = Path(context.cancel_file)
     receipt = {"schema": 1, "status": "cancelled", "rid": "", "url": "", "query_hash": plan["query_hash"],
                    "approval_hash": plan["approval_hash"], "program": plan["program"], "database": plan["database"],
                    "submitted_residues": plan["submitted_residues"], "plan": {k: v for k, v in plan.items() if k != "fasta"},
@@ -168,14 +168,14 @@ def submit_prepared(parameters, context, transport=post):
     # Even cancellation after acceptance retains this RID. Receipt write failure
     # still returns accepted data; host attempts retention/publication, no retry.
     try:
-        write_receipt(Path(context["outputs"]["receipt"]), receipt)
+        write_receipt(Path(context.outputs["receipt"]), receipt)
     except OSError as error:
         receipt["message"] = (receipt["message"] + f" Receipt write failed: {error}")[:2048]
     return {"ops": [], "data": receipt, "artifacts": [{"role": "receipt", "path": "."}]}
 
 
-@plugin.context_operation("submit")
-def submit(_snapshot, parameters, context):
+@plugin.operation("submit")
+def submit(parameters, context):
     return submit_prepared(parameters, context)
 
 
@@ -196,10 +196,10 @@ def inspect_retained(receipt, plan):
     return receipt
 
 
-@plugin.context_operation("receipt")
-def receipt(_snapshot, _parameters, context):
-    data = inspect_retained(json.loads(Path(context["inputs"]["receipt"][0]).read_text()),
-                            json.loads(Path(context["inputs"]["query"][0]).read_text()))
+@plugin.operation("receipt")
+def receipt(_parameters, context):
+    data = inspect_retained(json.loads(Path(context.inputs["receipt"][0]).read_text()),
+                            json.loads(Path(context.inputs["query"][0]).read_text()))
     return {"ops": [], "data": data}
 
 

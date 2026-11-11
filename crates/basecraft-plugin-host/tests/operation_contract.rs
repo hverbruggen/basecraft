@@ -7,7 +7,7 @@ use basecraft_plugin_host::{
     contract::{self, BoundedSchema},
     process::verify_handshake,
 };
-use basecraft_protocol::{operation::CONTRACT_CAPABILITY, plugin::PluginInfo};
+use basecraft_protocol::plugin::PluginInfo;
 use serde_json::json;
 
 fn fixture() -> Manifest {
@@ -21,12 +21,7 @@ fn fixture() -> Manifest {
 fn schemas_and_defaults_are_strict_and_shared() {
     crate::isolated_profile::isolate!();
     let manifest = fixture();
-    let mut descriptor = manifest
-        .operation_contract()
-        .unwrap()
-        .unwrap()
-        .operations
-        .remove(0);
+    let mut descriptor = manifest.operation_contract().unwrap().operations.remove(0);
     assert_eq!(
         contract::operation_id(&manifest.id, &descriptor).unwrap(),
         "org.example.registry-fixture/count@1"
@@ -103,7 +98,7 @@ fn rejects_remote_recursive_unknown_and_expensive_schemas() {
 fn contract_identity_effects_and_defaults_are_checked() {
     crate::isolated_profile::isolate!();
     let manifest = fixture();
-    let contract = manifest.operation_contract().unwrap().unwrap();
+    let contract = manifest.operation_contract().unwrap();
     let mut bad = contract.clone();
     bad.operations.push(bad.operations[0].clone());
     assert!(contract::validate_contract(&manifest.id, &bad).is_err());
@@ -121,7 +116,7 @@ fn contract_identity_effects_and_defaults_are_checked() {
 }
 
 #[test]
-fn schema_two_negotiation_refuses_false_or_legacy_runtime() {
+fn negotiation_refuses_another_protocol_or_identity() {
     crate::isolated_profile::isolate!();
     let manifest = fixture();
     let mut info = PluginInfo {
@@ -129,25 +124,19 @@ fn schema_two_negotiation_refuses_false_or_legacy_runtime() {
         id: manifest.id.clone(),
         version: manifest.version.clone(),
         operations: vec!["count".into()],
-        capabilities: vec![],
     };
     assert!(verify_handshake(&manifest, &info).is_err());
-    info.capabilities.push(CONTRACT_CAPABILITY.into());
+    info.protocol = basecraft_protocol::plugin::PROTOCOL_VERSION;
     verify_handshake(&manifest, &info).unwrap();
     info.operations.clear();
     assert!(verify_handshake(&manifest, &info).is_err());
     info.operations.push("count".into());
     info.id = "org.example.impostor".into();
     assert!(verify_handshake(&manifest, &info).is_err());
-    let legacy: PluginInfo = serde_json::from_value(
-        json!({"protocol":1,"id":"basecraft.orf-finder","version":"0.1.0","operations":[]}),
-    )
-    .unwrap();
-    assert_eq!(legacy.capabilities, Vec::<String>::new());
 }
 
 #[test]
-fn negotiated_sdk_context_runs_and_legacy_call_is_refused() {
+fn the_sdk_runs_a_handler_on_paths_relative_to_the_run_folder() {
     use basecraft_plugin_host::PluginProcess;
     use basecraft_protocol::operation::InvocationContext;
     use std::collections::BTreeMap;
@@ -160,36 +149,97 @@ fn negotiated_sdk_context_runs_and_legacy_call_is_refused() {
     let mut process = PluginProcess::spawn_with(&manifest, &python).unwrap();
     process.ping().unwrap();
     let temp = tempfile::tempdir().unwrap();
-    let input = temp.path().join("input");
+    let outside = tempfile::tempdir().unwrap();
+    let input = outside.path().join("input");
     std::fs::write(&input, b"ab\nc\n").unwrap();
-    let report = temp.path().join("report.json");
     let context = InvocationContext {
-        schema: 1,
+        schema: basecraft_protocol::plugin::PROTOCOL_VERSION,
         operation: "org.example.registry-fixture/count@1".into(),
         run_id: "test".into(),
+        run_root: temp.path().display().to_string(),
         inputs: BTreeMap::from([("sources".into(), vec![input.display().to_string()])]),
-        outputs: BTreeMap::from([("report".into(), report.display().to_string())]),
+        outputs: BTreeMap::from([("report".into(), "report.json".into())]),
         cpu_threads: 1,
-        cancel_file: temp.path().join("cancel").display().to_string(),
-        progress_file: temp.path().join("progress").display().to_string(),
+        cancel_file: "cancel".into(),
+        progress_file: "progress".into(),
         input_evidence: BTreeMap::new(),
-        legacy_parameters: BTreeMap::new(),
     };
     let result = process
-        .invoke_context(
+        .invoke(
             "count",
             json!({"include_newlines":false,"mode":"normal"}),
-            context,
+            context.clone(),
             None,
         )
         .unwrap();
     assert_eq!(*result.data.unwrap(), json!({"bytes":3}));
     assert_eq!(result.artifacts[0].role, "report");
     assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&std::fs::read(report).unwrap()).unwrap(),
+        serde_json::from_slice::<serde_json::Value>(
+            &std::fs::read(temp.path().join("report.json")).unwrap()
+        )
+        .unwrap(),
         json!({"bytes":3})
     );
-    assert!(process.invoke("count", json!({}), None).is_err());
+    assert!(process.invoke("missing", json!({}), context, None).is_err());
+}
+
+#[test]
+fn every_bundled_plugin_declares_a_valid_schema_two_contract() {
+    crate::isolated_profile::isolate!();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins");
+    let mut checked = 0;
+    for entry in std::fs::read_dir(root).unwrap() {
+        let path = entry.unwrap().path();
+        if !path.join("plugin.toml").is_file() {
+            continue;
+        }
+        let manifest = Manifest::load(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let contract = manifest.operation_contract().unwrap();
+        assert_eq!(contract.schema, 2, "{}", path.display());
+        for descriptor in &contract.operations {
+            let declared = descriptor.outputs.values().filter(|o| o.primary.is_some());
+            assert!(
+                declared.count() <= 1,
+                "{} declares two primary results",
+                descriptor.name
+            );
+        }
+        checked += 1;
+    }
+    assert!(checked >= 15);
+}
+
+/// Each bundled plugin starts, registers every declared implementation and
+/// answers its declared queries with the declared shape. A plugin with its own
+/// managed runtime is provisioned on install and is started by its own tests.
+#[test]
+fn every_bundled_plugin_starts_and_offers_what_it_declares() {
+    crate::isolated_profile::isolate!();
+    let python = basecraft_plugin_host::process::python_interpreter();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins");
+    let mut started = 0;
+    for entry in std::fs::read_dir(root).unwrap() {
+        let path = entry.unwrap().path();
+        if !path.join("plugin.toml").is_file() {
+            continue;
+        }
+        let manifest = Manifest::load(&path).unwrap();
+        if manifest.runtime.is_some() {
+            continue;
+        }
+        let mut process = basecraft_plugin_host::PluginProcess::spawn_with(&manifest, &python)
+            .unwrap_or_else(|e| panic!("{}: {e}", manifest.id));
+        for query in manifest.operation_contract().unwrap().queries {
+            process
+                .query(&query.name)
+                .unwrap_or_else(|e| panic!("{} {}: {e}", manifest.id, query.name));
+        }
+        assert!(process.query("undeclared").is_err());
+        process.finish().unwrap();
+        started += 1;
+    }
+    assert!(started >= 13, "{started}");
 }
 
 #[test]
@@ -224,40 +274,6 @@ fn completed_data_schema_embeds_local_references_at_its_actual_envelope_location
     assert!(schema.is_valid(&json!({"state":"completed","data":{"bytes":7}})));
     assert!(!schema.is_valid(&json!({"state":"completed","data":{"bytes":-1}})));
     assert!(!schema.is_valid(&json!({"state":"completed","data":null})));
-}
-
-#[test]
-fn live_process_keeps_its_contract_snapshot_and_still_validates_declared_operations() {
-    crate::isolated_profile::isolate!();
-    let temp = tempfile::tempdir().unwrap();
-    let original =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/registry-plugin");
-    for name in ["plugin.toml", "operations.json", "plugin.py"] {
-        std::fs::copy(original.join(name), temp.path().join(name)).unwrap();
-    }
-    let manifest = Manifest::load(temp.path()).unwrap();
-    let python = std::env::var_os("BASECRAFT_PYTHON").map_or_else(
-        || std::path::PathBuf::from("python3"),
-        std::path::PathBuf::from,
-    );
-    let mut process = basecraft_plugin_host::PluginProcess::spawn_with(&manifest, &python).unwrap();
-    // Editable metadata changes affect future discovery/spawns. The live
-    // process keeps its negotiated snapshot, including strict declared schemas.
-    std::fs::write(
-        temp.path().join("operations.json"),
-        b"invalid changed contract",
-    )
-    .unwrap();
-    let error = process
-        .invoke("count", json!({"mode":"not-a-declared-mode"}), None)
-        .unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("Mode: value does not satisfy schema"),
-        "{error}"
-    );
-    process.ping().unwrap();
 }
 
 #[test]

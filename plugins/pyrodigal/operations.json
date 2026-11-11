@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "operations": [
     {
       "name": "predict_genes",
@@ -44,14 +44,6 @@
       "effects": {
         "document_write": true,
         "artifact_write": false
-      },
-      "cpu_parameters": [],
-      "legacy_adapter": {
-        "primary_input": null,
-        "inputs": {},
-        "input_arrays": [],
-        "outputs": {},
-        "allocation": null
       }
     }
   ]

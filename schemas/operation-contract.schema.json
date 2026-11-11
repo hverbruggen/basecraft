@@ -9,6 +9,12 @@
         "$ref": "#/$defs/OperationDescriptor"
       }
     },
+    "queries": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/QueryDescriptor"
+      }
+    },
     "schema": {
       "type": "integer",
       "format": "uint32",
@@ -21,11 +27,31 @@
     "operations"
   ],
   "$defs": {
+    "Alphabet": {
+      "type": "string",
+      "enum": [
+        "nucleotide",
+        "protein"
+      ]
+    },
     "ArtifactVisibility": {
       "type": "string",
       "enum": [
         "result",
         "supporting"
+      ]
+    },
+    "BranchLengths": {
+      "type": "string",
+      "enum": [
+        "substitutions",
+        "time"
+      ]
+    },
+    "CallerKind": {
+      "type": "string",
+      "enum": [
+        "single_trace"
       ]
     },
     "Effects": {
@@ -54,84 +80,30 @@
     "HostServices": {
       "type": "object",
       "properties": {
-        "ambient_credentials": {
-          "description": "Ambient credentials are supplied only to bundled packages. Installed\npackages still need an explicit grant bound to their accepted digests.",
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "bootstrap_exports": {
-          "type": "boolean"
-        },
         "caller": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "caller_engine": {
-          "description": "Program a caller service runs. The host finds it through\n`BASECRAFT_<PROGRAM>`, the plugin runtime, then PATH, and pins its hash.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "lifecycle": {
-          "description": "Cooperative cancellation and receipt rules for a bundled remote service.",
+          "description": "The operation is a base caller the Sanger review asks for alternative\ncalls. Its contract answers the `engine` query with the program's name\nand SHA-256, and its primary output is the draft.",
           "anyOf": [
             {
-              "$ref": "#/$defs/LifecyclePolicy"
+              "$ref": "#/$defs/CallerKind"
             },
             {
               "type": "null"
             }
           ]
         },
-        "parameter_environment": {
-          "description": "Bundled operations may obtain a missing parameter from a named environment setting.",
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
-        },
-        "query_preparation": {
+        "remote": {
           "anyOf": [
             {
-              "$ref": "#/$defs/QueryPreparation"
+              "$ref": "#/$defs/RemoteService"
             },
             {
               "type": "null"
             }
-          ]
-        },
-        "retained_query_transformation": {
-          "type": [
-            "string",
-            "null"
           ]
         },
         "species_workspace": {
+          "description": "The result holds species hypotheses for the target workspace.",
           "type": "boolean"
-        },
-        "tree_support": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/TreeSupportRule"
-          }
-        },
-        "verify_inputs": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "workflow_operations": {
-          "description": "Workflow stage name -> registered operation id, including major version.",
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
         }
       },
       "additionalProperties": false
@@ -139,6 +111,13 @@
     "InputBinding": {
       "type": "object",
       "properties": {
+        "alphabets": {
+          "description": "Residue alphabets the operation accepts. Empty accepts any. The host\nrefuses other alignments before launch.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Alphabet"
+          }
+        },
         "max": {
           "type": "integer",
           "format": "uint",
@@ -154,6 +133,10 @@
         },
         "retain": {
           "description": "Preserve original and submitted bytes when results refer to input paths.\nApplied by the shared runner equally for GUI, CLI, Python and MCP.",
+          "type": "boolean"
+        },
+        "verify": {
+          "description": "Check the input's retained evidence before the run, as for a reused\ndistance cache.",
           "type": "boolean"
         },
         "view": {
@@ -178,67 +161,6 @@
         "sequence_snapshot"
       ]
     },
-    "LegacyAdapter": {
-      "type": "object",
-      "properties": {
-        "allocation": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "input_arrays": {
-          "type": "array",
-          "default": [],
-          "items": {
-            "type": "string"
-          }
-        },
-        "inputs": {
-          "description": "Named input binding -> legacy handler parameter.",
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
-        },
-        "outputs": {
-          "description": "Legacy output parameter -> allocated role and relative member.",
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/$defs/LegacyOutput"
-          }
-        },
-        "primary_input": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "inputs",
-        "outputs"
-      ]
-    },
-    "LegacyOutput": {
-      "type": "object",
-      "properties": {
-        "path": {
-          "type": "string"
-        },
-        "role": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "role",
-        "path"
-      ]
-    },
     "LifecyclePolicy": {
       "type": "string",
       "enum": [
@@ -247,28 +169,44 @@
         "remote_draft"
       ]
     },
-    "OperationDescriptor": {
+    "Needs": {
+      "description": "What an operation needs from the host besides its inputs.",
       "type": "object",
       "properties": {
-        "cpu_parameter": {
+        "contact_email": {
+          "description": "Parameter the host fills with the user's contact email when the caller\nleaves it out.",
           "type": [
             "string",
             "null"
           ]
         },
         "cpu_parameters": {
+          "description": "Parameters that receive the CPU threads granted to the run.",
           "type": "array",
           "items": {
             "type": "string"
           }
         },
         "credentials": {
-          "description": "Logical credential name -> reserved runtime environment variable. This\ndeclares a need, never permission; host grants bind exact accepted code.",
+          "description": "Credential name -> environment variable the plugin reads. A need, never\npermission: an installed package needs a grant bound to its digest; a\nbundled package receives the credential from the user's environment.",
           "type": "object",
           "additionalProperties": {
             "type": "string"
           }
         },
+        "workflow_stages": {
+          "description": "Workflow stage name -> registered operation id, including major version.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "OperationDescriptor": {
+      "type": "object",
+      "properties": {
         "description": {
           "type": "string"
         },
@@ -279,7 +217,7 @@
           "$ref": "#/$defs/ExecutionFamily"
         },
         "host": {
-          "description": "Host services selected by this contract, available to any accepted plugin.",
+          "description": "Services the host runs around a bundled plugin.",
           "anyOf": [
             {
               "$ref": "#/$defs/HostServices"
@@ -290,6 +228,7 @@
           ]
         },
         "host_workflow": {
+          "description": "A workflow the host runs itself from the stages in `needs`.",
           "type": [
             "string",
             "null"
@@ -305,19 +244,11 @@
           },
           "default": {}
         },
-        "legacy_adapter": {
-          "description": "Explicit migration of a public two-argument SDK handler. Runtime controls\ncome only from the allocated context; scientific callers cannot set them.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/LegacyAdapter"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "name": {
           "type": "string"
+        },
+        "needs": {
+          "$ref": "#/$defs/Needs"
         },
         "outputs": {
           "type": "object",
@@ -332,13 +263,6 @@
             "string",
             "null"
           ]
-        },
-        "required_features": {
-          "type": "array",
-          "default": [],
-          "items": {
-            "type": "string"
-          }
         },
         "result": true,
         "title": {
@@ -365,10 +289,18 @@
     "OutputBinding": {
       "type": "object",
       "properties": {
+        "bootstrap_exports": {
+          "description": "Bootstrap trees named `bootstrap-<run>.nex` may be exported beside the\nexported primary tree when `bootstrap_destination` is `working`.",
+          "type": "boolean"
+        },
         "collection": {
           "description": "A collection is allocated one directory; members remain relative to it.",
           "type": "boolean",
           "default": false
+        },
+        "facts": {
+          "description": "Facts about the primary member, for its companion file.",
+          "$ref": "#/$defs/OutputFacts"
         },
         "max": {
           "type": "integer",
@@ -383,6 +315,20 @@
           "format": "uint",
           "minimum": 0
         },
+        "primary": {
+          "description": "The collection member that holds the main result, such as `tree.nwk`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tree_support": {
+          "description": "What the support values on trees in this output mean.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TreeSupportRule"
+          }
+        },
         "visibility": {
           "$ref": "#/$defs/ArtifactVisibility"
         }
@@ -394,6 +340,33 @@
         "max",
         "visibility"
       ]
+    },
+    "OutputFacts": {
+      "description": "Facts an output declares about its primary member. The companion writer\nrecords them once document facts exist (merge task for piece 2B).",
+      "type": "object",
+      "properties": {
+        "alphabet": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Alphabet"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "branch_lengths": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BranchLengths"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "ParameterCondition": {
       "oneOf": [
@@ -435,10 +408,58 @@
         }
       ]
     },
+    "QueryDescriptor": {
+      "description": "A question the plugin answers without inputs, outputs or a run, such as\nwhich external engines are installed. The host refuses undeclared names\nand checks the answer against `result`.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "result": true
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "description",
+        "result"
+      ]
+    },
     "QueryPreparation": {
       "type": "string",
       "enum": [
         "blast"
+      ]
+    },
+    "RemoteService": {
+      "description": "A bundled service that sends data elsewhere: how the host cancels it,\nretains its receipt and freezes what it submits.",
+      "type": "object",
+      "properties": {
+        "lifecycle": {
+          "$ref": "#/$defs/LifecyclePolicy"
+        },
+        "query_preparation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/QueryPreparation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "retained_query_transformation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "lifecycle"
       ]
     },
     "SupportKind": {

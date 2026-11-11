@@ -1314,18 +1314,14 @@ fn verified_reports(
             "validation outcome differs from its registered run",
         ));
     }
-    let execution = read(&run.join("execution.json"))?;
-    let context: basecraft_protocol::operation::InvocationContext =
-        serde_json::from_value(execution["context"].clone())?;
-    if execution["schema"] != 1
-        || execution["operation"] != VALIDATE_OPERATION
-        || context.schema != 1
-        || context.operation != VALIDATE_OPERATION
-        || context.run_id != run_id
-        || execution["package_digest"] != outcome["pins"]["package_digest"]
-        || execution["descriptor_digest"] != outcome["pins"]["descriptor_digest"]
-        || execution["effective_parameters"] != outcome["effective_parameters"]
-        || context.input_evidence.len() != 4
+    let execution: basecraft_protocol::records::RunRecord =
+        serde_json::from_value(read(&run.join("execution.json"))?)?;
+    if execution.schema != basecraft_protocol::records::RUN_RECORD_SCHEMA
+        || execution.operation != VALIDATE_OPERATION
+        || outcome["pins"]["package_digest"] != execution.package_digest.as_str()
+        || outcome["pins"]["descriptor_digest"] != execution.descriptor_digest.as_str()
+        || outcome["effective_parameters"] != execution.effective_parameters
+        || execution.inputs.len() != 4
     {
         return Err(invalid("validation execution identity does not match"));
     }
@@ -1337,8 +1333,8 @@ fn verified_reports(
         ("template", "sbt"),
     ] {
         let current = package.join("genbank").join(format!("{BASE}.{ext}"));
-        let evidence = context
-            .input_evidence
+        let evidence = execution
+            .inputs
             .get(role)
             .filter(|e| e.len() == 1)
             .ok_or_else(|| invalid("validation has incomplete submitted input evidence"))?;
@@ -1348,9 +1344,8 @@ fn verified_reports(
             .original_path
             .as_deref()
             .ok_or_else(|| invalid("validation input has no source path"))?;
-        let ledger =
-            crate::records::input_evidence::read_input(Path::new(&evidence.run_directory))?;
-        if Path::new(original).canonicalize()? != current.canonicalize()?
+        let ledger = crate::records::input_evidence::read_input(&run.join(&evidence.run_directory))?;
+        if run.join(original).canonicalize()? != current.canonicalize()?
             || evidence.source_hash.as_deref() != Some(expected.as_str())
             || evidence.submitted_hash != expected
             || evidence.transformation != "identity-v1"

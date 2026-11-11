@@ -8,7 +8,7 @@ kinds = ["operation"]
 [entry]
 operation = "python:table2asn_plugin.py"
 
-# Informational legacy declaration for targets without a supported runtime.
+# Informational declaration for targets without a supported runtime.
 [environment]
 conda = ["bioconda::table2asn"]
 

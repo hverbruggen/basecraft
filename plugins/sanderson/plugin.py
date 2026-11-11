@@ -143,15 +143,15 @@ def _validate_result(root, nodes, result, settings):
     return durations
 
 
-@plugin.context_operation("date_tree")
-def date_tree(_snapshot, parameters, context):
-    source = Path(context["inputs"]["tree"][0])
+@plugin.operation("date_tree")
+def date_tree(parameters, context):
+    source = Path(context.inputs["tree"][0])
     raw = source.read_bytes()
     root = parse(raw.decode("utf-8"))
     nodes, keys, labels = _indexed(root)
     settings = _parameters(parameters, keys, labels)
     binary, digest = _binary()
-    cancel = context.get("cancel_file")
+    cancel = context.cancel_file
     result = _run(binary, {"nodes": nodes, "parameters": settings, "cancel_file": cancel},
                   cancel, settings.get("max_seconds", 3600))
     durations = _validate_result(root, nodes, result, settings)
@@ -169,8 +169,8 @@ def date_tree(_snapshot, parameters, context):
                          "age": result["ages"][index], "fitted_rate_per_site": result["rates_per_site"][index]}
                         for index, node in enumerate(root.walk())]}
     report_text = json.dumps(report, ensure_ascii=False, allow_nan=False, indent=2, sort_keys=True) + "\n"
-    Path(context["outputs"]["chronogram"]).write_text(chronogram)
-    Path(context["outputs"]["report"]).write_text(report_text)
+    Path(context.outputs["chronogram"]).write_text(chronogram)
+    Path(context.outputs["report"]).write_text(report_text)
     return {"data": {"lambda": result["lambda"], "root_age": settings["root_age"],
                      "time_unit": settings["time_unit"], "node_count": len(nodes),
                      "engine_sha256": digest},

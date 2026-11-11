@@ -8,12 +8,12 @@ from basecraft.plugin import Plugin
 plugin = Plugin("basecraft.host", "1.0.0")
 
 
-def refuse(_snapshot, _parameters, _context):
+def refuse(_parameters, _context):
     raise ValueError("Application workflow requires the Basecraft registry host")
 
 
 for operation in ("gmyc_alignment_single", "gmyc_alignment_multiple", "asap_alignment"):
-    plugin.context_operation(operation)(refuse)
+    plugin.operation(operation)(refuse)
 
 if __name__ == "__main__":
     plugin.run()

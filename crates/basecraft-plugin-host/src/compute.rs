@@ -30,41 +30,14 @@ pub fn configure(threads: usize) {
     ALLOCATION.store(threads.clamp(1, available()), Ordering::Relaxed);
 }
 
-/// Resolve built-in worker parameters explicitly, so the effective values are
-/// both sent through the public API and retained in tool-run provenance.
-pub fn parameters(
-    plugin: &str,
-    mut params: Map<String, Value>,
-    budget: usize,
-) -> Map<String, Value> {
-    let descriptor = crate::registry::RegistryConfig::discover()
-        .ok()
-        .and_then(|config| crate::registry::Registry::load(&config).ok())
-        .and_then(|registry| {
-            registry
-                .packages
-                .get(plugin)
-                .and_then(|package| package.descriptors.first())
-                .cloned()
-        });
-    if let Some(descriptor) = descriptor {
-        params = parameters_for(&descriptor, params, budget);
-    }
-    params
-}
-
-/// Resolve resource parameters from the public contract, including old facade
-/// calls. Zero is automatic only where the declared schema permits it.
+/// Resolve the CPU parameters the contract names. Zero is automatic only
+/// where the declared schema permits it.
 pub fn parameters_for(
     descriptor: &basecraft_protocol::operation::OperationDescriptor,
     mut params: Map<String, Value>,
     budget: usize,
 ) -> Map<String, Value> {
-    for key in descriptor
-        .cpu_parameter
-        .iter()
-        .chain(&descriptor.cpu_parameters)
-    {
+    for key in &descriptor.needs.cpu_parameters {
         let field = &descriptor.parameters["properties"][key];
         let cap = field["maximum"]
             .as_u64()

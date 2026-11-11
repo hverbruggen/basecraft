@@ -200,7 +200,7 @@ impl qobject::AppOperations {
         }
     }
     pub fn blast_contact(&self) -> QString {
-        QString::from(&std::env::var("BASECRAFT_BLAST_CONTACT_EMAIL").unwrap_or_default())
+        QString::from(&std::env::var("BASECRAFT_CONTACT_EMAIL").unwrap_or_default())
     }
     pub fn preview_blast(&self, queries: &QString, parameters: &QString) -> QString {
         let result = (|| -> basecraft_plugin_host::Result<_> {

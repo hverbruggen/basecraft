@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "operations": [
     {
       "name": "tree",
@@ -89,50 +89,40 @@
           "min": 1,
           "max": 1024,
           "visibility": "result",
-          "collection": true
+          "collection": true,
+          "primary": "tree.nwk",
+          "tree_support": [
+            {
+              "name": "Ultrafast bootstrap (UFBoot)",
+              "kind": "bootstrap",
+              "when": {
+                "test": "equals",
+                "parameter": "support",
+                "value": "ufboot"
+              }
+            },
+            {
+              "name": "Standard bootstrap",
+              "kind": "bootstrap",
+              "when": {
+                "test": "equals",
+                "parameter": "support",
+                "value": "bootstrap"
+              }
+            }
+          ],
+          "facts": {
+            "branch_lengths": "substitutions"
+          }
         }
       },
       "effects": {
         "document_write": false,
         "artifact_write": true
       },
-      "cpu_parameters": [
-        "threads"
-      ],
-      "legacy_adapter": {
-        "primary_input": "alignment",
-        "inputs": {
-          "alignment": "input"
-        },
-        "input_arrays": [],
-        "outputs": {
-          "output": {
-            "role": "artifacts",
-            "path": "tree.nwk"
-          }
-        },
-        "allocation": "artifacts"
-      },
-      "host": {
-        "tree_support": [
-          {
-            "name": "Ultrafast bootstrap (UFBoot)",
-            "kind": "bootstrap",
-            "when": {
-              "test": "equals",
-              "parameter": "support",
-              "value": "ufboot"
-            }
-          },
-          {
-            "name": "Standard bootstrap",
-            "kind": "bootstrap",
-            "when": {
-              "test": "equals",
-              "parameter": "support",
-              "value": "bootstrap"
-            }
-          }
+      "needs": {
+        "cpu_parameters": [
+          "threads"
         ]
       }
     }

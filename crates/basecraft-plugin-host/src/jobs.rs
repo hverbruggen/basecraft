@@ -117,7 +117,7 @@ fn cancel_job(job: &Job, strict: bool) -> Result<OperationOutcome> {
         }
         job.cancelled.store(true, Ordering::Release);
         basecraft_io::write_atomic(
-            std::path::Path::new(&job.prepared.context.cancel_file),
+            &job.prepared.run_path(&job.prepared.context.cancel_file),
             |w| std::io::Write::write_all(w, b"cancel\n"),
         )?;
         outcome.state = RuntimeState::Cancelling;

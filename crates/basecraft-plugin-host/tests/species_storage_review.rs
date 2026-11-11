@@ -77,66 +77,6 @@ fn rereview_alignment_move_and_explicit_evidence_decisions() {
     }
 }
 
-#[test]
-fn rereview_legacy_sidecar_break_and_remove_reach_combined_workspace() {
-    use basecraft_ops::records::{SavePolicy, conflicts, read_input, resolve};
-    isolated_profile::isolate!();
-    for policy in [SavePolicy::BreakEvidence, SavePolicy::RemoveAnalysis] {
-        let root = tempfile::tempdir().unwrap();
-        let source = root.path().join("legacy.spart");
-        let original = include_str!("../../../testdata/fixtures/delimitation/manual.spart");
-        std::fs::write(&source, original).unwrap();
-        let work = files::load_delimitation(&source).unwrap();
-        let mut bytes = Vec::new();
-        files::write_delimitation_sidecar_at(
-            &work,
-            &basecraft_io::hash_file(&source).unwrap(),
-            &source,
-            &mut bytes,
-        )
-        .unwrap();
-        let sidecar = files::tree_sidecar(&source);
-        std::fs::write(&sidecar, &bytes).unwrap();
-        let target = root.path().join("combined.spart");
-        std::fs::copy(&source, &target).unwrap();
-        let mut session = Session::recoverable(root.path()).unwrap();
-        let doc = session.open(&target).unwrap();
-        basecraft_ops::delimitation::combine(&mut session, doc, std::slice::from_ref(&source))
-            .unwrap();
-        session.save(doc, None).unwrap();
-        assert!(records::verify(&target).unwrap().is_empty());
-        let conflict = conflicts(&sidecar).unwrap();
-        assert!(conflict.analyses.iter().any(|a| a.direct));
-        assert!(conflict.analyses.iter().any(|a| !a.direct));
-        resolve(&conflict, policy).unwrap();
-        for affected in &conflict.analyses {
-            match policy {
-                SavePolicy::BreakEvidence => {
-                    assert_eq!(
-                        read_input(&affected.run).unwrap().state,
-                        basecraft_protocol::input_records::EvidenceState::Broken
-                    );
-                }
-                SavePolicy::RemoveAnalysis => assert!(!affected.run.exists()),
-                _ => unreachable!(),
-            }
-        }
-        assert!(
-            !matches!(records::verify(&target), Ok(issues) if issues.is_empty()),
-            "explicit {policy:?} must never verify complete"
-        );
-        assert!(records::package(&target, &root.path().join("rejected")).is_err());
-        assert_eq!(std::fs::read(&sidecar).unwrap(), bytes);
-        assert_eq!(std::fs::read_to_string(&source).unwrap(), original);
-        assert!(
-            !files::load_delimitation(&target)
-                .unwrap()
-                .hypotheses
-                .is_empty()
-        );
-    }
-}
-
 fn setup_tree(session: &mut Session, source: &Path, output: &Path) {
     let doc = session.open(source).unwrap();
     let outcome = common::run_in(&common::bundled(), session, |s| {
@@ -420,56 +360,6 @@ fn preserved_alignment_remains_usable_by_workspace_default_input() {
     );
     std::fs::write(&linked, "damaged preserved alignment").unwrap();
     assert!(basecraft_ops::delimitation::checked_alignment(&saved, &copied).is_err());
-}
-
-#[test]
-fn combine_complete_export_includes_legacy_sidecar_evidence() {
-    isolated_profile::isolate!();
-    let parent = tempfile::tempdir().unwrap();
-    let root = parent.path().join("working");
-    std::fs::create_dir(&root).unwrap();
-    let text = include_str!("../../../testdata/fixtures/delimitation/manual.spart");
-    let source = root.join("legacy.spart");
-    let target = root.join("target.spart");
-    std::fs::write(&source, text).unwrap();
-    std::fs::write(&target, text).unwrap();
-    let mut legacy = basecraft_io::spart::parse_text(text).unwrap();
-    legacy.exchange_fields.insert(
-        "authored_metadata".into(),
-        "Distinct original sidecar context".into(),
-    );
-    legacy.hypotheses[0].provenance.parameters.insert(
-        "reviewed_method_context".into(),
-        json!("Sidecar-only scientific context"),
-    );
-    let mut bytes = Vec::new();
-    files::write_delimitation_sidecar_at(
-        &legacy,
-        &basecraft_io::hash_file(&source).unwrap(),
-        &source,
-        &mut bytes,
-    )
-    .unwrap();
-    std::fs::write(files::tree_sidecar(&source), &bytes).unwrap();
-    let side_hash = basecraft_io::hash_bytes(&bytes);
-    let mut session = Session::recoverable(&root).unwrap();
-    let doc = session.open(&target).unwrap();
-    basecraft_ops::delimitation::combine(&mut session, doc, &[source]).unwrap();
-    let combined = root.join("combined.spart");
-    session.save(doc, Some(&combined)).unwrap();
-    let package = parent.path().join("package");
-    records::package(&combined, &package).unwrap();
-    drop(session);
-    std::fs::rename(&root, parent.path().join("unavailable")).unwrap();
-    let exported = package.join("combined.spart");
-    assert!(records::verify(&exported).unwrap().is_empty());
-    let artifacts = records::companion(&exported).join("artifacts");
-    assert!(
-        std::fs::read_dir(&artifacts)
-            .unwrap()
-            .any(|entry| basecraft_io::hash_file(&entry.unwrap().path()).unwrap() == side_hash),
-        "complete export omitted the legacy sidecar whose hash Combine declares: {side_hash}"
-    );
 }
 
 #[test]
