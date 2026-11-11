@@ -692,7 +692,7 @@ impl qobject::AlignmentController {
             let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
                 return false;
             };
-            let result = session.apply(doc, op);
+            let result = basecraft_ops::renames::apply_op(session, doc, op);
             r.view.sync(crate::bridge::checked_document!(
                 access_thread,
                 session.alignment(doc)
@@ -700,7 +700,7 @@ impl qobject::AlignmentController {
             result
         };
         match result {
-            Ok(_) => {
+            Ok(()) => {
                 self.as_mut().set_dirty(true);
                 self.as_mut().notify("");
                 true

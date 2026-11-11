@@ -706,12 +706,12 @@ impl qobject::TreeController {
             let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
                 return Err("No tree open".into());
             };
-            let result = session.apply(doc, op);
+            let result = basecraft_ops::renames::apply_op(session, doc, op);
             r.view.sync(session.tree(doc).map_err(|e| e.to_string())?);
             result
         };
         match result {
-            Ok(_) => {
+            Ok(()) => {
                 if clears_selection {
                     let mut state = self.as_mut().rust_mut();
                     state.view.selected = None;

@@ -708,6 +708,17 @@ impl TreeView {
         if let Some(s) = self.selected {
             parts.push(describe_node(doc, s));
         }
+        let moved: Vec<String> = doc
+            .displaced_annotations()
+            .iter()
+            .map(|id| format!("{:?}", doc.annotations()[id].label))
+            .collect();
+        if !moved.is_empty() {
+            parts.push(format!(
+                "moved labels, no longer on the group they were made for: {}",
+                moved.join(", ")
+            ));
+        }
         parts.join("   ·   ")
     }
 
@@ -875,9 +886,20 @@ fn layout(doc: &TreeDoc, width: f32, height: f32, row_zoom: f32, width_zoom: f32
     layout_with(doc, &[], width, height, row_zoom, width_zoom)
 }
 
+/// A clade label as drawn: marked when it no longer names the group it was
+/// made for, as after a reroot.
+fn shown_label(displaced: &[u32], id: u32, label: &str) -> String {
+    if label.is_empty() || !displaced.contains(&id) {
+        label.to_owned()
+    } else {
+        format!("{label} (moved)")
+    }
+}
+
 /// One column per nesting level of the clade annotations with bars: a bar
 /// that contains others goes outside them.
 fn annotation_columns(doc: &TreeDoc, tips: &[usize]) -> Vec<TipColumn> {
+    let displaced = doc.displaced_annotations();
     let ranges: Vec<(u32, &CladeAnnotation, usize, usize)> = doc
         .annotations()
         .iter()
@@ -926,7 +948,7 @@ fn annotation_columns(doc: &TreeDoc, tips: &[usize]) -> Vec<TipColumn> {
                     share: 1.0,
                     width: a.bar_width as f32,
                     color: a.colour.clone(),
-                    label: a.label.clone(),
+                    label: shown_label(&displaced, id, &a.label),
                 });
         }
     }
@@ -1384,7 +1406,8 @@ fn shapes(
     }
 
     // Names on stem branches.
-    for a in doc.annotations().values() {
+    let displaced = doc.displaced_annotations();
+    for (&id, a) in doc.annotations() {
         let Ok(node) = doc.resolve(&a.clade) else {
             continue;
         };
@@ -1395,7 +1418,7 @@ fn shapes(
                 x: f32::midpoint(px, l.x[node]),
                 y: l.y[node] - small - bw / 2.0 - 2.0,
                 size: small + 1.0,
-                text: a.label.clone(),
+                text: shown_label(&displaced, id, &a.label),
                 color: if a.bar || a.field {
                     pal.foreground
                 } else {
@@ -1751,6 +1774,31 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn a_label_a_reroot_moved_is_marked_and_named_in_the_status() {
+        let mut d = tree("((a,b),(c,d),e);");
+        for (id, clade, label) in [(1, ["a", "b"], "AB"), (2, ["c", "d"], "CD")] {
+            let annotation = Some(CladeAnnotation::new(clade.map(String::from).into(), label));
+            d.apply_edit(&Op::TreeAnnotate { id, annotation }).unwrap();
+        }
+        let view = TreeView::new(400.0, 300.0);
+        let labels = |d: &TreeDoc| -> Vec<String> {
+            annotation_columns(d, &d.tips_in_order())
+                .iter()
+                .flat_map(|column| column.tips.values().flatten().map(|band| band.label.clone()))
+                .collect()
+        };
+        assert!(!view.status(&d).contains("moved"));
+        assert!(labels(&d).iter().all(|label| !label.contains("moved")));
+        d.apply_edit(&Op::TreeReroot {
+            clade: vec!["a".into()],
+        })
+        .unwrap();
+        assert!(view.status(&d).contains("moved labels, no longer on the group they were made for: \"AB\""));
+        assert!(labels(&d).contains(&"AB (moved)".to_owned()));
+        assert!(labels(&d).contains(&"CD".to_owned()));
     }
 
     #[test]
