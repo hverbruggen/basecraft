@@ -353,8 +353,7 @@ pub fn apply(sub: &mut Submission, edit: &SubmissionEdit) -> Result<(), EditErro
             }
             next.selection_confirmation = Some(selection_hash.clone());
         }
-        SubmissionEdit::SetBatch { batch } => next.batch = batch.clone(),
-        SubmissionEdit::SetBatchDraft { batch } => {
+        SubmissionEdit::SetBatch { batch } => {
             next.marker_drafts.insert(
                 marker_kind(&next.batch.marker).into(),
                 next.batch.marker.clone(),
@@ -530,15 +529,10 @@ pub fn selection(
             });
         }
     };
-    let (input, include_metadata) = match &sub.accession_policy {
-        basecraft_protocol::submission::AccessionPolicy::LegacyHeuristic => {
-            (Some(IdentifierSource::Identifier), true)
-        }
-        basecraft_protocol::submission::AccessionPolicy::Configured {
-            input,
-            include_metadata,
-        } => (input.clone(), *include_metadata),
-    };
+    let basecraft_protocol::submission::AccessionPolicy::Configured {
+        input,
+        include_metadata,
+    } = sub.accession_policy.clone();
     match input {
         Some(IdentifierSource::Identifier) => {
             add(record, "whole identifier (unverified heuristic)".into());
@@ -1954,14 +1948,14 @@ mod redesign_tests {
         };
         apply(
             &mut sub,
-            &SubmissionEdit::SetBatchDraft {
+            &SubmissionEdit::SetBatch {
                 batch: rrna.clone(),
             },
         )
         .unwrap();
         apply(
             &mut sub,
-            &SubmissionEdit::SetBatchDraft {
+            &SubmissionEdit::SetBatch {
                 batch: BatchSettings {
                     marker: Marker::Coding {
                         gene: "tufA".into(),
