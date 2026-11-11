@@ -60,7 +60,13 @@ fn base(path: &Path) -> crate::Result<PathBuf> {
 }
 
 // Placement contexts can be large alignments; only traces use owned captures.
-fn source(path: &Path, sha256: &str, anchor: &Path) -> crate::Result<Source> {
+// A context inside the project links the history it keeps there.
+fn source(
+    path: &Path,
+    sha256: &str,
+    anchor: &Path,
+    project: Option<&crate::project::Project>,
+) -> crate::Result<Source> {
     let path = path.canonicalize()?;
     let hash = basecraft_io::hash_file(&path)?;
     let ledger = inputs::reference_input_with_dependencies(
@@ -69,7 +75,7 @@ fn source(path: &Path, sha256: &str, anchor: &Path) -> crate::Result<Source> {
         &hash,
         &[],
         "Explicit Sanger input reference",
-        None,
+        project,
     )?;
     if !basecraft_io::sha256_file(&path)?.eq_ignore_ascii_case(sha256) {
         return Err(crate::Error::ChangedOnDisk { path });
@@ -263,8 +269,13 @@ fn publication(run: &ArtifactRun, origin: &str, artifacts: Vec<ArtifactRevision>
 }
 
 impl SangerRun {
-    pub fn prepare(anchor: &Path, operation: &str, paths: &[PathBuf]) -> crate::Result<Self> {
-        Self::prepare_with_dependencies(anchor, operation, paths, &[])
+    pub fn prepare(
+        anchor: &Path,
+        operation: &str,
+        paths: &[PathBuf],
+        project: Option<&crate::project::Project>,
+    ) -> crate::Result<Self> {
+        Self::prepare_with_dependencies(anchor, operation, paths, &[], project)
     }
 
     pub fn prepare_with_dependencies(
@@ -272,6 +283,7 @@ impl SangerRun {
         operation: &str,
         paths: &[PathBuf],
         ancestors: &[PathBuf],
+        project: Option<&crate::project::Project>,
     ) -> crate::Result<Self> {
         if paths.is_empty() {
             return Err(crate::Error::Unsupported(
@@ -294,9 +306,12 @@ impl SangerRun {
                 evidence.sources.push(source_capture(&capture, anchor)?);
                 captures.push(capture);
             } else {
-                evidence
-                    .sources
-                    .push(source(path, &basecraft_io::sha256_file(path)?, anchor)?);
+                evidence.sources.push(source(
+                    path,
+                    &basecraft_io::sha256_file(path)?,
+                    anchor,
+                    project,
+                )?);
             }
         }
         let run = ArtifactRun::create(anchor, &ulid::Ulid::generate().to_string())?;
@@ -546,12 +561,14 @@ impl SangerReview {
         &mut self,
         directory: &Path,
         path: &Path,
+        project: Option<&crate::project::Project>,
     ) -> Result<(), String> {
         let placement = SangerPlacement::read(path)?;
         let context = source(
             &placement.source_path,
             &placement.source_sha256,
             &self.anchor,
+            project,
         )
         .map_err(|e| e.to_string())?;
         self.evidence.sources.push(context);
@@ -987,7 +1004,10 @@ struct AdditionEvidence {
 impl SangerReview {
     /// Freeze the accepted input for alignment addition without exporting an AB1
     /// or requiring a visible review file. This descriptor is never executable.
-    pub fn addition_evidence(&self) -> Result<String, String> {
+    pub fn addition_evidence(
+        &self,
+        project: Option<&crate::project::Project>,
+    ) -> Result<String, String> {
         let sequence = self
             .resolved_sequence()
             .filter(|s| !s.is_empty())
@@ -1003,6 +1023,7 @@ impl SangerReview {
             "accepted_review_input",
             &paths,
             self.evidence_runs(),
+            project,
         )
         .map_err(|e| e.to_string())?;
         let review = run.review_snapshot(self).map_err(|e| e.to_string())?;
@@ -1406,10 +1427,50 @@ mod tests {
     }
 
     #[test]
+    fn a_placement_context_inside_the_project_keeps_its_history_link() {
+        let tmp = tempfile::tempdir().unwrap();
+        let chosen = tmp.path().join("project");
+        std::fs::create_dir(&chosen).unwrap();
+        let context = chosen.join("context.fasta");
+        std::fs::write(&context, b">a\nACGT\n").unwrap();
+        let project = crate::project::Project::new(&chosen).unwrap();
+        let mut session = crate::Session::new(&chosen).in_project(Some(project.clone()));
+        let doc = session.open(&context).unwrap();
+        session
+            .apply(
+                doc,
+                basecraft_protocol::Op::SeqReplace {
+                    start: 0,
+                    end: 1,
+                    residues: "T".into(),
+                },
+            )
+            .unwrap();
+        session.save(doc, None).unwrap();
+        let sha256 = basecraft_io::sha256_file(&context).unwrap();
+        let placed = source(
+            &context,
+            &sha256,
+            &chosen.join("review.json"),
+            Some(&project),
+        )
+        .unwrap();
+        let upstream = inputs::read_input(placed.ledger.as_deref().unwrap())
+            .unwrap()
+            .upstream;
+        assert_eq!(upstream.len(), 1, "{upstream:?}");
+        assert_eq!(
+            upstream[0].bundle.file_name(),
+            project.provenance_bundle(&context).unwrap().file_name()
+        );
+    }
+
+    #[test]
     fn failed_analysis_keeps_owned_partial_output_and_declares_failure() {
         let tmp = tempfile::tempdir().unwrap();
         let (_, trace) = draft(tmp.path());
-        let run = SangerRun::prepare(&trace, "consensus", std::slice::from_ref(&trace)).unwrap();
+        let run =
+            SangerRun::prepare(&trace, "consensus", std::slice::from_ref(&trace), None).unwrap();
         let partial = run.artifact("partial-draft").unwrap();
         std::fs::write(&partial, b"partial").unwrap();
         run.failed("cancelled by user before review publication")
@@ -1432,7 +1493,7 @@ mod tests {
         let mut raw: serde_json::Value = serde_json::from_str(&first.draft_json).unwrap();
         raw["mode"] = "consensus".into();
         raw["inputs"].as_array_mut().unwrap().push(serde_json::json!({"read":2,"path":other,"sha256":basecraft_io::sha256_file(&other).unwrap(),"orientation":"forward","calls":{"sequence":"AC","positions":[3,4],"scores":[20,30]}}));
-        let run = SangerRun::prepare(&trace, "consensus", &[trace.clone(), other]).unwrap();
+        let run = SangerRun::prepare(&trace, "consensus", &[trace.clone(), other], None).unwrap();
         let evidence = run.artifact("evidence.json").unwrap();
         inputs::write_json(&evidence, &raw).unwrap();
         let reads = run.artifact("reads.align.fa").unwrap();
@@ -1448,6 +1509,7 @@ mod tests {
             "place_sanger",
             std::slice::from_ref(&alignment),
             review.evidence_runs(),
+            None,
         )
         .unwrap();
         let placement_path = placement_run.artifact("placement.json").unwrap();
@@ -1498,7 +1560,7 @@ mod tests {
                 choice: ReviewChoice::Accept,
             })
             .unwrap();
-        let descriptor = review.addition_evidence().unwrap();
+        let descriptor = review.addition_evidence(None).unwrap();
         let alignment = folder.join("alignment.afa");
         std::fs::write(&alignment, ">a\nAC\n>b\nAG\n").unwrap();
         let mut session = crate::Session::recoverable(&folder).unwrap();
@@ -1569,8 +1631,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let (_, trace) = draft(tmp.path());
         for cancelled in [false, true] {
-            let run =
-                SangerRun::prepare(&trace, "consensus", std::slice::from_ref(&trace)).unwrap();
+            let run = SangerRun::prepare(&trace, "consensus", std::slice::from_ref(&trace), None)
+                .unwrap();
             let directory = run.directory().to_path_buf();
             std::fs::write(run.artifact("partial").unwrap(), b"recover me").unwrap();
             let job = run.job_path().unwrap();

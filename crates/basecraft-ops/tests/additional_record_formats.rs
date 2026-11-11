@@ -133,6 +133,7 @@ fn sanger_invocation_original_records() {
         &root.path().join("review.sanger-review.json"),
         "fixture",
         std::slice::from_ref(&source),
+        None,
     )
     .unwrap();
     for (file, name) in [

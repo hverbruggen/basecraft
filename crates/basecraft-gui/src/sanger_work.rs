@@ -327,6 +327,7 @@ fn execute(
                     session.attach_operation_placement(
                         directory(&outcome)?,
                         &artifact(&outcome, "placement.json")?,
+                        crate::chosen_project::chosen()?.as_ref(),
                     )?;
                     let mut view = session_view(&session)?;
                     let automatic = session.automatic_only();
@@ -456,7 +457,7 @@ impl ReviewDocument {
     pub fn addition_evidence(&mut self) -> Result<String, String> {
         self.review()
             .ok_or("No review is open")?
-            .addition_evidence()
+            .addition_evidence(crate::chosen_project::chosen()?.as_ref())
     }
 }
 

@@ -86,6 +86,7 @@ fn explicit_sanger_run_registers_both_identities_in_one_read() {
         &root.join("analysis"),
         "consensus",
         std::slice::from_ref(&path),
+        None,
     )
     .unwrap();
     one_read(&path);
@@ -117,6 +118,7 @@ fn large_alignment_context_still_registers_as_streamed_evidence() {
         &root.join("placement"),
         "placement",
         std::slice::from_ref(&path),
+        None,
     )
     .unwrap();
     let request = run.artifact("request.json").unwrap();
