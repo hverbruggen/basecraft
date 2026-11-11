@@ -24,6 +24,8 @@ mod application_test_bridge;
 #[path = "../src/bridge.rs"]
 #[allow(unused_imports)] // harness=false omits the included module's #[test] bodies.
 mod bridge;
+#[path = "../src/command_bridge.rs"]
+mod command_bridge;
 #[path = "controller_appearance/mod.rs"]
 mod controller_appearance;
 #[path = "../src/delimitation_bridge.rs"]
@@ -1137,13 +1139,28 @@ fn main() {
         )),
         &QUrl::default(),
     );
-    // Guards the event loop only; the checks after it may take longer.
+    // Guards the event loop only; the checks after it may take longer. Saves
+    // on the window thread wait for the disk, which on a busy build host has
+    // taken over 15 seconds, so the limit is generous. On expiry, print each
+    // thread's blocking call.
     let exited = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let watched = exited.clone();
     std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_secs(15));
+        std::thread::sleep(std::time::Duration::from_secs(60));
         if !watched.load(std::sync::atomic::Ordering::Acquire) {
-            eprintln!("Bootstrap QML timer did not exit the event loop within 15 seconds");
+            for task in std::fs::read_dir("/proc/self/task").unwrap().flatten() {
+                let read = |name: &str| {
+                    std::fs::read_to_string(task.path().join(name)).unwrap_or_default()
+                };
+                eprintln!(
+                    "TASK {} {} | {} | {}",
+                    task.file_name().to_string_lossy(),
+                    read("comm").trim(),
+                    read("wchan").trim(),
+                    read("syscall").trim()
+                );
+            }
+            eprintln!("Bootstrap QML timer did not exit the event loop within 60 seconds");
             std::process::exit(1);
         }
     });

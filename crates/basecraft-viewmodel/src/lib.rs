@@ -28,5 +28,6 @@ pub mod sanger_triage;
 
 pub mod accessible;
 
+pub mod commands;
 pub mod overview;
 pub mod workspace;

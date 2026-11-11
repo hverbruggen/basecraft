@@ -14,6 +14,7 @@ mod app_bridge;
 mod appearance;
 mod application;
 mod bridge;
+mod command_bridge;
 mod delimitation_bridge;
 mod document_jobs;
 mod document_open;

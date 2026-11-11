@@ -1,5 +1,4 @@
 import QtQuick
-import "CommandHints.js" as CommandHints
 import QtQuick.Controls.Basic
 
 // A small captioned number box for the ribbon, such as a font size.

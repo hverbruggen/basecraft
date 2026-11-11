@@ -7,14 +7,15 @@ Item {
     width: 800; height: 650
     property string source
     function declaration(id) {
-        const begin = source.lastIndexOf("AppCommand {", source.indexOf("id: " + id))
+        const begin = source.lastIndexOf("Command {", source.indexOf("id: " + id))
         let end = source.indexOf("{", begin) + 1, depth = 1
         while (depth && end < source.length) {
             const c = source[end++]
             if (c === "{") depth++
             if (c === "}") depth--
         }
-        return source.slice(begin, end)
+        // Main's Command component supplies the customization binding.
+        return source.slice(begin, end).replace("Command {", "AppCommand { customization: window.customization;")
     }
     TestCase {
         name: "SequenceCommands"

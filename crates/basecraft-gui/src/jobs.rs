@@ -155,9 +155,9 @@ static BOARD: Mutex<Board> = Mutex::new(Board {
     next: 0,
     entries: Vec::new(),
 });
-/// Kept apart from the list: a watcher queues onto the window thread, whose
-/// queued calls read the list, so the list lock is never held while queueing.
-type Watcher = Box<dyn Fn() -> bool + Send>;
+/// A watcher queues onto a window thread, which may be waiting for one of
+/// these locks, so no lock is held while a watcher runs.
+type Watcher = Arc<dyn Fn() -> bool + Send + Sync>;
 static WATCHERS: Mutex<Vec<Watcher>> = Mutex::new(Vec::new());
 
 fn board() -> std::sync::MutexGuard<'static, Board> {
@@ -165,11 +165,26 @@ fn board() -> std::sync::MutexGuard<'static, Board> {
 }
 
 /// Call `notify` whenever the job list changes, until it returns false.
-pub(crate) fn watch(notify: impl Fn() -> bool + Send + 'static) {
+pub(crate) fn watch(notify: impl Fn() -> bool + Send + Sync + 'static) {
     WATCHERS
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .push(Box::new(notify));
+        .push(Arc::new(notify));
+}
+
+/// Call every watcher without holding a lock; forget those that are gone.
+fn notify_watchers() {
+    let watchers = WATCHERS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    let gone: Vec<_> = watchers.into_iter().filter(|notify| !notify()).collect();
+    if !gone.is_empty() {
+        WATCHERS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|watcher| !gone.iter().any(|dead| Arc::ptr_eq(dead, watcher)));
+    }
 }
 
 /// Change the entry `id` and tell the watchers.
@@ -177,10 +192,7 @@ fn update(id: u64, change: impl FnOnce(&mut Entry)) {
     if let Some(entry) = board().entries.iter_mut().find(|e| e.id == id) {
         change(entry);
     }
-    WATCHERS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .retain(|notify| notify());
+    notify_watchers();
 }
 
 impl Entry {

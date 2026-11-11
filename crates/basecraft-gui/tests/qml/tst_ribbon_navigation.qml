@@ -33,6 +33,8 @@ Item {
                 AppCommandButton {
                     id: save
                     commandId: "file.save"
+                    defaultKeyHint: "S"
+                    hintScope: "File"
                     text: "Save"
                     iconName: "save"
                     onInvoked: host.runs++
@@ -40,6 +42,8 @@ Item {
                 AppCommandButton {
                     id: unavailable
                     commandId: "file.save-as"
+                    defaultKeyHint: "A"
+                    hintScope: "File"
                     text: "Save as"
                     iconName: "save-as"
                     enabled: false

@@ -153,13 +153,8 @@ ApplicationWindow {
     readonly property bool treeOpen: currentKind === "tree"
     readonly property bool delimitationOpen: currentKind === "delimitation"
     readonly property bool traceOpen: currentKind === "trace"
-    readonly property var ribbonTabs: ["File", "View"].concat(
-        currentKind === "sequence" ? ["Sequence"] : alignmentOpen ? ["Alignment", "Phylogeny", "Delimitation"]
-        : treeOpen ? ["Tree", "Delimitation"] : delimitationOpen ? ["Delimitation"] : traceOpen ? ["Trace"] : [], ["Export"])
-    onRibbonTabsChanged: {
-        if (projectingDocument) return
-        if (!ribbonTabs.includes(ribbonTabName)) ribbonTabName = ribbonTabs.length > 3 ? ribbonTabs[2] : "File"
-    }
+    readonly property var ribbonTabs: commandList.ribbon_tabs(currentKind)
+    onRibbonTabsChanged: if (!projectingDocument) ribbonTabName = commandList.ribbon_tab(currentKind, ribbonTabName)
     readonly property string ribbonTab: ribbonTabs.includes(ribbonTabName) ? ribbonTabName : "File"
     // Each tab's panel in the ribbon's stack.
     readonly property var ribbonPanels: ({ "File": 0, "View": 1, "Sequence": 2, "Alignment": 3, "Tree": 4, "Phylogeny": 5, "Delimitation": 6, "Trace": 7, "Export": 8 })
@@ -284,7 +279,7 @@ ApplicationWindow {
         currentPath = d ? d.path : ""
         currentKind = d ? d.kind : ""
         projectingDocument = false
-        if (!ribbonTabs.includes(ribbonTabName)) ribbonTabName = ribbonTabs.length > 3 ? ribbonTabs[2] : "File"
+        ribbonTabName = commandList.ribbon_tab(currentKind, ribbonTabName)
         if (allowFocus && currentView && (focusOpenedDocument || !tabs.activeFocus)) {
             // Background model updates must not steal focus from controls/dialogs.
             if (focusOpenedDocument || !window.activeFocusItem || !window.activeFocusItem.visible)
@@ -495,10 +490,8 @@ ApplicationWindow {
         function put(text) { clipboard.text = text; clipboard.selectAll(); clipboard.copy() }
     }
 
-    AppCommand {
+    Command {
         id: installedOperationsCommand
-        disabledReason: window.disabledReasonFor(commandId)
-        customization: window.customization
         commandId: "tools.installed-operations"
         text: "Installed operations…"
         iconName: "more"
@@ -506,9 +499,8 @@ ApplicationWindow {
         enabled: window.current !== null && window.currentPath.length > 0
         onTriggered: operationPicker.show(shell.project_dir.length ? shell.project_dir : shell.local_file_path(shell.parent_folder_url(window.currentPath)), window.currentPath, !!window.current.dirty)
     }
-    AppCommand {
+    Command {
         id: newSequenceCommand
-        customization: window.customization
         commandId: "file.new-sequence"
         text: "New"
         tooltip: "New sequence"
@@ -516,9 +508,8 @@ ApplicationWindow {
         defaultShortcut: "Ctrl+N"
         onTriggered: newSequenceDialog.prepare("", "")
     }
-    AppCommand {
+    Command {
         id: addAnnotationCommand
-        customization: window.customization
         commandId: "ribbon.annotate-the-selection"
         text: "Add annotation"
         tooltip: "Annotate the selection; right-to-left selection defaults to reverse strand"
@@ -567,10 +558,8 @@ ApplicationWindow {
         newSequenceDialog.accept()
         Qt.callLater(() => { window.refreshCurrent(); document.view.forceActiveFocus() })
     }
-    AppCommand {
+    Command {
         id: openCommand
-        disabledReason: window.disabledReasonFor(commandId)
-        customization: window.customization
         commandId: "file.open"
         text: "Open…"
         iconName: "open"
@@ -578,10 +567,8 @@ ApplicationWindow {
         defaultShortcut: "Ctrl+O"
         onTriggered: openDialog.open()
     }
-    AppCommand {
+    Command {
         id: saveCommand
-        disabledReason: window.disabledReasonFor(commandId)
-        customization: window.customization
         commandId: "file.save"
         text: "Save"
         iconName: "save"
@@ -590,10 +577,8 @@ ApplicationWindow {
         enabled: window.current !== null && (!window.traceOpen || window.current.review_mode)
         onTriggered: window.traceOpen ? window.traceDocument.saveReview() : window.saveTarget(window.documentTarget(tabs.currentIndex), "", null)
     }
-    AppCommand {
+    Command {
         id: saveAsCommand
-        disabledReason: window.disabledReasonFor(commandId)
-        customization: window.customization
         commandId: "file.save-as"
         text: "Save as…"
         iconName: "save-as"
@@ -602,30 +587,24 @@ ApplicationWindow {
         enabled: window.current !== null
         onTriggered: window.saveAs()
     }
-    AppCommand {
+    Command {
         id: projectCommand
-        disabledReason: window.disabledReasonFor(commandId)
-        customization: window.customization
         commandId: "project.open"
         text: "Open project…"
         iconName: "project"
         tooltip: "Choose or create a project folder"
         onTriggered: window.openProjectPicker()
     }
-    AppCommand {
+    Command {
         id: shortcutsCommand
-        disabledReason: window.disabledReasonFor(commandId)
-        customization: window.customization
         commandId: "help.shortcuts"
         text: "Keyboard shortcuts…"
         iconName: "keyboard"
         tooltip: "List all keyboard shortcuts"
         onTriggered: shortcuts.show("")
     }
-    AppCommand {
+    Command {
         id: aboutCommand
-        disabledReason: window.disabledReasonFor(commandId)
-        customization: window.customization
         commandId: "help.about"
         text: "About Basecraft…"
         iconName: "info"
@@ -633,19 +612,16 @@ ApplicationWindow {
         onTriggered: about.open()
     }
 
-    AppCommand {
+    Command {
         id: preferencesCommand
-        disabledReason: window.disabledReasonFor(commandId)
-        customization: window.customization
         commandId: "application.preferences"
         text: "Preferences…"
         iconName: "settings"
         tooltip: "Appearance, files, compute, ribbon and shortcuts"
         onTriggered: preferencesDialog.open()
     }
-    AppCommand {
+    Command {
         id: findCommand
-        customization: window.customization
         commandId: "view.find"
         text: "Find"
         iconName: "search"
@@ -657,10 +633,8 @@ ApplicationWindow {
             if (document && document.openFind) document.openFind()
         }
     }
-    AppCommand {
+    Command {
         id: textRepresentationCommand
-        disabledReason: window.disabledReasonFor(commandId)
-        customization: window.customization
         commandId: "view.text"
         text: "Text representation…"
         iconName: "text-representation"
@@ -669,29 +643,23 @@ ApplicationWindow {
         enabled: window.current !== null
         onTriggered: window.openTextRepresentation()
     }
-    AppCommand {
+    Command {
         id: contextShortcutsCommand
-        disabledReason: window.disabledReasonFor(commandId)
-        customization: window.customization
         commandId: "help.context-shortcuts"
         text: "Shortcuts…"
         iconName: "keyboard"
         tooltip: "Keyboard shortcuts for this tab"
         onTriggered: shortcuts.show(window.ribbonTab)
     }
-    AppCommand {
+    Command {
         id: learnCommand
-        disabledReason: window.disabledReasonFor(commandId)
-        customization: window.customization
         commandId: "help.learn"
         text: "Learn"
         iconName: "book"
         tooltip: "Manual pages are not written yet"
     }
-    AppCommand {
+    Command {
         id: exportSvgCommand
-        disabledReason: window.disabledReasonFor(commandId)
-        customization: window.customization
         commandId: "ribbon.export-an-editable-svg-of-this-view"
         text: "Export SVG…"
         iconName: "save-as"
@@ -699,10 +667,8 @@ ApplicationWindow {
         enabled: window.current !== null
         onTriggered: window.exportSvg()
     }
-    AppCommand {
+    Command {
         id: exportPngCommand
-        disabledReason: window.disabledReasonFor(commandId)
-        customization: window.customization
         commandId: "figure.export-png"
         text: "Export PNG"
         iconName: "figure-export"
@@ -766,10 +732,8 @@ ApplicationWindow {
         provenanceExport = operation
         provenanceFolder.open()
     }
-    AppCommand {
+    Command {
         id: historyCommand
-        disabledReason: window.disabledReasonFor(commandId)
-        customization: window.customization
         commandId: "provenance.history"
         text: "Provenance"
         iconName: "history"
@@ -777,10 +741,9 @@ ApplicationWindow {
         enabled: window.current !== null && !provenance.busy
         onTriggered: documentRecord.showPage(0)
     }
-    AppCommand {
+    Command {
         id: methodsCommand
         disabledReason: tooltip
-        customization: window.customization
         commandId: "provenance.methods"
         text: "Methods"
         iconName: "methods-export"
@@ -788,10 +751,8 @@ ApplicationWindow {
         enabled: window.current !== null && !provenance.busy
         onTriggered: { documentRecord.savedRevision = false; documentRecord.showPage(1) }
     }
-    AppCommand {
+    Command {
         id: showProvenanceCommand
-        disabledReason: window.disabledReasonFor(commandId)
-        customization: window.customization
         commandId: "provenance.show-files"
         text: "Record folder"
         iconName: "open"
@@ -803,30 +764,24 @@ ApplicationWindow {
             else provenanceDialog.open()
         }
     }
-    AppCommand {
+    Command {
         id: verifyProvenanceCommand
-        disabledReason: window.disabledReasonFor(commandId)
-        customization: window.customization
         commandId: "provenance.verify"
         text: "Verify…"
         tooltip: "Verify recorded input and output hashes without executing tools"
         enabled: window.current !== null && !provenance.busy
         onTriggered: window.inspectProvenance("verify")
     }
-    AppCommand {
+    Command {
         id: packageCommand
-        disabledReason: window.disabledReasonFor(commandId)
-        customization: window.customization
         commandId: "provenance.package"
         text: "Package for reproduction…"
         tooltip: "Copy the result and retained history to a new package directory"
         enabled: window.current !== null && !provenance.busy
         onTriggered: window.exportProvenance("package")
     }
-    AppCommand {
+    Command {
         id: recoverCommand
-        disabledReason: window.disabledReasonFor(commandId)
-        customization: window.customization
         commandId: "file.recover-work"
         text: "Recover work…"
         iconName: "open"
@@ -900,92 +855,26 @@ ApplicationWindow {
     }
     PreferencesDialog { id: preferencesDialog; settings: preferences; commands: window.applicationCommands; defaultFontSizePoints: window.defaultFontSizePoints }
 
-    function ribbonIconFor(id) {
-        const specific = {
-            "ribbon.copy-the-selected-annotation-s-sequence": "clipboard",
-            "ribbon.save-the-selection-as-a-new-file": "selection",
-            "ribbon.rename-the-cursor-s-row": "rename",
-            "ribbon.annotate-open-reading-frames": "gene-orf",
-            "ribbon.annotate-protein-coding-genes-with-prodigal": "gene-predict",
-            "trace.compute-calls": "trace-compute",
-            "trace.cancel-calls": "trace-cancel",
-            "ribbon.combine-up-to-three-reads": "trace-draft",
-            "ribbon.choose-the-consensus-range-to-keep-in-exports": "trace-mask",
-            "ribbon.find-partial-terminal-primer-candidates-and-mask-them": "trace-primer",
-            "ribbon.choose-the-terminal-signal-percentage-for-a-new-draft": "trace-cutoff",
-            "ribbon.choose-alignment-context": "link",
-            "ribbon.add-support-values-from-another-analysis-of-the-same": "support-add"
-}
-        if (specific[id]) return specific[id]
-        if (!id) return "info"
-        if (id.includes("copy-") || id.includes("extract-")) return "selection"
-        if (id.includes("export-") || id.includes("save-") || id.includes("package-")) return "save-as"
-        if (id.includes("annotation") || id.includes("annotate-")) return "annotation-add"
-        if (id.includes("rename-") || id.includes("edit-")) return "edit"
-        if (id.includes("link-") || id.includes("associate-")) return "link"
-        if (id.includes("order-") || id.includes("above-")) return "up"
-        if (id.includes("below-")) return "down"
-        if (id.includes("flip-") || id.includes("reverse-")) return "arrow-right"
-        if (id.includes("tree") || id.includes("phylogeny") || id.includes("clade") || id.includes("distance.")) return "tree"
-        if (id.includes("mafft") || id.includes("trimal") || id.includes("alignment") || id.includes("matrix")) return "columns"
-        if (id.includes("trace") || id.includes("draft") || id.includes("signal") || id.includes("primer") || id.includes("consensus")) return "waveform"
-        if (id.includes("find-") || id.includes("predict-")) return "bug"
-        if (id.includes("open-")) return "open"
-        if (id.includes("move-")) return "arrow-right"
-        if (id.includes("add-")) return "add"
-        return "info"
+    // The one list of commands: keys, scopes, icons and why one is unavailable.
+    AppCommands { id: commandList }
+    readonly property string commandContext: JSON.stringify({project: shell.project_dir.length > 0, document: current !== null,
+        path: currentPath.length > 0, kind: currentKind, busy: !!current && !!current.busy, calling: !!current && !!current.calling,
+        linked_alignment: !!current && !!current.linked_alignment, species_view: speciesView !== null, records_busy: provenance.busy,
+        submission_busy: submissionJobs.busy, trace_working: traceOpen && !!traceDocument && traceDocument.working,
+        review_mode: !!current && !!current.review_mode, unresolved: !!current && current.unresolved > 0})
+    component Command: AppCommand {
+        customization: window.customization
+        disabledReason: commandList.disabled_reason(commandId, window.commandContext)
+        hintScope: commandList.scope(commandId)
+        defaultKeyHint: commandList.key(commandId)
     }
-
-    // Presentation only: availability stays with each existing command/control.
-    function disabledReasonFor(id) {
-        if (id.startsWith("metadata.") || id.startsWith("submission.")) {
-            if (!shell.project_dir.length) return "Choose a project folder with File > Project to use project data"
-            if (["metadata.import-headers", "metadata.template"].includes(id)) return "Open a FASTA file to use its records"
-            if (id === "submission.new") return "Open a marker alignment to start a submission"
-            if (submissionJobs.busy) return "Wait for submission validation to finish"
-            return "Start or open a GenBank submission in this project"
-        }
-        if (id.startsWith("species.")) {
-            if (id.startsWith("species.asap-") && !alignmentOpen && !(current && current.linked_alignment)) return "Open an alignment or link one to the species workspace to run ASAP"
-            if (/^species\.(gmyc|ptp|manual|asap)-/.test(id)) return current && current.busy ? "Wait for the current analysis to finish" : "Open an alignment, tree or species workspace to delimit species"
-            if (id.startsWith("species.combine-")) return "Open a document, then choose species workspaces to combine"
-            if (!speciesView) return "Open a species delimitation workspace to use this command"
-            if (current.busy) return "Wait for the workspace operation to finish"
-            if (id === "species.roster-links") return "Choose a project folder and open its specimen metadata table to link records"
-            if (id === "species.threshold-cut") return "Attach an ultrametric display tree to enable threshold selection"
-            if (id === "species.display") return "A display tree is already attached; use the workspace's tree view"
-            if (id === "species.layout") return "Choose at least one hypothesis in Columns to lay out its bars"
-            if (id === "species.support-style") return "Attach a display tree with support values to style support"
-            return "Attach a display tree to the species workspace to show it"
-        }
-        if (id === "help.learn") return "Manual pages are not written yet"
-        if (id === "file.recover-work") return "Wait for the current provenance operation to finish"
-        if (!current) return "Open a document to use this command"
-        if ((id.startsWith("provenance.") || id === "file.recover-work") && provenance.busy) return "Wait for the current provenance operation to finish"
-        if (id === "trace.cancel-calls") return "Compute alternative trace calls before cancelling them"
-        if (traceOpen && traceDocument && traceDocument.working) return "Wait for trace processing to finish"
-        if (current.busy || current.calling) return "Wait for the current operation to finish"
-        if (traceOpen && !current.review_mode) return "Open a Sanger review to edit or export its reviewed consensus"
-        if (id === "trace.compute-calls" || id === "ribbon.combine-up-to-three-reads") return "Open a single-read Sanger review to compute calls or draft additional reads"
-        if (id === "ribbon.choose-alignment-context") return "This review already has alignment context; open a standalone review to choose context"
-        if (id.includes("edited-consensus")) {
-            if (current.unresolved > 0) return "Resolve or accept every remaining review issue before exporting the consensus"
-            return "Choose alignment context for this review before adding its consensus"
-        }
-        if (id.includes("delete-columns-containing-only-gaps")) return "This alignment has no all-gap columns to delete"
-        if (id.includes("which-support-values")) return "Use Support > Add to add tree support values before styling them"
-        if (id === "ribbon.zoom-to-the-selection") return "Open a sequence or alignment and select a region to zoom to it"
-        if (id === "tree.rate-smoothing") return "Save the tree to a file before smoothing its rates"
-        if (id === "file.save-as" && traceOpen) return "Open a Sanger review to save review decisions; a raw trace cannot be saved as a new document"
-        if (!currentPath.length) return "Save the document to a file before using this command"
-        return "Open a compatible document to use this command"
-    }
-
     component RibbonButton: AppCommandButton {
         customization: window.customization
-        disabledReason: window.disabledReasonFor(commandId)
+        disabledReason: commandList.disabled_reason(commandId, window.commandContext)
+        hintScope: commandList.scope(commandId)
+        defaultKeyHint: commandList.key(commandId)
         enabled: window.current !== null
-        iconName: window.ribbonIconFor(commandId)
+        iconName: commandList.icon(commandId)
         Component.onCompleted: window.registerRibbonCommand(commandAction)
     }
     // The same last group on every ribbon tab.

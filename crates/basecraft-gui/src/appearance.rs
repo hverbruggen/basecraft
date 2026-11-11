@@ -91,7 +91,7 @@ impl Appearance {
     }
 }
 
-type Follower = Box<dyn Fn(&Arc<Appearance>) -> bool + Send>;
+type Follower = Arc<dyn Fn(&Arc<Appearance>) -> bool + Send + Sync>;
 /// Followers queue onto window threads, whose queued calls may read the
 /// current appearance, so the two never share a lock.
 static FOLLOWERS: Mutex<Vec<Follower>> = Mutex::new(Vec::new());
@@ -133,7 +133,7 @@ pub(crate) fn follow<T: cxx_qt::Threading + 'static>(
     FOLLOWERS
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .push(Box::new(move |look| {
+        .push(Arc::new(move |look| {
             let look = look.clone();
             thread
                 .queue(move |object| apply(object, &look, true))
@@ -151,10 +151,21 @@ fn replace(next: Appearance) {
         }
         *current = next.clone();
     }
-    FOLLOWERS
+    // Followers queue onto window threads; call them without holding a lock.
+    let followers = FOLLOWERS
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .retain(|follower| follower(&next));
+        .clone();
+    let gone: Vec<_> = followers
+        .into_iter()
+        .filter(|follow| !follow(&next))
+        .collect();
+    if !gone.is_empty() {
+        FOLLOWERS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|follower| !gone.iter().any(|dead| Arc::ptr_eq(dead, follower)));
+    }
 }
 
 /// Held from reading the files to publishing the result, so a reload that
