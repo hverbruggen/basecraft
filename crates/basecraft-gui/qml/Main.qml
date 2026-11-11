@@ -2704,35 +2704,10 @@ ApplicationWindow {
         }
     }
 
-    property var delimPending: []
-    function runDelimSteps(c) {
-        while (window.delimPending.length && !c.busy) {
-            const step=window.delimPending.shift()
-            if (step.action === "start") window.documentAt(tabs.currentIndex).startAnalysis(step.method, step.input, step.rooted || false, JSON.stringify(step.settings || {}), step.display || "existing")
-            else if (step.action === "attach") c.attach_tree(step.path,step.rooted)
-            else if (step.action === "select") c.highlight_taxa(JSON.stringify(step.ids))
-            else if (step.action === "activate_last") { const work = JSON.parse(c.workspace_json); c.activate(work.hypotheses[work.hypotheses.length-1].id) }
-            else if (step.action === "cut") c.preview_cut(step.threshold)
-            else if (step.action === "cancel_cut") c.cancel_cut()
-            else if (step.action === "save_cut") c.save_cut(step.name)
-            else if (step.action === "undo") c.undo()
-            else if (step.action === "redo") c.redo()
-            else if (step.action === "save") c.save()
-            else if (step.action === "run") c.run_analysis(step.method,step.input,step.rooted || false,JSON.stringify(step.settings || {}))
-            else if (step.action === "statistics_csv") c.export_statistics(step.path)
-            else if (step.action === "inspect") c.export_analysis(step.path)
-            else if (step.action === "svg") c.export_svg(step.path)
-            else if (step.action === "visible_all") c.action("visible",JSON.stringify({ids:JSON.parse(c.workspace_json).hypotheses.map(h=>h.id)}))
-            else c.action(step.action,JSON.stringify(step))
-            console.log("delim",step.action,"|",c.message,"|",c.workspace_json,"| preview",c.preview_json)
-        }
-    }
-
-    // Scripted runs, on the active tab: --goto START,END  --mode wrapped|linear|circular
-    // --type TEXT  --select X0,X1[,Y]  --menu X,Y  --menu-add X  --edit new|ID
-    // --label TEXT [--no-click 1]  --add LOCATION  --extract 1  --hover X,Y
-    // --no-sidebar 1  --fit 1  --aln STEPS  --keys KEYS  --shot-delay MS
-    // --screenshot FILE
+    // Scripted runs for the check tools (crates/basecraft-gui/tools): with
+    // --screenshot FILE, optionally --window-width, --font-size, --font-points,
+    // --cpu-threads, --fit, --ribbon INDEX, --species-dialog METHOD,
+    // --distance-dialog FORM, --project-picker STEPS and the audits.
     // Exercise the actual project command and native picker for integration checks.
     Timer {
         id: projectPickerCheck
@@ -2769,203 +2744,23 @@ ApplicationWindow {
                 return
             }
             const c = window.current
-            const v = window.currentView
             if (!c) { console.log("no document open"); shot.start(); return }
-            if (arg("--trace-review")) {
-                window.startTraceReview(JSON.parse(arg("--trace-review")), c.review_snapshot(), window.documentAt(tabs.currentIndex))
-                shot.start()
-                return
-            }
-            if (arg("--zoom-percent")) {
-                const controller = window.delimitationOpen ? v.controller : c
-                controller.set_zoom_percent(Number(arg("--zoom-percent")))
-                console.log("ZOOM_PERCENT", controller.zoom_text)
-            }
             if (arg("--cpu-threads")) window.localCpuThreads = Number(arg("--cpu-threads"))
             if (arg("--font-points")) preferences.update("fontSizePoints", arg("--font-points"))
-            if (arg("--sanger-draft")) c.open_draft(arg("--sanger-draft"))
-            if (arg("--sanger-single")) c.single_review(Number(arg("--signal-cutoff") || 20))
-            if (arg("--sanger-heights")) JSON.parse(arg("--sanger-heights")).forEach((height, i) => c.trace_height(i, height))
-            if (arg("--sanger-mask")) { const bounds = JSON.parse(arg("--sanger-mask")); c.mask_ends(bounds[0], bounds[1]) }
-            if (arg("--sanger-action")) {
-                ribbonTabName = "Trace"
-                const trace = window.documentAt(tabs.currentIndex)
-                if (arg("--sanger-action") === "name") { trace.accept(); trace.copyConsensus() }
-                if (arg("--sanger-action") === "mask") trace.maskEnds()
-                if (arg("--sanger-action") === "signal") trace.signalSettings()
-                if (arg("--sanger-action") === "primers") trace.setPrimers()
-                if (arg("--sanger-action") === "save") trace.saveReview()
-                if (arg("--sanger-action") === "issue") trace.issue(true)
-                if (arg("--sanger-action") === "accept") trace.accept()
-                if (arg("--sanger-action") === "export") { trace.accept(); trace.exportConsensus(); trace.confirmExportName() }
-                if (arg("--sanger-action") === "copy") { trace.accept(); trace.copyConsensus(); trace.confirmExportName(); const expected = clipboard.text; clipboard.text = ""; clipboard.paste(); console.log("consensus clipboard", clipboard.text, "verified", clipboard.text === expected) }
-            }
-            if (arg("--sanger-reference")) c.place_alignment(arg("--sanger-reference"))
-            if (arg("--review-thresholds")) c.apply_review_settings(arg("--review-thresholds"))
-            if (arg("--add-sequences")) {
-                const options = JSON.parse(arg("--add-sequences"))
-                c.add_sequences(options.text, options.name || "", options.mafft !== false, options.orientation !== false, options.keep !== false)
-            }
-            if (arg("--add-text-dialog")) window.documentAt(tabs.currentIndex).addText()
-            if (arg("--add-fasta-dialog")) window.documentAt(tabs.currentIndex).prepareFasta(arg("--add-fasta-dialog"))
-            if (arg("--add-reviewed-dialog")) { const r = JSON.parse(arg("--add-reviewed-dialog")); window.documentAt(tabs.currentIndex).addReviewed(r.sequence, r.name, r.mafft !== false) }
             if (arg("--fit")) c.fit()
-            if (arg("--sanger-position")) c.press(Number(arg("--sanger-position")), 40)
-            if (arg("--sanger-context")) {
-                const point = arg("--sanger-context").split(",").map(Number)
-                window.documentAt(tabs.currentIndex).maskMenuAt(point[0], point[1])
-            }
-            if (arg("--delim")) {
-                window.delimPending=JSON.parse(arg("--delim"))
-                window.runDelimSteps(c)
-            }
-            // Alignment edits, ';'-separated: sel:R0,C0,R1,C1  gap  rmgap
-            // slide:N  type:TEXT  del  undo  redo  up  down  strip  zoomsel
-            // insert  overwrite  mafft  fasttree
-            if (arg("--aln")) {
-                for (const step of arg("--aln").split(";")) {
-                    const [cmd, a] = step.split(":")
-                    if (cmd === "sel") { const n = a.split(",").map(Number); c.select_block(n[0], n[1], n[2], n[3]) }
-                    else if (cmd === "gap") c.insert_gap()
-                    else if (cmd === "rmgap") c.remove_gap()
-                    else if (cmd === "slide") c.slide(Number(a))
-                    else if (cmd === "type") { for (const ch of a) c.key(ch.toUpperCase().charCodeAt(0), ch, 0) }
-                    else if (cmd === "del") c.delete_selection()
-                    else if (cmd === "undo") c.undo()
-                    else if (cmd === "redo") c.redo()
-                    else if (cmd === "up") c.move_rows(true)
-                    else if (cmd === "down") c.move_rows(false)
-                    else if (cmd === "strip") c.remove_gap_columns()
-                    else if (cmd === "zoomsel") c.zoom_to_selection()
-                    else if (cmd === "insert") window.alignmentInsert = true
-                    else if (cmd === "overwrite") window.alignmentInsert = false
-                    else if (cmd === "mafft") c.align_mafft()
-                    else if (cmd === "fasttree") c.run_form("fasttree", "tree", a || "{}")
-                    else if (cmd === "trimal") c.trim_alignment()
-                    else if (cmd === "iqtree") c.run_form("iqtree", "tree", a || "{}")
-                    else if (cmd === "distance") c.run_form("distance", "nj", JSON.stringify({model: a || "k2p"}))
-                    console.log("aln", step, "|", c.message)
-                }
-            }
-            // Key presses through the window, ';'-separated: ctrl+=  alt+-
-            // ctrl+shift+=  enter  escape  (modifiers, then a character or
-            // a key's name).
-            if (arg("--keys")) {
-                const mods = { ctrl: Qt.ControlModifier, alt: Qt.AltModifier, shift: Qt.ShiftModifier }
-                for (const k of arg("--keys").split(";")) {
-                    const parts = k.split("+")
-                    const ch = parts.pop() || "+"
-                    let m = 0
-                    for (const p of parts) m |= mods[p] || 0
-                    const named = { enter: [Qt.Key_Return, "\r"], escape: [Qt.Key_Escape, ""], left: [Qt.Key_Left, ""], right: [Qt.Key_Right, ""], tab: [Qt.Key_Tab, "\t"], space: [Qt.Key_Space, " "], up: [Qt.Key_Up, ""], down: [Qt.Key_Down, ""], home: [Qt.Key_Home, ""], end: [Qt.Key_End, ""] }[ch]
-                    if (named) v.pressKey(named[0], m, named[1])
-                    else v.pressKey(ch.toUpperCase().charCodeAt(0), m, ch)
-                    console.log("keys", k, "|", c.zoom_text, c.hscroll_size, c.vscroll_size)
-                }
-            }
-            if (arg("--goto")) { const r = arg("--goto").split(","); c.show_range(Number(r[0]), Number(r[1])) }
-            if (arg("--mode")) c.switch_view(arg("--mode"))
-            if (arg("--no-sidebar")) window.sidebarOpen = false
-            if (arg("--circular") && !c.circular) c.switch_view("circular")
-            if (arg("--type")) {
-                c.press(v.width / 2, 45, 0)
-                c.release()
-                for (const ch of arg("--type")) c.key(ch.toUpperCase().charCodeAt(0), ch, 0)
-            }
-            if (arg("--select")) {
-                const r = arg("--select").split(",")
-                const y = r.length > 2 ? Number(r[2]) : 45
-                c.press(Number(r[0]), y, 0); c.drag(Number(r[1]), y); c.release()
-            }
-            if (arg("--add")) {
-                const err = c.save_feature(-1, JSON.stringify({ kind: "misc_feature", location: arg("--add"), qualifiers: [{ key: "label", value: "partial test" }] }))
-                if (err.length > 0) console.log("add failed:", err)
-            }
-            if (arg("--extract")) {
-                const completed = function(path) {
-                    c.extractionFinished.disconnect(completed)
-                    console.log("extracted:", path, "|", c.message)
-                }
-                c.extractionFinished.connect(completed)
-                if (!c.extract_selection()) {
-                    c.extractionFinished.disconnect(completed)
-                    console.log("extraction rejected:", c.message)
-                }
-            }
-            if (arg("--hover")) {
-                const h = arg("--hover").split(",")
-                if (window.traceOpen) window.traceDocument.hoverAt(Number(h[0]), Number(h[1]))
-                console.log("hover:", c.hover(Number(h[0]), Number(h[1])))
-            }
-            if (arg("--menu")) {
-                const p = arg("--menu").split(",")
-                menu.info = JSON.parse(c.context_press(Number(p[0]), Number(p[1])))
-                menu.popup(Number(p[0]), Number(p[1]) + v.mapToItem(null, 0, 0).y)
-            }
-            if (arg("--menu-add")) {
-                menu.info = JSON.parse(c.context_press(Number(arg("--menu-add")), 45))
-                menu.popup(Number(arg("--menu-add")), 45 + v.mapToItem(null, 0, 0).y)
-                menu.itemAt(5).triggered()
-                menu.close()
-            }
             if (arg("--ribbon")) window.ribbonTabName = window.ribbonTabs[Number(arg("--ribbon"))]
-            if (arg("--genes")) console.log(window.current.predict_genes(Number(arg("--genes")), arg("--select") !== undefined))
-            if (arg("--orfs")) console.log(window.current.find_orfs(Number(arg("--orfs")), arg("--select") !== undefined))
-            if (arg("--activity")) {
-                const files = []
-                for (let i = 0; i < documentOpens.count; i++) files.push(documentOpens.path_at(i))
-                console.log("activity:", shell.activity_log(files.join("\n"), -new Date().getTimezoneOffset()))
-            }
-            if (arg("--distance-action")) c.run_form("distance", arg("--distance-action"), arg("--distance-options") || "{}")
             if (arg("--species-dialog")) window.beginDelimitation(arg("--species-dialog"))
             if (arg("--distance-dialog")) toolSettings.show(c, "distance", arg("--distance-dialog"))
-            if (arg("--link-alignment")) c.link_alignment(arg("--link-alignment"))
-            if (arg("--clade")) c.select_clade(JSON.stringify(arg("--clade").split(",")))
-            if (arg("--export-svg")) c.export_figure(arg("--export-svg"), Number(arg("--export-scope") || 0), arg("--publication") === "1")
-            if (arg("--extract-clade")) c.extract_clade_alignment()
-            if (arg("--document-record")) { documentRecord.showPage(arg("--document-record") === "methods" ? 1 : 0); console.log("document-record:", c.document_record()) }
-            if (arg("--tasks")) tasksDialog.open()
-            if (arg("--shortcuts")) shortcuts.show(window.ribbonTab)
-            if (arg("--edit")) {
-                if (arg("--edit") === "new") editor.openNew(); else editor.openFeature(Number(arg("--edit")))
-            }
-            if (arg("--add-options-preview")) { additionOptionsPreview.start(); return }
-            if (arg("--label")) { labelTyper.start(); return }
-            shot.start()
-        }
-    }
-    Timer {
-        id: additionOptionsPreview
-        interval: 200
-        onTriggered: { window.documentAt(tabs.currentIndex).showAdditionChoices(); shot.start() }
-    }
-    Timer {
-        id: labelTyper
-        interval: 300
-        onTriggered: {
-            const field = editor.valueField(0)
-            if (!field) { console.log("no value field"); Qt.quit(); return }
-            const keys = arg("--label").replace(/\\t/g, "\t")
-            if (arg("--no-click") === undefined) {
-                const p = field.mapToItem(null, field.width / 2, field.height / 2)
-                window.currentView.clickAt(p.x, p.y)
-            }
-            window.currentView.typeText(keys)
-            console.log("field text:", JSON.stringify(field.text), "focus:", field.activeFocus)
             shot.start()
         }
     }
     Timer {
         id: shot
         property bool accessibilityAudited: false
-        interval: arg("--shot-delay") ? Number(arg("--shot-delay")) : 400
+        interval: 400
         onTriggered: {
             const c = window.current
-            if (c && (c.busy || window.delimPending.length)) {
-                if (!c.busy) window.runDelimSteps(c)
-                shot.start()
-                return
-            }
+            if (c && c.busy) { shot.start(); return }
             if (arg("--accessibility-audit") && !accessibilityAudited) {
                 accessibilityAudited = true
                 const view = window.currentView
@@ -2990,7 +2785,6 @@ ApplicationWindow {
                 }))
                 return
             }
-            if (arg("--text-representation")) window.openTextRepresentation()
             if (arg("--ribbon-audit")) {
                 const groups = []
                 for (const group of ribbon.currentPage.children) {

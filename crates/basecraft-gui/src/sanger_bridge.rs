@@ -127,8 +127,6 @@ pub mod qobject {
         #[qinvokable]
         fn reviewed_fasta(self: Pin<&mut SangerController>, name: &QString) -> QString;
         #[qinvokable]
-        fn open_draft(self: Pin<&mut SangerController>, path: &QString) -> bool;
-        #[qinvokable]
         fn draft_consensus(
             self: Pin<&mut SangerController>,
             additional_paths_json: &QString,
@@ -369,6 +367,12 @@ impl Default for SangerRust {
 }
 
 impl qobject::SangerController {
+    fn open_draft(self: std::pin::Pin<&mut Self>, path: &QString) -> bool {
+        let path = PathBuf::from(path.to_string());
+        let result = load_draft_review(&path);
+        self.install_review_result(&path, result, false)
+    }
+
     fn review_payload(&self) -> Option<&SangerReview> {
         self.rust()
             .review_session
@@ -946,12 +950,6 @@ impl qobject::SangerController {
                 false
             }
         }
-    }
-
-    pub fn open_draft(self: std::pin::Pin<&mut Self>, path: &QString) -> bool {
-        let path = PathBuf::from(path.to_string());
-        let result = load_draft_review(&path);
-        self.install_review_result(&path, result, false)
     }
 
     fn install_review_result(

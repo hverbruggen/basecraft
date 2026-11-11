@@ -179,8 +179,6 @@ pub mod qobject {
         fn fit(self: Pin<&mut GenomeController>);
         /// Show residues `start..end`.
         #[qinvokable]
-        fn show_range(self: Pin<&mut GenomeController>, start: f64, end: f64);
-        #[qinvokable]
         fn undo(self: Pin<&mut GenomeController>);
         #[qinvokable]
         fn redo(self: Pin<&mut GenomeController>);
@@ -208,8 +206,6 @@ pub mod qobject {
         fn relative_path(self: &GenomeController, path: &QString) -> QString;
         /// Write a readable account of this run's activity in the projects
         /// of `files` (one path per line) to a text file; returns its path.
-        #[qinvokable]
-        fn activity_log(self: &GenomeController, files: &QString, utc_offset_min: i32) -> QString;
         /// "alignment" or "sequence": which editor a file opens in.
         #[qinvokable]
         fn file_kind(self: &GenomeController, path: &QString) -> QString;
@@ -494,7 +490,7 @@ pub struct ControllerRust {
 
 impl Default for ControllerRust {
     fn default() -> Self {
-        let c = Self {
+        Self {
             find: basecraft_viewmodel::find::Session::default(),
             find_status: QString::default(),
             find_count: 0,
@@ -536,9 +532,7 @@ impl Default for ControllerRust {
             view: GenomeView::new(800.0, 600.0),
             theme: Theme::default(),
             scratch: Frame::new(),
-        };
-        started();
-        c
+        }
     }
 }
 crate::appearance::editor_follows_appearance!(qobject::GenomeController);
@@ -567,12 +561,6 @@ pub(crate) fn css(c: [f32; 4]) -> String {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let b = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     format!("#{:02x}{:02x}{:02x}", b(c[0]), b(c[1]), b(c[2]))
-}
-
-/// When this run of the app started (RFC 3339 UTC, as in log entries).
-fn started() -> &'static str {
-    static STARTED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    STARTED.get_or_init(basecraft_platform::now_rfc3339)
 }
 
 /// A bundled plugin's directory: under `$BASECRAFT_PLUGINS` if set, else
@@ -1199,18 +1187,6 @@ impl qobject::GenomeController {
     }
 
     #[allow(clippy::cast_possible_truncation)]
-    pub fn show_range(mut self: Pin<&mut Self>, start: f64, end: f64) {
-        let len = crate::bridge::checked_document!(sync self, self.len());
-        {
-            let mut r = self.as_mut().rust_mut();
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            r.view
-                .zoom_to(start.max(0.0) as u64, end.max(0.0) as u64, len);
-        }
-        self.as_mut().sync_mode();
-        self.refresh();
-    }
-
     /// Apply an edit through the session and report failures.
     fn edit(mut self: Pin<&mut Self>, op: Op) -> Option<basecraft_ops::session::Outcome> {
         let result = {
@@ -1428,28 +1404,6 @@ impl qobject::GenomeController {
 
     pub fn redo(self: Pin<&mut Self>) {
         self.history(true);
-    }
-
-    pub fn activity_log(&self, files: &QString, utc_offset_min: i32) -> QString {
-        let mut roots: Vec<PathBuf> = files
-            .to_string()
-            .lines()
-            .filter(|l| !l.is_empty())
-            .map(|f| project_root(Path::new(f)))
-            .collect();
-        roots.sort();
-        roots.dedup();
-        let text = basecraft_ops::log::activity_text(&roots, started(), utc_offset_min)
-            .unwrap_or_else(|e| format!("Couldn't read the log: {e}\n"));
-        let Ok(paths) = basecraft_platform::paths::AppPaths::discover() else {
-            return QString::default();
-        };
-        let dir = paths.cache.join("activity");
-        let path = dir.join(format!("activity-{}.txt", started().replace(':', "")));
-        match std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, text)) {
-            Ok(()) => QString::from(&path.to_string_lossy().into_owned()),
-            Err(_) => QString::default(),
-        }
     }
 
     pub fn relative_path(&self, path: &QString) -> QString {

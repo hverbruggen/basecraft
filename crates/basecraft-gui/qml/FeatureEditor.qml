@@ -75,11 +75,6 @@ AppContentDialog {
     ListModel { id: quals }
 
     // The value field of qualifier row `i`, for scripted tests.
-    function valueField(i) {
-        const row = list.itemAtIndex(i)
-        return row ? row.children[1] : null
-    }
-
     body: ColumnLayout {
         spacing: 10
         GridLayout {
