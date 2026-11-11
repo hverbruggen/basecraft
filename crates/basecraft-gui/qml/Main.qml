@@ -276,10 +276,7 @@ ApplicationWindow {
         const path = traceOpen && current && current.export_path ? current.export_path : current && current.file_path ? current.file_path : currentPath
         return path.length ? shell.parent_folder_url(path) : shell.local_file_url(shell.project_dir)
     }
-    function projectPickerFolder() {
-        const home = shell.local_file_path(StandardPaths.writableLocation(StandardPaths.HomeLocation))
-        return shell.local_file_url(preferences.project_picker_directory(home))
-    }
+    function projectPickerFolder() { return shell.local_file_url(preferences.project_picker_directory()) }
     property var projectDialog: null
     function openProjectPicker() {
         if (projectDialog && projectDialog.visible) return
@@ -791,7 +788,10 @@ ApplicationWindow {
     property var activeTasks: ({jobs: []})
     readonly property int runningTaskCount: (activeTasks.jobs || []).filter(job => ["queued", "running", "cancelling", "finalizing"].includes(job.status)).length
     readonly property int failedTaskCount: (activeTasks.jobs || []).filter(job => job.status === "failed").length
-    Timer { interval: 1500; running: true; repeat: true; onTriggered: window.activeTasks = JSON.parse(provenance.jobs(false)) }
+    AppJobs {
+        id: jobService
+        onRevisionChanged: window.activeTasks = JSON.parse(provenance.jobs(false))
+    }
     property string frozenReport: ""
     property string frozenDraft: ""
     property string frozenDraftRevision: ""
@@ -826,6 +826,7 @@ ApplicationWindow {
     TasksDialog {
         id: tasksDialog
         service: provenance
+        jobs: jobService
         onOpenDocument: path => window.openPath(path)
         onCopyText: text => clipboard.put(text)
     }
@@ -1823,11 +1824,10 @@ ApplicationWindow {
     }
     // The open alignment a submission can start from.
     readonly property string submissionAlignment: alignmentOpen ? metadataFasta : ""
-    AppOperations { id: submissionJobs }
-    Timer { interval: 200; repeat: true; running: submissionJobs.busy; onTriggered: {
-        submissionJobs.poll()
-        if (!submissionJobs.busy) submissions.record_validation(submissionJobs.outcome)
-    } }
+    AppOperations {
+        id: submissionJobs
+        onBusyChanged: if (!busy) submissions.record_validation(outcome)
+    }
     function startSubmission() {
         const file = submissionAlignment.split("/").pop()
         submissionName.ask("Start a GenBank submission", "Submission name", file.replace(/\.[^.]*$/, ""), name => {
@@ -2942,23 +2942,6 @@ ApplicationWindow {
         id: editor
         // Annotations belong to sequences; alignments have none yet.
         controller: window.currentKind === "sequence" ? window.current : null
-    }
-
-    Timer {
-        interval: 1500
-        running: true
-        repeat: true
-        onTriggered: {
-            shell.check_theme()
-            for (let i = 0; i < docs.count; i++) {
-                const d = window.documentAt(i)
-                if (d) {
-                    d.controller.check_theme()
-                    // The species view draws its tree with its own controller.
-                    if (d.kind === "delimitation") d.treeController.check_theme()
-                }
-            }
-        }
     }
 
     function arg(name) {

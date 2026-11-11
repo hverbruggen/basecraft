@@ -47,6 +47,7 @@ pub(crate) use checked_document;
 #[cxx_qt::bridge]
 pub mod qobject {
     impl cxx_qt::Threading for GenomeController {}
+    impl cxx_qt::Initialize for GenomeController {}
     unsafe extern "C++" {
         include!("instanceview.h");
         fn configure_canvas_graphics();
@@ -91,7 +92,10 @@ pub mod qobject {
         #[qinvokable]
         fn find_query(self: Pin<&mut GenomeController>, query: &QString, reverse: bool);
         #[qinvokable]
-        fn find_poll(self: Pin<&mut GenomeController>, direction: i32) -> QString;
+        fn find_step(self: Pin<&mut GenomeController>, direction: i32) -> QString;
+        #[qsignal]
+        #[cxx_name = "findChanged"]
+        fn find_changed(self: Pin<&mut GenomeController>, status: QString);
 
         #[qinvokable]
         fn document_record(self: &GenomeController) -> QString;
@@ -191,8 +195,6 @@ pub mod qobject {
         #[qinvokable]
         fn save_as(self: Pin<&mut GenomeController>, path: &QString) -> bool;
         /// Reload the Omarchy theme if it changed.
-        #[qinvokable]
-        fn check_theme(self: Pin<&mut GenomeController>);
         #[qinvokable]
         fn memory_report(self: &GenomeController) -> QString;
         /// `path` relative to the open project folder, or to the file's own
@@ -341,7 +343,7 @@ pub mod qobject {
 
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::time::{Instant, SystemTime};
+use std::time::Instant;
 
 use basecraft_docs::FeatureId;
 use basecraft_io::genbank::{format_location, parse_location};
@@ -440,7 +442,6 @@ pub(crate) const ALT: i32 = 0x0800_0000;
 
 pub struct ControllerRust {
     find: basecraft_viewmodel::find::Session,
-    find_status_revision: u64,
     overview_content: QString,
     overview_matches: QString,
     overview_match_cache: basecraft_viewmodel::overview::Cache,
@@ -473,15 +474,13 @@ pub struct ControllerRust {
     doc: Option<DocId>,
     view: GenomeView,
     theme: Theme,
-    theme_stamp: ThemeStamp,
     scratch: Frame,
 }
 
 impl Default for ControllerRust {
     fn default() -> Self {
-        let mut c = Self {
+        let c = Self {
             find: basecraft_viewmodel::find::Session::default(),
-            find_status_revision: u64::MAX,
             overview_content: QString::from("{\"shapes\":[]}"),
             overview_matches: QString::from("[]"),
             overview_match_cache: basecraft_viewmodel::overview::Cache::default(),
@@ -500,7 +499,7 @@ impl Default for ControllerRust {
             circular: false,
             mode: QString::from("wrapped"),
             project_dir: QString::default(),
-            mono_font: QString::from(&monospace_font()),
+            mono_font: QString::default(),
             file_path: QString::default(),
             dirty: false,
             zoom_text: QString::default(),
@@ -513,151 +512,13 @@ impl Default for ControllerRust {
             doc: None,
             view: GenomeView::new(800.0, 600.0),
             theme: Theme::default(),
-            theme_stamp: ThemeStamp::default(),
             scratch: Frame::new(),
         };
         started();
-        if let Some((theme, stamp)) = load_theme() {
-            c.theme = theme;
-            c.theme_stamp = stamp;
-        }
-        c.background = QString::from(&css(c.theme.background));
-        c.foreground = QString::from(&css(c.theme.foreground));
-        c.accent = QString::from(&css(c.theme.accent));
-        c.ok_color = QString::from(&css(c.theme.nearest_hue(120.0)));
-        c.error_color = QString::from(&css(c.theme.nearest_hue(0.0)));
         c
     }
 }
-
-/// The desktop's monospace font: Omarchy's current font when available,
-/// else whatever fontconfig calls monospace.
-pub(crate) fn monospace_font() -> String {
-    // Never wait for a desktop helper from a controller/theme callback. A
-    // failed refresh leaves the last usable font in place; at most one helper
-    // is active process-wide.
-    struct Cache {
-        checked: std::time::Instant,
-        font: String,
-        pending: bool,
-    }
-    static CACHE: std::sync::OnceLock<std::sync::Arc<std::sync::Mutex<Cache>>> =
-        std::sync::OnceLock::new();
-    let cache = CACHE.get_or_init(|| {
-        std::sync::Arc::new(std::sync::Mutex::new(Cache {
-            checked: std::time::Instant::now(),
-            font: "monospace".into(),
-            pending: false,
-        }))
-    });
-    let mut current = cache
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if !current.pending
-        && (current.font == "monospace"
-            || current.checked.elapsed() >= std::time::Duration::from_secs(2))
-    {
-        current.pending = true;
-        current.checked = std::time::Instant::now();
-        let worker_cache = cache.clone();
-        if std::thread::Builder::new()
-            .name("desktop-font".into())
-            .spawn(move || {
-                let font = read_monospace_font();
-                let mut current = worker_cache
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                current.font = font;
-                current.pending = false;
-            })
-            .is_err()
-        {
-            current.pending = false;
-        }
-    }
-    current.font.clone()
-}
-
-fn read_monospace_font() -> String {
-    std::process::Command::new("omarchy")
-        .args(["font", "current"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .filter(|f| !f.is_empty())
-        .unwrap_or_else(|| "monospace".to_string())
-}
-
-pub(crate) fn omarchy_theme_path() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    let p = PathBuf::from(home).join(".local/state/omarchy/current/theme/colors.toml");
-    p.exists().then_some(p)
-}
-
-/// Existing appearance invalidation also watches application palette preferences.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct ThemeStamp {
-    desktop: Option<SystemTime>,
-    preferences: Option<SystemTime>,
-}
-
-fn theme_stamp_at(desktop: Option<&Path>, preferences: Option<&Path>) -> ThemeStamp {
-    let modified = |path| std::fs::metadata(path).and_then(|m| m.modified()).ok();
-    ThemeStamp {
-        desktop: desktop.and_then(modified),
-        preferences: preferences.and_then(modified),
-    }
-}
-
-pub(crate) fn theme_stamp() -> ThemeStamp {
-    let preferences = basecraft_platform::paths::AppPaths::discover()
-        .ok()
-        .map(|p| p.preferences());
-    theme_stamp_at(omarchy_theme_path().as_deref(), preferences.as_deref())
-}
-
-fn color_blind_friendly_at(preferences: &Path) -> bool {
-    basecraft_platform::settings::SettingsStore::new(preferences.to_owned())
-        .load()
-        .is_ok_and(|p| {
-            p.ui.data_color_scheme
-                == basecraft_platform::settings::DataColorScheme::ColorBlindFriendly
-        })
-}
-
-fn color_blind_friendly() -> bool {
-    basecraft_platform::paths::AppPaths::discover()
-        .is_ok_and(|p| color_blind_friendly_at(&p.preferences()))
-}
-
-fn load_theme_at(desktop: Option<&Path>, preferences: &Path) -> (Theme, ThemeStamp) {
-    // Capture before reading, so a concurrent update is seen on the next poll.
-    let stamp = theme_stamp_at(desktop, Some(preferences));
-    let theme = desktop
-        .and_then(|path| std::fs::read_to_string(path).ok())
-        .map(|text| Theme::from_omarchy(&text))
-        .unwrap_or_default();
-    (
-        theme.with_color_blind_friendly(color_blind_friendly_at(preferences)),
-        stamp,
-    )
-}
-
-pub(crate) fn load_theme() -> Option<(Theme, ThemeStamp)> {
-    // Absent desktop configuration still gets the optional light data palette.
-    // Failed preferences retain the existing usable default; AppSettings owns
-    // startup/update error presentation and never overwrites a damaged file.
-    let paths = basecraft_platform::paths::AppPaths::discover().ok()?;
-    Some(load_theme_at(
-        omarchy_theme_path().as_deref(),
-        &paths.preferences(),
-    ))
-}
-
-pub(crate) fn publication_theme() -> Theme {
-    Theme::publication().with_color_blind_friendly(color_blind_friendly())
-}
+crate::appearance::editor_follows_appearance!(qobject::GenomeController);
 
 pub(crate) fn css(c: [f32; 4]) -> String {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -751,30 +612,26 @@ impl qobject::GenomeController {
             current.pending = true;
             current.checked = Instant::now();
             let result = report.clone();
-            let spawned = std::thread::Builder::new()
-                .name("engine-discovery".into())
-                .spawn(move || {
-                    let value = (|| -> Result<String, String> {
-                        let manifest =
-                            basecraft_plugin_host::Manifest::load(&plugin_dir("delimitation"))
-                                .map_err(|e| e.to_string())?;
-                        let mut plugin = basecraft_plugin_host::PluginProcess::spawn(&manifest)
+            let spawned = crate::jobs::spawn("engine-discovery", move || {
+                let value = (|| -> Result<String, String> {
+                    let manifest =
+                        basecraft_plugin_host::Manifest::load(&plugin_dir("delimitation"))
                             .map_err(|e| e.to_string())?;
-                        plugin
-                            .invoke("engines", json!({}), None)
-                            .map_err(|e| e.to_string())?
-                            .message
-                            .ok_or_else(|| "No engine report".into())
-                    })()
-                    .unwrap_or_else(|error| {
-                        json!({"asap":error,"ptp":error,"mptp":error}).to_string()
-                    });
-                    let mut current = result
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    current.value = Some(value);
-                    current.pending = false;
-                });
+                    let mut plugin = basecraft_plugin_host::PluginProcess::spawn(&manifest)
+                        .map_err(|e| e.to_string())?;
+                    plugin
+                        .invoke("engines", json!({}), None)
+                        .map_err(|e| e.to_string())?
+                        .message
+                        .ok_or_else(|| "No engine report".into())
+                })()
+                .unwrap_or_else(|error| json!({"asap":error,"ptp":error,"mptp":error}).to_string());
+                let mut current = result
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                current.value = Some(value);
+                current.pending = false;
+            });
             if spawned.is_err() {
                 current.pending = false;
             }
@@ -800,6 +657,7 @@ impl qobject::GenomeController {
 
     /// Rebuild the frame and status line.
     fn refresh(mut self: Pin<&mut Self>) {
+        self.as_mut().find_update(false);
         if let Some(warning) =
             crate::document_open::recovery_notice(self.rust().session.as_ref(), self.rust().doc)
         {
@@ -935,7 +793,7 @@ impl qobject::GenomeController {
                 return Ok(());
             };
             let theme = if publication {
-                publication_theme()
+                crate::appearance::publication_theme()
             } else {
                 r.theme.clone()
             };
@@ -1527,30 +1385,6 @@ impl qobject::GenomeController {
         self.history(true);
     }
 
-    pub fn check_theme(mut self: Pin<&mut Self>) {
-        if let Some(font) = crate::editor_core::prepare_font(&self.rust().mono_font.to_string()) {
-            self.as_mut().set_mono_font(QString::from(&font));
-        }
-
-        if let Some(update) =
-            crate::editor_core::prepare_theme(&self.rust().theme_stamp, theme_stamp, load_theme)
-        {
-            {
-                let mut r = self.as_mut().rust_mut();
-                r.theme = update.theme;
-                r.theme_stamp = update.stamp;
-            }
-            self.as_mut()
-                .set_background(QString::from(&update.background));
-            self.as_mut()
-                .set_foreground(QString::from(&update.foreground));
-            self.as_mut().set_accent(QString::from(&update.accent));
-            self.as_mut().set_ok_color(QString::from(&update.ok));
-            self.as_mut().set_error_color(QString::from(&update.error));
-            self.refresh();
-        }
-    }
-
     pub fn activity_log(&self, files: &QString, utc_offset_min: i32) -> QString {
         let mut roots: Vec<PathBuf> = files
             .to_string()
@@ -1562,10 +1396,10 @@ impl qobject::GenomeController {
         roots.dedup();
         let text = basecraft_ops::log::activity_text(&roots, started(), utc_offset_min)
             .unwrap_or_else(|e| format!("Couldn't read the log: {e}\n"));
-        let Some(home) = std::env::var_os("HOME") else {
+        let Ok(paths) = basecraft_platform::paths::AppPaths::discover() else {
             return QString::default();
         };
-        let dir = PathBuf::from(home).join(".cache/basecraft/activity");
+        let dir = paths.cache.join("activity");
         let path = dir.join(format!("activity-{}.txt", started().replace(':', "")));
         match std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, text)) {
             Ok(()) => QString::from(&path.to_string_lossy().into_owned()),
@@ -1910,38 +1744,39 @@ impl qobject::GenomeController {
             many.to_owned(),
         );
         let qt_thread = self.qt_thread();
-        let spawn = crate::document_jobs::background_session(
-            session,
-            move |session| {
+        let mut session = Some(session);
+        let spawn = crate::jobs::with_session(
+            qt_thread.clone(),
+            false,
+            &mut session,
+            move |session, _| {
                 Self::run_plugin_in_session(session, doc, &plugin, &operation, params, range)
             },
-            move |session, result| {
-                let _ = qt_thread.queue(move |mut this| {
-                    // Replacement is refused while the session is owned by this
-                    // continuation. A destroyed QObject simply drops this return.
-                    this.as_mut().rust_mut().session = Some(session);
-                    this.as_mut().set_busy(false);
-                    match result {
-                        Ok((added, known)) => {
-                            let message = match (added, known) {
-                                (0, 0) => format!("No {many} found"),
-                                (0, _) => format!("No new {many}"),
-                                (1, _) => format!("Added 1 {one}"),
-                                (n, _) => format!("Added {n} {many}"),
-                            };
-                            if added > 0 {
-                                this.as_mut().set_dirty(true);
-                            }
-                            this.as_mut().done(&format!("{message}{}", took(started)));
+            move |mut this, session, result| {
+                // Replacement is refused while the session is owned by this
+                // continuation. A destroyed QObject simply drops this return.
+                this.as_mut().rust_mut().session = Some(session);
+                this.as_mut().set_busy(false);
+                match result {
+                    Ok((added, known)) => {
+                        let message = match (added, known) {
+                            (0, 0) => format!("No {many} found"),
+                            (0, _) => format!("No new {many}"),
+                            (1, _) => format!("Added 1 {one}"),
+                            (n, _) => format!("Added {n} {many}"),
+                        };
+                        if added > 0 {
+                            this.as_mut().set_dirty(true);
                         }
-                        Err(error) => this.as_mut().fail(&format!("{title} failed: {error}")),
+                        this.as_mut().done(&format!("{message}{}", took(started)));
                     }
-                    this.refresh();
-                });
+                    Err(error) => this.as_mut().fail(&format!("{title} failed: {error}")),
+                }
+                this.refresh();
             },
         );
-        if let Err((session, error)) = spawn {
-            self.as_mut().rust_mut().session = Some(*session);
+        if let Err(error) = spawn {
+            self.as_mut().rust_mut().session = session;
             self.as_mut().set_busy(false);
             self.fail(&error);
         }
@@ -2092,9 +1927,12 @@ impl qobject::GenomeController {
         self.as_mut().notify("Extracting sequence");
         let qt_thread = self.qt_thread();
         let started = Instant::now();
-        let spawn = crate::document_jobs::background_session(
-            session,
-            move |session| {
+        let mut session = Some(session);
+        let spawn = crate::jobs::with_session(
+            qt_thread.clone(),
+            false,
+            &mut session,
+            move |session, _| {
                 let dir = source.parent().map(Path::to_path_buf).unwrap_or_default();
                 let stem = source.file_stem().map_or_else(
                     || "extract".to_string(),
@@ -2127,31 +1965,27 @@ impl qobject::GenomeController {
                     .map_err(|e| e.to_string())?;
                 Ok(target)
             },
-            move |session, result| {
-                let _ = qt_thread.queue(move |mut this| {
-                    this.as_mut().rust_mut().session = Some(session);
-                    this.as_mut().set_busy(false);
-                    match result {
-                        Ok(target) => {
-                            this.as_mut().done(&format!(
-                                "Extracted {} bp{}",
-                                basecraft_viewmodel::genome::format_thousands(end - start),
-                                took(started)
-                            ));
-                            this.extraction_finished(QString::from(
-                                target.to_string_lossy().as_ref(),
-                            ));
-                        }
-                        Err(error) => {
-                            this.as_mut().fail(&format!("Extract failed: {error}"));
-                            this.extraction_finished(QString::default());
-                        }
+            move |mut this, session, result| {
+                this.as_mut().rust_mut().session = Some(session);
+                this.as_mut().set_busy(false);
+                match result {
+                    Ok(target) => {
+                        this.as_mut().done(&format!(
+                            "Extracted {} bp{}",
+                            basecraft_viewmodel::genome::format_thousands(end - start),
+                            took(started)
+                        ));
+                        this.extraction_finished(QString::from(target.to_string_lossy().as_ref()));
                     }
-                });
+                    Err(error) => {
+                        this.as_mut().fail(&format!("Extract failed: {error}"));
+                        this.extraction_finished(QString::default());
+                    }
+                }
             },
         );
-        if let Err((session, error)) = spawn {
-            self.as_mut().rust_mut().session = Some(*session);
+        if let Err(error) = spawn {
+            self.as_mut().rust_mut().session = session;
             self.as_mut().set_busy(false);
             self.fail(&error);
             return false;
@@ -2559,37 +2393,6 @@ impl qobject::GenomeController {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn data_palette_refresh_uses_preference_and_appearance_stamps() {
-        use basecraft_platform::settings::{Change, DataColorScheme, SettingsStore};
-        let temp = tempfile::tempdir().unwrap();
-        let preferences = temp.path().join("preferences.toml");
-        let desktop = temp.path().join("colors.toml");
-        let (normal, before) = load_theme_at(None, &preferences);
-        assert_eq!(normal, Theme::default());
-        assert!(!preferences.exists());
-        SettingsStore::new(preferences.clone())
-            .update(Change::DataColorScheme(DataColorScheme::ColorBlindFriendly))
-            .unwrap();
-        let (light, after) = load_theme_at(None, &preferences);
-        assert_ne!(before, after);
-        assert_eq!(light, Theme::default().with_color_blind_friendly(true));
-        std::fs::write(&desktop, "mode = \"dark\"\nbackground = \"#111111\"\ndark_background = \"#222222\"\ndarker_background = \"#333333\"\nselection = \"#444444\"\n").unwrap();
-        let (dark, stamp) = load_theme_at(Some(&desktop), &preferences);
-        assert!(dark.dark);
-        assert_ne!(stamp, after);
-        assert_ne!(dark.data_palette(), light.data_palette());
-        SettingsStore::new(preferences.clone())
-            .update(Change::DataColorScheme(DataColorScheme::DesktopTheme))
-            .unwrap();
-        assert!(
-            load_theme_at(Some(&desktop), &preferences)
-                .0
-                .data_colors
-                .is_none()
-        );
-    }
 
     #[test]
     fn error_summary_keeps_one_readable_line() {

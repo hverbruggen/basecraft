@@ -181,18 +181,13 @@ FocusScope {
         implicitHeight: Math.max(32, implicitContentHeight + topPadding + bottomPadding)
         implicitWidth: Math.max(50, buttonMetrics.advanceWidth(text) + leftPadding + rightPadding)
     }
-    Timer { interval: 250; running: ctl.busy && ctl.analysis_running(); repeat: true; onTriggered: ctl.poll_job() }
     signal openFile(string path)
     DelimitationController { id: ctl }
     // Ordering, flips and style are the tree editor's own edits, kept with
     // this workspace.
     TreeController { id: tree; display_only: true }
     readonly property var treeGeometry: JSON.parse(tree.canvas_geometry)
-    Component.onCompleted: {
-        tree.check_theme()
-        ctl.check_theme()
-        ctl.open_file(path)
-    }
+    Component.onCompleted: ctl.open_file(path)
     Connections { target: ctl
         function onDisplay_revisionChanged() { doc.showTree(true) }
         // The hypotheses as bar columns beside the tips.

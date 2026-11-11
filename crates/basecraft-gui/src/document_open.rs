@@ -12,18 +12,20 @@ use std::{
     },
 };
 
-/// All editor entry points use the same acquisition worker and queued completion.
-pub(crate) fn start(
+/// Acquire `path` as a job; `done` gets the candidate on the window thread of
+/// `owner`. A failed start comes back as the error.
+pub(crate) fn start<T>(
+    owner: impl crate::jobs::Owner<T>,
     path: String,
     root: Option<PathBuf>,
-    completed: impl FnOnce(Result<Candidate, OpenError>) + Send + 'static,
+    done: impl FnOnce(std::pin::Pin<&mut T>, Result<Candidate, OpenError>) + Send + 'static,
 ) -> Result<(), OpenError> {
-    crate::document_jobs::background_initialized(
-        "document-open",
-        move || Candidate::acquire_in(&path, root, &AtomicBool::new(false)),
-        || OpenError::Interrupted,
-        completed,
+    crate::jobs::start(
+        owner,
+        move |work| Ok(Candidate::acquire_in(&path, root, work.flag())),
+        |owner, result| done(owner, result.unwrap_or(Err(OpenError::Interrupted))),
     )
+    .map(|_| ())
     .map_err(OpenError::Spawn)
 }
 
@@ -33,10 +35,7 @@ pub(crate) fn open_file<T: cxx_qt::Threading + 'static>(
     completed: impl Fn(std::pin::Pin<&mut T>, Result<Candidate, OpenError>) + Copy + Send + 'static,
 ) -> bool {
     let thread = controller.qt_thread();
-    let started = start(path.to_string(), None, move |result| {
-        let _ = thread.queue(move |controller| completed(controller, result));
-    });
-    if let Err(error) = started {
+    if let Err(error) = start(thread, path.to_string(), None, completed) {
         completed(controller.as_mut(), Err(error));
         return false;
     }

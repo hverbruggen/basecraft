@@ -14,6 +14,9 @@ mod alignment_bridge;
 #[path = "../src/app_bridge.rs"]
 #[allow(unused_imports)] // harness=false omits pure predicate test bodies.
 mod app_bridge;
+#[path = "../src/appearance.rs"]
+#[allow(dead_code, unused_imports)] // harness=false omits the included module's test bodies.
+mod appearance;
 #[path = "../src/application.rs"]
 mod application;
 #[path = "../src/application_test_bridge.rs"]
@@ -21,8 +24,8 @@ mod application_test_bridge;
 #[path = "../src/bridge.rs"]
 #[allow(unused_imports)] // harness=false omits the included module's #[test] bodies.
 mod bridge;
-#[path = "controller_theme/mod.rs"]
-mod controller_theme;
+#[path = "controller_appearance/mod.rs"]
+mod controller_appearance;
 #[path = "../src/delimitation_bridge.rs"]
 #[allow(unused_imports, dead_code)] // harness=false omits test bodies but retains their helpers.
 mod delimitation_bridge;
@@ -30,9 +33,6 @@ mod delimitation_bridge;
 mod document_jobs;
 #[path = "../src/document_open.rs"]
 mod document_open;
-#[path = "../src/editor_core.rs"]
-#[allow(unused_imports, dead_code)] // harness=false omits pure #[test] bodies.
-mod editor_core;
 #[path = "../src/editor_save.rs"]
 mod editor_save;
 #[path = "../src/figure_png.rs"]
@@ -41,6 +41,9 @@ mod figure_png;
 #[path = "../src/find_bridge.rs"]
 #[allow(unused_imports)] // harness=false omits the included module's #[test] bodies.
 mod find_bridge;
+#[path = "../src/jobs.rs"]
+#[allow(dead_code, unused_imports)] // harness=false omits the included module's test bodies.
+mod jobs;
 #[path = "../src/metadata_bridge.rs"]
 #[allow(unused_imports, dead_code)] // harness=false omits the included module's test bodies.
 mod metadata_bridge;
@@ -874,7 +877,7 @@ fn main() {
     #[cfg(feature = "test-counters")]
     linked_taxa_journey(app.as_mut());
 
-    controller_theme::run();
+    controller_appearance::run(&app);
 
     // Real QML-created controllers; inject invalid owned IDs without exposing
     // production invokables or constructing placeholder document payloads.
@@ -955,7 +958,6 @@ fn main() {
         property string manualDecision: ""
         property string manualMasks: ""
         function check(value, message) {{ if (!value) {{ console.error(message); Qt.exit(2) }} }}
-        Timer {{ interval: 10; repeat: true; running: sanger.busy; onTriggered: sanger.poll_stage() }}
         Connections {{
             target: sanger
             function onStageFinished(stage, success, payload) {{
@@ -967,9 +969,7 @@ fn main() {
                 check(sanger.mask_settings === manualMasks && sanger.dirty, "Failed pair changed masks or dirty state");
                 check(sanger.message_kind === "fail" && sanger.message.length > 0, "Pair error must be explicit");
                 const pairError = sanger.message;
-                sanger.poll_calls();
-                sanger.poll_stage();
-                check(sanger.message === pairError && !sanger.calling, "Late polling replaced pair failure");
+                check(sanger.message === pairError && !sanger.calling, "A late result replaced pair failure");
                 pairFailures++;
                 if (pairFailures === 1) {{
                     check(sanger.prepare_reads(JSON.stringify([pairFile, pairFile + ".missing"]), 20), "Retry must be accepted asynchronously");
@@ -1025,10 +1025,8 @@ fn main() {
             check(!sanger.calling, "Legacy validation must detach queued calling");
             const legacyError = sanger.message;
             check(legacyError.length > 0 && sanger.message_kind === "fail", "Legacy error must be explicit");
-            sanger.poll_calls();
-            sanger.poll_calls();
-            check(!sanger.calling, "Late legacy polling restarted calls");
-            check(sanger.message === legacyError && sanger.message_kind === "fail", "Late polling replaced legacy failure");
+            check(!sanger.calling, "Legacy failure restarted calls");
+            check(sanger.message === legacyError && sanger.message_kind === "fail", "Legacy failure message was replaced");
             check(sanger.file_path === file && sanger.review_mode, "Legacy failure changed document identity");
             check(sanger.record_revision() === legacyRevision, "Legacy failure changed review revision");
             check(sanger.review_decision === decision, "Legacy failure changed manual decision");
@@ -1042,8 +1040,7 @@ fn main() {
             check(!sanger.prepare_reads(JSON.stringify([file, file]), 0), "Invalid cutoff must fail");
             check(!sanger.calling, "Pair preparation must detach queued calling");
             const error = sanger.message;
-            sanger.poll_calls();
-            check(sanger.message === error, "Late first-read polling replaced pair failure");
+            check(sanger.message === error, "Pair failure message was replaced");
             // Restore a manual edit/mask, then fail preparation repeatedly.
             check(sanger.review_set("edit", "G"), "Second edit failed");
             check(sanger.mask_ends(2, sanger.consensus_columns - 1), "Second mask failed");

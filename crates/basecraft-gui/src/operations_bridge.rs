@@ -8,14 +8,7 @@ use basecraft_plugin_host::{
 use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::QString;
 use serde_json::{Value, json};
-use std::{
-    path::PathBuf,
-    pin::Pin,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-};
+use std::{path::PathBuf, pin::Pin};
 
 #[cxx_qt::bridge]
 pub mod qobject {
@@ -62,8 +55,6 @@ pub mod qobject {
             token: &QString,
         ) -> bool;
         #[qinvokable]
-        fn poll(self: Pin<&mut AppOperations>);
-        #[qinvokable]
         fn cancel(self: Pin<&mut AppOperations>);
     }
 }
@@ -72,14 +63,13 @@ pub struct OperationsRust {
     busy: bool,
     message: QString,
     outcome: QString,
-    cancelled: Option<Arc<AtomicBool>>,
-    pending_result: Option<Result<basecraft_protocol::operation::OperationOutcome, String>>,
+    work: Option<basecraft_ops::work::Work>,
     browser_pending: bool,
 }
 impl Drop for OperationsRust {
     fn drop(&mut self) {
-        if let Some(cancelled) = &self.cancelled {
-            cancelled.store(true, Ordering::Release);
+        if let Some(work) = &self.work {
+            work.cancel();
         }
     }
 }
@@ -178,20 +168,21 @@ impl qobject::AppOperations {
         }
         let url = url.to_string();
         self.as_mut().rust_mut().browser_pending = true;
-        let thread = self.qt_thread();
-        let spawn = std::thread::Builder::new()
-            .name("basecraft-browser".into())
-            .spawn(move || {
-                let status = match basecraft_platform::browser::open_new_window(&url) {
-                    Ok(true) => "opened",
-                    Ok(false) => "unsupported",
-                    Err(_) => "failed",
-                };
-                let _ = thread.queue(move |mut state| {
-                    state.as_mut().rust_mut().browser_pending = false;
-                    state.browser_finished(QString::from(&url), QString::from(status));
-                });
-            });
+        let spawn = crate::jobs::start(
+            self.qt_thread(),
+            move |_| {
+                Ok(match basecraft_platform::browser::open_new_window(&url) {
+                    Ok(true) => (url, "opened"),
+                    Ok(false) => (url, "unsupported"),
+                    Err(_) => (url, "failed"),
+                })
+            },
+            |mut state, result| {
+                state.as_mut().rust_mut().browser_pending = false;
+                let (url, status) = result.unwrap_or_default();
+                state.browser_finished(QString::from(&url), QString::from(status));
+            },
+        );
         if spawn.is_err() {
             self.as_mut().rust_mut().browser_pending = false;
             QString::from("failed")
@@ -322,104 +313,38 @@ impl qobject::AppOperations {
         if self.rust().busy {
             return false;
         }
-        let cancelled = Arc::new(AtomicBool::new(false));
-        self.as_mut().rust_mut().cancelled = Some(cancelled.clone());
         self.as_mut().set_outcome(QString::default());
         self.as_mut()
             .set_message(QString::from("Preparing operation"));
         self.as_mut().set_busy(true);
         let qt_thread = self.qt_thread();
-        let spawn = std::thread::Builder::new()
-            .name("operation-submission".into())
-            .spawn(move || {
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-                    || -> basecraft_plugin_host::Result<_> {
-                        let (root, request) = prepare()?;
-                        if cancelled.load(Ordering::Acquire) {
-                            return Err(basecraft_plugin_host::Error::Protocol(
-                                "Operation cancelled before submission".into(),
-                            ));
-                        }
-                        let registry = Registry::load(&RegistryConfig::discover()?)?;
-                        let mut policy = SessionPolicy::new(&root, true)?;
-                        if let Some(token) = credential {
-                            let recipient = registry.resolve("basecraft.zenodo/draft@1", None)?;
-                            if recipient.package.origin
-                                != basecraft_plugin_host::registry::Origin::Bundled
-                            {
-                                return Err(basecraft_plugin_host::Error::Protocol(
-                                    "unexpected credential package".into(),
-                                ));
-                            }
-                            policy = policy.with_runtime_credential(
-                                recipient,
-                                "zenodo_access",
-                                token,
-                            )?;
-                        }
-                        let mut jobs = JobManager::default().with_task_cancellation();
-                        let accepted = jobs.submit(
-                            &registry,
-                            serde_json::from_value(request)?,
-                            policy,
-                            "GUI",
-                        )?;
-                        let text = json!(accepted).to_string();
-                        let _ = qt_thread.queue(move |mut state| {
-                            state.as_mut().set_outcome(QString::from(text));
-                            state.set_message(QString::from("Running operation"));
-                        });
-                        loop {
-                            if cancelled.load(Ordering::Acquire) {
-                                jobs.cancel(&accepted.run_id)?;
-                            }
-                            let outcome = jobs.get(&accepted.run_id)?;
-                            if outcome.state.terminal() {
-                                return Ok(outcome);
-                            }
-                            if let Some(evidence) = &outcome.evidence {
-                                let path = PathBuf::from(evidence).join("progress");
-                                if let Ok(file) = std::fs::File::open(path) {
-                                    use std::io::Read;
-                                    let mut stage = String::new();
-                                    if file.take(4096).read_to_string(&mut stage).is_ok()
-                                        && !stage.trim().is_empty()
-                                    {
-                                        let _ = qt_thread.queue(move |state| {
-                                            state.set_message(QString::from(stage.trim()));
-                                        });
-                                    }
-                                }
-                            }
-                            std::thread::sleep(std::time::Duration::from_millis(25));
-                        }
-                    },
-                ))
-                .unwrap_or_else(|_| {
-                    Err(basecraft_plugin_host::Error::Protocol(
-                        "Operation worker interrupted".into(),
-                    ))
-                });
-                let _ = qt_thread.queue(move |mut state| {
-                    state.as_mut().rust_mut().pending_result =
-                        Some(result.map_err(|e| e.to_string()));
-                });
-            });
-        if let Err(error) = spawn {
-            self.as_mut().rust_mut().cancelled = None;
-            self.as_mut().set_busy(false);
-            self.set_message(QString::from(format!("fail: {error}")));
-            return false;
+        let started = crate::jobs::start_listed(
+            self.qt_thread(),
+            move |work| {
+                run_request(prepare, credential, work, &qt_thread).map_err(|e| e.to_string())
+            },
+            qobject::AppOperations::finish,
+        );
+        match started {
+            Ok(work) => {
+                self.as_mut().rust_mut().work = Some(work);
+                true
+            }
+            Err(error) => {
+                self.as_mut().set_busy(false);
+                self.set_message(QString::from(format!("fail: {error}")));
+                false
+            }
         }
-        true
     }
-    pub fn poll(mut self: Pin<&mut Self>) {
-        // Keep the existing poll/terminal transition contract: callers can
-        // record a terminal outcome immediately after poll clears busy.
-        let Some(result) = self.as_mut().rust_mut().pending_result.take() else {
-            return;
-        };
-        self.as_mut().rust_mut().cancelled = None;
+
+    /// Show a finished run: its outcome first, then the message, then busy
+    /// clears, so a caller reacting to `busy` reads the final outcome.
+    fn finish(
+        mut self: Pin<&mut Self>,
+        result: Result<basecraft_protocol::operation::OperationOutcome, String>,
+    ) {
+        self.as_mut().rust_mut().work = None;
         match result {
             Ok(outcome) => {
                 let message =
@@ -446,10 +371,73 @@ impl qobject::AppOperations {
         self.set_busy(false);
     }
     pub fn cancel(self: Pin<&mut Self>) {
-        if let Some(cancelled) = &self.rust().cancelled {
-            cancelled.store(true, Ordering::Release);
+        if let Some(work) = &self.rust().work {
+            work.cancel();
         }
         self.set_message(QString::from("Cancelling operation"));
+    }
+}
+
+/// Submit a prepared request and wait for its outcome on the job thread,
+/// showing the plugin's progress text as the owner's message.
+fn run_request(
+    prepare: impl FnOnce() -> basecraft_plugin_host::Result<(PathBuf, Value)>,
+    credential: Option<String>,
+    work: &basecraft_ops::work::Work,
+    owner: &cxx_qt::CxxQtThread<qobject::AppOperations>,
+) -> basecraft_plugin_host::Result<basecraft_protocol::operation::OperationOutcome> {
+    let (root, request) = prepare()?;
+    if work.cancelled() {
+        return Err(basecraft_plugin_host::Error::Protocol(
+            "Operation cancelled before submission".into(),
+        ));
+    }
+    let registry = Registry::load(&RegistryConfig::discover()?)?;
+    let mut policy = SessionPolicy::new(&root, true)?;
+    if let Some(token) = credential {
+        let recipient = registry.resolve("basecraft.zenodo/draft@1", None)?;
+        if recipient.package.origin != basecraft_plugin_host::registry::Origin::Bundled {
+            return Err(basecraft_plugin_host::Error::Protocol(
+                "unexpected credential package".into(),
+            ));
+        }
+        policy = policy.with_runtime_credential(recipient, "zenodo_access", token)?;
+    }
+    let mut jobs = JobManager::default().with_task_cancellation();
+    let accepted = jobs.submit(&registry, serde_json::from_value(request)?, policy, "GUI")?;
+    let text = json!(accepted).to_string();
+    let _ = owner.queue(move |mut state| {
+        state.as_mut().set_outcome(QString::from(text));
+        state.set_message(QString::from("Running operation"));
+    });
+    let mut shown = String::new();
+    let mut cancelling = false;
+    loop {
+        if work.cancelled() && !cancelling {
+            jobs.cancel(&accepted.run_id)?;
+            cancelling = true;
+        }
+        let outcome = jobs.get(&accepted.run_id)?;
+        if outcome.state.terminal() {
+            return Ok(outcome);
+        }
+        if let Some(evidence) = &outcome.evidence
+            && let Ok(file) = std::fs::File::open(PathBuf::from(evidence).join("progress"))
+        {
+            use std::io::Read;
+            let mut stage = String::new();
+            if file.take(4096).read_to_string(&mut stage).is_ok()
+                && !stage.trim().is_empty()
+                && stage != shown
+            {
+                shown.clone_from(&stage);
+                work.progress("");
+                let _ = owner.queue(move |state| {
+                    state.set_message(QString::from(stage.trim()));
+                });
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
     }
 }
 

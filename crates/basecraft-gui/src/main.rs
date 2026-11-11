@@ -11,15 +11,16 @@
 
 mod alignment_bridge;
 mod app_bridge;
+mod appearance;
 mod application;
 mod bridge;
 mod delimitation_bridge;
 mod document_jobs;
 mod document_open;
-mod editor_core;
 mod editor_save;
 mod figure_png;
 mod find_bridge;
+mod jobs;
 mod metadata_bridge;
 mod operations_bridge;
 mod provenance_bridge;

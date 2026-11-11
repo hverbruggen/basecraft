@@ -59,7 +59,7 @@ Item {
             selection: index < 2 ? current.selection_text() : ""}
         // Replace a submitted scan before accepting its result.
         current.find_query("no-such-match!", false)
-        current.find_poll(1)
+        current.find_step(1)
         realFind.query = cases[index].query
         realFind.openFind()
         phase = 0

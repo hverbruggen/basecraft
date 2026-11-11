@@ -2,6 +2,7 @@
 #[cxx_qt::bridge]
 pub mod qobject {
     impl cxx_qt::Threading for DelimitationController {}
+    impl cxx_qt::Initialize for DelimitationController {}
     unsafe extern "C++" {
         include!("cxx-qt-lib/qstring.h");
         type QString = cxx_qt_lib::QString;
@@ -40,7 +41,10 @@ pub mod qobject {
         #[qinvokable]
         fn find_query(self: Pin<&mut DelimitationController>, query: &QString, reverse: bool);
         #[qinvokable]
-        fn find_poll(self: Pin<&mut DelimitationController>, direction: i32) -> QString;
+        fn find_step(self: Pin<&mut DelimitationController>, direction: i32) -> QString;
+        #[qsignal]
+        #[cxx_name = "findChanged"]
+        fn find_changed(self: Pin<&mut DelimitationController>, status: QString);
 
         #[qinvokable]
         fn accessible_page(self: &DelimitationController, page: i32) -> QString;
@@ -157,12 +161,6 @@ pub mod qobject {
         #[qinvokable]
         fn cancel_job(self: Pin<&mut DelimitationController>);
         #[qinvokable]
-        fn poll_job(self: Pin<&mut DelimitationController>);
-        #[qinvokable]
-        fn analysis_running(self: &DelimitationController) -> bool;
-        #[qinvokable]
-        fn check_theme(self: Pin<&mut DelimitationController>);
-        #[qinvokable]
         fn memory_report(self: &DelimitationController) -> QString;
     }
 }
@@ -177,18 +175,23 @@ use basecraft_protocol::{
 use basecraft_viewmodel::delimitation::{self, Selection};
 
 use crate::document_jobs::{
-    BackgroundDocumentJob as DocumentJob, bundled, declared_parameters, failure, input_role,
-    primary_member, result_file,
+    DocumentJob, Finished, bundled, declared_parameters, failure, input_role, primary_member,
+    result_file,
 };
 
 /// A registered analysis running for this workspace; dropping it cancels it.
 struct RunningAnalysis {
-    job: DocumentJob,
+    work: basecraft_ops::work::Work,
     display_job: bool,
     display_rooted: bool,
     display_output: PathBuf,
     generation: u64,
     identity: (String, String),
+}
+impl Drop for RunningAnalysis {
+    fn drop(&mut self) {
+        self.work.cancel();
+    }
 }
 use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::QString;
@@ -201,7 +204,6 @@ use std::{
 
 pub struct DelimitationRust {
     find: basecraft_viewmodel::find::Session,
-    find_status_revision: u64,
     workspace_json: QString,
     selection_json: QString,
     preview_json: QString,
@@ -226,7 +228,6 @@ pub struct DelimitationRust {
     bar_columns: QString,
     palette: Vec<String>,
     // Modification time of the theme file last applied; empty before the first read.
-    theme_stamp: crate::bridge::ThemeStamp,
     session: Option<Session>,
     doc: Option<DocId>,
     selection: Selection,
@@ -239,7 +240,6 @@ impl Default for DelimitationRust {
     fn default() -> Self {
         Self {
             find: basecraft_viewmodel::find::Session::default(),
-            find_status_revision: u64::MAX,
             workspace_json: QString::from("{}"),
             selection_json: QString::from("[]"),
             preview_json: QString::from("[]"),
@@ -263,7 +263,6 @@ impl Default for DelimitationRust {
             display_revision: 0,
             bar_columns: QString::from("[]"),
             palette: delimitation::palette(&basecraft_viewmodel::Theme::default()),
-            theme_stamp: crate::bridge::ThemeStamp::default(),
             session: None,
             doc: None,
             selection: Selection::default(),
@@ -346,6 +345,7 @@ impl qobject::DelimitationController {
         self.set_message(QString::from(&summary));
     }
     fn refresh(mut self: Pin<&mut Self>) {
+        self.as_mut().find_update(false);
         if let Some(warning) =
             crate::document_open::recovery_notice(self.rust().session.as_ref(), self.rust().doc)
         {
@@ -395,7 +395,7 @@ impl qobject::DelimitationController {
             self.set_tree_edits(QString::from(&edits));
         }
     }
-    // BackgroundDocumentJob exclusively owns the Session until poll_job restores it.
+    // A running analysis owns the Session until its completion returns it.
     fn workspace_available(mut self: Pin<&mut Self>) -> bool {
         let error = if self.rust().busy {
             Some("Species analysis is running; wait for completion or cancel it first")
@@ -1210,11 +1210,9 @@ impl qobject::DelimitationController {
     pub fn export_figure(self: Pin<&mut Self>, path: &QString, _scope: i32, publication: bool) {
         // The comparison figure is always complete: every visible column and tip.
         let theme = if publication {
-            crate::bridge::publication_theme()
+            crate::appearance::publication_theme()
         } else {
-            crate::bridge::load_theme()
-                .map(|(theme, _)| theme)
-                .unwrap_or_default()
+            crate::appearance::current().theme.clone()
         };
         self.export_with(path, &theme, None);
     }
@@ -1226,11 +1224,9 @@ impl qobject::DelimitationController {
         width: f64,
     ) {
         let theme = if publication {
-            crate::bridge::publication_theme()
+            crate::appearance::publication_theme()
         } else {
-            crate::bridge::load_theme()
-                .map(|(theme, _)| theme)
-                .unwrap_or_default()
+            crate::appearance::current().theme.clone()
         };
         self.export_with(path, &theme, Some(width));
     }
@@ -1474,9 +1470,7 @@ impl qobject::DelimitationController {
         }
     }
     pub fn export_svg(self: Pin<&mut Self>, path: &QString) {
-        let theme = crate::bridge::load_theme()
-            .map(|(theme, _)| theme)
-            .unwrap_or_default();
+        let theme = crate::appearance::current().theme.clone();
         self.export_with(path, &theme, None);
     }
     fn export_with(
@@ -1499,7 +1493,7 @@ impl qobject::DelimitationController {
                 .ok_or("Attach a display tree first")?;
             let work = s.delimitation(d)?;
             basecraft_ops::session::apply_drawing_edits(&mut tree, &work.view.tree_edits);
-            let font = crate::bridge::monospace_font();
+            let font = crate::appearance::current().font.clone();
             let columns =
                 delimitation::tip_columns(work, &tip_names(&tree), &delimitation::palette(theme));
             let figure = basecraft_viewmodel::tree::figure_with_columns(
@@ -1837,22 +1831,31 @@ impl qobject::DelimitationController {
                     return;
                 }
             };
+        let thread = self.qt_thread();
         let submitted = {
             let mut state = self.as_mut().rust_mut();
             let state = &mut *state;
             match state.doc {
-                Some(doc) => DocumentJob::submit_files(
+                Some(doc) => crate::document_jobs::run_operation(
+                    thread,
                     &mut state.session,
-                    doc,
-                    &operation,
-                    [(role, vec![analysis_input])].into(),
-                    params,
-                    &exports,
+                    move |session| {
+                        DocumentJob::submit_files(
+                            session,
+                            doc,
+                            &operation,
+                            [(role, vec![analysis_input])].into(),
+                            params,
+                            &exports,
+                        )
+                    },
+                    qobject::DelimitationController::analysis_progress,
+                    qobject::DelimitationController::finish_analysis,
                 ),
                 None => Err("No workspace open".into()),
             }
         };
-        let job = match submitted {
+        let work = match submitted {
             Ok(job) => job,
             Err(e) => {
                 self.as_mut().fail(&e);
@@ -1865,7 +1868,7 @@ impl qobject::DelimitationController {
             }
         };
         self.as_mut().rust_mut().analysis = Some(RunningAnalysis {
-            job,
+            work,
             display_job,
             display_rooted,
             display_output: output,
@@ -1877,20 +1880,16 @@ impl qobject::DelimitationController {
             .set_message(QString::from("Running analysis…"));
     }
 
-    /// Called from the poll timer: records a finished run in the workspace's
-    /// history, then adds its hypotheses or attaches its display tree.
-    fn finish_analysis(mut self: Pin<&mut Self>) {
-        let polled = {
-            let mut state = self.as_mut().rust_mut();
-            let state = &mut *state;
-            let Some(analysis) = &state.analysis else {
-                return;
-            };
-            analysis.job.poll(&mut state.session)
-        };
-        let outcome = match polled {
-            Ok(Some(outcome)) => outcome,
-            Ok(None) => return,
+    /// The session has recorded a finished run in the workspace's history;
+    /// add its hypotheses or attach its display tree.
+    fn finish_analysis(
+        mut self: Pin<&mut Self>,
+        session: Session,
+        finished: Result<Finished, String>,
+    ) {
+        self.as_mut().rust_mut().session = Some(session);
+        let (outcome, finalized) = match finished {
+            Ok(finished) => (finished.outcome, finished.generation),
             Err(error) => {
                 let display_job = self
                     .as_mut()
@@ -1929,10 +1928,7 @@ impl qobject::DelimitationController {
                 return Err("Analysis completed for its original workspace; its result remains available for review".into());
             }
             if session.generation(doc).map_err(|e| e.to_string())?
-                != analysis
-                    .job
-                    .finalized_generation()
-                    .unwrap_or(analysis.generation)
+                != finalized.unwrap_or(analysis.generation)
             {
                 return Err("Analysis completed for its saved input; workspace changed, so result remains an artifact".into());
             }
@@ -2077,53 +2073,17 @@ impl qobject::DelimitationController {
     }
     pub fn cancel_job(self: Pin<&mut Self>) {
         if let Some(analysis) = &self.rust().analysis {
-            analysis.job.cancel();
+            analysis.work.cancel();
         }
-    }
-    pub fn analysis_running(&self) -> bool {
-        self.rust().analysis.is_some()
     }
 
-    pub fn poll_job(mut self: Pin<&mut Self>) {
-        let progress = self.rust().analysis.as_ref().and_then(|analysis| {
-            let path = analysis.job.progress_file()?;
-            std::fs::read(path)
-                .ok()
-                .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-                .map(|v| {
-                    format!(
-                        "{} · {} / {}",
-                        v["phase"].as_str().unwrap_or("Running"),
-                        v["completed"],
-                        v["total"]
-                    )
-                })
-        });
-        if let Some(text) = progress {
-            self.as_mut().set_message(QString::from(&text));
-        }
-        self.finish_analysis();
-    }
-    pub fn check_theme(mut self: Pin<&mut Self>) {
-        let stamp = crate::bridge::theme_stamp();
-        if self.rust().theme_stamp == stamp {
-            return;
-        }
-        let theme = crate::bridge::load_theme()
-            .map(|(theme, _)| theme)
-            .unwrap_or_default();
-        let palette = delimitation::palette(&theme);
-        let changed = palette != self.rust().palette;
-        {
-            let mut r = self.as_mut().rust_mut();
-            r.theme_stamp = stamp;
-            r.palette = palette;
-        }
-        if changed {
-            let next = self.rust().theme_revision + 1;
-            self.as_mut().set_theme_revision(next);
-            self.update_bar_columns();
-        }
+    fn analysis_progress(self: Pin<&mut Self>, progress: &Value) {
+        self.set_message(QString::from(&format!(
+            "{} · {} / {}",
+            progress["phase"].as_str().unwrap_or("Running"),
+            progress["completed"],
+            progress["total"]
+        )));
     }
     pub fn memory_report(&self) -> QString {
         QString::from(&crate::bridge::memory_text())
@@ -2317,6 +2277,21 @@ impl qobject::DelimitationController {
     }
     fn find_y(&self) -> f32 {
         0.0
+    }
+}
+
+impl cxx_qt::Initialize for qobject::DelimitationController {
+    fn initialize(self: Pin<&mut Self>) {
+        crate::appearance::follow(self, |mut this, look, _| {
+            let palette = delimitation::palette(&look.theme);
+            if palette == this.rust().palette {
+                return;
+            }
+            this.as_mut().rust_mut().palette = palette;
+            let next = this.rust().theme_revision + 1;
+            this.as_mut().set_theme_revision(next);
+            this.update_bar_columns();
+        });
     }
 }
 

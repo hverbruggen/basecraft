@@ -18,7 +18,6 @@ AppContentDialog {
     readonly property var operationOutcome: JSON.parse(backend.outcome || "{}")
     signal openResult(string path)
     AppOperations { id: backend }
-    Timer { interval: 200; repeat: true; running: backend.busy; onTriggered: backend.poll() }
     function show(project, path, dirty) {
         if (backend.busy) { open(); return }
         dialog.project = project

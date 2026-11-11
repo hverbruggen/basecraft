@@ -8,6 +8,9 @@ pub struct AppPaths {
     pub state: PathBuf,
     pub cache: PathBuf,
     pub scratch: PathBuf,
+    /// The user's home folder, for desktop settings the app follows (theme,
+    /// fonts). None when the environment does not name one.
+    pub home: Option<PathBuf>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -35,8 +38,12 @@ impl AppPaths {
                 })
                 .transpose()
         };
+        let home = absolute(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+            .ok()
+            .flatten();
         if let Some(profile) = absolute("BASECRAFT_PROFILE_DIR")? {
             return Ok(Self {
+                home,
                 config: profile.join("config"),
                 data: profile.join("data"),
                 state: absolute("BASECRAFT_STATE_DIR")?.unwrap_or_else(|| profile.join("state")),
@@ -44,13 +51,12 @@ impl AppPaths {
                 scratch: absolute("BASECRAFT_SCRATCH_DIR")?.unwrap_or_else(std::env::temp_dir),
             });
         }
-        let home =
-            absolute(if cfg!(windows) { "USERPROFILE" } else { "HOME" })?.ok_or_else(|| {
-                PathError("home directory is unavailable; set BASECRAFT_PROFILE_DIR".into())
-            })?;
+        let user = home.clone().ok_or_else(|| {
+            PathError("home directory is unavailable; set BASECRAFT_PROFILE_DIR".into())
+        })?;
         let (config, data, state, cache) = if cfg!(windows) {
-            let roaming = absolute("APPDATA")?.unwrap_or_else(|| home.join("AppData/Roaming"));
-            let local = absolute("LOCALAPPDATA")?.unwrap_or_else(|| home.join("AppData/Local"));
+            let roaming = absolute("APPDATA")?.unwrap_or_else(|| user.join("AppData/Roaming"));
+            let local = absolute("LOCALAPPDATA")?.unwrap_or_else(|| user.join("AppData/Local"));
             (
                 roaming.join("Basecraft"),
                 local.join("Basecraft/data"),
@@ -58,30 +64,31 @@ impl AppPaths {
                 local.join("Basecraft/cache"),
             )
         } else if cfg!(target_os = "macos") {
-            let support = home.join("Library/Application Support/Basecraft");
+            let support = user.join("Library/Application Support/Basecraft");
             (
                 support.join("config"),
                 support.join("data"),
                 support.join("state"),
-                home.join("Library/Caches/Basecraft"),
+                user.join("Library/Caches/Basecraft"),
             )
         } else {
             (
                 absolute("XDG_CONFIG_HOME")?
-                    .unwrap_or_else(|| home.join(".config"))
+                    .unwrap_or_else(|| user.join(".config"))
                     .join("basecraft"),
                 absolute("XDG_DATA_HOME")?
-                    .unwrap_or_else(|| home.join(".local/share"))
+                    .unwrap_or_else(|| user.join(".local/share"))
                     .join("basecraft"),
                 absolute("XDG_STATE_HOME")?
-                    .unwrap_or_else(|| home.join(".local/state"))
+                    .unwrap_or_else(|| user.join(".local/state"))
                     .join("basecraft"),
                 absolute("XDG_CACHE_HOME")?
-                    .unwrap_or_else(|| home.join(".cache"))
+                    .unwrap_or_else(|| user.join(".cache"))
                     .join("basecraft"),
             )
         };
         Ok(Self {
+            home,
             config,
             data,
             state: absolute("BASECRAFT_STATE_DIR")?.unwrap_or(state),

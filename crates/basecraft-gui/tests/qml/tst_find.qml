@@ -15,7 +15,8 @@ Item {
         property int selection: 17
         property int reveals: 0
         function find_query(text, rc) { query = text; reverse = rc; current = 1 }
-        function find_poll(direction) {
+        signal findChanged(string status)
+        function find_step(direction) {
             current = direction === 0 ? current : (current + (direction > 0 ? 1 : 2) - 1) % 3 + 1
             const count = query.length && query !== "missing" ? 3 : 0
             return JSON.stringify({count: count, current: count ? current : 0, label: "Read 2", nucleotide: true, y: 120, rows: []})

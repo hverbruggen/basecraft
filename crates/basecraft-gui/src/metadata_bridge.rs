@@ -407,32 +407,32 @@ impl qobject::MetadataController {
         let epoch = self.rust().open_epoch;
         self.as_mut().set_busy(true);
         self.as_mut().refresh();
-        let thread = self.qt_thread();
         let path = metadata::manifest_path(&project)
             .to_string_lossy()
             .into_owned();
-        if let Err(error) =
-            crate::document_open::start(path, Some(project.clone()), move |result| {
-                let _ = thread.queue(move |mut this| {
-                    if this.rust().open_epoch != epoch || this.rust().project() != project {
-                        return;
+        if let Err(error) = crate::document_open::start(
+            self.qt_thread(),
+            path,
+            Some(project.clone()),
+            move |mut this, result| {
+                if this.rust().open_epoch != epoch || this.rust().project() != project {
+                    return;
+                }
+                let ok = result.is_ok();
+                match result {
+                    Ok(candidate) => {
+                        let mut state = this.as_mut().rust_mut();
+                        state.session = Some(candidate.session);
+                        state.doc = Some(candidate.doc);
+                        this.as_mut().report("", "");
                     }
-                    let ok = result.is_ok();
-                    match result {
-                        Ok(candidate) => {
-                            let mut state = this.as_mut().rust_mut();
-                            state.session = Some(candidate.session);
-                            state.doc = Some(candidate.doc);
-                            this.as_mut().report("", "");
-                        }
-                        Err(error) => this.as_mut().report("error", &error.to_string()),
-                    }
-                    this.as_mut().refresh();
-                    this.as_mut().set_busy(false);
-                    this.opened(ok);
-                });
-            })
-        {
+                    Err(error) => this.as_mut().report("error", &error.to_string()),
+                }
+                this.as_mut().refresh();
+                this.as_mut().set_busy(false);
+                this.opened(ok);
+            },
+        ) {
             self.as_mut().set_busy(false);
             self.as_mut().report("error", &error.to_string());
             self.opened(false);

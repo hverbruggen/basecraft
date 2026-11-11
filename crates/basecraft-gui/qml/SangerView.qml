@@ -368,9 +368,7 @@ FocusScope {
     }
     SangerController { id: ctl }
     Connections { target: ctl; function onStageFinished(stage, success, payload) { doc.reviewStageFinished(stage, success, payload) } }
-    Timer { interval: 200; repeat: true; running: ctl.busy; onTriggered: ctl.poll_stage() }
     Component.onDestruction: { ctl.cancel_stage(); ctl.cancel_calls() }
-    Timer { interval: 200; repeat: true; running: ctl.calling; onTriggered: ctl.poll_calls() }
     Shortcut { sequence: "F2"; enabled: doc.visible && !doc.working && ctl.review_mode; onActivated: doc.beginExport("fasta") }
     FileDialog {
         onVisibleChanged: if (visible) currentFolder = doc.activeFolder()

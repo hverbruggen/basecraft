@@ -13,10 +13,7 @@ use basecraft_plugin_host::{
 };
 use basecraft_protocol::operation::{OperationOutcome, RuntimeState};
 use std::sync::Arc;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    mpsc,
-};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Explicit request evidence uses the shared preserve-copy ledger. The returned
 /// verified path outlives source-controller snapshots, failed stages and retries.
@@ -85,14 +82,16 @@ pub(super) struct Completion {
     pub path: PathBuf,
     pub payload: String,
 }
+/// A running stage. Dropping it cancels the work; a replaced stage's result
+/// is ignored by its id.
 pub(super) struct Stage {
+    pub id: u64,
     pub name: &'static str,
-    pub receiver: mpsc::Receiver<Result<Completion, String>>,
-    pub cancelled: Arc<AtomicBool>,
+    pub work: basecraft_ops::work::Work,
 }
 impl Drop for Stage {
     fn drop(&mut self) {
-        self.cancelled.store(true, Ordering::Release);
+        self.work.cancel();
     }
 }
 fn check(cancelled: &AtomicBool) -> Result<(), String> {
@@ -183,28 +182,21 @@ fn evaluate(session: &mut SangerReview, view: &mut SangerReviewView) -> Result<(
     )
 }
 
-pub(super) fn start(request: Request, session: Option<SangerReview>) -> Result<Stage, String> {
+pub(super) fn start(
+    owner: cxx_qt::CxxQtThread<super::qobject::SangerController>,
+    request: Request,
+    session: Option<SangerReview>,
+) -> Result<Stage, String> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let id = NEXT.fetch_add(1, Ordering::Relaxed);
     let name = request.name();
-    let cancelled = Arc::new(AtomicBool::new(false));
-    let flag = cancelled.clone();
-    let (sender, receiver) = mpsc::channel();
-    std::thread::Builder::new()
-        .name(format!("sanger-{name}"))
-        .spawn(move || {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                execute(request, session, &flag)
-            }))
-            .unwrap_or_else(|_| {
-                Err("Sanger continuation interrupted; previous review preserved".into())
-            });
-            let _ = sender.send(result);
-        })
-        .map_err(|e| e.to_string())?;
-    Ok(Stage {
-        name,
-        receiver,
-        cancelled,
-    })
+    let work = crate::jobs::start(
+        owner,
+        move |work| execute(request, session, work.flag()),
+        move |this, result| this.stage_done(id, result),
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(Stage { id, name, work })
 }
 fn execute(
     request: Request,
@@ -572,14 +564,15 @@ mod tests {
         let original_hash = basecraft_io::hash_file(&reference).unwrap();
         let frozen = retain_reference(&reads[0], &reference).unwrap();
         let flag = AtomicBool::new(false);
-        let preparation = start(Request::Prepare(reads.clone(), 20), None).unwrap();
+        let request = Request::Prepare(reads.clone(), 20);
+        let preparation =
+            std::thread::spawn(move || execute(request, None, &AtomicBool::new(false)));
         // Dispose the alignment-owned snapshot before observing first completion.
         std::fs::remove_file(&reference).unwrap();
         assert_eq!(basecraft_io::hash_file(&frozen).unwrap(), original_hash);
         assert_eq!(retain_reference(&reads[0], &frozen).unwrap(), frozen);
         let prepared = preparation
-            .receiver
-            .recv()
+            .join()
             .unwrap()
             .unwrap_or_else(|e| panic!("prepare: {e}"));
         assert_eq!(prepared.session.draft.inputs.len(), 2);

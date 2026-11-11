@@ -10,6 +10,7 @@ pub mod records;
 pub mod sanger_review;
 pub mod session;
 pub mod submission;
+pub mod work;
 
 mod documents;
 mod error;

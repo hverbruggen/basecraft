@@ -11,6 +11,7 @@ AppDialog {
     implicitHeight: 570
     standardButtons: Dialog.Close
     property var service: null
+    property var jobs: null
     function resultPath(job) {
         if (job.primary_output !== undefined) return job.primary_output || ""
         return Object.keys(job.outputs || {})[0] || ""
@@ -30,7 +31,10 @@ AppDialog {
     }
     function refreshJobs() { if (service) jobData = JSON.parse(service.jobs(previousRuns.checked)) }
     onOpened: refreshJobs()
-    Timer { interval: 1500; repeat: true; running: dialog.visible; onTriggered: dialog.refreshJobs() }
+    Connections {
+        target: dialog.visible ? dialog.jobs : null
+        function onRevisionChanged() { dialog.refreshJobs() }
+    }
     contentItem: ColumnLayout {
         AppCheckBox { id: previousRuns; text: "Include retained runs from earlier sessions"; onToggled: dialog.refreshJobs() }
         Label { text: dialog.jobData.error || (dialog.jobData.warnings || []).join("\n"); Layout.fillWidth: true; wrapMode: Text.Wrap; visible: text.length > 0 }

@@ -272,9 +272,8 @@ impl qobject::DocumentOpens {
         let delivery_cancelled = cancelled.clone();
         #[cfg(test)]
         let completion_path = path.clone();
-        let spawned = crate::document_jobs::background_initialized(
-            "document-open",
-            move || {
+        let spawned = crate::jobs::spawn("document-open", move || {
+            let acquired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 #[cfg(test)]
                 if let Some(gate) = gate {
                     gate.wait();
@@ -282,9 +281,10 @@ impl qobject::DocumentOpens {
                 #[cfg(test)]
                 assert_ne!(fault, faults::Fault::Worker, "injected worker panic");
                 Candidate::acquire(&path, &cancelled)
-            },
-            || OpenError::Interrupted,
-            move |result| {
+            }))
+            .unwrap_or(Err(OpenError::Interrupted));
+            {
+                let result = acquired;
                 let delivery = move |mut this: Pin<&mut Self>| {
                     let Some(request) = this.rust().opens.requests.get(&id) else {
                         return;
@@ -339,8 +339,8 @@ impl qobject::DocumentOpens {
                 }
                 #[cfg(test)]
                 barriers::finished(&completion_path);
-            },
-        );
+            }
+        });
         if let Err(error) = spawned {
             self.reject(id, &OpenError::Spawn(error));
         }

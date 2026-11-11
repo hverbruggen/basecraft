@@ -77,9 +77,9 @@ AppFormDialog {
             if (!receipt.status) error += "\nInspect the run evidence before retrying: " + (outcome.evidence || "unavailable")
         }
     }
-    Timer {
-        interval: 200; repeat: true; running: dialog.backend.busy
-        onTriggered: { dialog.backend.poll(); if (!dialog.backend.busy) dialog.completed() }
+    Connections {
+        target: dialog.backend
+        function onBusyChanged() { if (!dialog.backend.busy) dialog.completed() }
     }
     onRejected: { token.text = ""; if (backend.busy) backend.cancel() }
     onClosed: token.text = ""

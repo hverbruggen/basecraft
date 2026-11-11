@@ -5,6 +5,8 @@ mod work;
 
 #[cxx_qt::bridge]
 pub mod qobject {
+    impl cxx_qt::Threading for SangerController {}
+    impl cxx_qt::Initialize for SangerController {}
     unsafe extern "C++" {
         include!("cxx-qt-lib/qbytearray.h");
         type QByteArray = cxx_qt_lib::QByteArray;
@@ -59,10 +61,11 @@ pub mod qobject {
         #[qinvokable]
         fn find_query(self: Pin<&mut SangerController>, query: &QString, reverse: bool);
         #[qinvokable]
-        fn find_poll(self: Pin<&mut SangerController>, direction: i32) -> QString;
+        fn find_step(self: Pin<&mut SangerController>, direction: i32) -> QString;
+        #[qsignal]
+        #[cxx_name = "findChanged"]
+        fn find_changed(self: Pin<&mut SangerController>, status: QString);
 
-        #[qinvokable]
-        fn poll_stage(self: Pin<&mut SangerController>);
         #[qinvokable]
         fn cancel_stage(self: Pin<&mut SangerController>);
         #[qsignal]
@@ -73,8 +76,6 @@ pub mod qobject {
             success: bool,
             payload: QString,
         );
-        #[qinvokable]
-        fn poll_calls(self: Pin<&mut SangerController>);
         #[qinvokable]
         fn cancel_calls(self: Pin<&mut SangerController>);
         #[qinvokable]
@@ -173,8 +174,6 @@ pub mod qobject {
         #[qinvokable]
         fn hscroll_to(self: Pin<&mut SangerController>, fraction: f64);
         #[qinvokable]
-        fn check_theme(self: Pin<&mut SangerController>);
-        #[qinvokable]
         fn hover(self: Pin<&mut SangerController>, x: f64, y: f64) -> QString;
         #[qinvokable]
         fn resize(self: Pin<&mut SangerController>, width: f64, height: f64);
@@ -225,17 +224,15 @@ use basecraft_ops::sanger_review::{MaskSettings, ReviewChoice, ReviewOp, SangerR
 use basecraft_viewmodel::sanger::SangerView;
 use basecraft_viewmodel::sanger_review::SangerReviewView;
 use basecraft_viewmodel::{Frame, Theme, svg};
-use cxx_qt::CxxQtType;
+use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::{QByteArray, QString};
 
-use crate::bridge::{css, load_theme, monospace_font, theme_stamp};
 use work::{load_draft_review, session_view, sync_review_view};
 
 // Independent generated QML properties describe document state and caller activity.
 #[allow(clippy::struct_excessive_bools)]
 pub struct SangerRust {
     find: basecraft_viewmodel::find::Session,
-    find_status_revision: u64,
     find_source_key: String,
     overview_content: QString,
     overview_matches: QString,
@@ -286,17 +283,13 @@ pub struct SangerRust {
     review_path: Option<PathBuf>,
     view: SangerView,
     theme: Theme,
-    theme_stamp: crate::bridge::ThemeStamp,
     scratch: Frame,
 }
 
 impl Default for SangerRust {
     fn default() -> Self {
-        let (theme, theme_stamp) = load_theme()
-            .unwrap_or_else(|| (Theme::default(), crate::bridge::ThemeStamp::default()));
         Self {
             find: basecraft_viewmodel::find::Session::default(),
-            find_status_revision: u64::MAX,
             find_source_key: String::new(),
             overview_content: QString::from("{\"shapes\":[]}"),
             overview_matches: QString::from("[]"),
@@ -306,12 +299,12 @@ impl Default for SangerRust {
             status: QString::default(),
             message: QString::default(),
             message_kind: QString::default(),
-            ok_color: QString::from(&css(theme.nearest_hue(120.0))),
-            error_color: QString::from(&css(theme.nearest_hue(0.0))),
-            background: QString::from(&css(theme.background)),
-            foreground: QString::from(&css(theme.foreground)),
-            accent: QString::from(&css(theme.accent)),
-            mono_font: QString::from(&monospace_font()),
+            ok_color: QString::default(),
+            error_color: QString::default(),
+            background: QString::default(),
+            foreground: QString::default(),
+            accent: QString::default(),
+            mono_font: QString::default(),
             file_path: QString::default(),
             zoom_text: QString::default(),
             trace_scroll_pos: 0.0,
@@ -348,8 +341,7 @@ impl Default for SangerRust {
             review_session: None,
             review_path: None,
             view: SangerView::default(),
-            theme,
-            theme_stamp,
+            theme: Theme::default(),
             scratch: Frame::new(),
         }
     }
@@ -381,9 +373,7 @@ impl qobject::SangerController {
 
     pub fn cancel_stage(mut self: std::pin::Pin<&mut Self>) {
         if let Some(stage) = &self.rust().stage {
-            stage
-                .cancelled
-                .store(true, std::sync::atomic::Ordering::Release);
+            stage.work.cancel();
             self.as_mut().set_message_kind(QString::from("notify"));
             self.set_message(QString::from("Cancelling Sanger operation"));
         }
@@ -397,7 +387,7 @@ impl qobject::SangerController {
         let single = request.name() == "single";
         let message = request.message();
         let session = self.review_payload().map(SangerReview::fork_for_operation);
-        match work::start(request, session) {
+        match work::start(self.qt_thread(), request, session) {
             Ok(stage) => {
                 self.as_mut().rust_mut().stage = Some(stage);
                 self.as_mut().set_busy(true);
@@ -414,19 +404,16 @@ impl qobject::SangerController {
         }
     }
 
-    pub fn poll_stage(mut self: std::pin::Pin<&mut Self>) {
-        let Some(stage) = &self.rust().stage else {
+    fn stage_done(
+        mut self: std::pin::Pin<&mut Self>,
+        id: u64,
+        result: Result<work::Completion, String>,
+    ) {
+        let Some(stage) = self.rust().stage.as_ref().filter(|stage| stage.id == id) else {
             return;
         };
-        let result = match stage.receiver.try_recv() {
-            Ok(result) => result,
-            Err(std::sync::mpsc::TryRecvError::Empty) => return,
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                Err("Sanger worker disconnected; previous review preserved".into())
-            }
-        };
         let name = stage.name;
-        let cancelled = stage.cancelled.load(std::sync::atomic::Ordering::Acquire);
+        let cancelled = stage.work.cancelled();
         self.as_mut().rust_mut().stage = None;
         self.as_mut().set_busy(false);
         self.as_mut().set_calling(false);
@@ -490,12 +477,12 @@ impl qobject::SangerController {
         self.single_review(20);
     }
 
-    pub fn poll_calls(mut self: std::pin::Pin<&mut Self>) {
+    /// Start the alternative calls queued when a trace opened, unless the
+    /// user cancelled them or another stage started first.
+    fn start_queued_calls(mut self: std::pin::Pin<&mut Self>) {
         if self.rust().pending_calls && self.rust().stage.is_none() {
             self.as_mut().rust_mut().pending_calls = false;
             self.compute_calls();
-        } else {
-            self.poll_stage();
         }
     }
 
@@ -575,6 +562,7 @@ impl qobject::SangerController {
     }
 
     fn refresh(mut self: std::pin::Pin<&mut Self>) {
+        self.as_mut().find_update(false);
         let (bytes, status, zoom, review_mode, sequence, decision, unresolved, context) = {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
@@ -701,8 +689,8 @@ impl qobject::SangerController {
             .as_deref()
             .and_then(Path::parent)
             .or_else(|| paths.first().and_then(|p| p.parent()))
-            .unwrap_or(Path::new("/tmp"))
-            .join(format!("{name}_consensus_from_basecraft.fasta"));
+            .map(|folder| folder.join(format!("{name}_consensus_from_basecraft.fasta")))
+            .unwrap_or_default();
         self.as_mut().set_proposed_name(QString::from(&name));
         self.as_mut()
             .set_export_path(QString::from(export.to_string_lossy().as_ref()));
@@ -921,6 +909,7 @@ impl qobject::SangerController {
                 self.as_mut().set_dirty(false);
                 self.as_mut().refresh();
                 self.as_mut().rust_mut().pending_calls = true;
+                let _ = self.qt_thread().queue(Self::start_queued_calls);
                 self.as_mut().set_calling(true);
                 self.as_mut().set_message_kind(QString::from("notify"));
                 self.set_message(QString::from(
@@ -1627,29 +1616,6 @@ impl qobject::SangerController {
         self.refresh();
     }
 
-    pub fn check_theme(mut self: std::pin::Pin<&mut Self>) {
-        if let Some(font) = crate::editor_core::prepare_font(&self.rust().mono_font.to_string()) {
-            self.as_mut().set_mono_font(QString::from(&font));
-        }
-        if let Some(update) =
-            crate::editor_core::prepare_theme(&self.rust().theme_stamp, theme_stamp, load_theme)
-        {
-            self.as_mut()
-                .set_background(QString::from(&update.background));
-            self.as_mut()
-                .set_foreground(QString::from(&update.foreground));
-            self.as_mut().set_accent(QString::from(&update.accent));
-            self.as_mut().set_ok_color(QString::from(&update.ok));
-            self.as_mut().set_error_color(QString::from(&update.error));
-            {
-                let mut r = self.as_mut().rust_mut();
-                r.theme = update.theme;
-                r.theme_stamp = update.stamp;
-            }
-            self.refresh();
-        }
-    }
-
     pub fn hover(mut self: std::pin::Pin<&mut Self>, x: f64, y: f64) -> QString {
         let mut changed = false;
         let text = {
@@ -1853,7 +1819,7 @@ impl qobject::SangerController {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
             let theme = if publication {
-                crate::bridge::publication_theme()
+                crate::appearance::publication_theme()
             } else {
                 r.theme.clone()
             };
@@ -1977,12 +1943,14 @@ impl SangerRust {
     }
 }
 impl qobject::SangerController {
-    fn find_update(mut self: std::pin::Pin<&mut Self>) {
-        if !self.rust().find.needs_update(&self.rust().find_source_key) {
+    fn find_update(mut self: std::pin::Pin<&mut Self>, first: bool) {
+        let source = &self.rust().find_source_key;
+        if !self.rust().find.needs_update(source) || !(first || self.rust().find.stale(source)) {
             return;
         }
         let (key, input) = self.rust().find_source();
-        self.as_mut().rust_mut().find.update(key, || input);
+        let scan = self.as_mut().rust_mut().find.update(key, || input);
+        self.find_start(scan);
     }
     fn find_reveal(mut self: std::pin::Pin<&mut Self>) {
         let mut r = self.as_mut().rust_mut();
@@ -2004,3 +1972,5 @@ impl qobject::SangerController {
             .map_or(0.0, |(review, hit)| review.find_row_y(hit.row))
     }
 }
+
+crate::appearance::editor_follows_appearance!(qobject::SangerController);

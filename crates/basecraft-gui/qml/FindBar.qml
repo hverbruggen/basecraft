@@ -43,11 +43,11 @@ Control {
         result = ({busy: field.text.length > 0, count: 0, current: 0, rows: []})
         debounce.restart()
     }
-    function poll(direction) {
+    // `reply` is a status the controller sent; otherwise ask for one.
+    function poll(direction, reply) {
         if (debounce.running) return
         const previous = result
-        const reply = controller.find_poll(direction)
-        if (!reply.length) return
+        if (reply === undefined) reply = controller.find_step(direction)
         result = JSON.parse(reply)
         if (result.count > 0 && (direction !== 0 || previous.busy || previous.current !== result.current))
             revealed(result)
@@ -62,7 +62,10 @@ Control {
     Component.onDestruction: if (controller) controller.find_query("", false)
     Keys.onEscapePressed: event => { closeFind(); event.accepted = true }
     Timer { id: debounce; interval: 160; onTriggered: bar.poll(0) }
-    Timer { interval: 80; repeat: true; running: bar.opened && bar.activeDocument && !debounce.running; onTriggered: bar.poll(0) }
+    Connections {
+        target: bar.opened && bar.activeDocument ? bar.controller : null
+        function onFindChanged(status) { bar.poll(0, status) }
+    }
 
     contentItem: ColumnLayout {
         spacing: metrics.height * 0.2

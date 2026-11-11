@@ -357,13 +357,9 @@ impl qobject::SubmissionController {
             .unwrap_or_default();
         self.as_mut().rust_mut().review_active = true;
         self.as_mut().set_reviewing(true);
-        let thread = self.qt_thread();
-        let progress_thread = thread.clone();
-        // Reuse the shared panic/ownership-safe background continuation. The live
-        // owner stays on Qt; this detached owner contains no mutable user state.
-        let worker = Session::detached(&project);
-        let spawned = crate::document_jobs::background_session(
-            worker,
+        let progress_thread = self.qt_thread();
+        let spawned = crate::jobs::start(
+            self.qt_thread(),
             move |_| {
                 let started = std::time::Instant::now();
                 let submitter = submission::submitter_preference().unwrap_or_default();
@@ -403,39 +399,37 @@ impl qobject::SubmissionController {
             });
                 Ok((review, package, cache, started.elapsed().as_secs_f64()))
             },
-            move |_, result| {
-                let _ = thread.queue(move |mut this| {
-                    this.as_mut().rust_mut().review_active = false;
-                    let current = epoch == this.rust().review_epoch;
-                    if std::env::var_os("BASECRAFT_SUBMISSION_TIMINGS").is_some() {
-                        eprintln!("submission-review epoch={epoch} accepted={current}");
-                    }
-                    match result {
-                        Ok((review, package, cache, _seconds)) => {
-                            this.as_mut().rust_mut().review_cache = Some(cache);
-                            if current {
-                                this.as_mut().set_review(qs(&review));
-                                this.as_mut().set_package(qs(&package));
-                            }
-                        }
-                        Err(error) => {
-                            if current {
-                                this.as_mut().report("error", &error);
-                            }
+            move |mut this, result| {
+                this.as_mut().rust_mut().review_active = false;
+                let current = epoch == this.rust().review_epoch;
+                if std::env::var_os("BASECRAFT_SUBMISSION_TIMINGS").is_some() {
+                    eprintln!("submission-review epoch={epoch} accepted={current}");
+                }
+                match result {
+                    Ok((review, package, cache, _seconds)) => {
+                        this.as_mut().rust_mut().review_cache = Some(cache);
+                        if current {
+                            this.as_mut().set_review(qs(&review));
+                            this.as_mut().set_package(qs(&package));
                         }
                     }
-                    if current {
-                        this.as_mut().set_reviewing(false);
-                    } else {
-                        this.as_mut().refresh_review();
+                    Err(error) => {
+                        if current {
+                            this.as_mut().report("error", &error);
+                        }
                     }
-                });
+                }
+                if current {
+                    this.as_mut().set_reviewing(false);
+                } else {
+                    this.as_mut().refresh_review();
+                }
             },
         );
-        if let Err((_, error)) = spawned {
+        if let Err(error) = spawned {
             self.as_mut().rust_mut().review_active = false;
             self.as_mut().set_reviewing(false);
-            self.report("error", &error);
+            self.report("error", &error.to_string());
         }
     }
 
@@ -506,10 +500,12 @@ impl qobject::SubmissionController {
         self.as_mut().set_busy(true);
         self.as_mut().rust_mut().open_epoch += 1;
         let epoch = self.rust().open_epoch;
-        let thread = self.qt_thread();
         let root = (!self.rust().project_dir.is_empty()).then(|| self.rust().project());
-        let started = crate::document_open::start(path.to_string(), root, move |result| {
-            let _ = thread.queue(move |mut this| {
+        let started = crate::document_open::start(
+            self.qt_thread(),
+            path.to_string(),
+            root,
+            move |mut this, result| {
                 if this.rust().open_epoch != epoch {
                     return;
                 }
@@ -530,8 +526,8 @@ impl qobject::SubmissionController {
                 }
                 this.as_mut().set_busy(false);
                 this.opened(ok);
-            });
-        });
+            },
+        );
         if let Err(error) = started {
             self.as_mut().set_busy(false);
             self.as_mut().report("error", &error.to_string());

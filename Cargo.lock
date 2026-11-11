@@ -316,6 +316,7 @@ dependencies = [
  "cxx-qt-build",
  "cxx-qt-lib",
  "cxx-qt-lib-extras",
+ "libc",
  "resvg",
  "serde",
  "serde_json",

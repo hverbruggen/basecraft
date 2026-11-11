@@ -29,12 +29,9 @@ AppFormDialog {
     readonly property var programDatabases: ["nt", "nr", "nr", "nt"]
     signal copyText(string text)
     required property var backend
-    Timer {
-        interval: 200; repeat: true; running: backend.busy
-        onTriggered: {
-            backend.poll()
-            if (!backend.busy) dialog.completed()
-        }
+    Connections {
+        target: dialog.backend
+        function onBusyChanged() { if (!dialog.backend.busy) dialog.completed() }
     }
     function show(provider, mode, isAlignment) {
         if (backend.busy) { open(); return }

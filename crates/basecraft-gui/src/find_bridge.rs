@@ -39,23 +39,37 @@ pub fn status(find: &Session, y: f32) -> String {
     }).to_string()
 }
 
+/// Find for a document controller. A scan runs as a job; when it finishes the
+/// controller reveals the first hit and emits `find_changed` with the status.
+/// `find_update(true)` starts the first scan for a query; `find_update(false)`,
+/// called from `refresh`, only rescans after the document changed.
 macro_rules! controller_find {
     ($controller:ty, $getter:ident, |$document:ident| $snapshot:expr) => {
         crate::find_bridge::controller_find!($controller, $getter);
         impl $controller {
-            fn find_update(mut self: std::pin::Pin<&mut Self>) {
+            fn find_update(mut self: std::pin::Pin<&mut Self>, first: bool) {
+                if !self.rust().find.active() {
+                    return;
+                }
                 let access_thread = self.qt_thread();
                 if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
                     crate::bridge::checked_document!(sync self, session.$getter(doc));
                 }
-                let mut r = self.as_mut().rust_mut();
-                let r = &mut *r;
-                let (Some(session), Some(doc)) = (&r.session, r.doc) else {
-                    return;
+                let scan = {
+                    let mut r = self.as_mut().rust_mut();
+                    let r = &mut *r;
+                    let (Some(session), Some(doc)) = (&r.session, r.doc) else {
+                        return;
+                    };
+                    let key = crate::find_bridge::document_key(session, doc);
+                    if !first && !r.find.stale(&key) {
+                        return;
+                    }
+                    let $document =
+                        crate::bridge::checked_document!(access_thread, session.$getter(doc));
+                    r.find.update(key, || $snapshot)
                 };
-                let key = crate::find_bridge::document_key(session, doc);
-                let $document = crate::bridge::checked_document!(access_thread, session.$getter(doc));
-                r.find.update(key, || $snapshot);
+                self.find_start(scan);
             }
         }
     };
@@ -66,7 +80,6 @@ macro_rules! controller_find {
                 query: &cxx_qt_lib::QString,
                 reverse: bool,
             ) {
-
                 $(if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
                     crate::bridge::checked_document!(sync self, session.$getter(doc));
                 })?
@@ -76,37 +89,63 @@ macro_rules! controller_find {
                     .set_query(query.to_string(), reverse);
                 self.refresh();
             }
-            pub fn find_poll(
+            /// The current status after moving `direction` hits (0 stays),
+            /// starting the query's scan if it has not started.
+            pub fn find_step(
                 mut self: std::pin::Pin<&mut Self>,
                 direction: i32,
             ) -> cxx_qt_lib::QString {
-
                 $(if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
                     crate::bridge::checked_document!(sync self, session.$getter(doc));
                 })?
-                self.as_mut().find_update();
-                let reveal = {
-                    let mut r = self.as_mut().rust_mut();
-                    let completed = r.find.poll();
-                    // A pending scan's first Enter still reveals its first hit.
-                    if direction != 0 && !completed {
-                        r.find.step(direction < 0);
-                    }
-                    completed || direction != 0
-                };
-                if reveal {
+                self.as_mut().find_update(true);
+                if direction != 0 {
+                    self.as_mut().rust_mut().find.step(direction < 0);
                     self.as_mut().find_reveal();
                     self.as_mut().refresh();
                 }
-                let revision = self.rust().find.revision();
-                if direction == 0 && self.rust().find_status_revision == revision {
-                    return cxx_qt_lib::QString::default();
-                }
-                self.as_mut().rust_mut().find_status_revision = revision;
                 cxx_qt_lib::QString::from(&crate::find_bridge::status(
                     &self.rust().find,
                     self.find_y(),
                 ))
+            }
+            fn find_start(
+                mut self: std::pin::Pin<&mut Self>,
+                scan: Option<basecraft_viewmodel::find::Scan>,
+            ) {
+                let Some(scan) = scan else {
+                    return;
+                };
+                let started = crate::jobs::start(
+                    self.qt_thread(),
+                    move |_| Ok(scan.run()),
+                    |mut this, found| {
+                        let completed = {
+                            let mut r = this.as_mut().rust_mut();
+                            match found {
+                                Ok(found) => r.find.finish(found),
+                                Err(error) => {
+                                    r.find.failed(error);
+                                    false
+                                }
+                            }
+                        };
+                        if completed {
+                            this.as_mut().find_reveal();
+                        }
+                        this.as_mut().refresh();
+                        let status = crate::find_bridge::status(&this.rust().find, this.find_y());
+                        this.find_changed(cxx_qt_lib::QString::from(&status));
+                    },
+                );
+                if let Err(error) = started {
+                    self.as_mut()
+                        .rust_mut()
+                        .find
+                        .failed(format!("Cannot start Find: {error}"));
+                }
+                let status = crate::find_bridge::status(&self.rust().find, self.find_y());
+                self.find_changed(cxx_qt_lib::QString::from(&status));
             }
         }
     };

@@ -335,27 +335,31 @@ impl qobject::AppProvenance {
         self.as_mut().set_busy(true);
         self.as_mut().set_text(QString::default());
         self.as_mut().set_message(QString::from("notify: Working…"));
-        let thread = self.qt_thread();
-        let spawn = std::thread::Builder::new().name("basecraft-provenance".into()).spawn(move || {
-            let result = work();
-            let _ = thread.queue(move |mut state| {
+        let spawn = crate::jobs::start(
+            self.qt_thread(),
+            move |_| work(),
+            |mut state, result| {
                 state.as_mut().set_busy(false);
                 match result {
                     Ok(mut text) => {
                         const LIMIT: usize = 1024 * 1024;
                         if text.len() > LIMIT {
                             let mut end = LIMIT;
-                            while !text.is_char_boundary(end) { end -= 1; }
+                            while !text.is_char_boundary(end) {
+                                end -= 1;
+                            }
                             text.truncate(end);
                             text.push_str("\nDisplay truncated. Inspect the readable provenance files for the full record.");
                         }
                         state.as_mut().set_text(QString::from(text.as_str()));
                         state.set_message(QString::from("done"));
                     }
-                    Err(error) => { state.set_message(QString::from(format!("fail: {error}").as_str())); }
+                    Err(error) => {
+                        state.set_message(QString::from(format!("fail: {error}").as_str()));
+                    }
                 }
-            });
-        });
+            },
+        );
         if let Err(error) = spawn {
             self.as_mut().set_busy(false);
             self.set_message(QString::from(
@@ -482,6 +486,7 @@ mod tests {
             state: root.join("state"),
             cache: root.join("cache"),
             scratch: root.join("scratch"),
+            home: None,
         };
         let file = root.join("sequence.fasta");
         std::fs::write(&file, ">example\nACGT\n").unwrap();

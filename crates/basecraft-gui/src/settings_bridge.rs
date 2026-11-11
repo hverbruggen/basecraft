@@ -29,7 +29,7 @@ pub mod qobject {
         #[qinvokable]
         fn remember_project(self: Pin<&mut AppSettings>, path: &QString) -> QString;
         #[qinvokable]
-        fn project_picker_directory(self: &AppSettings, home: &QString) -> QString;
+        fn project_picker_directory(self: &AppSettings) -> QString;
         #[qinvokable]
         fn project_is_directory(self: &AppSettings, path: &QString) -> bool;
     }
@@ -152,11 +152,14 @@ impl qobject::AppSettings {
             .and_then(|path| remember_project_path(&path));
         history_reply(result)
     }
-    fn project_picker_directory(&self, home: &QString) -> QString {
-        let folder = self.project_picker.directory(
-            &load_project_history().unwrap_or_default(),
-            Path::new(&home.to_string()),
-        );
+    fn project_picker_directory(&self) -> QString {
+        let home = AppPaths::discover()
+            .ok()
+            .and_then(|paths| paths.home)
+            .unwrap_or_default();
+        let folder = self
+            .project_picker
+            .directory(&load_project_history().unwrap_or_default(), &home);
         QString::from(folder.to_string_lossy().as_ref())
     }
     fn project_is_directory(&self, path: &QString) -> bool {
@@ -180,10 +183,14 @@ impl qobject::AppSettings {
         self.publish(result)
     }
     fn update(self: Pin<&mut Self>, key: &QString, value: &QString) -> bool {
+        let key = key.to_string();
         let result = serde_json::from_str::<serde_json::Value>(&value.to_string())
             .map_err(|e| e.to_string())
-            .and_then(|v| change(&key.to_string(), &v))
+            .and_then(|v| change(&key, &v))
             .and_then(|change| store()?.update(change).map_err(|e| e.to_string()));
+        if result.is_ok() && key == "colorBlindFriendly" {
+            crate::appearance::preferences_changed();
+        }
         self.publish(result)
     }
 }

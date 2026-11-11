@@ -68,7 +68,13 @@ AppDialog {
     onSavedRevisionChanged: { token = ""; if (visible) refreshReport() }
     onControllerChanged: { token = ""; if (visible) refreshReport() }
     onClosed: rememberDraft()
-    Timer { interval: 500; repeat: true; running: dialog.visible; onTriggered: dialog.refreshReport() }
+    Connections {
+        target: dialog.visible ? dialog.controller : null
+        ignoreUnknownSignals: true
+        // Every edit or finished run redraws the document or rewrites the workspace.
+        function onFrameChanged() { dialog.refreshReport() }
+        function onWorkspace_jsonChanged() { dialog.refreshReport() }
+    }
 
     contentItem: ColumnLayout {
         spacing: 8
