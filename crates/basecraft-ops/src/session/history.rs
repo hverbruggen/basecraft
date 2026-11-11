@@ -390,24 +390,12 @@ impl Session {
     /// Undo the last step on a document (one operation, or a whole group);
     /// returns the id of the last entry undone.
     pub fn undo(&mut self, id: DocId) -> Result<String> {
-        self.docs.get(id.0).ok_or(Error::UnknownDocument { id })?;
-        let group = self.docs[id.0].undo.last().and_then(|a| a.group);
-        let mut last = self.undo_one(id)?;
-        while group.is_some() && self.docs[id.0].undo.last().and_then(|a| a.group) == group {
-            last = self.undo_one(id)?;
-        }
-        Ok(last)
+        self.step(id, true, true)
     }
 
     /// Redo the last undone step (one operation, or a whole group).
     pub fn redo(&mut self, id: DocId) -> Result<String> {
-        self.docs.get(id.0).ok_or(Error::UnknownDocument { id })?;
-        let group = self.docs[id.0].redo.last().and_then(|a| a.group);
-        let mut last = self.redo_one(id)?;
-        while group.is_some() && self.docs[id.0].redo.last().and_then(|a| a.group) == group {
-            last = self.redo_one(id)?;
-        }
-        Ok(last)
+        self.step(id, false, true)
     }
 
     /// Verify an explicitly named history target before changing anything. An empty
@@ -435,82 +423,113 @@ impl Session {
     /// Undo exactly one operation, ignoring groups. Replay uses this: the
     /// log holds one undo entry per operation.
     pub fn undo_single(&mut self, id: DocId) -> Result<String> {
-        self.undo_one(id)
+        self.step(id, true, false)
     }
 
     pub fn redo_single(&mut self, id: DocId) -> Result<String> {
-        self.redo_one(id)
+        self.step(id, false, false)
     }
 
-    pub(super) fn undo_one(&mut self, id: DocId) -> Result<String> {
+    /// Undo or redo one operation, or with `whole` its whole group. Every
+    /// operation gets its own journal entry, written together in one batch,
+    /// so a grouped step costs one journal write. If the write fails, the
+    /// document returns to where it was.
+    fn step(&mut self, id: DocId, undo: bool, whole: bool) -> Result<String> {
+        self.docs.get(id.0).ok_or(Error::UnknownDocument { id })?;
         self.track(id)?;
         self.typing = None;
-        let applied = self.docs[id.0].undo.pop().ok_or(Error::NothingTo("undo"))?;
-        self.docs[id.0]
-            .content_mut()
-            .as_document_mut()
-            .revert(&applied.inverse)?;
-        self.docs[id.0].generation += 1;
-        let of = applied.entry_id.clone();
-        let entry = self.entry(
-            id,
-            self.actor.clone(),
-            Op::Undo { of: of.clone() },
-            OpResult::default(),
-        );
-        if let Err(error) = self.write_undo(id, &entry, &of) {
-            let inverse = self.reexecute(id, &applied)?;
-            self.docs[id.0].generation -= 1;
-            self.docs[id.0].undo.push(Applied { inverse, ..applied });
+        let group = whole
+            .then(|| self.docs[id.0].stack(undo).last().and_then(|a| a.group))
+            .flatten();
+        let mut entries = Vec::new();
+        let mut undone = Vec::new();
+        loop {
+            let Some(applied) = self.docs[id.0].stack(undo).pop() else {
+                if entries.is_empty() {
+                    return Err(Error::NothingTo(if undo { "undo" } else { "redo" }));
+                }
+                break;
+            };
+            let flipped = if undo {
+                self.docs[id.0]
+                    .content_mut()
+                    .as_document_mut()
+                    .revert(&applied.inverse)
+                    .map(|()| None)
+            } else {
+                self.reexecute(id, &applied).map(Some)
+            };
+            let flipped = match flipped {
+                Ok(Some(inverse)) => Applied { inverse, ..applied },
+                Ok(None) => applied,
+                Err(error) => {
+                    self.docs[id.0].stack(undo).push(applied);
+                    self.unstep(id, undo, entries.len())?;
+                    return Err(error);
+                }
+            };
+            self.docs[id.0].generation += 1;
+            let of = flipped.entry_id.clone();
+            let op = if undo {
+                Op::Undo { of: of.clone() }
+            } else {
+                Op::Redo { of: of.clone() }
+            };
+            entries.push(self.entry(id, self.actor.clone(), op, OpResult::default()));
+            undone.push(of);
+            self.docs[id.0].stack(!undo).push(flipped);
+            if group.is_none() || self.docs[id.0].stack(undo).last().and_then(|a| a.group) != group
+            {
+                break;
+            }
+        }
+        if let Err(error) = self.write_steps(id, &entries, &undone) {
+            self.unstep(id, undo, entries.len())?;
             return Err(error);
         }
-        self.docs[id.0].redo.push(applied);
-        Ok(of)
+        Ok(undone.pop().unwrap_or_default())
     }
 
-    pub(super) fn redo_one(&mut self, id: DocId) -> Result<String> {
-        self.track(id)?;
-        self.typing = None;
-        let applied = self.docs[id.0].redo.pop().ok_or(Error::NothingTo("redo"))?;
-        let inverse = self.reexecute(id, &applied)?;
-        self.docs[id.0].generation += 1;
-        let of = applied.entry_id.clone();
-        let entry = self.entry(
-            id,
-            self.actor.clone(),
-            Op::Redo { of: of.clone() },
-            OpResult::default(),
-        );
-        if let Err(error) = self.write_undo(id, &entry, &of) {
-            restore_inverse(self.docs[id.0].content_mut(), &inverse)?;
+    /// Take back the last `count` operations a failed [`Session::step`] moved.
+    fn unstep(&mut self, id: DocId, undo: bool, count: usize) -> Result<()> {
+        for _ in 0..count {
+            let Some(applied) = self.docs[id.0].stack(!undo).pop() else {
+                break;
+            };
+            let applied = if undo {
+                Applied {
+                    inverse: self.reexecute(id, &applied)?,
+                    ..applied
+                }
+            } else {
+                restore_inverse(self.docs[id.0].content_mut(), &applied.inverse)?;
+                applied
+            };
             self.docs[id.0].generation -= 1;
-            self.docs[id.0].redo.push(applied);
-            return Err(error);
+            self.docs[id.0].stack(undo).push(applied);
         }
-        self.docs[id.0].undo.push(Applied { inverse, ..applied });
-        Ok(of)
+        Ok(())
     }
 
-    fn write_undo(&mut self, id: DocId, entry: &LogEntry, of: &str) -> Result<()> {
+    fn write_steps(&mut self, id: DocId, entries: &[LogEntry], undone: &[String]) -> Result<()> {
         let changed = self.source_changed(id);
+        let boundary = self.docs[id.0].recovery_boundary.as_deref();
         if self.log.is_some()
-            && (changed
-                || self.docs[id.0]
-                    .recovery_boundary
-                    .as_deref()
-                    .is_some_and(|boundary| of <= boundary))
+            && (changed || boundary.is_some_and(|b| undone.iter().any(|of| of.as_str() <= b)))
         {
             if let Some(checkpoint) = self.recovery_checkpoint(id)? {
-                self.write_entries(&[entry.clone(), checkpoint.clone()])?;
+                let mut batch = entries.to_vec();
+                batch.push(checkpoint.clone());
+                self.write_entries(&batch)?;
                 self.docs[id.0].recovery_boundary = Some(checkpoint.id);
             } else {
-                self.write(entry)?;
+                self.write_entries(entries)?;
             }
             self.docs[id.0].baseline = None;
             self.refresh_source_stamps(id);
             self.docs[id.0].recovery_changed |= changed;
         } else {
-            self.write(entry)?;
+            self.write_entries(entries)?;
         }
         Ok(())
     }
