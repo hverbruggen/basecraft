@@ -19,9 +19,7 @@ fn fingerprint(path: &Path) -> (u64, String) {
 /// Every retained checkpoint in objects/.
 fn objects(root: &Path) -> BTreeMap<String, (u64, String)> {
     let mut found = BTreeMap::new();
-    let mut pending = vec![
-        root.join(".basecraft/objects"),
-    ];
+    let mut pending = vec![root.join(".basecraft/objects")];
     while let Some(directory) = pending.pop() {
         let Ok(entries) = std::fs::read_dir(&directory) else {
             continue;
@@ -98,9 +96,7 @@ fn repeated_open_with_edits_replays_and_recovers_while_the_original_stays() {
         let source = path.exists().then(|| fingerprint(&path));
         let recovered = parent.path().join("recovered");
         if source_state != "unchanged" {
-            assert!(
-                records::recover(&root, &recovered).map_or(true, |outputs| outputs.is_empty())
-            );
+            assert!(records::recover(&root, &recovered).map_or(true, |outputs| outputs.is_empty()));
             assert_eq!(path.exists().then(|| fingerprint(&path)), source);
             continue;
         }
