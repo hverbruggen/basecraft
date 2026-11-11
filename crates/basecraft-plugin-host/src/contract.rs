@@ -293,13 +293,9 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
         if !valid_name(&descriptor.implementation) {
             return Err(invalid("invalid implementation name"));
         }
-        if descriptor.required_features.iter().any(|f| {
-            f != basecraft_protocol::operation::CONTRACT_CAPABILITY && f != "host-workflow-v1"
-        }) {
-            return Err(invalid("unsupported required host feature"));
-        }
-        if descriptor.credentials.len() > 8
-            || descriptor.credentials.iter().any(|(name, environment)| {
+        let needs = &descriptor.needs;
+        if needs.credentials.len() > 8
+            || needs.credentials.iter().any(|(name, environment)| {
                 !valid_name(name) || !crate::policy::credential_environment(environment)
             })
         {
@@ -321,6 +317,14 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
             {
                 return Err(invalid("input view is incompatible with execution family"));
             }
+            if !binding.alphabets.is_empty()
+                && !matches!(
+                    binding.view,
+                    InputView::AlignedFasta | InputView::UngappedFasta
+                )
+            {
+                return Err(invalid("only alignment inputs declare alphabets"));
+            }
         }
         for (name, binding) in &descriptor.outputs {
             if !valid_name(name)
@@ -330,6 +334,15 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
                 || (!binding.collection && binding.max != 1)
             {
                 return Err(invalid("invalid output binding/cardinality"));
+            }
+            if binding.primary.as_ref().is_some_and(|member| {
+                !binding.collection
+                    || member.is_empty()
+                    || std::path::Path::new(member)
+                        .components()
+                        .any(|part| !matches!(part, std::path::Component::Normal(_)))
+            }) {
+                return Err(invalid("a primary result is a member of a collection"));
             }
         }
         if descriptor.family == ExecutionFamily::SequenceProposal
@@ -367,11 +380,7 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
         {
             return Err(invalid("reserved control parameter"));
         }
-        for cpu in descriptor
-            .cpu_parameter
-            .iter()
-            .chain(&descriptor.cpu_parameters)
-        {
+        for cpu in &needs.cpu_parameters {
             let field = properties
                 .get(cpu)
                 .ok_or_else(|| invalid("CPU binding is not a parameter"))?;
@@ -416,13 +425,6 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
                 return Err(invalid("verified input is not a declared binding"));
             }
             if host
-                .ambient_credentials
-                .iter()
-                .any(|name| !descriptor.credentials.contains_key(name))
-            {
-                return Err(invalid("ambient credential is not declared"));
-            }
-            if host
                 .caller
                 .as_deref()
                 .is_some_and(|caller| caller != "single_trace")
@@ -454,11 +456,7 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
             }
         }
         if let Some(workflow) = &descriptor.host_workflow {
-            let stages = descriptor
-                .host
-                .as_ref()
-                .map(|host| &host.workflow_operations)
-                .ok_or_else(|| invalid("host workflow needs declared stage operations"))?;
+            let stages = &needs.workflow_stages;
             for stage in ["prepare", "fit"]
                 .into_iter()
                 .chain((workflow != "asap_alignment").then_some("tree"))
@@ -483,70 +481,26 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
                 }
             }
         }
-        if let Some(host) = &descriptor.host {
-            for (parameter, setting) in &host.parameter_environment {
-                if !descriptor.parameters["properties"]
-                    .as_object()
-                    .is_some_and(|p| p.contains_key(parameter))
-                    || setting.is_empty()
-                    || !setting
-                        .bytes()
-                        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == b'_')
-                {
-                    return Err(invalid(
-                        "parameter environment must name a declared parameter and environment setting",
-                    ));
-                }
-            }
-            if (host.lifecycle
+        if needs
+            .contact_email
+            .as_ref()
+            .is_some_and(|parameter| !properties.contains_key(parameter))
+        {
+            return Err(invalid(
+                "the contact email need names an undeclared parameter",
+            ));
+        }
+        if let Some(host) = &descriptor.host
+            && ((host.lifecycle
                 == Some(basecraft_protocol::operation::LifecyclePolicy::ExternalSubmission)
                 && host.query_preparation.is_none())
                 || (host.lifecycle
                     == Some(basecraft_protocol::operation::LifecyclePolicy::RetainedReceipt)
-                    && host.retained_query_transformation.is_none())
-            {
-                return Err(invalid(
-                    "submission and retained receipt services require a query preparation transform",
-                ));
-            }
-        }
-        if let Some(adapter) = &descriptor.legacy_adapter {
-            if adapter
-                .inputs
-                .iter()
-                .any(|(role, param)| !descriptor.inputs.contains_key(role) || !valid_name(param))
-                || adapter
-                    .input_arrays
-                    .iter()
-                    .any(|role| !adapter.inputs.contains_key(role))
-            {
-                return Err(invalid("invalid legacy input binding"));
-            }
-            let mut bound = BTreeSet::new();
-            for (param, output) in &adapter.outputs {
-                let binding = descriptor
-                    .outputs
-                    .get(&output.role)
-                    .ok_or_else(|| invalid("undeclared legacy output role"))?;
-                if !valid_name(param)
-                    || !bound.insert(param)
-                    || (output.path != "."
-                        && (!binding.collection
-                            || output.path.is_empty()
-                            || std::path::Path::new(&output.path)
-                                .components()
-                                .any(|p| !matches!(p, std::path::Component::Normal(_)))))
-                {
-                    return Err(invalid("invalid legacy output allocation"));
-                }
-            }
-            if adapter
-                .allocation
-                .as_ref()
-                .is_some_and(|role| !descriptor.outputs.get(role).is_some_and(|b| b.collection))
-            {
-                return Err(invalid("legacy allocation requires a collection output"));
-            }
+                    && host.retained_query_transformation.is_none()))
+        {
+            return Err(invalid(
+                "submission and retained receipt services require a query preparation transform",
+            ));
         }
         BoundedSchema::compile(&descriptor.parameters)?;
         BoundedSchema::compile(&descriptor.result)?;

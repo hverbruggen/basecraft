@@ -746,12 +746,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     schemars::schema_for!(basecraft_protocol::installation_records::Runtime),
                 ),
                 (
-                    "external-execution",
-                    schemars::schema_for!(basecraft_protocol::records::ExternalExecution),
-                ),
-                (
-                    "host-workflow-execution",
-                    schemars::schema_for!(basecraft_protocol::records::HostWorkflowExecution),
+                    "run-record",
+                    schemars::schema_for!(basecraft_protocol::records::RunRecord),
                 ),
                 (
                     "local-job-index",
@@ -878,9 +874,6 @@ fn run_plugin(
         map.insert(k.to_string(), value);
     }
     let manifest = basecraft_plugin_host::Manifest::load(dir)?;
-    if manifest.schema < 2 {
-        return Err("Plugin requires a versioned operation contract (schema 2); migrate/install it before running analyses".into());
-    }
     run_registered_plugin(
         &manifest,
         file,

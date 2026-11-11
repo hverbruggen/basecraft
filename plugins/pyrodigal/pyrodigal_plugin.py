@@ -45,7 +45,7 @@ def cds(start, end, strand, partial_start, partial_end, code, label):
 
 
 @plugin.operation("predict_genes")
-def predict_genes(snapshot, params):
+def predict_genes(snapshot, params, context):
     """Genes on both strands with genetic code `translation_table`,
     optionally only within `start`..`end` (0-based, end exclusive).
     Training uses the whole sequence."""
@@ -97,5 +97,4 @@ def predict_genes(snapshot, params):
 
 
 if __name__ == "__main__":
-    plugin.contract()
     plugin.run()

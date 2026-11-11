@@ -62,45 +62,45 @@ pub struct StoreRegistry {
     pub extra: BTreeMap<String, Value>,
 }
 
-/// External-process `execution.json`, distinct from the runtime outcome and the
-/// host-workflow envelope. No new reader/version gate is implied by this type.
+/// A run folder's `execution.json`: what ran, on what and how. Paths are
+/// relative to the run folder, so the folder can move with its project; an
+/// input outside the folder has a path that starts with `..`. The request
+/// itself, normalised the same way, is the folder's `request.json`.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct ExternalExecution {
+#[serde(deny_unknown_fields)]
+pub struct RunRecord {
     pub schema: u32,
     pub operation: String,
     pub package_version: String,
     pub package_digest: String,
     pub descriptor_digest: String,
-    /// Snapshot of the host's managed-runtime receipt, or explicit null. The
-    /// implementation type is GPL host-owned; protocol must not depend on it.
-    pub runtime: Option<Value>,
-    pub interpreter: Option<PathBuf>,
-    /// Existing caller label, not an `Actor` serialization or a new identity.
+    /// The managed environment the plugin ran in; null for the system Python
+    /// and for host workflows.
+    pub environment: Option<RunEnvironment>,
+    /// Caller label, such as `gui` or `mcp`.
     pub initiator: String,
     pub executor: String,
     pub process_instance: String,
-    pub context: crate::operation::InvocationContext,
-    pub requested_parameters: Value,
+    /// Submitted inputs by binding.
+    pub inputs: BTreeMap<String, Vec<crate::operation::InvocationInputEvidence>>,
     pub effective_parameters: Value,
+    pub cpu_threads: usize,
     pub stdout: String,
     pub stderr: String,
     pub tool: Option<crate::plugin::ToolInfo>,
     pub execution: Option<crate::plugin::ExecutionInfo>,
 }
 
-/// Host-workflow `execution.json`. This explicit shape intentionally has no
-/// external operation, context, stdout/stderr, runtime, interpreter or tool keys.
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct HostWorkflowExecution {
-    pub schema: u32,
-    pub workflow: String,
-    pub initiator: String,
-    pub executor: String,
-    pub requested_parameters: Value,
-    pub effective_parameters: Value,
-    pub package_digest: String,
-    pub descriptor_digest: String,
-    pub process_instance: String,
+pub const RUN_RECORD_SCHEMA: u32 = 2;
+
+/// A managed plugin environment, by content. No paths.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RunEnvironment {
+    pub lock_digest: String,
+    pub manifest_digest: String,
+    pub reported_versions: BTreeMap<String, String>,
+    pub executable_digests: BTreeMap<String, String>,
 }
 
 /// The existing two-field plugin identity in the local index. Neither `Actor`'s

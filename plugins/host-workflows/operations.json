@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "operations": [
     {
       "name": "gmyc_alignment_single",
@@ -87,7 +87,10 @@
           "view": "aligned_fasta",
           "media_type": "text/x-fasta",
           "min": 1,
-          "max": 1
+          "max": 1,
+          "alphabets": [
+            "nucleotide"
+          ]
         }
       },
       "outputs": {
@@ -103,21 +106,19 @@
         "document_write": false,
         "artifact_write": true
       },
-      "cpu_parameters": [
-        "workers"
-      ],
-      "host_workflow": "gmyc_alignment_single",
-      "required_features": [
-        "operation-contract-v1",
-        "host-workflow-v1"
-      ],
-      "host": {
-        "species_workspace": true,
-        "workflow_operations": {
+      "needs": {
+        "workflow_stages": {
           "prepare": "basecraft.delimitation/haplotypes@1",
           "fit": "basecraft.delimitation/gmyc_single@1",
           "tree": "basecraft.distance/tree@1"
-        }
+        },
+        "cpu_parameters": [
+          "workers"
+        ]
+      },
+      "host_workflow": "gmyc_alignment_single",
+      "host": {
+        "species_workspace": true
       }
     },
     {
@@ -210,7 +211,10 @@
           "view": "aligned_fasta",
           "media_type": "text/x-fasta",
           "min": 1,
-          "max": 1
+          "max": 1,
+          "alphabets": [
+            "nucleotide"
+          ]
         }
       },
       "outputs": {
@@ -226,21 +230,19 @@
         "document_write": false,
         "artifact_write": true
       },
-      "cpu_parameters": [
-        "workers"
-      ],
-      "host_workflow": "gmyc_alignment_multiple",
-      "required_features": [
-        "operation-contract-v1",
-        "host-workflow-v1"
-      ],
-      "host": {
-        "species_workspace": true,
-        "workflow_operations": {
+      "needs": {
+        "workflow_stages": {
           "prepare": "basecraft.delimitation/haplotypes@1",
           "fit": "basecraft.delimitation/gmyc_multiple@1",
           "tree": "basecraft.distance/tree@1"
-        }
+        },
+        "cpu_parameters": [
+          "workers"
+        ]
+      },
+      "host_workflow": "gmyc_alignment_multiple",
+      "host": {
+        "species_workspace": true
       }
     },
     {
@@ -330,7 +332,10 @@
           "view": "aligned_fasta",
           "media_type": "text/x-fasta",
           "min": 1,
-          "max": 1
+          "max": 1,
+          "alphabets": [
+            "nucleotide"
+          ]
         }
       },
       "outputs": {
@@ -346,20 +351,18 @@
         "document_write": false,
         "artifact_write": true
       },
-      "cpu_parameters": [
-        "workers"
-      ],
-      "host_workflow": "asap_alignment",
-      "required_features": [
-        "operation-contract-v1",
-        "host-workflow-v1"
-      ],
-      "host": {
-        "species_workspace": true,
-        "workflow_operations": {
+      "needs": {
+        "workflow_stages": {
           "prepare": "basecraft.delimitation/haplotypes@1",
           "fit": "basecraft.delimitation/asap@1"
-        }
+        },
+        "cpu_parameters": [
+          "workers"
+        ]
+      },
+      "host_workflow": "asap_alignment",
+      "host": {
+        "species_workspace": true
       }
     }
   ]

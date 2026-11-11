@@ -219,11 +219,36 @@ def failure_report(method, params, error, artifacts=()):
     os.replace(temporary, str(target) + ".run.json")
 
 
+def file_parameters(params, context):
+    """The engine's file parameters from the host's allocation. The primary
+    input is the tree, imported partitions or alignment; a second alignment,
+    when bound, is the full alignment behind a representative input."""
+    primary = next(name for name in ("tree", "partitions", "alignment") if context.input(name))
+    artifacts = context.output("artifacts")
+    values = dict(params, input=context.input(primary), output=context.output("artifacts", "result.json"),
+                  job_id=context.run_id, cancel_file=context.cancel_file, progress=context.progress_file,
+                  analysis_artifacts={"metadata_directory": artifacts, "working_directory": artifacts,
+                                      "run_id": context.run_id})
+    for binding in ("mapping", "groups"):
+        if path := context.input(binding):
+            values[binding] = path
+    source = context.source(primary)
+    if source.get("path"):
+        values.update(original_source=source["path"], input_evidence=source)
+    full = "full_alignment" if primary == "alignment" else "alignment"
+    if snapshot := context.input(full):
+        values["alignment_snapshot"] = snapshot
+        if records := context.evidence.get(full):
+            values["alignment_input_hash"] = records[0]["submitted_hash"]
+            values["alignment_evidence"] = dict(records[0], path=records[0].get("original_path") or snapshot)
+    return values
+
+
 for _method in METHODS:
     def register(method):
         @plugin.operation(method)
-        def operation(snapshot, params):
-            params = dict(params, job_id=params.get("job_id") or str(uuid.uuid4()))
+        def operation(snapshot, params, context):
+            params = file_parameters(params, context)
             try:
                 if method in ("gmyc_single", "gmyc_multiple", "gmyc_exhaustive", "ptp", "mptp") and params.get("deduplicate") and not params.get("alignment_snapshot"):
                     raise ValueError("Tree-only deduplication requires verified alignment evidence and a representative tree; use alignment GMYC/ASAP or prepare a representative tree and mapping first. No tips were removed.")
@@ -255,15 +280,14 @@ for _method in METHODS:
 
 
 
-@plugin.operation("engines")
-def engines(snapshot, params):
+@plugin.query("engines")
+def engines():
     """External engines this installation can run: null when ready, else why not.
     ASAP is native to basecraft-delimitation, so it needs no external engine."""
     from mptp_adapter import engine_problem as mptp_problem
     mptp = mptp_problem()
-    return {"message": json.dumps({"asap": None, "ptp": mptp, "mptp": mptp})}
+    return {"asap": None, "ptp": mptp, "mptp": mptp}
 
 
 if __name__ == "__main__":
-    plugin.contract()
     plugin.run()

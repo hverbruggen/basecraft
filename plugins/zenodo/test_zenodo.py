@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import zenodo_plugin as z
+from basecraft.plugin import local_context
 
 
 class Zenodo(unittest.TestCase):
@@ -17,12 +18,11 @@ class Zenodo(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.file = self.root / "a file.fa"
         self.file.write_bytes(b">synthetic\nACGT\n")
-        self.context = {"inputs": {"files": [str(self.file)]}, "input_evidence": {"files": [{"original_path": str(self.file)}]},
-                        "outputs": {"receipt": str(self.root / "selection.json")},
-                        "cancel_file": str(self.root / "cancel"), "progress_file": str(self.root / "progress")}
+        self.context = local_context(self.root, {"files": [str(self.file)]}, {"receipt": "selection.json"})
+        self.context.evidence = {"files": [{"original_path": str(self.file)}]}
         self.plan = z.prepare(self.context)["data"]
-        self.context["inputs"]["selection"] = [self.context["outputs"]["receipt"]]
-        self.context["outputs"]["receipt"] = str(self.root / "draft.json")
+        self.context.inputs["selection"] = [self.context.outputs["receipt"]]
+        self.context.outputs["receipt"] = str(self.root / "draft.json")
         self.parameters = {"title": "Synthetic dataset", "description": "Transport fixture only", "creators": "Example, A.",
                            "license": "cc-by-4.0", "service": "sandbox", "access_right": "open"}
         self.calls = []
@@ -51,11 +51,11 @@ class Zenodo(unittest.TestCase):
         return z.upload(self.parameters, self.context, transport or self.transport, "private-test-token")["data"]
 
     def resume(self):
-        self.context["inputs"]["resume"] = [self.context["outputs"]["receipt"]]
+        self.context.inputs["resume"] = [self.context.outputs["receipt"]]
         # Runner freezes resume input before allocating next output.
         previous = self.root / "previous.json"
-        previous.write_bytes(Path(self.context["outputs"]["receipt"]).read_bytes())
-        self.context["inputs"]["resume"] = [str(previous)]
+        previous.write_bytes(Path(self.context.outputs["receipt"]).read_bytes())
+        self.context.inputs["resume"] = [str(previous)]
 
     def test_documented_create_and_raw_object_put_never_publish(self):
         data = self.upload()
@@ -64,7 +64,7 @@ class Zenodo(unittest.TestCase):
         self.assertEqual(data["draft_id"], 123)
         self.assertEqual(data["url"], "https://sandbox.zenodo.org/deposit/123")
         self.assertNotIn("doi", data)
-        self.assertNotIn("private-test-token", Path(self.context["outputs"]["receipt"]).read_text())
+        self.assertNotIn("private-test-token", Path(self.context.outputs["receipt"]).read_text())
         self.assertNotIn("actions/publish", json.dumps(self.calls))
 
     def test_retry_checks_same_draft_and_skips_verified_uploaded_bytes(self):
@@ -169,14 +169,14 @@ class Zenodo(unittest.TestCase):
         self.assertEqual([c[0] for c in self.calls], ["POST"])
 
     def test_cancellation_before_and_after_creation(self):
-        Path(self.context["cancel_file"]).touch()
+        Path(self.context.cancel_file).touch()
         with self.assertRaises(z.Cancelled):
             self.upload()
         self.assertEqual(self.calls, [])
-        Path(self.context["cancel_file"]).unlink()
+        Path(self.context.cancel_file).unlink()
         def cancel_after_create(*args, **kwargs):
             response = self.transport(*args, **kwargs)
-            Path(self.context["cancel_file"]).touch()
+            Path(self.context.cancel_file).touch()
             return response
         receipt = self.upload(cancel_after_create)
         self.assertEqual(receipt["draft_id"], 123)
@@ -193,8 +193,8 @@ class Zenodo(unittest.TestCase):
             z.metadata({**self.parameters, "access_right": "restricted"})
 
     def test_duplicate_filename_rejected(self):
-        self.context["inputs"]["files"] *= 2
-        self.context["input_evidence"]["files"] *= 2
+        self.context.inputs["files"] *= 2
+        self.context.evidence["files"] *= 2
         with self.assertRaisesRegex(ValueError, "distinct"):
             z.prepare(self.context)
 

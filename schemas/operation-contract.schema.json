@@ -21,11 +21,25 @@
     "operations"
   ],
   "$defs": {
+    "Alphabet": {
+      "type": "string",
+      "enum": [
+        "nucleotide",
+        "protein"
+      ]
+    },
     "ArtifactVisibility": {
       "type": "string",
       "enum": [
         "result",
         "supporting"
+      ]
+    },
+    "BranchLengths": {
+      "type": "string",
+      "enum": [
+        "substitutions",
+        "time"
       ]
     },
     "Effects": {
@@ -54,13 +68,6 @@
     "HostServices": {
       "type": "object",
       "properties": {
-        "ambient_credentials": {
-          "description": "Ambient credentials are supplied only to bundled packages. Installed\npackages still need an explicit grant bound to their accepted digests.",
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
         "bootstrap_exports": {
           "type": "boolean"
         },
@@ -87,13 +94,6 @@
               "type": "null"
             }
           ]
-        },
-        "parameter_environment": {
-          "description": "Bundled operations may obtain a missing parameter from a named environment setting.",
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
         },
         "query_preparation": {
           "anyOf": [
@@ -125,13 +125,6 @@
           "items": {
             "type": "string"
           }
-        },
-        "workflow_operations": {
-          "description": "Workflow stage name -> registered operation id, including major version.",
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
         }
       },
       "additionalProperties": false
@@ -139,6 +132,13 @@
     "InputBinding": {
       "type": "object",
       "properties": {
+        "alphabets": {
+          "description": "Residue alphabets the operation accepts. Empty accepts any. The host\nrefuses other alignments before launch.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Alphabet"
+          }
+        },
         "max": {
           "type": "integer",
           "format": "uint",
@@ -178,67 +178,6 @@
         "sequence_snapshot"
       ]
     },
-    "LegacyAdapter": {
-      "type": "object",
-      "properties": {
-        "allocation": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "input_arrays": {
-          "type": "array",
-          "default": [],
-          "items": {
-            "type": "string"
-          }
-        },
-        "inputs": {
-          "description": "Named input binding -> legacy handler parameter.",
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
-        },
-        "outputs": {
-          "description": "Legacy output parameter -> allocated role and relative member.",
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/$defs/LegacyOutput"
-          }
-        },
-        "primary_input": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "inputs",
-        "outputs"
-      ]
-    },
-    "LegacyOutput": {
-      "type": "object",
-      "properties": {
-        "path": {
-          "type": "string"
-        },
-        "role": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "role",
-        "path"
-      ]
-    },
     "LifecyclePolicy": {
       "type": "string",
       "enum": [
@@ -247,28 +186,44 @@
         "remote_draft"
       ]
     },
-    "OperationDescriptor": {
+    "Needs": {
+      "description": "What an operation needs from the host besides its inputs.",
       "type": "object",
       "properties": {
-        "cpu_parameter": {
+        "contact_email": {
+          "description": "Parameter the host fills with the user's contact email when the caller\nleaves it out.",
           "type": [
             "string",
             "null"
           ]
         },
         "cpu_parameters": {
+          "description": "Parameters that receive the CPU threads granted to the run.",
           "type": "array",
           "items": {
             "type": "string"
           }
         },
         "credentials": {
-          "description": "Logical credential name -> reserved runtime environment variable. This\ndeclares a need, never permission; host grants bind exact accepted code.",
+          "description": "Credential name -> environment variable the plugin reads. A need, never\npermission: an installed package needs a grant bound to its digest; a\nbundled package receives the credential from the user's environment.",
           "type": "object",
           "additionalProperties": {
             "type": "string"
           }
         },
+        "workflow_stages": {
+          "description": "Workflow stage name -> registered operation id, including major version.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "OperationDescriptor": {
+      "type": "object",
+      "properties": {
         "description": {
           "type": "string"
         },
@@ -279,7 +234,7 @@
           "$ref": "#/$defs/ExecutionFamily"
         },
         "host": {
-          "description": "Host services selected by this contract, available to any accepted plugin.",
+          "description": "Services the host runs around a bundled plugin.",
           "anyOf": [
             {
               "$ref": "#/$defs/HostServices"
@@ -290,6 +245,7 @@
           ]
         },
         "host_workflow": {
+          "description": "A workflow the host runs itself from the stages in `needs`.",
           "type": [
             "string",
             "null"
@@ -305,19 +261,11 @@
           },
           "default": {}
         },
-        "legacy_adapter": {
-          "description": "Explicit migration of a public two-argument SDK handler. Runtime controls\ncome only from the allocated context; scientific callers cannot set them.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/LegacyAdapter"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "name": {
           "type": "string"
+        },
+        "needs": {
+          "$ref": "#/$defs/Needs"
         },
         "outputs": {
           "type": "object",
@@ -332,13 +280,6 @@
             "string",
             "null"
           ]
-        },
-        "required_features": {
-          "type": "array",
-          "default": [],
-          "items": {
-            "type": "string"
-          }
         },
         "result": true,
         "title": {
@@ -370,6 +311,10 @@
           "type": "boolean",
           "default": false
         },
+        "facts": {
+          "description": "Facts the host writes into the result's companion file.",
+          "$ref": "#/$defs/OutputFacts"
+        },
         "max": {
           "type": "integer",
           "format": "uint",
@@ -383,6 +328,13 @@
           "format": "uint",
           "minimum": 0
         },
+        "primary": {
+          "description": "The collection member that holds the main result, such as `tree.nwk`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "visibility": {
           "$ref": "#/$defs/ArtifactVisibility"
         }
@@ -394,6 +346,33 @@
         "max",
         "visibility"
       ]
+    },
+    "OutputFacts": {
+      "description": "Facts an output declares about itself. The host writes them into the\nresult's companion file (lane facts' writer, once it exists).",
+      "type": "object",
+      "properties": {
+        "alphabet": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Alphabet"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "branch_lengths": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BranchLengths"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "ParameterCondition": {
       "oneOf": [

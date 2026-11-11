@@ -1,16 +1,29 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "ExternalExecution",
-  "description": "External-process `execution.json`, distinct from the runtime outcome and the\nhost-workflow envelope. No new reader/version gate is implied by this type.",
+  "title": "RunRecord",
+  "description": "A run folder's `execution.json`: what ran, on what and how. Paths are\nrelative to the run folder, so the folder can move with its project; an\ninput outside the folder has a path that starts with `..`. The request\nitself, normalised the same way, is the folder's `request.json`.",
   "type": "object",
   "properties": {
-    "context": {
-      "$ref": "#/$defs/InvocationContext"
+    "cpu_threads": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
     },
     "descriptor_digest": {
       "type": "string"
     },
     "effective_parameters": true,
+    "environment": {
+      "description": "The managed environment the plugin ran in; null for the system Python\nand for host workflows.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RunEnvironment"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "execution": {
       "anyOf": [
         {
@@ -25,14 +38,18 @@
       "type": "string"
     },
     "initiator": {
-      "description": "Existing caller label, not an `Actor` serialization or a new identity.",
+      "description": "Caller label, such as `gui` or `mcp`.",
       "type": "string"
     },
-    "interpreter": {
-      "type": [
-        "string",
-        "null"
-      ]
+    "inputs": {
+      "description": "Submitted inputs by binding.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/InvocationInputEvidence"
+        }
+      }
     },
     "operation": {
       "type": "string"
@@ -45,10 +62,6 @@
     },
     "process_instance": {
       "type": "string"
-    },
-    "requested_parameters": true,
-    "runtime": {
-      "description": "Snapshot of the host's managed-runtime receipt, or explicit null. The\nimplementation type is GPL host-owned; protocol must not depend on it."
     },
     "schema": {
       "type": "integer",
@@ -72,6 +85,7 @@
       ]
     }
   },
+  "additionalProperties": false,
   "required": [
     "schema",
     "operation",
@@ -81,9 +95,9 @@
     "initiator",
     "executor",
     "process_instance",
-    "context",
-    "requested_parameters",
+    "inputs",
     "effective_parameters",
+    "cpu_threads",
     "stdout",
     "stderr"
   ],
@@ -140,76 +154,8 @@
         "argv"
       ]
     },
-    "InvocationContext": {
-      "description": "Host-owned wire context, sent only after capability negotiation.",
-      "type": "object",
-      "properties": {
-        "cancel_file": {
-          "type": "string"
-        },
-        "cpu_threads": {
-          "type": "integer",
-          "format": "uint",
-          "minimum": 0
-        },
-        "input_evidence": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/InvocationInputEvidence"
-            }
-          },
-          "default": {}
-        },
-        "inputs": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        },
-        "legacy_parameters": {
-          "description": "Host-owned legacy compatibility metadata, never caller parameters.",
-          "type": "object",
-          "additionalProperties": true
-        },
-        "operation": {
-          "type": "string"
-        },
-        "outputs": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
-        },
-        "progress_file": {
-          "type": "string"
-        },
-        "run_id": {
-          "type": "string"
-        },
-        "schema": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "schema",
-        "operation",
-        "run_id",
-        "inputs",
-        "outputs",
-        "cpu_threads",
-        "cancel_file",
-        "progress_file"
-      ]
-    },
     "InvocationInputEvidence": {
+      "description": "Where a submitted input came from. Paths are relative to the run folder.",
       "type": "object",
       "properties": {
         "original_path": {
@@ -257,6 +203,37 @@
       },
       "required": [
         "description"
+      ]
+    },
+    "RunEnvironment": {
+      "description": "A managed plugin environment, by content. No paths.",
+      "type": "object",
+      "properties": {
+        "executable_digests": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "lock_digest": {
+          "type": "string"
+        },
+        "manifest_digest": {
+          "type": "string"
+        },
+        "reported_versions": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "lock_digest",
+        "manifest_digest",
+        "reported_versions",
+        "executable_digests"
       ]
     },
     "ToolInfo": {

@@ -16,22 +16,22 @@ import json, os, time
 from pathlib import Path
 from basecraft.plugin import Plugin
 plugin = Plugin('basecraft.blast','0.1.0')
-@plugin.context_operation('submit')
+@plugin.operation('submit')
 def submit(snapshot,params,context):
-    plan=json.loads(Path(context['inputs']['queries'][0]).read_text())
+    plan=json.loads(Path(context.inputs['queries'][0]).read_text())
     mode=plan['records'][0]['name']
     receipt=dict(schema=1,status='accepted',rid='ABCD1234567',url='https://blast.ncbi.nlm.nih.gov/Blast.cgi?CMD=Get&RID=ABCD1234567&FORMAT_TYPE=HTML',query_hash=plan['query_hash'],approval_hash=plan['approval_hash'],program=plan['program'],database=plan['database'],submitted_residues=plan['submitted_residues'],plan={k:v for k,v in plan.items() if k!='fasta'},request_fields={},submitted_at='synthetic',message='Submitted (mock)')
-    output=Path(context['outputs']['receipt'])
+    output=Path(context.outputs['receipt'])
     output.write_text(json.dumps(receipt))
-    Path(context['progress_file']).write_text('accepted')
+    Path(context.progress_file).write_text('accepted')
     if mode=='cancel':
         until=time.monotonic()+5
-        while not Path(context['cancel_file']).exists() and time.monotonic()<until: time.sleep(.01)
+        while not Path(context.cancel_file).exists() and time.monotonic()<until: time.sleep(.01)
     if mode=='crash': os._exit(17)
     if mode=='malformed': output.write_text('{bad receipt'); os._exit(18)
     if mode=='bad_identity': receipt['query_hash']='changed'; output.write_text(json.dumps(receipt))
     return dict(ops=[],data=receipt,artifacts=[dict(role='receipt',path='.')])
-@plugin.context_operation('receipt')
+@plugin.operation('receipt')
 def receipt(snapshot,params,context): return dict(ops=[],data=None)
 plugin.run()
 ";

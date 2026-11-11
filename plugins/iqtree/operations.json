@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "operations": [
     {
       "name": "tree",
@@ -89,29 +89,18 @@
           "min": 1,
           "max": 1024,
           "visibility": "result",
-          "collection": true
+          "collection": true,
+          "primary": "tree.nwk"
         }
       },
       "effects": {
         "document_write": false,
         "artifact_write": true
       },
-      "cpu_parameters": [
-        "threads"
-      ],
-      "legacy_adapter": {
-        "primary_input": "alignment",
-        "inputs": {
-          "alignment": "input"
-        },
-        "input_arrays": [],
-        "outputs": {
-          "output": {
-            "role": "artifacts",
-            "path": "tree.nwk"
-          }
-        },
-        "allocation": "artifacts"
+      "needs": {
+        "cpu_parameters": [
+          "threads"
+        ]
       },
       "host": {
         "tree_support": [

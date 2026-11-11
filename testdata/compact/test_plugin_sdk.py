@@ -1,5 +1,6 @@
-"""Public SDK negotiation tests; no core implementation imports."""
+"""Public SDK tests; no core implementation imports."""
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -7,76 +8,58 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "python/src"))
 from basecraft.plugin import Plugin  # noqa: E402
 
 
+def context(root, **fields):
+    return {"schema": 2, "operation": "org.example.sdk/run@1", "run_id": "owned", "run_root": str(root),
+            "inputs": {}, "outputs": {}, "cpu_threads": 3, "cancel_file": "cancel",
+            "progress_file": "progress", **fields}
+
+
 class PluginContextTests(unittest.TestCase):
-    def test_legacy_handlers_remain_two_argument_and_context_is_opt_in(self):
-        plugin = Plugin("org.example.legacy", "1.0.0")
-
-        @plugin.operation("old")
-        def old(snapshot, parameters):
-            self.assertIsNone(snapshot)
-            return {"message": str(parameters["n"])}
-
-        self.assertEqual(plugin._dispatch("initialize", {}, [])["capabilities"], [])
-        self.assertEqual(
-            plugin._dispatch("invoke", {"operation": "old", "params": {"n": 4}}, []),
-            {"message": "4"},
-        )
-        with self.assertRaises(ValueError):
-            plugin._dispatch("invoke", {"operation": "old", "context": {"schema": 1}}, [])
-
-    def test_context_handlers_require_version_and_receive_unchanged_parameters(self):
-        plugin = Plugin("org.example.context", "1.0.0")
-
-        @plugin.context_operation("new")
-        def new(snapshot, parameters, context):
-            self.assertIsNone(snapshot)
-            self.assertEqual(parameters, {"count": True})
-            self.assertEqual(context, {"schema": 1, "cpu_threads": 3})
-            return {"data": {"ok": True}}
-
-        info = plugin._dispatch("initialize", {}, [])
-        self.assertEqual(info["operations"], ["new"])
-        self.assertEqual(info["capabilities"], ["operation-contract-v1"])
-        request = {"operation": "new", "params": {"count": True}}
-        with self.assertRaises(ValueError):
-            plugin._dispatch("invoke", request, [])
-        request["context"] = {"schema": 1, "cpu_threads": 3}
-        self.assertEqual(plugin._dispatch("invoke", request, []), {"data": {"ok": True}})
-        with self.assertRaises(ValueError):
-            plugin.operation("new")(lambda _snapshot, _parameters: None)
-
-    def test_declared_legacy_adapter_preserves_controls_and_allocated_collections(self):
-        import json
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as directory:
+    def test_handlers_receive_parameters_and_paths_resolved_against_the_run_folder(self):
+        plugin = Plugin("org.example.sdk", "1.0.0")
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as elsewhere:
             root = Path(directory)
-            output = root / "outputs"
-            output.mkdir()
-            contract = root / "operations.json"
-            contract.write_text(json.dumps({"schema": 1, "operations": [{
-                "implementation": "old", "legacy_adapter": {
-                    "primary_input": "source", "inputs": {"source": "input"},
-                    "outputs": {"output": {"role": "artifacts", "path": "result.txt"}},
-                    "allocation": "artifacts",
-                },
-            }]}))
-            plugin = Plugin("org.example.adapter", "1.0.0")
+            (root / "pending").mkdir()
+            external = Path(elsewhere) / "input.fa"
 
-            @plugin.operation("old")
-            def old(_snapshot, parameters):
-                self.assertEqual(parameters["count"], 3)
-                self.assertEqual(parameters["input"], str(root / "source"))
-                target = Path(parameters["output"])
-                target.write_text("exact result")
-                target.with_suffix(".log").write_text("diagnostic")
-                return {"outputs": [str(target)], "ops": []}
+            @plugin.operation("run")
+            def run(snapshot, parameters, ctx):
+                self.assertIsNone(snapshot)
+                self.assertEqual(parameters, {"count": True})
+                self.assertEqual(ctx.threads, 3)
+                self.assertEqual(ctx.input("source"), str(external))
+                self.assertEqual(ctx.cancel_file, str(root / "cancel"))
+                self.assertEqual(ctx.source("source")["path"], str(external))
+                Path(ctx.output("artifacts", "result.txt")).write_text("exact result")
+                Path(ctx.output("artifacts", "logs/run.log")).write_text("diagnostic")
+                return {"data": {"ok": True}}
 
-            plugin.contract(contract)
-            self.assertEqual(plugin._dispatch("initialize", {}, [])["capabilities"], ["operation-contract-v1"])
-            context = {"schema": 1, "inputs": {"source": [str(root / "source")]},
-                       "outputs": {"artifacts": str(output)}, "run_id": "owned",
-                       "cancel_file": str(root / "cancel"), "progress_file": str(root / "progress")}
-            result = plugin._dispatch("invoke", {"operation": "old", "params": {"count": 3}, "context": context}, [])
-            self.assertEqual(result["artifacts"], [{"role": "artifacts", "path": "result.log"}, {"role": "artifacts", "path": "result.txt"}])
-            self.assertIsNone(result["data"])
+            info = plugin._dispatch("initialize", {}, [])
+            self.assertEqual(info, {"protocol": 2, "id": "org.example.sdk", "version": "1.0.0", "operations": ["run"]})
+            raw = context(root, inputs={"source": [str(external)]}, outputs={"artifacts": "pending"},
+                          input_evidence={"source": [{"original_path": str(external), "source_hash": "b3:x",
+                                                      "submitted_hash": "b3:x", "transformation": "identity-v1",
+                                                      "run_directory": "."}]})
+            result = plugin._dispatch("invoke", {"operation": "run", "params": {"count": True}, "context": raw}, [])
+            self.assertEqual(result["data"], {"ok": True})
+            self.assertEqual(result["artifacts"], [{"role": "artifacts", "path": "logs/run.log"},
+                                                   {"role": "artifacts", "path": "result.txt"}])
+
+    def test_a_call_without_a_schema_two_context_is_refused(self):
+        plugin = Plugin("org.example.sdk", "1.0.0")
+        plugin.operation("run")(lambda _snapshot, _parameters, _context: None)
+        for request in ({"operation": "run"}, {"operation": "run", "context": {"schema": 1}}):
+            with self.subTest(request=request), self.assertRaises((KeyError, ValueError)):
+                plugin._dispatch("invoke", request, [])
+        with self.assertRaises(ValueError):
+            plugin.operation("run")(lambda _snapshot, _parameters, _context: None)
+
+    def test_queries_take_no_inputs(self):
+        plugin = Plugin("org.example.sdk", "1.0.0")
+        plugin.query("engines")(lambda: {"engine": None})
+        self.assertEqual(plugin._dispatch("query", {"name": "engines"}, []), {"engine": None})
+        self.assertEqual(plugin._dispatch("initialize", {}, [])["operations"], [])
+
+
+if __name__ == "__main__":
+    unittest.main()

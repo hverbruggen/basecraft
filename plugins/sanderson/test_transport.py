@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "python" / "src"))
 
+from basecraft.plugin import local_context
 from plugin import _parameters, date_tree
 from tree import labeled_newick, parse
 
@@ -36,8 +37,8 @@ class TransportTests(unittest.TestCase):
             source = root / "input.nwk"
             source.write_text("(('A B':0.011,C:0.012)Clade:0.021,D:0.03)Root;\n")
             chrono, report = root / "chrono.nwk", root / "report.json"
-            context = {"inputs": {"tree": [str(source)]},
-                       "outputs": {"chronogram": str(chrono), "report": str(report)}}
+            context = local_context(root, {"tree": [str(source)]},
+                                    {"chronogram": "chrono.nwk", "report": "report.json"})
             parameters = {"branch_units": "substitutions_per_site", "sites": 953,
                           "root_age": 1, "time_unit": "relative units", "penalty": "log",
                           "lambda": 2, "starts": 2, "seed": 7,
@@ -62,8 +63,8 @@ class TransportTests(unittest.TestCase):
             source = root / "input.nwk"
             source.write_text("((A:0.1,B:0.2):0.3,C:0.4);")
             chrono, report = root / "chrono.nwk", root / "report.json"
-            context = {"inputs": {"tree": [str(source)]},
-                       "outputs": {"chronogram": str(chrono), "report": str(report)}}
+            context = local_context(root, {"tree": [str(source)]},
+                                    {"chronogram": "chrono.nwk", "report": "report.json"})
             parameters = {"branch_units": "substitution_counts", "sites": 100,
                           "root_age": 1, "time_unit": "relative units", "penalty": "add", "lambda": 1}
             truncated = {"ages": [1, 0.5], "rates_per_site": [None, 1],

@@ -6,7 +6,7 @@ from basecraft.plugin import Plugin, feature
 plugin = Plugin("org.example.registry-sequence", "1.0.0")
 
 
-@plugin.context_operation("annotate")
+@plugin.operation("annotate")
 def annotate(snapshot, parameters, _context):
     if parameters["slow"]:
         time.sleep(0.2)

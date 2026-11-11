@@ -22,6 +22,15 @@ plugin = Plugin("basecraft.iqtree", "0.1.0")
 
 
 @plugin.operation("tree")
+def tree_operation(snapshot, params, context):
+    artifacts = context.output("artifacts")
+    return tree(snapshot, dict(params, input=context.input("alignment"),
+                               output=context.output("artifacts", "tree.nwk"),
+                               cancel_file=context.cancel_file,
+                               analysis_artifacts={"run_id": context.run_id, "metadata_directory": artifacts,
+                                                   "working_directory": artifacts}))
+
+
 def tree(snapshot, params):
     source, target = Path(params["input"]).resolve(), Path(params["output"]).resolve()
     if source == target:
@@ -172,5 +181,4 @@ def tree(snapshot, params):
 
 
 if __name__ == "__main__":
-    plugin.contract()
     plugin.run()

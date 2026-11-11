@@ -196,7 +196,6 @@ impl Lifecycle {
             || data["database"] != plan["database"]
             || data["submitted_residues"] != plan["submitted_residues"]
             || !result.ops.is_empty()
-            || !result.outputs.is_empty()
             || result.artifacts.len() != 1
             || result.artifacts[0].role != "receipt"
             || result.artifacts[0].path != "."

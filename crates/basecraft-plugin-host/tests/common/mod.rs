@@ -259,18 +259,14 @@ from pathlib import Path
 from basecraft.plugin import Plugin
 plugin = Plugin('basecraft.mafft', 'test')
 @plugin.operation('align')
-def align(snapshot, params):
-    allocation = params['analysis_artifacts']
-    root = Path(allocation['metadata_directory'])
+def align(snapshot, params, context):
+    root = Path(context.output('artifacts'))
     assert root.is_absolute() and root.is_dir()
-    assert Path(allocation['working_directory']).is_absolute()
-    assert allocation['run_id'] == params['job_id']
-    source, target = Path(params['input']), Path(params['output'])
-    target.write_bytes(source.read_bytes())
-    receipt = root / 'sdk-allocation.json'
-    receipt.write_text(json.dumps(allocation))
-    return {'ops': [], 'outputs': [str(target), str(receipt)]}
-plugin.contract()
+    source = Path(context.input('alignment'))
+    Path(context.output('artifacts', 'alignment.afa')).write_bytes(source.read_bytes())
+    allocation = {'metadata_directory': str(root), 'working_directory': str(root), 'run_id': context.run_id}
+    (root / 'sdk-allocation.json').write_text(json.dumps(allocation))
+    return {'ops': []}
 plugin.run()
 ";
 

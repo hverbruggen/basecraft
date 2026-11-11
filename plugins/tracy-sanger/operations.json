@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "operations": [
     {
       "name": "consensus",
@@ -58,23 +58,6 @@
         "document_write": false,
         "artifact_write": true
       },
-      "cpu_parameters": [],
-      "legacy_adapter": {
-        "primary_input": "reads",
-        "inputs": {
-          "reads": "reads"
-        },
-        "input_arrays": [
-          "reads"
-        ],
-        "outputs": {
-          "output": {
-            "role": "artifacts",
-            "path": "."
-          }
-        },
-        "allocation": null
-      },
       "host": {
         "caller": "single_trace",
         "caller_engine": "tracy"
@@ -114,27 +97,13 @@
           "min": 1,
           "max": 1024,
           "visibility": "result",
-          "collection": true
+          "collection": true,
+          "primary": "calls.json"
         }
       },
       "effects": {
         "document_write": false,
         "artifact_write": true
-      },
-      "cpu_parameters": [],
-      "legacy_adapter": {
-        "primary_input": "read",
-        "inputs": {
-          "read": "read"
-        },
-        "input_arrays": [],
-        "outputs": {
-          "output": {
-            "role": "artifacts",
-            "path": "calls.json"
-          }
-        },
-        "allocation": null
       }
     },
     {
@@ -185,25 +154,13 @@
           "min": 1,
           "max": 1024,
           "visibility": "result",
-          "collection": true
+          "collection": true,
+          "primary": "primers.json"
         }
       },
       "effects": {
         "document_write": false,
         "artifact_write": true
-      },
-      "cpu_parameters": [],
-      "legacy_adapter": {
-        "primary_input": null,
-        "inputs": {},
-        "input_arrays": [],
-        "outputs": {
-          "output": {
-            "role": "artifacts",
-            "path": "primers.json"
-          }
-        },
-        "allocation": null
       }
     }
   ]

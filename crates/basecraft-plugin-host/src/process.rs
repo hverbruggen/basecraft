@@ -29,20 +29,16 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 
 pub struct PluginProcess {
     pub info: PluginInfo,
-    manifest: Manifest,
-    contract: Option<basecraft_protocol::operation::OperationContract>,
     /// Time from spawning to the `initialize` reply.
     pub startup: Duration,
     child: OwnedProcess,
     cancelled: Option<Arc<AtomicBool>>,
-    cancel_path: Option<PathBuf>,
     deadline: Option<Instant>,
     capture: Arc<Mutex<CapturedOutput>>,
     capture_workers: Vec<std::thread::JoinHandle<()>>,
     stopped: bool,
     rx: Receiver,
     next_id: u64,
-    cpu_budget: usize,
     credentials: crate::policy::RuntimeCredentials,
     _socket_dir: tempfile::TempDir,
 }
@@ -132,7 +128,6 @@ impl PluginProcess {
             .transpose()?;
         let started = Instant::now();
         let script = manifest.python_entry()?.canonicalize()?;
-        let contract = manifest.operation_contract()?;
         let dir = tempfile::Builder::new()
             .prefix("basecraft-plugin")
             .tempdir()?;
@@ -148,7 +143,7 @@ impl PluginProcess {
         let mut command = Command::new(python);
         crate::runtime::configure_command(&mut command, manifest, python)?;
         // Ambient credentials are input to host providers, never implicit grants
-        // to child code (including legacy/direct spawn and initialization).
+        // to child code, including during initialization.
         for (name, _) in std::env::vars_os() {
             if name.to_str().is_some_and(|name| {
                 crate::policy::credential_environment(&name.to_ascii_uppercase())
@@ -267,19 +262,15 @@ impl PluginProcess {
         stream.set_read_timeout(Some(Duration::from_millis(100)))?;
         stream.set_write_timeout(Some(Duration::from_millis(500)))?;
         let mut p = Self {
-            manifest: manifest.clone(),
-            contract,
             info: PluginInfo {
                 protocol: 0,
                 id: manifest.id.clone(),
                 version: manifest.version.clone(),
                 operations: Vec::new(),
-                capabilities: Vec::new(),
             },
             startup: Duration::ZERO,
             child,
             cancelled: None,
-            cancel_path: None,
             deadline: Some(started + CONNECT_TIMEOUT),
             capture,
             capture_workers,
@@ -290,7 +281,6 @@ impl PluginProcess {
                 basecraft_protocol::operation::MAX_FDS,
             ),
             next_id: 1,
-            cpu_budget,
             credentials: credentials.clone(),
             _socket_dir: dir,
         };
@@ -342,9 +332,6 @@ impl PluginProcess {
             self.rx.stream().write_all(&line)?;
         }
         let reply = loop {
-            if self.cancel_path.as_ref().is_some_and(|path| path.exists()) {
-                return Err(Error::Protocol("cancelled".into()));
-            }
             if self
                 .cancelled
                 .as_ref()
@@ -371,11 +358,7 @@ impl PluginProcess {
             let cancelled = self.cancelled.clone();
             let deadline = self.deadline;
             let capture = self.capture.clone();
-            let cancel_path = self.cancel_path.clone();
             match self.rx.line_checked(|| {
-                if cancel_path.as_ref().is_some_and(|path| path.exists()) {
-                    return Err(std::io::Error::other("cancelled"));
-                }
                 if cancelled
                     .as_ref()
                     .is_some_and(|flag| flag.load(Ordering::Acquire))
@@ -437,125 +420,15 @@ impl PluginProcess {
         self.call("ping", Value::Null, &[]).map(|_| ())
     }
 
-    /// Run one of the plugin's operations, on a snapshot if given.
+    /// Run one of the plugin's operations in the run the host allocated, on a
+    /// snapshot if given.
     pub fn invoke(
-        &mut self,
-        operation: &str,
-        params: Value,
-        snapshot: Option<&Snapshot>,
-    ) -> Result<InvokeResult> {
-        self.cancel_path = params
-            .get("cancel_file")
-            .and_then(Value::as_str)
-            .map(PathBuf::from);
-        if let Some(contract) = &self.contract {
-            let matching: Vec<_> = contract
-                .operations
-                .iter()
-                .filter(|descriptor| descriptor.implementation == operation)
-                .collect();
-            if matching.len() > 1 {
-                return Err(Error::Protocol(
-                    "ambiguous legacy operation major; use its canonical registry ID".into(),
-                ));
-            }
-            if let Some(descriptor) = matching.first() {
-                let given = params.as_object().ok_or_else(|| {
-                    Error::Protocol("operation parameters must be an object".into())
-                })?;
-                let properties = descriptor.parameters["properties"]
-                    .as_object()
-                    .ok_or_else(|| Error::Protocol("missing parameter properties".into()))?;
-                let scientific: serde_json::Map<String, Value> = given
-                    .iter()
-                    .filter(|(key, _)| properties.contains_key(*key))
-                    .map(|(key, value)| (key.clone(), value.clone()))
-                    .collect();
-                let scientific =
-                    crate::contract::normalize_parameters(descriptor, &Value::Object(scientific))?;
-                let scientific = crate::compute::parameters_for(
-                    descriptor,
-                    scientific
-                        .as_object()
-                        .cloned()
-                        .ok_or_else(|| Error::Protocol("invalid normalized parameters".into()))?,
-                    self.cpu_budget,
-                );
-                crate::contract::BoundedSchema::compile(&descriptor.parameters)?
-                    .validate(&Value::Object(scientific.clone()))?;
-                let controls: std::collections::BTreeMap<_, _> = given
-                    .iter()
-                    .filter(|(key, _)| !properties.contains_key(*key))
-                    .map(|(key, value)| (key.clone(), value.clone()))
-                    .collect();
-                let context = basecraft_protocol::operation::InvocationContext {
-                    schema: 1,
-                    operation: crate::contract::operation_id(&self.manifest.id, descriptor)?,
-                    run_id: given
-                        .get("job_id")
-                        .and_then(Value::as_str)
-                        .map_or_else(|| ulid::Ulid::generate().to_string(), str::to_owned),
-                    inputs: std::collections::BTreeMap::new(),
-                    outputs: std::collections::BTreeMap::new(),
-                    cpu_threads: self.cpu_budget,
-                    cancel_file: given
-                        .get("cancel_file")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .into(),
-                    progress_file: given
-                        .get("progress")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .into(),
-                    input_evidence: std::collections::BTreeMap::new(),
-                    legacy_parameters: controls,
-                };
-                let implementation = descriptor.implementation.clone();
-                return self.invoke_context(
-                    &implementation,
-                    Value::Object(scientific),
-                    context,
-                    snapshot,
-                );
-            }
-        }
-        let params = match params {
-            Value::Object(params) if self.contract.is_none() => Value::Object(
-                crate::compute::parameters(&self.info.id, params, self.cpu_budget),
-            ),
-            value => value,
-        };
-        let req = Invoke {
-            operation: operation.to_string(),
-            params,
-            snapshot: snapshot.map(Snapshot::describe),
-            context: None,
-        };
-        let fds: Vec<BorrowedFd<'_>> = snapshot
-            .map(|s| vec![s.residues.transport_handle(), s.features.transport_handle()])
-            .unwrap_or_default();
-        let (result, _) = self.call("invoke", serde_json::to_value(req)?, &fds)?;
-        Ok(serde_json::from_value(result)?)
-    }
-    /// Contract calls keep scientific parameters separate from allocated controls.
-    pub fn invoke_context(
         &mut self,
         implementation: &str,
         parameters: Value,
         context: basecraft_protocol::operation::InvocationContext,
         snapshot: Option<&Snapshot>,
     ) -> Result<InvokeResult> {
-        if !self
-            .info
-            .capabilities
-            .iter()
-            .any(|c| c == basecraft_protocol::operation::CONTRACT_CAPABILITY)
-        {
-            return Err(Error::Protocol(
-                "runtime lacks operation-contract-v1".into(),
-            ));
-        }
         if !self
             .info
             .operations
@@ -570,7 +443,7 @@ impl PluginProcess {
             operation: implementation.into(),
             params: parameters,
             snapshot: snapshot.map(Snapshot::describe),
-            context: Some(context),
+            context,
         };
         let fds: Vec<_> = snapshot
             .map(|s| vec![s.residues.transport_handle(), s.features.transport_handle()])
@@ -580,6 +453,13 @@ impl PluginProcess {
             return Err(Error::Protocol("unexpected result descriptors".into()));
         }
         Ok(serde_json::from_value(result)?)
+    }
+
+    /// A named metadata query, such as which engines are installed. It takes
+    /// no inputs and allocates nothing.
+    pub fn query(&mut self, name: &str) -> Result<Value> {
+        let query = basecraft_protocol::plugin::Query { name: name.into() };
+        Ok(self.call("query", serde_json::to_value(query)?, &[])?.0)
     }
 }
 
@@ -710,23 +590,12 @@ pub fn verify_handshake(manifest: &Manifest, info: &PluginInfo) -> Result<()> {
     if unique.len() != info.operations.len() {
         return Err(Error::Protocol("duplicate runtime implementations".into()));
     }
-    if let Some(contract) = manifest.operation_contract()? {
-        if !info
-            .capabilities
-            .iter()
-            .any(|c| c == basecraft_protocol::operation::CONTRACT_CAPABILITY)
-        {
-            return Err(Error::Protocol(
-                "schema 2 requires runtime operation-contract-v1 capability".into(),
-            ));
-        }
-        for descriptor in contract.operations {
-            if !info.operations.contains(&descriptor.implementation) {
-                return Err(Error::Protocol(format!(
-                    "runtime missing implementation {}",
-                    descriptor.implementation
-                )));
-            }
+    for descriptor in manifest.operation_contract()?.operations {
+        if !info.operations.contains(&descriptor.implementation) {
+            return Err(Error::Protocol(format!(
+                "runtime missing implementation {}",
+                descriptor.implementation
+            )));
         }
     }
     Ok(())

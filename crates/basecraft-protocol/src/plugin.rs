@@ -12,7 +12,8 @@ use serde_json::Value;
 
 use crate::Op;
 
-pub const PROTOCOL_VERSION: u32 = 1;
+/// Also the schema of the invocation context.
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// A request or a response.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -65,8 +66,6 @@ pub struct PluginInfo {
     pub id: String,
     pub version: String,
     pub operations: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub capabilities: Vec<String>,
 }
 
 /// A sequence snapshot: two Arrow IPC streams in shared memory.
@@ -96,12 +95,18 @@ pub struct Invoke {
     pub params: Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub snapshot: Option<SequenceSnapshot>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub context: Option<crate::operation::InvocationContext>,
+    pub context: crate::operation::InvocationContext,
+}
+
+/// `query` parameters: a named metadata query that takes no inputs.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Query {
+    pub name: String,
 }
 
 /// `invoke` result: proposed operations against the snapshot's version,
 /// and for operations that write files, what they wrote and with which tool.
+/// Unknown keys, such as a plugin's own file list, are ignored.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct InvokeResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -114,9 +119,6 @@ pub struct InvokeResult {
     pub ops: Vec<Op>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
-    /// Paths of the files the operation wrote, as given in its parameters.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub outputs: Vec<String>,
     /// The external program that did the work.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool: Option<ToolInfo>,

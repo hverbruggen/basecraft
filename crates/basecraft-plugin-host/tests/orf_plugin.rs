@@ -26,6 +26,14 @@ fn plugin() -> Option<PluginProcess> {
     Some(PluginProcess::spawn_with(&manifest, &python).expect("spawn"))
 }
 
+/// An empty run for sequence operations, which allocate no files.
+fn context() -> basecraft_protocol::operation::InvocationContext {
+    serde_json::from_value(json!({"schema":2,"operation":"test","run_id":"test",
+        "run_root":std::env::temp_dir(),"inputs":{},"outputs":{},"cpu_threads":1,
+        "cancel_file":"cancel","progress_file":"progress"}))
+    .unwrap()
+}
+
 /// A GenBank record: poly-C background with one forward ORF of 121 codons
 /// (ATG + 120 × AAA + TAA) at 0-based position 10.
 fn record(dir: &Path) -> std::path::PathBuf {
@@ -52,7 +60,7 @@ fn record(dir: &Path) -> std::path::PathBuf {
 #[test]
 fn finds_orfs_and_maps_them_onto_a_newer_version() {
     let Some(mut p) = plugin() else { return };
-    assert_eq!(p.info.operations, vec!["find_orfs", "noop", "selftest"]);
+    assert_eq!(p.info.operations, vec!["find_orfs", "selftest"]);
     eprintln!("plugin startup: {:?}", p.startup);
 
     let dir = tempfile::tempdir().unwrap();
@@ -61,7 +69,12 @@ fn finds_orfs_and_maps_them_onto_a_newer_version() {
     let snap = Snapshot::of(session.doc_key(doc).unwrap(), session.doc(doc).unwrap()).unwrap();
 
     let result = p
-        .invoke("find_orfs", json!({ "min_codons": 100 }), Some(&snap))
+        .invoke(
+            "find_orfs",
+            json!({ "min_codons": 100 }),
+            context(),
+            Some(&snap),
+        )
         .unwrap();
     assert_eq!(result.ops.len(), 1, "{:?}", result.message);
     let Op::FeatureAdd { feature } = &result.ops[0] else {
@@ -105,18 +118,7 @@ fn call_overhead() {
         p.ping().unwrap();
     }
     let ping = t.elapsed() / n;
-    let t = Instant::now();
-    for _ in 0..n {
-        p.invoke("noop", json!({}), None).unwrap();
-    }
-    let noop = t.elapsed() / n;
-    eprintln!(
-        "startup {:?}, ping {ping:?}, no-op invoke {noop:?}",
-        p.startup
-    );
+    eprintln!("startup {:?}, ping {ping:?}", p.startup);
     // The budget is 1 ms; leave room for a loaded machine.
-    assert!(
-        noop < Duration::from_millis(1),
-        "no-op invoke took {noop:?}"
-    );
+    assert!(ping < Duration::from_millis(1), "ping took {ping:?}");
 }

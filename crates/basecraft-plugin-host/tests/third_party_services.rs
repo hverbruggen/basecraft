@@ -9,14 +9,13 @@ fn load(root: &Path, host: &HostServices) -> basecraft_plugin_host::Result<Regis
     std::fs::create_dir_all(&source).unwrap();
     std::fs::write(source.join("plugin.toml"), "schema=2\ncontract='operations.json'\nid='org.example.services'\nname='Service fixture'\nversion='1.0.0'\n[entry]\noperation='python:plugin.py'\n").unwrap();
     std::fs::write(source.join("plugin.py"), "").unwrap();
-    let contract = json!({"schema":1,"operations":[{"name":"call","version":"1.0.0","implementation":"call","title":"Call","description":"Third-party host service fixture","family":"file_analysis",
+    let contract = json!({"schema":2,"operations":[{"name":"call","version":"1.0.0","implementation":"call","title":"Call","description":"Third-party host service fixture","family":"file_analysis",
         "parameters":{"type":"object","additionalProperties":false,"properties":{}},
         "result":{"type":"object"},
         "inputs":{"reads":{"view":"bytes","media_type":"application/octet-stream","min":1,"max":1}},
         "outputs":{"output":{"media_type":"application/json","min":1,"max":1,"visibility":"result"}},
         "effects":{"document_write":false,"artifact_write":true},
-        "credentials":{"access":"BASECRAFT_EXAMPLE_TOKEN"},
-        "required_features":["operation-contract-v1"],"host":host}]});
+        "needs":{"credentials":{"access":"BASECRAFT_EXAMPLE_TOKEN"}},"host":host}]});
     std::fs::write(source.join("operations.json"), contract.to_string()).unwrap();
     let config = RegistryConfig {
         bundled: root.join("bundle"),
@@ -34,7 +33,6 @@ fn installed_packages_declare_the_services_built_in_plugins_use() {
         species_workspace: true,
         bootstrap_exports: true,
         verify_inputs: names(&["reads"]),
-        ambient_credentials: names(&["access"]),
         caller: Some("single_trace".into()),
         caller_engine: Some("example-caller".into()),
         query_preparation: Some(QueryPreparation::Blast),
@@ -60,10 +58,6 @@ fn installed_packages_declare_the_services_built_in_plugins_use() {
         },
         HostServices {
             verify_inputs: names(&["missing"]),
-            ..HostServices::default()
-        },
-        HostServices {
-            ambient_credentials: names(&["undeclared"]),
             ..HostServices::default()
         },
     ] {

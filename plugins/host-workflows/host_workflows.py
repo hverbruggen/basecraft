@@ -13,7 +13,7 @@ def refuse(_snapshot, _parameters, _context):
 
 
 for operation in ("gmyc_alignment_single", "gmyc_alignment_multiple", "asap_alignment"):
-    plugin.context_operation(operation)(refuse)
+    plugin.operation(operation)(refuse)
 
 if __name__ == "__main__":
     plugin.run()

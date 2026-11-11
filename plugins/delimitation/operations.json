@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "operations": [
     {
       "name": "haplotypes",
@@ -58,7 +58,10 @@
           "view": "aligned_fasta",
           "media_type": "application/octet-stream",
           "min": 1,
-          "max": 1
+          "max": 1,
+          "alphabets": [
+            "nucleotide"
+          ]
         }
       },
       "outputs": {
@@ -67,29 +70,18 @@
           "min": 1,
           "max": 1024,
           "visibility": "result",
-          "collection": true
+          "collection": true,
+          "primary": "result.json"
         }
       },
       "effects": {
         "document_write": false,
         "artifact_write": true
       },
-      "cpu_parameters": [
-        "workers"
-      ],
-      "legacy_adapter": {
-        "primary_input": "alignment",
-        "inputs": {
-          "alignment": "input"
-        },
-        "input_arrays": [],
-        "outputs": {
-          "output": {
-            "role": "artifacts",
-            "path": "result.json"
-          }
-        },
-        "allocation": "artifacts"
+      "needs": {
+        "cpu_parameters": [
+          "workers"
+        ]
       },
       "host": {
         "species_workspace": true
@@ -155,29 +147,18 @@
           "min": 1,
           "max": 1024,
           "visibility": "result",
-          "collection": true
+          "collection": true,
+          "primary": "result.json"
         }
       },
       "effects": {
         "document_write": false,
         "artifact_write": true
       },
-      "cpu_parameters": [
-        "workers"
-      ],
-      "legacy_adapter": {
-        "primary_input": "tree",
-        "inputs": {
-          "tree": "input"
-        },
-        "input_arrays": [],
-        "outputs": {
-          "output": {
-            "role": "artifacts",
-            "path": "result.json"
-          }
-        },
-        "allocation": "artifacts"
+      "needs": {
+        "cpu_parameters": [
+          "workers"
+        ]
       },
       "host": {
         "species_workspace": true
@@ -250,29 +231,18 @@
           "min": 1,
           "max": 1024,
           "visibility": "result",
-          "collection": true
+          "collection": true,
+          "primary": "result.json"
         }
       },
       "effects": {
         "document_write": false,
         "artifact_write": true
       },
-      "cpu_parameters": [
-        "workers"
-      ],
-      "legacy_adapter": {
-        "primary_input": "tree",
-        "inputs": {
-          "tree": "input"
-        },
-        "input_arrays": [],
-        "outputs": {
-          "output": {
-            "role": "artifacts",
-            "path": "result.json"
-          }
-        },
-        "allocation": "artifacts"
+      "needs": {
+        "cpu_parameters": [
+          "workers"
+        ]
       },
       "host": {
         "species_workspace": true
@@ -345,29 +315,18 @@
           "min": 1,
           "max": 1024,
           "visibility": "result",
-          "collection": true
+          "collection": true,
+          "primary": "result.json"
         }
       },
       "effects": {
         "document_write": false,
         "artifact_write": true
       },
-      "cpu_parameters": [
-        "workers"
-      ],
-      "legacy_adapter": {
-        "primary_input": "tree",
-        "inputs": {
-          "tree": "input"
-        },
-        "input_arrays": [],
-        "outputs": {
-          "output": {
-            "role": "artifacts",
-            "path": "result.json"
-          }
-        },
-        "allocation": "artifacts"
+      "needs": {
+        "cpu_parameters": [
+          "workers"
+        ]
       },
       "host": {
         "species_workspace": true
@@ -464,7 +423,10 @@
           "view": "aligned_fasta",
           "media_type": "text/x-fasta",
           "min": 0,
-          "max": 1
+          "max": 1,
+          "alphabets": [
+            "nucleotide"
+          ]
         }
       },
       "outputs": {
@@ -473,31 +435,18 @@
           "min": 1,
           "max": 1024,
           "visibility": "result",
-          "collection": true
+          "collection": true,
+          "primary": "result.json"
         }
       },
       "effects": {
         "document_write": false,
         "artifact_write": true
       },
-      "cpu_parameters": [
-        "workers"
-      ],
-      "legacy_adapter": {
-        "primary_input": "tree",
-        "inputs": {
-          "tree": "input",
-          "mapping": "mapping",
-          "alignment": "alignment_snapshot"
-        },
-        "input_arrays": [],
-        "outputs": {
-          "output": {
-            "role": "artifacts",
-            "path": "result.json"
-          }
-        },
-        "allocation": "artifacts"
+      "needs": {
+        "cpu_parameters": [
+          "workers"
+        ]
       },
       "host": {
         "species_workspace": true
@@ -598,7 +547,10 @@
           "view": "aligned_fasta",
           "media_type": "text/x-fasta",
           "min": 0,
-          "max": 1
+          "max": 1,
+          "alphabets": [
+            "nucleotide"
+          ]
         }
       },
       "outputs": {
@@ -607,31 +559,18 @@
           "min": 1,
           "max": 1024,
           "visibility": "result",
-          "collection": true
+          "collection": true,
+          "primary": "result.json"
         }
       },
       "effects": {
         "document_write": false,
         "artifact_write": true
       },
-      "cpu_parameters": [
-        "workers"
-      ],
-      "legacy_adapter": {
-        "primary_input": "tree",
-        "inputs": {
-          "tree": "input",
-          "mapping": "mapping",
-          "alignment": "alignment_snapshot"
-        },
-        "input_arrays": [],
-        "outputs": {
-          "output": {
-            "role": "artifacts",
-            "path": "result.json"
-          }
-        },
-        "allocation": "artifacts"
+      "needs": {
+        "cpu_parameters": [
+          "workers"
+        ]
       },
       "host": {
         "species_workspace": true
@@ -708,29 +647,18 @@
           "min": 1,
           "max": 1024,
           "visibility": "result",
-          "collection": true
+          "collection": true,
+          "primary": "result.json"
         }
       },
       "effects": {
         "document_write": false,
         "artifact_write": true
       },
-      "cpu_parameters": [
-        "workers"
-      ],
-      "legacy_adapter": {
-        "primary_input": "tree",
-        "inputs": {
-          "tree": "input"
-        },
-        "input_arrays": [],
-        "outputs": {
-          "output": {
-            "role": "artifacts",
-            "path": "result.json"
-          }
-        },
-        "allocation": "artifacts"
+      "needs": {
+        "cpu_parameters": [
+          "workers"
+        ]
       },
       "host": {
         "species_workspace": true
@@ -800,29 +728,18 @@
           "min": 1,
           "max": 1024,
           "visibility": "result",
-          "collection": true
+          "collection": true,
+          "primary": "result.json"
         }
       },
       "effects": {
         "document_write": false,
         "artifact_write": true
       },
-      "cpu_parameters": [
-        "workers"
-      ],
-      "legacy_adapter": {
-        "primary_input": "tree",
-        "inputs": {
-          "tree": "input"
-        },
-        "input_arrays": [],
-        "outputs": {
-          "output": {
-            "role": "artifacts",
-            "path": "result.json"
-          }
-        },
-        "allocation": "artifacts"
+      "needs": {
+        "cpu_parameters": [
+          "workers"
+        ]
       },
       "host": {
         "species_workspace": true
@@ -907,7 +824,10 @@
           "view": "aligned_fasta",
           "media_type": "text/x-fasta",
           "min": 0,
-          "max": 1
+          "max": 1,
+          "alphabets": [
+            "nucleotide"
+          ]
         }
       },
       "outputs": {
@@ -916,31 +836,18 @@
           "min": 1,
           "max": 1024,
           "visibility": "result",
-          "collection": true
+          "collection": true,
+          "primary": "result.json"
         }
       },
       "effects": {
         "document_write": false,
         "artifact_write": true
       },
-      "cpu_parameters": [
-        "workers"
-      ],
-      "legacy_adapter": {
-        "primary_input": "tree",
-        "inputs": {
-          "tree": "input",
-          "mapping": "mapping",
-          "alignment": "alignment_snapshot"
-        },
-        "input_arrays": [],
-        "outputs": {
-          "output": {
-            "role": "artifacts",
-            "path": "result.json"
-          }
-        },
-        "allocation": "artifacts"
+      "needs": {
+        "cpu_parameters": [
+          "workers"
+        ]
       },
       "host": {
         "species_workspace": true
@@ -1025,7 +932,10 @@
           "view": "aligned_fasta",
           "media_type": "text/x-fasta",
           "min": 0,
-          "max": 1
+          "max": 1,
+          "alphabets": [
+            "nucleotide"
+          ]
         }
       },
       "outputs": {
@@ -1034,31 +944,18 @@
           "min": 1,
           "max": 1024,
           "visibility": "result",
-          "collection": true
+          "collection": true,
+          "primary": "result.json"
         }
       },
       "effects": {
         "document_write": false,
         "artifact_write": true
       },
-      "cpu_parameters": [
-        "workers"
-      ],
-      "legacy_adapter": {
-        "primary_input": "tree",
-        "inputs": {
-          "tree": "input",
-          "mapping": "mapping",
-          "alignment": "alignment_snapshot"
-        },
-        "input_arrays": [],
-        "outputs": {
-          "output": {
-            "role": "artifacts",
-            "path": "result.json"
-          }
-        },
-        "allocation": "artifacts"
+      "needs": {
+        "cpu_parameters": [
+          "workers"
+        ]
       },
       "host": {
         "species_workspace": true
@@ -1113,29 +1010,18 @@
           "min": 1,
           "max": 1024,
           "visibility": "result",
-          "collection": true
+          "collection": true,
+          "primary": "result.json"
         }
       },
       "effects": {
         "document_write": false,
         "artifact_write": true
       },
-      "cpu_parameters": [
-        "workers"
-      ],
-      "legacy_adapter": {
-        "primary_input": "tree",
-        "inputs": {
-          "tree": "input"
-        },
-        "input_arrays": [],
-        "outputs": {
-          "output": {
-            "role": "artifacts",
-            "path": "result.json"
-          }
-        },
-        "allocation": "artifacts"
+      "needs": {
+        "cpu_parameters": [
+          "workers"
+        ]
       },
       "host": {
         "species_workspace": true
@@ -1194,7 +1080,10 @@
           "view": "aligned_fasta",
           "media_type": "application/octet-stream",
           "min": 1,
-          "max": 1
+          "max": 1,
+          "alphabets": [
+            "nucleotide"
+          ]
         }
       },
       "outputs": {
@@ -1203,29 +1092,18 @@
           "min": 1,
           "max": 1024,
           "visibility": "result",
-          "collection": true
+          "collection": true,
+          "primary": "result.json"
         }
       },
       "effects": {
         "document_write": false,
         "artifact_write": true
       },
-      "cpu_parameters": [
-        "workers"
-      ],
-      "legacy_adapter": {
-        "primary_input": "alignment",
-        "inputs": {
-          "alignment": "input"
-        },
-        "input_arrays": [],
-        "outputs": {
-          "output": {
-            "role": "artifacts",
-            "path": "result.json"
-          }
-        },
-        "allocation": "artifacts"
+      "needs": {
+        "cpu_parameters": [
+          "workers"
+        ]
       },
       "host": {
         "species_workspace": true
@@ -1324,7 +1202,10 @@
           "view": "aligned_fasta",
           "media_type": "application/octet-stream",
           "min": 1,
-          "max": 1
+          "max": 1,
+          "alphabets": [
+            "nucleotide"
+          ]
         },
         "mapping": {
           "view": "bytes",
@@ -1336,7 +1217,10 @@
           "view": "aligned_fasta",
           "media_type": "text/x-fasta",
           "min": 0,
-          "max": 1
+          "max": 1,
+          "alphabets": [
+            "nucleotide"
+          ]
         }
       },
       "outputs": {
@@ -1345,31 +1229,18 @@
           "min": 1,
           "max": 1024,
           "visibility": "result",
-          "collection": true
+          "collection": true,
+          "primary": "result.json"
         }
       },
       "effects": {
         "document_write": false,
         "artifact_write": true
       },
-      "cpu_parameters": [
-        "workers"
-      ],
-      "legacy_adapter": {
-        "primary_input": "alignment",
-        "inputs": {
-          "alignment": "input",
-          "mapping": "mapping",
-          "full_alignment": "alignment_snapshot"
-        },
-        "input_arrays": [],
-        "outputs": {
-          "output": {
-            "role": "artifacts",
-            "path": "result.json"
-          }
-        },
-        "allocation": "artifacts"
+      "needs": {
+        "cpu_parameters": [
+          "workers"
+        ]
       },
       "host": {
         "species_workspace": true
@@ -1424,29 +1295,18 @@
           "min": 1,
           "max": 1024,
           "visibility": "result",
-          "collection": true
+          "collection": true,
+          "primary": "result.json"
         }
       },
       "effects": {
         "document_write": false,
         "artifact_write": true
       },
-      "cpu_parameters": [
-        "workers"
-      ],
-      "legacy_adapter": {
-        "primary_input": "partitions",
-        "inputs": {
-          "partitions": "input"
-        },
-        "input_arrays": [],
-        "outputs": {
-          "output": {
-            "role": "artifacts",
-            "path": "result.json"
-          }
-        },
-        "allocation": "artifacts"
+      "needs": {
+        "cpu_parameters": [
+          "workers"
+        ]
       },
       "host": {
         "species_workspace": true
@@ -1511,7 +1371,10 @@
           "view": "aligned_fasta",
           "media_type": "application/octet-stream",
           "min": 1,
-          "max": 1
+          "max": 1,
+          "alphabets": [
+            "nucleotide"
+          ]
         },
         "groups": {
           "view": "bytes",
@@ -1526,30 +1389,18 @@
           "min": 1,
           "max": 1024,
           "visibility": "result",
-          "collection": true
+          "collection": true,
+          "primary": "result.json"
         }
       },
       "effects": {
         "document_write": false,
         "artifact_write": true
       },
-      "cpu_parameters": [
-        "workers"
-      ],
-      "legacy_adapter": {
-        "primary_input": "alignment",
-        "inputs": {
-          "alignment": "input",
-          "groups": "groups"
-        },
-        "input_arrays": [],
-        "outputs": {
-          "output": {
-            "role": "artifacts",
-            "path": "result.json"
-          }
-        },
-        "allocation": "artifacts"
+      "needs": {
+        "cpu_parameters": [
+          "workers"
+        ]
       },
       "host": {
         "species_workspace": true

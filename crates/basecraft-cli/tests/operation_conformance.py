@@ -599,7 +599,7 @@ def main():
             (package / "operations.json").write_text(json.dumps(contract))
             script = package / "plugin.py"
             script.write_text(script.read_text().replace('if __name__ == "__main__":',
-                              'plugin.context_operation("count_again")(count)\n\nif __name__ == "__main__":'))
+                              'plugin.operation("count_again")(count)\n\nif __name__ == "__main__":'))
             cli("plugins", "install", str(package))
             mcp.tool("basecraft.host.registry_refresh.v1", {})
             assert mcp.call("tools/list", {"cursor": old_cursor}, error=True)["code"] == -32602

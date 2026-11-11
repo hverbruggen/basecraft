@@ -35,7 +35,7 @@ Normalized call evidence retains `sequence`, `secondary_sequence`, `positions`
 and `scores` in the original read's event order. Positions are zero-based signal
 samples. The optional secondary string has exactly one IUPAC symbol per primary
 event; it is Tracy evidence, not an accepted call or calibrated mixture label.
-Missing/null secondary evidence in legacy artifacts means unknown, not agreement
+Missing/null secondary evidence in an artifact means unknown, not agreement
 with primary. Trimming and draft reverse complementation leave all native arrays
 intact; use the read orientation and existing event mapping to interpret them.
 The same JSON evidence is returned by the public calls/consensus plugin paths and

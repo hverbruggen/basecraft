@@ -6,8 +6,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const CONTRACT_VERSION: u32 = 1;
-pub const CONTRACT_CAPABILITY: &str = "operation-contract-v1";
+pub const CONTRACT_VERSION: u32 = 2;
 pub const MAX_DESCRIPTOR_BYTES: usize = 1024 * 1024;
 pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_NESTING: usize = 32;
@@ -42,27 +41,43 @@ pub struct OperationDescriptor {
     #[serde(default)]
     pub outputs: BTreeMap<String, OutputBinding>,
     pub effects: Effects,
-    /// Logical credential name -> reserved runtime environment variable. This
-    /// declares a need, never permission; host grants bind exact accepted code.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub credentials: BTreeMap<String, String>,
-    #[serde(default)]
-    pub required_features: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cpu_parameter: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub cpu_parameters: Vec<String>,
-    /// Explicit migration of a public two-argument SDK handler. Runtime controls
-    /// come only from the allocated context; scientific callers cannot set them.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub legacy_adapter: Option<LegacyAdapter>,
+    #[serde(default, skip_serializing_if = "Needs::is_empty")]
+    pub needs: Needs,
+    /// A workflow the host runs itself from the stages in `needs`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_workflow: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub presentation: Option<String>,
-    /// Host services selected by this contract, available to any accepted plugin.
+    /// Services the host runs around a bundled plugin.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host: Option<HostServices>,
+}
+
+/// What an operation needs from the host besides its inputs.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Needs {
+    /// Credential name -> environment variable the plugin reads. A need, never
+    /// permission: an installed package needs a grant bound to its digest; a
+    /// bundled package receives the credential from the user's environment.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub credentials: BTreeMap<String, String>,
+    /// Parameter the host fills with the user's contact email when the caller
+    /// leaves it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact_email: Option<String>,
+    /// Workflow stage name -> registered operation id, including major version.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub workflow_stages: BTreeMap<String, String>,
+    /// Parameters that receive the CPU threads granted to the run.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cpu_parameters: Vec<String>,
+}
+
+impl Needs {
+    pub fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -76,13 +91,6 @@ pub struct HostServices {
     pub verify_inputs: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tree_support: Vec<TreeSupportRule>,
-    /// Workflow stage name -> registered operation id, including major version.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub workflow_operations: BTreeMap<String, String>,
-    /// Ambient credentials are supplied only to bundled packages. Installed
-    /// packages still need an explicit grant bound to their accepted digests.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub ambient_credentials: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caller: Option<String>,
     /// Program a caller service runs. The host finds it through
@@ -96,9 +104,6 @@ pub struct HostServices {
     pub query_preparation: Option<QueryPreparation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retained_query_transformation: Option<String>,
-    /// Bundled operations may obtain a missing parameter from a named environment setting.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub parameter_environment: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -131,27 +136,6 @@ pub enum ParameterCondition {
     Positive { parameter: String },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct LegacyAdapter {
-    #[serde(default)]
-    pub primary_input: Option<String>,
-    /// Named input binding -> legacy handler parameter.
-    pub inputs: BTreeMap<String, String>,
-    #[serde(default)]
-    pub input_arrays: Vec<String>,
-    /// Legacy output parameter -> allocated role and relative member.
-    pub outputs: BTreeMap<String, LegacyOutput>,
-    #[serde(default)]
-    pub allocation: Option<String>,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct LegacyOutput {
-    pub role: String,
-    pub path: String,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionFamily {
@@ -176,6 +160,10 @@ pub struct InputBinding {
     pub media_type: String,
     pub min: usize,
     pub max: usize,
+    /// Residue alphabets the operation accepts. Empty accepts any. The host
+    /// refuses other alignments before launch.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alphabets: Vec<Alphabet>,
     /// Preserve original and submitted bytes when results refer to input paths.
     /// Applied by the shared runner equally for GUI, CLI, Python and MCP.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -192,6 +180,46 @@ pub struct OutputBinding {
     /// A collection is allocated one directory; members remain relative to it.
     #[serde(default)]
     pub collection: bool,
+    /// The collection member that holds the main result, such as `tree.nwk`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary: Option<String>,
+    /// Facts the host writes into the result's companion file.
+    #[serde(default, skip_serializing_if = "OutputFacts::is_empty")]
+    pub facts: OutputFacts,
+}
+
+// FACTS PLACEHOLDER. Lane facts adds `protocol/src/facts.rs` with the alphabet
+// and branch-length meaning. When it lands, delete `Alphabet` and
+// `BranchLengths` here and re-export `crate::facts::{Alphabet, BranchLengths}`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Alphabet {
+    Nucleotide,
+    Protein,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BranchLengths {
+    Substitutions,
+    Time,
+}
+
+/// Facts an output declares about itself. The host writes them into the
+/// result's companion file (lane facts' writer, once it exists).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OutputFacts {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alphabet: Option<Alphabet>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_lengths: Option<BranchLengths>,
+}
+
+impl OutputFacts {
+    pub fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -249,13 +277,15 @@ pub struct OperationPins {
     pub descriptor_digest: String,
 }
 
-/// Host-owned wire context, sent only after capability negotiation.
+/// What the host allocated for one run, sent with every invocation. Paths are
+/// relative to `run_root`; an input outside the run folder is absolute.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct InvocationContext {
     pub schema: u32,
     pub operation: String,
     pub run_id: String,
+    pub run_root: String,
     pub inputs: BTreeMap<String, Vec<String>>,
     pub outputs: BTreeMap<String, String>,
     pub cpu_threads: usize,
@@ -263,11 +293,9 @@ pub struct InvocationContext {
     pub progress_file: String,
     #[serde(default)]
     pub input_evidence: BTreeMap<String, Vec<InvocationInputEvidence>>,
-    /// Host-owned legacy compatibility metadata, never caller parameters.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub legacy_parameters: BTreeMap<String, Value>,
 }
 
+/// Where a submitted input came from. Paths are relative to the run folder.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct InvocationInputEvidence {

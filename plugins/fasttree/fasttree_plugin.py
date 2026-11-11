@@ -77,10 +77,10 @@ def quote(name: str) -> str:
 
 
 @plugin.operation("tree")
-def tree(snapshot, params):
-    """Infer a tree from the alignment in `input` and write it to `output`."""
-    source = Path(params["input"])
-    target = Path(params["output"])
+def tree(snapshot, params, context):
+    """Infer a tree from the alignment and write it to `artifacts/tree.nwk`."""
+    source = Path(context.input("alignment"))
+    target = Path(context.output("artifacts", "tree.nwk"))
     records = read_fasta(source)
     if len(records) < 3:
         raise ValueError("FastTree needs at least three sequences")
@@ -125,12 +125,10 @@ def tree(snapshot, params):
     return {
         "ops": [],
         "message": f"Built a {model}{'+G' if gamma else ''} tree of {len(records)} sequences{explained}",
-        "outputs": [str(target)],
         "tool": {"name": "fasttree", "version": fasttree_version(exe)},
         "execution": {"argv": args, "resolved_parameters": {"model": model, "sequence_type": "nucleotide" if nucleotide else "protein", "support": support_text, "rate_categories": rates}, "preprocessing": ["FASTA headers replaced with neutral t0..tN identifiers before execution; original names restored in Newick"], "environment": {}, "methods_template": "fasttree.tree.v1", "methods": {"description": "A phylogenetic tree was inferred", "citations": ["Price et al. (2010), FastTree 2. https://doi.org/10.1371/journal.pone.0009490"]}},
     }
 
 
 if __name__ == "__main__":
-    plugin.contract()
     plugin.run()

@@ -395,17 +395,15 @@ mod live_tests {
             &basecraft_ops::records::read_record(&called.run.join("runtime.json")).unwrap(),
         )
         .unwrap();
-        let execution: serde_json::Value = serde_json::from_slice(
+        let execution: basecraft_protocol::records::RunRecord = serde_json::from_slice(
             &basecraft_ops::records::read_record(&called.run.join("execution.json")).unwrap(),
         )
         .unwrap();
-        let context: basecraft_protocol::operation::InvocationContext =
-            serde_json::from_value(execution["context"].clone()).unwrap();
         let mut query = CompletedResultQuery {
             operation: receipt.operation.clone(),
             pins: receipt.pins.clone(),
             effective_parameters: receipt.effective_parameters.clone(),
-            inputs: context.input_evidence,
+            inputs: execution.inputs,
         };
         assert!(verify_completed_result(&receipt, &query).is_ok());
         query.inputs.get_mut("reads").unwrap()[0].submitted_hash = "b3:changed".into();

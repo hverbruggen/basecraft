@@ -90,7 +90,7 @@ fn publication_setup(
             .destinations
             .insert("report/a/file.txt".into(), "member λ.txt".into());
     }
-    let staging = Path::new(&prepared.context.outputs["report"]);
+    let staging = &prepared.run_path(&prepared.context.outputs["report"]);
     let names = ["a/file.txt", "a0.txt", "λ space/quote\".txt"];
     for (index, name) in names.iter().enumerate() {
         let path = staging.join(name);
@@ -128,7 +128,7 @@ fn publication_expected(
     prepared: &PreparedOperation,
     validated: &[(String, PathBuf, String)],
 ) -> BTreeMap<PathBuf, String> {
-    let staging = Path::new(&prepared.context.outputs["report"]);
+    let staging = &prepared.run_path(&prepared.context.outputs["report"]);
     validated
         .iter()
         .map(|(_, path, hash)| {
@@ -420,7 +420,7 @@ fn publication_invalid_native_paths_return_json_at_producer_boundary() {
     // from JSON strings. Exercise actual finalize with a native map key.
     let temp = tempfile::tempdir().unwrap();
     let (prepared, result, _, mut outcome) = publication_setup(temp.path(), false, false);
-    let staging = PathBuf::from(&prepared.context.outputs["report"]);
+    let staging = prepared.run_path(&prepared.context.outputs["report"]);
     std::fs::remove_dir_all(&staging).unwrap();
     std::fs::create_dir(&staging).unwrap();
     let path = staging.join(&invalid);

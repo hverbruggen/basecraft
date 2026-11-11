@@ -10,13 +10,13 @@ plugin = Plugin("basecraft.tracy-sanger", "0.2.0")
 
 
 @plugin.operation("consensus")
-def consensus(snapshot, params):
-    reads = [Path(value) for value in params["reads"]]
+def consensus(snapshot, params, context):
+    reads = [Path(value) for value in context.inputs["reads"]]
     if len(reads) not in (1, 2, 3):
         raise ValueError(
             "Exactly 1, 2 or 3 Sanger reads are required; larger assemblies are unsupported"
         )
-    target = Path(params["output"])
+    target = Path(context.output("artifacts"))
     tracy = executable(("tracy",), "BASECRAFT_TRACY")
     if params.get("engine_sha256") and params["engine_sha256"] != file_hash(
         Path(tracy)
@@ -41,10 +41,6 @@ def consensus(snapshot, params):
         raise ValueError("Sanger input changed during calling; results were not accepted")
     return {
         "ops": [],
-        "outputs": [
-            str(target / name)
-            for name in ("consensus.fa", "reads.align.fa", "evidence.json")
-        ],
         "message": f"Draft consensus: {report['consensus_length']} bases, "
         f"{report['conflict_columns']} conflicting columns",
         "tool": {"name": "Tracy", "version": report["version_output"]},
@@ -52,10 +48,10 @@ def consensus(snapshot, params):
 
 
 @plugin.operation("calls")
-def calls(snapshot, params):
+def calls(snapshot, params, context):
     import json
 
-    target = Path(params["output"])
+    target = Path(context.output("artifacts", "calls.json"))
     tracy = executable(("tracy",), "BASECRAFT_TRACY")
     expected = params.get("engine_sha256")
     if expected and expected != file_hash(Path(tracy)):
@@ -63,18 +59,17 @@ def calls(snapshot, params):
             "Tracy changed since this draft; regenerate the draft before reviewing"
         )
     data = trace_calls(
-        Path(params["read"]), Path(tracy), target.with_suffix(".trace.json")
+        Path(context.input("read")), Path(tracy), target.with_suffix(".trace.json")
     )
     target.write_text(json.dumps(data))
     return {
         "ops": [],
-        "outputs": [str(target), str(target.with_suffix(".trace.json"))],
         "message": "Tracy calls loaded",
     }
 
 
 @plugin.operation("primers")
-def primers(snapshot, params):
+def primers(snapshot, params, context):
     import json
 
     from primers import detect
@@ -86,15 +81,13 @@ def primers(snapshot, params):
         int(params.get("minimum_overlap", 12)),
         int(params.get("error_percent", 25)),
     )
-    target = Path(params["output"])
+    target = Path(context.output("artifacts", "primers.json"))
     target.write_text(json.dumps(result, indent=2) + "\n")
     return {
         "ops": [],
-        "outputs": [str(target)],
         "message": f"Found {len(result['hits'])} primer candidates",
     }
 
 
 if __name__ == "__main__":
-    plugin.contract()
     plugin.run()

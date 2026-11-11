@@ -129,9 +129,9 @@ impl AlignmentWorkflow<'_> {
         self.parent
             .operation
             .descriptor
-            .host
-            .as_ref()
-            .and_then(|host| host.workflow_operations.get(name))
+            .needs
+            .workflow_stages
+            .get(name)
             .cloned()
             .ok_or_else(|| Error::Protocol(format!("workflow has no {name} operation")))
     }
@@ -145,7 +145,9 @@ impl AlignmentWorkflow<'_> {
         // refer to the parent's disposable scratch input after it completes.
         let source = root.join("accepted.fasta");
         crate::file_tool::freeze_file(
-            Path::new(&self.parent.context.inputs["alignment"][0]),
+            &self
+                .parent
+                .run_path(&self.parent.context.inputs["alignment"][0]),
             &source,
         )?;
         let prepare = self.stage(
@@ -170,7 +172,10 @@ impl AlignmentWorkflow<'_> {
             let diagnostic =
                 "GMYC unavailable: fewer than two retained haplotypes; no tree or fit was invented";
             basecraft_ops::input_evidence::write_json(
-                &Path::new(&self.parent.context.outputs["artifacts"]).join("fit.json.run.json"),
+                &self
+                    .parent
+                    .run_path(&self.parent.context.outputs["artifacts"])
+                    .join("fit.json.run.json"),
                 &serde_json::to_value(basecraft_protocol::records::WorkflowFailure {
                     version: 1,
                     job: basecraft_protocol::records::WorkflowFailureJob {
@@ -241,7 +246,9 @@ impl AlignmentWorkflow<'_> {
                 json!("UPGMA equal-rate clustering from retained aligned sequences");
         }
         let result = self.stage(&self.stage_operation("fit")?, &inputs, &params)?;
-        let target = Path::new(&self.parent.context.outputs["artifacts"]);
+        let target = &self
+            .parent
+            .run_path(&self.parent.context.outputs["artifacts"]);
         // Keep nested stage results in their owned runs. The parent's stable fit
         // report is the one logical result consumed by every interface.
         std::fs::copy(result.join("result.json"), target.join("fit.json"))?;
@@ -249,7 +256,12 @@ impl AlignmentWorkflow<'_> {
         // Report the full accepted alignment for representative-only ASAP too.
         // The fit's mapping and stage receipt retain the representative input.
         if let Some(workspace) = metadata.get_mut("workspace").and_then(Value::as_object_mut) {
-            let evidence = &self.parent.context.input_evidence["alignment"][0];
+            // The workspace names files by absolute path, as every result does.
+            let mut evidence = self.parent.context.input_evidence["alignment"][0].clone();
+            let absolute = |path: &str| self.parent.run_path(path).display().to_string();
+            evidence.original_path = evidence.original_path.as_deref().map(absolute);
+            evidence.run_directory = absolute(&evidence.run_directory);
+            let evidence = &evidence;
             let stable = evidence.original_path.clone().unwrap_or_else(|| {
                 self.parent
                     .run

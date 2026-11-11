@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "operations": [
     {
       "name": "extract",
@@ -48,28 +48,13 @@
           "min": 1,
           "max": 1024,
           "visibility": "result",
-          "collection": true
+          "collection": true,
+          "primary": "clade.afa"
         }
       },
       "effects": {
         "document_write": false,
         "artifact_write": true
-      },
-      "cpu_parameters": [],
-      "legacy_adapter": {
-        "primary_input": "alignment",
-        "inputs": {
-          "alignment": "input",
-          "selection_tree": "selection_tree"
-        },
-        "input_arrays": [],
-        "outputs": {
-          "output": {
-            "role": "artifacts",
-            "path": "clade.afa"
-          }
-        },
-        "allocation": "artifacts"
       }
     }
   ]

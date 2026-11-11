@@ -284,21 +284,36 @@ def invoke(kind, params):
                           "methods_template": f"basecraft.distance.{kind}.v1", "methods": methods(kind, model, method, params.get("min_overlap", 1), bootstrap, used_dynamic_search(metadata), bootstrap_report)}}
 
 
+def file_parameters(params, context, member):
+    """The engine's file parameters from the host's allocation."""
+    artifacts = context.output("artifacts")
+    values = dict(params, input=context.input("alignment"), output=context.output("artifacts", member),
+                  job_id=context.run_id, cancel_file=context.cancel_file, progress=context.progress_file,
+                  analysis_artifacts={"metadata_directory": artifacts, "working_directory": artifacts,
+                                      "run_id": context.run_id})
+    for binding, parameter in (("cache", "cache_input"), ("groups", "groups")):
+        if path := context.input(binding):
+            values[parameter] = path
+    source = context.source("alignment")
+    if source.get("path"):
+        values.update(original_source=source["path"], input_evidence=source)
+    return values
+
+
 @plugin.operation("tree")
-def tree(snapshot, params):
-    return invoke("tree", params)
+def tree(snapshot, params, context):
+    return invoke("tree", file_parameters(params, context, "tree.nwk"))
 
 
 @plugin.operation("matrix")
-def matrix(snapshot, params):
-    return invoke("matrix", params)
+def matrix(snapshot, params, context):
+    return invoke("matrix", file_parameters(params, context, "distances.tsv"))
 
 
 @plugin.operation("groups")
-def groups(snapshot, params):
-    return invoke("groups", params)
+def groups(snapshot, params, context):
+    return invoke("groups", file_parameters(params, context, "groups.tsv"))
 
 
 if __name__ == "__main__":
-    plugin.contract()
     plugin.run()

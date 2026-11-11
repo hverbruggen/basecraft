@@ -114,7 +114,15 @@ fn runtime_is_frozen_updates_preserve_disabled_and_failed_solve_preserves_active
         &std::fs::read(accepted.run.artifact("execution.json").unwrap()).unwrap(),
     )
     .unwrap();
-    assert_eq!(evidence["runtime"]["root"], runtime.root.to_str().unwrap());
+    assert_eq!(
+        evidence["environment"]["lock_digest"],
+        runtime.lock_digest.as_str()
+    );
+    assert!(
+        !evidence
+            .to_string()
+            .contains(runtime.root.to_str().unwrap())
+    );
     let mut process =
         PluginProcess::spawn_with(&package.manifest, Path::new("/does/not/exist")).unwrap();
     process.finish().unwrap();
@@ -162,7 +170,8 @@ fn runtime_is_frozen_updates_preserve_disabled_and_failed_solve_preserves_active
             .join(".pixi/envs/default/bin/nativecheck"),
     )
     .unwrap();
-    let missing = Registry::load(&config).unwrap();
+    // Damage outside the host shows on an explicit refresh.
+    let missing = Registry::reload(&config).unwrap();
     assert!(missing.packages.is_empty());
     assert!(missing.diagnostics[0].message.contains("nativecheck"));
     assert!(missing.diagnostics[0].message.contains("not executable"));
@@ -261,14 +270,14 @@ fn actual_pixi_installs_and_invokes_declared_runtime() {
     let mut process =
         PluginProcess::spawn_with(&package.manifest, Path::new("/missing-ambient-python")).unwrap();
     std::fs::write(temp.path().join("input"), "abc").unwrap();
-    let mut context: basecraft_protocol::operation::InvocationContext = serde_json::from_value(serde_json::json!({
-        "schema":1,"operation":"org.example.registry-fixture/count@1","run_id":"test-runtime",
-        "inputs":{"sources":[temp.path().join("input")]},"outputs":{"report":temp.path().join("report")},
-        "cpu_threads":1,"cancel_file":"","progress_file":""
-    })).unwrap();
-    context.cpu_threads = 1;
+    let context = serde_json::from_value(serde_json::json!({
+        "schema":2,"operation":"org.example.registry-fixture/count@1","run_id":"test-runtime",
+        "run_root":temp.path(),"inputs":{"sources":["input"]},"outputs":{"report":"report"},
+        "cpu_threads":1,"cancel_file":"cancel","progress_file":"progress"
+    }))
+    .unwrap();
     let result = process
-        .invoke_context(
+        .invoke(
             "count",
             serde_json::json!({"mode":"normal", "include_newlines":true}),
             context,

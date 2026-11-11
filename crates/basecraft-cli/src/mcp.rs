@@ -929,8 +929,8 @@ pub fn serve(root: &Path, writable: bool, kind: ClientKind, model: &str) -> Resu
                             if name == "basecraft.host.registry_refresh.v1" {
                                 let previous = operation_tools(&registry, &policy)
                                     .map_err(|e| (-32603, e.to_string()))?;
-                                registry =
-                                    Registry::load(&config).map_err(|e| (-32603, e.to_string()))?;
+                                registry = Registry::reload(&config)
+                                    .map_err(|e| (-32603, e.to_string()))?;
                                 if previous
                                     != operation_tools(&registry, &policy)
                                         .map_err(|e| (-32603, e.to_string()))?

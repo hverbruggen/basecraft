@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "operations": [
     {
       "version": "1.0.0",
@@ -16,9 +16,6 @@
         "document_write": false,
         "artifact_write": true
       },
-      "required_features": [
-        "operation-contract-v1"
-      ],
       "name": "prepare",
       "implementation": "prepare",
       "title": "Prepare selected files for Zenodo",
@@ -114,9 +111,11 @@
         "document_write": false,
         "artifact_write": true
       },
-      "required_features": [
-        "operation-contract-v1"
-      ],
+      "needs": {
+        "credentials": {
+          "zenodo_access": "BASECRAFT_ZENODO_TOKEN"
+        }
+      },
       "name": "draft",
       "implementation": "draft",
       "title": "Create or resume a Zenodo draft",
@@ -345,13 +344,7 @@
           "retain": true
         }
       },
-      "credentials": {
-        "zenodo_access": "BASECRAFT_ZENODO_TOKEN"
-      },
       "host": {
-        "ambient_credentials": [
-          "zenodo_access"
-        ],
         "lifecycle": "remote_draft"
       }
     }

@@ -24,10 +24,10 @@ def inspect(snapshot, parameters, context):
     print('stderr=' + token, file=sys.stderr, flush=True)
     if parameters['fail']:
         raise ValueError('remote error=' + token)
-    Path(context['outputs']['report']).write_text(json.dumps(dict(seen=bool(token))))
+    Path(context.outputs['report']).write_text(json.dumps(dict(seen=bool(token))))
     return dict(ops=[], data=dict(seen=bool(token),echo=token), artifacts=[dict(role='report',path='.')])
-plugin.context_operation('inspect')(inspect)
-plugin.context_operation('other')(inspect)
+plugin.operation('inspect')(inspect)
+plugin.operation('other')(inspect)
 plugin.run()
 ";
 
@@ -43,11 +43,11 @@ fn fixture_registry(root: &Path, bundled: bool, title: &str) -> Registry {
         "inputs":{"source":{"view":"bytes","media_type":"application/octet-stream","min":1,"max":1}},
         "outputs":{"report":{"media_type":"application/json","min":1,"max":1,"visibility":"result"}},
         "effects":{"document_write":false,"artifact_write":true},
-        "credentials":{"access":"BASECRAFT_ZENODO_TOKEN"},"required_features":["operation-contract-v1"]})
+        "needs":{"credentials":{"access":"BASECRAFT_ZENODO_TOKEN"}}})
     };
     std::fs::write(
         source.join("operations.json"),
-        json!({"schema":1,"operations":[descriptor("inspect"),descriptor("other")]}).to_string(),
+        json!({"schema":2,"operations":[descriptor("inspect"),descriptor("other")]}).to_string(),
     )
     .unwrap();
     let config = RegistryConfig {
@@ -115,14 +115,32 @@ fn credential_scope_and_redaction() {
         assert!(status.success());
         return;
     }
-    for bundled in [false, true] {
+    // A bundled package receives the credentials it declares from the user's
+    // environment, and they never reach the run's evidence.
+    {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let registry = fixture_registry(root, true, "Original");
+        let id = "org.example.credentials/inspect@1";
+        let bundled = run(
+            &registry,
+            root,
+            SessionPolicy::new(root, true).unwrap(),
+            id,
+            false,
+        );
+        assert_eq!(bundled.data.as_ref().unwrap()["seen"], true, "{bundled:?}");
+        assert!(!evidence(&bundled).contains("synthetic-ambient-secret"));
+    }
+    {
+        let bundled = false;
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
         let registry = fixture_registry(root, bundled, "Original");
         let operation = registry
             .resolve("org.example.credentials/inspect@1", None)
             .unwrap();
-        // Declarations (even bundled ones) do not authorize ambient credentials.
+        // An installed package's declaration does not authorize ambient credentials.
         let ordinary = run(
             &registry,
             root,
@@ -170,7 +188,7 @@ fn credential_scope_and_redaction() {
         assert_eq!(failed.state, RuntimeState::Failed);
         assert!(failed.errors[0].message.contains("[redacted]"));
         evidence(&failed);
-        // Direct/legacy process spawn also strips ambient credentials before
+        // A directly spawned process also has ambient credentials stripped before
         // initialize, even when a package declares the same credential.
         let mut direct = basecraft_plugin_host::PluginProcess::spawn_with(
             &operation.package.manifest,
@@ -209,7 +227,7 @@ fn reserved_ipc_credential_is_rejected() {
         .resolve("org.example.credentials/inspect@1", None)
         .unwrap();
     let mut descriptor = OperationContract {
-        schema: 1,
+        schema: 2,
         operations: vec![operation.descriptor.clone()],
     };
     // The regular service token declaration and explicit pinned grant remain valid.
@@ -222,6 +240,7 @@ fn reserved_ipc_credential_is_rejected() {
     );
 
     descriptor.operations[0]
+        .needs
         .credentials
         .insert("access".into(), "BASECRAFT_TOKEN".into());
     assert!(
