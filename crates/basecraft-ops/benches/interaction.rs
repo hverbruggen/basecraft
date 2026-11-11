@@ -5,7 +5,7 @@ use basecraft_ops::{
 };
 use basecraft_platform::paths::AppPaths;
 use basecraft_protocol::Op;
-use serde_json::json;
+use serde::Serialize;
 use std::error::Error;
 use std::path::Path;
 use std::time::Instant;
@@ -53,6 +53,22 @@ fn verify(session: &Session, id: basecraft_ops::DocId, edited: bool) -> Result<(
         }
     }
     Ok(())
+}
+
+#[derive(Serialize)]
+struct Sample<'a> {
+    scenario: &'a str,
+    duration_ns: u128,
+    operations: usize,
+    schema_version: u8,
+    verified: bool,
+    fixture_bytes: u64,
+    output_bytes: u64,
+    rows: usize,
+    columns: Option<usize>,
+    edits: usize,
+    source_commit: &'a str,
+    debug_assertions: bool,
 }
 
 fn run() -> Result<()> {
@@ -129,6 +145,21 @@ fn run() -> Result<()> {
                 return Err("large FASTA payload verification failed".into());
             }
         }
+        session.apply(
+            id,
+            Op::SeqReplace {
+                start: 0,
+                end: 1,
+                residues: "N".into(),
+            },
+        )?;
+        if session.doc(id)?.read(0, 1) != b"N" {
+            return Err("large edit verification failed".into());
+        }
+        session.undo(id)?;
+        if session.doc(id)?.read(0, 1) != b"A" {
+            return Err("large undo verification failed".into());
+        }
     } else {
         verify(&session, id, false)?;
         if scenario != "open-alignment" {
@@ -179,16 +210,24 @@ fn run() -> Result<()> {
     }
     println!(
         "{}",
-        json!({
-            "scenario": scenario, "duration_ns": duration_ns, "operations": operations,
-            "schema_version": 2, "verified": true, "fixture_bytes": fixture_bytes,
-            "output_bytes": file.metadata()?.len(),
-            "rows": if bytes.is_some() { 1 } else { ROWS },
-            "columns": if bytes.is_some() { None } else { Some(WIDTH) },
-            "edits": if scenario == "open-alignment" || bytes.is_some() { 0 } else { EDITS },
-            "source_commit": option_env!("BASECRAFT_BENCH_REVISION").unwrap_or("unknown"),
-            "debug_assertions": cfg!(debug_assertions)
-        })
+        serde_json::to_string(&Sample {
+            scenario,
+            duration_ns,
+            operations,
+            schema_version: 2,
+            verified: true,
+            fixture_bytes,
+            output_bytes: file.metadata()?.len(),
+            rows: if bytes.is_some() { 1 } else { ROWS },
+            columns: if bytes.is_some() { None } else { Some(WIDTH) },
+            edits: if scenario == "open-alignment" || bytes.is_some() {
+                0
+            } else {
+                EDITS
+            },
+            source_commit: option_env!("BASECRAFT_BENCH_REVISION").unwrap_or("unknown"),
+            debug_assertions: cfg!(debug_assertions),
+        })?
     );
     Ok(())
 }

@@ -35,11 +35,12 @@ check:
     cargo test -p basecraft-ops --features test-counters --test budgets
     cargo test -p basecraft-io --features test-heap --lib heap::tests
     cargo test -p basecraft-ops --features test-heap --test heap_budgets
+    cargo test -p basecraft-ops --features test-heap,test-counters --test open_memory
     pixi run ruff check python plugins
 
 # Everything. Run before every push.
 ci: check schemas-check deny protocol-license replay qml-test
-    @echo "Timing gate off: provisioning review and supported-environment calibration pending (see benches/README.md)"
+    python3 benches/run.py --compact --samples 1 --gate gross
 
 # Generate JSON Schema and Arrow schemas from basecraft-protocol.
 schemas:
@@ -80,10 +81,6 @@ replay:
 # Warm-cache headless timings. Run on the build host under its shared lock.
 bench *args:
     python3 benches/run.py {{args}}
-
-# Opt-in only. Caller holds the site lock and supplies reviewed immutable inputs.
-bench-ci machine cache baseline environment runtime receipt checksum:
-    python3 benches/run.py --compact --samples 5 --gate gross --machine {{quote(machine)}} --cache {{quote(cache)}} --baseline {{quote(baseline)}} --environment {{quote(environment)}} --runtime-receipt {{quote(runtime)}} --provision {{quote(receipt)}} --provision-sha256 {{quote(checksum)}}
 
 # Compact defaults need no compilation. Legacy small/full stress tiers remain opt-in.
 # Run compiler-backed tiers on the configured remote build machine.

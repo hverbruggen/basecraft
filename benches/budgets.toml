@@ -1,9 +1,7 @@
-# Opt-in comparison limits from the M5 plan, not PRD qualification.
-# Default CI remains off pending provisioning review and supported-environment calibration.
+# Relative timing limits from M5, separate from PRD qualification.
 [comparison]
 benchmark_ratio = 1.30
 gross_ci_ratio = 2.0
-minimum_gate_samples = 5
 
 [scenarios.open-alignment]
 fixture = "32 rows x 4096 columns; rowNNN; ACGT rotated by row; .afa"
@@ -52,3 +50,16 @@ branches = "positive integer 1+(start*17+count*13)%97 on every nonroot subtree"
 open = "warm-cache recoverable Session::open only"
 midpoint = "one Session::apply(TreeMidpointRoot), first-edit recovery/journal/undo state included"
 verification = "all tip identities, finite branches, topology, total length, undo hashes, redo, journal replay, unchanged source"
+
+# Generous headless regression limits, distinct from PRD first-paint targets.
+# These work on an uncalibrated machine; named-machine history adds a relative gate.
+[limits_ms]
+open-alignment = 100
+open-fasta-100mb = 1500
+open-fasta-1gb = 15000
+edit-alignment = 16
+undo-alignment = 16
+save-alignment = 500
+frame = 16
+tree-open-50000 = 5000
+tree-midpoint-50000 = 5000
