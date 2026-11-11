@@ -15,6 +15,10 @@ pub mod qobject {
         #[qml_element]
         type AppCommands = super::CommandList;
         #[qinvokable]
+        fn caption(self: &AppCommands, id: &QString) -> QString;
+        #[qinvokable]
+        fn tip(self: &AppCommands, id: &QString) -> QString;
+        #[qinvokable]
         fn key(self: &AppCommands, id: &QString) -> QString;
         #[qinvokable]
         fn scope(self: &AppCommands, id: &QString) -> QString;
@@ -34,6 +38,12 @@ pub mod qobject {
 pub struct CommandList;
 
 impl qobject::AppCommands {
+    fn caption(&self, id: &QString) -> QString {
+        QString::from(commands::caption(&id.to_string()))
+    }
+    fn tip(&self, id: &QString) -> QString {
+        QString::from(commands::tip(&id.to_string()))
+    }
     fn key(&self, id: &QString) -> QString {
         QString::from(commands::key(&id.to_string()))
     }
