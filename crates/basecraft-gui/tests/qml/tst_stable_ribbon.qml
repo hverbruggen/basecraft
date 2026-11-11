@@ -59,6 +59,7 @@ Item {
                     property string currentKind: ""
                     property string currentPath: "/test"
                     property string ribbonTabName: "File"
+                    property bool projectingDocument: false
                     property var current: null
                     property var currentView: null
                     property var speciesView: null
