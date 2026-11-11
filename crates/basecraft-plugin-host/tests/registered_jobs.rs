@@ -728,11 +728,11 @@ fn document_inputs_read_the_session_revision_and_record_history() {
         [
             (
                 clean.run_id.as_str(),
-                basecraft_protocol::delimitation::JobStatus::Completed
+                basecraft_protocol::records::JobStatus::Completed
             ),
             (
                 edited.run_id.as_str(),
-                basecraft_protocol::delimitation::JobStatus::Completed
+                basecraft_protocol::records::JobStatus::Completed
             )
         ]
     );
@@ -756,7 +756,7 @@ fn document_inputs_read_the_session_revision_and_record_history() {
     assert!(record.events.iter().any(|event| matches!(&event.op,
         basecraft_protocol::Op::JobFinished { report }
             if report.id == failed.run_id
-                && report.status == basecraft_protocol::delimitation::JobStatus::Failed)));
+                && report.status == basecraft_protocol::records::JobStatus::Failed)));
     // A request pinned to an older revision is refused before anything runs.
     let stale = manager.submit_in_session(
         &registry,
@@ -821,7 +821,7 @@ fn document_repair_waits_for_owner_history_and_does_not_repeat_activity() {
             .iter()
             .filter(|event| matches!(&event.op,
         basecraft_protocol::Op::JobFinished { report } if report.id == accepted.run_id
-            && report.status == basecraft_protocol::delimitation::JobStatus::Completed))
+            && report.status == basecraft_protocol::records::JobStatus::Completed))
             .count(),
         1
     );
@@ -1007,7 +1007,7 @@ fn ungapped_alignment_input_accepts_unequal_lengths_without_padding() {
 #[test]
 fn tasks_cancel_registered_document_run_through_owner_without_success_history() {
     use basecraft_plugin_host::file_tool::{can_cancel_run, cancel_run};
-    use basecraft_protocol::delimitation::JobStatus;
+    use basecraft_protocol::records::JobStatus;
     for mode in ["slow", "hang"] {
         let temp = tempfile::tempdir().unwrap();
         let registry = alignment_registry(temp.path());
@@ -1274,7 +1274,7 @@ fn equal_content_retention_keeps_exact_primary_owner_and_leaf_lifecycles() {
                 // This ownership assertion fails on the former hash-only lookup
                 // when only the equal-byte sibling binding is retained.
                 if retain_primary {
-                    let origin = primary.extra["origin_run"].as_str().unwrap();
+                    let origin = primary.origin_run.as_deref().unwrap();
                     assert_eq!(
                         run.join(origin).canonicalize().unwrap(),
                         owner.canonicalize().unwrap()
@@ -1289,7 +1289,7 @@ fn equal_content_retention_keeps_exact_primary_owner_and_leaf_lifecycles() {
                     );
                 } else {
                     assert!(
-                        !primary.extra.contains_key("origin_run"),
+                        primary.origin_run.is_none(),
                         "unretained primary delegated to a distinct equal-byte original"
                     );
                     assert_eq!(

@@ -66,7 +66,6 @@ fn multi_record_genbank_and_annotated_fasta_refuse_save_and_save_as() {
                 assert!(!session.recovery_root().join("pending-save.json").exists());
             }
         }
-        session.flush().unwrap();
         let recovery = root.join(format!("recovered-{extension}"));
         let error =
             basecraft_ops::records::recover(session.recovery_root(), &recovery).unwrap_err();

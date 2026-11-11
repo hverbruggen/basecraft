@@ -339,7 +339,6 @@ fn damaged_journal_recovery_names_the_salvage_and_never_skips_events() {
     let doc = session.open(&file).unwrap();
     session.apply(doc, replace(1, "T")).unwrap();
     session.apply(doc, replace(3, "A")).unwrap();
-    session.flush().unwrap();
     let root = session.recovery_root().to_path_buf();
     // A crash: the process stops without saving.
     drop(session);

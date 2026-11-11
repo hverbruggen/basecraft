@@ -351,12 +351,10 @@ fn alignment_bursts_respect_actor_group_and_nonadjacent_boundaries() {
     session.apply(doc, replace(1, "G")).unwrap();
     session.set_actor(second.clone());
     session.apply(doc, replace(2, "T")).unwrap();
-    // Group boundaries retain the existing caller-owned flush contract.
-    session.flush().unwrap();
+    // An explicit group ends the burst and is its own undo step.
     session.begin_group();
     session.apply(doc, replace(3, "C")).unwrap();
     session.apply(doc, replace(4, "G")).unwrap();
-    session.flush().unwrap();
     session.end_group();
     session.apply(doc, replace(5, "T")).unwrap();
     session.apply(doc, replace(7, "C")).unwrap();
@@ -382,9 +380,10 @@ fn alignment_bursts_respect_actor_group_and_nonadjacent_boundaries() {
         .iter()
         .filter(|e| matches!(e.op, Op::AlnReplace { .. }))
         .collect();
-    assert_eq!(edits.len(), 5);
-    assert_eq!(edits[0].actor, first);
-    assert_eq!(edits[1].actor, second);
+    // Every keystroke is journaled on its own; bursts group only undo.
+    assert_eq!(edits.len(), 7);
+    assert_eq!(edits[1].actor, first);
+    assert_eq!(edits[2].actor, second);
     let report = basecraft_ops::records::replay(dir.path()).unwrap();
     assert!(report.ok(), "{:?}", report.problems);
 }

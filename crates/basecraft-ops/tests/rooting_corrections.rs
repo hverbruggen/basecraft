@@ -28,7 +28,6 @@ fn unrepresentable_tip_support_is_refused_before_recovery_tracking() {
             let revision = session.record_revision(id).unwrap();
             let error = session.apply(id, op).unwrap_err().to_string();
             assert!(error.contains("support on a tip"), "{error}");
-            session.flush().unwrap();
             assert_eq!(session.tree(id).unwrap().nodes(), before.nodes());
             assert_eq!(session.tree(id).unwrap().supports(), before.supports());
             assert_eq!(

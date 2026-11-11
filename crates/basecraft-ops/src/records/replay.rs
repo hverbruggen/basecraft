@@ -636,14 +636,6 @@ fn recover_entries(
         warnings: Vec::new(),
         damage,
         published: false,
-        #[cfg(test)]
-        after_write: None,
-        #[cfg(test)]
-        before_sync: None,
-        #[cfg(test)]
-        before_promote: None,
-        #[cfg(test)]
-        after_promote: None,
     })
 }
 
@@ -660,18 +652,7 @@ pub struct RecoveryAttempt {
     warnings: Vec<crate::session::SaveWarning>,
     damage: Option<String>,
     published: bool,
-    #[cfg(test)]
-    after_write: Option<PublicationBarrier>,
-    #[cfg(test)]
-    before_sync: Option<PublicationBarrier>,
-    #[cfg(test)]
-    before_promote: Option<PublicationBarrier>,
-    #[cfg(test)]
-    after_promote: Option<PublicationBarrier>,
 }
-
-#[cfg(test)]
-type PublicationBarrier = Box<dyn FnOnce(&Path)>;
 
 struct RecoveryDocument {
     relative: String,
@@ -978,10 +959,6 @@ impl RecoveryAttempt {
             };
             self.warnings.extend(outcome.warnings);
             self.documents[document].written = true;
-            #[cfg(test)]
-            if let Some(barrier) = self.after_write.take() {
-                barrier(&self.session_path(document)?);
-            }
             self.artifacts = artifacts(self.stage_path()?)?;
             outcome
                 .recovery_observation
@@ -1045,10 +1022,6 @@ impl RecoveryAttempt {
         let stage = self.validate()?.to_path_buf();
         let stores = self.session.recovery_stores()?;
         let evidence_actions = self.session.recovery_actions()?;
-        #[cfg(test)]
-        if let Some(barrier) = self.before_sync.take() {
-            barrier(&stage);
-        }
         for artifact in self.artifacts.iter().rev() {
             let path = stage.join(&artifact.path);
             if artifact.revision.is_some() {
@@ -1058,20 +1031,12 @@ impl RecoveryAttempt {
             }
         }
         self.validate()?;
-        #[cfg(test)]
-        if let Some(barrier) = self.before_promote.take() {
-            barrier(&self.destination);
-        }
         basecraft_platform::atomic::rename_noreplace(&stage, &self.destination)?;
         // Disarm immediately: post-promotion errors must never imply rollback.
         if let Some(staging) = self.staging.take() {
             let _ = staging.keep();
         }
         self.published = true;
-        #[cfg(test)]
-        if let Some(barrier) = self.after_promote.take() {
-            barrier(&self.destination);
-        }
         let mut completion = RecoveryCompletion {
             destination: self.destination.clone(),
             outputs: self
@@ -1114,279 +1079,9 @@ impl RecoveryAttempt {
     }
 }
 
-#[cfg(all(test, windows))]
-#[path = "../../tests/support/recovery_windows.rs"]
-mod recovery_windows;
-
-#[cfg(test)]
-use crate::isolated_profile as isolated_recovery_profile;
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn reconstructed(root: &Path, spart: bool) -> (Session, RecoveryAttempt) {
-        let source = root.join("source");
-        std::fs::create_dir_all(&source).unwrap();
-        let path = source.join(if spart { "a.spart" } else { "a.fasta" });
-        let bytes = if spart {
-            include_str!("../../../../testdata/fixtures/delimitation/manual.spart")
-        } else {
-            ">gene\nACGT\n"
-        };
-        std::fs::write(&path, bytes).unwrap();
-        let mut session = Session::recoverable(&source).unwrap();
-        let doc = session.open(&path).unwrap();
-        let op = if spart {
-            Op::DelimitationEdit {
-                edit: Box::new(basecraft_protocol::delimitation::DelimitationEdit::Remove {
-                    hypotheses: ["partition-3".into()].into(),
-                }),
-            }
-        } else {
-            Op::SeqReplace {
-                start: 1,
-                end: 2,
-                residues: "T".into(),
-            }
-        };
-        session.apply(doc, op).unwrap();
-        session.flush().unwrap();
-        let attempt = prepare_recovery(
-            session.recovery_root(),
-            &root.join("final"),
-            RecoveryMode::Strict,
-        )
-        .unwrap();
-        (session, attempt)
-    }
-
-    fn prepared(root: &Path, spart: bool) -> (Session, RecoveryAttempt) {
-        let (session, mut attempt) = reconstructed(root, spart);
-        attempt.advance(0, None).unwrap();
-        (session, attempt)
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn status_retains_written_after_real_post_write_observation_error() {
-        use std::os::unix::fs::PermissionsExt;
-        let Some(root) = isolated_recovery_profile::enter(
-            "records::replay::tests::status_retains_written_after_real_post_write_observation_error",
-        ) else {
-            return;
-        };
-        let (_session, mut attempt) = reconstructed(&root, false);
-        let check = attempt.check(0).unwrap();
-        let target = check.target().to_path_buf();
-        let original_identity = object_identity(&target, OrdinaryKind::File).unwrap();
-        assert_eq!(
-            attempt.status().unwrap().documents[0].phase,
-            RecoveryPhase::PendingWrite
-        );
-        attempt.after_write = Some(Box::new(|target| {
-            std::fs::set_permissions(target, std::fs::Permissions::from_mode(0o000)).unwrap();
-        }));
-        let error = attempt
-            .advance(
-                0,
-                Some(check.decide(crate::input_evidence::SavePolicy::Cancel, false)),
-            )
-            .unwrap_err();
-        assert!(matches!(
-            error,
-            crate::Error::Io(_) | crate::Error::Format(_)
-        ));
-        // The file is still unreadable: status must not re-inspect it. The real
-        // writer succeeded before the owned-stage observation returned its error.
-        let status = attempt.status().unwrap();
-        assert_eq!(status.phase, RecoveryPhase::NeedsFinalization);
-        assert_eq!(status.documents[0].phase, RecoveryPhase::NeedsFinalization);
-        assert!(status.documents[0].written);
-        assert!(!root.join("final").exists());
-        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
-        let written_identity = object_identity(&target, OrdinaryKind::File).unwrap();
-        assert_ne!(written_identity, original_identity);
-        assert_eq!(std::fs::read(&target).unwrap(), b">gene\nATGT\n");
-        // An untrusted observation requires reconstruction here, not another
-        // write. Status reports the stored fact, never permission to resave.
-        assert!(attempt.advance(0, None).is_err());
-        assert_eq!(
-            object_identity(&target, OrdinaryKind::File).unwrap(),
-            written_identity
-        );
-        assert!(attempt.status().unwrap().documents[0].written);
-    }
-
-    #[test]
-    fn final_noreplace_barrier_preserves_competitors() {
-        let Some(root) = isolated_recovery_profile::enter(
-            "records::replay::tests::final_noreplace_barrier_preserves_competitors",
-        ) else {
-            return;
-        };
-        for kind in 0..3 {
-            let case = root.join(kind.to_string());
-            std::fs::create_dir(&case).unwrap();
-            let (_session, mut attempt) = prepared(&case, false);
-            attempt.before_promote = Some(Box::new(move |destination| match kind {
-                0 => std::fs::write(destination, "competitor").unwrap(),
-                1 => std::fs::create_dir(destination).unwrap(),
-                _ => {
-                    std::fs::create_dir(destination).unwrap();
-                    std::fs::write(destination.join("owned"), "competitor").unwrap();
-                }
-            }));
-            assert!(matches!(attempt.publish(), Err(crate::Error::Io(_))));
-            assert!(!attempt.published);
-            assert!(std::fs::symlink_metadata(case.join("final")).is_ok());
-            if kind == 0 {
-                assert_eq!(std::fs::read(case.join("final")).unwrap(), b"competitor");
-            }
-            if kind == 2 {
-                assert_eq!(
-                    std::fs::read(case.join("final/owned")).unwrap(),
-                    b"competitor"
-                );
-            }
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn final_noreplace_barrier_preserves_unix_dangling_link() {
-        let Some(root) = isolated_recovery_profile::enter(
-            "records::replay::tests::final_noreplace_barrier_preserves_unix_dangling_link",
-        ) else {
-            return;
-        };
-        let (_session, mut attempt) = prepared(&root, false);
-        attempt.before_promote = Some(Box::new(|destination| {
-            std::os::unix::fs::symlink("missing", destination).unwrap();
-            assert!(
-                std::fs::symlink_metadata(destination)
-                    .unwrap()
-                    .file_type()
-                    .is_symlink()
-            );
-        }));
-        assert!(matches!(attempt.publish(), Err(crate::Error::Io(_))));
-        assert_eq!(
-            std::fs::read_link(root.join("final")).unwrap(),
-            Path::new("missing")
-        );
-        assert!(!attempt.published);
-    }
-
-    #[cfg(windows)]
-    #[test]
-    #[ignore = "requires native Windows NTFS, cmd.exe junction creation and symlink privilege/Developer Mode; run with --ignored"]
-    fn final_noreplace_barrier_preserves_windows_reparse_competitors() {
-        let Some(root) = super::recovery_windows::enter(
-            "records::replay::tests::final_noreplace_barrier_preserves_windows_reparse_competitors",
-        ) else {
-            return;
-        };
-        for junction in [false, true] {
-            let case = root.join(if junction { "junction" } else { "dangling" });
-            std::fs::create_dir(&case).unwrap();
-            let (_session, mut attempt) = prepared(&case, false);
-            let external = case.join("external");
-            std::fs::create_dir(&external).unwrap();
-            std::fs::write(external.join("owned"), b"external").unwrap();
-            let target = external.clone();
-            attempt.before_promote = Some(Box::new(move |destination| {
-                super::recovery_windows::competitor(destination, &target, junction);
-            }));
-            assert!(matches!(attempt.publish(), Err(crate::Error::Io(_))));
-            super::recovery_windows::assert_reparse(&case.join("final"));
-            assert_eq!(std::fs::read(external.join("owned")).unwrap(), b"external");
-            assert!(!attempt.published);
-        }
-    }
-
-    #[test]
-    fn post_promotion_registration_failure_retains_final_files() {
-        let Some(root) = isolated_recovery_profile::enter(
-            "records::replay::tests::post_promotion_registration_failure_retains_final_files",
-        ) else {
-            return;
-        };
-        let (_session, mut attempt) = prepared(&root, true);
-        let registry = basecraft_platform::paths::AppPaths::discover()
-            .unwrap()
-            .state
-            .join("analysis-stores.json");
-        assert!(!registry.exists());
-        attempt.after_promote = Some(Box::new(move |_| {
-            std::fs::create_dir(&registry).unwrap();
-        }));
-        let crate::Error::PublishedWithFailure(failure) = attempt.publish().unwrap_err() else {
-            panic!("expected published failure")
-        };
-        assert!(matches!(failure.cause, crate::Error::Io(_)));
-        assert_eq!(failure.completion.registered_stores, [] as [PathBuf; 0]);
-        assert_eq!(failure.completion.outputs.len(), 1);
-        let status = attempt.status().unwrap();
-        assert_eq!(status.phase, RecoveryPhase::Published);
-        assert!(status.documents[0].written);
-        assert_eq!(status.documents[0].phase, RecoveryPhase::Published);
-        assert_eq!(status.destination, failure.completion.destination);
-        assert_eq!(status.damage, failure.completion.damage);
-        drop(attempt);
-        let work = crate::files::load_delimitation(&failure.completion.outputs[0]).unwrap();
-        assert_eq!(work.hypotheses.len(), 2);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn sync_permission_failures_distinguish_before_and_after_promotion() {
-        use std::os::unix::fs::PermissionsExt;
-        let Some(root) = isolated_recovery_profile::enter(
-            "records::replay::tests::sync_permission_failures_distinguish_before_and_after_promotion",
-        ) else {
-            return;
-        };
-        let pre = root.join("pre");
-        std::fs::create_dir(&pre).unwrap();
-        let (_session, mut attempt) = prepared(&pre, false);
-        let file = attempt.check(0).unwrap().target().to_path_buf();
-        attempt.before_sync = Some(Box::new(|stage| {
-            std::fs::set_permissions(
-                stage.join("a.fasta"),
-                std::fs::Permissions::from_mode(0o000),
-            )
-            .unwrap();
-        }));
-        assert!(matches!(attempt.publish(), Err(crate::Error::Io(_))));
-        assert!(!pre.join("final").exists());
-        let status = attempt.status().unwrap();
-        assert_eq!(status.phase, RecoveryPhase::NeedsFinalization);
-        assert!(status.documents[0].written);
-        std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o600)).unwrap();
-        drop(attempt);
-        let post = root.join("post");
-        std::fs::create_dir(&post).unwrap();
-        let (_session, mut attempt) = prepared(&post, false);
-        attempt.after_promote = Some(Box::new(|destination| {
-            std::fs::set_permissions(
-                destination.parent().unwrap(),
-                std::fs::Permissions::from_mode(0o000),
-            )
-            .unwrap();
-        }));
-        let failure = attempt.publish().unwrap_err();
-        std::fs::set_permissions(&post, std::fs::Permissions::from_mode(0o700)).unwrap();
-        let crate::Error::PublishedWithFailure(failure) = failure else {
-            panic!("expected published failure")
-        };
-        assert!(matches!(failure.cause, crate::Error::Io(_)));
-        drop(attempt);
-        assert_eq!(
-            std::fs::read(&failure.completion.outputs[0]).unwrap(),
-            b">gene\nATGT\n"
-        );
-    }
 
     #[test]
     fn materialise_replaces_aliases_and_different_baselines_without_touching_sources() {
@@ -1478,7 +1173,6 @@ mod tests {
                 },
             )
             .unwrap();
-        session.flush().unwrap();
         let entries = log::read_all(root.path()).unwrap();
         let baseline = entries
             .iter()

@@ -85,6 +85,10 @@ pub struct HostServices {
     pub ambient_credentials: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caller: Option<String>,
+    /// Program a caller service runs. The host finds it through
+    /// `BASECRAFT_<PROGRAM>`, the plugin runtime, then PATH, and pins its hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caller_engine: Option<String>,
     /// Cooperative cancellation and receipt rules for a bundled remote service.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lifecycle: Option<LifecyclePolicy>,

@@ -720,7 +720,6 @@ mod tests {
             link.checked_snapshot(&output, session.tree(doc).unwrap())
                 .is_ok()
         );
-        session.flush().unwrap();
         assert!(crate::records::replay::replay(dir.path()).unwrap().ok());
     }
 

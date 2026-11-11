@@ -1,4 +1,7 @@
-use basecraft_protocol::delimitation::{DelimitationRequest, DelimitationResult, JobStatus};
+use basecraft_protocol::{
+    delimitation::{DelimitationRequest, DelimitationResult},
+    records::JobStatus,
+};
 use serde_json::json;
 use std::{collections::BTreeSet, process::Command};
 

@@ -445,7 +445,7 @@ mod tests {
     }
 
     #[test]
-    fn sequence_typing_merge_keeps_feature_undo_and_log_residue_case() {
+    fn sequence_typing_burst_keeps_feature_undo_and_journals_each_keystroke() {
         let root = tempfile::tempdir().unwrap();
         let source = root.path().join("sequence.gb");
         std::fs::write(
@@ -476,9 +476,8 @@ mod tests {
                 },
             )
             .unwrap();
-        assert_eq!(first.entry_id, second.entry_id);
+        assert_ne!(first.entry_id, second.entry_id);
         let edited = session.save_hashes(id).unwrap();
-        session.flush().unwrap();
         session.undo(id).unwrap();
         assert_eq!(session.save_hashes(id).unwrap(), initial);
         assert!(!session.can_undo(id).unwrap());
@@ -494,7 +493,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(replacements, vec!["aTG"]);
+        assert_eq!(replacements.len(), 2);
         let report = crate::records::replay::replay(root.path()).unwrap();
         assert!(report.ok(), "{:?}", report.problems);
     }

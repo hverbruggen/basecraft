@@ -9,6 +9,13 @@
         "null"
       ]
     },
+    "origin_run": {
+      "description": "The earlier run, relative to this one, that holds the preserved original.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "proposal_target": {
       "type": [
         "boolean",

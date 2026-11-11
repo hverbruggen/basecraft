@@ -70,6 +70,13 @@
             "null"
           ]
         },
+        "caller_engine": {
+          "description": "Program a caller service runs. The host finds it through\n`BASECRAFT_<PROGRAM>`, the plugin runtime, then PATH, and pins its hash.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "lifecycle": {
           "description": "Cooperative cancellation and receipt rules for a bundled remote service.",
           "anyOf": [

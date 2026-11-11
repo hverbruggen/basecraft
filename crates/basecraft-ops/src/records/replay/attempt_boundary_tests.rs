@@ -24,7 +24,6 @@ fn pre_session_refusal_discards_actual_consent() {
             },
         )
         .unwrap();
-    session.flush().unwrap();
     let destination = root.join("final");
     let mut attempt =
         prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict).unwrap();

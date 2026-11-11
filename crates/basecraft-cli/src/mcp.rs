@@ -245,7 +245,6 @@ impl Server {
                 }
                 let op: Op = serde_json::from_value(args["operation"].clone())?;
                 self.session.apply(doc, op)?;
-                self.session.flush()?;
                 self.state(doc)
             }
             "extract" => {
@@ -272,7 +271,6 @@ impl Server {
                     args["reverse"].as_bool().unwrap_or(false),
                     &target,
                 )?;
-                self.session.flush()?;
                 Ok(json!({"output":target,"hash":basecraft_io::hash_file(&target)?}))
             }
             "delimitation_linked_alignment" => Ok(json!({
@@ -332,7 +330,6 @@ impl Server {
                 let source = self.path(text(args, "path")?)?;
                 let name = args.get("name").and_then(Value::as_str).unwrap_or("");
                 let imported = self.session.import_support(doc, &source, name)?;
-                self.session.flush()?;
                 let mut state = self.state(doc)?;
                 state["added"] = json!(imported.added);
                 state["matched"] = json!(imported.matched);
@@ -1120,6 +1117,5 @@ pub fn serve(root: &Path, writable: bool, kind: ClientKind, model: &str) -> Resu
         output.flush()?;
     }
     drop(jobs);
-    server.session.flush()?;
     Ok(())
 }

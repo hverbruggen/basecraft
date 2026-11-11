@@ -6,7 +6,7 @@ mod common;
 
 use basecraft_ops::{Session, input_evidence, records};
 use basecraft_plugin_host::jobs::JobManager;
-use basecraft_protocol::{delimitation::JobStatus, operation::RuntimeState};
+use basecraft_protocol::{operation::RuntimeState, records::JobStatus};
 use serde_json::{Value, json};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};

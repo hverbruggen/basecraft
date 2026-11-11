@@ -101,7 +101,6 @@ fn refusal_in_recoverable_session_creates_no_tracking_or_history() {
             let revision = session.record_revision(id).unwrap();
             assert!(!session.recovery_root().exists());
             assert!(session.apply(id, op).is_err());
-            session.flush().unwrap();
             assert_eq!(session.tree(id).unwrap().to_newick(), before);
             assert_eq!(session.record_revision(id).unwrap(), revision);
             assert!(!session.can_undo(id).unwrap());

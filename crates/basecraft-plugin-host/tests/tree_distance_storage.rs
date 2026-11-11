@@ -110,7 +110,6 @@ fn matrix_reference_generated_failure_move_and_export_use_the_common_store() {
         common::names(&root),
         [".basecraft", "dirty.tsv", "matrix.tsv", "source.afa"]
     );
-    session.flush().unwrap();
     assert!(
         basecraft_ops::records::replay(session.recovery_root())
             .unwrap()

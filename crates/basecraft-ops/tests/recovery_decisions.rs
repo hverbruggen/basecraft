@@ -29,7 +29,6 @@ fn source(root: &Path, count: usize) -> Session {
             )
             .unwrap();
     }
-    session.flush().unwrap();
     session
 }
 fn registry() -> PathBuf {
@@ -449,7 +448,6 @@ fn nested_delimitation_registers_only_final_stores_and_reopens() {
             )
             .unwrap();
     }
-    source.flush().unwrap();
     let destination = root.join("final");
     let mut attempt =
         records::prepare_recovery(source.recovery_root(), &destination, RecoveryMode::Strict)
@@ -687,7 +685,6 @@ fn new_unsaved_sequence_has_final_only_issue_group_and_explicit_recovery() {
     };
     let mut source = Session::recoverable(&root).unwrap();
     source.create_sequence("new", "ACGT").unwrap();
-    source.flush().unwrap();
     let mut attempt = records::prepare_recovery(
         source.recovery_root(),
         &root.join("out"),
@@ -754,7 +751,6 @@ fn status_is_read_only_and_tracks_document_progress_without_slot_ids() {
             },
         )
         .unwrap();
-    session.flush().unwrap();
     let destination = root.join("out");
     let mut attempt =
         records::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
@@ -906,7 +902,6 @@ fn replaced_stage_directory_is_refused_with_file_identity_unchanged() {
             },
         )
         .unwrap();
-    session.flush().unwrap();
     let destination = root.join("out");
     let mut attempt =
         records::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)

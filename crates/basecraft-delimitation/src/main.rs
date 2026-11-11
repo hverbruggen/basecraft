@@ -1,7 +1,8 @@
 //! Standalone native preparation engine; plugins use this versioned request.
 use basecraft_distance::DistanceMatrixExt;
-use basecraft_protocol::delimitation::{
-    DelimitationRequest, DelimitationResult, JobRecord, JobStatus,
+use basecraft_protocol::{
+    delimitation::{DelimitationRequest, DelimitationResult},
+    records::{JobRecord, JobStatus},
 };
 use clap::Parser;
 use std::{

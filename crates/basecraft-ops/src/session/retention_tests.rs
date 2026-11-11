@@ -37,7 +37,6 @@ fn recovery_starts_at_completed_save() {
     std::fs::write(&path, b">sequence\nACGT\n").unwrap();
     let mut session = Session::new(&source);
     session.provenance_policy = basecraft_platform::settings::ProvenancePolicy::None;
-    session.merge = false;
     let doc = session.open(&path).unwrap();
     let replace = |start, residues: &str| Op::SeqReplace {
         start,
@@ -47,7 +46,6 @@ fn recovery_starts_at_completed_save() {
     session.apply(doc, replace(0, "T")).unwrap();
     session.save(doc, None).unwrap();
     session.apply(doc, replace(1, "A")).unwrap();
-    session.flush().unwrap();
     let recovered =
         crate::records::replay::recover(session.recovery_root(), &root.join("recovered")).unwrap();
     assert_eq!(std::fs::read(&recovered[0]).unwrap(), b">sequence\nTAGT\n");
@@ -202,7 +200,6 @@ fn cross_device_recovery_after_save_as_and_interrupted_save() {
             root.metadata().unwrap().dev()
         );
         session.provenance_policy = basecraft_platform::settings::ProvenancePolicy::None;
-        session.merge = false;
         let doc = if scenario == "new-save-as" {
             session.create_sequence("sequence", "AAAA").unwrap()
         } else {
@@ -251,7 +248,6 @@ fn cross_device_recovery_after_save_as_and_interrupted_save() {
                 b"TGAA"
             }
         };
-        session.flush().unwrap();
         let recovery = session.recovery_root().to_path_buf();
         std::mem::forget(session);
         let output = root.join(scenario);
@@ -314,7 +310,6 @@ fn recovery_after_save_keeps_feature_ids_and_external_save_as() {
     )
     .unwrap();
     let mut session = Session::new(&source);
-    session.merge = false;
     session.provenance_policy = basecraft_platform::settings::ProvenancePolicy::None;
     let doc = session.open(&file).unwrap();
     let feature = session
@@ -365,7 +360,6 @@ fn external_document_checkpoint_stays_inside_recovery_storage() {
     session.apply(doc, edit(0, "G")).unwrap();
     std::fs::write(&source, b">outside\nCCCC\n").unwrap();
     session.apply(doc, edit(1, "T")).unwrap();
-    session.flush().unwrap();
     assert_eq!(std::fs::read(&source).unwrap(), b">outside\nCCCC\n");
     let recovered =
         crate::records::replay::recover(session.recovery_root(), &root.join("recovered")).unwrap();
@@ -398,7 +392,6 @@ fn missing_cross_device_document_does_not_block_other_recovery() {
             .unwrap();
     }
     std::fs::remove_file(source.path().join("missing.fa")).unwrap();
-    session.flush().unwrap();
     let recovery = session.recovery_root().to_path_buf();
     std::mem::forget(session);
     let before = serde_json::to_vec(&crate::log::read_all(&recovery).unwrap()).unwrap();

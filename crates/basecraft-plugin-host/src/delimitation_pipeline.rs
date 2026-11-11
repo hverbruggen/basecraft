@@ -174,7 +174,7 @@ impl AlignmentWorkflow<'_> {
                 &serde_json::to_value(basecraft_protocol::records::WorkflowFailure {
                     version: 1,
                     job: basecraft_protocol::records::WorkflowFailureJob {
-                        status: basecraft_protocol::delimitation::JobStatus::Unavailable,
+                        status: basecraft_protocol::records::JobStatus::Unavailable,
                         diagnostics: vec![diagnostic.into()],
                     },
                     workspace: None,
