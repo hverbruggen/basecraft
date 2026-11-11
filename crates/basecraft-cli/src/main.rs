@@ -609,14 +609,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     schemars::schema_for!(basecraft_protocol::records::WorkflowFailure),
                 ),
                 (
-                    "tree-sidecar",
-                    schemars::schema_for!(basecraft_protocol::companion_records::TreeSidecar),
-                ),
-                (
-                    "delimitation-sidecar",
-                    schemars::schema_for!(
-                        basecraft_protocol::companion_records::DelimitationSidecar
-                    ),
+                    "companion",
+                    schemars::schema_for!(basecraft_protocol::companion_records::Companion),
                 ),
                 (
                     "sequence-arrow-pair",

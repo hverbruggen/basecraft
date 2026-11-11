@@ -79,9 +79,7 @@ fn support_kind_survives_current_sidecar() {
     let mut tree = files::load_tree(&path).unwrap().doc;
     assert_eq!(tree.supports()[0].kind, SupportKind::Unknown);
     tree.set_support_kind("Support", SupportKind::Bootstrap);
-    let mut sidecar = Vec::new();
-    files::write_tree_sidecar(&tree, &mut sidecar).unwrap();
-    std::fs::write(files::tree_sidecar(&path), sidecar).unwrap();
+    files::save_tree_companion(&path, &tree).unwrap();
     let reopened = files::load_tree(&path).unwrap().doc;
     assert_eq!(reopened.supports()[0].kind, SupportKind::Bootstrap);
     assert!(!reopened.supports()[0].proportions);
@@ -309,9 +307,7 @@ fn imported_supports_retain_recorded_names_kinds_and_evidence() {
     source.rename_support("Support 2", "Posterior probability");
     source.set_support_kind("Standard bootstrap", SupportKind::Bootstrap);
     source.set_support_kind("Posterior probability", SupportKind::Probability);
-    let mut sidecar = Vec::new();
-    files::write_tree_sidecar(&source, &mut sidecar).unwrap();
-    std::fs::write(files::tree_sidecar(&path), sidecar).unwrap();
+    files::save_tree_companion(&path, &source).unwrap();
     let known = files::load_tree(&path).unwrap().doc;
     assert_eq!(known.supports()[0].name, "Standard bootstrap");
     assert_eq!(known.supports()[1].name, "Posterior probability");
@@ -335,11 +331,12 @@ fn unreadable_metadata_never_blocks_the_exchange_tree() {
     std::fs::write(&path, original).unwrap();
     let tree = files::load_tree(&path).unwrap().doc;
     let mut bytes = Vec::new();
-    files::write_tree_sidecar(&tree, &mut bytes).unwrap();
+    let hash = basecraft_io::hash_bytes(original);
+    files::write_companion(&files::tree_companion(&tree, &hash), &mut bytes).unwrap();
     let mut side: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     let sidecar = files::tree_sidecar(&path);
     for version in [0, 99] {
-        side["schema_version"] = version.into();
+        side["version"] = version.into();
         std::fs::write(&sidecar, serde_json::to_vec(&side).unwrap()).unwrap();
         let mut session = Session::unlogged(dir.path());
         let id = session.open(&path).unwrap();

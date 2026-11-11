@@ -170,7 +170,7 @@ def invoke(method, params):
                 hypothesis["provenance"]["parameters"]["input_evidence"] = evidence
             if sidecar.is_file():
                 sidecar.write_text(json.dumps({"version": 1, "exchange_hash": published[str(spart)],
-                                               "workspace": workspace}, indent=2) + "\n")
+                                               "delimitation": {"workspace": workspace}}, indent=2) + "\n")
                 published[str(sidecar)] = subprocess.check_output([engine, "--hash", str(sidecar)], text=True).strip()
         metadata["job"]["outputs"] = published
         with staged_output.open("w") as stream:

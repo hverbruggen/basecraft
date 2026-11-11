@@ -553,7 +553,34 @@ pub fn tree_sidecar(path: &Path) -> PathBuf {
     path.with_file_name(name)
 }
 
-use basecraft_protocol::companion_records::{DelimitationSidecar, SupportName, TreeSidecar};
+use basecraft_protocol::companion_records::{
+    COMPANION_VERSION, Companion, DelimitationCompanion, SupportName, TreeCompanion,
+};
+
+/// Write a document's companion. Every `*.basecraft.json` goes through here.
+pub fn write_companion(companion: &Companion, w: &mut dyn Write) -> io::Result<()> {
+    serde_json::to_writer_pretty(&mut *w, companion)?;
+    writeln!(w)
+}
+
+/// Read a document's companion. Refuses another layout, and a companion
+/// written for different bytes than the document's.
+fn read_companion(path: &Path, bytes: &[u8], exchange_hash: &str) -> Result<Companion> {
+    let companion: Companion = serde_json::from_slice(bytes)?;
+    if companion.version != COMPANION_VERSION {
+        return Err(Error::Unsupported(format!(
+            "{} was written by a different basecraft version",
+            path.display()
+        )));
+    }
+    if companion.exchange_hash != exchange_hash {
+        return Err(Error::Damaged {
+            path: path.into(),
+            detail: "the file it describes was changed outside basecraft".into(),
+        });
+    }
+    Ok(companion)
+}
 
 /// Read the first tree of a Newick or NEXUS file, with its sidecar.
 pub fn load_tree(path: &Path) -> Result<OpenedTree> {
@@ -601,7 +628,7 @@ fn load_tree_bytes(
         if let Some(issue) = side_issue {
             return Err(Error::Io(io::Error::other(issue)));
         }
-        // Errors in a hidden association must never select an adjacent legacy file.
+        // A broken hidden binding never falls back to the companion beside the file.
         let run = crate::analysis_store::ArtifactRun::for_result_with_hash(path, exchange_hash)?;
         let bound = run.is_some();
         let (sidecar, side) = match run {
@@ -616,23 +643,13 @@ fn load_tree_bytes(
             None => (tree_sidecar(path), captured_side.cloned()),
         };
         if let Some(bytes) = &side {
-            let side: TreeSidecar = serde_json::from_slice(bytes.bytes())?;
-            if side.schema_version != 1 {
-                return Err(Error::Unsupported(
-                    "Unsupported tree metadata version".into(),
-                ));
-            }
-            if side.tree_hash != tree_hash(&doc)
-                || side
-                    .exchange_hash
-                    .as_ref()
-                    .is_some_and(|hash| hash != exchange_hash)
-            {
-                return Err(Error::Damaged {
+            let side = read_companion(&sidecar, bytes.bytes(), exchange_hash)?
+                .tree
+                .filter(|side| side.tree_hash == tree_hash(&doc))
+                .ok_or_else(|| Error::Damaged {
                     path: sidecar,
-                    detail: "Tree metadata describes different exchange contents".into(),
-                });
-            }
+                    detail: "Tree metadata describes a different tree".into(),
+                })?;
             let kinds: Vec<_> = side
                 .supports
                 .iter()
@@ -691,29 +708,6 @@ pub fn write_tree(tree: &OpenedTree, w: &mut dyn Write) -> io::Result<()> {
     Ok(())
 }
 
-pub fn write_tree_sidecar(doc: &TreeDoc, w: &mut dyn Write) -> io::Result<()> {
-    write_tree_metadata(doc, None, w)
-}
-
-/// File-backed metadata binds the entire exchange, including forests and NEXUS.
-pub fn write_tree_sidecar_at(
-    doc: &TreeDoc,
-    exchange_hash: &str,
-    w: &mut dyn Write,
-) -> io::Result<()> {
-    write_tree_metadata(doc, Some(exchange_hash.to_owned()), w)
-}
-
-fn write_tree_metadata(
-    doc: &TreeDoc,
-    exchange_hash: Option<String>,
-    w: &mut dyn Write,
-) -> io::Result<()> {
-    let side = tree_metadata(doc, exchange_hash);
-    serde_json::to_writer_pretty(&mut *w, &side)?;
-    writeln!(w)
-}
-
 fn tree_hash(doc: &TreeDoc) -> String {
     let mut writer = HashingWriter::new(io::sink());
     doc.write_newick(&mut writer)
@@ -721,23 +715,33 @@ fn tree_hash(doc: &TreeDoc) -> String {
     writer.hash()
 }
 
-fn tree_metadata(doc: &TreeDoc, exchange_hash: Option<String>) -> TreeSidecar {
-    TreeSidecar {
-        schema_version: 1,
-        tree_hash: tree_hash(doc),
-        exchange_hash,
-        supports: doc
-            .supports()
-            .iter()
-            .map(|s| SupportName {
-                name: s.name.clone(),
-                source: s.source.clone(),
-                kind: s.kind,
-            })
-            .collect(),
-        annotations: doc.annotations().clone(),
-        style: doc.style().clone(),
+/// A tree's companion, for the saved file whose bytes hash to `exchange_hash`.
+pub fn tree_companion(doc: &TreeDoc, exchange_hash: &str) -> Companion {
+    Companion {
+        tree: Some(TreeCompanion {
+            tree_hash: tree_hash(doc),
+            supports: doc
+                .supports()
+                .iter()
+                .map(|s| SupportName {
+                    name: s.name.clone(),
+                    source: s.source.clone(),
+                    kind: s.kind,
+                })
+                .collect(),
+            annotations: doc.annotations().clone(),
+            style: doc.style().clone(),
+        }),
+        ..Companion::new(exchange_hash)
     }
+}
+
+/// Replace the companion of a tree file already on disk.
+pub fn save_tree_companion(tree: &Path, doc: &TreeDoc) -> Result<PathBuf> {
+    let companion = tree_companion(doc, &basecraft_io::hash_file(tree)?);
+    let path = tree_sidecar(tree);
+    basecraft_io::write_atomic(&path, |w| write_companion(&companion, w))?;
+    Ok(path)
 }
 
 /// An open document plus what's needed to write its file back.
@@ -1288,7 +1292,7 @@ fn load_delimitation_bytes(
     } else {
         basecraft_io::spart::parse_text(text)?
     };
-    // A damaged hidden binding must never silently select stale legacy data.
+    // A broken hidden binding never falls back to the companion beside the file.
     let hidden = crate::analysis_store::ArtifactRun::for_result(path)?;
     if hidden.is_some() && captured_side.is_none() {
         return Err(crate::error::invalid(
@@ -1296,19 +1300,18 @@ fn load_delimitation_bytes(
         ));
     }
     if let Some(source) = captured_side {
-        let side: DelimitationSidecar = serde_json::from_slice(source.bytes())?;
-        if side.version != 2 || side.exchange_hash != exchange_hash {
-            return Err(Error::Damaged {
-                path: tree_sidecar(path),
-                detail: "SPART sidecar version or exchange hash differs".into(),
-            });
-        }
+        let companion = tree_sidecar(path);
+        let side = read_companion(&companion, source.bytes(), exchange_hash)?
+            .delimitation
+            .ok_or_else(|| Error::Damaged {
+                path: companion,
+                detail: "the companion holds no species workspace".into(),
+            })?;
         work = side.workspace;
-        let new = path.parent().unwrap_or(Path::new(".")).canonicalize()?;
-        let old = side
-            .path_base
-            .ok_or_else(|| crate::error::invalid("Species metadata has no path base"))?;
-        rebase_delimitation_paths(&mut work, &old, &new);
+        if let Some(old) = side.path_base {
+            let new = path.parent().unwrap_or(Path::new(".")).canonicalize()?;
+            rebase_delimitation_paths(&mut work, &old, &new);
+        }
     }
     basecraft_docs::delimitation::validate(&work).map_err(|e| crate::error::invalid(e.0))?;
     Ok(work)
@@ -1327,12 +1330,13 @@ pub fn write_delimitation(
     w.write_all(text.as_bytes())
 }
 
-pub fn write_delimitation_sidecar_at(
+/// A species workspace's companion. Its paths are recorded under the folder
+/// `target` is saved in, so they follow the SPART file when it moves.
+pub fn delimitation_companion(
     work: &basecraft_protocol::delimitation::DelimitationWorkspace,
-    hash: &str,
+    exchange_hash: &str,
     target: &Path,
-    w: &mut dyn Write,
-) -> io::Result<()> {
+) -> io::Result<Companion> {
     let parent = target
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -1340,23 +1344,13 @@ pub fn write_delimitation_sidecar_at(
     let base = parent
         .canonicalize()
         .or_else(|_| std::path::absolute(parent))?;
-    write_delimitation_sidecar_in(work, hash, &base, w)
-}
-
-pub(crate) fn write_delimitation_sidecar_in(
-    work: &basecraft_protocol::delimitation::DelimitationWorkspace,
-    hash: &str,
-    base: &Path,
-    w: &mut dyn Write,
-) -> io::Result<()> {
-    let side = DelimitationSidecar {
-        version: 2,
-        exchange_hash: hash.into(),
-        path_base: Some(base.to_path_buf()),
-        workspace: work.clone(),
-    };
-    serde_json::to_writer_pretty(&mut *w, &side)?;
-    writeln!(w)
+    Ok(Companion {
+        delimitation: Some(DelimitationCompanion {
+            path_base: Some(base),
+            workspace: work.clone(),
+        }),
+        ..Companion::new(exchange_hash)
+    })
 }
 
 /// Rebase only declared workspace path fields; authored text and scientific

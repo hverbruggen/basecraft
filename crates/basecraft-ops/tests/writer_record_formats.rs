@@ -61,8 +61,8 @@ fn document_writer_bytes_require_a_version_bump() {
     let hash = basecraft_io::hash_bytes(&bytes);
     golden("newick", "tree", &path, bytes);
     let mut bytes = Vec::new();
-    files::write_tree_sidecar_at(&opened.doc, &hash, &mut bytes).unwrap();
-    golden("tree-sidecar", "tree", &path, bytes);
+    files::write_companion(&files::tree_companion(&opened.doc, &hash), &mut bytes).unwrap();
+    golden("companion", "tree", &path, bytes);
     let path = root.join("species-delimitation/hypotheses.spart");
     let workspace = files::load_delimitation(&path).unwrap();
     for xml in [false, true] {
@@ -73,14 +73,13 @@ fn document_writer_bytes_require_a_version_bump() {
     #[cfg(unix)]
     {
         let mut bytes = Vec::new();
-        files::write_delimitation_sidecar_at(
-            &workspace,
-            "b3:fixture",
-            Path::new("/fixture.spart"),
+        files::write_companion(
+            &files::delimitation_companion(&workspace, "b3:fixture", Path::new("/fixture.spart"))
+                .unwrap(),
             &mut bytes,
         )
         .unwrap();
-        golden("delimitation-sidecar", "current", &path, bytes);
+        golden("companion", "delimitation", &path, bytes);
     }
     {
         use basecraft_ops::records::{AlignmentLink, AlignmentLinkExt};
@@ -261,10 +260,9 @@ fn companion_record_types_round_trip_original_writer_bytes() {
         }
         assert_eq!(encoded, original);
     }
-    check::<basecraft_protocol::companion_records::TreeSidecar>("tree-sidecar-tree-v1.bin");
-    check::<basecraft_protocol::companion_records::DelimitationSidecar>(
-        "delimitation-sidecar-current-v1.bin",
-    );
+    use basecraft_protocol::companion_records::Companion;
+    check::<Companion>("companion-tree-v1.bin");
+    check::<Companion>("companion-delimitation-v1.bin");
 }
 
 // Only current writer goldens are kept; the journal has no old-writer exceptions.
@@ -273,8 +271,8 @@ fn writer_versions(path: &Path) -> std::collections::BTreeMap<String, u32> {
     let formats: &[(&str, u32)] = match Format::from_path(path) {
         Ok(Format::Fasta) => &[("fasta", 1), ("gff3", 1)],
         Ok(Format::GenBank) => &[("genbank", 1)],
-        Ok(Format::Tree) => &[("newick", 1), ("tree-sidecar", 1), ("alignment-link", 1)],
-        Ok(Format::Delimitation) => &[("spart", 1), ("delimitation-sidecar", 1)],
+        Ok(Format::Tree) => &[("newick", 1), ("companion", 1), ("alignment-link", 1)],
+        Ok(Format::Delimitation) => &[("spart", 1), ("companion", 1)],
         Ok(Format::Metadata) => &[("metadata-manifest", 1), ("metadata-tsv", 1)],
         Ok(Format::Submission) => &[("submission", 1)],
         Ok(Format::SangerReview) => &[("sanger-review", 3)],

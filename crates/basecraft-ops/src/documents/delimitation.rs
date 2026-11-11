@@ -100,10 +100,12 @@ impl Document for DelimitationWorkspace {
         let mut side_hash = String::new();
         basecraft_io::write_atomic(&sidecar, |w| {
             let mut hw = HashingWriter::new(w);
-            files::write_delimitation_sidecar_at(
-                self,
-                &main_hash,
-                &publication.logical(target).map_err(std::io::Error::other)?,
+            files::write_companion(
+                &files::delimitation_companion(
+                    self,
+                    &main_hash,
+                    &publication.logical(target).map_err(std::io::Error::other)?,
+                )?,
                 &mut hw,
             )?;
             side_hash = hw.hash();
@@ -130,10 +132,8 @@ impl Document for DelimitationWorkspace {
         files::write_delimitation(self, files::delimitation_xml(target), &mut main)?;
         let hash = main.hash();
         let mut side = HashingWriter::new(std::io::sink());
-        files::write_delimitation_sidecar_at(
-            self,
-            &hash,
-            &publication.logical(target)?,
+        files::write_companion(
+            &files::delimitation_companion(self, &hash, &publication.logical(target)?)?,
             &mut side,
         )?;
         Ok(vec![hash, side.hash()])
@@ -229,7 +229,11 @@ mod tests {
                 .unwrap();
             let hash = basecraft_io::hash_bytes(&main);
             let mut side = Vec::new();
-            files::write_delimitation_sidecar_at(&initial, &hash, &target, &mut side).unwrap();
+            files::write_companion(
+                &files::delimitation_companion(&initial, &hash, &target).unwrap(),
+                &mut side,
+            )
+            .unwrap();
             let expected = vec![hash.clone(), basecraft_io::hash_bytes(&side)];
             assert_eq!(
                 doc.saved_hashes(&target, &super::super::WritePublication::Immediate)

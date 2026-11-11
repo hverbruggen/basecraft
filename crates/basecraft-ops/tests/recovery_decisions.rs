@@ -422,10 +422,12 @@ fn nested_delimitation_registers_only_final_stores_and_reopens() {
         .unwrap();
         let sidecar = basecraft_ops::files::tree_sidecar(&path);
         basecraft_io::write_atomic(&sidecar, |w| {
-            basecraft_ops::files::write_delimitation_sidecar_at(
-                &work,
-                &basecraft_io::hash_file(&path).map_err(std::io::Error::other)?,
-                &path,
+            basecraft_ops::files::write_companion(
+                &basecraft_ops::files::delimitation_companion(
+                    &work,
+                    &basecraft_io::hash_file(&path).map_err(std::io::Error::other)?,
+                    &path,
+                )?,
                 w,
             )
         })
@@ -487,7 +489,10 @@ fn nested_delimitation_registers_only_final_stores_and_reopens() {
         let side = basecraft_ops::files::tree_sidecar(&file);
         let value: serde_json::Value =
             serde_json::from_slice(&std::fs::read(side).unwrap()).unwrap();
-        assert_eq!(value["path_base"], file.parent().unwrap().to_str().unwrap());
+        assert_eq!(
+            value["delimitation"]["path_base"],
+            file.parent().unwrap().to_str().unwrap()
+        );
         let run = basecraft_ops::analysis_store::ArtifactRun::for_result(&file)
             .unwrap()
             .unwrap();

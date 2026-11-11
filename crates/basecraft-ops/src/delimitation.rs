@@ -79,7 +79,7 @@ fn stage_workspace(
     })?;
     let hash = basecraft_io::hash_file(&staged)?;
     basecraft_io::write_atomic(&run.artifact(&format!("{name}.basecraft.json"))?, |w| {
-        files::write_delimitation_sidecar_at(work, &hash, target, w)
+        files::write_companion(&files::delimitation_companion(work, &hash, target)?, w)
     })?;
     Ok(name.into())
 }

@@ -267,8 +267,11 @@ fn bound_tree_verifies_owned_snapshot_after_main_mutation_or_removal() {
             let expected = files::load_tree(&path).unwrap();
             if metadata {
                 let mut bytes = Vec::new();
-                files::write_tree_sidecar_at(&expected.doc, &hash_bytes(original), &mut bytes)
-                    .unwrap();
+                files::write_companion(
+                    &files::tree_companion(&expected.doc, &hash_bytes(original)),
+                    &mut bytes,
+                )
+                .unwrap();
                 std::fs::write(run.artifact("bound.nwk.basecraft.json").unwrap(), bytes).unwrap();
             }
             let (source, hash) = Source::open_hashed(&path).unwrap();
@@ -395,16 +398,19 @@ fn bound_tree_snapshot_verification_keeps_binding_run_namespace_and_metadata_gua
             "metadata-version" | "metadata-exchange" | "metadata-tree" | "metadata-legacy" => {
                 let opened = files::load_tree(&path).unwrap();
                 let mut bytes = Vec::new();
-                files::write_tree_sidecar_at(&opened.doc, &hash_bytes(original), &mut bytes)
-                    .unwrap();
+                files::write_companion(
+                    &files::tree_companion(&opened.doc, &hash_bytes(original)),
+                    &mut bytes,
+                )
+                .unwrap();
                 let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
                 match fault {
-                    "metadata-version" => value["schema_version"] = 2.into(),
-                    "metadata-legacy" => value["schema_version"] = 0.into(),
+                    "metadata-version" => value["version"] = 2.into(),
+                    "metadata-legacy" => value["version"] = 0.into(),
                     "metadata-exchange" => {
                         value["exchange_hash"] = hash_bytes(b"other bytes").into();
                     }
-                    _ => value["tree_hash"] = hash_bytes(b"other tree").into(),
+                    _ => value["tree"]["tree_hash"] = hash_bytes(b"other tree").into(),
                 }
                 std::fs::write(
                     run.artifact("bound.nwk.basecraft.json").unwrap(),

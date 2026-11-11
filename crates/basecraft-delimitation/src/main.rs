@@ -92,13 +92,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })?;
         let spart_hash = basecraft_io::hash_file(&spart)?;
         basecraft_io::write_atomic(&sidecar, |w| {
+            use basecraft_protocol::companion_records::{Companion, DelimitationCompanion};
             serde_json::to_writer_pretty(
                 w,
-                &basecraft_protocol::companion_records::DelimitationSidecar {
-                    version: 1,
-                    exchange_hash: spart_hash.clone(),
-                    path_base: None,
-                    workspace: workspace.clone(),
+                &Companion {
+                    delimitation: Some(DelimitationCompanion {
+                        path_base: None,
+                        workspace: workspace.clone(),
+                    }),
+                    ..Companion::new(spart_hash.clone())
                 },
             )?;
             Ok(())

@@ -192,10 +192,13 @@ fn linked_taxa_journey(mut app: std::pin::Pin<&mut cxx_qt_lib_extras::QApplicati
             "LINKED_MEMBERS",
             &serde_json::to_string(&group.members).unwrap(),
         );
-    basecraft_ops::files::write_delimitation_sidecar_at(
-        &work,
-        &basecraft_io::hash_file(&workspace).unwrap(),
-        &workspace,
+    basecraft_ops::files::write_companion(
+        &basecraft_ops::files::delimitation_companion(
+            &work,
+            &basecraft_io::hash_file(&workspace).unwrap(),
+            &workspace,
+        )
+        .unwrap(),
         &mut std::fs::File::create(basecraft_ops::files::tree_sidecar(&workspace)).unwrap(),
     )
     .unwrap();

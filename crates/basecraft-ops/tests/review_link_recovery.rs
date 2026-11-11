@@ -83,7 +83,12 @@ fn guarded_partial_save_supports_retry_and_manual_intended_recovery() {
                 // Restore the intended presentation and association state for the new main file.
                 // Restoring previous links alone would be wrong after main-file replacement.
                 let mut bytes = Vec::new();
-                files::write_tree_sidecar(session.tree(doc).unwrap(), &mut bytes).unwrap();
+                let hash = basecraft_io::hash_file(&output).unwrap();
+                files::write_companion(
+                    &files::tree_companion(session.tree(doc).unwrap(), &hash),
+                    &mut bytes,
+                )
+                .unwrap();
                 std::fs::write(&presentation, bytes).unwrap();
                 for (key, path) in [
                     ("intended_origin", records::sidecar(&output)),

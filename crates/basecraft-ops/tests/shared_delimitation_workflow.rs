@@ -35,10 +35,8 @@ fn inspection_and_naming_are_read_only_and_keep_stable_order() {
         .attributes
         .insert("asap_rank".into(), "1".into());
     let hash = basecraft_io::hash_file(&paths[0]).unwrap();
-    files::write_delimitation_sidecar_at(
-        &work,
-        &hash,
-        &paths[0],
+    files::write_companion(
+        &files::delimitation_companion(&work, &hash, &paths[0]).unwrap(),
         &mut std::fs::File::create(files::tree_sidecar(&paths[0])).unwrap(),
     )
     .unwrap();
@@ -355,10 +353,9 @@ fn hint_workspace(
     std::fs::write(&path, SPART).unwrap();
     let mut work = files::load_delimitation(&path).unwrap();
     change(&mut work);
-    files::write_delimitation_sidecar_at(
-        &work,
-        &basecraft_io::hash_file(&path).unwrap(),
-        &path,
+    files::write_companion(
+        &files::delimitation_companion(&work, &basecraft_io::hash_file(&path).unwrap(), &path)
+            .unwrap(),
         &mut std::fs::File::create(files::tree_sidecar(&path)).unwrap(),
     )
     .unwrap();

@@ -106,9 +106,11 @@ impl Document for OpenedTree {
             basecraft_io::write_atomic(path, |w| {
                 let mut hw = HashingWriter::new(w);
                 if sidecar_file {
-                    files::write_tree_sidecar_at(
-                        &self.doc,
-                        &basecraft_io::hash_file(target).map_err(std::io::Error::other)?,
+                    files::write_companion(
+                        &files::tree_companion(
+                            &self.doc,
+                            &basecraft_io::hash_file(target).map_err(std::io::Error::other)?,
+                        ),
                         &mut hw,
                     )?;
                 } else {
@@ -133,7 +135,7 @@ impl Document for OpenedTree {
         let mut hw = HashingWriter::new(std::io::sink());
         files::write_tree(self, &mut hw)?;
         let mut side = HashingWriter::new(std::io::sink());
-        files::write_tree_sidecar_at(&self.doc, &hw.hash(), &mut side)?;
+        files::write_companion(&files::tree_companion(&self.doc, &hw.hash()), &mut side)?;
         Ok(vec![hw.hash(), side.hash()])
     }
 }
