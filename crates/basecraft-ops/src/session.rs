@@ -32,6 +32,7 @@ mod creation;
 mod extraction;
 mod history;
 mod open;
+use open::SavedMark;
 mod proposals;
 mod publish;
 #[cfg(test)]
@@ -104,9 +105,6 @@ struct Slot {
     disk_stamp: basecraft_protocol::provenance::FileStamp,
 }
 
-#[derive(Clone, PartialEq, Eq)]
-struct SavedMark(Option<String>);
-
 /// A merged typing burst whose log entry hasn't been written yet.
 struct Pending {
     doc: DocId,
@@ -142,7 +140,7 @@ pub struct Session {
     write_publication: crate::documents::WritePublication,
     evidence_actions: Mutex<Vec<save_decision::EvidenceAction>>,
     replay_mode: ReplayMode,
-    memory_objects: Mutex<std::collections::HashMap<String, Vec<u8>>>,
+    memory_objects: Mutex<std::collections::HashMap<String, basecraft_io::Source>>,
     events: Vec<LogEntry>,
     pending_baselines: Vec<LogEntry>,
     id: String,

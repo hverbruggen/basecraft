@@ -877,16 +877,23 @@ impl TreeDoc {
     /// The tree as Newick. Internal nodes carry their support values joined
     /// with `/`, in set order, or their name.
     pub fn to_newick(&self) -> String {
-        let mut out = String::new();
+        let mut out = Vec::new();
+        self.write_newick(&mut out)
+            .expect("writing to a byte buffer cannot fail");
+        String::from_utf8(out).expect("Newick output is UTF-8")
+    }
+
+    /// Stream the same Newick bytes without allocating a complete saved form.
+    pub fn write_newick(&self, out: &mut dyn std::io::Write) -> std::io::Result<()> {
         // Iterative events also handle very deep trees after rerooting.
         let mut stack = vec![(self.root, false, false)];
         while let Some((i, close, comma)) = stack.pop() {
             if comma {
-                out.push(',');
+                out.write_all(b",")?;
             }
             let node = &self.nodes[i];
             if !close && !node.is_tip() {
-                out.push('(');
+                out.write_all(b"(")?;
                 stack.push((i, true, false));
                 for (k, &child) in node.children.iter().enumerate().rev() {
                     stack.push((child, false, k > 0));
@@ -894,25 +901,25 @@ impl TreeDoc {
                 continue;
             }
             if close {
-                out.push(')');
+                out.write_all(b")")?;
             }
             let support = self.support_text(i);
             if node.is_tip() || support.is_empty() {
                 if !node.name.is_empty() {
-                    out.push_str(&newick::quote_name(&node.name));
+                    out.write_all(newick::quote_name(&node.name).as_bytes())?;
                 }
             } else {
-                out.push_str(&support);
+                out.write_all(support.as_bytes())?;
             }
             if i != self.root
                 && let Some(length) = node.length
             {
-                out.push(':');
-                out.push_str(&newick::format_length(length));
+                out.write_all(b":")?;
+                out.write_all(newick::format_length(length).as_bytes())?;
             }
         }
-        out.push(';');
-        out
+        out.write_all(b";")?;
+        Ok(())
     }
 
     /// Every set's value at `node`, joined with `/`; empty if none has one.

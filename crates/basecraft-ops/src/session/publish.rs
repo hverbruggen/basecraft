@@ -338,7 +338,7 @@ impl Session {
                     source = bundle
                         .join("artifacts")
                         .join(hash.trim_start_matches("b3:"));
-                    basecraft_io::write_atomic(&source, |w| w.write_all(bytes))?;
+                    basecraft_io::write_atomic(&source, |w| w.write_all(bytes.bytes()))?;
                 }
                 inputs.push(retain(
                     &source,
@@ -365,7 +365,7 @@ impl Session {
                 source = bundle
                     .join("artifacts")
                     .join(hash.trim_start_matches("b3:"));
-                basecraft_io::write_atomic(&source, |w| w.write_all(bytes))?;
+                basecraft_io::write_atomic(&source, |w| w.write_all(bytes.bytes()))?;
             }
             inputs.push(retain(
                 &source,

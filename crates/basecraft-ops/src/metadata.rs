@@ -117,15 +117,17 @@ fn optional(text: &str) -> Option<String> {
 
 /// Read a metadata document from its manifest.
 pub fn load(manifest_path: &Path) -> Result<OpenedMetadata> {
-    load_with(manifest_path, &mut |path| Ok(basecraft_io::Source::open(path)?))
+    load_with(manifest_path, &mut |path| {
+        Ok(basecraft_io::Source::open_hashed(path)?)
+    })
 }
 
 pub(crate) fn load_with(
     manifest_path: &Path,
-    read: &mut impl FnMut(&Path) -> Result<basecraft_io::Source>,
+    read: &mut impl FnMut(&Path) -> Result<(basecraft_io::Source, String)>,
 ) -> Result<OpenedMetadata> {
     let dir = manifest_path.parent().unwrap_or(Path::new("."));
-    let value: serde_json::Value = serde_json::from_slice(read(manifest_path)?.bytes())
+    let value: serde_json::Value = serde_json::from_slice(read(manifest_path)?.0.bytes())
         .map_err(|e| invalid(format!("{MANIFEST} is not valid JSON: {e}")))?;
     if value["format"] != FORMAT {
         return Err(invalid(format!(
@@ -153,9 +155,9 @@ pub(crate) fn load_with(
                 entry.file
             )));
         }
-        let source = read(&dir.join(expected))?;
+        let (source, hash) = read(&dir.join(expected))?;
         let bytes = source.bytes();
-        if basecraft_io::hash_bytes(bytes) != entry.hash {
+        if hash != entry.hash {
             notices.push(format!(
                 "{expected} was changed outside Basecraft since the last save; it was read and checked against its column types"
             ));

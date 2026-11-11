@@ -291,16 +291,25 @@ pub(crate) fn capture_load(
     let content = match format {
         Format::Fasta => load_fasta_from(path, main, companion, cache_root)?,
         Format::GenBank => Loaded::Sequence(open_from(path, main)?),
-        Format::Tree => Loaded::Tree(load_tree_bytes(path, &main, verified, companion)?),
-        Format::Delimitation => {
-            Loaded::Delimitation(load_delimitation_bytes(path, main.bytes(), companion)?)
-        }
+        Format::Tree => Loaded::Tree(load_tree_bytes(
+            path,
+            &main,
+            &files[0].2,
+            verified,
+            companion,
+        )?),
+        Format::Delimitation => Loaded::Delimitation(load_delimitation_bytes(
+            path,
+            main.bytes(),
+            &files[0].2,
+            companion,
+        )?),
         Format::Submission => Loaded::Submission(crate::submission::load_from(path, main.bytes())?),
         Format::Metadata => Loaded::Metadata(crate::metadata::load_with(path, &mut |file| {
             files
                 .iter()
                 .find(|(p, _, _)| p == file)
-                .map(|(_, source, _)| source.clone())
+                .map(|(_, source, hash)| (source.clone(), hash.clone()))
                 .ok_or_else(|| Error::NotFound {
                     path: file.to_path_buf(),
                 })
@@ -493,12 +502,19 @@ pub(crate) fn load_tree_from(
     verified_snapshot: bool,
 ) -> Result<OpenedTree> {
     let side = read_optional(&tree_sidecar(path))?;
-    load_tree_bytes(path, source, verified_snapshot, side.as_ref())
+    load_tree_bytes(
+        path,
+        source,
+        &basecraft_io::hash_bytes(source.bytes()),
+        verified_snapshot,
+        side.as_ref(),
+    )
 }
 
 fn load_tree_bytes(
     path: &Path,
     source: &Source,
+    exchange_hash: &str,
     verified_snapshot: bool,
     captured_side: Option<&Source>,
 ) -> Result<OpenedTree> {
@@ -516,10 +532,7 @@ fn load_tree_bytes(
     let mut doc = TreeDoc::from_parsed(name, &parsed);
     let mut metadata_warning = None;
     // Errors in a hidden association must never select an adjacent legacy file.
-    let run = crate::analysis_store::ArtifactRun::for_result_with_hash(
-        path,
-        &basecraft_io::hash_bytes(source.bytes()),
-    )?;
+    let run = crate::analysis_store::ArtifactRun::for_result_with_hash(path, exchange_hash)?;
     let bound = run.is_some();
     let sidecar = run.map_or_else(
         || tree_sidecar(path),
@@ -543,11 +556,11 @@ fn load_tree_bytes(
             ));
         } else {
             if side.schema_version == 1
-                && (side.tree_hash != basecraft_io::hash_bytes(doc.to_newick().as_bytes())
+                && (side.tree_hash != tree_hash(&doc)
                     || side
                         .exchange_hash
                         .as_ref()
-                        .is_some_and(|hash| *hash != basecraft_io::hash_bytes(text.as_bytes())))
+                        .is_some_and(|hash| hash != exchange_hash))
             {
                 return Err(crate::error::invalid(
                     "Tree metadata describes different exchange contents; bytes were preserved and metadata was not applied",
@@ -586,7 +599,7 @@ fn load_tree_bytes(
             trees.iter().any(|tree| {
                 tree.as_str()
                     .and_then(|text| TreeDoc::from_newick("", text).ok())
-                    .is_some_and(|tree| tree.to_newick() == doc.to_newick())
+                    .is_some_and(|tree| tree_hash(&tree) == tree_hash(&doc))
             })
         })
         && doc.supports().len() == 1
@@ -689,10 +702,17 @@ pub(crate) fn write_legacy_tree_sidecar(doc: &TreeDoc, w: &mut dyn Write) -> io:
     writeln!(w)
 }
 
+fn tree_hash(doc: &TreeDoc) -> String {
+    let mut writer = HashingWriter::new(io::sink());
+    doc.write_newick(&mut writer)
+        .expect("hashing writer cannot fail");
+    writer.hash()
+}
+
 fn tree_metadata(doc: &TreeDoc, exchange_hash: Option<String>) -> TreeSidecar {
     TreeSidecar {
         schema_version: 1,
-        tree_hash: basecraft_io::hash_bytes(doc.to_newick().as_bytes()),
+        tree_hash: tree_hash(doc),
         exchange_hash,
         supports: doc
             .supports()
@@ -1210,14 +1230,15 @@ struct DelimitationSidecar {
 pub fn load_delimitation(
     path: &Path,
 ) -> Result<basecraft_protocol::delimitation::DelimitationWorkspace> {
-    let source = Source::open(path)?;
+    let (source, hash) = Source::open_hashed(path)?;
     let side = read_optional(&tree_sidecar(path))?;
-    load_delimitation_bytes(path, source.bytes(), side.as_ref())
+    load_delimitation_bytes(path, source.bytes(), &hash, side.as_ref())
 }
 
 fn load_delimitation_bytes(
     path: &Path,
     bytes: &[u8],
+    exchange_hash: &str,
     captured_side: Option<&Source>,
 ) -> Result<basecraft_protocol::delimitation::DelimitationWorkspace> {
     let text =
@@ -1236,7 +1257,7 @@ fn load_delimitation_bytes(
     }
     if let Some(source) = captured_side {
         let side: DelimitationSidecar = serde_json::from_slice(source.bytes())?;
-        if !matches!(side.version, 1 | 2) || side.exchange_hash != basecraft_io::hash_bytes(bytes) {
+        if !matches!(side.version, 1 | 2) || side.exchange_hash != exchange_hash {
             return Err(crate::error::invalid(
                 "SPART sidecar version or exchange hash differs",
             ));

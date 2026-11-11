@@ -2,6 +2,9 @@
 use super::{DocId, Op, OpResult, Path, PathBuf, Result, Slot, files, invalid, objects_dir};
 use super::{OBJECT_STORE_LIMIT, Session, save_authority};
 
+#[derive(Clone, PartialEq, Eq)]
+pub(super) struct SavedMark(pub(super) Option<String>);
+
 impl Slot {
     pub(super) fn mark(&self) -> super::SavedMark {
         super::SavedMark(self.undo.last().map(|entry| entry.entry_id.clone()))
@@ -94,7 +97,7 @@ impl Session {
                 if source.bytes().len() as u64 <= OBJECT_STORE_LIMIT {
                     objects
                         .entry(hash.clone())
-                        .or_insert_with(|| source.bytes().to_vec());
+                        .or_insert_with(|| source.clone());
                 }
             }
         }
@@ -451,16 +454,17 @@ impl Session {
     pub fn snapshot_bytes(&self, bytes: &[u8]) -> Result<String> {
         let hash = basecraft_io::hash_bytes(bytes);
         if self.tracked && bytes.len() as u64 > OBJECT_STORE_LIMIT {
-            return Err(invalid(format!(
-                "exact input retention exceeds the {OBJECT_STORE_LIMIT}-byte policy limit"
-            )));
+            return Err(crate::Error::Limit {
+                what: "exact input retention".into(),
+                limit: OBJECT_STORE_LIMIT,
+            });
         }
         if self.tracked && !self.store_objects {
             self.memory_objects
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .entry(hash.clone())
-                .or_insert_with(|| bytes.to_vec());
+                .or_insert_with(|| basecraft_io::Source::from_vec(bytes.to_vec()));
         }
         if self.store_objects && bytes.len() as u64 <= OBJECT_STORE_LIMIT {
             let dest = objects_dir(&self.storage_root).join(hash.trim_start_matches("b3:"));

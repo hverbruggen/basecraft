@@ -273,7 +273,12 @@ mod tests {
 
     fn journal_bytes(root: &Path) -> Vec<Vec<u8>> {
         let mut paths = Vec::new();
-        for host in std::fs::read_dir(crate::log::log_dir(root)).unwrap() {
+        let hosts = match std::fs::read_dir(crate::log::log_dir(root)) {
+            Ok(hosts) => hosts,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+            Err(error) => panic!("cannot read journal: {error}"),
+        };
+        for host in hosts {
             for entry in std::fs::read_dir(host.unwrap().path()).unwrap() {
                 paths.push(entry.unwrap().path());
             }
@@ -282,6 +287,7 @@ mod tests {
         paths
             .into_iter()
             .map(|path| std::fs::read(path).unwrap())
+            .filter(|bytes| !bytes.is_empty())
             .collect()
     }
 
@@ -313,7 +319,8 @@ mod tests {
             assert_eq!(session.delimitation(doc).unwrap().hypotheses.len(), 1);
             assert_eq!(session.generation(doc), 2);
             let entries = crate::log::read_all(dir.path()).unwrap();
-            assert_eq!(entries.len(), events.len() + 2);
+            assert_eq!(entries.len(), 3);
+            assert!(matches!(entries[0].op, Op::Open { .. }));
             assert_eq!(entries[entries.len() - 2].state.features, 2);
             assert_eq!(entries[entries.len() - 1].state.features, 1);
             session.undo(doc).unwrap();
