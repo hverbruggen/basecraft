@@ -1,3 +1,6 @@
+#[path = "support/isolated_profile.rs"]
+mod isolated_profile;
+
 use basecraft_ops::{Session, replay};
 use basecraft_protocol::{
     Op,
@@ -8,6 +11,7 @@ const SPART: &str = include_str!("../../../testdata/fixtures/delimitation/manual
 
 #[test]
 fn edits_undo_save_reopen_and_replay_preserve_lineage() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("input.spart");
     std::fs::write(&path, SPART).unwrap();
@@ -174,6 +178,7 @@ fn derived_group(
 
 #[test]
 fn invalid_edits_are_transactional_and_results_are_immutable() {
+    crate::isolated_profile::isolate!();
     let mut work = basecraft_io::spart::parse_text(SPART).unwrap();
     let before = work.clone();
     assert!(
@@ -214,6 +219,7 @@ fn invalid_edits_are_transactional_and_results_are_immutable() {
 
 #[test]
 fn changed_exchange_file_is_not_silently_replaced_by_sidecar() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("test.spart");
     std::fs::write(&path, SPART).unwrap();
@@ -226,6 +232,7 @@ fn changed_exchange_file_is_not_silently_replaced_by_sidecar() {
 
 #[test]
 fn save_as_xml_replays_the_selected_exchange_format() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let text = dir.path().join("input.spart");
     std::fs::write(&text, SPART).unwrap();
@@ -246,6 +253,7 @@ fn save_as_xml_replays_the_selected_exchange_format() {
 
 #[test]
 fn combine_keeps_only_selected_hypotheses_and_remove_guards_lineage() {
+    crate::isolated_profile::isolate!();
     use std::collections::{BTreeMap, BTreeSet};
     let dir = tempfile::tempdir().unwrap();
     let first = dir.path().join("first.spart");
@@ -324,6 +332,7 @@ fn combine_keeps_only_selected_hypotheses_and_remove_guards_lineage() {
 
 #[test]
 fn combine_is_atomic_undoable_and_replayable() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let first = dir.path().join("first.spart");
     let second = dir.path().join("second.spart");
@@ -369,6 +378,7 @@ fn combine_is_atomic_undoable_and_replayable() {
 
 #[test]
 fn combine_rejects_a_bad_later_source_without_importing_earlier_sources() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let first = dir.path().join("first.spart");
     let bad = dir.path().join("bad.spart");
@@ -383,6 +393,7 @@ fn combine_rejects_a_bad_later_source_without_importing_earlier_sources() {
 
 #[test]
 fn combine_preserves_parent_mapping_and_rejects_mismatched_specimens() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let first = dir.path().join("first.spart");
     let second = dir.path().join("second.spart");
@@ -424,6 +435,7 @@ fn combine_preserves_parent_mapping_and_rejects_mismatched_specimens() {
 
 #[test]
 fn hidden_workspace_moves_with_its_folder_and_passive_open_writes_nothing() {
+    crate::isolated_profile::isolate!();
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().join("original");
     std::fs::create_dir(&root).unwrap();
@@ -501,6 +513,7 @@ fn hidden_workspace_moves_with_its_folder_and_passive_open_writes_nothing() {
 
 #[test]
 fn damaged_species_binding_refuses_legacy_fallback_and_foreign_store_refuses_save() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("species.spart");
     std::fs::write(&path, SPART).unwrap();
@@ -525,6 +538,7 @@ fn damaged_species_binding_refuses_legacy_fallback_and_foreign_store_refuses_sav
 
 #[test]
 fn referenced_display_preserve_copy_is_idempotent_and_never_uses_changed_bytes() {
+    crate::isolated_profile::isolate!();
     use basecraft_ops::input_evidence::{SavePolicy, conflicts, resolve};
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("species.spart");
@@ -565,6 +579,7 @@ fn referenced_display_preserve_copy_is_idempotent_and_never_uses_changed_bytes()
 
 #[test]
 fn application_state_replay_handles_hidden_baseline_and_missing_original_folder() {
+    crate::isolated_profile::isolate!();
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().join("working");
     std::fs::create_dir(&root).unwrap();
@@ -649,6 +664,7 @@ fn application_state_replay_handles_hidden_baseline_and_missing_original_folder(
 
 #[test]
 fn legacy_visible_workspace_metadata_remains_read_only() {
+    crate::isolated_profile::isolate!();
     use std::io::Write;
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("legacy.spart");
@@ -672,6 +688,7 @@ fn legacy_visible_workspace_metadata_remains_read_only() {
 
 #[test]
 fn combined_workspace_move_and_complete_export_keep_declared_source_evidence() {
+    crate::isolated_profile::isolate!();
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().join("working");
     std::fs::create_dir(&root).unwrap();

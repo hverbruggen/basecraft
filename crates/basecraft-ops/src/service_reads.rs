@@ -166,8 +166,6 @@ impl ServiceContext {
             basecraft_platform::settings::Error::Invalid(message) => crate::error::invalid(message),
         })
     }
-
-
 }
 
 fn namespace_error(error: NamespaceReadError) -> AccessError {

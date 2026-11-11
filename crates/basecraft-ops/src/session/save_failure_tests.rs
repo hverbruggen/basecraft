@@ -77,3 +77,80 @@ fn new_destination_and_history_preserve_existing_bytes() {
     session.save_history(id).unwrap();
     assert_eq!(crate::input_evidence::stamp(&target).unwrap(), before);
 }
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum WriteStep {
+    Journal,
+    RemoveIntent,
+    RecoveryCheck,
+}
+thread_local! { static FAILURE: std::cell::Cell<Option<WriteStep>> = const { std::cell::Cell::new(None) }; }
+
+// One test-only failure seam, with no observations, callbacks or alternate writer.
+pub(super) fn fail_write(step: WriteStep) -> Result<()> {
+    if FAILURE.with(|failure| failure.get() == Some(step)) {
+        FAILURE.with(|failure| failure.set(None));
+        return Err(std::io::Error::other("injected save write failure").into());
+    }
+    Ok(())
+}
+
+#[test]
+fn late_write_failures_retain_recovery_and_retry() {
+    let Some(root) = crate::isolated_profile::enter(
+        "session::save_failure_tests::late_write_failures_retain_recovery_and_retry",
+    ) else {
+        return;
+    };
+    for (name, step) in [
+        ("journal", WriteStep::Journal),
+        ("cleanup", WriteStep::RemoveIntent),
+    ] {
+        let root = root.join(name);
+        fs::create_dir(&root).unwrap();
+        let (mut session, id, target) = fixture(&root);
+        FAILURE.with(|failure| failure.set(Some(step)));
+        assert!(session.save(id, None).is_err());
+        assert!(fs::read_to_string(&target).unwrap().contains("TCGT"));
+        assert!(session.recovery_root().join("pending-save.json").is_file());
+        assert!(session.can_undo(id));
+        session.save(id, None).unwrap();
+        assert!(!session.recovery_root().join("pending-save.json").exists());
+        assert!(fs::read_to_string(target).unwrap().contains("TCGT"));
+    }
+}
+
+#[test]
+fn recovery_inspection_failure_retries_without_replacing_written_data() {
+    let Some(root) = crate::isolated_profile::enter(
+        "session::save_failure_tests::recovery_inspection_failure_retries_without_replacing_written_data",
+    ) else {
+        return;
+    };
+    let (session, _, original) = fixture(&root);
+    let mut recovery = crate::replay::prepare_recovery(
+        session.recovery_root(),
+        &root.join("recovered"),
+        crate::replay::RecoveryMode::Strict,
+    )
+    .unwrap();
+    let path = recovery.check(0).unwrap().target().to_owned();
+    FAILURE.with(|failure| failure.set(Some(WriteStep::RecoveryCheck)));
+    assert!(recovery.advance(0, None).is_err());
+    let written = crate::input_evidence::stamp(&path).unwrap();
+    let check = recovery.check(0).unwrap();
+    recovery
+        .advance(
+            0,
+            Some(check.decide(crate::input_evidence::SavePolicy::Cancel, false)),
+        )
+        .unwrap();
+    assert_eq!(crate::input_evidence::stamp(&path).unwrap(), written);
+    let completed = recovery.publish().unwrap();
+    assert_eq!(fs::read(&original).unwrap(), b">source\nACGT\n");
+    assert!(
+        fs::read_to_string(&completed.outputs[0])
+            .unwrap()
+            .contains("TCGT")
+    );
+}

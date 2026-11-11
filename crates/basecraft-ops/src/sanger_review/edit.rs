@@ -37,6 +37,7 @@ mod tests {
 
     #[test]
     fn prepared_review_edit_does_not_touch_history_or_inactive_call_sets() {
+        crate::isolated_profile::isolate!();
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../testdata/fixtures/sanger-legacy/multi.json");
         let mut review = SangerReviewSession::load(&path).unwrap();
@@ -75,6 +76,7 @@ mod tests {
 
     #[test]
     fn invalid_preparation_preserves_the_existing_redo_and_decisions() {
+        crate::isolated_profile::isolate!();
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../testdata/fixtures/sanger-legacy/single.json");
         let mut review = SangerReviewSession::load(&path).unwrap();

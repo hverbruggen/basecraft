@@ -1,4 +1,6 @@
-//! Byte oracles exercised against original writers before the protocol move.
+#[path = "support/isolated_profile.rs"]
+mod isolated_profile;
+// Byte oracles exercised against original writers before the protocol move.
 use basecraft_ops::links::AlignmentLinkExt;
 use basecraft_ops::{
     files, input_evidence,
@@ -44,6 +46,7 @@ fn capture(name: &str, metadata: &Path, expected: &OriginalLink, newline: bool) 
 
 #[test]
 fn original_snapshot_and_view_writers() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("ünicode source.afa");
     let folder = root.path().join("trees");
@@ -96,6 +99,7 @@ fn original_snapshot_and_view_writers() {
 
 #[test]
 fn original_referenced_and_shared_writers() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source.afa");
     let tree = root.path().join("ü tree.nwk");
@@ -144,6 +148,7 @@ fn original_referenced_and_shared_writers() {
 
 #[test]
 fn captured_links_roundtrip_without_byte_changes() {
+    crate::isolated_profile::isolate!();
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/records-v1");
     for (name, newline) in [
         ("link-snapshot-inferred", false),
@@ -171,6 +176,7 @@ fn captured_links_roundtrip_without_byte_changes() {
 
 #[test]
 fn reader_keeps_extensions_and_existing_version_and_missing_field_checks() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let tree = root.path().join("tree.nwk");
     std::fs::write(&tree, "(a,b);").unwrap();

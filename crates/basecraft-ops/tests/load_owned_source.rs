@@ -1,4 +1,7 @@
 //! Main-file hashes and parsers must describe one owned snapshot.
+#[path = "support/isolated_profile.rs"]
+mod isolated_profile;
+
 use basecraft_io::{Source, hash_bytes};
 use basecraft_ops::{Session, files};
 use std::path::Path;
@@ -18,6 +21,7 @@ fn rendered(loaded: &files::Loaded) -> Vec<u8> {
 
 #[test]
 fn mutation_after_read_cannot_change_loaded_bytes_or_hash() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     for (name, original) in [
         ("single.fasta", b">first description\nACGT\n".as_slice()),
@@ -67,6 +71,7 @@ fn mutation_after_read_cannot_change_loaded_bytes_or_hash() {
 
 #[test]
 fn multirecord_sequence_and_companion_survive_owned_loading() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("records.fasta");
     let bytes = b">a description\nACGT\n>b retained\nTTAA\n";
@@ -91,6 +96,7 @@ fn multirecord_sequence_and_companion_survive_owned_loading() {
 
 #[test]
 fn malformed_empty_missing_and_unsupported_sources_fail() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     for (name, bytes) in [
         ("bad.fasta", b"not FASTA".as_slice()),
@@ -115,6 +121,7 @@ fn malformed_empty_missing_and_unsupported_sources_fail() {
 
 #[test]
 fn session_records_loaded_hash_and_refuses_edits_after_external_change() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("sequence.fasta");
     let original = b">a\nACGT\n";
@@ -149,6 +156,7 @@ fn session_records_loaded_hash_and_refuses_edits_after_external_change() {
 
 #[test]
 fn companion_hash_remains_guarded_on_the_captured_path() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("sequence.fasta");
     let sidecar = files::gff_sidecar(&path);
@@ -189,6 +197,7 @@ fn companion_hash_remains_guarded_on_the_captured_path() {
 #[cfg(feature = "test-counters")]
 #[test]
 fn actual_session_read_counts_separate_kind_probe_and_companion_capture() {
+    crate::isolated_profile::isolate!();
     use basecraft_io::counters;
     let dir = tempfile::tempdir().unwrap();
     for (name, bytes, expected_session, expected_probe, companion) in [
@@ -243,6 +252,7 @@ fn actual_session_read_counts_separate_kind_probe_and_companion_capture() {
 
 #[test]
 fn public_filesystem_errors_keep_historical_format_specific_variants() {
+    crate::isolated_profile::isolate!();
     use basecraft_ops::Error;
     let dir = tempfile::tempdir().unwrap();
     for directory in [false, true] {
@@ -284,6 +294,7 @@ fn public_filesystem_errors_keep_historical_format_specific_variants() {
 
 #[test]
 fn bound_tree_verifies_owned_snapshot_after_main_mutation_or_removal() {
+    crate::isolated_profile::isolate!();
     use basecraft_ops::analysis_store::ArtifactRun;
     let original = b"(a:1,b:2);\n(c:3,d:4);\n";
     for metadata in [false, true] {
@@ -342,6 +353,7 @@ fn bound_tree_verifies_owned_snapshot_after_main_mutation_or_removal() {
 #[cfg(feature = "test-counters")]
 #[test]
 fn bound_tree_session_with_missing_metadata_reads_main_once() {
+    crate::isolated_profile::isolate!();
     use basecraft_io::counters;
     use basecraft_ops::analysis_store::ArtifactRun;
     let dir = tempfile::tempdir().unwrap();
@@ -372,6 +384,7 @@ fn bound_tree_session_with_missing_metadata_reads_main_once() {
 
 #[test]
 fn bound_tree_snapshot_verification_keeps_binding_run_namespace_and_metadata_guards() {
+    crate::isolated_profile::isolate!();
     use basecraft_ops::analysis_store::ArtifactRun;
     let original = b"(a,b);\n";
     for fault in [
@@ -459,6 +472,7 @@ fn bound_tree_snapshot_verification_keeps_binding_run_namespace_and_metadata_gua
 
 #[test]
 fn captured_companion_refusals_preserve_baseline_undo_and_journal() {
+    crate::isolated_profile::isolate!();
     use basecraft_protocol::Op;
     if !isolated_capture_test("captured_companion_refusals_preserve_baseline_undo_and_journal") {
         return;
@@ -527,6 +541,7 @@ fn captured_companion_refusals_preserve_baseline_undo_and_journal() {
 
 #[test]
 fn captured_multirecord_writer_and_retained_replay_inputs_match_legacy() {
+    crate::isolated_profile::isolate!();
     if !isolated_capture_test("captured_multirecord_writer_and_retained_replay_inputs_match_legacy")
     {
         return;
@@ -609,6 +624,7 @@ fn isolated_capture_test(name: &str) -> bool {
 
 #[test]
 fn cold_recoverable_retention_reads_each_raw_input_once_and_recovers_without_sources() {
+    crate::isolated_profile::isolate!();
     if !isolated_capture_test(
         "cold_recoverable_retention_reads_each_raw_input_once_and_recovers_without_sources",
     ) {

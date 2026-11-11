@@ -385,7 +385,7 @@ fn r3_real_partial_registration_precedes_incomplete_refusal() {
     });
     assert_eq!(
         error,
-        "evidence_check_incomplete: could not check all analysis evidence"
+        "evidence_check_incomplete: explicit save decision required"
     );
     assert!(!target(&f, &dest).exists());
     let runs = dest.join(".basecraft/analyses-v1/runs");

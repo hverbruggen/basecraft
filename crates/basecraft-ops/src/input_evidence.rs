@@ -1,4 +1,6 @@
 //! Referenced-input lifecycle. Only known stores are inspected, never filesystem trees.
+mod index;
+
 use crate::links::AlignmentLinkExt;
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
@@ -200,6 +202,8 @@ fn reference_input_locked(
         report_template_version: 2,
     };
     crate::provenance::publish(run.directory(), &publication)?;
+    // Publication can refresh the input ledger after its initial registration.
+    index::register(run.directory().parent().unwrap().parent().unwrap());
     Ok(run)
 }
 
@@ -503,21 +507,89 @@ pub(crate) fn evidence_lock_path(state: &Path) -> PathBuf {
     state.join("analysis-evidence.lock")
 }
 
-pub fn lock() -> Result<std::fs::File> {
-    let registry = registry()?;
-    let parent = registry
-        .parent()
-        .ok_or_else(|| invalid("registry has no parent"))?;
-    std::fs::create_dir_all(parent)?;
-    let lock = std::fs::OpenOptions::new()
+fn open_lock(path: &Path) -> Result<std::fs::File> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    Ok(std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .read(true)
         .write(true)
-        .open(evidence_lock_path(parent))?;
+        .open(path)?)
+}
+
+pub fn lock() -> Result<std::fs::File> {
+    let lock = open_lock(&registry()?.with_file_name("analysis-evidence.lock"))?;
     lock.lock_exclusive()
-        .map_err(|_| invalid("analysis evidence is busy; retry shortly"))?;
+        .map_err(|e| crate::Error::Busy(e.to_string()))?;
     Ok(lock)
+}
+
+fn registry_lock() -> Result<std::fs::File> {
+    let lock = open_lock(&registry()?.with_file_name("analysis-registry.lock"))?;
+    lock.lock_exclusive()
+        .map_err(|e| crate::Error::Busy(e.to_string()))?;
+    Ok(lock)
+}
+
+pub(crate) struct SaveLock {
+    _gate: std::fs::File,
+    _stores: Vec<std::fs::File>,
+}
+
+/// Old writers still take the exclusive gate. Ordinary saves share it, then
+/// serialize only stores they can change. No new dependency may be registered
+/// through this shared route; analysis-producing saves retain the exclusive gate.
+pub(crate) fn lock_save(target: &Path, creates_dependencies: bool) -> Result<SaveLock> {
+    if creates_dependencies {
+        return Ok(SaveLock {
+            _gate: lock()?,
+            _stores: Vec::new(),
+        });
+    }
+    let gate = open_lock(&registry()?.with_file_name("analysis-evidence.lock"))?;
+    fs4::fs_std::FileExt::lock_shared(&gate)?;
+    let Ok(mut all) = stores() else {
+        drop(gate);
+        return lock_save(target, true); // An unreadable registry needs full exclusion.
+    };
+    let target = target
+        .canonicalize()
+        .unwrap_or(crate::save_guard::target_path(target)?);
+    for parent in target.ancestors().skip(1) {
+        let store = parent.join(".basecraft/analyses-v1");
+        if store.is_dir() && !all.contains(&store) {
+            all.push(store);
+        }
+    }
+    loop {
+        let mut selected = index::select(&target, &all, false);
+        selected.sort();
+        selected.dedup();
+        let mut held = Vec::new();
+        for store in &selected {
+            let key = basecraft_io::hash_bytes(store.as_os_str().as_encoded_bytes());
+            let lock = open_lock(
+                &registry()?
+                    .with_file_name("analysis-store-locks")
+                    .join(key.trim_start_matches("b3:")),
+            )?;
+            lock.lock_exclusive()?;
+            held.push(lock);
+        }
+        if index::select(&target, &all, false)
+            .iter()
+            .all(|store| selected.contains(store))
+        {
+            return Ok(SaveLock {
+                _gate: gate,
+                _stores: held,
+            });
+        }
+        // A preceding saver changed the selected closure while we waited.
+        // Release in full before acquiring the new sorted set.
+    }
 }
 
 fn empty_registry() -> StoreRegistry {
@@ -603,6 +675,7 @@ pub(crate) fn registered_run(id: &str, expected: &str) -> Result<PathBuf> {
 
 /// Caller holds `lock`. Only explicit analysis execution registers a store.
 pub fn register(run: &ArtifactRun) -> Result<()> {
+    let registry_guard = registry_lock()?;
     let store = run
         .directory()
         .parent()
@@ -619,6 +692,8 @@ pub fn register(run: &ArtifactRun) -> Result<()> {
         // The legacy Value builder sorted nested extension keys as well.
         write_json(&registry()?, &serde_json::to_value(value)?)?;
     }
+    drop(registry_guard);
+    index::register(store);
     Ok(())
 }
 
@@ -663,6 +738,15 @@ fn conservative(check: EvidenceCheck) -> Result<EvidenceConflict> {
 /// Side-effect-free full inspection; callers must recheck under `lock` before
 /// acting. Failure of the lock or of an actual write is never an inspection issue.
 pub fn check(target: &Path) -> Result<EvidenceCheck> {
+    check_impl(target, false)
+}
+
+/// Refresh the private cache only while the caller holds the mutation lock.
+pub(crate) fn check_locked(target: &Path) -> Result<EvidenceCheck> {
+    check_impl(target, true)
+}
+
+fn check_impl(target: &Path, persist_index: bool) -> Result<EvidenceCheck> {
     let mut inspection = Inspection::default();
     let path = registry()?;
     let result = inspection.record_bounded(&path, 1 << 20);
@@ -670,6 +754,12 @@ pub fn check(target: &Path) -> Result<EvidenceCheck> {
         Err(crate::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         result => inspection.parse_registry(&path, result),
     };
+    // Valid unrelated registry entries do not change this target's consent.
+    // Selected records and issues below bind all relevant changes; malformed
+    // registry bytes remain in the receipt because coverage is uncertain.
+    if inspection.issues.is_empty() {
+        inspection.observations.remove(&path);
+    }
     let target = std::path::absolute(target)?;
     let canonical = target.canonicalize().unwrap_or_else(|_| target.clone());
     for parent in canonical.ancestors().skip(1) {
@@ -680,7 +770,8 @@ pub fn check(target: &Path) -> Result<EvidenceCheck> {
             _ => {}
         }
     }
-    inspect_in(&canonical, &all, inspection)
+    let selected = index::select(&canonical, &all, persist_index);
+    inspect_in(&canonical, &selected, inspection)
 }
 
 impl Inspection {
@@ -790,8 +881,15 @@ fn scan_run(
     metadata_bytes: &mut u64,
     inspection: &mut Inspection,
 ) -> Result<Option<RunScan>> {
-    if !entry.file_type()?.is_dir() {
-        return Err(invalid("unsafe entry in analysis store"));
+    let kind = entry.file_type()?;
+    if kind.is_file() {
+        return Ok(None);
+    }
+    if !kind.is_dir() {
+        return Err(crate::Error::Damaged {
+            path: entry.path(),
+            detail: "unsafe entry in analysis store".into(),
+        });
     }
     let run = entry.path();
     if !run.join("input.json").try_exists()? {

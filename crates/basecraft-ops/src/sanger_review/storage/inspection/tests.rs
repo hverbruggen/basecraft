@@ -102,6 +102,7 @@ fn reference_set(folder: &Path) -> SangerReviewSession {
 
 #[test]
 fn current_membership_is_borrowed_without_simulation_or_authority_changes() {
+    crate::isolated_profile::isolate!();
     let Some(root) =
         enter("current_membership_is_borrowed_without_simulation_or_authority_changes")
     else {
@@ -186,6 +187,7 @@ fn current_membership_is_borrowed_without_simulation_or_authority_changes() {
 
 #[test]
 fn candidate_errors_and_legacy_skip_fallback_and_read_counts_are_preserved() {
+    crate::isolated_profile::isolate!();
     let Some(root) =
         enter("candidate_errors_and_legacy_skip_fallback_and_read_counts_are_preserved")
     else {
@@ -264,6 +266,7 @@ fn legacy_registration_rechecks_and_stops_after_prior_real_effects() {
         return;
     };
     let mut s = reference_set(&root.join("data"));
+    #[cfg(feature = "test-counters")]
     let path = s.draft.inputs[0].path.clone();
     let anchor = root.join("data/review.json");
     #[cfg(feature = "test-counters")]
@@ -552,6 +555,7 @@ fn methods_membership_keeps_selected_precedence_and_optional_absence() {
 #[cfg(unix)]
 #[test]
 fn symlink_and_denied_diagnostics_never_fall_back_or_write() {
+    crate::isolated_profile::isolate!();
     use std::os::unix::fs::{PermissionsExt, symlink};
     let Some(root) = enter("symlink_and_denied_diagnostics_never_fall_back_or_write") else {
         return;
@@ -636,6 +640,7 @@ fn symlink_and_denied_diagnostics_never_fall_back_or_write() {
 
 #[test]
 fn placement_and_recovery_diagnostics_preserve_errors_and_remaining_facts() {
+    crate::isolated_profile::isolate!();
     let Some(root) =
         enter("placement_and_recovery_diagnostics_preserve_errors_and_remaining_facts")
     else {
@@ -739,6 +744,7 @@ fn placement_and_recovery_diagnostics_preserve_errors_and_remaining_facts() {
 
 #[test]
 fn path_discovery_failure_is_a_component_not_an_empty_report() {
+    crate::isolated_profile::isolate!();
     let name = "path_discovery_failure_is_a_component_not_an_empty_report";
     let Some(root) = enter(name) else {
         return;

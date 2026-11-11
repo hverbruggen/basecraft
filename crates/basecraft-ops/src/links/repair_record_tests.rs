@@ -46,6 +46,7 @@ fn original_guard(recovery: &Path) -> Vec<u8> {
 
 #[test]
 fn repair_original_producer_bytes() {
+    crate::isolated_profile::isolate!();
     for mode in 0..3 {
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("ü target.nwk");
@@ -132,6 +133,7 @@ fn repair_original_producer_bytes() {
 #[cfg(unix)]
 #[test]
 fn invalid_utf8_prior_symlink_returns_error_before_publication() {
+    crate::isolated_profile::isolate!();
     use std::os::unix::{ffi::OsStringExt, fs::symlink};
     for bad_view in [false, true] {
         let dir = tempfile::tempdir().unwrap();
@@ -183,6 +185,7 @@ fn invalid_utf8_prior_symlink_returns_error_before_publication() {
 
 #[test]
 fn view_guard_failure_precedes_data_and_origin_mutation() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let target = dir.path().join("tree.nwk");
     std::fs::write(&target, b"old tree").unwrap();

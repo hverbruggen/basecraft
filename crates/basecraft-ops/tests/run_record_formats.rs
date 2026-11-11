@@ -1,4 +1,7 @@
 //! Actual original-writer byte oracles, captured before constructor replacement.
+#[path = "support/isolated_profile.rs"]
+mod isolated_profile;
+
 use std::path::{Path, PathBuf};
 
 use basecraft_ops::{Session, analysis_store::ArtifactRun, input_evidence};
@@ -23,6 +26,7 @@ fn capture(name: &str, run: &Path, expected: &Value) {
 
 #[test]
 fn original_reference_and_generated_run_writers() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source.fasta");
     std::fs::write(&source, b">sample\nACGT\n").unwrap();
@@ -58,6 +62,7 @@ fn original_reference_and_generated_run_writers() {
 #[cfg(unix)]
 #[test]
 fn original_reference_null_result() {
+    crate::isolated_profile::isolate!();
     use std::{ffi::OsString, os::unix::ffi::OsStringExt};
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source.fasta");
@@ -80,6 +85,7 @@ fn original_reference_null_result() {
 
 #[test]
 fn original_delimitation_save_run_writer() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let target = root.path().join("input.spart");
     std::fs::write(
@@ -103,6 +109,7 @@ fn original_delimitation_save_run_writer() {
 
 #[test]
 fn original_referenced_publication_run_writer() {
+    crate::isolated_profile::isolate!();
     for with_outputs in [false, true] {
         let root = tempfile::tempdir().unwrap();
         let source = root.path().join("source.fasta");
@@ -162,6 +169,7 @@ fn original_referenced_publication_run_writer() {
 
 #[test]
 fn run_examples_roundtrip_and_preserve_extensions() {
+    crate::isolated_profile::isolate!();
     use basecraft_protocol::records::{AnalysisRun, AnalysisRunStatus};
     let fixture_root =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/records-v1");
@@ -218,6 +226,7 @@ fn run_examples_roundtrip_and_preserve_extensions() {
 
 #[test]
 fn original_extraction_run_writer_inventory() {
+    crate::isolated_profile::isolate!();
     // Captured while the sixth production constructor was still the original
     // literal, before the user expanded scope to include its substitution.
     let root = tempfile::tempdir().unwrap();

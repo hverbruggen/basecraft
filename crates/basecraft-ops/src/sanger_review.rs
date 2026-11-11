@@ -678,6 +678,7 @@ mod tests {
 
     #[test]
     fn terminal_mask_excludes_pending_bases_and_replays_with_undo() {
+        crate::isolated_profile::isolate!();
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("source.json");
         let columns: Vec<_> = "ACGT".chars().enumerate().map(|(i,b)| serde_json::json!({"column": i+1,"consensus":b,"support":[{"read":1,"base":b,"kind":"call"}],"conflict":false,"review":true})).collect();
@@ -755,6 +756,7 @@ mod tests {
 
     #[test]
     fn thresholds_replay_preserve_manual_decisions_and_masks_and_undo_atomically() {
+        crate::isolated_profile::isolate!();
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("source.json");
         let columns: Vec<_> = "ACGT".chars().enumerate().map(|(i,b)| serde_json::json!({"column": i+1,"consensus":b,"support":[{"read":1,"base":b,"kind":"call"}],"conflict":false,"review":true})).collect();
@@ -862,6 +864,7 @@ mod tests {
 
     #[test]
     fn automatic_triage_and_manual_edits_replay_portably() {
+        crate::isolated_profile::isolate!();
         let tmp = tempfile::tempdir().unwrap();
         let source = tmp.path().join("draft.json");
         let draft = serde_json::json!({
@@ -917,6 +920,7 @@ mod tests {
 
     #[test]
     fn sanger_review_ops_replay_batch_undo_and_redo() {
+        crate::isolated_profile::isolate!();
         let path = Path::new("/tmp/basecraft-sanger-review-real-evidence.json");
         if !path.exists() {
             return;
@@ -1029,6 +1033,7 @@ mod call_set_tests {
 
     #[test]
     fn independent_histories_masks_selection_and_replaced_calls_survive_reopen() {
+        crate::isolated_profile::isolate!();
         let tmp = tempfile::tempdir().unwrap();
         let mut session = instrument(tmp.path());
         let original = std::fs::read(&session.draft_path).unwrap();
@@ -1091,6 +1096,7 @@ mod call_set_tests {
 
     #[test]
     fn all_retained_drafts_and_versions_are_checked_and_v1_still_loads() {
+        crate::isolated_profile::isolate!();
         let tmp = tempfile::tempdir().unwrap();
         let mut session = instrument(tmp.path());
         let legacy = tmp.path().join("legacy.json");
@@ -1122,6 +1128,7 @@ mod call_set_tests {
 
     #[test]
     fn unavailable_storage_does_not_prevent_instrument_review_or_lose_edits() {
+        crate::isolated_profile::isolate!();
         let tmp = tempfile::tempdir().unwrap();
         let mut session = instrument(tmp.path());
         std::fs::write(tmp.path().join(".basecraft"), "foreign file").unwrap();
@@ -1151,6 +1158,7 @@ mod readonly_tests {
     }
     #[test]
     fn readonly_source_folder_keeps_instrument_editing_and_previous_save() {
+        crate::isolated_profile::isolate!();
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("source.ab1");
         std::fs::copy(
@@ -1225,6 +1233,7 @@ mod moved_and_failed_recovery_tests {
     }
     #[test]
     fn stale_review_save_preserves_both_call_sets_and_recovery() {
+        crate::isolated_profile::isolate!();
         let tmp = tempfile::tempdir().unwrap();
         let folder = tmp.path().join("source");
         let mut original = pair(&folder);
@@ -1267,6 +1276,7 @@ mod moved_and_failed_recovery_tests {
 
     #[test]
     fn external_missing_recreated_and_save_as_targets_are_guarded() {
+        crate::isolated_profile::isolate!();
         // Registered stores must outlive every iteration in this test profile.
         let mut fixtures = Vec::new();
         for mutation in ["external", "missing", "recreated"] {
@@ -1321,6 +1331,7 @@ mod moved_and_failed_recovery_tests {
     #[cfg(unix)]
     #[test]
     fn aliases_do_not_split_saved_review_identity() {
+        crate::isolated_profile::isolate!();
         let tmp = tempfile::tempdir().unwrap();
         let folder = tmp.path().join("source");
         let mut review = pair(&folder);
@@ -1346,6 +1357,7 @@ mod moved_and_failed_recovery_tests {
 
     #[test]
     fn referenced_review_uses_shared_cancel_preserve_and_break_policy() {
+        crate::isolated_profile::isolate!();
         use crate::input_evidence::{self as inputs, SavePolicy};
         // Registered stores must outlive every iteration in this test profile.
         let mut fixtures = Vec::new();
@@ -1406,6 +1418,7 @@ mod moved_and_failed_recovery_tests {
 
     #[test]
     fn failed_binding_reports_saved_data_and_allows_safe_retry() {
+        crate::isolated_profile::isolate!();
         let tmp = tempfile::tempdir().unwrap();
         let folder = tmp.path().join("source");
         let mut review = pair(&folder);
@@ -1450,6 +1463,7 @@ mod moved_and_failed_recovery_tests {
 
     #[test]
     fn simultaneous_review_writers_accept_only_one_revision() {
+        crate::isolated_profile::isolate!();
         fn wait_for(path: &Path) {
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
             while !path.exists() {
@@ -1519,6 +1533,7 @@ mod moved_and_failed_recovery_tests {
 
     #[test]
     fn moved_folder_reopens_every_call_set_without_relying_on_cache_paths() {
+        crate::isolated_profile::isolate!();
         let tmp = tempfile::tempdir().unwrap();
         let original = tmp.path().join("original");
         let mut review = pair(&original);
@@ -1535,6 +1550,7 @@ mod moved_and_failed_recovery_tests {
     }
     #[test]
     fn failed_recovery_and_save_keep_both_histories_and_previous_file() {
+        crate::isolated_profile::isolate!();
         let tmp = tempfile::tempdir().unwrap();
         let folder = tmp.path().join("source");
         let mut review = pair(&folder);

@@ -439,7 +439,7 @@ fn document_interface_preserves_metadata_bytes_and_rejections() {
     .unwrap();
     assert_eq!(
         serde_json::to_string(&s.state(doc)).unwrap(),
-        r#"{"len":2,"features":0,"rows":0}"#
+        r#"{"len":2,"features":0,"rows":0,"counts":{"kind":"metadata","specimens":2,"identifications":0,"links":0}}"#
     );
     assert_eq!(s.save_hashes(doc).unwrap(), expected_hashes);
     // Historical hashing ignores the target's format; writing rejects it.
@@ -549,4 +549,65 @@ fn metadata_partial_writer_failure_retains_payload_and_allows_retry() {
     for (path, expected) in paths.iter().zip(&bytes) {
         assert_eq!(&std::fs::read(path).unwrap(), expected);
     }
+}
+
+#[test]
+fn save_copy_keeps_project_owner_and_pending_edits() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    metadata::create(root).unwrap();
+    let mut session = Session::new(root);
+    let doc = metadata::open(&mut session, false).unwrap().unwrap();
+    let original = session.doc_key(doc).to_owned();
+    session
+        .apply(
+            doc,
+            Op::MetadataEdit {
+                edit: Box::new(MetadataEdit::Apply {
+                    changes: ChangeSet {
+                        specimens: vec!["first".into()],
+                        ..ChangeSet::default()
+                    },
+                }),
+            },
+        )
+        .unwrap();
+    let target = root.join("copy/metadata.basecraft.json");
+    std::fs::create_dir(target.parent().unwrap()).unwrap();
+    let check = session.check_save(doc, Some(&target)).unwrap();
+    session
+        .save_with_decision(
+            doc,
+            Some(&target),
+            check.decide(basecraft_ops::input_evidence::SavePolicy::Cancel, false),
+        )
+        .unwrap();
+    assert_eq!(session.doc_key(doc), original);
+    assert!(session.document_record(doc).unwrap().unsaved);
+    let copy = metadata::files(&target)
+        .iter()
+        .map(|p| std::fs::read(p).unwrap())
+        .collect::<Vec<_>>();
+    session
+        .apply(
+            doc,
+            Op::MetadataEdit {
+                edit: Box::new(MetadataEdit::Apply {
+                    changes: ChangeSet {
+                        specimens: vec!["second".into()],
+                        ..ChangeSet::default()
+                    },
+                }),
+            },
+        )
+        .unwrap();
+    session.save(doc, None).unwrap();
+    assert!(!session.document_record(doc).unwrap().unsaved);
+    assert_eq!(
+        copy,
+        metadata::files(&target)
+            .iter()
+            .map(|p| std::fs::read(p).unwrap())
+            .collect::<Vec<_>>()
+    );
 }

@@ -11,6 +11,10 @@ use crate::metadata::OpenedMetadata;
 use crate::session::Inverse;
 
 impl Document for OpenedMetadata {
+    fn writes_analysis_dependencies(&self) -> bool {
+        false
+    }
+
     fn kind(&self) -> crate::files::Kind {
         crate::files::Kind::Metadata
     }

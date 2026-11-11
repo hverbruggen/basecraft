@@ -218,6 +218,7 @@ mod tests {
 
     #[test]
     fn exchange_companion_and_record_bytes_keep_existing_writers() {
+        crate::isolated_profile::isolate!();
         // The Session save boundary holds this lock and prepares registry storage.
         let _lock = crate::input_evidence::lock().unwrap();
         let initial = basecraft_io::spart::parse_text(SPART).unwrap();

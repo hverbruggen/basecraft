@@ -437,3 +437,49 @@ fn non_finite_root_and_inactive_nested_overlap_refuse_binding() {
     };
     non_finite_binding_control(&root, true);
 }
+
+#[test]
+fn stale_and_foreign_decisions_do_not_prepare_a_save() {
+    let Some(root) = enter("stale_and_foreign_decisions_do_not_prepare_a_save") else {
+        return;
+    };
+    let mut review = pair(&root.join("data"));
+    let path = root.join("review.json");
+    let foreign = decision(&review.clone(), &path);
+    let stale = decision(&review, &path);
+    review.draft.minimum_identity += 0.125;
+    drop(crate::save_guard::lock(&path).unwrap());
+    let before = inventory(&root);
+    for receipt in [foreign, stale] {
+        assert!(matches!(
+            review.save_with_decision(&path, receipt),
+            Err(crate::Error::SaveDecisionStale(_))
+        ));
+        assert_eq!(inventory(&root), before);
+    }
+}
+
+#[test]
+fn first_confirmed_save_can_prepare_recovery_and_sources() {
+    let Some(root) = enter("first_confirmed_save_can_prepare_recovery_and_sources") else {
+        return;
+    };
+    let source = root.join("source.ab1");
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../testdata/fixtures/compact/sanger-review/forward.ab1"),
+        &source,
+    )
+    .unwrap();
+    let mut review = crate::sanger_review::instrument_review(&source).unwrap();
+    assert!(review.recovery.is_none());
+    let path = root.join("review.sanger-review.json");
+    let check = review.check_save(&path).unwrap();
+    let decision = review
+        .decide_save(&path, check.token(), SavePolicy::Cancel, false)
+        .unwrap();
+    let outcome = review.save_with_decision(&path, decision).unwrap();
+    assert!(outcome.warnings.is_empty());
+    assert!(path.is_file());
+    assert!(review.recovery.as_ref().unwrap().is_file());
+}

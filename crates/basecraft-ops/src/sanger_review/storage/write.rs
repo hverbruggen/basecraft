@@ -182,6 +182,7 @@ mod tests {
 
     #[test]
     fn staged_review_is_exact_and_does_not_accept_or_mutate_live_state() {
+        crate::isolated_profile::isolate!();
         let tmp = tempfile::tempdir().unwrap();
         let target = tmp.path().join("review.json");
         let review = review();
@@ -229,6 +230,7 @@ mod tests {
 
     #[test]
     fn staged_review_preserves_a_concurrently_created_destination() {
+        crate::isolated_profile::isolate!();
         let tmp = tempfile::tempdir().unwrap();
         let target = tmp.path().join("review.json");
         let review = review();
@@ -249,6 +251,7 @@ mod tests {
 
     #[test]
     fn failed_staging_preserves_the_previous_review_and_live_evidence() {
+        crate::isolated_profile::isolate!();
         let tmp = tempfile::tempdir().unwrap();
         let target = tmp.path().join("review.json");
         std::fs::write(&target, b"previous review").unwrap();

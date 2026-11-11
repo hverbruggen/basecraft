@@ -1,8 +1,11 @@
+#[path = "support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_ops::{Session, files};
 use basecraft_protocol::{Op, SupportKind};
 
 #[test]
 fn same_path_replacement_cannot_reuse_tree_metadata() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("tree.nwk");
     std::fs::write(&path, "((a,b)90,c);\n").unwrap();
@@ -29,6 +32,7 @@ fn same_path_replacement_cannot_reuse_tree_metadata() {
 
 #[test]
 fn undone_import_is_absent_from_methods() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let target = dir.path().join("tree.nwk");
     let source = dir.path().join("source.nwk");
@@ -56,6 +60,7 @@ fn paths(root: &std::path::Path) -> basecraft_platform::paths::AppPaths {
 
 #[test]
 fn legacy_metadata_opens_with_warning_and_survives_explicit_save() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("tree.nwk");
     std::fs::write(&path, "((a,b)90,c);\n").unwrap();
@@ -97,6 +102,7 @@ fn legacy_metadata_opens_with_warning_and_survives_explicit_save() {
 
 #[test]
 fn hidden_binding_errors_never_fall_back_to_adjacent_metadata() {
+    crate::isolated_profile::isolate!();
     use basecraft_ops::analysis_store::ArtifactRun;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("forest.nwk");
@@ -157,6 +163,7 @@ fn hidden_binding_errors_never_fall_back_to_adjacent_metadata() {
 
 #[test]
 fn imported_support_partial_removal_undo_save_reopen_and_redo() {
+    crate::isolated_profile::isolate!();
     use basecraft_ops::provenance;
     let dir = tempfile::tempdir().unwrap();
     let target = dir.path().join("tree.nwk");
@@ -284,6 +291,7 @@ fn annotate(session: &mut Session, doc: basecraft_ops::DocId, label: &str, start
 
 #[test]
 fn annotation_runs_follow_partial_deletion_and_feature_ids_after_reopen() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("gene.fasta");
     std::fs::write(&file, ">gene\nACGTACGTACGT\n").unwrap();
@@ -344,6 +352,7 @@ fn annotation_runs_follow_partial_deletion_and_feature_ids_after_reopen() {
 
 #[test]
 fn generic_no_output_activity_does_not_own_unrelated_manual_edits() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("gene.fasta");
     std::fs::write(&file, ">gene\nACGTACGT\n").unwrap();
@@ -377,6 +386,7 @@ fn generic_no_output_activity_does_not_own_unrelated_manual_edits() {
 
 #[test]
 fn extraction_is_reference_first_and_packages_exact_source_and_mapping() {
+    crate::isolated_profile::isolate!();
     use basecraft_ops::provenance;
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("gene.fasta");
@@ -421,6 +431,7 @@ fn extraction_is_reference_first_and_packages_exact_source_and_mapping() {
 
 #[test]
 fn saving_a_forest_preserves_other_members_and_refreshes_bound_identity() {
+    crate::isolated_profile::isolate!();
     use basecraft_ops::analysis_store::ArtifactRun;
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("forest.nwk");
@@ -471,6 +482,7 @@ fn saving_a_forest_preserves_other_members_and_refreshes_bound_identity() {
 
 #[test]
 fn nexus_forest_retains_member_identity_rooting_and_untouched_annotations() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("forest.nex");
     let text = "#NEXUS\nbegin trees;\ntranslate 1 a, 2 b, 3 c;\ntree 'selected tree' = [&U] ((1:1,2:2)90:3,3:4);\ntree 'rooted member' = [&R] ((1:1,3:2)[&prob=0.99,note=x]:3,2:4);\nutree 'unrooted member' = ((2:5,3:6),1);\ntree 'unknown member' = (1:1,2:2,3:3);\nend;\n";
@@ -510,6 +522,7 @@ fn nexus_forest_retains_member_identity_rooting_and_untouched_annotations() {
 
 #[test]
 fn interrupted_tree_metadata_save_is_explicit_and_never_reuses_old_semantics() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let original = dir.path().join("original.nwk");
     std::fs::write(&original, "((a,b)90,c);\n").unwrap();

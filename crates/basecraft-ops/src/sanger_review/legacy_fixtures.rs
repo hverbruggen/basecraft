@@ -34,6 +34,7 @@ fn fixture_root() -> PathBuf {
 #[test]
 #[ignore = "explicit baseline capture only; never regenerate compatibility oracles during tests"]
 fn capture_legacy_writer() {
+    crate::isolated_profile::isolate!();
     assert_eq!(
         std::env::var("BASECRAFT_CAPTURE").as_deref(),
         Ok("legacy-writer")
@@ -154,6 +155,7 @@ fn capture_legacy_writer() {
 
 #[test]
 fn evaluate_initialization_depends_on_first_event_not_first_evaluate() {
+    crate::isolated_profile::isolate!();
     let root = fixture_root();
     let fresh = || SangerReviewSession::new(&root.join("draft-a.json")).unwrap();
     let mut first = fresh();
@@ -196,6 +198,7 @@ fn checkpoint_path(root: &Path) -> PathBuf {
 
 #[test]
 fn frozen_writer_bytes_drafts_support_and_selected_history() {
+    crate::isolated_profile::isolate!();
     let root = fixture_root().canonicalize().unwrap();
     // A child selects the captured job layout as application state without
     // process-global environment mutation or touching the developer's profile.
@@ -340,6 +343,7 @@ fn frozen_writer_bytes_drafts_support_and_selected_history() {
 
 #[test]
 fn legacy_extensions_and_invalid_records_keep_existing_contract() {
+    crate::isolated_profile::isolate!();
     let root = fixture_root().canonicalize().unwrap();
     let path = root.join("single.json");
     let original: serde_json::Value =

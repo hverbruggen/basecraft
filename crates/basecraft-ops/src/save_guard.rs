@@ -159,6 +159,7 @@ mod tests {
 
     #[test]
     fn hard_link_destination_is_rejected_on_every_platform() {
+        crate::isolated_profile::isolate!();
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("source");
         let alias = directory.path().join("alias");
@@ -172,6 +173,7 @@ mod tests {
 
     #[test]
     fn concurrent_saver_is_refused_and_edits_remain_saveable() {
+        crate::isolated_profile::isolate!();
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("gene.fasta");
         std::fs::write(&file, ">gene\nACGT\n").unwrap();

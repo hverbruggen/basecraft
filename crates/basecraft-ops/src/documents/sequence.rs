@@ -10,6 +10,10 @@ use crate::files::{self, Format, HashingWriter, Opened};
 use crate::session::{Inverse, normalise};
 
 impl Document for Opened {
+    fn writes_analysis_dependencies(&self) -> bool {
+        false
+    }
+
     fn kind(&self) -> crate::files::Kind {
         crate::files::Kind::Sequence
     }
@@ -291,6 +295,7 @@ mod tests {
 
     #[test]
     fn sequence_interface_rejects_wrong_ops_inverses_and_formats_without_mutation() {
+        crate::isolated_profile::isolate!();
         let root = tempfile::tempdir().unwrap();
         let source = root.path().join("sequence.fasta");
         std::fs::write(&source, b">sequence\nACGT\n").unwrap();
@@ -351,6 +356,7 @@ mod tests {
 
     #[test]
     fn sequence_interface_preserves_writer_bytes_features_topology_and_fasta_records() {
+        crate::isolated_profile::isolate!();
         for (name, bytes) in [
             (
                 "sequence.fasta",
@@ -432,6 +438,7 @@ mod tests {
 
     #[test]
     fn sequence_typing_merge_keeps_feature_undo_and_log_residue_case() {
+        crate::isolated_profile::isolate!();
         let root = tempfile::tempdir().unwrap();
         let source = root.path().join("sequence.gb");
         std::fs::write(

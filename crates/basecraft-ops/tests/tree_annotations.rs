@@ -1,10 +1,13 @@
 //! Viewer names remain annotations: save, history and links preserve scientific identity.
+#[path = "support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_ops::links::AlignmentLinkExt;
 use basecraft_ops::{Session, files, links::AlignmentLink, replay};
 use basecraft_protocol::{CladeAnnotation, Op};
 
 #[test]
 fn display_names_preserve_support_tip_identity_links_and_replay() {
+    crate::isolated_profile::isolate!();
     for extension in ["nwk", "nex"] {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();

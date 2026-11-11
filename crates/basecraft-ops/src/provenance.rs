@@ -274,7 +274,10 @@ fn read_record_with_access_open<R: std::io::Read>(
 ) -> Result<Vec<u8>> {
     let checked = access.resource(path, crate::access::ResourceAction::ReadFile)?;
     let (file, length) = open(&checked)?;
-    read_record_from_open(file, length, remaining, 64 << 20, RecordLimit::Provenance)
+    let bytes = read_record_from_open(file, length, remaining, 64 << 20, RecordLimit::Provenance)?;
+    #[cfg(feature = "test-counters")]
+    basecraft_io::counters::record_read(&checked, bytes.len() as u64);
+    Ok(bytes)
 }
 
 #[derive(Clone, Copy)]

@@ -1,4 +1,6 @@
 //! Imported support values keep a verifiable, referenced (not copied) source.
+#[path = "support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_ops::{Session, provenance, replay};
 use basecraft_protocol::Op;
 use std::path::Path;
@@ -22,6 +24,7 @@ fn trees(root: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
 
 #[test]
 fn imported_source_is_referenced_verified_and_survives_a_folder_move() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let (target, source) = trees(dir.path());
     let paths = paths(dir.path());
@@ -88,6 +91,7 @@ fn imported_source_is_referenced_verified_and_survives_a_folder_move() {
 
 #[test]
 fn a_source_without_support_or_a_clashing_name_changes_and_records_nothing() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let (target, source) = trees(dir.path());
     let plain = target.parent().unwrap().join("plain.nwk");
@@ -118,6 +122,7 @@ fn a_source_without_support_or_a_clashing_name_changes_and_records_nothing() {
 
 #[test]
 fn imported_values_replay_from_the_journal() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let (target, source) = trees(dir.path());
     let root = target.parent().unwrap();

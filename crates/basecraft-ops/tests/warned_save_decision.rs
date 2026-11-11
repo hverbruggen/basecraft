@@ -642,7 +642,7 @@ fn invalid_document_attempt_consumes_originating_receipt() {
                 None,
                 check.decide(SavePolicy::Cancel, true),
             );
-            assert!(matches!(invalid, Err(Error::Invalid(_))));
+            assert!(matches!(invalid, Err(Error::UnknownDocument { .. })));
             assert_eq!(std::fs::read(&file).unwrap(), ORIGINAL);
             assert!(session.can_undo(doc));
             assert!(matches!(
@@ -681,7 +681,7 @@ fn invalid_document_attempt_does_not_consume_newer_receipt() {
                     None,
                     old.decide(SavePolicy::Cancel, true)
                 ),
-                Err(Error::Invalid(_))
+                Err(Error::UnknownDocument { .. })
             ));
             assert_eq!(std::fs::read(&file).unwrap(), ORIGINAL);
             let outcome = session
@@ -719,7 +719,7 @@ fn foreign_receipt_cannot_consume_local_or_originating_session_authority() {
                     None,
                     check.decide(SavePolicy::Cancel, true)
                 ),
-                Err(Error::Invalid(_))
+                Err(Error::UnknownDocument { .. })
             ));
             assert_eq!(std::fs::read(&file).unwrap(), ORIGINAL);
             assert_eq!(std::fs::read(&other_file).unwrap(), ORIGINAL);

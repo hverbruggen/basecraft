@@ -1,4 +1,4 @@
-//! Advisory participation in the common save authority. No writer is connected.
+//! Sanger participation in the shared one-attempt save decision.
 use super::{Change, SangerReviewSession, storage::ReviewEvidence};
 use crate::session::save_authority::{
     PendingSaveAuthority, SaveCheck, SaveDecision, SaveScope, target_revision,
@@ -94,6 +94,10 @@ impl SangerReviewSession {
     }
 
     fn save_scope(&self, path: &Path) -> Result<SaveCheck> {
+        self.save_scope_for_state(path, &self.state_digest()?)
+    }
+
+    fn save_scope_for_state(&self, path: &Path, state: &str) -> Result<SaveCheck> {
         let (owner, epoch) = self.authority()?;
         crate::save_guard::Revision::check(self.accepted.as_ref(), path)?;
         let target = crate::save_guard::target_path(path)?;
@@ -112,23 +116,20 @@ impl SangerReviewSession {
             target_revision: target_revision(&target)?,
             target,
         };
-        SaveCheck::from_scope_with_participant(
-            scope,
-            Some(("sanger-working-state-v1", &self.state_digest()?)),
-        )
+        SaveCheck::from_scope_with_participant(scope, Some(("sanger-working-state-v1", state)))
     }
 
     /// Inspect and publish one advisory receipt without writing records or saving.
-    /// No guard is retained across the caller's interaction. Writer adoption is
-    /// deliberately absent; this receipt cannot yet authorize a Sanger save.
+    /// No guard is retained across the caller's interaction. Saving consumes
+    /// this receipt and checks the live document and destination again.
     pub fn check_save(&self, path: &Path) -> Result<SaveCheck> {
         let check = self.save_scope(path)?;
         self.authority()?.0.pending.publish(check)
     }
 
     /// Bind a token to the live root's pending check, like `Session::decide_save`.
-    /// This does not rescan or authorize IO. A future writer must consume origin
-    /// on entry and compare a fresh guarded scope, including public-field edits.
+    /// Saving consumes the origin on entry and compares a fresh guarded scope,
+    /// including public-field edits.
     pub fn decide_save(
         &self,
         path: &Path,
@@ -147,6 +148,77 @@ impl SangerReviewSession {
         Err(crate::Error::SaveDecisionStale(Box::new(
             self.check_save(path)?,
         )))
+    }
+
+    pub fn save_with_decision(
+        &mut self,
+        path: &Path,
+        decision: SaveDecision,
+    ) -> Result<crate::session::SaveOutcome> {
+        let policy = decision.known;
+        self.save_attempt(path, policy, Some(decision))
+    }
+
+    pub(super) fn consume_save_decision(&self, decision: &SaveDecision) -> Result<bool> {
+        let (owner, _) = self.authority()?;
+        if PendingSaveAuthority::origin(&owner.origin, decision) != Some(0) {
+            return Ok(false);
+        }
+        owner.pending.consume(decision)
+    }
+
+    pub(super) fn validate_save_decision(
+        &self,
+        path: &Path,
+        decision: &SaveDecision,
+        consumed: bool,
+    ) -> Result<String> {
+        let state = self.state_digest()?;
+        self.authority()?.0.pending.validate_decision(
+            &self.save_scope_for_state(path, &state)?,
+            decision,
+            consumed,
+        )?;
+        Ok(state)
+    }
+
+    pub(super) fn authorize_save(
+        &self,
+        path: &Path,
+        policy: SavePolicy,
+        decision: Option<(SaveDecision, bool)>,
+        state_before_preparation: Option<&str>,
+    ) -> Result<Vec<crate::session::SaveWarning>> {
+        // The exclusive &mut save has already validated public working state.
+        // Internal source retention/recovery allocation may change its digest;
+        // live target and relevant evidence must still match the displayed check.
+        let fresh = match state_before_preparation {
+            Some(state) => self.save_scope_for_state(path, state)?,
+            None => self.save_scope(path)?,
+        };
+        if decision.is_none() && fresh.evidence().is_complete() {
+            crate::input_evidence::resolve(&fresh.evidence().conflict, policy)?;
+            return Ok(Vec::new());
+        }
+        self.authority()?
+            .0
+            .pending
+            .authorize_write(
+                &fresh,
+                decision,
+                policy,
+                || crate::save_guard::Revision::check(self.accepted.as_ref(), path).map(|_| ()),
+                None,
+            )
+            .or_else(|error| match error {
+                crate::Error::SaveDecisionStale(_) => Err(crate::Error::SaveDecisionStale(
+                    Box::new(self.check_save(path)?),
+                )),
+                crate::Error::SaveCheckRequired(_) => Err(crate::Error::SaveCheckRequired(
+                    Box::new(self.check_save(path)?),
+                )),
+                error => Err(error),
+            })
     }
 
     // JSON encodes every non-finite float as null. Reject these public working

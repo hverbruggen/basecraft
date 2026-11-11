@@ -1,10 +1,14 @@
 //! Existing public import paths remain aliases of the protocol payloads.
+#[path = "support/isolated_profile.rs"]
+mod isolated_profile;
+
 use basecraft_docs::sanger::{ReviewReference, ReviewSettings};
 use basecraft_ops::sanger_review::{MaskSettings, ReviewChoice, ReviewOp, SangerReviewSession};
 use basecraft_protocol::sanger;
 
 #[test]
 fn old_paths_accept_protocol_values_without_conversion() {
+    crate::isolated_profile::isolate!();
     let settings: ReviewSettings = sanger::ReviewSettings::default();
     let _: sanger::ReviewSettings = settings;
     let reference: Option<ReviewReference> = None::<sanger::ReviewReference>;

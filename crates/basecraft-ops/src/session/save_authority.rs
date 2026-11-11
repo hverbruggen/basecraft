@@ -203,7 +203,7 @@ impl SaveCheck {
 #[derive(Debug)]
 pub struct SaveDecision {
     pub(super) check: SaveCheck,
-    pub(super) known: SavePolicy,
+    pub(crate) known: SavePolicy,
     pub(super) acknowledge_incomplete: bool,
 }
 
@@ -282,7 +282,7 @@ impl PendingSaveAuthority {
         Ok(false)
     }
 
-    fn validate_decision(
+    pub(crate) fn validate_decision(
         &self,
         fresh: &SaveCheck,
         decision: &SaveDecision,
@@ -387,72 +387,6 @@ pub struct EvidenceAction {
 #[cfg(test)]
 mod participant_tests {
     use super::*;
-
-    #[test]
-    fn participant_binding_preserves_session_shape_and_rejects_changed_state() {
-        let name = "session::save_authority::participant_tests::participant_binding_preserves_session_shape_and_rejects_changed_state";
-        let Some(root) = crate::isolated_profile::enter(name) else {
-            return;
-        };
-        let path = root.join("sequence.fasta");
-        std::fs::write(&path, ">x\nACGT\n").unwrap();
-        let mut session = crate::Session::new(&root);
-        let id = session.open(&path).unwrap();
-        let original = session.check_save(id, None).unwrap();
-        let plain = SaveCheck::from_scope(original.scope.clone()).unwrap();
-        let none = SaveCheck::from_scope_with_participant(original.scope.clone(), None).unwrap();
-        assert_eq!(plain.scope_revision, original.scope.revision().unwrap());
-        assert_eq!(plain.scope_revision, none.scope_revision);
-        assert_eq!(
-            serde_json::to_vec(&plain).unwrap(),
-            serde_json::to_vec(&none).unwrap()
-        );
-        let a = SaveCheck::from_scope_with_participant(
-            original.scope.clone(),
-            Some(("sanger", "state-a")),
-        )
-        .unwrap();
-        let b = SaveCheck::from_scope_with_participant(
-            original.scope.clone(),
-            Some(("sanger", "state-b")),
-        )
-        .unwrap();
-        let other = SaveCheck::from_scope_with_participant(
-            original.scope.clone(),
-            Some(("other", "state-a")),
-        )
-        .unwrap();
-        assert_ne!(a.scope_revision, plain.scope_revision);
-        assert_ne!(a.scope_revision, b.scope_revision);
-        assert_ne!(a.scope_revision, other.scope_revision);
-        assert_eq!(
-            serde_json::to_vec(&plain).unwrap(),
-            serde_json::to_vec(&a).unwrap()
-        );
-        let owner = PendingSaveAuthority::default();
-        let d = owner
-            .publish(a.clone())
-            .unwrap()
-            .decide(SavePolicy::Cancel, true);
-        let spent = owner.consume(&d).unwrap();
-        assert!(matches!(
-            owner.validate_decision(&b, &d, spent),
-            Err(crate::Error::SaveDecisionStale(_))
-        ));
-        assert!(!owner.consume(&d).unwrap());
-        let d = owner
-            .publish(a.clone())
-            .unwrap()
-            .decide(SavePolicy::Cancel, true);
-        assert!(
-            owner
-                .validate_decision(&a, &d, owner.consume(&d).unwrap())
-                .is_ok()
-        );
-        let d = owner.publish(a).unwrap().decide(SavePolicy::Cancel, true);
-        owner.invalidate().unwrap();
-        assert!(!owner.consume(&d).unwrap());
-    }
 
     #[test]
     fn real_sanger_checks_bind_direct_public_changes_without_publishing_biology() {

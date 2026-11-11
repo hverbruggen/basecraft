@@ -15,6 +15,10 @@ pub(crate) fn companions(_target: &Path) -> Vec<PathBuf> {
 }
 
 impl Document for Submission {
+    fn writes_analysis_dependencies(&self) -> bool {
+        false
+    }
+
     fn kind(&self) -> crate::files::Kind {
         crate::files::Kind::Submission
     }

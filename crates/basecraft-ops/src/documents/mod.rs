@@ -36,6 +36,11 @@ pub(crate) enum PreparedEdit {
 
 pub(crate) trait Document {
     fn kind(&self) -> crate::files::Kind;
+    /// Conservative default: analysis-producing writers retain the legacy
+    /// mutation gate until their dependency publication has its own locks.
+    fn writes_analysis_dependencies(&self) -> bool {
+        true
+    }
     /// Operations requiring preparation must reject the wrong payload before
     /// Session retains originals or starts a journal.
     fn check_preparation_kind(&self, op: &Op, live: bool) -> Result<()> {

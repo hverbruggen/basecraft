@@ -701,6 +701,10 @@ impl SangerReviewSession {
     /// Tasks previous-runs list. It is labelled as a review, never a consensus.
     pub fn start_recovery(&mut self) -> Result<(), String> {
         self.invalidate_save_authority();
+        self.ensure_recovery()
+    }
+
+    fn ensure_recovery(&mut self) -> Result<(), String> {
         let anchor = self.anchor.clone();
         self.ensure_sources(&anchor).map_err(|e| e.to_string())?;
         if self.recovery.is_none() {
@@ -730,8 +734,26 @@ impl SangerReviewSession {
         path: &Path,
         policy: inputs::SavePolicy,
     ) -> crate::Result<()> {
+        self.save_attempt(path, policy, None).map(|_| ())
+    }
+
+    pub(super) fn save_attempt(
+        &mut self,
+        path: &Path,
+        policy: inputs::SavePolicy,
+        decision: Option<crate::session::SaveDecision>,
+    ) -> crate::Result<crate::session::SaveOutcome> {
+        let consumed = decision
+            .as_ref()
+            .map(|d| self.consume_save_decision(d))
+            .transpose()?
+            .unwrap_or(false);
         let _target_lock = crate::save_guard::lock(path)?;
         crate::save_guard::Revision::check(self.accepted.as_ref(), path)?;
+        let state_before_preparation = decision
+            .as_ref()
+            .map(|decision| self.validate_save_decision(path, decision, consumed))
+            .transpose()?;
         // Never replace an input, even through a symlink or alternate spelling.
         let absolute = std::path::absolute(path)?;
         let mut protected: Vec<_> = self.draft.inputs.iter().map(|r| r.path.clone()).collect();
@@ -760,11 +782,16 @@ impl SangerReviewSession {
             }
         }
         self.ensure_sources(path)?;
-        self.start_recovery().map_err(invalid)?;
+        self.ensure_recovery().map_err(invalid)?;
         // Registration above acquires evidence locks itself. Never nest them.
         let _evidence_lock = inputs::lock()?;
         crate::save_guard::Revision::check(self.accepted.as_ref(), path)?;
-        inputs::resolve(&inputs::conflicts(path)?, policy)?;
+        let warnings = self.authorize_save(
+            path,
+            policy,
+            decision.map(|d| (d, consumed)),
+            state_before_preparation.as_deref(),
+        )?;
         let write = write::ReviewWrite::allocate(self, path)?;
         let outcome = (|| -> crate::Result<()> {
             // Preparing support and exact bytes does not mutate the live review.
@@ -796,7 +823,16 @@ impl SangerReviewSession {
         }
         self.evidence.clone_from(&write.evidence);
         self.anchor = absolute;
-        self.checkpoint().map_err(|error| invalid(format!("review data and binding saved; recovery checkpoint incomplete: {error}; repair evidence: {}", write.run.directory().display())))
+        self.checkpoint().map_err(|detail| crate::Error::Damaged {
+            path: write.run.directory().into(),
+            detail: format!(
+                "review data and binding saved; recovery checkpoint incomplete: {detail}"
+            ),
+        })?;
+        Ok(crate::session::SaveOutcome {
+            recovery_observation: None,
+            warnings,
+        })
     }
 
     pub(super) fn publish_consensus(&mut self, path: &Path) -> crate::Result<()> {
@@ -1125,6 +1161,7 @@ mod tests {
 
     #[test]
     fn save_move_and_undo_keep_exact_draft_and_reference_only_inputs() {
+        crate::isolated_profile::isolate!();
         let tmp = tempfile::tempdir().unwrap();
         let folder = tmp.path().join("work");
         let (mut review, trace) = draft(&folder);
@@ -1180,6 +1217,7 @@ mod tests {
 
     #[test]
     fn complete_review_export_survives_missing_originals_and_another_move() {
+        crate::isolated_profile::isolate!();
         let tmp = tempfile::tempdir().unwrap();
         let folder = tmp.path().join("original");
         let (mut review, _) = draft(&folder);
@@ -1215,13 +1253,23 @@ mod tests {
             Vec::<String>::new()
         );
         let mut saved_again = reopened;
-        saved_again
-            .save(&moved.join("another.sanger-review.json"))
+        let target = moved.join("another.sanger-review.json");
+        assert!(saved_again.save(&target).is_err());
+        let check = saved_again.check_save(&target).unwrap();
+        assert!(!check.evidence().is_complete());
+        let outcome = saved_again
+            .save_with_decision(&target, check.decide(inputs::SavePolicy::Cancel, true))
             .unwrap();
+        assert!(!outcome.warnings.is_empty());
+        assert_eq!(
+            SangerReviewSession::load(&target).unwrap().draft_json,
+            exact
+        );
     }
 
     #[test]
     fn consensus_requires_resolution_and_complete_export_includes_resumable_review() {
+        crate::isolated_profile::isolate!();
         let tmp = tempfile::tempdir().unwrap();
         let folder = tmp.path().join("original");
         let (mut review, _) = draft(&folder);
@@ -1254,6 +1302,7 @@ mod tests {
 
     #[test]
     fn missing_changed_and_explicitly_preserved_sources_are_distinguished() {
+        crate::isolated_profile::isolate!();
         let tmp = tempfile::tempdir().unwrap();
         let (mut review, trace) = draft(tmp.path());
         let path = tmp.path().join("review.sanger-review.json");
@@ -1290,6 +1339,7 @@ mod tests {
 
     #[test]
     fn failed_save_keeps_recovery_and_unrelated_files() {
+        crate::isolated_profile::isolate!();
         let tmp = tempfile::tempdir().unwrap();
         let (mut review, _) = draft(tmp.path());
         review.start_recovery().unwrap();
@@ -1321,6 +1371,7 @@ mod tests {
 
     #[test]
     fn failed_analysis_keeps_owned_partial_output_and_declares_failure() {
+        crate::isolated_profile::isolate!();
         let tmp = tempfile::tempdir().unwrap();
         let (_, trace) = draft(tmp.path());
         let run = SangerRun::prepare(&trace, "consensus", std::slice::from_ref(&trace)).unwrap();
@@ -1338,6 +1389,7 @@ mod tests {
 
     #[test]
     fn multiple_read_and_placement_evidence_export_with_exact_original_mappings() {
+        crate::isolated_profile::isolate!();
         let tmp = tempfile::tempdir().unwrap();
         let folder = tmp.path().join("original");
         let (first, trace) = draft(&folder);
@@ -1404,6 +1456,7 @@ mod tests {
 
     #[test]
     fn alignment_addition_retains_review_ancestry_and_packages_without_originals() {
+        crate::isolated_profile::isolate!();
         let tmp = tempfile::tempdir().unwrap();
         let folder = tmp.path().join("original");
         let (mut review, _) = draft(&folder);
@@ -1497,6 +1550,7 @@ mod tests {
 
     #[test]
     fn save_preserves_extension_metadata_and_refuses_source_aliases() {
+        crate::isolated_profile::isolate!();
         let tmp = tempfile::tempdir().unwrap();
         let (mut review, trace) = draft(tmp.path());
         let path = tmp.path().join("review.sanger-review.json");
@@ -1530,6 +1584,7 @@ mod tests {
 
     #[test]
     fn cancellation_and_early_exit_retain_support_without_a_successful_result() {
+        crate::isolated_profile::isolate!();
         let tmp = tempfile::tempdir().unwrap();
         let (_, trace) = draft(tmp.path());
         for cancelled in [false, true] {

@@ -77,7 +77,7 @@ impl Session {
             .unwrap_or(false);
 
         if !self.is_open(id) {
-            return Err(invalid("save document is not open"));
+            return Err(Error::UnknownDocument { id });
         }
         let mut warnings = Vec::new();
         let mut target_check = None;
@@ -95,7 +95,13 @@ impl Session {
         if history_only && !clean {
             return Err(invalid("history publication requires a saved document"));
         }
-        if decision.is_none() && !history_only && self.log.is_some() && path.is_none() && clean {
+        if decision.is_none()
+            && !history_only
+            && self.log.is_some()
+            && path.is_none()
+            && clean
+            && !self.storage_root.join("pending-save.json").exists()
+        {
             return Ok(SaveOutcome {
                 recovery_observation: None,
                 warnings,
@@ -117,9 +123,33 @@ impl Session {
             crate::save_guard::Revision::check(None, &target)?;
         }
 
-        let _evidence_lock = crate::input_evidence::lock()?;
+        let creates_dependencies = || {
+            path.is_some()
+                || !matches!(
+                    self.write_publication,
+                    crate::documents::WritePublication::Immediate
+                )
+                || self.docs[id.0].origin_bundle.join("input.json").exists()
+                || self.docs[id.0]
+                    .content
+                    .as_document()
+                    .writes_analysis_dependencies()
+                || !matches!(
+                    crate::analysis_store::ArtifactRun::for_result(&target),
+                    Ok(None)
+                )
+        };
+        let exclusive = creates_dependencies();
+        let guard = crate::input_evidence::lock_save(&target, exclusive)?;
+        // A registrar may have published a binding while we waited for the gate.
+        let _evidence_lock = if !exclusive && creates_dependencies() {
+            drop(guard);
+            crate::input_evidence::lock_save(&target, true)?
+        } else {
+            guard
+        };
         if !history_only {
-            let evidence = crate::input_evidence::check(&target)?;
+            let evidence = crate::input_evidence::check_locked(&target)?;
             if decision.is_some()
                 || !evidence.is_complete()
                 || matches!(
@@ -205,6 +235,10 @@ impl Session {
                 self.docs[id.0].disk_stamp = crate::input_evidence::stamp(&target)?;
             }
             if self.log.is_some() {
+                #[cfg(test)]
+                super::save_failure_tests::fail_write(
+                    super::save_failure_tests::WriteStep::RemoveIntent,
+                )?;
                 std::fs::remove_file(self.storage_root.join("pending-save.json"))?;
             }
         }
@@ -254,10 +288,8 @@ impl Session {
                             .push((key, expected_sidecar.clone()));
                     }
                 }
-                invalid(format!(
-                    "data saved; provenance or sidecar incomplete: {error}. Recovery remains at {}",
-                    self.storage_root.display()
-                ))
+                Error::Damaged { path: target.clone(), detail: format!(
+                    "data saved; provenance or sidecar incomplete: {error}. Recovery remains at {}", self.storage_root.display()) }
             } else {
                 error
             }
@@ -267,6 +299,10 @@ impl Session {
             crate::documents::WritePublication::Recovery { .. }
         ) {
             Some((|| -> Result<SaveCheck> {
+                #[cfg(test)]
+                super::save_failure_tests::fail_write(
+                    super::save_failure_tests::WriteStep::RecoveryCheck,
+                )?;
                 let mut observed = self.recovery_snapshot(id)?;
                 if target_check
                     .as_ref()
@@ -292,9 +328,9 @@ impl Session {
     pub(super) fn check_save_source(&self, id: DocId) -> Result<()> {
         for key in &self.docs[id.0].absent_sidecars {
             if self.resolve(key).exists() {
-                return Err(invalid(
-                    "a source sidecar appeared since opening; reopen before saving",
-                ));
+                return Err(Error::ChangedOnDisk {
+                    path: self.resolve(key),
+                });
             }
         }
         for (key, hash) in &self.docs[id.0].accepted_hashes {
@@ -358,6 +394,8 @@ impl Session {
             },
         );
 
+        #[cfg(test)]
+        super::save_failure_tests::fail_write(super::save_failure_tests::WriteStep::Journal)?;
         self.write(&entry)?;
 
         if target == self.resolve(&self.docs[id.0].key) {
@@ -370,11 +408,12 @@ impl Session {
             && self.provenance_policy != basecraft_platform::settings::ProvenancePolicy::None
         {
             self.publish_save(id, target, &entry, &[], None)
-                .map_err(|e| {
-                    invalid(format!(
+                .map_err(|e| Error::Damaged {
+                    path: target.into(),
+                    detail: format!(
                         "data saved; provenance incomplete: {e}. Recovery has been retained at {}",
                         self.storage_root.display()
-                    ))
+                    ),
                 })?;
         }
         Ok(())

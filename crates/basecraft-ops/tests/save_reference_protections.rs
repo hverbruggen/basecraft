@@ -217,21 +217,17 @@ fn moved_project_store_is_discovered_with_stale_registry_location() {
             let source = moved.join("gene.fasta");
             let run = moved.join(relative_run);
             let (mut session, doc) = edited(&moved, &source);
-            // The v1 registry cannot prove the missing old path is the same
-            // store as the newly discovered nearby one. Preserve known guards
-            // while explicitly acknowledging that remaining uncertainty.
-            let check = match session.save(doc, None).unwrap_err() {
-                Error::SaveCheckRequired(check) => check,
-                other => panic!("expected incomplete moved-store check, got {other:?}"),
-            };
-            assert!(!check.evidence().is_complete());
-            let found = &check.evidence().conflict;
+            // The private index proves this directory moved; the known input
+            // still blocks replacement and requires the normal preserve choice.
+            let found = conflict(session.save(doc, None).unwrap_err());
+            let check = session.check_save(doc, None).unwrap();
+            assert!(check.evidence().is_complete());
             assert_eq!(found.analyses.len(), 1);
             assert_eq!(found.analyses[0].run, run);
             assert_eq!(std::fs::read(&source).unwrap(), ORIGINAL);
             recovery_refused(&mut session, doc, &root.join("recovered"));
             session
-                .save_with_decision(doc, None, check.decide(SavePolicy::PreserveCopy, true))
+                .save_with_decision(doc, None, check.decide(SavePolicy::PreserveCopy, false))
                 .unwrap();
             assert_eq!(
                 std::fs::read(run.join("preserved-input")).unwrap(),

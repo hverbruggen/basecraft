@@ -104,6 +104,38 @@ copy repairs that effective owning ledger only after checking original identity.
 CLI/MCP/default Rust Session saves return a structured conflict/options
 without an interactive prompt; Rust callers can choose `save_with_evidence`.
 
+Save checks return known affected analyses separately from incomplete inspection
+issues. An incomplete check requires an explicit, single-use acknowledgement bound
+to the live document, destination and inspected evidence. Cancel is the default;
+acknowledging an incomplete check does not select a policy for known analyses.
+Stale or reused decisions return a fresh check. Successful overrides retain the
+inspection issues as warnings. GUI, CLI, Python and MCP use the same typed result.
+
+The private version-1 `analysis-stores.json` registry remains readable and unchanged.
+A separate, rebuildable `analysis-input-index.json` caches each store's source paths,
+dependency locations and filesystem metadata; it never rewrites run records.
+Missing, damaged or future cache versions cause conservative reconciliation.
+Unknown registry fields survive writes. On supported filesystems, lookup stats
+cached directories and input-ledger metadata to detect older writers, then stats
+live source paths to catch external replacements and new hard-link aliases. Only
+changed or selected stores have their input records opened. Unix change timestamps
+also detect same-size rewrites that restore modification time. Platforms without
+an equivalent change timestamp use full inspection. This is metadata reconciliation,
+not a filesystem journal or a content-identity guarantee.
+
+A vanished registered store stays uncertain unless the same directory identity and
+an unchanged retained input ledger prove relocation to a discovered store. Lookup
+includes dependent stores and their backing owners. Ordinary stray files cannot
+contain run ledgers and are ignored; unreadable or unsafe entries remain inspection
+issues. A new destination does not waive protection for a missing recorded source.
+
+Saves lock their destination and selected stores in sorted order. Ordinary document
+replacements that cannot introduce dependencies share the legacy evidence gate.
+Registry/cache replacement uses a separate lock. Registration, analysis-producing
+saves, recovery and Save As retain the exclusive compatibility gate so concurrent
+older writers cannot introduce an unchecked reference. Unrelated ordinary saves
+can run concurrently; those compatibility writers still serialize.
+
 External editors cannot be intercepted. Verification reports changed/missing
 originals. Verified-original relink accepts only matching bytes and updates the
 read-only source location. No startup scan/hash of a filesystem occurs. Unknown
