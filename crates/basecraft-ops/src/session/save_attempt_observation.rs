@@ -422,7 +422,7 @@ pub(crate) mod tests {
                 (0, Error::Format(basecraft_io::Error::Io(error))) => {
                     assert!(error.raw_os_error().is_some());
                 }
-                (2, Error::Invalid(_)) => {} // Journal owner already formatted its IO cause.
+                (2, Error::Damaged { .. }) => {} // Journal owner already formatted its IO cause.
                 (3, Error::Io(error)) => assert!(error.raw_os_error().is_some()),
                 (1 | 4..=6, Error::Io(error)) => {
                     assert_eq!(error.to_string(), "injected boundary failure");

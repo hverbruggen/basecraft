@@ -21,6 +21,8 @@ pub enum Error {
         id: crate::DocId,
         expected: crate::files::Kind,
     },
+    #[error("proposal target changed since revision {revision}")]
+    StaleRevision { id: crate::DocId, revision: u64 },
     #[error("{path} changed on disk")]
     ChangedOnDisk { path: PathBuf },
     #[error("{path} was not found")]
@@ -56,32 +58,46 @@ pub(crate) fn invalid(msg: impl Into<String>) -> Error {
 }
 
 impl Error {
-    /// Stable category for callers; message text is for people, not dispatch.
-    pub fn code(&self) -> &'static str {
+    /// The single mapping shared by CLI, MCP, and registered operation jobs.
+    pub fn operation_code(&self) -> basecraft_protocol::operation::OperationErrorCode {
+        use basecraft_protocol::operation::OperationErrorCode as Code;
         match self {
-            Self::ChangedOnDisk { .. } => "changed_on_disk",
-            Self::NotFound { .. } => "not_found",
-            Self::Damaged { .. } => "damaged",
-            Self::Limit { .. } => "limit",
-            Self::Unsupported(_) => "unsupported",
-            Self::Busy(_) => "busy",
-            Self::UnknownDocument { .. } => "unknown_document",
-            Self::WrongKind { .. } => "wrong_document_kind",
-            Self::Access(crate::access::AccessError::Denied(_)) => "permission_denied",
-            Self::Access(crate::access::AccessError::DestinationExists) => "output_conflict",
-            Self::Access(crate::access::AccessError::Io(_)) | Self::Io(_) => "io",
-            Self::Format(_) => "format",
-            Self::Json(_) => "json",
-            Self::UnknownFormat(_) => "unknown_format",
-            Self::Empty(_) => "empty_document",
-            Self::Invalid(_) => "invalid_operation",
-            Self::EvidenceConflict(_) => "evidence_conflict",
-            Self::EvidenceCheckIncomplete(_) | Self::SaveCheckRequired(_) => {
-                "evidence_check_incomplete"
+            Self::StaleRevision { .. } => Code::StaleRevision,
+            Self::ChangedOnDisk { .. } => Code::ChangedOnDisk,
+            Self::NotFound { .. } => Code::NotFound,
+            Self::Damaged { .. } => Code::Damaged,
+            Self::Limit { .. } => Code::Limit,
+            Self::Unsupported(_) => Code::Unsupported,
+            Self::Busy(_) => Code::Busy,
+            Self::UnknownDocument { .. } => Code::UnknownDocument,
+            Self::WrongKind { .. } => Code::WrongDocumentKind,
+            Self::Access(crate::access::AccessError::Denied(_)) => Code::PermissionDenied,
+            Self::Access(crate::access::AccessError::DestinationExists) => Code::OutputConflict,
+            Self::Access(crate::access::AccessError::Io(e))
+            | Self::Io(e)
+            | Self::Format(basecraft_io::Error::Io(e)) => {
+                if e.kind() == std::io::ErrorKind::PermissionDenied {
+                    Code::PermissionDenied
+                } else {
+                    Code::IoError
+                }
             }
-            Self::SaveDecisionStale(_) => "save_decision_stale",
-            Self::PublishedWithFailure(_) => "published_with_failure",
-            Self::NothingTo(_) => "nothing_to_do",
+            Self::Format(_) => Code::FormatError,
+            Self::Json(_) | Self::Invalid(_) => Code::InvalidArguments,
+            Self::UnknownFormat(_) => Code::UnknownFormat,
+            Self::Empty(_) => Code::EmptyDocument,
+            Self::EvidenceConflict(_) => Code::AnalysisInputConflict,
+            Self::EvidenceCheckIncomplete(_) | Self::SaveCheckRequired(_) => {
+                Code::EvidenceCheckIncomplete
+            }
+            Self::SaveDecisionStale(_) => Code::SaveDecisionStale,
+            Self::PublishedWithFailure(_) => Code::PublishedWithFailure,
+            Self::NothingTo(_) => Code::NothingToDo,
         }
+    }
+
+    /// Stable wire spelling; messages are for people, not dispatch.
+    pub fn code(&self) -> &'static str {
+        self.operation_code().as_str()
     }
 }

@@ -160,3 +160,106 @@ pub struct SangerJobRecord {
 pub struct SangerJobSource {
     pub path: Option<PathBuf>,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TraceCalls {
+    pub sequence: String,
+    /// Native secondary calls, indexed by the same events as sequence/positions/scores.
+    /// Missing legacy or instrument evidence is unknown, never primary agreement.
+    /// Draft orientation and clipping do not transform these native arrays.
+    #[serde(default)]
+    pub secondary_sequence: Option<String>,
+    pub positions: Vec<u32>,
+    pub scores: Vec<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signal_bounds: Option<[usize; 2]>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct InputRead {
+    pub read: usize,
+    pub path: PathBuf,
+    pub sha256: String,
+    pub orientation: Orientation,
+    #[serde(default)]
+    pub calls: Option<TraceCalls>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Orientation {
+    Forward,
+    Reverse,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SupportKind {
+    Call,
+    InternalGap,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ReadSupport {
+    pub read: usize,
+    pub base: char,
+    pub kind: SupportKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DraftColumn {
+    /// One-based column in the Tracy alignment, including gap columns.
+    pub column: usize,
+    pub consensus: char,
+    pub support: Vec<ReadSupport>,
+    pub conflict: bool,
+    pub review: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct Overlap {
+    pub reads: [usize; 2],
+    pub comparable_bases: usize,
+    pub identity: f64,
+    pub accepted: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SangerDraft {
+    pub status: String,
+    pub engine: String,
+    #[serde(default)]
+    pub signal_threshold: Option<u32>,
+    pub version_output: String,
+    pub engine_sha256: String,
+    pub mode: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub argv: Vec<String>,
+    pub inputs: Vec<InputRead>,
+    pub consensus: String,
+    pub consensus_length: usize,
+    pub minimum_overlap: usize,
+    pub minimum_identity: f64,
+    pub overlaps: Vec<Overlap>,
+    pub aligned_columns: usize,
+    pub conflict_columns: usize,
+    pub columns: Vec<DraftColumn>,
+    #[serde(default)]
+    pub limitations: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SangerPlacement {
+    pub status: String,
+    pub engine: String,
+    pub version: String,
+    pub source_path: PathBuf,
+    pub source_sha256: String,
+    pub source_rows: usize,
+    pub source_width: usize,
+    pub fragment: String,
+    pub map: Vec<Option<usize>>,
+    pub aligned_probe: String,
+    pub insertions: usize,
+    pub parameters: Vec<String>,
+}

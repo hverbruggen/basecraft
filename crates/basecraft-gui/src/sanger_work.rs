@@ -3,6 +3,7 @@
 use super::{
     Arc, Path, PathBuf, ReviewOp, SangerDraft, SangerReviewSession, SangerReviewView, session_view,
 };
+use basecraft_docs::sanger::SangerDraftExt;
 use basecraft_plugin_host::{
     jobs::JobManager,
     policy::SessionPolicy,

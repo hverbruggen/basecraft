@@ -16,6 +16,5 @@
   "transformation": "identity-v1",
   "state": "referenced",
   "sanger_input_events": [],
-  "selected_input_links": {},
-  "upstream": []
+  "selected_input_links": {}
 }

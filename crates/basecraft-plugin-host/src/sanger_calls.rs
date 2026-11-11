@@ -9,6 +9,7 @@ use crate::{
     },
 };
 use basecraft_docs::sanger::SangerDraft;
+use basecraft_docs::sanger::SangerDraftExt;
 use basecraft_protocol::operation::{InvocationInputEvidence, OperationRequest, RuntimeState};
 use serde_json::json;
 use std::path::{Path, PathBuf};

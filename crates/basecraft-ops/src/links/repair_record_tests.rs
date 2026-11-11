@@ -172,7 +172,7 @@ fn invalid_utf8_prior_symlink_returns_error_before_publication() {
             .publish(|| -> Result<()> { panic!("data callback must not run") })
             .unwrap_err();
         assert!(matches!(error, crate::Error::Json(_)), "{error}");
-        assert_eq!(error.code(), "json");
+        assert_eq!(error.code(), "invalid_arguments");
         assert_eq!(entries(), before, "no DS04 file may be retained");
         assert_eq!(std::fs::read(&target).unwrap(), b"old tree");
         assert_eq!(std::fs::read(ordinary).unwrap(), b"old metadata");

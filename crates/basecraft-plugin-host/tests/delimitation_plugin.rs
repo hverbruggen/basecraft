@@ -71,7 +71,10 @@ fn snapshots_and_terminal_outcomes_survive_success_and_failure() {
         // The submitted tree is referenced in place, with its accepted hash.
         let run = common::evidence(&outcome);
         let input = input_evidence::read_input(&run).unwrap();
-        assert_eq!(input.state, "referenced");
+        assert_eq!(
+            input.state,
+            basecraft_protocol::input_records::EvidenceState::Referenced
+        );
         assert_eq!(
             input.source.unwrap().hash,
             basecraft_io::hash_file(&source).unwrap()
@@ -490,7 +493,10 @@ fn dirty_tree_submission_retains_generated_bytes_without_stale_original_claim() 
     common::assert_completed(&outcome);
     let run = common::evidence(&outcome);
     let input = input_evidence::read_input(&run).unwrap();
-    assert_eq!(input.state, "generated");
+    assert_eq!(
+        input.state,
+        basecraft_protocol::input_records::EvidenceState::Generated
+    );
     assert!(input.source.is_none());
     let generated = run.join("submitted.fasta");
     assert!(
@@ -721,7 +727,7 @@ fn optional_display_tree_uses_hidden_reference_first_companions() {
     let run = common::evidence(&outcome);
     assert_eq!(
         input_evidence::read_input(&run).unwrap().state,
-        "referenced"
+        basecraft_protocol::input_records::EvidenceState::Referenced
     );
     assert!(!run.join("submitted.fasta").exists());
     let tree = basecraft_ops::files::load_tree(&display).unwrap();
@@ -799,7 +805,14 @@ fn alignment_workflows_use_frozen_unsaved_inputs() {
         let outcome = common::wait_in(&manager, &mut session, &accepted.run_id);
         common::assert_completed(&outcome);
         let input = input_evidence::read_input(&common::evidence(&outcome)).unwrap();
-        assert_eq!(input.state, if dirty { "generated" } else { "referenced" });
+        assert_eq!(
+            input.state,
+            if dirty {
+                basecraft_protocol::input_records::EvidenceState::Generated
+            } else {
+                basecraft_protocol::input_records::EvidenceState::Referenced
+            }
+        );
         let submitted = common::evidence(&outcome).join("submitted.fasta");
         if dirty {
             assert_eq!(
@@ -1080,7 +1093,7 @@ fn workflow_save_decision_covers_nested_stages_and_original_ancestry() {
                 if policy == SavePolicy::BreakEvidence {
                     assert_eq!(
                         input_evidence::read_input(&affected.run).unwrap().state,
-                        "broken"
+                        basecraft_protocol::input_records::EvidenceState::Broken
                     );
                 } else {
                     assert!(!affected.run.exists());

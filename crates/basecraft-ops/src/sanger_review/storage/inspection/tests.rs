@@ -1,5 +1,6 @@
 use super::*;
 use crate::sanger_review::{instrument_review, moved_and_failed_recovery_tests::pair};
+use basecraft_docs::sanger::SangerPlacementExt;
 use std::collections::BTreeMap;
 
 fn enter(name: &str) -> Option<PathBuf> {

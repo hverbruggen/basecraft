@@ -5,6 +5,7 @@
 mod edit;
 mod save;
 mod storage;
+use basecraft_docs::sanger::SangerDraftExt;
 pub use storage::{SangerRun, record_addition};
 pub(crate) use storage::{is_review, relocate_package};
 
@@ -985,12 +986,12 @@ pub fn instrument_review(path: &Path) -> Result<SangerReviewSession, String> {
     let calls = trace.display_calls();
     let sequence = String::from_utf8(calls.bases.clone()).map_err(|e| e.to_string())?;
     let length = sequence.len();
-    let draft = SangerDraft {
+    let draft = SangerDraft { argv: Vec::new(),
         status: "draft_requires_review".into(), engine: "ABI".into(),
         version_output: format!("ABIF instrument PBAS{}; no recalculation", calls.number),
         engine_sha256: String::new(), mode: "single".into(), signal_threshold: None,
         inputs: vec![InputRead { read: 1, path: path.clone(), sha256: basecraft_io::sha256_bytes(&bytes),
-            orientation: Orientation::Forward, calls: Some(TraceCalls { sequence: sequence.clone(), secondary_sequence: None,
+            orientation: Orientation::Forward, calls: Some(TraceCalls { signal_bounds: None, sequence: sequence.clone(), secondary_sequence: None,
                 positions: calls.positions.clone(), scores: calls.qualities.as_ref().map_or_else(
                     || vec![0; length], |scores| scores.iter().map(|&score| i32::from(score)).collect()) }) }],
         consensus: sequence.clone(), consensus_length: length, minimum_overlap: 1,
@@ -1388,13 +1389,19 @@ mod moved_and_failed_recovery_tests {
             review.save_with_evidence(&path, policy).unwrap();
             let input = inputs::read_input(ledger.directory()).unwrap();
             if policy == SavePolicy::PreserveCopy {
-                assert_eq!(input.state, "preserved");
+                assert_eq!(
+                    input.state,
+                    basecraft_protocol::input_records::EvidenceState::Preserved
+                );
                 assert_eq!(
                     std::fs::read(ledger.directory().join("preserved-input")).unwrap(),
                     before
                 );
             } else {
-                assert_eq!(input.state, "broken");
+                assert_eq!(
+                    input.state,
+                    basecraft_protocol::input_records::EvidenceState::Broken
+                );
             }
             assert_eq!(
                 SangerReviewSession::load(&path).unwrap().decision(1),

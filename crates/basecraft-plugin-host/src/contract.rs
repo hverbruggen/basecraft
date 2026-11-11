@@ -473,6 +473,33 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
                 }
             }
         }
+        if let Some(host) = &descriptor.host {
+            for (parameter, setting) in &host.parameter_environment {
+                if !descriptor.parameters["properties"]
+                    .as_object()
+                    .is_some_and(|p| p.contains_key(parameter))
+                    || setting.is_empty()
+                    || !setting
+                        .bytes()
+                        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == b'_')
+                {
+                    return Err(invalid(
+                        "parameter environment must name a declared parameter and environment setting",
+                    ));
+                }
+            }
+            if (host.lifecycle
+                == Some(basecraft_protocol::operation::LifecyclePolicy::ExternalSubmission)
+                && host.query_preparation.is_none())
+                || (host.lifecycle
+                    == Some(basecraft_protocol::operation::LifecyclePolicy::RetainedReceipt)
+                    && host.retained_query_transformation.is_none())
+            {
+                return Err(invalid(
+                    "submission and retained receipt services require a query preparation transform",
+                ));
+            }
+        }
         if let Some(adapter) = &descriptor.legacy_adapter {
             if adapter
                 .inputs

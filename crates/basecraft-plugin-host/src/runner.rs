@@ -158,7 +158,7 @@ pub fn verify_completed_result(
         let path = Path::new(&artifact.path);
         if !path.canonicalize()?.starts_with(directory.canonicalize()?)
             || path.symlink_metadata()?.file_type().is_symlink()
-            || basecraft_io::hash_file(path).map_err(basecraft_ops::Error::from)? != artifact.digest
+            || basecraft_io::hash_file(path)? != artifact.digest
             || !publication
                 .outputs
                 .iter()
@@ -195,14 +195,13 @@ pub fn lookup_completed_result(
             continue;
         } // Input ledgers and legacy domain runs have no runtime receipt.
         let candidate = (|| -> Result<Option<VerifiedOperationResult>> {
-            let value: Value =
+            let outcome: OperationOutcome =
                 serde_json::from_slice(&basecraft_ops::provenance::read_record(&receipt)?)?;
-            if value["schema"] != 1 {
+            if outcome.schema != 1 {
                 return Err(Error::Protocol(
                     "unsupported operation receipt version".into(),
                 ));
             }
-            let outcome: OperationOutcome = serde_json::from_value(value)?;
             if !query.matches(&outcome)
                 || outcome.state != basecraft_protocol::operation::RuntimeState::Completed
             {
@@ -384,23 +383,22 @@ impl PreparedOperation {
         );
         for directory in ledgers {
             let mut input = mutation.read_input(&directory)?;
-            input.extra.insert(
-                "analysis_run".into(),
-                json!(input_evidence::relative(&directory, parent)?),
-            );
-            let upstream = input
-                .extra
-                .entry("upstream".into())
-                .or_insert_with(|| json!([]))
-                .as_array_mut()
-                .ok_or_else(|| Error::Protocol("invalid stage ancestry".into()))?;
+            input.analysis_run = Some(input_evidence::relative(&directory, parent)?);
+            let upstream = &mut input.upstream;
             for dependency in &dependencies {
                 let bytes =
                     basecraft_ops::provenance::read_record(&dependency.join("manifest.json"))?;
                 let publication: Publication = serde_json::from_slice(&bytes)?;
-                if !upstream.iter().any(|entry| entry["id"] == publication.id) {
-                    upstream.push(json!({"bundle":input_evidence::relative(&directory, &dependency.canonicalize()?)?,
-                        "id":publication.id,"hash":basecraft_io::hash_bytes(&bytes)}));
+                if !upstream.iter().any(|entry| entry.id == publication.id) {
+                    upstream.push(basecraft_protocol::input_records::UpstreamLink {
+                        bundle: (input_evidence::relative(
+                            &directory,
+                            &dependency.canonicalize()?,
+                        )?)
+                        .into(),
+                        id: publication.id.clone(),
+                        hash: basecraft_io::hash_bytes(&bytes),
+                    });
                 }
             }
             mutation.write_input(&directory, &input)?;
@@ -521,7 +519,7 @@ impl PreparedOperation {
                 ));
             }
             *counts.entry(artifact.role.clone()).or_default() += 1;
-            let hash = basecraft_io::hash_file(&path).map_err(basecraft_ops::Error::from)?;
+            let hash = basecraft_io::hash_file(&path)?;
             validated.push((artifact.role.clone(), path, hash));
         }
         // Add the producer's support semantics before sealing the collection so
@@ -555,8 +553,7 @@ impl PreparedOperation {
                         return Err(Error::Protocol("duplicate support sidecar".into()));
                     }
                     *counts.entry("artifacts".into()).or_default() += 1;
-                    let hash =
-                        basecraft_io::hash_file(&sidecar).map_err(basecraft_ops::Error::from)?;
+                    let hash = basecraft_io::hash_file(&sidecar)?;
                     // Bound tree reads use the run-root sidecar; the collection
                     // member carries the same initial metadata when exported.
                     let hidden = self.run.artifact(
@@ -569,8 +566,7 @@ impl PreparedOperation {
                         let mut input = std::fs::File::open(&sidecar)?;
                         std::io::copy(&mut input, writer)?;
                         Ok(())
-                    })
-                    .map_err(basecraft_ops::Error::from)?;
+                    })?;
                     validated.push(("artifacts".into(), sidecar, hash));
                 }
             }
@@ -675,7 +671,7 @@ impl PreparedOperation {
                     .map_err(|_| Error::Protocol("result escapes allocation".into()))?,
             )
         };
-        if basecraft_io::hash_file(&retained).map_err(basecraft_ops::Error::from)? != *hash {
+        if basecraft_io::hash_file(&retained)? != *hash {
             return Err(Error::Protocol("retained species result changed".into()));
         }
         let value: Value = serde_json::from_slice(&std::fs::read(&retained)?)?;
@@ -837,19 +833,14 @@ impl PreparedOperation {
             plugin: JobIndexPlugin {
                 id: self.operation.package.manifest.id.clone(),
                 version: self.operation.package.manifest.version.clone(),
-                extra: BTreeMap::new(),
             },
             operation: self.operation.id.clone(),
             effective_parameters: outcome.effective_parameters.clone(),
             initiator: self.initiator.clone(),
-            source: JobIndexSource {
-                path: source,
-                extra: BTreeMap::new(),
-            },
+            source: JobIndexSource { path: source },
             outputs,
             diagnostics: outcome.errors.first().map(|error| error.message.clone()),
             runtime_record: runtime.into(),
-            extra: BTreeMap::new(),
         })?;
         input_evidence::write_json(&directory.join("manifest.json"), &index)?;
         Ok(())
@@ -889,12 +880,9 @@ fn sources_from_upstream(directory: &Path) -> Result<Vec<PathBuf>> {
     }
     let record = input_evidence::read_input(directory)?;
     Ok(record
-        .extra
-        .get("upstream")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|value| value["bundle"].as_str().map(|path| directory.join(path)))
+        .upstream
+        .iter()
+        .map(|value| directory.join(&value.bundle))
         .collect())
 }
 
@@ -912,9 +900,7 @@ fn verify_collection(root: &Path, expected: &BTreeMap<PathBuf, String>) -> Resul
     }
     for (relative, hash) in expected {
         let path = root.join(relative);
-        if link_count(&path)? != 1
-            || basecraft_io::hash_file(&path).map_err(basecraft_ops::Error::from)? != *hash
-        {
+        if link_count(&path)? != 1 || basecraft_io::hash_file(&path)? != *hash {
             return Err(Error::Protocol(
                 "collection bytes changed after validation".into(),
             ));
@@ -936,7 +922,7 @@ fn verify_member_receipt(destination: &Path, hash: &str, intent: &Path) -> Resul
         || receipt["device"].as_u64() != Some(identity(destination)?.0)
         || receipt["inode"].as_u64() != Some(identity(destination)?.1)
         || receipt["size"].as_u64() != Some(metadata.len())
-        || basecraft_io::hash_file(destination).map_err(basecraft_ops::Error::from)? != hash
+        || basecraft_io::hash_file(destination)? != hash
     {
         return Err(Error::Protocol(
             "output_conflict: member ownership or bytes changed; repair refused".into(),
@@ -954,7 +940,7 @@ fn export_member(source: &Path, destination: &Path, hash: &str, intent: &Path) -
         .prefix(".basecraft-export-")
         .tempfile_in(parent)?;
     std::fs::copy(source, pending.path())?;
-    if basecraft_io::hash_file(pending.path()).map_err(basecraft_ops::Error::from)? != hash {
+    if basecraft_io::hash_file(pending.path())? != hash {
         return Err(Error::Protocol("member changed during export".into()));
     }
     pending.as_file().sync_all()?;
@@ -970,8 +956,6 @@ fn export_member(source: &Path, destination: &Path, hash: &str, intent: &Path) -
             size: metadata.len(),
         })?,
     )?;
-    #[cfg(test)]
-    record_format_tests::member_promotion_hook(pending.path(), destination, intent);
     basecraft_platform::atomic::rename_noreplace(pending.path(), destination).map_err(|error| {
         if error.kind() == std::io::ErrorKind::AlreadyExists {
             Error::Protocol("output_conflict: destination exists".into())
@@ -1000,7 +984,7 @@ fn export_collection(
             std::fs::create_dir_all(parent)?;
         }
         std::fs::copy(source.join(relative), &target)?;
-        if basecraft_io::hash_file(&target).map_err(basecraft_ops::Error::from)? != *hash {
+        if basecraft_io::hash_file(&target)? != *hash {
             return Err(Error::Protocol("collection changed during export".into()));
         }
         basecraft_platform::files::sync_file(&target)?;
@@ -1008,129 +992,6 @@ fn export_collection(
     basecraft_platform::atomic::rename_noreplace(pending.path(), destination)?;
     basecraft_platform::files::sync_directory(parent)?;
     Ok(())
-}
-
-#[cfg(test)]
-mod completed_result_tests {
-    use super::*;
-    #[test]
-    fn retained_primary_owner_survives_reversed_evidence_binding_order() {
-        use crate::registry::{Registry, RegistryConfig};
-        let temp = tempfile::tempdir().unwrap();
-        let fixture =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/registry-plugin");
-        let package = temp.path().join("package");
-        std::fs::create_dir(&package).unwrap();
-        for name in ["plugin.toml", "plugin.py", "operations.json"] {
-            std::fs::copy(fixture.join(name), package.join(name)).unwrap();
-        }
-        let path = package.join("operations.json");
-        let mut contract: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        let binding = json!({"view":"bytes", "media_type":"application/octet-stream",
-            "min":1, "max":1, "retain":true});
-        contract["operations"][0]["inputs"] = json!({"a_first":binding, "sources":binding});
-        std::fs::write(path, serde_json::to_vec(&contract).unwrap()).unwrap();
-        let config = RegistryConfig {
-            bundled: temp.path().join("no-bundle"),
-            packages: temp.path().join("plugins"),
-            index: temp.path().join("index.json"),
-        };
-        crate::registry::install(&config, &package).unwrap();
-        let registry = Registry::load(&config).unwrap();
-        std::fs::write(temp.path().join("z.txt"), b"equal originals").unwrap();
-        std::fs::write(temp.path().join("a.txt"), b"equal originals").unwrap();
-        let request: OperationRequest = serde_json::from_value(json!({
-            "operation":"org.example.registry-fixture/count@1",
-            "inputs":{"a_first":[{"kind":"file","path":"z.txt"}],
-                "sources":[{"kind":"file","path":"a.txt"}]},
-            "destinations":{"report":"report.json"}, "parameters":{}
-        }))
-        .unwrap();
-        let operation = registry.resolve(&request.operation, None).unwrap().clone();
-        let mut prepared = PreparedOperation::prepare(
-            operation,
-            request,
-            SessionPolicy::new(temp.path(), true).unwrap(),
-            "ownership probe".into(),
-            None,
-            &registry,
-        )
-        .unwrap();
-        let owner = prepared.context.input_evidence["a_first"][0]
-            .run_directory
-            .clone();
-        let mut first = prepared.context.input_evidence.remove("a_first").unwrap();
-        let mut other = prepared.context.input_evidence.remove("sources").unwrap();
-        assert_ne!(first[0].original_path, other[0].original_path);
-        assert_eq!(first[0].source_hash, other[0].source_hash);
-        // Preparation naturally uses the same BTreeMap order as evidence. This
-        // synthetic permutation exercises delegation independent of that order
-        // on a real registered prepared operation, without a production hook.
-        std::mem::swap(&mut first, &mut other);
-        prepared
-            .context
-            .input_evidence
-            .insert("a_first".into(), first);
-        prepared
-            .context
-            .input_evidence
-            .insert("sources".into(), other);
-        prepared.retain_inputs().unwrap();
-        let primary = input_evidence::read_input(prepared.run.directory()).unwrap();
-        let origin = primary.extra["origin_run"].as_str().unwrap();
-        assert_eq!(
-            prepared
-                .run
-                .directory()
-                .join(origin)
-                .canonicalize()
-                .unwrap(),
-            Path::new(&owner).canonicalize().unwrap(),
-            "binding iteration must not replace the original primary owner"
-        );
-        assert_eq!(
-            std::fs::read(Path::new(&owner).join("preserved-input")).unwrap(),
-            b"equal originals"
-        );
-    }
-
-    #[test]
-    fn lookup_reports_corrupt_future_and_incomplete_inventory_without_creating_a_store() {
-        let tmp = tempfile::tempdir().unwrap();
-        let anchor = tmp.path().join("operation");
-        let query = CompletedResultQuery {
-            operation: "test.operation/run@1".into(),
-            pins: basecraft_protocol::operation::OperationPins {
-                generation: "g".into(),
-                package_digest: "p".into(),
-                descriptor_digest: "d".into(),
-            },
-            effective_parameters: json!({}),
-            inputs: std::collections::BTreeMap::default(),
-        };
-        assert!(lookup_completed_result(&anchor, &query).result.is_none());
-        assert!(!tmp.path().join(".basecraft").exists());
-        let run = ArtifactRun::create(&anchor, "corrupt").unwrap();
-        input_evidence::write_json(
-            &run.artifact("runtime.json").unwrap(),
-            &json!({"schema":99}),
-        )
-        .unwrap();
-        let result = lookup_completed_result(&anchor, &query);
-        assert!(result.result.is_none());
-        assert_eq!(result.diagnostics.len(), 1);
-        std::fs::write(run.artifact("runtime.json").unwrap(), b"broken JSON").unwrap();
-        assert_eq!(
-            lookup_completed_result(&anchor, &query).diagnostics.len(),
-            1
-        );
-        assert!(
-            ArtifactRun::runs_for_anchor(&anchor, 0)
-                .unwrap_err()
-                .to_string()
-                .contains("incomplete")
-        );
-    }
 }
 
 #[cfg(test)]

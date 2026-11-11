@@ -422,14 +422,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
         Command::Replay { project } => {
             let report = basecraft_ops::replay::replay(&project)?;
-            for mismatch in &report.writer_mismatches {
-                println!(
-                    "{} {}: {}",
-                    mismatch.code(),
-                    mismatch.entry,
-                    mismatch.message()
-                );
-            }
             for p in &report.problems {
                 println!("problem: {p}");
             }
@@ -618,6 +610,34 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     schemars::schema_for!(
                         basecraft_protocol::companion_records::DelimitationSidecar
                     ),
+                ),
+                (
+                    "mafft-addition",
+                    schemars::schema_for!(basecraft_protocol::producer_records::MafftAddition),
+                ),
+                (
+                    "primer-report",
+                    schemars::schema_for!(basecraft_protocol::producer_records::PrimerReport),
+                ),
+                (
+                    "zenodo-selection",
+                    schemars::schema_for!(basecraft_protocol::producer_records::ZenodoSelection),
+                ),
+                (
+                    "zenodo-receipt",
+                    schemars::schema_for!(basecraft_protocol::producer_records::ZenodoReceipt),
+                ),
+                (
+                    "iqtree-recovery",
+                    schemars::schema_for!(basecraft_protocol::producer_records::IqtreeRecovery),
+                ),
+                (
+                    "sanger-draft",
+                    schemars::schema_for!(basecraft_protocol::sanger_records::SangerDraft),
+                ),
+                (
+                    "sanger-placement",
+                    schemars::schema_for!(basecraft_protocol::sanger_records::SangerPlacement),
                 ),
                 (
                     "sanger-request",

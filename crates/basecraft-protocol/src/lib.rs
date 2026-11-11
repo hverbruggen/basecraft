@@ -15,6 +15,7 @@ pub mod metadata_records;
 pub mod operation;
 pub mod ops;
 pub mod plugin;
+pub mod producer_records;
 pub mod provenance;
 pub mod publication_records;
 pub mod query_records;

@@ -49,6 +49,9 @@ impl Session {
                     submitted_size: reference.stamp.size,
                     transformation: "identity-v1".into(),
                     state: "referenced".into(),
+                    analysis_run: None,
+                    proposal_target: None,
+                    upstream: Vec::new(),
                     extra: BTreeMap::default(),
                 },
                 ArtifactRevision {
@@ -81,6 +84,9 @@ impl Session {
                     submitted_size: bytes.len() as u64,
                     transformation: "identity-v1".into(),
                     state: "generated".into(),
+                    analysis_run: None,
+                    proposal_target: None,
+                    upstream: Vec::new(),
                     extra: BTreeMap::default(),
                 },
                 ArtifactRevision {
@@ -98,11 +104,17 @@ impl Session {
         for dependency in snapshot.origin_bundles() {
             let bytes = crate::provenance::read_record(&dependency.join("manifest.json"))?;
             let parent: Publication = serde_json::from_slice(&bytes)?;
-            upstream.push(serde_json::json!({"bundle":crate::input_evidence::relative(&bundle.canonicalize()?, &dependency.canonicalize()?)?,"id":parent.id,"hash":basecraft_io::hash_bytes(&bytes)}));
+            upstream.push(basecraft_protocol::input_records::UpstreamLink {
+                bundle: (crate::input_evidence::relative(
+                    &bundle.canonicalize()?,
+                    &dependency.canonicalize()?,
+                )?)
+                .into(),
+                id: parent.id.clone(),
+                hash: basecraft_io::hash_bytes(&bytes),
+            });
         }
-        input
-            .extra
-            .insert("upstream".into(), serde_json::json!(upstream));
+        input.upstream = upstream;
         input.extra.insert("extraction".into(), serde_json::to_value(basecraft_protocol::records::ExtractionRecord { schema_version: 1, source_revision: snapshot.revision.clone(), selection: activity.op.clone(), coordinates: "zero-based-half-open; segments in biological order; reverse-complement after splicing".into(), extra: BTreeMap::new() })?);
         crate::input_evidence::write_json(&bundle.join("input.json"), &input)?;
         if let Some(run) = &run {
@@ -126,7 +138,6 @@ impl Session {
         let hash = basecraft_io::hash_file(path)?;
         let publication = Publication {
             schema_version: 1,
-            writer: std::collections::BTreeMap::new(),
             id: activity.id.clone(),
             session: self.id.clone(),
             parents: Vec::new(),

@@ -281,7 +281,7 @@ pub fn read_rows(path: &Path) -> Result<Vec<SourceRow>> {
     let bytes = std::fs::read(path)?;
     let index = basecraft_io::fasta::FastaIndex::build(&bytes)?;
     if index.records.is_empty() {
-        return Err(invalid(format!("{} has no records", path.display())));
+        return Err(crate::Error::Empty(path.to_path_buf()));
     }
     index
         .records
@@ -1354,7 +1354,7 @@ fn verified_reports(
             || evidence.source_hash.as_deref() != Some(expected.as_str())
             || evidence.submitted_hash != expected
             || evidence.transformation != "identity-v1"
-            || ledger.state == "broken"
+            || ledger.state == basecraft_protocol::input_records::EvidenceState::Broken
             || ledger.submitted_hash != expected
             || ledger.transformation != "identity-v1"
         {
@@ -1397,10 +1397,13 @@ fn verified_reports(
         }
         let issues = crate::provenance::verify(&path)?;
         if !issues.is_empty() {
-            return Err(invalid(format!(
-                "validation publication verification failed: {}",
-                issues.join("; ")
-            )));
+            return Err(crate::Error::Damaged {
+                path: path.clone(),
+                detail: format!(
+                    "validation publication verification failed: {}",
+                    issues.join("; ")
+                ),
+            });
         }
     }
     // Only read files actually published by this run, including optional reports.
@@ -1671,28 +1674,19 @@ pub fn plan_accessions(
     session: &Session,
     doc: DocId,
     text: &str,
-    submitter: &Submitter,
+    _submitter: &Submitter,
 ) -> Result<AccessionPlan> {
     let sub = checked(session, doc)?;
     let mut ids: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    if sub.exported.is_empty() {
-        // Compatibility for documents made before export mappings were retained.
-        for r in &review(session, doc, submitter)?.prepared.records {
-            if let Some(id) = &r.export_id {
-                ids.entry(id.clone()).or_default().insert(r.record.clone());
-            }
+    for mapping in sub.exported.iter().filter(|m| m.source == sub.source) {
+        for (id, record) in &mapping.records {
+            ids.entry(id.clone()).or_default().insert(record.clone());
         }
-    } else {
-        for mapping in sub.exported.iter().filter(|m| m.source == sub.source) {
-            for (id, record) in &mapping.records {
-                ids.entry(id.clone()).or_default().insert(record.clone());
-            }
-        }
-        if ids.is_empty() {
-            return Err(invalid(
-                "the submission source changed since export; use the original submission for returned accessions",
-            ));
-        }
+    }
+    if ids.is_empty() {
+        return Err(invalid(
+            "export this submission before importing returned accessions",
+        ));
     }
     let originals: BTreeSet<&String> = ids.values().flatten().collect();
     let mut plan = AccessionPlan::default();

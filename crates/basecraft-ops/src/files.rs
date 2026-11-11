@@ -4,12 +4,9 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use std::collections::BTreeMap;
-
 use basecraft_docs::{AlignmentDoc, SequenceDoc, TreeDoc};
 use basecraft_io::{Source, cache, fasta, genbank, gff3, newick};
-use basecraft_protocol::{CladeAnnotation, Feature, Location, Qualifier, Segment, TreeStyle};
-use serde::Serialize;
+use basecraft_protocol::{Feature, Location, Qualifier, Segment};
 
 use crate::{Error, Result};
 
@@ -518,19 +515,6 @@ pub fn write_tree(tree: &OpenedTree, w: &mut dyn Write) -> io::Result<()> {
     Ok(())
 }
 
-/// Historical serializer used only when verifying old journal save hashes.
-pub(crate) fn write_legacy_tree(tree: &OpenedTree, w: &mut dyn Write) -> io::Result<()> {
-    let newick = tree.doc.to_newick();
-    if tree.nexus {
-        writeln!(
-            w,
-            "#NEXUS\nbegin trees;\n\ttree tree1 = [&R] {newick}\nend;"
-        )
-    } else {
-        writeln!(w, "{newick}")
-    }
-}
-
 pub fn write_tree_sidecar(doc: &TreeDoc, w: &mut dyn Write) -> io::Result<()> {
     write_tree_metadata(doc, None, w)
 }
@@ -551,25 +535,6 @@ fn write_tree_metadata(
 ) -> io::Result<()> {
     let side = tree_metadata(doc, exchange_hash);
     serde_json::to_writer_pretty(&mut *w, &side)?;
-    writeln!(w)
-}
-
-pub(crate) fn write_legacy_tree_sidecar(doc: &TreeDoc, w: &mut dyn Write) -> io::Result<()> {
-    #[derive(Serialize)]
-    struct Legacy<'a> {
-        supports: &'a [SupportName],
-        annotations: &'a BTreeMap<u32, CladeAnnotation>,
-        style: &'a TreeStyle,
-    }
-    let side = tree_metadata(doc, None);
-    serde_json::to_writer_pretty(
-        &mut *w,
-        &Legacy {
-            supports: &side.supports,
-            annotations: &side.annotations,
-            style: &side.style,
-        },
-    )?;
     writeln!(w)
 }
 

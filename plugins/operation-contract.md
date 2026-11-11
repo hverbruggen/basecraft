@@ -531,3 +531,10 @@ packages still need explicit grants bound to their accepted package and contract
 `retained_receipt`, or `remote_draft`). It governs cooperative cancellation,
 contact spacing and receipt verification; omission keeps ordinary process
 cancellation. Installed packages cannot grant themselves these bundled services.
+
+Bundled host services may declare `query_preparation` (currently `blast`), a
+`retained_query_transformation` for receipt verification, and
+`parameter_environment` mappings from declared parameters to environment settings.
+Only bundled packages receive ambient parameter values, and explicit request
+parameters take precedence. Required parameters remain required in the operation
+schema. Receipt lifecycles do not implicitly select a query transform.

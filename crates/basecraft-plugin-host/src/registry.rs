@@ -316,10 +316,7 @@ pub fn package_digest(root: &Path) -> Result<String> {
         let name = relative
             .to_str()
             .ok_or_else(|| Error::Protocol("package paths must be UTF-8".into()))?;
-        hashes.push((
-            name.to_owned(),
-            basecraft_io::hash_file(&path).map_err(basecraft_ops::Error::from)?,
-        ));
+        hashes.push((name.to_owned(), basecraft_io::hash_file(&path)?));
     }
     Ok(basecraft_io::hash_bytes(&serde_json::to_vec(&hashes)?))
 }
@@ -392,8 +389,7 @@ fn write_index(
     if bytes.len() > MAX_DESCRIPTOR_BYTES {
         return Err(Error::Protocol("plugin index exceeds size limit".into()));
     }
-    basecraft_io::write_atomic(&config.index, |out| std::io::Write::write_all(out, &bytes))
-        .map_err(basecraft_ops::Error::from)?;
+    basecraft_io::write_atomic(&config.index, |out| std::io::Write::write_all(out, &bytes))?;
     Ok(())
 }
 

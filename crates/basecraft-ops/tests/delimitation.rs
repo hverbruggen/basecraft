@@ -439,7 +439,10 @@ fn hidden_workspace_moves_with_its_folder_and_passive_open_writes_nothing() {
     // The generic writer extraction must retain species reference-only semantics
     // and its established publication origin; no automatic source snapshot.
     let input = basecraft_ops::input_evidence::read_input(run.directory()).unwrap();
-    assert_eq!(input.state, "referenced");
+    assert_eq!(
+        input.state,
+        basecraft_protocol::input_records::EvidenceState::Referenced
+    );
     assert_eq!(input.source.as_ref().unwrap().hash, hash);
     assert!(hash.starts_with("b3:"));
     assert!(!run.directory().join("preserved-input").exists());

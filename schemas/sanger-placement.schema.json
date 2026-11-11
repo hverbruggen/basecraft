@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SangerPlacement",
+  "type": "object",
+  "properties": {
+    "aligned_probe": {
+      "type": "string"
+    },
+    "engine": {
+      "type": "string"
+    },
+    "fragment": {
+      "type": "string"
+    },
+    "insertions": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "map": {
+      "type": "array",
+      "items": {
+        "type": [
+          "integer",
+          "null"
+        ],
+        "format": "uint",
+        "minimum": 0
+      }
+    },
+    "parameters": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "source_path": {
+      "type": "string"
+    },
+    "source_rows": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "source_sha256": {
+      "type": "string"
+    },
+    "source_width": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "status": {
+      "type": "string"
+    },
+    "version": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "status",
+    "engine",
+    "version",
+    "source_path",
+    "source_sha256",
+    "source_rows",
+    "source_width",
+    "fragment",
+    "map",
+    "aligned_probe",
+    "insertions",
+    "parameters"
+  ]
+}

@@ -434,6 +434,7 @@ fn accessions_import_and_table() {
     project(root);
     let mut s = Session::new(root);
     let doc = rbcl(&mut s);
+    submission::export(&mut s, doc, &root.join("package"), &submitter()).unwrap();
     let text =
         "Sequence ID\tAccession\nHV101_rbcL\tPX123456\nHV102_rbcL PX123457.1\nunknown PX123458\n";
     let plan = submission::plan_accessions(&s, doc, text, &submitter()).unwrap();
@@ -1131,24 +1132,6 @@ fn inclusion_presets_reuse_the_open_metadata_owner_and_preserve_pending_edits() 
     );
     assert_eq!(session.metadata(doc).unwrap().import.inclusion_rules, []);
     assert!(replay::replay(root.path()).unwrap().ok());
-}
-
-#[test]
-fn published_legacy_submission_histories_keep_exact_save_hashes() {
-    let root = tempfile::tempdir().unwrap();
-    let fixture = fixtures().join("legacy-history");
-    let log = root.path().join(".basecraft/log/legacy");
-    let objects = root.path().join(".basecraft/objects");
-    std::fs::create_dir_all(&log).unwrap();
-    std::fs::create_dir_all(&objects).unwrap();
-    std::fs::copy(fixture.join("events.jsonl"), log.join("2026-11.jsonl")).unwrap();
-    for entry in std::fs::read_dir(fixture.join("objects")).unwrap() {
-        let entry = entry.unwrap();
-        std::fs::copy(entry.path(), objects.join(entry.file_name())).unwrap();
-    }
-    let report = replay::replay(root.path()).unwrap();
-    assert_eq!((report.sessions, report.entries), (2, 6));
-    assert!(report.ok(), "{:#?}", report.problems);
 }
 
 #[test]

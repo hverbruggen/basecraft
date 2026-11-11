@@ -7,6 +7,7 @@
 )]
 
 use crate::{Frame, Theme, sanger_alignment::AlignmentContext, sanger_map};
+use basecraft_docs::sanger::SangerDraftExt;
 use basecraft_docs::{
     AlignmentDoc,
     sanger::{Orientation, SangerDraft, SangerPlacement, SupportKind},
@@ -2081,9 +2082,9 @@ mod tests {
             assert!(lane.column_events.iter().flatten().count() > 500);
         }
         let source = std::env::var("BASECRAFT_SANGER_REFERENCE").unwrap();
-        let placement = SangerPlacement::read(std::path::Path::new(
-            &std::env::var("BASECRAFT_SANGER_PLACEMENT").unwrap(),
-        ))
+        let placement = <SangerPlacement as basecraft_docs::sanger::SangerPlacementExt>::read(
+            std::path::Path::new(&std::env::var("BASECRAFT_SANGER_PLACEMENT").unwrap()),
+        )
         .unwrap();
         let indexed =
             Arc::new(basecraft_io::cache::open_fasta(std::path::Path::new(&source)).unwrap());

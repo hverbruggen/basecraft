@@ -3,6 +3,18 @@
   "title": "SubmittedInput",
   "type": "object",
   "properties": {
+    "analysis_run": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "proposal_target": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
     "schema_version": {
       "type": "integer",
       "format": "uint32",
@@ -32,6 +44,12 @@
     "transformation": {
       "description": "canonical-fasta-v1 or ungapped-fasta-v1; generated inputs retain their bytes.",
       "type": "string"
+    },
+    "upstream": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/UpstreamLink"
+      }
     }
   },
   "additionalProperties": true,
@@ -121,6 +139,25 @@
         "path",
         "stamp",
         "hash"
+      ]
+    },
+    "UpstreamLink": {
+      "type": "object",
+      "properties": {
+        "bundle": {
+          "type": "string"
+        },
+        "hash": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "bundle",
+        "hash",
+        "id"
       ]
     }
   }

@@ -371,10 +371,7 @@ pub fn provision_with(
             ));
         }
         std::fs::copy(source, pending.path().join("pixi.lock"))?;
-        Some(
-            basecraft_io::hash_file(&pending.path().join("pixi.lock"))
-                .map_err(basecraft_ops::Error::from)?,
-        )
+        Some(basecraft_io::hash_file(&pending.path().join("pixi.lock"))?)
     } else {
         None
     };
@@ -407,9 +404,7 @@ pub fn provision_with(
         "plugin dependency installation (Pixi must be included in the Basecraft installation)",
     )?;
     if let Some(digest) = frozen_lock_digest
-        && digest
-            != basecraft_io::hash_file(&pending.path().join("pixi.lock"))
-                .map_err(basecraft_ops::Error::from)?
+        && digest != basecraft_io::hash_file(&pending.path().join("pixi.lock"))?
     {
         return Err(Error::Protocol(
             "frozen runtime lock changed during installation".into(),
@@ -440,10 +435,7 @@ pub fn provision_with(
     let mut executable_digests = BTreeMap::new();
     for command in &spec.executables {
         let path = executable_path(pending.path(), command);
-        executable_digests.insert(
-            command.clone(),
-            basecraft_io::hash_file(&path).map_err(basecraft_ops::Error::from)?,
-        );
+        executable_digests.insert(command.clone(), basecraft_io::hash_file(&path)?);
         if let Some(check) = spec.version_checks.get(command) {
             // No shell or ambient executable resolution. The Python subprocess
             // enforces a deadline; the shared owner also bounds the outer job.
@@ -465,9 +457,8 @@ pub fn provision_with(
         executables: spec.executables.clone(),
         root: pending.path().to_owned(),
         interpreter,
-        lock_digest: basecraft_io::hash_file(&pending.path().join("pixi.lock"))
-            .map_err(basecraft_ops::Error::from)?,
-        manifest_digest: basecraft_io::hash_file(&project).map_err(basecraft_ops::Error::from)?,
+        lock_digest: basecraft_io::hash_file(&pending.path().join("pixi.lock"))?,
+        manifest_digest: basecraft_io::hash_file(&project)?,
         package_digest: digest.into(),
         reported_versions,
         executable_digests,
@@ -475,8 +466,7 @@ pub fn provision_with(
     runtime.verify()?;
     basecraft_io::write_atomic(&pending.path().join("runtime.json"), |out| {
         serde_json::to_writer_pretty(out, &runtime).map_err(std::io::Error::other)
-    })
-    .map_err(basecraft_ops::Error::from)?;
+    })?;
     let _retained = pending.keep();
     Ok(Some(runtime))
 }

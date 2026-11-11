@@ -1279,7 +1279,10 @@ fn equal_content_retention_keeps_exact_primary_owner_and_leaf_lifecycles() {
                         run.join(origin).canonicalize().unwrap(),
                         owner.canonicalize().unwrap()
                     );
-                    assert_eq!(primary.state, "preserved");
+                    assert_eq!(
+                        primary.state,
+                        basecraft_protocol::input_records::EvidenceState::Preserved
+                    );
                     assert_eq!(
                         std::fs::read(owner.join("preserved-input")).unwrap(),
                         original
@@ -1289,10 +1292,13 @@ fn equal_content_retention_keeps_exact_primary_owner_and_leaf_lifecycles() {
                         !primary.extra.contains_key("origin_run"),
                         "unretained primary delegated to a distinct equal-byte original"
                     );
-                    assert_eq!(primary.state, "referenced");
+                    assert_eq!(
+                        primary.state,
+                        basecraft_protocol::input_records::EvidenceState::Referenced
+                    );
                     assert_eq!(
                         input_evidence::read_input(owner).unwrap().state,
-                        "referenced"
+                        basecraft_protocol::input_records::EvidenceState::Referenced
                     );
                 }
                 assert_eq!(
@@ -1344,7 +1350,10 @@ fn equal_content_retention_keeps_exact_primary_owner_and_leaf_lifecycles() {
                     owner_before
                 );
                 if policy == SavePolicy::BreakEvidence {
-                    assert_eq!(input_evidence::read_input(sibling).unwrap().state, "broken");
+                    assert_eq!(
+                        input_evidence::read_input(sibling).unwrap().state,
+                        basecraft_protocol::input_records::EvidenceState::Broken
+                    );
                 } else {
                     assert!(!sibling.exists());
                 }

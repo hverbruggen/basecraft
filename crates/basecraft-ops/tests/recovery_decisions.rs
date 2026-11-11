@@ -295,12 +295,8 @@ fn stage_and_final_policies_validate_all_groups_before_any_mutation() {
     let owner = reference(&root.join("owner/result"), &root.join("source/0.fasta"));
     for run in [&stage_run, &final_run] {
         let mut input = basecraft_ops::input_evidence::read_input(run.directory()).unwrap();
-        input.extra.insert(
-            "analysis_run".into(),
-            serde_json::json!(
-                basecraft_ops::input_evidence::relative(run.directory(), owner.directory())
-                    .unwrap()
-            ),
+        input.analysis_run = Some(
+            basecraft_ops::input_evidence::relative(run.directory(), owner.directory()).unwrap(),
         );
         basecraft_ops::input_evidence::write_json(&run.directory().join("input.json"), &input)
             .unwrap();
@@ -383,7 +379,7 @@ fn stage_and_final_policies_validate_all_groups_before_any_mutation() {
             basecraft_ops::input_evidence::read_input(run.directory())
                 .unwrap()
                 .state,
-            "broken"
+            basecraft_protocol::input_records::EvidenceState::Broken
         );
     }
 }
@@ -498,7 +494,8 @@ fn nested_delimitation_registers_only_final_stores_and_reopens() {
             .unwrap()
             .unwrap();
         let input = basecraft_ops::input_evidence::read_input(&run).unwrap();
-        let upstream = input.extra["upstream"].as_array().unwrap();
+        let upstream = serde_json::to_value(&input.upstream).unwrap();
+        let upstream = upstream.as_array().unwrap();
         assert!(upstream.iter().any(|record| {
             run.join(record["bundle"].as_str().unwrap())
                 .canonicalize()
@@ -646,12 +643,8 @@ fn removal_of_shared_backing_ledgers_across_target_groups_is_once() {
     let owner = reference(&root.join("owner/result"), &root.join("source/0.fasta"));
     for run in [&stage_run, &final_run] {
         let mut input = basecraft_ops::input_evidence::read_input(run.directory()).unwrap();
-        input.extra.insert(
-            "analysis_run".into(),
-            serde_json::json!(
-                basecraft_ops::input_evidence::relative(run.directory(), owner.directory())
-                    .unwrap()
-            ),
+        input.analysis_run = Some(
+            basecraft_ops::input_evidence::relative(run.directory(), owner.directory()).unwrap(),
         );
         basecraft_ops::input_evidence::write_json(&run.directory().join("input.json"), &input)
             .unwrap();

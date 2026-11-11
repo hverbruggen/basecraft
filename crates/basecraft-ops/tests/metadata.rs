@@ -363,7 +363,10 @@ fn outside_edits_future_versions_and_unknown_fields() {
         .err()
         .unwrap()
         .to_string();
-    assert!(error.contains("newer Basecraft"), "{error}");
+    assert!(
+        error.contains("metadata format version 2 is not supported"),
+        "{error}"
+    );
 }
 
 #[test]

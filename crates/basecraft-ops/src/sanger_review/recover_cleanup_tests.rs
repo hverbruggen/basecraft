@@ -397,7 +397,10 @@ fn r3_real_partial_registration_precedes_incomplete_refusal() {
     assert!(!ledgers.is_empty());
     for ledger in ledgers {
         let input = inputs::read_input(&ledger).unwrap();
-        assert_eq!(input.state, "referenced");
+        assert_eq!(
+            input.state,
+            basecraft_protocol::input_records::EvidenceState::Referenced
+        );
         assert!(ledger.join("manifest.json").is_file());
         let source = f.source.join("source.ab1");
         assert_eq!(input.submitted_size, fs::metadata(&source).unwrap().len());

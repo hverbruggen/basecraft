@@ -100,8 +100,7 @@ pub(crate) fn write_support_sidecar(
             &basecraft_io::hash_file(tree).map_err(std::io::Error::other)?,
             w,
         )
-    })
-    .map_err(basecraft_ops::Error::from)?;
+    })?;
     Ok(Some(metadata))
 }
 
@@ -143,9 +142,9 @@ pub fn output_beside(file: &Path, suffix: &str, ext: &str) -> PathBuf {
 pub(crate) fn freeze_file(source: &Path, destination: &Path) -> Result<String> {
     let before = basecraft_ops::input_evidence::stamp(source)?;
     std::fs::copy(source, destination)?;
-    let hash = basecraft_io::hash_file(destination).map_err(basecraft_ops::Error::from)?;
+    let hash = basecraft_io::hash_file(destination)?;
     if before != basecraft_ops::input_evidence::stamp(source)?
-        || basecraft_io::hash_file(source).map_err(basecraft_ops::Error::from)? != hash
+        || basecraft_io::hash_file(source)? != hash
     {
         return Err(Error::Protocol("input changed during submission".into()));
     }

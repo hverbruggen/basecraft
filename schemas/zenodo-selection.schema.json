@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ZenodoSelection",
+  "type": "object",
+  "properties": {
+    "files": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ZenodoSnapshot"
+      }
+    },
+    "schema": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "selection": {
+      "type": "string"
+    },
+    "total_bytes": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "schema",
+    "selection",
+    "files",
+    "total_bytes"
+  ],
+  "$defs": {
+    "ZenodoSnapshot": {
+      "type": "object",
+      "properties": {
+        "md5": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "size": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "snapshot": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "snapshot",
+        "size",
+        "sha256",
+        "md5"
+      ]
+    }
+  }
+}

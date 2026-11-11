@@ -188,28 +188,17 @@ impl Session {
             && previous_bundle.join("input.json").is_file()
         {
             let mut input = crate::input_evidence::read_input(previous_bundle)?;
-            let mut upstream = input
-                .extra
-                .get("upstream")
-                .and_then(serde_json::Value::as_array)
-                .cloned()
-                .unwrap_or_default();
+            let mut upstream = input.upstream.clone();
             for reference in &mut upstream {
-                let path = reference["bundle"]
-                    .as_str()
-                    .ok_or_else(|| invalid("ancestor location missing"))?;
-                reference["bundle"] = serde_json::json!(crate::input_evidence::relative(
+                reference.bundle = crate::input_evidence::relative(
                     &bundle.canonicalize()?,
-                    &previous_bundle.join(path).canonicalize()?
-                )?);
+                    &previous_bundle.join(&reference.bundle).canonicalize()?,
+                )?
+                .into();
             }
             if bundle.join("input.json").is_file() {
                 let current = crate::input_evidence::read_input(&bundle)?;
-                if let Some(dependencies) = current
-                    .extra
-                    .get("upstream")
-                    .and_then(serde_json::Value::as_array)
-                {
+                if let Some(dependencies) = Some(&current.upstream) {
                     for dependency in dependencies {
                         if !upstream.contains(dependency) {
                             upstream.push(dependency.clone());
@@ -218,9 +207,7 @@ impl Session {
                 }
             }
             if !upstream.is_empty() {
-                input
-                    .extra
-                    .insert("upstream".into(), serde_json::json!(upstream));
+                input.upstream = upstream;
             }
             if input.source.is_some() {
                 input.extra.insert(
@@ -488,10 +475,6 @@ impl Session {
         crate::contributions::project(&events, &mut effective_edits);
         let publication = Publication {
             schema_version: 1,
-            writer: match &save.op {
-                Op::Save { writer, .. } => writer.clone(),
-                _ => std::collections::BTreeMap::new(),
-            },
             id: save.id.clone(),
             session: self.id.clone(),
             parents,
@@ -547,21 +530,22 @@ impl Session {
     ) -> Result<()> {
         use basecraft_protocol::provenance::{ArtifactRevision, Completeness, Publication};
         let mut input = crate::input_evidence::read_input(run.directory())?;
-        let mut upstream = input
-            .extra
-            .get("upstream")
-            .and_then(serde_json::Value::as_array)
-            .cloned()
-            .unwrap_or_default();
+        let mut upstream = input.upstream.clone();
         for (bundle, origin) in &snapshot.origins {
             let mut bytes = serde_json::to_vec_pretty(origin)?;
             bytes.push(b'\n');
-            upstream.push(serde_json::json!({"bundle":crate::input_evidence::relative(run.directory(), &bundle.canonicalize()?)?,"id":origin.id,"hash":basecraft_io::hash_bytes(&bytes)}));
+            upstream.push(basecraft_protocol::input_records::UpstreamLink {
+                bundle: (crate::input_evidence::relative(
+                    run.directory(),
+                    &bundle.canonicalize()?,
+                )?)
+                .into(),
+                id: origin.id.clone(),
+                hash: basecraft_io::hash_bytes(&bytes),
+            });
         }
         if !upstream.is_empty() {
-            input
-                .extra
-                .insert("upstream".into(), serde_json::json!(upstream));
+            input.upstream = upstream;
             crate::input_evidence::write_json(&run.directory().join("input.json"), &input)?;
         }
         let activity = self
@@ -664,10 +648,10 @@ impl Session {
         let (events, effective) = portable_analysis_activity(snapshot, &activity);
         let publication = Publication {
             schema_version: 1,
-            writer: std::collections::BTreeMap::new(), id: activity.id, session: self.id.clone(), parents: Vec::new(), parent_hashes: std::collections::BTreeMap::new(),
+            id: activity.id, session: self.id.clone(), parents: Vec::new(), parent_hashes: std::collections::BTreeMap::new(),
             created: activity.t, origin: "Referenced source; submitted transformation recorded in input.json. Declared immutable upstream records are referenced without copying input bytes. Earlier history before import remains unknown.".into(),
             inputs, outputs: artifacts, events, effective_edits: effective,
-            completeness: Completeness { ancestry_known: false, input_bytes_available: input.state != "broken", execution_specification_available: false, replay_verified: false }, report_template_version: 2,
+            completeness: Completeness { ancestry_known: false, input_bytes_available: input.state != basecraft_protocol::input_records::EvidenceState::Broken, execution_specification_available: false, replay_verified: false }, report_template_version: 2,
         };
         match self.provenance_policy {
             basecraft_platform::settings::ProvenancePolicy::Portable => {

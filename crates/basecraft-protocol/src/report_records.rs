@@ -44,6 +44,7 @@ pub struct DocumentRecord {
     pub revision: String,
     pub unsaved: bool,
     pub warnings: Vec<String>,
+    #[schemars(with = "serde_json::Value")]
     pub events: Vec<LogEntry>,
     pub effective: Vec<EditActivity>,
 }

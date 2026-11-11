@@ -63,24 +63,25 @@ impl DocumentRecord {
         publication.effective_edits = effective;
         // Preserve upstream bundles used by the submitted revision for packaging.
         let mut input = crate::input_evidence::read_input(run.directory())?;
-        let mut upstream = input
-            .extra
-            .get("upstream")
-            .and_then(serde_json::Value::as_array)
-            .cloned()
-            .unwrap_or_default();
+        let mut upstream = input.upstream.clone();
         for (bundle, origin) in &self.origins {
             let mut bytes = serde_json::to_vec_pretty(origin)?;
             bytes.push(b'\n');
-            let reference = serde_json::json!({"bundle":crate::input_evidence::relative(run.directory(), &bundle.canonicalize()?)?,"id":origin.id,"hash":basecraft_io::hash_bytes(&bytes)});
+            let reference = basecraft_protocol::input_records::UpstreamLink {
+                bundle: (crate::input_evidence::relative(
+                    run.directory(),
+                    &bundle.canonicalize()?,
+                )?)
+                .into(),
+                id: origin.id.clone(),
+                hash: basecraft_io::hash_bytes(&bytes),
+            };
             if !upstream.contains(&reference) {
                 upstream.push(reference);
             }
         }
         if !upstream.is_empty() {
-            input
-                .extra
-                .insert("upstream".into(), serde_json::json!(upstream));
+            input.upstream = upstream;
             crate::input_evidence::write_json(&run.directory().join("input.json"), &input)?;
         }
         crate::provenance::publish_operation(run.directory(), &publication)
@@ -455,10 +456,10 @@ impl ReportExt for Report {
     fn export(&self, directory: &Path) -> crate::Result<()> {
         check_report_folder(directory)?;
         write_report_files(self, directory).map_err(|error| {
-            crate::error::invalid(format!(
+            crate::Error::Damaged { path: directory.to_path_buf(), detail: format!(
                 "report export to {} is incomplete ({error}); files there may mix this report with an earlier one",
                 directory.display()
-            ))
+            ) }
         })
     }
 }
@@ -992,7 +993,6 @@ mod tests {
             .unwrap();
         let mut publication = Publication {
             schema_version: 1,
-            writer: Default::default(),
             id: "registered".into(),
             session: "current".into(),
             parents: vec![],

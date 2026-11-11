@@ -97,12 +97,7 @@ impl AlignmentWorkflow<'_> {
         // Connect immutable completed stage publications to the existing parent
         // ledger. They carry their own execution identity, history and inputs.
         let mut input = mutation.read_input(self.parent.run.directory())?;
-        let upstream = input
-            .extra
-            .entry("upstream".into())
-            .or_insert_with(|| json!([]))
-            .as_array_mut()
-            .ok_or_else(|| Error::Protocol("invalid workflow ancestry".into()))?;
+        let upstream = &mut input.upstream;
         for stage in &self.stages {
             if stage.state != RuntimeState::Completed {
                 continue;
@@ -113,11 +108,18 @@ impl AlignmentWorkflow<'_> {
                     .as_ref()
                     .ok_or_else(|| Error::Protocol("stage evidence missing".into()))?,
             );
-            if upstream.iter().any(|parent| parent["id"] == stage.run_id) {
+            if upstream.iter().any(|parent| parent.id == stage.run_id) {
                 continue;
             }
-            upstream.push(json!({"bundle":basecraft_ops::input_evidence::relative(self.parent.run.directory(), directory)?,
-                "id":stage.run_id,"hash":basecraft_io::hash_file(&directory.join("manifest.json")).map_err(basecraft_ops::Error::from)?}));
+            upstream.push(basecraft_protocol::input_records::UpstreamLink {
+                bundle: (basecraft_ops::input_evidence::relative(
+                    self.parent.run.directory(),
+                    directory,
+                )?)
+                .into(),
+                id: stage.run_id.clone(),
+                hash: basecraft_io::hash_file(&directory.join("manifest.json"))?,
+            });
         }
         mutation.write_input(self.parent.run.directory(), &input)?;
         Ok(())
@@ -186,8 +188,7 @@ impl AlignmentWorkflow<'_> {
         } else {
             source.clone()
         };
-        let alignment_hash =
-            basecraft_io::hash_file(&alignment).map_err(basecraft_ops::Error::from)?;
+        let alignment_hash = basecraft_io::hash_file(&alignment)?;
         if unique
             && !report["job"]["outputs"].as_object().is_some_and(|outputs| {
                 outputs.iter().any(|(path, hash)| {
@@ -214,7 +215,7 @@ impl AlignmentWorkflow<'_> {
         }
         if unique {
             let mapping = prepare.join("result.json.haplotypes.json");
-            let hash = basecraft_io::hash_file(&mapping).map_err(basecraft_ops::Error::from)?;
+            let hash = basecraft_io::hash_file(&mapping)?;
             if !report["job"]["outputs"].as_object().is_some_and(|outputs| {
                 outputs.iter().any(|(path, digest)| {
                     Path::new(path).file_name() == mapping.file_name() && digest == &hash

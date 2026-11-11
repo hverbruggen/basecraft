@@ -107,7 +107,10 @@ fn rereview_legacy_sidecar_break_and_remove_reach_combined_workspace() {
         for affected in &conflict.analyses {
             match policy {
                 SavePolicy::BreakEvidence => {
-                    assert_eq!(read_input(&affected.run).unwrap().state, "broken");
+                    assert_eq!(
+                        read_input(&affected.run).unwrap().state,
+                        basecraft_protocol::input_records::EvidenceState::Broken
+                    );
                 }
                 SavePolicy::RemoveAnalysis => assert!(!affected.run.exists()),
                 _ => unreachable!(),
@@ -322,7 +325,7 @@ fn preserved_alignment_remains_usable_by_workspace_default_input() {
         basecraft_ops::input_evidence::read_input(&owner)
             .unwrap()
             .state,
-        "referenced"
+        basecraft_protocol::input_records::EvidenceState::Referenced
     );
     assert_eq!(
         basecraft_ops::delimitation::checked_alignment(&clean, &canonical)

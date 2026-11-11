@@ -18,14 +18,7 @@ impl Document for DelimitationWorkspace {
     fn rebase_replay_paths(&mut self, from: &Path, to: &Path) {
         files::rebase_delimitation_paths(self, from, to);
     }
-    fn legacy_hashes(&self, target: &Path) -> Result<Option<Vec<String>>> {
-        let mut main = HashingWriter::new(std::io::sink());
-        files::write_delimitation(self, files::delimitation_xml(target), &mut main)?;
-        let hash = main.hash();
-        let mut side = HashingWriter::new(std::io::sink());
-        files::write_delimitation_sidecar(self, &hash, &mut side)?;
-        Ok(Some(vec![hash, side.hash()]))
-    }
+
     fn proposal_candidate(&self) -> Result<files::Loaded> {
         Ok(files::Loaded::Delimitation(self.clone()))
     }
@@ -259,7 +252,10 @@ mod tests {
             let input = crate::input_evidence::read_input(&run).unwrap();
             assert_eq!(input.submitted_hash, hash);
             assert_eq!(input.submitted_size, main.len() as u64);
-            assert_eq!(input.state, "generated");
+            assert_eq!(
+                input.state,
+                basecraft_protocol::input_records::EvidenceState::Generated
+            );
             // Match the pre-extraction sorted JSON record bytes, including the
             // newline added by write_json. Golden typed-record tests also apply.
             let record = serde_json::json!({"schema_version":1,

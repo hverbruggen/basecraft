@@ -95,6 +95,9 @@ fn reference_run(root: &std::path::Path, source: &std::path::Path, id: &str) -> 
             submitted_size: std::fs::metadata(source).unwrap().len(),
             transformation: "canonical-fasta-v1".into(),
             state: "referenced".into(),
+            analysis_run: None,
+            proposal_target: None,
+            upstream: Vec::new(),
             extra: std::collections::BTreeMap::default(),
         },
     )
@@ -128,7 +131,10 @@ fn reference_lifecycle_multiple_analyses_preserve_break_trash_and_cancel() {
     std::fs::write(&source, ">a\nTTTT\n>b\nTTTT\n").unwrap();
     for run in [&a, &b] {
         let input = input_evidence::read_input(run.directory()).unwrap();
-        assert_eq!(input.state, "preserved");
+        assert_eq!(
+            input.state,
+            basecraft_protocol::input_records::EvidenceState::Preserved
+        );
         let path = input_evidence::verified_source(run.directory(), input.source.as_ref().unwrap())
             .unwrap();
         assert_eq!(std::fs::read_to_string(path).unwrap(), old);
@@ -174,13 +180,16 @@ fn changed_missing_and_failed_copy_cannot_claim_preserved_evidence() {
     assert!(input_evidence::resolve(&conflict, SavePolicy::PreserveCopy).is_err());
     assert_eq!(
         input_evidence::read_input(run.directory()).unwrap().state,
-        "referenced"
+        basecraft_protocol::input_records::EvidenceState::Referenced
     );
     std::fs::remove_dir(run.directory().join("preserved-input")).unwrap();
     std::fs::write(&source, ">a\nTTTT\n>b\nTTTT\n").unwrap();
     assert!(input_evidence::resolve(&conflict, SavePolicy::PreserveCopy).is_err());
     let input = input_evidence::read_input(run.directory()).unwrap();
-    assert_eq!(input.state, "referenced");
+    assert_eq!(
+        input.state,
+        basecraft_protocol::input_records::EvidenceState::Referenced
+    );
     assert!(
         input_evidence::verified_source(run.directory(), input.source.as_ref().unwrap()).is_err()
     );
@@ -281,7 +290,7 @@ fn session_save_policies_and_copy_failure_leave_source_safe() {
                 SavePolicy::RemoveAnalysis => assert!(!run.directory().exists()),
                 SavePolicy::BreakEvidence => assert_eq!(
                     input_evidence::read_input(run.directory()).unwrap().state,
-                    "broken"
+                    basecraft_protocol::input_records::EvidenceState::Broken
                 ),
                 SavePolicy::Cancel => {}
             }

@@ -129,23 +129,7 @@ fn scenario<T: Debug + PartialEq>(
     assert_eq!(report.entries, entries.len());
     assert_eq!(log::read_all(dir.path()).unwrap().len(), entries.len());
 
-    // Old journals have only the legacy counts. Re-encode this real workflow
-    // through the actual checksummed writer, rather than bypassing integrity.
-    assert!(entries.iter().all(|entry| entry.state.counts.is_some()));
-    let mut legacy = entries.clone();
-    for entry in &mut legacy {
-        entry.state.counts = None;
-    }
-    replace_fixture_log(dir.path(), &legacy);
-    let legacy_report = replay::replay(dir.path()).unwrap();
-    assert!(
-        legacy_report.ok(),
-        "legacy {name}: {:#?}",
-        legacy_report.problems
-    );
-    assert_eq!(legacy_report.entries, entries.len());
-
-    // Equal legacy counts do not make different document kinds equivalent.
+    // Equal aggregate counts do not make different document kinds equivalent.
     let mut wrong_kind = entries;
     let state = &mut wrong_kind[1].state;
     use basecraft_protocol::ops::DocumentCounts;

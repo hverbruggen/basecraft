@@ -165,7 +165,7 @@ fn known_policy_and_incomplete_acknowledgement_are_independent() {
             ));
             assert_eq!(
                 input_evidence::read_input(known.directory()).unwrap().state,
-                "referenced"
+                basecraft_protocol::input_records::EvidenceState::Referenced
             );
             let check = session.check_save(doc, None).unwrap();
             let check = required(
@@ -183,7 +183,7 @@ fn known_policy_and_incomplete_acknowledgement_are_independent() {
             );
             assert_eq!(
                 input_evidence::read_input(known.directory()).unwrap().state,
-                "preserved"
+                basecraft_protocol::input_records::EvidenceState::Preserved
             );
         },
     );
@@ -326,7 +326,7 @@ fn preservation_and_changed_source_failures_are_not_waivable() {
             ));
             assert_eq!(
                 input_evidence::read_input(known.directory()).unwrap().state,
-                "referenced"
+                basecraft_protocol::input_records::EvidenceState::Referenced
             );
             assert_eq!(std::fs::read(&file).unwrap(), b">external\nTTTT\n");
             assert_recovery(&mut session, root);
@@ -469,7 +469,7 @@ fn session_tokens_support_adapter_round_trip_and_cannot_be_replayed() {
             ));
             assert_eq!(
                 input_evidence::read_input(known.directory()).unwrap().state,
-                "referenced"
+                basecraft_protocol::input_records::EvidenceState::Referenced
             );
             assert_eq!(std::fs::read(&file).unwrap(), ORIGINAL);
             assert!(matches!(
@@ -527,12 +527,8 @@ fn incomplete_inspection_keeps_descendants_ownership_and_backing() {
             )
             .unwrap();
             let mut input = input_evidence::read_input(ledger.directory()).unwrap();
-            input.extra.insert(
-                "analysis_run".into(),
-                serde_json::json!(
-                    input_evidence::relative(ledger.directory(), child.directory()).unwrap()
-                ),
-            );
+            input.analysis_run =
+                Some(input_evidence::relative(ledger.directory(), child.directory()).unwrap());
             input_evidence::write_json(&ledger.artifact("input.json").unwrap(), &input).unwrap();
             // Damage in this very store must not discard any successfully read
             // ledger, known descendant, logical owner or backing decision.

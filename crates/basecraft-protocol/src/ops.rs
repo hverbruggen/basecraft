@@ -353,7 +353,7 @@ pub enum DocumentCounts {
 }
 
 impl DocState {
-    /// Write named counts alongside their unchanged legacy projection.
+    /// Construct a complete document fingerprint.
     pub fn from_counts(counts: DocumentCounts) -> Self {
         let (len, features, rows) = match &counts {
             DocumentCounts::Sequence { residues, features } => (*residues, *features, None),
@@ -382,17 +382,9 @@ impl DocState {
         }
     }
 
-    /// Compare a current fingerprint to a recorded one. Old entries require
-    /// all their original counts; new entries additionally require the named
-    /// counts and kind. This is deliberately not a relaxed `PartialEq`.
+    /// Replay requires all counts and the document kind to agree.
     pub fn matches_recorded(&self, recorded: &Self) -> bool {
-        self.len == recorded.len
-            && self.features == recorded.features
-            && self.rows == recorded.rows
-            && recorded
-                .counts
-                .as_ref()
-                .is_none_or(|counts| self.counts.as_ref() == Some(counts))
+        self == recorded
     }
 }
 
@@ -440,34 +432,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn named_fingerprints_preserve_legacy_bytes_and_counts() {
+    fn named_fingerprints_round_trip_and_detect_changes() {
         let fixtures =
             include_str!("../../../testdata/fixtures/records-v1/document-fingerprints.jsonl");
-        let lines: Vec<_> = fixtures.lines().collect();
-        assert_eq!(lines.len(), 12);
-        for pair in lines.chunks_exact(2) {
-            let old: DocState = serde_json::from_str(pair[0]).unwrap();
-            let current: DocState = serde_json::from_str(pair[1]).unwrap();
-            assert_eq!(serde_json::to_string(&old).unwrap(), pair[0]);
-            assert_eq!(serde_json::to_string(&current).unwrap(), pair[1]);
-            assert!(old.counts.is_none());
-            assert!(current.counts.is_some());
+        for line in fixtures.lines() {
+            let current: DocState = serde_json::from_str(line).unwrap();
+            assert_eq!(serde_json::to_string(&current).unwrap(), line);
             assert_eq!(
                 DocState::from_counts(current.counts.clone().unwrap()),
                 current
             );
-            assert!(current.matches_recorded(&old));
-            assert!(current.matches_recorded(&current));
-            assert!(!old.matches_recorded(&current));
-            assert_ne!(current, old);
-            let mut wrong = old.clone();
+            let mut wrong = current.clone();
             wrong.len += 1;
             assert!(!current.matches_recorded(&wrong));
-            wrong = old.clone();
-            wrong.features += 1;
-            assert!(!current.matches_recorded(&wrong));
-            wrong = old;
-            wrong.rows = Some(wrong.rows.unwrap_or(0) + 1);
+            wrong = current.clone();
+            wrong.counts = None;
             assert!(!current.matches_recorded(&wrong));
         }
         let sequence = DocState::from_counts(DocumentCounts::Sequence {

@@ -98,7 +98,62 @@ fn document_writer_bytes_require_a_version_bump() {
             bytes.replace(&allocated, "\"snapshot.afa\"").into_bytes(),
         );
     }
-    for (i, bytes) in metadata::encode(&Default::default())
+    use basecraft_protocol::metadata::{
+        Cell, Column, ColumnKind, Identification, ProjectMetadata, RecordLink, Row, Table, Taxon,
+    };
+    let metadata_fixture = ProjectMetadata {
+        specimens: Table {
+            columns: vec![
+                Column {
+                    name: "locality".into(),
+                    kind: ColumnKind::Text,
+                    description: "Collection site".into(),
+                },
+                Column {
+                    name: "depth".into(),
+                    kind: ColumnKind::Number {
+                        unit: Some("m".into()),
+                    },
+                    description: String::new(),
+                },
+            ],
+            rows: vec![
+                Row {
+                    id: "S1".into(),
+                    cells: [
+                        ("locality".into(), Cell::Text("Île\tNorth\nshore".into())),
+                        ("depth".into(), Cell::Number(2.5)),
+                    ]
+                    .into(),
+                },
+                Row {
+                    id: "S2".into(),
+                    cells: Default::default(),
+                },
+            ],
+        },
+        taxa: vec![Taxon {
+            id: "T1".into(),
+            name: "Caulerpa taxifolia".into(),
+            submitted_name: None,
+            taxid: Some(76317),
+        }],
+        identifications: vec![Identification {
+            id: "I1".into(),
+            specimen: "S1".into(),
+            taxon: "T1".into(),
+            identified_by: Some("Example, A.".into()),
+            date: Some(basecraft_protocol::metadata::PartialDate::parse("2026-01").unwrap()),
+            remarks: Some("reviewed".into()),
+        }],
+        links: vec![RecordLink {
+            document: "locus.afa".into(),
+            record: "sample".into(),
+            specimen: "S1".into(),
+        }],
+        ..Default::default()
+    };
+    for (i, bytes) in metadata::encode(&metadata_fixture)
         .unwrap()
         .into_iter()
         .enumerate()
@@ -109,21 +164,52 @@ fn document_writer_bytes_require_a_version_bump() {
             } else {
                 "metadata-tsv"
             },
-            &i.to_string(),
+            &format!("filled-{i}"),
             Path::new("metadata.basecraft.json"),
             bytes,
         );
     }
+    use basecraft_protocol::submission::{
+        AccessionEntry, Author, Decision, FrameChoice, Publication, RowDecision, SourceAlignment,
+        Submission,
+    };
+    let submission_fixture = Submission {
+        source: Some(SourceAlignment {
+            document: "locus.afa".into(),
+            hash: "b3:source".into(),
+        }),
+        rows: vec![RowDecision {
+            record: "sample".into(),
+            decision: Decision::New,
+        }],
+        frames: vec![FrameChoice {
+            record: "sample".into(),
+            codon_start: 2,
+        }],
+        publication: Publication {
+            title: "Synthetic marker study".into(),
+            authors: vec![Author {
+                first: "Ana".into(),
+                last: "Example".into(),
+                middle: "M.".into(),
+            }],
+        },
+        accessions: vec![AccessionEntry {
+            record: "sample".into(),
+            accession: "AB123456.1".into(),
+        }],
+        ..Default::default()
+    };
     golden(
         "submission",
-        "default",
+        "filled",
         Path::new("sample.submission.json"),
-        submission::encode(&Default::default()).unwrap(),
+        submission::encode(&submission_fixture).unwrap(),
     );
 }
 
 #[test]
-fn replay_checks_matching_writers_and_keeps_fingerprint_checks_for_other_versions() {
+fn replay_checks_saved_bytes_and_document_fingerprints() {
     use basecraft_ops::{Session, log, replay};
     use basecraft_protocol::Op;
     let root = tempfile::tempdir().unwrap();
@@ -143,24 +229,18 @@ fn replay_checks_matching_writers_and_keeps_fingerprint_checks_for_other_version
     };
     assert_eq!(writer["genbank"], 1);
     let publication = basecraft_ops::provenance::inspect(&root.path().join("sample.gb")).unwrap();
-    assert_eq!(&publication.writer, writer);
-    for (version, damage_state, expected_problem) in [
-        (Some(1), false, true),
-        (Some(0), false, false),
-        (Some(0), true, true),
-        (None, false, true),
-    ] {
+    assert!(
+        !serde_json::to_value(&publication)
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .contains_key("writer")
+    );
+    for damage_state in [false, true] {
         let replay_root = tempfile::tempdir().unwrap();
         let mut log = log::LogWriter::new(replay_root.path(), "fixture");
         for mut entry in entries.clone() {
-            if let Op::Save { writer, .. } = &mut entry.op {
-                if let Some(version) = version {
-                    for v in writer.values_mut() {
-                        *v = version;
-                    }
-                } else {
-                    writer.clear();
-                }
+            if let Op::Save { .. } = &mut entry.op {
                 entry.result.hashes[0].1 = "b3:wrong".into();
                 if damage_state {
                     entry.state.len += 1;
@@ -170,15 +250,17 @@ fn replay_checks_matching_writers_and_keeps_fingerprint_checks_for_other_version
         }
         drop(log);
         let report = replay::replay(replay_root.path()).unwrap();
-        assert_eq!(!report.ok(), expected_problem, "{report:?}");
-        assert_eq!(
-            report.writer_mismatches.len(),
-            usize::from(version == Some(0))
+        assert!(!report.ok(), "{report:?}");
+        assert!(
+            report
+                .problems
+                .iter()
+                .any(|p| p.contains("saved content differs"))
         );
-        if let Some(mismatch) = report.writer_mismatches.first() {
-            assert_eq!(mismatch.code(), "writer_version_mismatch");
-            assert!(mismatch.message().starts_with("written by an older writer"));
-        }
+        assert_eq!(
+            report.problems.iter().any(|p| p.contains("state ")),
+            damage_state
+        );
     }
 }
 

@@ -58,6 +58,7 @@ impl Lifecycle {
     pub fn verify_retained(
         self,
         inputs: &std::collections::BTreeMap<String, Vec<std::path::PathBuf>>,
+        transformation: Option<&str>,
     ) -> Result<Vec<String>> {
         if self != Self::RetainedReceipt {
             return Ok(Vec::new());
@@ -74,10 +75,9 @@ impl Lifecycle {
             .parent()
             .ok_or_else(|| Error::Protocol("missing query evidence directory".into()))?;
         let input = basecraft_ops::input_evidence::read_input(run)?;
-        if input.state != "generated"
-            || input.transformation != "blast-query-preparation-v1"
-            || input.submitted_hash
-                != basecraft_io::hash_file(query).map_err(basecraft_ops::Error::from)?
+        if input.state != basecraft_protocol::input_records::EvidenceState::Generated
+            || Some(input.transformation.as_str()) != transformation
+            || input.submitted_hash != basecraft_io::hash_file(query)?
         {
             return Err(Error::Protocol(
                 "retained query differs from shared input evidence".into(),
@@ -87,7 +87,7 @@ impl Lifecycle {
         if run.join("manifest.json").is_file() {
             diagnostics.extend(basecraft_ops::provenance::verify(receipt)?);
             let publication = basecraft_ops::provenance::inspect(receipt)?;
-            let hash = basecraft_io::hash_file(receipt).map_err(basecraft_ops::Error::from)?;
+            let hash = basecraft_io::hash_file(receipt)?;
             if !publication.outputs.iter().any(|output| output.hash == hash) {
                 return Err(Error::Protocol(
                     "retained receipt differs from published artifact identity".into(),

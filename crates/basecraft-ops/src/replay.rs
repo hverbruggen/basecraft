@@ -19,31 +19,6 @@ pub struct Report {
     pub sessions: usize,
     pub entries: usize,
     pub problems: Vec<String>,
-    /// Save entries whose writer versions differ. Fingerprints are still checked.
-    pub writer_mismatches: Vec<WriterMismatch>,
-}
-
-#[derive(Debug)]
-pub struct WriterMismatch {
-    pub entry: String,
-    pub recorded: std::collections::BTreeMap<String, u32>,
-    pub current: std::collections::BTreeMap<String, u32>,
-}
-impl WriterMismatch {
-    pub fn code(&self) -> &'static str {
-        "writer_version_mismatch"
-    }
-    pub fn message(&self) -> &'static str {
-        if self.recorded.iter().all(|(format, version)| {
-            self.current
-                .get(format)
-                .is_some_and(|current| version <= current)
-        }) {
-            "written by an older writer; content check skipped"
-        } else {
-            "written by a different writer; content check skipped"
-        }
-    }
 }
 
 impl Report {
@@ -126,32 +101,11 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
         match &e.op {
             // Species metadata records the original folder as its relocation
             // base. Hash against that destination, not replay's disposable root.
-            Op::Save { path, writer }
-                if !writer.is_empty()
-                    && writer != &crate::writer_versions::for_path(Path::new(path)) =>
-            {
-                report.writer_mismatches.push(WriterMismatch {
-                    entry: e.id.clone(),
-                    recorded: writer.clone(),
-                    current: crate::writer_versions::for_path(Path::new(path)),
-                });
-            }
-            Op::Save { path, writer } => match session.save_hashes_at(doc, &source_root.join(path))
-            {
+            Op::Save { path, .. } => match session.save_hashes_at(doc, &source_root.join(path)) {
                 Ok(got) => {
                     let want: Vec<&String> = e.result.hashes.iter().map(|(_, h)| h).collect();
                     if got.iter().collect::<Vec<_>>() != want {
-                        let legacy = if writer.is_empty() {
-                            session.legacy_delimitation_hashes(doc, Path::new(path))?
-                        } else {
-                            None
-                        };
-                        if legacy
-                            .as_ref()
-                            .is_none_or(|hashes| hashes.iter().collect::<Vec<_>>() != want)
-                        {
-                            problem(format!("saved content differs: {got:?} vs {want:?}"));
-                        }
+                        problem(format!("saved content differs: {got:?} vs {want:?}"));
                     }
                 }
                 Err(err) => problem(err.to_string()),
@@ -348,11 +302,11 @@ fn strict_entries(root: &Path) -> Result<Vec<LogEntry>> {
             .ok()
             .filter(|prefix| prefix.problem.is_some());
         match kept {
-            Some(prefix) => crate::error::invalid(format!(
+            Some(prefix) => crate::Error::Damaged { path: root.to_path_buf(), detail: format!(
                 "the recovery journal is damaged ({}); nothing was recovered. The {} verified journal events before the damage can be recovered explicitly with `basecraft recover --verified-prefix`; the journal is left unchanged",
                 prefix.problem.unwrap_or_default(),
                 prefix.entries.len()
-            )),
+            ) },
             None => error,
         }
     })
@@ -776,7 +730,7 @@ impl RecoveryAttempt {
         document: usize,
         decision: Option<crate::session::SaveDecision>,
     ) -> Result<()> {
-        self.advance_with(document, decision, &mut LegacyAdvance)
+        self.advance_with(document, decision, &mut RecoveryAdvance)
     }
 
     fn advance_with(
@@ -1471,7 +1425,7 @@ trait AdvanceHooks {
         }
     }
 }
-struct LegacyAdvance;
-impl AdvanceHooks for LegacyAdvance {}
+struct RecoveryAdvance;
+impl AdvanceHooks for RecoveryAdvance {}
 #[cfg(test)]
 mod attempt_boundary_tests;

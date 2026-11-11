@@ -3,8 +3,9 @@ use super::{
     Arc, ArtifactRevision, ArtifactRun, BTreeMap, DocumentTarget, Error, ExecutionFamily,
     InputReference, InputView, InvocationContext, InvocationInputEvidence, OperationRequest, Path,
     PathBuf, PreparedOperation, RegisteredOperation, Result, SequenceTarget, SessionPolicy, Value,
-    contract, file_tool, input_evidence, json, sources_from_upstream,
+    contract, file_tool, input_evidence, sources_from_upstream,
 };
+use basecraft_protocol::operation::QueryPreparation;
 
 struct GeneratedInput {
     position: usize,
@@ -329,21 +330,30 @@ impl PreparedOperation {
         };
         let mut inputs = prepare_inputs(&operation, &request, &policy, &mut session)?;
         let target = prepare_target(&request, &policy, &mut session)?;
-        let input_diagnostics = lifecycle.verify_retained(&inputs.bindings.inputs)?;
+        let services = operation.descriptor.host.as_ref();
+        let query_preparation = services.and_then(|host| host.query_preparation);
+        let input_diagnostics = lifecycle.verify_retained(
+            &inputs.bindings.inputs,
+            services.and_then(|host| host.retained_query_transformation.as_deref()),
+        )?;
         let mut supplied_parameters = request.parameters.clone();
-        if lifecycle.external() && supplied_parameters.get("contact_email").is_none() {
-            let contact = std::env::var("BASECRAFT_BLAST_CONTACT_EMAIL").map_err(|_| {
-                Error::Protocol(
-                    "Configure BASECRAFT_BLAST_CONTACT_EMAIL or supply contact_email for NCBI"
-                        .into(),
-                )
-            })?;
-            supplied_parameters["contact_email"] = json!(contact);
+        if operation.package.origin == crate::registry::Origin::Bundled {
+            for (parameter, setting) in services
+                .into_iter()
+                .flat_map(|host| &host.parameter_environment)
+            {
+                if supplied_parameters.get(parameter).is_none() {
+                    let value = std::env::var(setting).map_err(|_| {
+                        Error::Protocol(format!("Configure {setting} or supply {parameter}"))
+                    })?;
+                    supplied_parameters[parameter] = Value::String(value);
+                }
+            }
         }
         let parameters =
             contract::normalize_parameters(&operation.descriptor, &supplied_parameters)?;
         operation.package.verify()?;
-        let mut frozen = freeze_inputs(&operation, lifecycle, &parameters, &mut inputs)?;
+        let mut frozen = freeze_inputs(&operation, query_preparation, &parameters, &mut inputs)?;
         let AllocatedRun {
             run,
             ledger_inputs,
@@ -434,7 +444,7 @@ impl PreparedOperation {
 
 fn freeze_inputs(
     operation: &RegisteredOperation,
-    lifecycle: crate::lifecycle::Lifecycle,
+    query_preparation: Option<QueryPreparation>,
     parameters: &Value,
     inputs: &mut PreparationInputs,
 ) -> Result<FrozenInputs> {
@@ -480,7 +490,7 @@ fn freeze_inputs(
                 let issues = basecraft_ops::provenance::verify(&source)?;
                 if !issues.is_empty() {
                     return Err(Error::Protocol(format!(
-                        "distance cache evidence is not reusable: {}",
+                        "input evidence is not reusable: {}",
                         issues.join("; ")
                     )));
                 }
@@ -494,7 +504,7 @@ fn freeze_inputs(
                     "source changed since opening; reopen it before analysis".into(),
                 ));
             }
-            if lifecycle.external() {
+            if matches!(query_preparation, Some(QueryPreparation::Blast)) {
                 submission_queries.extend(basecraft_ops::blast::from_file_named(
                     &path,
                     &source.display().to_string(),
@@ -538,16 +548,13 @@ fn freeze_inputs(
                     basecraft_ops::document_record::DocumentRecord::from_file(&source)
             {
                 input_record.include_input(&record);
-                if basecraft_io::hash_file(&source).map_err(basecraft_ops::Error::from)?
-                    != original_hash
-                {
+                if basecraft_io::hash_file(&source)? != original_hash {
                     return Err(Error::Protocol(
                         "source changed while capturing its history".into(),
                     ));
                 }
             }
-            let submitted_hash =
-                basecraft_io::hash_file(&path).map_err(basecraft_ops::Error::from)?;
+            let submitted_hash = basecraft_io::hash_file(&path)?;
             sources.push((
                 source,
                 original_hash,
@@ -580,7 +587,7 @@ fn freeze_inputs(
         }
         .ok_or_else(|| Error::Protocol("document input was not submitted".into()))?;
     }
-    let submission_plan = if lifecycle.external() {
+    let submission_plan = if matches!(query_preparation, Some(QueryPreparation::Blast)) {
         let plan = basecraft_ops::blast::prepare(&submission_queries, parameters)?;
         basecraft_ops::blast::authorize(&plan, parameters)?;
         Some(plan)
@@ -655,13 +662,10 @@ fn allocate_run(
             &format!("Input for {}", operation.id),
         )?;
         let mut record = mutation.read_input(ledger.directory())?;
-        record.extra.insert(
-            "analysis_run".into(),
-            json!(input_evidence::relative(
-                ledger.directory(),
-                run.directory()
-            )?),
-        );
+        record.analysis_run = Some(input_evidence::relative(
+            ledger.directory(),
+            run.directory(),
+        )?);
         record.submitted_hash = submitted_hash;
         record.submitted_size = std::fs::metadata(&frozen)?.len();
         record.transformation = transformation.into();
@@ -669,9 +673,7 @@ fn allocate_run(
             // The run reads this file and proposes edits to the same
             // document; saving them must not count as replacing an
             // analysis input.
-            record
-                .extra
-                .insert(input_evidence::PROPOSAL_TARGET.into(), json!(true));
+            record.proposal_target = Some(true);
         }
         mutation.write_input(ledger.directory(), &record)?;
         if let Some(role) = frozen_inputs
@@ -691,7 +693,11 @@ fn allocate_run(
                 });
         }
         let manifest = ledger.artifact("manifest.json")?;
-        upstream.push(json!({"bundle":input_evidence::relative(run.directory(),ledger.directory())?,"id":ledger.id(),"hash":basecraft_io::hash_file(&manifest).map_err(basecraft_ops::Error::from)?}));
+        upstream.push(basecraft_protocol::input_records::UpstreamLink {
+            bundle: (input_evidence::relative(run.directory(), ledger.directory())?).into(),
+            id: (ledger.id()).to_owned(),
+            hash: basecraft_io::hash_file(&manifest)?,
+        });
         let mut reference = record
             .source
             .clone()
@@ -718,7 +724,7 @@ fn allocate_run(
     // contributing original also owns its own normal reference ledger.
     let primary_input_owner = first_input.as_ref().map(|(_, owner)| owner.clone());
     if let Some((mut input, _)) = first_input {
-        input.extra.insert("upstream".into(), json!(upstream));
+        input.upstream = upstream;
         mutation.write_input(run.directory(), &input)?;
         // The save guard names a registered run by its run.json and treats a
         // missing one as damage, as for every other registered run. A run
@@ -739,99 +745,106 @@ fn allocate_run(
         )?;
         mutation.register(&run)?;
     }
-    for (name, inputs) in generated {
-        for input in inputs {
-            let mut dependencies = sources_from_upstream(run.directory())?;
-            dependencies.extend(input.dependencies.iter().cloned());
-            mutation.link_generated_input(
-                &run,
-                &dependencies,
-                &input.bytes,
-                input.transformation,
-                "Document snapshot",
-            )?;
-            // The store's format-neutral name for retained generated bytes,
-            // which links, workspaces, Save As and replay look up.
-            let retained = "submitted.fasta".to_owned();
-            basecraft_io::write_atomic(&run.artifact(&retained)?, |w| {
-                std::io::Write::write_all(w, &input.bytes)
-            })
-            .map_err(basecraft_ops::Error::from)?;
-            let submitted_hash = basecraft_io::hash_bytes(&input.bytes);
-            evidence
-                .entry(name.clone())
-                .or_default()
-                .push(InvocationInputEvidence {
-                    original_path: None,
-                    source_hash: None,
-                    submitted_hash: submitted_hash.clone(),
-                    transformation: input.transformation.into(),
-                    run_directory: run.directory().display().to_string(),
-                });
-            ledger_inputs.push(ArtifactRevision {
-                id: format!("{}:document", run.id()),
-                logical_name: retained.clone(),
-                hash: submitted_hash,
-                size: input.bytes.len() as u64,
-                retained: Some(retained),
-                reference: None,
-            });
-        }
+    let mut allocated = AllocatedRun {
+        run,
+        ledger_inputs,
+        primary_input_owner,
+        evidence,
+    };
+    allocated.document_inputs(&mutation, generated)?;
+    if let (Some(target), Some(payload)) = (sequence, sequence_payload.as_deref()) {
+        allocated.sequence_snapshot(&mutation, target, payload)?;
     }
-    if let Some(target) = sequence {
-        let payload = sequence_payload
-            .as_deref()
-            .ok_or_else(|| Error::Protocol("missing sequence snapshot".into()))?;
-        let mut dependencies = sources_from_upstream(run.directory())?;
+    if let Some(payload) = submission_payload {
+        allocated.query_preparation(&mutation, &payload, frozen_inputs)?;
+    }
+    Ok(allocated)
+}
+
+impl AllocatedRun {
+    /// Retain exact generated bytes and their immutable publication identity.
+    fn retain(&mut self, name: &str, role: &str, bytes: &[u8]) -> Result<PathBuf> {
+        let path = self.run.artifact(name)?;
+        basecraft_io::write_atomic(&path, |w| std::io::Write::write_all(w, bytes))?;
+        self.ledger_inputs.push(ArtifactRevision {
+            id: format!("{}:{role}", self.run.id()),
+            logical_name: name.into(),
+            hash: basecraft_io::hash_bytes(bytes),
+            size: bytes.len() as u64,
+            retained: Some(name.into()),
+            reference: None,
+        });
+        Ok(path)
+    }
+
+    fn document_inputs(
+        &mut self,
+        mutation: &input_evidence::Mutation,
+        generated: &BTreeMap<String, Vec<GeneratedInput>>,
+    ) -> Result<()> {
+        for (name, inputs) in generated {
+            for input in inputs {
+                let mut dependencies = sources_from_upstream(self.run.directory())?;
+                dependencies.extend(input.dependencies.iter().cloned());
+                mutation.link_generated_input(
+                    &self.run,
+                    &dependencies,
+                    &input.bytes,
+                    input.transformation,
+                    "Document snapshot",
+                )?;
+                self.retain("submitted.fasta", "document", &input.bytes)?;
+                self.evidence
+                    .entry(name.clone())
+                    .or_default()
+                    .push(InvocationInputEvidence {
+                        original_path: None,
+                        source_hash: None,
+                        submitted_hash: basecraft_io::hash_bytes(&input.bytes),
+                        transformation: input.transformation.into(),
+                        run_directory: self.run.directory().display().to_string(),
+                    });
+            }
+        }
+        Ok(())
+    }
+
+    fn sequence_snapshot(
+        &mut self,
+        mutation: &input_evidence::Mutation,
+        target: &SequenceTarget,
+        payload: &[u8],
+    ) -> Result<()> {
+        let mut dependencies = sources_from_upstream(self.run.directory())?;
         dependencies.extend(target.dependencies.iter().cloned());
         mutation.link_generated_input(
-            &run,
+            &self.run,
             &dependencies,
             payload,
             "sequence-arrow-buffers-v1",
             "Sequence operation snapshot",
         )?;
-        let name = "snapshot.arrow-pair";
-        basecraft_io::write_atomic(&run.artifact(name)?, |w| {
-            std::io::Write::write_all(w, payload)
-        })
-        .map_err(basecraft_ops::Error::from)?;
-        ledger_inputs.push(ArtifactRevision {
-            id: format!("{}:snapshot", run.id()),
-            logical_name: name.into(),
-            hash: basecraft_io::hash_bytes(payload),
-            size: payload.len() as u64,
-            retained: Some(name.into()),
-            reference: None,
-        });
+        self.retain("snapshot.arrow-pair", "snapshot", payload)?;
+        Ok(())
     }
-    if let Some(payload) = &submission_payload {
-        let path = run.artifact("query-preparation.json")?;
-        basecraft_io::write_atomic(&path, |w| std::io::Write::write_all(w, payload))
-            .map_err(basecraft_ops::Error::from)?;
-        let dependencies = sources_from_upstream(run.directory())?;
+
+    fn query_preparation(
+        &mut self,
+        mutation: &input_evidence::Mutation,
+        payload: &[u8],
+        inputs: &mut BTreeMap<String, Vec<String>>,
+    ) -> Result<()> {
+        // Retain the query before publishing its input ledger, as for the producer.
+        let path = self.retain("query-preparation.json", "queries", payload)?;
+        let dependencies = sources_from_upstream(self.run.directory())?;
         mutation.link_generated_input(
-            &run,
+            &self.run,
             &dependencies,
             payload,
             "blast-query-preparation-v1",
             "Frozen BLAST submission",
         )?;
-        ledger_inputs.push(ArtifactRevision {
-            id: format!("{}:queries", run.id()),
-            logical_name: "query-preparation.json".into(),
-            hash: basecraft_io::hash_bytes(payload),
-            size: payload.len() as u64,
-            retained: Some("query-preparation.json".into()),
-            reference: None,
-        });
-        frozen_inputs.insert("queries".into(), vec![path.display().to_string()]);
+        inputs.insert("queries".into(), vec![path.display().to_string()]);
+        Ok(())
     }
-    drop(mutation);
-    Ok(AllocatedRun {
-        run,
-        ledger_inputs,
-        primary_input_owner,
-        evidence,
-    })
 }

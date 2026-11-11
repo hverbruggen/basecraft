@@ -49,7 +49,7 @@ fn synthetic_large_clean_source_has_metadata_only_evidence_and_relocates() {
     // The clean source is referenced in place: its bytes are never copied.
     assert_eq!(
         input_evidence::read_input(&run).unwrap().state,
-        "referenced"
+        basecraft_protocol::input_records::EvidenceState::Referenced
     );
     assert!(!run.join("submitted.fasta").exists());
     assert!(!run.join("preserved-input").exists());
@@ -124,7 +124,10 @@ fn common_save_route_preserves_actual_original_and_dirty_submitted_input() {
     let dirty = common::align_document(&registry, &mut session, doc, &dirty_output);
     let run = ArtifactRun::for_result(&dirty_output).unwrap().unwrap();
     assert_eq!(run, common::evidence(&dirty));
-    assert_eq!(input_evidence::read_input(&run).unwrap().state, "generated");
+    assert_eq!(
+        input_evidence::read_input(&run).unwrap().state,
+        basecraft_protocol::input_records::EvidenceState::Generated
+    );
     // The unsaved bytes that were analysed are retained with the run.
     assert!(
         std::fs::read_to_string(run.join("submitted.fasta"))
@@ -245,7 +248,8 @@ fn save_as_descendants_receive_each_explicit_evidence_decision() {
                     conflict
                         .analyses
                         .iter()
-                        .all(|a| input_evidence::read_input(&a.run).unwrap().state == "broken")
+                        .all(|a| input_evidence::read_input(&a.run).unwrap().state
+                            == basecraft_protocol::input_records::EvidenceState::Broken)
                 );
                 assert_ne!(
                     basecraft_ops::provenance::verify(&last).unwrap(),

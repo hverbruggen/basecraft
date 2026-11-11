@@ -81,6 +81,29 @@
             }
           ]
         },
+        "parameter_environment": {
+          "description": "Bundled operations may obtain a missing parameter from a named environment setting.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "query_preparation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/QueryPreparation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "retained_query_transformation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "species_workspace": {
           "type": "boolean"
         },
@@ -403,6 +426,12 @@
             "parameter"
           ]
         }
+      ]
+    },
+    "QueryPreparation": {
+      "type": "string",
+      "enum": [
+        "blast"
       ]
     },
     "SupportKind": {

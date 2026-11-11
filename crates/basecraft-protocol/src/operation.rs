@@ -88,6 +88,19 @@ pub struct HostServices {
     /// Cooperative cancellation and receipt rules for a bundled remote service.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lifecycle: Option<LifecyclePolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query_preparation: Option<QueryPreparation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retained_query_transformation: Option<String>,
+    /// Bundled operations may obtain a missing parameter from a named environment setting.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub parameter_environment: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum QueryPreparation {
+    Blast,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -295,6 +308,15 @@ impl RuntimeState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum OperationErrorCode {
+    IoError,
+    FormatError,
+    UnknownFormat,
+    EmptyDocument,
+    AnalysisInputConflict,
+    EvidenceCheckIncomplete,
+    SaveDecisionStale,
+    PublishedWithFailure,
+    NothingToDo,
     ChangedOnDisk,
     WrongDocumentKind,
     UnknownDocument,
@@ -318,6 +340,45 @@ pub enum OperationErrorCode {
     Timeout,
     PublicationIncomplete,
     EvidenceIncomplete,
+}
+
+impl OperationErrorCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::IoError => "io_error",
+            Self::FormatError => "format_error",
+            Self::UnknownFormat => "unknown_format",
+            Self::EmptyDocument => "empty_document",
+            Self::AnalysisInputConflict => "analysis_input_conflict",
+            Self::EvidenceCheckIncomplete => "evidence_check_incomplete",
+            Self::SaveDecisionStale => "save_decision_stale",
+            Self::PublishedWithFailure => "published_with_failure",
+            Self::NothingToDo => "nothing_to_do",
+            Self::ChangedOnDisk => "changed_on_disk",
+            Self::WrongDocumentKind => "wrong_document_kind",
+            Self::UnknownDocument => "unknown_document",
+            Self::NotFound => "not_found",
+            Self::Damaged => "damaged",
+            Self::Limit => "limit",
+            Self::Unsupported => "unsupported",
+            Self::Busy => "busy",
+            Self::InvalidArguments => "invalid_arguments",
+            Self::IncompatibleContract => "incompatible_contract",
+            Self::PluginDisabled => "plugin_disabled",
+            Self::PluginUnavailable => "plugin_unavailable",
+            Self::PluginChanged => "plugin_changed",
+            Self::PermissionDenied => "permission_denied",
+            Self::StaleRevision => "stale_revision",
+            Self::OutputConflict => "output_conflict",
+            Self::UnsupportedInput => "unsupported_input",
+            Self::PluginProtocolViolation => "plugin_protocol_violation",
+            Self::ToolFailure => "tool_failure",
+            Self::Cancelled => "cancelled",
+            Self::Timeout => "timeout",
+            Self::PublicationIncomplete => "publication_incomplete",
+            Self::EvidenceIncomplete => "evidence_incomplete",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

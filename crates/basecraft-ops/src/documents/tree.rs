@@ -22,13 +22,7 @@ impl Document for OpenedTree {
     fn opening_warning(&self) -> Option<&str> {
         self.metadata_warning.as_deref()
     }
-    fn legacy_hashes(&self, _target: &Path) -> Result<Option<Vec<String>>> {
-        let mut main = HashingWriter::new(std::io::sink());
-        files::write_legacy_tree(self, &mut main)?;
-        let mut side = HashingWriter::new(std::io::sink());
-        files::write_legacy_tree_sidecar(&self.doc, &mut side)?;
-        Ok(Some(vec![main.hash(), side.hash()]))
-    }
+
     fn revision(&self, _generation: u64) -> u64 {
         self.doc.version()
     }

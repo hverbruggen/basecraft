@@ -1,0 +1,1 @@
+{"rows": [["new", "ACGTTAGCCTAGGCTAACGTTGACCTGATCGTACGATCGT"]], "reference": ["ACGTTAGCCTAGGCTAACGTTGACCTGATCGTACGATCGT", "ACGTTAGCCTAGGCAAACGTTGACCTGATCGTACGATCGT"], "insertions": 5, "reversed": [], "parameters": ["--preservecase", "--thread", "1", "--add", "/work/tmp/basecraft-mafft-add-266kwc40/new.fa", "--mapout"]}

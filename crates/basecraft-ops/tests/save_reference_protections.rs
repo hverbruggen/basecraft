@@ -129,7 +129,7 @@ fn registered_other_folder_policies_preserve_original_and_pending_edits() {
                     assert_eq!(std::fs::read(&source).unwrap(), ORIGINAL);
                     assert_eq!(
                         input_evidence::read_input(run.directory()).unwrap().state,
-                        "referenced"
+                        basecraft_protocol::input_records::EvidenceState::Referenced
                     );
                     continue;
                 }
@@ -143,9 +143,15 @@ fn registered_other_folder_policies_preserve_original_and_pending_edits() {
                     )
                     .unwrap();
                     assert_eq!(std::fs::read(retained).unwrap(), ORIGINAL);
-                    assert_eq!(input.state, "preserved");
+                    assert_eq!(
+                        input.state,
+                        basecraft_protocol::input_records::EvidenceState::Preserved
+                    );
                 } else {
-                    assert_eq!(input.state, "broken");
+                    assert_eq!(
+                        input.state,
+                        basecraft_protocol::input_records::EvidenceState::Broken
+                    );
                     assert!(
                         input_evidence::verified_source(
                             run.directory(),
@@ -283,7 +289,7 @@ fn lexical_old_path_still_guards_missing_or_replaced_source() {
                     .unwrap();
                 assert_eq!(
                     input_evidence::read_input(run.directory()).unwrap().state,
-                    "broken"
+                    basecraft_protocol::input_records::EvidenceState::Broken
                 );
                 assert!(std::fs::read_to_string(source).unwrap().contains("ATGT"));
                 assert_eq!(std::fs::read(&moved).unwrap(), ORIGINAL);
@@ -339,7 +345,7 @@ fn registered_transitive_dependencies_are_included_in_session_conflict() {
             for run in [&child, &grandchild] {
                 assert_eq!(
                     input_evidence::read_input(run.directory()).unwrap().state,
-                    "referenced"
+                    basecraft_protocol::input_records::EvidenceState::Referenced
                 );
                 let reference = input_evidence::read_input(parent.directory())
                     .unwrap()

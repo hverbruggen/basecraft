@@ -65,39 +65,7 @@ impl Options {
 
 /// Typed errors stay typed through CLI, MCP and Python, including the fresh check.
 pub(crate) fn error_value(error: &Error) -> Value {
-    let code = match error {
-        Error::ChangedOnDisk { .. }
-        | Error::NotFound { .. }
-        | Error::Damaged { .. }
-        | Error::Limit { .. }
-        | Error::Unsupported(_)
-        | Error::Busy(_) => error.code(),
-        Error::Access(AccessError::Denied(_)) => "permission_denied",
-        Error::Access(AccessError::DestinationExists) => "output_conflict",
-        Error::Access(AccessError::Io(e))
-        | Error::Io(e)
-        | Error::Format(basecraft_io::Error::Io(e))
-            if e.kind() == std::io::ErrorKind::PermissionDenied =>
-        {
-            "permission_denied"
-        }
-        Error::Access(AccessError::Io(_))
-        | Error::Io(_)
-        | Error::Format(basecraft_io::Error::Io(_)) => "io_error",
-        Error::Format(_) => "format_error",
-        Error::Json(_) | Error::Invalid(_) => "invalid_arguments",
-        Error::UnknownFormat(_) => "unknown_format",
-        Error::Empty(_) => "empty_document",
-        Error::EvidenceConflict(_) => "analysis_input_conflict",
-        Error::EvidenceCheckIncomplete(_) | Error::SaveCheckRequired(_) => {
-            "evidence_check_incomplete"
-        }
-        Error::SaveDecisionStale(_) => "save_decision_stale",
-        Error::UnknownDocument { .. } => "unknown_document",
-        Error::WrongKind { .. } => "wrong_document_kind",
-        Error::NothingTo(_) => "nothing_to_do",
-        Error::PublishedWithFailure(_) => "published_with_failure",
-    };
+    let code = error.code();
     let mut value = json!({"state":"failed", "errors":[{"code":code,"message":error.to_string()}]});
     match error {
         Error::Access(AccessError::Denied(reason)) => {
@@ -343,6 +311,33 @@ mod typed_error_tests {
             ),
             (Error::Unsupported("future format".into()), "unsupported"),
             (Error::Busy("writer active".into()), "busy"),
+            (std::io::Error::other("disk full").into(), "io_error"),
+            (
+                std::io::Error::from(std::io::ErrorKind::NotFound).into(),
+                "io_error",
+            ),
+            (
+                std::io::Error::from(std::io::ErrorKind::PermissionDenied).into(),
+                "permission_denied",
+            ),
+            (
+                Error::Json(serde_json::from_str::<Value>("{").unwrap_err()),
+                "invalid_arguments",
+            ),
+            (Error::Invalid("bad argument".into()), "invalid_arguments"),
+            (Error::UnknownFormat("unknown.ext".into()), "unknown_format"),
+            (Error::Empty("empty.fa".into()), "empty_document"),
+            (Error::NothingTo("undo"), "nothing_to_do"),
+            (
+                Error::EvidenceConflict(Box::new(
+                    basecraft_ops::input_evidence::EvidenceConflict {
+                        target: "input.fa".into(),
+                        analyses: vec![],
+                        options: vec![],
+                    },
+                )),
+                "analysis_input_conflict",
+            ),
         ];
         for (error, code) in cases {
             assert_eq!(error.code(), code);

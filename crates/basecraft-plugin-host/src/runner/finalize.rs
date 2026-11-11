@@ -63,10 +63,8 @@ impl PreparedOperation {
                 })?;
                 expected.insert(relative.to_path_buf(), (*hash).clone());
             }
-            if retained == staging {
-                verify_collection(&retained, &expected)?;
-            } else if retained.exists() {
-                if !repair || !intent.is_file() {
+            if retained == staging || retained.exists() {
+                if retained != staging && (!repair || !intent.is_file()) {
                     return Err(Error::Protocol(
                         "output_conflict: retained collection already exists".into(),
                     ));
@@ -86,20 +84,7 @@ impl PreparedOperation {
                 }
                 self.run.publish_collection(role)?;
             }
-            for (relative, hash) in &expected {
-                let path = retained.join(relative).display().to_string();
-                if !outcome
-                    .artifacts
-                    .iter()
-                    .any(|a| a.path == path && &a.digest == hash)
-                {
-                    outcome.artifacts.push(PublishedArtifact {
-                        role: role.clone(),
-                        path,
-                        digest: hash.clone(),
-                    });
-                }
-            }
+            record_collection(outcome, role, &retained, &expected);
             self.persist(outcome)?;
             if let Some(destination) = self.request.destinations.get(role) {
                 let destination_path = self.policy.root.join(destination);
@@ -125,20 +110,7 @@ impl PreparedOperation {
                     )?;
                     export_collection(&retained, &destination, &expected)?;
                 }
-                for (relative, hash) in &expected {
-                    let path = destination_path.join(relative).display().to_string();
-                    if !outcome
-                        .artifacts
-                        .iter()
-                        .any(|a| a.path == path && &a.digest == hash)
-                    {
-                        outcome.artifacts.push(PublishedArtifact {
-                            role: role.clone(),
-                            path,
-                            digest: hash.clone(),
-                        });
-                    }
-                }
+                record_collection(outcome, role, &destination_path, &expected);
                 self.persist(outcome)?;
             }
             for (key, destination) in &self.request.destinations {
@@ -244,15 +216,13 @@ impl PreparedOperation {
                 .iter()
                 .any(|a| a.path == retained.display().to_string() && &a.digest == digest)
             {
-                if basecraft_io::hash_file(&retained).map_err(basecraft_ops::Error::from)?
-                    != *digest
-                {
+                if basecraft_io::hash_file(&retained)? != *digest {
                     return Err(Error::Protocol(
                         "retained artifact changed; repair refused".into(),
                     ));
                 }
             } else {
-                if basecraft_io::hash_file(path).map_err(basecraft_ops::Error::from)? != *digest {
+                if basecraft_io::hash_file(path)? != *digest {
                     return Err(Error::Protocol("validated staging artifact changed".into()));
                 }
                 let staging = self.run.staging(&name)?;
@@ -274,9 +244,7 @@ impl PreparedOperation {
                     .iter()
                     .any(|a| a.path == expected.display().to_string() && &a.digest == digest)
                 {
-                    if basecraft_io::hash_file(&expected).map_err(basecraft_ops::Error::from)?
-                        != *digest
-                    {
+                    if basecraft_io::hash_file(&expected)? != *digest {
                         return Err(Error::Protocol(
                             "published destination changed; repair refused".into(),
                         ));
@@ -297,10 +265,8 @@ impl PreparedOperation {
                 logical_name: input_evidence::relative(
                     self.run
                         .directory()
-                        .parent()
-                        .and_then(Path::parent)
-                        .and_then(Path::parent)
-                        .and_then(Path::parent)
+                        .ancestors()
+                        .nth(4)
                         .ok_or_else(|| Error::Protocol("invalid run location".into()))?,
                     &retained,
                 )?,
@@ -335,9 +301,7 @@ impl PreparedOperation {
                 .iter()
                 .find(|artifact| artifact.path == path.display().to_string())
             {
-                if basecraft_io::hash_file(&path).map_err(basecraft_ops::Error::from)?
-                    != artifact.digest
-                {
+                if basecraft_io::hash_file(&path)? != artifact.digest {
                     return Err(Error::Protocol(
                         "published workspace changed; repair refused".into(),
                     ));
@@ -347,8 +311,7 @@ impl PreparedOperation {
                 outcome.artifacts.push(PublishedArtifact {
                     role: crate::policy::WORKSPACE_DESTINATION.into(),
                     path: published.display().to_string(),
-                    digest: basecraft_io::hash_file(&published)
-                        .map_err(basecraft_ops::Error::from)?,
+                    digest: basecraft_io::hash_file(&published)?,
                 });
                 self.persist(outcome)?;
             }
@@ -399,8 +362,7 @@ impl PreparedOperation {
                         exported.push(ArtifactRevision {
                             id: format!("{}:export-{}", self.run.id(), exported.len()),
                             logical_name: input_evidence::relative(&self.policy.root, &companion)?,
-                            hash: basecraft_io::hash_file(&companion)
-                                .map_err(basecraft_ops::Error::from)?,
+                            hash: basecraft_io::hash_file(&companion)?,
                             size: std::fs::metadata(&companion)?.len(),
                             retained: Some(input_evidence::relative(
                                 self.run.directory(),
@@ -426,9 +388,11 @@ impl PreparedOperation {
         let previous = std::fs::read(self.run.directory().join("manifest.json"))
             .ok()
             .and_then(|bytes| serde_json::from_slice::<Publication>(&bytes).ok());
+        let (events, effective_edits) = previous
+            .map(|p| (p.events, p.effective_edits))
+            .unwrap_or_default();
         let publication = Publication {
             schema_version: 1,
-            writer: BTreeMap::new(),
             id: self.run.id().into(),
             session: basecraft_platform::process_instance().into(),
             parents: vec![],
@@ -440,12 +404,8 @@ impl PreparedOperation {
             ),
             inputs: self.ledger_inputs.clone(),
             outputs: publication_outputs,
-            events: previous
-                .as_ref()
-                .map_or_else(Vec::new, |p| p.events.clone()),
-            effective_edits: previous
-                .as_ref()
-                .map_or_else(Vec::new, |p| p.effective_edits.clone()),
+            events,
+            effective_edits,
             completeness: Completeness {
                 ancestry_known: false,
                 input_bytes_available: true,
@@ -548,5 +508,27 @@ impl PreparedOperation {
             self.finalise_exported_tree(&destination_path)?;
         }
         Ok(())
+    }
+}
+
+fn record_collection(
+    outcome: &mut OperationOutcome,
+    role: &str,
+    root: &Path,
+    members: &BTreeMap<PathBuf, String>,
+) {
+    for (relative, hash) in members {
+        let path = root.join(relative).display().to_string();
+        if !outcome
+            .artifacts
+            .iter()
+            .any(|a| a.path == path && &a.digest == hash)
+        {
+            outcome.artifacts.push(PublishedArtifact {
+                role: role.into(),
+                path,
+                digest: hash.clone(),
+            });
+        }
     }
 }

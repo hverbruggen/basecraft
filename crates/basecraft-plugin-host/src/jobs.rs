@@ -118,8 +118,7 @@ fn cancel_job(job: &Job, strict: bool) -> Result<OperationOutcome> {
         basecraft_io::write_atomic(
             std::path::Path::new(&job.prepared.context.cancel_file),
             |w| std::io::Write::write_all(w, b"cancel\n"),
-        )
-        .map_err(basecraft_ops::Error::from)?;
+        )?;
         outcome.state = RuntimeState::Cancelling;
         job.prepared.persist(&outcome)?;
     } else if strict {
@@ -354,7 +353,7 @@ impl JobManager {
                         .state = RuntimeState::Running;
                     fail(
                         job,
-                        if error.to_string().contains("stale_revision") {
+                        if matches!(error, basecraft_ops::Error::StaleRevision { .. }) {
                             OperationErrorCode::StaleRevision
                         } else {
                             OperationErrorCode::PluginProtocolViolation
@@ -380,7 +379,7 @@ impl JobManager {
             ));
             let snapshot_path = job.prepared.run.artifact("snapshot.arrow-pair");
             let activity = snapshot_path.and_then(|path| {
-                let hash = basecraft_io::hash_file(&path).map_err(basecraft_ops::Error::from)?;
+                let hash = basecraft_io::hash_file(&path)?;
                 let key = basecraft_ops::input_evidence::relative(session.root(),&path)?;
                 let params = json!({"requested":job.prepared.request.parameters,"effective":outcome.effective_parameters,
                     "operation":job.prepared.operation.id,"pins":outcome.pins,"initiator":job.prepared.initiator,"run_id":outcome.run_id});
@@ -1141,36 +1140,5 @@ pub fn error_code(error: &Error) -> OperationErrorCode {
 
 /// Preserve typed core failures across the CLI, MCP and registered job adapters.
 pub fn ops_error_code(error: &basecraft_ops::Error) -> OperationErrorCode {
-    use basecraft_ops::Error as Core;
-    match error {
-        Core::ChangedOnDisk { .. } => OperationErrorCode::ChangedOnDisk,
-        Core::WrongKind { .. } => OperationErrorCode::WrongDocumentKind,
-        Core::UnknownDocument { .. } => OperationErrorCode::UnknownDocument,
-        Core::NotFound { .. } => OperationErrorCode::NotFound,
-        Core::Limit { .. } => OperationErrorCode::Limit,
-        Core::Unsupported(_) | Core::UnknownFormat(_) => OperationErrorCode::Unsupported,
-        Core::Busy(_) => OperationErrorCode::Busy,
-        Core::Access(basecraft_ops::access::AccessError::Denied(_)) => {
-            OperationErrorCode::PermissionDenied
-        }
-        Core::Access(basecraft_ops::access::AccessError::DestinationExists) => {
-            OperationErrorCode::OutputConflict
-        }
-        Core::EvidenceConflict(_)
-        | Core::EvidenceCheckIncomplete(_)
-        | Core::SaveCheckRequired(_) => OperationErrorCode::EvidenceIncomplete,
-        Core::SaveDecisionStale(_) => OperationErrorCode::StaleRevision,
-        Core::PublishedWithFailure(_) => OperationErrorCode::PublicationIncomplete,
-        Core::Io(e)
-        | Core::Access(basecraft_ops::access::AccessError::Io(e))
-        | Core::Format(basecraft_io::Error::Io(e)) => match e.kind() {
-            std::io::ErrorKind::NotFound => OperationErrorCode::NotFound,
-            std::io::ErrorKind::PermissionDenied => OperationErrorCode::PermissionDenied,
-            _ => OperationErrorCode::ToolFailure,
-        },
-        Core::Damaged { .. } | Core::Json(_) | Core::Format(_) => OperationErrorCode::Damaged,
-        Core::Empty(_) | Core::Invalid(_) | Core::NothingTo(_) => {
-            OperationErrorCode::InvalidArguments
-        }
-    }
+    error.operation_code()
 }

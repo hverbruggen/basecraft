@@ -30,12 +30,15 @@ impl Session {
         let slot = self
             .docs
             .get(id.0)
-            .ok_or_else(|| invalid("unknown document"))?;
+            .ok_or(crate::Error::UnknownDocument { id })?;
         if slot.generation != generation || self.revision(id) != revision {
-            return Err(invalid("stale_revision: proposal target changed"));
+            return Err(crate::Error::StaleRevision { id, revision });
         }
         if count > 4096 {
-            return Err(invalid("proposal count exceeds 4096"));
+            return Err(crate::Error::Limit {
+                what: "proposal count".into(),
+                limit: 4096,
+            });
         }
         Ok(slot)
     }

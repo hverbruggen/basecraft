@@ -5,6 +5,7 @@ mod inspection;
 mod write;
 use super::{SangerReviewSession, StoredReview};
 use crate::{analysis_store::ArtifactRun, error::invalid, input_evidence as inputs};
+use basecraft_docs::sanger::SangerPlacementExt;
 use basecraft_docs::sanger::{SangerDraft, SangerPlacement};
 use basecraft_protocol::provenance::{ArtifactRevision, Completeness, Publication};
 use basecraft_protocol::sanger_records::{
@@ -194,7 +195,6 @@ fn carry_authored(dependencies: &[PathBuf], run: &ArtifactRun) -> crate::Result<
 fn publication(run: &ArtifactRun, origin: &str, artifacts: Vec<ArtifactRevision>) -> Publication {
     Publication {
         schema_version: 1,
-        writer: std::collections::BTreeMap::new(),
         id: run.id().into(),
         session: run.id().into(),
         parents: vec![],
@@ -1184,7 +1184,10 @@ mod tests {
         );
         assert_eq!(review.evidence.sources.len(), 1);
         let ledger = review.evidence.sources[0].ledger.as_ref().unwrap();
-        assert_eq!(inputs::read_input(ledger).unwrap().state, "referenced");
+        assert_eq!(
+            inputs::read_input(ledger).unwrap().state,
+            basecraft_protocol::input_records::EvidenceState::Referenced
+        );
         assert!(!ledger.join("preserved-input").exists());
         assert!(
             review.evidence.sources[0]

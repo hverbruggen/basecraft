@@ -929,35 +929,3 @@ fn cli_submission_show_rejects_an_alignment_without_success_output() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("Submission"));
     assert_eq!(std::fs::read(file).unwrap(), original);
 }
-
-#[test]
-fn replay_reports_writer_mismatches_separately_from_damage() {
-    let source = tempfile::tempdir().unwrap();
-    let root = tempfile::tempdir().unwrap();
-    let mut session = basecraft_ops::Session::new(source.path());
-    let doc = session.create_sequence("sample", "ACGT").unwrap();
-    session
-        .save(doc, Some(&source.path().join("sample.gb")))
-        .unwrap();
-    drop(session);
-    let mut log = basecraft_ops::log::LogWriter::new(root.path(), "fixture");
-    for mut entry in basecraft_ops::log::read_all(source.path()).unwrap() {
-        if let basecraft_protocol::Op::Save { writer, .. } = &mut entry.op {
-            writer.insert("genbank".into(), 0);
-            entry.result.hashes[0].1 = "older-writer-bytes".into();
-        }
-        log.append(&entry).unwrap();
-    }
-    drop(log);
-    let mut client = Client::start(root.path(), &root.path().join("profile"));
-    let result = client.call("replay", json!({}));
-    client.close();
-    let report = &result["result"]["structuredContent"];
-    assert_eq!(report["problems"], json!([]));
-    assert_eq!(
-        report["writer_mismatches"][0]["code"],
-        "writer_version_mismatch"
-    );
-    assert_eq!(report["writer_mismatches"][0]["recorded"]["genbank"], 0);
-    assert_eq!(report["writer_mismatches"][0]["current"]["genbank"], 1);
-}

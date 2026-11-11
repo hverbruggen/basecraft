@@ -1,0 +1,297 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SangerDraft",
+  "type": "object",
+  "properties": {
+    "aligned_columns": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "argv": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "columns": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/DraftColumn"
+      }
+    },
+    "conflict_columns": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "consensus": {
+      "type": "string"
+    },
+    "consensus_length": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "engine": {
+      "type": "string"
+    },
+    "engine_sha256": {
+      "type": "string"
+    },
+    "inputs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/InputRead"
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    },
+    "minimum_identity": {
+      "type": "number",
+      "format": "double"
+    },
+    "minimum_overlap": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "mode": {
+      "type": "string"
+    },
+    "overlaps": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Overlap"
+      }
+    },
+    "signal_threshold": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "default": null,
+      "minimum": 0
+    },
+    "status": {
+      "type": "string"
+    },
+    "version_output": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "status",
+    "engine",
+    "version_output",
+    "engine_sha256",
+    "mode",
+    "inputs",
+    "consensus",
+    "consensus_length",
+    "minimum_overlap",
+    "minimum_identity",
+    "overlaps",
+    "aligned_columns",
+    "conflict_columns",
+    "columns"
+  ],
+  "$defs": {
+    "DraftColumn": {
+      "type": "object",
+      "properties": {
+        "column": {
+          "description": "One-based column in the Tracy alignment, including gap columns.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "conflict": {
+          "type": "boolean"
+        },
+        "consensus": {
+          "type": "string",
+          "maxLength": 1,
+          "minLength": 1
+        },
+        "review": {
+          "type": "boolean"
+        },
+        "support": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReadSupport"
+          }
+        }
+      },
+      "required": [
+        "column",
+        "consensus",
+        "support",
+        "conflict",
+        "review"
+      ]
+    },
+    "InputRead": {
+      "type": "object",
+      "properties": {
+        "calls": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceCalls"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "orientation": {
+          "$ref": "#/$defs/Orientation"
+        },
+        "path": {
+          "type": "string"
+        },
+        "read": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "read",
+        "path",
+        "sha256",
+        "orientation"
+      ]
+    },
+    "Orientation": {
+      "type": "string",
+      "enum": [
+        "forward",
+        "reverse"
+      ]
+    },
+    "Overlap": {
+      "type": "object",
+      "properties": {
+        "accepted": {
+          "type": "boolean"
+        },
+        "comparable_bases": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "identity": {
+          "type": "number",
+          "format": "double"
+        },
+        "reads": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "maxItems": 2,
+          "minItems": 2
+        }
+      },
+      "required": [
+        "reads",
+        "comparable_bases",
+        "identity",
+        "accepted"
+      ]
+    },
+    "ReadSupport": {
+      "type": "object",
+      "properties": {
+        "base": {
+          "type": "string",
+          "maxLength": 1,
+          "minLength": 1
+        },
+        "kind": {
+          "$ref": "#/$defs/SupportKind"
+        },
+        "read": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "read",
+        "base",
+        "kind"
+      ]
+    },
+    "SupportKind": {
+      "type": "string",
+      "enum": [
+        "call",
+        "internal_gap"
+      ]
+    },
+    "TraceCalls": {
+      "type": "object",
+      "properties": {
+        "positions": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "scores": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "secondary_sequence": {
+          "description": "Native secondary calls, indexed by the same events as sequence/positions/scores.\nMissing legacy or instrument evidence is unknown, never primary agreement.\nDraft orientation and clipping do not transform these native arrays.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "sequence": {
+          "type": "string"
+        },
+        "signal_bounds": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "maxItems": 2,
+          "minItems": 2
+        }
+      },
+      "required": [
+        "sequence",
+        "positions",
+        "scores"
+      ]
+    }
+  }
+}

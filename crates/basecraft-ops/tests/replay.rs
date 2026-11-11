@@ -267,17 +267,19 @@ fn replay_detects_divergence() {
         .unwrap()
         .path();
     let text = std::fs::read_to_string(&file).unwrap();
-    // Exercise semantic divergence in a legacy unframed log. Framed-log
-    // corruption is rejected earlier by checksum tests.
+    // Recompute integrity to exercise semantic divergence independently of corruption.
     let tampered = text
         .lines()
         .map(|line| {
             let mut value: serde_json::Value = serde_json::from_str(line).unwrap();
             value.as_object_mut().unwrap().remove("_checksum");
-            value.as_object_mut().unwrap().remove("_sequence");
+            let sequence = value.as_object_mut().unwrap().remove("_sequence").unwrap();
             if value["params"]["start"] == 25 && value["params"]["end"] == 35 {
                 value["params"]["end"] = serde_json::json!(36);
             }
+            let checksum = basecraft_io::hash_bytes(&serde_json::to_vec(&value).unwrap());
+            value["_checksum"] = serde_json::json!(checksum);
+            value["_sequence"] = sequence;
             serde_json::to_string(&value).unwrap() + "\n"
         })
         .collect::<String>();

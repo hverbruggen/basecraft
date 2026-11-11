@@ -1,8 +1,8 @@
 //! Local execution stage. Preparation and publication do not launch processes.
 use super::{
-    Arc, AtomicBool, BTreeMap, Error, ExternalExecution, HostWorkflowExecution, InvokeResult,
-    Ordering, Path, PluginArtifact, PluginProcess, PreparedOperation, Result, Value, contract,
-    input_evidence, link_count,
+    Arc, AtomicBool, Error, ExternalExecution, HostWorkflowExecution, InvokeResult, Ordering, Path,
+    PluginArtifact, PluginProcess, PreparedOperation, Result, Value, contract, input_evidence,
+    link_count,
 };
 
 impl PreparedOperation {
@@ -108,24 +108,13 @@ impl PreparedOperation {
                 initiator: self.initiator.clone(),
                 executor: self.operation.package.manifest.id.clone(),
                 process_instance: basecraft_platform::process_instance().into(),
-                context: serde_json::to_value(&context)?,
+                context,
                 requested_parameters: self.request.parameters.clone(),
                 effective_parameters: effective,
                 stdout,
                 stderr,
-                tool: result
-                    .as_ref()
-                    .ok()
-                    .and_then(|r| r.tool.as_ref())
-                    .map(serde_json::to_value)
-                    .transpose()?,
-                execution: result
-                    .as_ref()
-                    .ok()
-                    .and_then(|r| r.execution.as_ref())
-                    .map(serde_json::to_value)
-                    .transpose()?,
-                extra: BTreeMap::new(),
+                tool: result.as_ref().ok().and_then(|r| r.tool.clone()),
+                execution: result.as_ref().ok().and_then(|r| r.execution.clone()),
             })?,
         );
         match result {
@@ -240,7 +229,6 @@ impl PreparedOperation {
                 package_digest: self.operation.package.digest.clone(),
                 descriptor_digest: self.operation.descriptor_digest.clone(),
                 process_instance: basecraft_platform::process_instance().into(),
-                extra: BTreeMap::new(),
             })?,
         )?;
         execution

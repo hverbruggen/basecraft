@@ -30,7 +30,7 @@ pub fn retain(root: &Path, request: &Value, outcome: &mut Value) {
         evidence.insert(role.into(), json!([{"original_path":source,"source_hash":hash,"submitted_hash":hash,"transformation":"identity-v1","run_directory":ledger.directory()}]));
     }
     let mut first = first.unwrap();
-    first.extra.insert("upstream".into(), json!(upstream));
+    first.upstream = serde_json::from_value(json!(upstream)).unwrap();
     input_evidence::write_json(&run.artifact("input.json").unwrap(), &first).unwrap();
     let mut artifacts = vec![];
     let mut outputs = vec![];

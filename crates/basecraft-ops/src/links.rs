@@ -105,10 +105,10 @@ fn previous_metadata(path: &Path) -> Result<PreviousMetadata> {
             Ok(PreviousMetadata::Symlink(std::fs::read_link(path)?))
         }
         Ok(metadata) if metadata.is_file() => Ok(PreviousMetadata::File(std::fs::read(path)?)),
-        Ok(_) => Err(invalid(format!(
-            "association metadata is not a file: {}",
-            path.display()
-        ))),
+        Ok(_) => Err(crate::Error::Damaged {
+            path: path.to_path_buf(),
+            detail: format!("association metadata is not a file: {}", path.display()),
+        }),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(PreviousMetadata::Absent),
         Err(error) => Err(error.into()),
     }
@@ -245,9 +245,9 @@ impl PreparedLinks {
             }
             Ok((result, outputs))
         };
-        finish().map_err(|error| invalid(format!(
+        finish().map_err(|error| crate::Error::Damaged { path: recovery_path.clone(), detail: format!(
             "Save As incomplete; alignment association may be unavailable; recovery metadata at {}: {error}", recovery_path.display()
-        )))
+        ) })
     }
 }
 
@@ -540,9 +540,9 @@ impl AlignmentLinkExt for AlignmentLink {
         };
         let metadata = sidecar(tree);
         let bytes = serde_json::to_vec_pretty(&link)?;
-        basecraft_io::write_atomic(&metadata, |out| out.write_all(&bytes)).map_err(|error| invalid(format!(
+        basecraft_io::write_atomic(&metadata, |out| out.write_all(&bytes)).map_err(|error| crate::Error::Damaged { path: metadata.clone(), detail: format!(
             "alignment metadata replacement failed; previous snapshots are unchanged; staged snapshot retained at {}: {error}", snapshot.display()
-        )))?;
+        ) })?;
         Ok(vec![snapshot, metadata])
     }
 

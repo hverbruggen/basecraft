@@ -16,6 +16,12 @@ pub struct SubmittedInput {
     /// canonical-fasta-v1 or ungapped-fasta-v1; generated inputs retain their bytes.
     pub transformation: String,
     pub state: EvidenceState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis_run: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposal_target: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub upstream: Vec<UpstreamLink>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
 }
@@ -59,16 +65,11 @@ impl From<String> for EvidenceState {
         Self::from(value.as_str())
     }
 }
-// Preserve the existing caller API while callers migrate to matching variants.
-impl PartialEq<str> for EvidenceState {
-    fn eq(&self, value: &str) -> bool {
-        self.as_str() == value
-    }
-}
-impl PartialEq<&str> for EvidenceState {
-    fn eq(&self, value: &&str) -> bool {
-        self.as_str() == *value
-    }
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct UpstreamLink {
+    pub bundle: std::path::PathBuf,
+    pub hash: String,
+    pub id: String,
 }
 
 #[cfg(test)]

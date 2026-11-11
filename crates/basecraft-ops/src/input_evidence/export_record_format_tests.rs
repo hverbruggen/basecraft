@@ -5,7 +5,6 @@ use basecraft_protocol::provenance::Completeness;
 fn publication(id: &str, parents: &[&str]) -> Publication {
     Publication {
         schema_version: 1,
-        writer: Default::default(),
         id: id.into(),
         session: "synthetic-session".into(),
         parents: parents.iter().map(|s| (*s).into()).collect(),
@@ -277,21 +276,24 @@ fn original_export_failures() {
         let dest = target(temp.path(), "target");
         let error = export_history(&[(bundle, p)], &dest).unwrap_err();
         let (code, message) = match case {
-            "unsafe" | "empty" => ("invalid_operation", "unsafe publication identity"),
-            "id" | "schema" => ("invalid_operation", "inconsistent export history record"),
-            "cycle" => ("invalid_operation", "export history contains a cycle"),
-            "corrupt" => ("invalid_operation", "evidence changed during export"),
+            "unsafe" | "empty" => ("invalid_arguments", "unsafe publication identity"),
+            "id" | "schema" => ("invalid_arguments", "inconsistent export history record"),
+            "cycle" => ("invalid_arguments", "export history contains a cycle"),
+            "corrupt" => ("invalid_arguments", "evidence changed during export"),
             "count" => (
-                "invalid_operation",
+                "invalid_arguments",
                 "export history exceeds bounded record limit",
             ),
-            "missing" => ("io", "No such file or directory (os error 2)"),
-            "malformed" => ("json", "EOF while parsing an object at line 1 column 1"),
-            "unknown" => ("json", "unknown field `extension`"),
+            "missing" => ("io_error", "No such file or directory (os error 2)"),
+            "malformed" => (
+                "invalid_arguments",
+                "EOF while parsing an object at line 1 column 1",
+            ),
+            "unknown" => ("invalid_arguments", "unknown field `extension`"),
             _ => unreachable!(),
         };
         assert_eq!(error.code(), code, "{case}: {error}");
-        if code == "invalid_operation" {
+        if matches!(error, crate::Error::Invalid(_)) {
             assert_eq!(error.to_string(), format!("invalid operation: {message}"));
         } else if case == "unknown" {
             assert!(error.to_string().starts_with(message));
@@ -350,7 +352,7 @@ fn reached_final_map_obstruction() {
     std::fs::write(dest.join("artifacts"), b"preserve obstruction").unwrap();
     assert!(!path.exists());
     let error = export_history(&[], &dest).unwrap_err();
-    assert_eq!(error.code(), "format");
+    assert_eq!(error.code(), "io_error");
     assert!(dest.join("records").is_dir()); // traversal complete; final write reached.
     assert_eq!(
         std::fs::read(dest.join("artifacts")).unwrap(),
