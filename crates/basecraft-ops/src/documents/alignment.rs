@@ -11,12 +11,6 @@ use crate::files::{self, Format, HashingWriter, OpenedAlignment};
 use crate::session::{Inverse, normalise};
 
 impl Document for OpenedAlignment {
-    fn retains_companions(&self) -> bool {
-        self.save_refusal.is_some()
-    }
-    fn save_refusal(&self) -> Option<&str> {
-        self.save_refusal
-    }
     fn accepts(&self, op: &Op) -> bool {
         matches!(
             op,

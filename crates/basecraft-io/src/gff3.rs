@@ -357,20 +357,121 @@ fn encode(s: &str, extra: &[u8]) -> String {
 pub fn write(w: &mut dyn Write, seqs: &[(&SeqFeatures, u64)]) -> io::Result<()> {
     writeln!(w, "##gff-version 3")?;
     for (seq, len) in seqs {
-        writeln!(
-            w,
-            "##sequence-region {} 1 {len}",
-            encode(&seq.seqid, b"\t ")
-        )?;
+        write_region(w, seq, *len)?;
     }
     let mut auto_id = 0usize;
     for (seq, len) in seqs {
-        let seqid = encode(&seq.seqid, b"\t");
-        for f in &seq.features {
-            write_feature(w, &seqid, f, seq.circular.then_some(*len), &mut auto_id)?;
-        }
+        write_features(w, seq, *len, &mut auto_id)?;
     }
     Ok(())
+}
+
+fn write_region(w: &mut dyn Write, seq: &SeqFeatures, len: u64) -> io::Result<()> {
+    writeln!(
+        w,
+        "##sequence-region {} 1 {len}",
+        encode(&seq.seqid, b"\t ")
+    )
+}
+
+fn write_features(
+    w: &mut dyn Write,
+    seq: &SeqFeatures,
+    len: u64,
+    auto_id: &mut usize,
+) -> io::Result<()> {
+    let seqid = encode(&seq.seqid, b"\t");
+    for f in &seq.features {
+        write_feature(w, &seqid, f, seq.circular.then_some(len), auto_id)?;
+    }
+    Ok(())
+}
+
+/// A companion file without one sequence's region and feature lines. Every
+/// other line, including other sequences, comments and an embedded `##FASTA`
+/// section, is kept byte for byte.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Kept {
+    bytes: Vec<u8>,
+    /// Where the removed `##sequence-region` line goes back.
+    region_at: usize,
+    /// Where the removed feature lines go back.
+    features_at: usize,
+    /// Highest generated `basecraft_auto_N` ID among the kept lines.
+    auto_id: usize,
+}
+
+/// Split `data` into the lines of `seqid` (dropped) and everything else (kept).
+pub fn keep_others(data: &[u8], seqid: &str) -> Kept {
+    let mut kept = Kept::default();
+    let (mut region_at, mut features_at, mut first_feature) = (None, None, None);
+    let mut pos = 0;
+    while pos < data.len() {
+        let end = memchr::memchr(b'\n', &data[pos..]).map_or(data.len(), |i| pos + i + 1);
+        let raw = &data[pos..end];
+        pos = end;
+        let text = String::from_utf8_lossy(raw);
+        let line = text.trim_end_matches(['\n', '\r']);
+        if line.starts_with("##FASTA") {
+            features_at.get_or_insert(kept.bytes.len());
+            kept.bytes.extend_from_slice(raw);
+            kept.bytes.extend_from_slice(&data[pos..]);
+            break;
+        }
+        if let Some(rest) = line.strip_prefix("##sequence-region") {
+            if rest.split_whitespace().next().map(decode).as_deref() == Some(seqid) {
+                region_at.get_or_insert(kept.bytes.len());
+                continue;
+            }
+        } else if !line.is_empty() && !line.starts_with('#') {
+            first_feature.get_or_insert(kept.bytes.len());
+            if line.split('\t').next().map(decode).as_deref() == Some(seqid) {
+                features_at.get_or_insert(kept.bytes.len());
+                continue;
+            }
+            for (at, _) in line.match_indices("basecraft_auto_") {
+                let digits: String = line[at + 15..]
+                    .chars()
+                    .take_while(char::is_ascii_digit)
+                    .collect();
+                kept.auto_id = kept.auto_id.max(digits.parse().unwrap_or(0));
+            }
+        }
+        kept.bytes.extend_from_slice(raw);
+    }
+    if !kept.bytes.is_empty() && !kept.bytes.ends_with(b"\n") {
+        kept.bytes.push(b'\n');
+    }
+    let end = kept.bytes.len();
+    kept.features_at = features_at.unwrap_or(end);
+    // A missing region line goes before the first feature line.
+    kept.region_at = region_at.unwrap_or_else(|| first_feature.unwrap_or(kept.features_at));
+    kept
+}
+
+/// Write the kept lines with `seq`'s region and features back in their place.
+pub fn write_kept(w: &mut dyn Write, kept: &Kept, seq: &SeqFeatures, len: u64) -> io::Result<()> {
+    if kept.bytes.is_empty() {
+        return write(w, &[(seq, len)]);
+    }
+    let mut auto_id = kept.auto_id;
+    let (first, second) = (
+        kept.region_at.min(kept.features_at),
+        kept.region_at.max(kept.features_at),
+    );
+    w.write_all(&kept.bytes[..first])?;
+    if kept.region_at <= kept.features_at {
+        write_region(w, seq, len)?;
+    } else {
+        write_features(w, seq, len, &mut auto_id)?;
+    }
+    w.write_all(&kept.bytes[first..second])?;
+    if kept.region_at <= kept.features_at {
+        write_features(w, seq, len, &mut auto_id)?;
+    } else {
+        write_region(w, seq, len)?;
+    }
+    w.write_all(&kept.bytes[second..])
 }
 
 fn write_feature(

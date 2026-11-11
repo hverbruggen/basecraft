@@ -350,6 +350,9 @@ pub enum DocumentCounts {
     Sequence {
         residues: u64,
         features: u64,
+        /// Records in the file, when it holds more than the one shown.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        records: Option<u64>,
     },
     Alignment {
         columns: u64,
@@ -384,7 +387,9 @@ impl DocState {
                 unresolved,
                 call_sets,
             } => (*columns, *unresolved, Some(*call_sets)),
-            DocumentCounts::Sequence { residues, features } => (*residues, *features, None),
+            DocumentCounts::Sequence {
+                residues, features, ..
+            } => (*residues, *features, None),
             DocumentCounts::Alignment { columns, rows } => (*columns, 0, Some(*rows)),
             DocumentCounts::Tree { tips, annotations } => (*tips, *annotations, None),
             DocumentCounts::Delimitation {
@@ -493,6 +498,7 @@ mod tests {
         let sequence = DocState::from_counts(DocumentCounts::Sequence {
             residues: 10,
             features: 2,
+            records: None,
         });
         let tree = DocState::from_counts(DocumentCounts::Tree {
             tips: 10,

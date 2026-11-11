@@ -120,7 +120,6 @@ pub const LONGEST_ALIGNMENT_ROW: u64 = 1_000_000;
 
 /// An open alignment plus what's needed to write its file back.
 pub struct OpenedAlignment {
-    pub save_refusal: Option<&'static str>,
     pub doc: AlignmentDoc,
     pub format: Format,
 }
@@ -299,9 +298,9 @@ pub(crate) fn capture_load(path: &Path, format: Format) -> Result<CapturedLoad> 
             path.to_path_buf(),
             Some(crate::input_evidence::stamp(path)?),
         )];
-        let (record, count, hash) = genbank::open_hashed(path)?;
+        let (first, hash) = genbank::open_hashed(path)?;
         return finish_capture(
-            Loaded::Sequence(opened_genbank(record, count)),
+            Loaded::Sequence(opened_genbank(first)),
             vec![(path.to_path_buf(), hash)],
             stamps,
         );
@@ -456,7 +455,6 @@ fn load_fasta_from(
             .file_name()
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
         Ok(Loaded::Alignment(OpenedAlignment {
-            save_refusal: (file.index.records.len() > 1 && gff_present).then_some(MULTI_RECORD_GFF),
             doc: AlignmentDoc::from_fasta(name, &file),
             format: Format::Fasta,
         }))
@@ -710,12 +708,23 @@ fn tree_metadata(doc: &TreeDoc, exchange_hash: Option<String>) -> TreeSidecar {
 
 /// An open document plus what's needed to write its file back.
 pub struct Opened {
-    pub save_refusal: Option<&'static str>,
     pub doc: SequenceDoc,
     pub format: Format,
     /// For FASTA: the original file, so records other than the open one are
     /// copied through on save.
     pub fasta: Option<Arc<fasta::IndexedFasta>>,
+    pub others: OtherRecords,
+}
+
+/// The records a sequence document does not show, written back unchanged on save.
+#[derive(Clone, Default)]
+pub struct OtherRecords {
+    /// Records in the file, the open one included.
+    pub count: usize,
+    /// GenBank: the exact bytes after the first record.
+    pub genbank: Arc<[u8]>,
+    /// FASTA: the GFF3 companion without the open record's lines.
+    pub gff: Option<Arc<gff3::Kept>>,
 }
 
 fn open_source(path: &Path, format: Format) -> Result<Source> {
@@ -729,8 +738,8 @@ fn open_source(path: &Path, format: Format) -> Result<Source> {
 pub fn open(path: &Path) -> Result<Opened> {
     let format = Format::from_path(path)?;
     if format == Format::GenBank {
-        let (record, count, _) = genbank::open_hashed(path)?;
-        return Ok(opened_genbank(record, count));
+        let (first, _) = genbank::open_hashed(path)?;
+        return Ok(opened_genbank(first));
     }
     if matches!(format, Format::Fasta | Format::GenBank) {
         return open_from(path, Source::open(path)?);
@@ -752,23 +761,21 @@ pub fn open_from(path: &Path, source: Source) -> Result<Opened> {
             "{} is a tree, not a sequence",
             path.display()
         ))),
-        Format::GenBank => {
-            let (record, count) = genbank::parse_first(source.bytes())?;
-            Ok(opened_genbank(record, count))
-        }
+        Format::GenBank => Ok(opened_genbank(genbank::parse_first(source.bytes())?)),
         Format::Fasta => open_fasta_from(path, Arc::new(fasta::IndexedFasta::from_source(source)?)),
     }
 }
 
-const MULTI_RECORD_GFF: &str = "Cannot save a multi-record FASTA file with a GFF3 companion: annotations for the other records would be lost. Full multi-record saving is not supported yet.";
-const MULTI_RECORD_GENBANK: &str = "Cannot save a GenBank file with more than one record: the other records would be lost. Full multi-record saving is not supported yet.";
-
-fn opened_genbank(record: genbank::Record, count: usize) -> Opened {
+fn opened_genbank(first: genbank::First) -> Opened {
     Opened {
-        doc: SequenceDoc::from_genbank(record),
+        doc: SequenceDoc::from_genbank(first.record),
         format: Format::GenBank,
         fasta: None,
-        save_refusal: (count > 1).then_some(MULTI_RECORD_GENBANK),
+        others: OtherRecords {
+            count: first.records,
+            genbank: first.rest.into(),
+            gff: None,
+        },
     }
 }
 
@@ -801,22 +808,25 @@ fn open_fasta_with_gff(
     let features = gff.and_then(|g| g.sequences.into_iter().find(|s| s.seqid == name));
     let doc = SequenceDoc::from_fasta(Arc::clone(&file), 0, features);
     Ok(Opened {
-        save_refusal: (file.index.records.len() > 1 && gff_bytes.is_some())
-            .then_some(MULTI_RECORD_GFF),
         doc,
         format: Format::Fasta,
+        others: OtherRecords {
+            count: file.index.records.len(),
+            genbank: Arc::default(),
+            gff: gff_bytes.map(|bytes| Arc::new(gff3::keep_others(bytes, &name))),
+        },
         fasta: Some(file),
     })
 }
 
 /// Serialise the main file of a document.
 pub fn write_main(opened: &Opened, w: &mut dyn Write) -> io::Result<()> {
-    if let Some(message) = opened.save_refusal {
-        return Err(io::Error::new(io::ErrorKind::Unsupported, message));
-    }
     let doc = &opened.doc;
     match opened.format {
-        Format::GenBank => genbank::write(w, &doc.to_genbank()),
+        Format::GenBank => {
+            genbank::write(w, &doc.to_genbank())?;
+            w.write_all(&opened.others.genbank)
+        }
         Format::SangerReview => Err(io::Error::other(
             "a sequence cannot be written as a Sanger review",
         )),
@@ -830,15 +840,12 @@ pub fn write_main(opened: &Opened, w: &mut dyn Write) -> io::Result<()> {
             let Some(file) = &opened.fasta else {
                 return write_fasta_record(doc, None, w);
             };
-            for (i, rec) in file.index.records.iter().enumerate() {
-                if i == 0 {
-                    write_fasta_record(doc, Some(rec.header(file.bytes())), w)?;
-                } else {
-                    let seq = rec
-                        .read(file.bytes(), 0, rec.len)
-                        .map_err(io::Error::other)?;
-                    fasta::write_record(w, rec.header(file.bytes()), &seq, 60)?;
-                }
+            let records = &file.index.records;
+            write_fasta_record(doc, Some(records[0].header(file.bytes())), w)?;
+            // The other records, byte for byte.
+            if let Some(next) = records.get(1) {
+                #[allow(clippy::cast_possible_truncation)]
+                w.write_all(&file.bytes()[next.header_offset as usize..])?;
             }
             Ok(())
         }
@@ -875,7 +882,10 @@ fn write_fasta_record(
 pub fn write_sidecar(opened: &Opened, w: &mut dyn Write) -> Option<io::Result<()>> {
     (opened.format == Format::Fasta).then(|| {
         let feats = opened.doc.to_gff();
-        gff3::write(w, &[(&feats, opened.doc.len())])
+        match &opened.others.gff {
+            Some(kept) => gff3::write_kept(w, kept, &feats, opened.doc.len()),
+            None => gff3::write(w, &[(&feats, opened.doc.len())]),
+        }
     })
 }
 

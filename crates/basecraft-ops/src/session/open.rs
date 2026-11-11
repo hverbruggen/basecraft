@@ -261,14 +261,6 @@ impl Session {
         &self,
         id: DocId,
     ) -> Result<Option<basecraft_protocol::LogEntry>> {
-        if self.docs[id.0]
-            .content
-            .as_document()
-            .save_refusal()
-            .is_some()
-        {
-            return Ok(None);
-        }
         let directory = objects_dir(&self.storage_root);
         recovery_directory(&directory)?;
         let stage = tempfile::tempdir_in(&directory)?;
@@ -354,11 +346,9 @@ impl Session {
 
     pub fn recovery_warning(&self, id: DocId) -> Option<&str> {
         let slot = self.docs.get(id.0)?;
-        slot.recovery_changed.then_some(if slot.content.as_document().save_refusal().is_some() {
-            "The original changed on disk. Your edits remain in the journal, but recovery requires the unchanged original; this multi-record file cannot be saved yet."
-        } else {
-            "The original changed on disk. Your current edits have been preserved in recovery; save them to a new file."
-        })
+        slot.recovery_changed.then_some(
+            "The original changed on disk. Your current edits have been preserved in recovery; save them to a new file.",
+        )
     }
 
     /// Cheap change token for readers; saves and job outcomes also invalidate a report.

@@ -50,7 +50,6 @@ impl Session {
         let (name, residues) = Self::validate_new_sequence(name, text)?;
         self.flush()?;
         let content = Loaded::Sequence(Opened {
-            save_refusal: None,
             doc: SequenceDoc::new(
                 name.clone(),
                 Arc::new(residues.as_bytes().to_vec()),
@@ -59,6 +58,7 @@ impl Session {
             ),
             format: files::Format::GenBank,
             fasta: None,
+            others: files::OtherRecords::default(),
         });
         self.docs.push(Slot::new(
             key.into(),

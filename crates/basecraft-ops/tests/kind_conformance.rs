@@ -146,6 +146,7 @@ fn scenario<T: Debug + PartialEq>(
             DocumentCounts::Sequence {
                 residues: state.len,
                 features: state.features,
+                records: None,
             }
         },
     );

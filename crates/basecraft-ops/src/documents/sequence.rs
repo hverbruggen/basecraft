@@ -10,9 +10,6 @@ use crate::files::{self, Format, HashingWriter, Opened};
 use crate::session::{Inverse, normalise};
 
 impl Document for Opened {
-    fn save_refusal(&self) -> Option<&str> {
-        self.save_refusal
-    }
     fn accepts(&self, op: &Op) -> bool {
         matches!(
             op,
@@ -32,10 +29,10 @@ impl Document for Opened {
     }
     fn proposal_candidate(&self) -> Result<files::Loaded> {
         Ok(files::Loaded::Sequence(Opened {
-            save_refusal: self.save_refusal,
             doc: self.doc.clone(),
             format: self.format,
             fasta: self.fasta.clone(),
+            others: self.others.clone(),
         }))
     }
     fn apply_proposal(&mut self, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {
@@ -56,7 +53,7 @@ impl Document for Opened {
         self.doc.version()
     }
     fn fingerprint(&self) -> DocState {
-        sequence_state(&self.doc)
+        sequence_state(&self.doc, self.others.count)
     }
     fn apply(&mut self, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {
         execute_sequence(&mut self.doc, op)
@@ -157,10 +154,11 @@ impl Document for Opened {
     }
 }
 
-pub(crate) fn sequence_state(doc: &SequenceDoc) -> DocState {
+pub(crate) fn sequence_state(doc: &SequenceDoc, records: usize) -> DocState {
     DocState::from_counts(basecraft_protocol::ops::DocumentCounts::Sequence {
         residues: doc.len(),
         features: doc.feature_count() as u64,
+        records: (records > 1).then_some(records as u64),
     })
 }
 

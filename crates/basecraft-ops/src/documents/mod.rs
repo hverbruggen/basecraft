@@ -22,9 +22,6 @@ mod tree;
 
 pub(crate) trait Document {
     fn kind(&self) -> crate::files::Kind;
-    fn save_refusal(&self) -> Option<&str> {
-        None
-    }
     /// Reject operations for another payload before durable tracking starts.
     fn accepts(&self, op: &Op) -> bool;
     /// Whether admission must retain the discovered companion hashes.

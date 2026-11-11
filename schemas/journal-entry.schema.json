@@ -2556,6 +2556,15 @@
               "type": "string",
               "const": "sequence"
             },
+            "records": {
+              "description": "Records in the file, when it holds more than the one shown.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 0
+            },
             "residues": {
               "type": "integer",
               "format": "uint64",
