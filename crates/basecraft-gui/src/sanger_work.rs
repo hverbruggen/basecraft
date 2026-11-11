@@ -30,26 +30,26 @@ pub(super) fn retain_reference(anchor: &Path, source: &Path) -> Result<PathBuf, 
             && let Some(directory) = source.parent()
             && directory.join("input.json").is_file()
         {
-            let input = basecraft_ops::input_evidence::read_input(directory)?;
+            let input = basecraft_ops::records::read_input(directory)?;
             if let Some(reference) = input.source.as_ref() {
-                return basecraft_ops::input_evidence::verified_source(directory, reference);
+                return basecraft_ops::records::verified_source(directory, reference);
             }
         }
         let hash = basecraft_io::hash_file(source)?;
-        let run = basecraft_ops::input_evidence::reference_input_with_dependencies(
+        let run = basecraft_ops::records::reference_input_with_dependencies(
             anchor,
             source,
             &hash,
             &[],
             "GUI Sanger reference",
         )?;
-        basecraft_ops::input_evidence::preserve_input(run.directory())?;
-        let input = basecraft_ops::input_evidence::read_input(run.directory())?;
+        basecraft_ops::records::preserve_input(run.directory())?;
+        let input = basecraft_ops::records::read_input(run.directory())?;
         let reference = input
             .source
             .as_ref()
             .ok_or_else(|| std::io::Error::other("Missing reference evidence"))?;
-        basecraft_ops::input_evidence::verified_source(run.directory(), reference)
+        basecraft_ops::records::verified_source(run.directory(), reference)
     })()
     .map_err(|e| e.to_string())
 }

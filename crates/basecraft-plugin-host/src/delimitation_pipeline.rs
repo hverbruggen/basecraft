@@ -89,8 +89,8 @@ impl AlignmentWorkflow<'_> {
     }
 
     fn persist(&self) -> Result<()> {
-        let mutation = basecraft_ops::input_evidence::Mutation::begin()?;
-        basecraft_ops::input_evidence::write_json(
+        let mutation = basecraft_ops::records::Mutation::begin()?;
+        basecraft_ops::records::write_json(
             &self.parent.run.artifact("stages.json")?,
             &self.stages,
         )?;
@@ -112,11 +112,8 @@ impl AlignmentWorkflow<'_> {
                 continue;
             }
             upstream.push(basecraft_protocol::input_records::UpstreamLink {
-                bundle: (basecraft_ops::input_evidence::relative(
-                    self.parent.run.directory(),
-                    directory,
-                )?)
-                .into(),
+                bundle: (basecraft_ops::records::relative(self.parent.run.directory(), directory)?)
+                    .into(),
                 id: stage.run_id.clone(),
                 hash: basecraft_io::hash_file(&directory.join("manifest.json"))?,
             });
@@ -169,7 +166,7 @@ impl AlignmentWorkflow<'_> {
         if fit != "asap" && retained < 2 {
             let diagnostic =
                 "GMYC unavailable: fewer than two retained haplotypes; no tree or fit was invented";
-            basecraft_ops::input_evidence::write_json(
+            basecraft_ops::records::write_json(
                 &Path::new(&self.parent.context.outputs["artifacts"]).join("fit.json.run.json"),
                 &serde_json::to_value(basecraft_protocol::records::WorkflowFailure {
                     version: 1,
@@ -303,7 +300,7 @@ impl AlignmentWorkflow<'_> {
                 }
             }
         }
-        basecraft_ops::input_evidence::write_json(&target.join("fit.json"), &metadata)?;
+        basecraft_ops::records::write_json(&target.join("fit.json"), &metadata)?;
         Ok(InvokeResult {
             artifacts: vec![basecraft_protocol::operation::PluginArtifact {
                 role: "artifacts".into(),

@@ -896,7 +896,7 @@ mod moved_and_failed_recovery_tests {
 
     #[test]
     fn referenced_review_uses_shared_cancel_preserve_and_break_policy() {
-        use crate::input_evidence::{self as inputs, SavePolicy};
+        use crate::records::input_evidence::{self as inputs, SavePolicy};
         // Registered stores must outlive every iteration in this test profile.
         let mut fixtures = Vec::new();
         for policy in [SavePolicy::PreserveCopy, SavePolicy::BreakEvidence] {
@@ -931,11 +931,11 @@ mod moved_and_failed_recovery_tests {
                 // Failed preservation must not publish new visible review bytes.
                 let preserved = ledger.directory().join("preserved-input");
                 std::fs::write(&preserved, b"damaged preservation").unwrap();
-                assert!(review.save_with_evidence(&path, policy).is_err());
+                assert!(review.save_with_policy(&path, policy).is_err());
                 assert_eq!(std::fs::read(&path).unwrap(), before);
                 std::fs::remove_file(&preserved).unwrap();
             }
-            review.save_with_evidence(&path, policy).unwrap();
+            review.save_with_policy(&path, policy).unwrap();
             let input = inputs::read_input(ledger.directory()).unwrap();
             if policy == SavePolicy::PreserveCopy {
                 assert_eq!(
@@ -989,7 +989,7 @@ mod moved_and_failed_recovery_tests {
         std::fs::write(&binding, previous_binding).unwrap();
         review.save(&path).unwrap();
         assert!(
-            crate::analysis_store::ArtifactRun::for_result(&path)
+            crate::records::analysis_store::ArtifactRun::for_result(&path)
                 .unwrap()
                 .is_some()
         );
@@ -1058,7 +1058,7 @@ mod moved_and_failed_recovery_tests {
             Some(&ReviewChoice::Edit(if parent_saved { 'T' } else { 'A' }))
         );
         assert!(
-            crate::analysis_store::ArtifactRun::for_result(&path)
+            crate::records::analysis_store::ArtifactRun::for_result(&path)
                 .unwrap()
                 .is_some()
         );

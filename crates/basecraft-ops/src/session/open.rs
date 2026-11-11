@@ -151,7 +151,7 @@ impl Session {
                 let directory = originals.join(&entry.id);
                 for (index, reference) in files.iter().enumerate() {
                     let original = self.resolve(&reference.path);
-                    if crate::input_evidence::stamp(&original)? != reference.stamp {
+                    if crate::records::input_evidence::stamp(&original)? != reference.stamp {
                         return Err(crate::Error::ChangedOnDisk { path: original });
                     }
                     let link = stage.path().join(index.to_string());
@@ -166,9 +166,11 @@ impl Session {
                             let same = if review {
                                 basecraft_io::hash_file(&link)? == reference.hash
                             } else {
-                                crate::input_evidence::stamp(&link)? == reference.stamp
+                                crate::records::input_evidence::stamp(&link)? == reference.stamp
                             };
-                            if !same || crate::input_evidence::stamp(&original)? != reference.stamp
+                            if !same
+                                || crate::records::input_evidence::stamp(&original)?
+                                    != reference.stamp
                             {
                                 std::fs::remove_file(&link)?;
                                 return Err(crate::Error::ChangedOnDisk { path: original });
@@ -244,12 +246,12 @@ impl Session {
         self.docs[id.0]
             .source_stamps
             .iter()
-            .any(|(path, before)| *before != crate::input_evidence::stamp(path).ok())
+            .any(|(path, before)| *before != crate::records::input_evidence::stamp(path).ok())
     }
 
     pub(super) fn refresh_source_stamps(&mut self, id: DocId) {
         for (path, stamp) in &mut self.docs[id.0].source_stamps {
-            *stamp = crate::input_evidence::stamp(path).ok();
+            *stamp = crate::records::input_evidence::stamp(path).ok();
         }
     }
 
@@ -442,14 +444,14 @@ impl Session {
             return Ok(None);
         }
         if let Some((path, stamp, hash)) = &slot.saved_target {
-            let current = crate::input_evidence::stamp(path)?;
+            let current = crate::records::input_evidence::stamp(path)?;
             if current != *stamp {
                 return Err(crate::Error::ChangedOnDisk { path: path.clone() });
             }
             return Ok(Some((path.clone(), current, hash.clone())));
         }
         let path = self.resolve(&slot.key).canonicalize()?;
-        let current = crate::input_evidence::stamp(&path)?;
+        let current = crate::records::input_evidence::stamp(&path)?;
         if current != slot.disk_stamp {
             return Err(invalid(
                 "source changed since opening; reopen it before analysis",
@@ -473,7 +475,7 @@ impl Session {
         self.saved_source(id)?
             .map(|(path, stamp, hash)| {
                 Ok(basecraft_protocol::provenance::InputReference {
-                    path: crate::input_evidence::relative(bundle, &path)?,
+                    path: crate::records::input_evidence::relative(bundle, &path)?,
                     stamp,
                     hash,
                     extra: std::collections::BTreeMap::new(),

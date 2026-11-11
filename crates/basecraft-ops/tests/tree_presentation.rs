@@ -1,4 +1,6 @@
 //! Support formatting is presentation; scientific strings and inference input survive edits.
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_ops::records::AlignmentLinkExt;
 use basecraft_ops::{Session, files, records::AlignmentLink};
 use basecraft_protocol::{Op, SupportKind};
@@ -6,6 +8,7 @@ use serde_json::json;
 
 #[test]
 fn support_precision_scale_unknown_settings_save_undo_and_replay() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("tree.nwk");
     std::fs::write(&path, "((a,b)0.654321/0.987654321,c);").unwrap();
@@ -73,6 +76,7 @@ fn support_precision_scale_unknown_settings_save_undo_and_replay() {
 
 #[test]
 fn support_kind_survives_current_sidecar() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("tree.nwk");
     std::fs::write(&path, "((a,b)0.5,c);").unwrap();
@@ -87,6 +91,7 @@ fn support_kind_survives_current_sidecar() {
 
 #[test]
 fn changing_view_link_preserves_origin_and_save_as_rebases_both_links() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let source = root.join("source.afa");
@@ -159,6 +164,7 @@ fn changing_view_link_preserves_origin_and_save_as_rebases_both_links() {
 
 #[test]
 fn portable_links_and_corrupt_view_never_fall_back_to_scientific_input() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let folder = dir.path().join("project");
     std::fs::create_dir(&folder).unwrap();
@@ -187,6 +193,7 @@ fn portable_links_and_corrupt_view_never_fall_back_to_scientific_input() {
 
 #[test]
 fn staged_support_removal_and_style_are_one_reversible_replayable_edit() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("tree.nwk");
     std::fs::write(&path, "((a,b)90.123/0.987,c);").unwrap();
@@ -228,6 +235,7 @@ fn staged_support_removal_and_style_are_one_reversible_replayable_edit() {
 
 #[test]
 fn invalid_style_and_removal_do_not_mutate_or_start_recovery_tracking() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("tree.nwk");
     std::fs::write(&path, "((a,b)90.123/0.987,c);").unwrap();
@@ -270,6 +278,7 @@ fn invalid_style_and_removal_do_not_mutate_or_start_recovery_tracking() {
 #[test]
 fn drawing_edits_replay_in_order_and_skip_stale_clades() {
     use basecraft_protocol::delimitation::TreeDrawingEdit;
+    crate::isolated_profile::isolate!();
     let mut tree = basecraft_docs::TreeDoc::from_newick("t", "((a,b),(c,(d,e)));").unwrap();
     let mut style = tree.style().clone();
     style.tip_font = 21;
@@ -298,6 +307,7 @@ fn drawing_edits_replay_in_order_and_skip_stale_clades() {
 
 #[test]
 fn imported_supports_retain_recorded_names_kinds_and_evidence() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("inferred.nwk");
     let text = "((a,b)95/0.9,c);";
@@ -325,6 +335,7 @@ fn imported_supports_retain_recorded_names_kinds_and_evidence() {
 
 #[test]
 fn unreadable_metadata_never_blocks_the_exchange_tree() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("tree.nwk");
     let original = b"((a,b)0.5,c);\n";

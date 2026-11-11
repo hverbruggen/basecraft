@@ -7,8 +7,11 @@ mod memory_cases;
 #[global_allocator]
 static ALLOCATOR: basecraft_io::heap::Allocator = basecraft_io::heap::Allocator;
 
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 #[test]
 fn recoverable_open_requested_heap() {
+    crate::isolated_profile::isolate!();
     if std::env::var_os("BASECRAFT_HEAP_CHILD").is_none() {
         let root = tempfile::tempdir().unwrap();
         let output = std::process::Command::new(std::env::current_exe().unwrap())

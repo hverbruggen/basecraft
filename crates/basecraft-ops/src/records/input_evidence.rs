@@ -1,4 +1,5 @@
 //! Referenced-input lifecycle. Only known stores are inspected, never filesystem trees.
+mod index;
 
 use crate::records::links::AlignmentLinkExt;
 use std::collections::BTreeMap;
@@ -10,7 +11,7 @@ use basecraft_protocol::records::StoreRegistry;
 use fs4::fs_std::FileExt;
 use serde::{Deserialize, Serialize};
 
-use crate::{Result, analysis_store::ArtifactRun, error::invalid};
+use crate::{Result, error::invalid, records::analysis_store::ArtifactRun};
 
 /// Register one clean original using the shared reference/preserve/export lifecycle.
 /// This is an explicit analysis action, never a passive-open writer. Dependencies
@@ -30,41 +31,12 @@ pub fn reference_input_with_dependencies(
 /// Files remain separate atomic writes: failure may leave conservative partial
 /// evidence, and dropping this guard does not roll those writes back.
 pub struct Mutation {
-    lock: EvidenceLock,
-}
-
-enum EvidenceLock {
-    Legacy { _file: std::fs::File },
-    Checked(Box<crate::service_reads::ServiceLockGuard>),
+    _locks: Locks,
 }
 
 impl Mutation {
     pub fn begin() -> Result<Self> {
-        Ok(Self {
-            lock: EvidenceLock::Legacy { _file: lock()? },
-        })
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn begin_with_access(
-        context: std::sync::Arc<crate::service_reads::ServiceContext>,
-        access: &dyn crate::access::Access,
-    ) -> Result<Self> {
-        crate::service_reads::acquire_lock(context, access, None).map(|guard| Self {
-            lock: EvidenceLock::Checked(Box::new(guard)),
-        })
-    }
-    /// Checks the retained guard only; never reacquires or authorizes legacy
-    /// write/register methods. Those remain outside confined activation.
-    #[allow(dead_code)]
-    pub fn reauthorize(&self, access: &dyn crate::access::Access) -> Result<()> {
-        match &self.lock {
-            EvidenceLock::Checked(guard) => guard.reauthorize(access),
-            EvidenceLock::Legacy { .. } => Err(crate::access::AccessError::Denied(
-                crate::access::Denial::ServiceUnavailable,
-            )
-            .into()),
-        }
+        Ok(Self { _locks: lock()? })
     }
 
     pub fn read_input(&self, directory: &Path) -> Result<SubmittedInput> {
@@ -126,9 +98,13 @@ pub(crate) fn reference_input_locked(
     use basecraft_protocol::provenance::{
         ArtifactRevision, Completeness, InputReference, Publication,
     };
-    let run =
-        crate::analysis_store::ArtifactRun::create(anchor, &ulid::Ulid::generate().to_string())?;
+    let run = crate::records::analysis_store::ArtifactRun::create(
+        anchor,
+        &ulid::Ulid::generate().to_string(),
+    )?;
     let source = source.canonicalize()?;
+    let reservation = lock()?;
+    reservation.source(&source)?;
     if captured_stamp.map_or_else(
         || {
             basecraft_io::hash_file(&source)
@@ -140,12 +116,12 @@ pub(crate) fn reference_input_locked(
         return Err(crate::Error::ChangedOnDisk { path: source });
     }
     let reference = InputReference {
-        path: crate::input_evidence::relative(run.directory(), &source)?,
+        path: crate::records::input_evidence::relative(run.directory(), &source)?,
         stamp: captured_stamp.cloned().map_or_else(|| stamp(&source), Ok)?,
         hash: hash.into(),
         extra: BTreeMap::new(),
     };
-    let mut input = crate::input_evidence::SubmittedInput {
+    let mut input = crate::records::input_evidence::SubmittedInput {
         schema_version: 1,
         source: Some(reference.clone()),
         submitted_hash: hash.into(),
@@ -166,7 +142,8 @@ pub(crate) fn reference_input_locked(
             let bytes = crate::records::provenance::read_record(&manifest)?;
             let record: Publication = serde_json::from_slice(&bytes)?;
             upstream.push(basecraft_protocol::input_records::UpstreamLink {
-                bundle: (crate::input_evidence::relative(run.directory(), dependency)?).into(),
+                bundle: (crate::records::input_evidence::relative(run.directory(), dependency)?)
+                    .into(),
                 id: record.id.clone(),
                 hash: basecraft_io::hash_bytes(&bytes),
             });
@@ -175,22 +152,15 @@ pub(crate) fn reference_input_locked(
     if !upstream.is_empty() {
         input.upstream = upstream;
     }
-    crate::input_evidence::write_json(&run.artifact("input.json")?, &input)?;
-    crate::input_evidence::write_json(
-        &run.artifact("run.json")?,
-        &serde_json::to_value(basecraft_protocol::records::AnalysisRun {
-            schema_version: 1,
-            id: run.id().into(),
-            result: anchor
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map(str::to_owned),
-            status: basecraft_protocol::records::AnalysisRunStatus::Referenced,
-            outputs: None,
-            extra: BTreeMap::new(),
-        })?,
+    crate::records::input_evidence::write_json(&run.artifact("input.json")?, &input)?;
+    run.write_run(
+        basecraft_protocol::records::AnalysisRunStatus::Referenced,
+        anchor
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(str::to_owned),
     )?;
-    crate::input_evidence::register(&run)?;
+    crate::records::input_evidence::register(&run)?;
     let publication = Publication {
         schema_version: 1,
         id: run.id().into(),
@@ -223,16 +193,12 @@ pub(crate) fn reference_input_locked(
         report_template_version: 2,
     };
     crate::records::provenance::publish(run.directory(), &publication)?;
+    // Publication can refresh the input ledger after its initial registration.
+    index::register(run.directory().parent().unwrap().parent().unwrap(), None)?;
     Ok(run)
 }
 
 pub use basecraft_protocol::input_records::SubmittedInput;
-
-/// `input.json` field marking a referenced source that is also the document
-/// a sequence-proposal run applied its proposals to. Saving that document is
-/// the expected next step, so the source does not guard saves; the record and
-/// its hashes stay as written.
-pub const PROPOSAL_TARGET: &str = "proposal_target";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -251,8 +217,8 @@ pub struct AffectedAnalysis {
     pub source_hash: String,
     pub can_preserve: bool,
     pub direct: bool,
-    /// Complete backing decisions for this logical analysis. Empty for legacy
-    /// single-ledger records. Each child retains its own hash/direct guard.
+    /// Backing decisions for a logical analysis; empty for a direct ledger.
+    /// Each child retains its own hash/direct guard.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub backing_analyses: Vec<AffectedAnalysis>,
 }
@@ -468,6 +434,9 @@ pub fn relative(base: &Path, target: &Path) -> Result<String> {
 }
 
 pub fn read_input(run: &Path) -> Result<SubmittedInput> {
+    if let Some(held) = HELD_LOCKS.with(|slot| slot.borrow().upgrade()) {
+        Locks(held).record(run)?;
+    }
     let bytes = crate::records::provenance::read_record(&run.join("input.json"))?;
     validate_input(run, &bytes)
 }
@@ -508,7 +477,41 @@ fn validate_input(run: &Path, bytes: &[u8]) -> Result<SubmittedInput> {
 pub fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
     let mut bytes = serde_json::to_vec_pretty(value)?;
     bytes.push(b'\n');
-    basecraft_io::write_atomic(path, |w| w.write_all(&bytes))?;
+    if path.file_name().is_some_and(|name| name == "input.json") {
+        let locks = lock()?;
+        let mut sources = Some(std::collections::BTreeSet::new());
+        if let Ok(input) = serde_json::from_slice::<SubmittedInput>(&bytes) {
+            locks.input(
+                path.parent().unwrap(),
+                &input,
+                &mut std::collections::BTreeSet::new(),
+                &mut sources,
+            )?;
+        } else {
+            sources = None;
+        }
+        // Lock order: the ledger and its inputs first, then the catalogue.
+        let guard = registry_lock()?;
+        // An ancestry change cannot be scoped until its index is published.
+        // Keep it atomic to lookups; direct-source updates need no long lock.
+        let ancestry = sources.is_none();
+        let store = index::changing(path, sources)?;
+        let guard = if ancestry {
+            Some(guard)
+        } else {
+            drop(guard);
+            None
+        };
+        basecraft_io::write_atomic(path, |w| w.write_all(&bytes))?;
+        basecraft_platform::files::sync_directory(path.parent().unwrap())?;
+        if let Some(store) = store {
+            // A damaged sibling must not prevent an explicitly acknowledged
+            // evidence decision. The durable dirty marker keeps coverage unknown.
+            let _ = index::register(&store, guard);
+        }
+    } else {
+        basecraft_io::write_atomic(path, |w| w.write_all(&bytes))?;
+    }
     Ok(())
 }
 
@@ -522,27 +525,208 @@ pub(crate) fn registry_location(paths: &basecraft_platform::paths::AppPaths) -> 
     paths.state.join("analysis-stores.json")
 }
 
-/// Shared lock covers registration and the entire guarded replacement, including
-/// copy/decision publication. It does not claim to lock external editors or sync.
-pub(crate) fn evidence_lock_path(state: &Path) -> PathBuf {
-    state.join("analysis-evidence.lock")
-}
-
-pub fn lock() -> Result<std::fs::File> {
-    let registry = registry()?;
-    let parent = registry
-        .parent()
-        .ok_or_else(|| invalid("registry has no parent"))?;
-    std::fs::create_dir_all(parent)?;
-    let lock = std::fs::OpenOptions::new()
+fn open_lock(path: &Path) -> Result<std::fs::File> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    Ok(std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .read(true)
         .write(true)
-        .open(evidence_lock_path(parent))?;
+        .open(path)?)
+}
+
+/// Reserved keys, each with whether it is held exclusively. Ledgers (run
+/// folders) are always reserved exclusively, reads included, since a read is
+/// often followed by a write. Store keys are only taken for store-level
+/// changes and by saves, up front.
+#[derive(Default)]
+struct Scope {
+    held: std::cell::RefCell<BTreeMap<PathBuf, (std::fs::File, bool)>>,
+}
+type HeldLocks = std::rc::Rc<Scope>;
+thread_local! {
+    static HELD_LOCKS: std::cell::RefCell<std::rc::Weak<Scope>> = const { std::cell::RefCell::new(std::rc::Weak::new()) };
+}
+const RESERVATION_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// A thread-confined mutation scope. Readers reserve shared, writers exclusive;
+/// nested operations reuse the scope. Cooperating writers hold keys briefly, so
+/// a reservation waits up to 2 s; contention then ends in Busy, never deadlock.
+pub struct Locks(HeldLocks);
+
+pub fn lock() -> Result<Locks> {
+    Ok(HELD_LOCKS.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let held = slot.upgrade().unwrap_or_default();
+        *slot = std::rc::Rc::downgrade(&held);
+        Locks(held)
+    }))
+}
+
+impl Locks {
+    fn record(&self, directory: &Path) -> Result<()> {
+        let directory = lexical(&std::path::absolute(directory)?);
+        self.reserve([directory], true)
+    }
+    fn input(
+        &self,
+        directory: &Path,
+        input: &SubmittedInput,
+        seen: &mut std::collections::BTreeSet<PathBuf>,
+        sources: &mut Option<std::collections::BTreeSet<PathBuf>>,
+    ) -> Result<()> {
+        self.record(directory)?;
+        if !seen.insert(directory.into()) {
+            return Ok(());
+        }
+        if seen.len() > 32 {
+            return Err(crate::Error::Limit {
+                what: "input ancestry".into(),
+                limit: 32,
+            });
+        }
+        if let Some(source) = &input.source {
+            let path = lexical(&directory.join(&source.path));
+            self.source(&path)?;
+            if let Some(sources) = sources {
+                sources.extend(index::spellings(&path));
+            }
+        }
+        let mut dependencies = Vec::new();
+        let origin = input.extra.get("origin_run").map(|value| value.as_str());
+        if origin.is_some() || input.analysis_run.is_some() || !input.upstream.is_empty() {
+            // Unpublished dependency edges can acquire new sources. Only direct
+            // references have stable pending coverage.
+            *sources = None;
+        }
+        if origin == Some(None) {
+            return Err(invalid("invalid origin_run"));
+        }
+        dependencies.extend(origin.flatten().map(Path::new));
+        dependencies.extend(input.analysis_run.as_deref().map(Path::new));
+        dependencies.extend(input.upstream.iter().map(|link| link.bundle.as_path()));
+        for relative in dependencies {
+            let path = lexical(&directory.join(relative));
+            match read_input(&path) {
+                Ok(input) => self.input(&path, &input, seen, sources)?,
+                Err(error @ crate::Error::Busy(_)) => return Err(error),
+                Err(_) => *sources = None,
+            }
+        }
+        Ok(())
+    }
+    fn reserve(&self, paths: impl IntoIterator<Item = PathBuf>, exclusive: bool) -> Result<()> {
+        let mut held = self.0.held.borrow_mut();
+        for path in paths.into_iter().collect::<std::collections::BTreeSet<_>>() {
+            let path = if path.is_absolute() {
+                path.canonicalize().unwrap_or(path)
+            } else {
+                path
+            };
+            if let Some((_, held_exclusive)) = held.get(&path) {
+                // flock conversion is not atomic: never upgrade a shared hold.
+                // A scope that will write reserves exclusively up front.
+                if exclusive && !*held_exclusive {
+                    return Err(crate::Error::Busy(format!(
+                        "this save did not reserve {} before changing it",
+                        path.display()
+                    )));
+                }
+                continue;
+            }
+            let key = basecraft_io::hash_bytes(path.as_os_str().as_encoded_bytes());
+            let file = open_lock(
+                &registry()?
+                    .with_file_name("analysis-locks")
+                    .join(key.trim_start_matches("b3:")),
+            )?;
+            Self::acquire(&file, exclusive, &path)?;
+            held.insert(path, (file, exclusive));
+        }
+        Ok(())
+    }
+    fn acquire(file: &std::fs::File, exclusive: bool, path: &Path) -> Result<()> {
+        let started = std::time::Instant::now();
+        loop {
+            let acquired = if exclusive {
+                file.try_lock_exclusive()?
+            } else {
+                FileExt::try_lock_shared(file)?
+            };
+            if acquired {
+                return Ok(());
+            }
+            if started.elapsed() > RESERVATION_WAIT {
+                return Err(crate::Error::Busy(format!(
+                    "an analysis or save is using {}; retry shortly",
+                    path.display()
+                )));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+    pub(crate) fn source(&self, path: &Path) -> Result<()> {
+        let absolute = lexical(&std::path::absolute(path)?);
+        let mut keys = vec![absolute.clone()];
+        if let Ok(canonical) = absolute.canonicalize() {
+            keys.push(canonical);
+        }
+        if let Ok(meta) = stamp(path)
+            && let (Some(dev), Some(ino)) = (meta.device, meta.inode)
+        {
+            keys.push(PathBuf::from(format!("inode:{dev}:{ino}")));
+        }
+        self.reserve(keys, true)
+    }
+}
+
+fn registry_lock() -> Result<std::fs::File> {
+    let lock = open_lock(&registry()?.with_file_name("analysis-registry.lock"))?;
     lock.lock_exclusive()
-        .map_err(|_| invalid("analysis evidence is busy; retry shortly"))?;
+        .map_err(|e| crate::Error::Busy(e.to_string()))?;
     Ok(lock)
+}
+
+pub(crate) struct SaveLock {
+    _locks: Locks,
+    check: Option<EvidenceCheck>,
+}
+
+impl SaveLock {
+    pub(crate) fn check(&mut self, target: &Path) -> Result<EvidenceCheck> {
+        self.check.take().map_or_else(|| check(target), Ok)
+    }
+}
+
+/// Select and reserve under the short catalogue lock, then retain only resources
+/// belonging to this target. A lookup is carried into the save unchanged.
+/// `writes` are stores this save will change (its history bundle's store);
+/// they are reserved exclusively first. Other selected stores are reserved
+/// shared unless `changes_stores` (a policy that edits ledgers) is set.
+pub(crate) fn lock_save(
+    target: &Path,
+    changes_stores: bool,
+    writes: &[PathBuf],
+) -> Result<SaveLock> {
+    let locks = lock()?;
+    // Lock order: reservations first, then the catalogue, which is never held
+    // while waiting. Holding the target's keys stops any new reference to it,
+    // so stores selected under the shared catalogue stay the right set.
+    locks.reserve(writes.iter().cloned(), true)?;
+    locks.source(target)?;
+    let (canonical, selected, inspection) = {
+        let catalogue = open_lock(&registry()?.with_file_name("analysis-registry.lock"))?;
+        FileExt::lock_shared(&catalogue).map_err(|e| crate::Error::Busy(e.to_string()))?;
+        selection(target)?
+    };
+    locks.reserve(selected.iter().cloned(), changes_stores)?;
+    let check = inspect_in(&canonical, &selected, inspection)?;
+    Ok(SaveLock {
+        _locks: locks,
+        check: Some(check),
+    })
 }
 
 fn empty_registry() -> StoreRegistry {
@@ -562,7 +746,8 @@ fn parse_store_registry(bytes: &[u8]) -> Result<StoreRegistry> {
 }
 
 fn store_registry() -> Result<StoreRegistry> {
-    match std::fs::File::open(registry()?) {
+    let path = registry()?;
+    match std::fs::File::open(&path) {
         Ok(file) => {
             let length = file.metadata()?.len();
             let bytes = crate::records::provenance::read_record_from_open(
@@ -572,440 +757,12 @@ fn store_registry() -> Result<StoreRegistry> {
                 1 << 20,
                 crate::records::provenance::RecordLimit::Registry,
             )?;
+            #[cfg(feature = "test-counters")]
+            basecraft_io::counters::record_read(&path, bytes.len() as u64);
             parse_store_registry(&bytes)
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(empty_registry()),
         Err(e) => Err(e.into()),
-    }
-}
-
-// Unwired contextual consumers. Keep the original missing-component error until
-// the selected consumer observes or explicitly projects the checked absence.
-#[allow(dead_code)]
-mod service_registry {
-    use super::{
-        Inspection, PathBuf, Result, StoreRegistry, empty_registry, parse_store_registry,
-        validate_store_paths,
-    };
-    use crate::{
-        access::Access, records::provenance::RecordLimit, service_reads::ServiceReadContext,
-    };
-    use basecraft_platform::files::CheckedRead;
-
-    enum RegistryBytes {
-        Present(Vec<u8>),
-        Absent { missing: std::io::Error },
-    }
-    struct RegistryByteRead {
-        location: PathBuf,
-        outcome: Result<RegistryBytes>,
-    }
-
-    fn registry_bytes_with_access(
-        context: &ServiceReadContext,
-        access: &dyn Access,
-        remaining: &mut u64,
-        label: RecordLimit,
-    ) -> RegistryByteRead {
-        let outcome = context
-            .registry_input(access)
-            .and_then(|input| match input {
-                CheckedRead::File(file) => {
-                    let length = file.metadata()?.len();
-                    let result = crate::records::provenance::read_record_from_open(
-                        file,
-                        length,
-                        remaining,
-                        1 << 20,
-                        label,
-                    );
-                    result.map(RegistryBytes::Present)
-                }
-                CheckedRead::Absent(absence) => {
-                    let (_, missing) = absence.into_parts();
-                    Ok(RegistryBytes::Absent { missing })
-                }
-            });
-        RegistryByteRead {
-            location: context.registry_location().into(),
-            outcome,
-        }
-    }
-
-    fn store_registry_with_access(
-        context: &ServiceReadContext,
-        access: &dyn Access,
-    ) -> Result<StoreRegistry> {
-        let read =
-            registry_bytes_with_access(context, access, &mut (1 << 20), RecordLimit::Registry);
-        let value = match read.outcome? {
-            RegistryBytes::Present(bytes) => parse_store_registry(&bytes)?,
-            RegistryBytes::Absent { .. } => empty_registry(),
-        };
-        validate_store_paths(&value.stores)?;
-        Ok(value)
-    }
-
-    impl Inspection {
-        fn registry_with_access(
-            &mut self,
-            context: &ServiceReadContext,
-            access: &dyn Access,
-            remaining: &mut u64,
-        ) -> Result<Vec<PathBuf>> {
-            self.registry_read(registry_bytes_with_access(
-                context,
-                access,
-                remaining,
-                RecordLimit::Provenance,
-            ))
-        }
-
-        fn registry_read(&mut self, read: RegistryByteRead) -> Result<Vec<PathBuf>> {
-            // Hard access/namespace failures must never look like inspected data.
-            if matches!(
-                &read.outcome,
-                Err(crate::Error::Access(
-                    crate::access::AccessError::Denied(_)
-                        | crate::access::AccessError::DestinationExists
-                ))
-            ) {
-                return read.outcome.map(|_| Vec::new());
-            }
-            let result = match read.outcome {
-                Ok(RegistryBytes::Present(bytes)) => Ok(bytes),
-                Ok(RegistryBytes::Absent { missing }) => {
-                    let error = crate::Error::Io(missing);
-                    self.observe(&read.location, &Err(error));
-                    return Ok(Vec::new());
-                }
-                Err(error) => Err(error),
-            };
-            self.observe(&read.location, &result);
-            // Unlike checked absence, a content/metadata NotFound is an ordinary
-            // failed read and must produce an issue, never empty success.
-            Ok(self.parse_registry(&read.location, result))
-        }
-    }
-    #[cfg(all(test, target_os = "linux"))]
-    mod tests {
-        use super::*;
-        use crate::service_reads::tests::{Bound, context};
-        use std::io::{self, Read};
-        use std::path::Path;
-
-        #[test]
-        fn checked_absence_keeps_logical_leaf_original_error_and_budget() {
-            for existing_parent in [false, true] {
-                let temp = tempfile::tempdir().unwrap();
-                let context = context(temp.path());
-                let path = context.registry_location();
-                if existing_parent {
-                    std::fs::create_dir(path.parent().unwrap()).unwrap();
-                }
-                let mut budget = 123;
-                let read = registry_bytes_with_access(
-                    &context,
-                    &Bound(&context),
-                    &mut budget,
-                    RecordLimit::Registry,
-                );
-                assert_eq!(budget, 123);
-                assert_eq!(read.location, path);
-                let Ok(RegistryBytes::Absent { ref missing }) = read.outcome else {
-                    panic!()
-                };
-                assert_eq!(missing.kind(), io::ErrorKind::NotFound);
-                assert_eq!(missing.raw_os_error(), Some(2));
-                let expected = format!("unavailable: {missing}");
-                let mut inspection = Inspection::default();
-                assert_eq!(inspection.registry_read(read).unwrap().len(), 0);
-                assert_eq!(inspection.observations.len(), 1);
-                assert_eq!(inspection.observations[path], expected);
-                assert_eq!(inspection.issues.len(), 0);
-                assert_eq!(
-                    store_registry_with_access(&context, &Bound(&context))
-                        .unwrap()
-                        .stores
-                        .len(),
-                    0
-                );
-                assert_eq!(path.parent().unwrap().exists(), existing_parent);
-                assert!(!path.exists());
-            }
-        }
-
-        #[test]
-        fn default_and_structural_denials_create_no_observation_or_default() {
-            let temp = tempfile::tempdir().unwrap();
-            let context = context(temp.path());
-            let mut inspection = Inspection::default();
-            let mut budget = 999;
-            assert!(
-                inspection
-                    .registry_with_access(&context, &crate::access::TrustedLegacy, &mut budget)
-                    .is_err()
-            );
-            assert_eq!(budget, 999);
-            assert!(inspection.observations.is_empty());
-            assert_eq!(inspection.issues.len(), 0);
-            std::fs::create_dir(temp.path().join("state")).unwrap();
-            std::os::unix::fs::symlink(temp.path().join("missing"), context.registry_location())
-                .unwrap();
-            assert!(
-                inspection
-                    .registry_with_access(&context, &Bound(&context), &mut budget)
-                    .is_err()
-            );
-            assert_eq!(budget, 999);
-            assert!(inspection.observations.is_empty());
-            assert_eq!(inspection.issues.len(), 0);
-        }
-
-        #[test]
-        fn present_unknown_fields_limits_and_distinct_parser_contracts() {
-            let temp = tempfile::tempdir().unwrap();
-            let context = context(temp.path());
-            let path = context.registry_location();
-            std::fs::create_dir(path.parent().unwrap()).unwrap();
-            let outside = temp.path().join("outside-not-created");
-            let value = serde_json::json!({"schema_version": 1, "stores": [outside], "future": {"keep":true}});
-            let bytes = serde_json::to_vec(&value).unwrap();
-            std::fs::write(path, &bytes).unwrap();
-            let store = store_registry_with_access(&context, &Bound(&context)).unwrap();
-            assert_eq!(store.extra["future"], value["future"]);
-            let mut inspection = Inspection::default();
-            let mut budget = 1 << 20;
-            assert_eq!(
-                inspection
-                    .registry_with_access(&context, &Bound(&context), &mut budget)
-                    .unwrap(),
-                std::slice::from_ref(&outside)
-            );
-            assert_eq!(budget, (1 << 20) - bytes.len() as u64);
-            assert_eq!(
-                inspection.observations[path],
-                basecraft_io::hash_bytes(&bytes)
-            );
-            assert!(!outside.exists());
-            // Inspection retains valid entries and issues for invalid entries;
-            // the ordinary typed parser rejects the entire mixed inventory.
-            std::fs::write(
-                path,
-                serde_json::to_vec(
-                    &serde_json::json!({"schema_version":1,"stores":[outside,17,"relative"]}),
-                )
-                .unwrap(),
-            )
-            .unwrap();
-            assert!(store_registry_with_access(&context, &Bound(&context)).is_err());
-            let mut inspection = Inspection::default();
-            assert_eq!(
-                inspection
-                    .registry_with_access(&context, &Bound(&context), &mut (1 << 20))
-                    .unwrap(),
-                std::slice::from_ref(&outside)
-            );
-            assert_eq!(inspection.issues.len(), 2);
-            for count in [4096, 4097] {
-                std::fs::write(path, serde_json::to_vec(&serde_json::json!({"schema_version":1,"stores": vec![outside.clone(); count]})).unwrap()).unwrap();
-                assert_eq!(
-                    store_registry_with_access(&context, &Bound(&context)).is_ok(),
-                    count == 4096
-                );
-                let mut inspection = Inspection::default();
-                assert_eq!(
-                    inspection
-                        .registry_with_access(&context, &Bound(&context), &mut (1 << 20))
-                        .unwrap()
-                        .len(),
-                    4096
-                );
-                assert_eq!(inspection.issues.len(), usize::from(count > 4096));
-            }
-            std::fs::write(path, vec![b' '; (1 << 20) + 1]).unwrap();
-            assert!(
-                matches!(store_registry_with_access(&context, &Bound(&context)), Err(crate::Error::Limit { limit, .. }) if limit == 1 << 20)
-            );
-            let mut inspection = Inspection::default();
-            let mut budget = 1 << 22;
-            inspection
-                .registry_with_access(&context, &Bound(&context), &mut budget)
-                .unwrap();
-            assert_eq!(budget, 1 << 22); // metadata rejection precedes content
-            assert!(
-                inspection.observations[path]
-                    .contains("provenance record reading exceeds the limit of 1048576")
-            );
-        }
-
-        #[test]
-        fn ordinary_permission_failure_is_not_absence() {
-            use std::os::unix::fs::PermissionsExt;
-            let temp = tempfile::tempdir().unwrap();
-            let context = context(temp.path());
-            let path = context.registry_location();
-            std::fs::create_dir(path.parent().unwrap()).unwrap();
-            std::fs::write(path, b"{}").unwrap();
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o0)).unwrap();
-            let read = registry_bytes_with_access(
-                &context,
-                &Bound(&context),
-                &mut 100,
-                RecordLimit::Registry,
-            );
-            assert!(
-                matches!(&read.outcome, Err(crate::Error::Access(crate::access::AccessError::Io(e))) if e.kind() == io::ErrorKind::PermissionDenied && e.raw_os_error() == Some(13))
-            );
-            let mut inspection = Inspection::default();
-            inspection.registry_read(read).unwrap();
-            assert_eq!(inspection.issues.len(), 1);
-            assert_eq!(inspection.observations.len(), 1);
-            assert!(store_registry_with_access(&context, &Bound(&context)).is_err());
-        }
-
-        #[test]
-        fn validated_denial_has_no_observation_or_default() {
-            struct Revoke<'a>(&'a ServiceReadContext);
-            impl Access for Revoke<'_> {
-                fn boundary(&self) -> Option<&Path> {
-                    None
-                }
-                fn resource(
-                    &self,
-                    _: &Path,
-                    _: crate::access::ResourceAction,
-                ) -> crate::access::Result<PathBuf> {
-                    panic!("resource")
-                }
-                fn service_read(
-                    &self,
-                    request: &crate::service_reads::ServiceReadRequest<'_>,
-                    phase: crate::service_reads::ServiceReadPhase<'_>,
-                ) -> crate::access::Result<()> {
-                    use crate::service_reads::ServiceReadPhase;
-                    assert!(request.permits(self.0, &ServiceReadPhase::Eligibility));
-                    if matches!(phase, ServiceReadPhase::Validated(_)) {
-                        Err(crate::access::AccessError::Denied(
-                            crate::access::Denial::ServiceUnavailable,
-                        ))
-                    } else {
-                        Ok(())
-                    }
-                }
-            }
-            let temp = tempfile::tempdir().unwrap();
-            let context = context(temp.path());
-            let mut inspection = Inspection::default();
-            let mut budget = 100;
-            assert!(
-                inspection
-                    .registry_with_access(&context, &Revoke(&context), &mut budget)
-                    .is_err()
-            );
-            assert_eq!(budget, 100);
-            assert!(inspection.observations.is_empty());
-            assert_eq!(inspection.issues.len(), 0);
-            assert!(store_registry_with_access(&context, &Revoke(&context)).is_err());
-        }
-
-        #[test]
-        fn observation_seam_consumes_original_absence_source() {
-            let source = std::sync::Arc::new(());
-            let missing = io::Error::new(io::ErrorKind::NotFound, Source(source.clone()));
-            let path = PathBuf::from("logical-leaf");
-            // Injection only at the actual observation seam. Production Absent
-            // construction requires platform checked absence above.
-            let read = RegistryByteRead {
-                location: path.clone(),
-                outcome: Ok(RegistryBytes::Absent { missing }),
-            };
-            let Ok(RegistryBytes::Absent { ref missing }) = read.outcome else {
-                panic!()
-            };
-            assert!(std::sync::Arc::ptr_eq(
-                &source,
-                &missing
-                    .get_ref()
-                    .unwrap()
-                    .downcast_ref::<Source>()
-                    .unwrap()
-                    .0
-            ));
-            let mut inspection = Inspection::default();
-            assert_eq!(inspection.registry_read(read).unwrap().len(), 0);
-            assert_eq!(
-                inspection.observations[&path],
-                "unavailable: retained custom source"
-            );
-            assert_eq!(std::sync::Arc::strong_count(&source), 1);
-            assert_eq!(inspection.issues.len(), 0);
-        }
-
-        #[derive(Debug)]
-        struct Source(std::sync::Arc<()>);
-        impl std::fmt::Display for Source {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str("retained custom source")
-            }
-        }
-        impl std::error::Error for Source {}
-        #[test]
-        fn partial_failure_charges_bytes_and_retains_source_without_success_hash() {
-            struct Failing {
-                first: bool,
-                error: Option<io::Error>,
-            }
-            impl Read for Failing {
-                fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
-                    if self.first {
-                        self.first = false;
-                        bytes[..3].copy_from_slice(b"abc");
-                        Ok(3)
-                    } else {
-                        Err(self.error.take().unwrap())
-                    }
-                }
-            }
-            let source = std::sync::Arc::new(());
-            let mut budget = 100;
-            let outcome = crate::records::provenance::read_record_from_open(
-                Failing {
-                    first: true,
-                    error: Some(io::Error::new(
-                        io::ErrorKind::PermissionDenied,
-                        Source(source.clone()),
-                    )),
-                },
-                0,
-                &mut budget,
-                1 << 20,
-                RecordLimit::Registry,
-            )
-            .map(RegistryBytes::Present);
-            assert_eq!(budget, 97);
-            let Err(crate::Error::Io(error)) = &outcome else {
-                panic!()
-            };
-            assert!(std::sync::Arc::ptr_eq(
-                &source,
-                &error.get_ref().unwrap().downcast_ref::<Source>().unwrap().0
-            ));
-            let path = PathBuf::from("logical-registry");
-            let mut inspection = Inspection::default();
-            inspection
-                .registry_read(RegistryByteRead {
-                    location: path.clone(),
-                    outcome,
-                })
-                .unwrap();
-            assert_eq!(
-                inspection.observations[&path],
-                "unavailable: retained custom source"
-            );
-            assert_eq!(inspection.issues.len(), 1);
-            assert_eq!(std::sync::Arc::strong_count(&source), 1);
-        }
     }
 }
 
@@ -1063,6 +820,13 @@ pub fn register(run: &ArtifactRun) -> Result<()> {
         .parent()
         .and_then(Path::parent)
         .ok_or_else(|| invalid("run has no store"))?;
+    if index::is_private(store) {
+        return Ok(());
+    }
+    // The catalogue lock serialises index publication. Reserving the store
+    // here too would order store before inputs, the reverse of a writer that
+    // reserves its inputs first, and the two would wait on each other.
+    let registry_guard = registry_lock()?;
     let mut all = stores()?;
     if !all.iter().any(|p| p == store) {
         if all.len() >= 4096 {
@@ -1073,6 +837,8 @@ pub fn register(run: &ArtifactRun) -> Result<()> {
         value.stores = all;
         write_json(&registry()?, &serde_json::to_value(value)?)?;
     }
+    drop(registry_guard);
+    index::register(store, None)?;
     Ok(())
 }
 
@@ -1117,68 +883,43 @@ fn conservative(check: EvidenceCheck) -> Result<EvidenceConflict> {
 /// Side-effect-free full inspection; callers must recheck under `lock` before
 /// acting. Failure of the lock or of an actual write is never an inspection issue.
 pub fn check(target: &Path) -> Result<EvidenceCheck> {
-    let mut inspection = Inspection::default();
-    let path = registry()?;
-    let result = inspection.record_bounded(&path, 1 << 20);
-    let mut all = match result {
-        Err(crate::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-        result => inspection.parse_registry(&path, result),
+    // Advisory inspection creates no profile state. Writers create the lock
+    // before their first index change; an empty profile needs no reservation.
+    let catalogue = match std::fs::File::open(registry()?.with_file_name("analysis-registry.lock"))
+    {
+        Ok(file) => {
+            FileExt::lock_shared(&file).map_err(|e| crate::Error::Busy(e.to_string()))?;
+            Some(file)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
     };
-    let target = std::path::absolute(target)?;
-    let canonical = target.canonicalize().unwrap_or_else(|_| target.clone());
+    let (canonical, selected, inspection) = selection(target)?;
+    drop(catalogue);
+    inspect_in(&canonical, &selected, inspection)
+}
+
+fn selection(target: &Path) -> Result<(PathBuf, Vec<PathBuf>, Inspection)> {
+    let mut inspection = Inspection::default();
+    let absolute = std::path::absolute(target)?;
+    let canonical = absolute.canonicalize().unwrap_or_else(|_| absolute.clone());
+    let mut nearby = Vec::new();
     for parent in canonical.ancestors().skip(1) {
-        let nearby = parent.join(".basecraft/analyses-v1");
-        match nearby.try_exists() {
-            Ok(true) if !all.contains(&nearby) => all.push(nearby),
-            Err(error) => inspection.issue(InspectionCode::StoreUnavailable, &nearby, error),
+        let store = parent.join(".basecraft/analyses-v1");
+        match store.try_exists() {
+            Ok(true) => nearby.push(store),
+            Err(error) => inspection.issue(InspectionCode::StoreUnavailable, &store, error),
             _ => {}
         }
     }
-    inspect_in(&canonical, &all, inspection)
-}
-
-impl Inspection {
-    fn parse_registry(&mut self, path: &Path, result: Result<Vec<u8>>) -> Vec<PathBuf> {
-        let mut all = Vec::new();
-        match result {
-            Ok(bytes) => {
-                let parsed = serde_json::from_slice::<serde_json::Value>(&bytes);
-                match parsed {
-                    Ok(value) if value["schema_version"] == 1 && value["stores"].is_array() => {
-                        if let Some(paths) = value["stores"].as_array() {
-                            if paths.len() > 4096 {
-                                self.issue(
-                                    InspectionCode::LimitExceeded,
-                                    path,
-                                    "known-store registry exceeds 4096 stores",
-                                );
-                            }
-                            for (index, entry) in paths.iter().take(4096).enumerate() {
-                                match entry.as_str().map(PathBuf::from) {
-                                    Some(store) if store.is_absolute() => all.push(store),
-                                    _ => self.issue(
-                                        InspectionCode::RegistryUnavailable,
-                                        path,
-                                        format!(
-                                            "known-store entry {index} must be an absolute path"
-                                        ),
-                                    ),
-                                }
-                            }
-                        }
-                    }
-                    Ok(_) => self.issue(
-                        InspectionCode::RegistryUnavailable,
-                        path,
-                        "unsupported known-store registry",
-                    ),
-                    Err(error) => self.issue(InspectionCode::RegistryUnavailable, path, error),
-                }
-            }
-            Err(error) => self.issue(InspectionCode::RegistryUnavailable, path, error),
+    let selected = match index::select(&canonical, &absolute, &nearby, &mut inspection) {
+        Ok(selected) => selected,
+        Err(error) => {
+            inspection.issue(InspectionCode::RegistryUnavailable, &registry()?, error);
+            nearby
         }
-        all
-    }
+    };
+    Ok((canonical, selected, inspection))
 }
 
 #[derive(Default)]
@@ -1244,8 +985,15 @@ fn scan_run(
     metadata_bytes: &mut u64,
     inspection: &mut Inspection,
 ) -> Result<Option<RunScan>> {
-    if !entry.file_type()?.is_dir() {
-        return Err(invalid("unsafe entry in analysis store"));
+    let kind = entry.file_type()?;
+    if kind.is_file() {
+        return Ok(None);
+    }
+    if !kind.is_dir() {
+        return Err(crate::Error::Damaged {
+            path: entry.path(),
+            detail: "unsafe entry in analysis store".into(),
+        });
     }
     let run = entry.path();
     if !run.join("input.json").try_exists()? {
@@ -1362,8 +1110,8 @@ fn inspect_in(
             break;
         }
     }
-    // Only explicit ownership or the runner's declared upstream ledgers may
-    // collapse records. Equal names/hashes alone never merge distinct analyses.
+    // Only explicit ownership collapses records into one analysis. Equal
+    // names/hashes alone never merge distinct analyses.
     let mut owners = BTreeMap::new();
     for (run, input) in &known_runs {
         if let Some(owner) = input.analysis_run.as_deref() {
@@ -1553,6 +1301,7 @@ pub(crate) fn resolve_group(
 /// Apply explicit decisions before overwrite. A partial decision failure aborts
 /// the save; earlier preserved copies/removed metadata remain recoverable.
 pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
+    let _locks = lock()?;
     if conflict.analyses.is_empty() {
         return Ok(());
     }
@@ -1682,7 +1431,17 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
                             .to_string_lossy(),
                         ulid::Ulid::generate()
                     ));
+                    let catalogue = registry_lock()?;
+                    index::changing(
+                        &affected.run.join("input.json"),
+                        Some(std::collections::BTreeSet::new()),
+                    )?;
                     std::fs::rename(&affected.run, destination)?;
+                    basecraft_platform::files::sync_directory(affected.run.parent().unwrap())?;
+                    basecraft_platform::files::sync_directory(&trash)?;
+                    basecraft_platform::files::sync_directory(store)?;
+                    drop(catalogue);
+                    index::register(store, None)?;
                 }
                 SavePolicy::Cancel => return Err(invalid("save cancelled")),
             }
@@ -1796,7 +1555,8 @@ pub(crate) fn source_location(bundle: &Path, reference: &InputReference) -> Resu
 
 /// Honest repair: only a byte-verified original may replace a missing/changed reference.
 pub fn relink(bundle: &Path, original: &Path) -> Result<()> {
-    let _lock = lock()?;
+    let locks = lock()?;
+    locks.source(original)?;
     let local = read_input(bundle)?;
     let (owner, mut input) = owning_ledger(bundle)?;
     if local.source.as_ref().map(|r| &r.hash) != input.source.as_ref().map(|r| &r.hash) {
@@ -2075,8 +1835,8 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
             });
         }
     }
-    // Complete tree exports deliberately materialize the legacy exchange
-    // association, so extraction still works with the original store absent.
+    // Complete tree exports materialize their exchange association, so
+    // extraction still works with the original store absent.
     if let Ok(tree) = crate::files::load_tree(result)
         && crate::records::links::metadata_present(&crate::records::links::sidecar(result))?
     {
@@ -2469,14 +2229,14 @@ pub(crate) fn link_generated_input_locked(
         let publication: basecraft_protocol::provenance::Publication =
             serde_json::from_slice(&bytes)?;
         upstream.push(basecraft_protocol::input_records::UpstreamLink {
-            bundle: (crate::input_evidence::relative(run.directory(), dependency)?).into(),
+            bundle: (crate::records::input_evidence::relative(run.directory(), dependency)?).into(),
             id: publication.id.clone(),
             hash: basecraft_io::hash_bytes(&bytes),
         });
     }
-    crate::input_evidence::write_json(
+    crate::records::input_evidence::write_json(
         &run.artifact("input.json")?,
-        &crate::input_evidence::SubmittedInput {
+        &crate::records::input_evidence::SubmittedInput {
             schema_version: 1,
             source: None,
             submitted_hash: basecraft_io::hash_bytes(payload),
@@ -2490,16 +2250,9 @@ pub(crate) fn link_generated_input_locked(
             extra: BTreeMap::new(),
         },
     )?;
-    crate::input_evidence::write_json(
-        &run.artifact("run.json")?,
-        &serde_json::to_value(basecraft_protocol::records::AnalysisRun {
-            schema_version: 1,
-            id: run.id().into(),
-            result: Some(result_label.into()),
-            status: basecraft_protocol::records::AnalysisRunStatus::Prepared,
-            outputs: None,
-            extra: BTreeMap::new(),
-        })?,
+    run.write_run(
+        basecraft_protocol::records::AnalysisRunStatus::Prepared,
+        Some(result_label.into()),
     )?;
     register(run)
 }

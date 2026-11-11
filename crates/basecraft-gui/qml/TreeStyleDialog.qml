@@ -14,7 +14,6 @@ AppContentDialog {
     property string section: "extra"
 
     title: section === "support" ? "Support style" : "Tree style"
-    modal: true
     padding: 16
 
     ListModel { id: sets }

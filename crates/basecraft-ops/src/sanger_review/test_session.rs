@@ -61,13 +61,18 @@ impl ReviewSession {
             .save_new(self.id, Some(path))
             .map_err(|e| e.to_string())
     }
-    pub(super) fn save_with_evidence(
+    pub(super) fn save_with_policy(
         &mut self,
         path: &Path,
-        policy: crate::input_evidence::SavePolicy,
+        policy: crate::records::input_evidence::SavePolicy,
     ) -> Result<(), String> {
+        let check = self
+            .owner
+            .check_save(self.id, Some(path))
+            .map_err(|e| e.to_string())?;
         self.owner
-            .save_with_evidence(self.id, Some(path), policy)
+            .save_with_decision(self.id, Some(path), check.decide(policy, false))
+            .map(|_| ())
             .map_err(|e| e.to_string())
     }
     pub(super) fn export_consensus(&mut self, path: &Path, label: &str) -> Result<(), String> {

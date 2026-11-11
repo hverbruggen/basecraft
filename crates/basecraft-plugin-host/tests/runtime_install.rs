@@ -1,5 +1,7 @@
 //! Network-free installer regression checks. Real Pixi invocation is a separate
 //! opt-in test, using a disposable external profile and an actual channel solve.
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
@@ -64,6 +66,7 @@ const DECLARED: &str =
 
 #[test]
 fn runtime_is_frozen_updates_preserve_disabled_and_failed_solve_preserves_active() {
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let config = config(temp.path());
     let source = source(temp.path(), DECLARED);
@@ -179,6 +182,7 @@ fn runtime_is_frozen_updates_preserve_disabled_and_failed_solve_preserves_active
 
 #[test]
 fn missing_broken_and_unexecutable_pixi_fail_without_activation() {
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let config = config(temp.path());
     registry::install(&config, &fixture()).unwrap();
@@ -211,6 +215,7 @@ fn missing_broken_and_unexecutable_pixi_fail_without_activation() {
 
 #[test]
 fn missing_declared_runtime_is_diagnostic_discovery_never_provisions() {
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let config = config(temp.path());
     let source = source(temp.path(), DECLARED);
@@ -236,6 +241,7 @@ fn missing_declared_runtime_is_diagnostic_discovery_never_provisions() {
 
 #[test]
 fn missing_required_native_command_cannot_be_satisfied_by_ambient_path() {
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let config = config(temp.path());
     let source = source(temp.path(), &DECLARED.replace("nativecheck", "sh"));
@@ -249,6 +255,7 @@ fn missing_required_native_command_cannot_be_satisfied_by_ambient_path() {
 #[test]
 #[ignore = "networked Pixi install; run explicitly in an external disposable profile"]
 fn actual_pixi_installs_and_invokes_declared_runtime() {
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let config = config(temp.path());
     let source = source(
@@ -297,6 +304,7 @@ fn actual_pixi_installs_and_invokes_declared_runtime() {
 
 #[test]
 fn bundled_frozen_runtime_retains_old_selection_and_rejects_changed_lock_or_version() {
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let mut config = config(temp.path());
     let runtime = DECLARED.replace("[runtime]\n", "[runtime]\nlock = \"runtime.lock\"\n")
@@ -396,6 +404,7 @@ fn bundled_frozen_runtime_retains_old_selection_and_rejects_changed_lock_or_vers
 
 #[test]
 fn bundled_runtime_requires_frozen_lock_and_rejects_traversal() {
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let mut config = config(temp.path());
     let source = source(temp.path(), DECLARED);
@@ -423,6 +432,7 @@ fn bundled_runtime_requires_frozen_lock_and_rejects_traversal() {
 
 #[test]
 fn source_table2asn_requires_qualified_deployment_without_running_pixi() {
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let mut config = config(temp.path());
     config.bundled = temp.path().join("bundled");
@@ -455,6 +465,7 @@ fn source_table2asn_requires_qualified_deployment_without_running_pixi() {
 #[test]
 fn local_channels_are_data_only_and_target_gating_is_explicit() {
     use basecraft_plugin_host::runtime::RuntimeSpec;
+    crate::isolated_profile::isolate!();
     for channel in [
         "conda-forge",
         "/media/runtime/channel",

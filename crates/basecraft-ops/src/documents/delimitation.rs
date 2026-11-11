@@ -58,34 +58,30 @@ impl Document for DelimitationWorkspace {
         Some(files::tree_sidecar(target))
     }
 
-    fn write(
+    fn prepare_write(
         &self,
         target: &Path,
         format: files::Format,
         _recovery_root: &Path,
         publication: &super::WritePublication,
-    ) -> Result<Vec<(PathBuf, String)>> {
+    ) -> Result<super::PreparedWrite> {
         if format != files::Format::Delimitation {
             return Err(invalid(
                 "a delimitation workspace requires SPART or SPART-XML",
             ));
         }
-        let new_run = if crate::analysis_store::ArtifactRun::for_result(target)?.is_none() {
-            Some(crate::analysis_store::ArtifactRun::create(
+        let new_run = if crate::records::analysis_store::ArtifactRun::for_result(target)?.is_none()
+        {
+            Some(crate::records::analysis_store::ArtifactRun::create(
                 target,
                 &ulid::Ulid::generate().to_string(),
             )?)
         } else {
             None
         };
-        let mut main_hash = String::new();
+        let mut prepared = super::PreparedWrite::default();
         let xml = files::delimitation_xml(target);
-        basecraft_io::write_atomic(target, |w| {
-            let mut hw = HashingWriter::new(w);
-            files::write_delimitation(self, xml, &mut hw)?;
-            main_hash = hw.hash();
-            Ok(())
-        })?;
+        let main_hash = prepared.push(target, |w| files::write_delimitation(self, xml, w))?;
         let sidecar = if let Some(run) = &new_run {
             run.artifact(&format!(
                 "{}.basecraft.json",
@@ -97,31 +93,34 @@ impl Document for DelimitationWorkspace {
         } else {
             files::tree_sidecar(target)
         };
-        let mut side_hash = String::new();
-        basecraft_io::write_atomic(&sidecar, |w| {
-            let mut hw = HashingWriter::new(w);
+        prepared.push(&sidecar, |w| {
             files::write_companion(
                 &files::delimitation_companion(
                     self,
                     &main_hash,
                     &publication.logical(target).map_err(std::io::Error::other)?,
                 )?,
-                &mut hw,
+                w,
             )?;
-            side_hash = hw.hash();
             Ok(())
         })?;
-        crate::analysis_store::publish_delimitation(
+        prepared.run = new_run;
+        Ok(prepared)
+    }
+    fn finish_write(
+        &self,
+        target: &Path,
+        hashes: &[(PathBuf, String)],
+        run: Option<&crate::records::analysis_store::ArtifactRun>,
+        publication: &super::WritePublication,
+    ) -> Result<()> {
+        crate::records::analysis_store::publish_delimitation(
             self,
             target,
-            &main_hash,
-            new_run.as_ref(),
+            &hashes[0].1,
+            run,
             publication,
-        )?;
-        Ok(vec![
-            (target.to_path_buf(), main_hash),
-            (sidecar, side_hash),
-        ])
+        )
     }
     fn saved_hashes(
         &self,
@@ -171,6 +170,7 @@ mod tests {
 
     #[test]
     fn dispatch_rejects_wrong_operations_and_restores_snapshot() {
+        crate::isolated_profile::isolate!();
         let initial = basecraft_io::spart::parse_text(SPART).unwrap();
         let mut loaded = files::Loaded::Delimitation(initial.clone());
         let doc = loaded.as_document_mut();
@@ -216,8 +216,9 @@ mod tests {
 
     #[test]
     fn exchange_companion_and_record_bytes_keep_existing_writers() {
+        crate::isolated_profile::isolate!();
         // The Session save boundary holds this lock and prepares registry storage.
-        let _lock = crate::input_evidence::lock().unwrap();
+        let _lock = crate::records::input_evidence::lock().unwrap();
         let initial = basecraft_io::spart::parse_text(SPART).unwrap();
         for name in ["copy.spart", "copy.spartxml"] {
             let dir = tempfile::tempdir().unwrap();
@@ -254,11 +255,11 @@ mod tests {
             );
             assert_eq!(std::fs::read(&written[0].0).unwrap(), main);
             assert_eq!(std::fs::read(&written[1].0).unwrap(), side);
-            let run = crate::analysis_store::ArtifactRun::for_result(&target)
+            let run = crate::records::analysis_store::ArtifactRun::for_result(&target)
                 .unwrap()
                 .unwrap();
             assert_eq!(std::fs::read(run.join("submitted.fasta")).unwrap(), main);
-            let input = crate::input_evidence::read_input(&run).unwrap();
+            let input = crate::records::input_evidence::read_input(&run).unwrap();
             assert_eq!(input.submitted_hash, hash);
             assert_eq!(input.submitted_size, main.len() as u64);
             assert_eq!(
@@ -289,17 +290,19 @@ mod tests {
                 written
             );
             assert_eq!(
-                crate::analysis_store::ArtifactRun::for_result(&target).unwrap(),
+                crate::records::analysis_store::ArtifactRun::for_result(&target).unwrap(),
                 Some(run)
             );
         }
     }
     #[test]
     fn companion_failure_preserves_main_and_reports_error() {
+        crate::isolated_profile::isolate!();
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("partial.spart");
         let work = basecraft_io::spart::parse_text(SPART).unwrap();
-        let run = crate::analysis_store::ArtifactRun::create(&target, "partial-test").unwrap();
+        let run =
+            crate::records::analysis_store::ArtifactRun::create(&target, "partial-test").unwrap();
         std::fs::write(&target, SPART).unwrap();
         run.bind(&target).unwrap();
         let side = files::tree_sidecar(&target);

@@ -234,8 +234,9 @@ if os.geteuid() != 0:
     finally:
         root.chmod(0o755)
 
-# Repair only the deliberately damaged ledger; complete checks have no warning.
+# Repair the deliberately damaged ledger and its pending index update; checks are complete.
 Path(fixture["ledger"]).write_text(fixture["good"])
+Path(fixture["marker"]).unlink()
 with Session(root, writes=True) as session:
     path = source("complete")
     doc = open_edit(session, path)

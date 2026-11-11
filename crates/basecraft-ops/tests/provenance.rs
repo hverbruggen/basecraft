@@ -1,3 +1,5 @@
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_ops::records::ReportExt;
 use basecraft_ops::{Session, log, records};
 use basecraft_protocol::Op;
@@ -19,6 +21,7 @@ fn edit() -> Op {
 
 #[test]
 fn passive_open_close_and_unchanged_save_create_no_records() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("gene.fasta");
     std::fs::write(&file, ">gene\nACGT\n").unwrap();
@@ -38,6 +41,7 @@ fn passive_open_close_and_unchanged_save_create_no_records() {
 
 #[test]
 fn edit_undo_redo_save_move_verify_and_report() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("gene.fasta");
     std::fs::write(&file, ">gene\nACGT\n").unwrap();
@@ -94,6 +98,7 @@ fn edit_undo_redo_save_move_verify_and_report() {
 
 #[test]
 fn completely_undone_edit_publishes_nothing_and_cleans_recovery() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("gene.fasta");
     std::fs::write(&file, ">gene\nACGT\n").unwrap();
@@ -113,6 +118,7 @@ fn completely_undone_edit_publishes_nothing_and_cleans_recovery() {
 
 #[test]
 fn changed_source_refused_before_mutation_and_before_save() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("gene.fasta");
     std::fs::write(&file, ">gene\nACGT\n").unwrap();
@@ -137,6 +143,7 @@ fn changed_source_refused_before_mutation_and_before_save() {
 
 #[test]
 fn history_is_fingerprints_only_and_path_escape_is_detected() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("gene.fasta");
     std::fs::write(&file, ">gene\nACGT\n").unwrap();
@@ -177,6 +184,7 @@ fn history_is_fingerprints_only_and_path_escape_is_detected() {
 
 #[test]
 fn sidecar_failure_reports_partial_save_and_keeps_pending_recovery() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("gene.fasta");
     std::fs::write(&file, ">gene\nACGT\n").unwrap();
@@ -204,6 +212,7 @@ fn sidecar_failure_reports_partial_save_and_keeps_pending_recovery() {
 #[test]
 fn no_recovery_and_no_provenance_policy_leave_no_durable_lineage() {
     use basecraft_platform::settings::{Change, ProvenancePolicy, SettingsStore};
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let paths = paths(dir.path());
     let store = SettingsStore::new(paths.preferences());
@@ -224,6 +233,7 @@ fn no_recovery_and_no_provenance_policy_leave_no_durable_lineage() {
 
 #[test]
 fn save_as_does_not_disable_original_conflict_detection() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let original = dir.path().join("a.fasta");
     let copy = dir.path().join("b.fasta");
@@ -245,6 +255,7 @@ fn save_as_does_not_disable_original_conflict_detection() {
 
 #[test]
 fn live_annotation_sidecar_is_verified_and_packaged() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("tree.nwk");
     std::fs::write(&file, "(A:1,B:1);\n").unwrap();
@@ -271,6 +282,7 @@ fn live_annotation_sidecar_is_verified_and_packaged() {
 
 #[test]
 fn journal_checksum_and_torn_tail_expose_only_verified_prefix() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("gene.fasta");
     std::fs::write(&file, ">gene\nACGT\n").unwrap();
@@ -312,6 +324,7 @@ fn journal_checksum_and_torn_tail_expose_only_verified_prefix() {
 
 #[test]
 fn unsaved_recovery_reconstructs_exact_state_without_source_or_cache() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("gene.fasta");
     std::fs::write(&file, ">gene\nACGT\n").unwrap();
@@ -348,6 +361,7 @@ fn unsaved_recovery_reconstructs_exact_state_without_source_or_cache() {
 
 #[test]
 fn reopen_and_save_as_preserve_contributing_ancestry() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("gene.fasta");
     std::fs::write(&file, ">gene\nACGT\n").unwrap();
@@ -383,6 +397,7 @@ fn reopen_and_save_as_preserve_contributing_ancestry() {
 
 #[test]
 fn recovery_rejects_traversal_and_skips_corrupt_retained_candidates() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("gene.fasta");
     std::fs::write(&file, ">gene\nACGT\n").unwrap();
@@ -449,6 +464,7 @@ fn recovery_rejects_traversal_and_skips_corrupt_retained_candidates() {
 
 #[test]
 fn ancestor_only_artifacts_and_duplicate_parent_references_are_checked() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("gene.fasta");
     std::fs::write(&file, ">gene\nACGT\n").unwrap();
@@ -498,6 +514,7 @@ fn ancestor_only_artifacts_and_duplicate_parent_references_are_checked() {
 
 #[test]
 fn current_record_tracks_unsaved_undo_redo_and_is_read_only() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("gene.fasta");
     std::fs::write(&file, ">gene\nACGT\n").unwrap();
@@ -534,6 +551,7 @@ fn current_record_tracks_unsaved_undo_redo_and_is_read_only() {
 
 #[test]
 fn reopened_ancestry_survives_multiple_saves_and_changed_disk_records() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("gene.fasta");
     std::fs::write(&file, ">gene\nACGT\n").unwrap();
@@ -586,6 +604,7 @@ fn reopened_ancestry_survives_multiple_saves_and_changed_disk_records() {
 
 #[test]
 fn analysis_uses_submission_record_even_after_source_undo() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("gene.fasta");
     let output = dir.path().join("result.fasta");
@@ -625,6 +644,7 @@ fn analysis_uses_submission_record_even_after_source_undo() {
 #[test]
 fn two_input_records_preserve_distinct_origins_and_export_frozen_evidence() {
     use basecraft_ops::records::DocumentRecord;
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let paths = paths(dir.path());
     let mut records = Vec::new();
@@ -682,6 +702,7 @@ fn two_input_records_preserve_distinct_origins_and_export_frozen_evidence() {
 #[test]
 fn provenance_works_with_recovery_disabled_and_preserves_frozen_reports() {
     use basecraft_platform::settings::{Change, SettingsStore};
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let paths = paths(dir.path());
     SettingsStore::new(paths.preferences())
@@ -726,6 +747,7 @@ fn provenance_works_with_recovery_disabled_and_preserves_frozen_reports() {
 
 #[test]
 fn methods_use_frozen_plugin_metadata_and_reject_unmatched_contribution() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("gene.fasta");
     let output = dir.path().join("result.fasta");
@@ -752,6 +774,7 @@ fn methods_use_frozen_plugin_metadata_and_reject_unmatched_contribution() {
 
 #[test]
 fn partial_save_as_can_retry_its_verified_output() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("gene.fasta");
     std::fs::write(&file, ">gene\nACGT\n").unwrap();

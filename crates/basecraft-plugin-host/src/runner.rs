@@ -19,8 +19,8 @@ use std::sync::{
 };
 
 use basecraft_ops::{
-    analysis_store::{ArtifactDestination, ArtifactRun},
-    input_evidence,
+    records,
+    records::{ArtifactDestination, ArtifactRun},
 };
 use basecraft_protocol::{
     operation::{
@@ -303,7 +303,7 @@ impl PreparedOperation {
             .collect();
         // Preserve leaves and delegate the primary ledger under one boundary:
         // a cooperating save must not invalidate the primary before its rewrite.
-        let mutation = input_evidence::Mutation::begin()?;
+        let mutation = records::Mutation::begin()?;
         for (binding, records) in &self.context.input_evidence {
             if !retained_bindings.contains(binding) {
                 continue;
@@ -333,7 +333,7 @@ impl PreparedOperation {
                             && record.source_hash.as_ref() == Some(&source.hash)
                     })
             {
-                input.origin_run = Some(input_evidence::relative(
+                input.origin_run = Some(records::relative(
                     self.run.directory(),
                     Path::new(&owner.run_directory),
                 )?);
@@ -369,7 +369,7 @@ impl PreparedOperation {
 
     /// Inherit a workflow stage's original ledgers, avoiding a parent/child cycle.
     pub(crate) fn inherit_input_ancestry(&self, parent: &Path) -> Result<()> {
-        let mutation = input_evidence::Mutation::begin()?;
+        let mutation = records::Mutation::begin()?;
         let dependencies = sources_from_upstream(parent)?;
         let mut ledgers = BTreeSet::from([self.run.directory().to_path_buf()]);
         ledgers.extend(
@@ -381,18 +381,15 @@ impl PreparedOperation {
         );
         for directory in ledgers {
             let mut input = mutation.read_input(&directory)?;
-            input.analysis_run = Some(input_evidence::relative(&directory, parent)?);
+            input.analysis_run = Some(records::relative(&directory, parent)?);
             let upstream = &mut input.upstream;
             for dependency in &dependencies {
                 let bytes = basecraft_ops::records::read_record(&dependency.join("manifest.json"))?;
                 let publication: Publication = serde_json::from_slice(&bytes)?;
                 if !upstream.iter().any(|entry| entry.id == publication.id) {
                     upstream.push(basecraft_protocol::input_records::UpstreamLink {
-                        bundle: (input_evidence::relative(
-                            &directory,
-                            &dependency.canonicalize()?,
-                        )?)
-                        .into(),
+                        bundle: (records::relative(&directory, &dependency.canonicalize()?)?)
+                            .into(),
                         id: publication.id.clone(),
                         hash: basecraft_io::hash_bytes(&bytes),
                     });
@@ -460,10 +457,7 @@ impl PreparedOperation {
             self.submission_identity(result)?;
             let receipt = Path::new(&self.context.outputs["receipt"]);
             if !receipt.try_exists()? {
-                input_evidence::write_json(
-                    receipt,
-                    result.data.as_deref().unwrap_or(&Value::Null),
-                )?;
+                records::write_json(receipt, result.data.as_deref().unwrap_or(&Value::Null))?;
             }
         }
         let mut paths = BTreeSet::new();
@@ -591,8 +585,8 @@ impl PreparedOperation {
                 &plan,
             )?;
         }
-        input_evidence::write_json(&self.run.artifact("validated.json")?, result)?;
-        input_evidence::write_json(&self.run.artifact("validated-artifacts.json")?, &validated)?;
+        records::write_json(&self.run.artifact("validated.json")?, result)?;
+        records::write_json(&self.run.artifact("validated-artifacts.json")?, &validated)?;
         Ok(validated)
     }
 
@@ -765,7 +759,7 @@ impl PreparedOperation {
     }
     pub fn persist(&self, outcome: &OperationOutcome) -> Result<()> {
         let runtime = self.run.artifact("runtime.json")?;
-        input_evidence::write_json(&runtime, outcome)?;
+        records::write_json(&runtime, outcome)?;
         self.write_task_index(outcome, &runtime)
     }
 
@@ -815,7 +809,7 @@ impl PreparedOperation {
             diagnostics: outcome.errors.first().map(|error| error.message.clone()),
             runtime_record: runtime.into(),
         })?;
-        input_evidence::write_json(&directory.join("manifest.json"), &index)?;
+        records::write_json(&directory.join("manifest.json"), &index)?;
         Ok(())
     }
 }
@@ -851,7 +845,7 @@ fn sources_from_upstream(directory: &Path) -> Result<Vec<PathBuf>> {
     if !directory.join("input.json").is_file() {
         return Ok(Vec::new());
     }
-    let record = input_evidence::read_input(directory)?;
+    let record = records::read_input(directory)?;
     Ok(record
         .upstream
         .iter()
@@ -918,7 +912,7 @@ fn export_member(source: &Path, destination: &Path, hash: &str, intent: &Path) -
     }
     pending.as_file().sync_all()?;
     let metadata = pending.as_file().metadata()?;
-    input_evidence::write_json(
+    records::write_json(
         intent,
         &serde_json::to_value(MemberExportReceipt {
             schema: 1,

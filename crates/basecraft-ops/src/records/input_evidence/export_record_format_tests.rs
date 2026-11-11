@@ -366,14 +366,16 @@ fn typed_export_maps_round_trip_original_fixtures() {
     use basecraft_protocol::export_records::ProvenanceExportMap;
 
     for bytes in [
-        include_bytes!("../../../../testdata/fixtures/records-v1/provenance-export-map-empty.json")
-            .as_slice(),
         include_bytes!(
-            "../../../../testdata/fixtures/records-v1/provenance-export-map-single.json"
+            "../../../../../testdata/fixtures/records-v1/provenance-export-map-empty.json"
         )
         .as_slice(),
         include_bytes!(
-            "../../../../testdata/fixtures/records-v1/provenance-export-map-shared-ancestry.json"
+            "../../../../../testdata/fixtures/records-v1/provenance-export-map-single.json"
+        )
+        .as_slice(),
+        include_bytes!(
+            "../../../../../testdata/fixtures/records-v1/provenance-export-map-shared-ancestry.json"
         )
         .as_slice(),
     ] {

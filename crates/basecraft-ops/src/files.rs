@@ -298,7 +298,7 @@ pub(crate) fn capture_load(path: &Path, format: Format) -> Result<CapturedLoad> 
     if format == Format::GenBank {
         let stamps = vec![(
             path.to_path_buf(),
-            Some(crate::input_evidence::stamp(path)?),
+            Some(crate::records::input_evidence::stamp(path)?),
         )];
         let (first, hash) = genbank::open_hashed(path)?;
         return finish_capture(
@@ -330,7 +330,9 @@ pub(crate) fn capture_load(path: &Path, format: Format) -> Result<CapturedLoad> 
                 let error = io::Error::new(io::ErrorKind::InvalidInput, "not an ordinary file");
                 return Err(basecraft_io::Error::Io(error).into());
             }
-            Ok(metadata) => Some(crate::input_evidence::stamp_metadata(&file, &metadata)?),
+            Ok(metadata) => Some(crate::records::input_evidence::stamp_metadata(
+                &file, &metadata,
+            )?),
             Err(error) if error.kind() == io::ErrorKind::NotFound && file != path => None,
             Err(error) => return Err(error.into()),
         };
@@ -415,7 +417,9 @@ fn finish_capture(
     for (file, before) in &stamps {
         let after = match std::fs::metadata(file) {
             Ok(metadata) if !metadata.is_file() => None,
-            Ok(metadata) => Some(crate::input_evidence::stamp_metadata(file, &metadata)?),
+            Ok(metadata) => Some(crate::records::input_evidence::stamp_metadata(
+                file, &metadata,
+            )?),
             Err(error) if error.kind() == io::ErrorKind::NotFound => None,
             Err(error) => return Err(error.into()),
         };
@@ -468,13 +472,23 @@ fn load_fasta_from(
 }
 
 /// Residues of an alignment row, gaps excluded.
+/// Reads the row in chunks, so a long row is never held whole.
 pub(crate) fn ungapped_len(doc: &AlignmentDoc, row: usize) -> u64 {
+    let chunk = 60 * 16_384;
     let mut residues = Vec::new();
-    doc.read_into(row, 0, doc.width(), &mut residues);
-    residues
-        .iter()
-        .filter(|&&byte| !basecraft_docs::alignment::is_gap(byte))
-        .count() as u64
+    let mut count = 0;
+    let mut pos = 0;
+    while pos < doc.width() {
+        let end = (pos + chunk).min(doc.width());
+        residues.clear();
+        doc.read_into(row, pos, end, &mut residues);
+        count += residues
+            .iter()
+            .filter(|&&byte| !basecraft_docs::alignment::is_gap(byte))
+            .count() as u64;
+        pos = end;
+    }
+    count
 }
 
 /// The rows a companion annotates. An unreadable companion counts every row.
@@ -500,6 +514,8 @@ fn annotated_rows(doc: &AlignmentDoc, gff: Option<&Source>) -> Vec<(String, u64)
 /// Write explicit alignment contents as FASTA, 60 columns a line.
 /// Synthetic suffix padding used to display ragged input is never materialised.
 pub fn write_alignment(doc: &AlignmentDoc, w: &mut dyn Write) -> io::Result<()> {
+    #[cfg(feature = "test-counters")]
+    basecraft_io::counters::record_serialization("alignment");
     let mut buf = Vec::new();
     let chunk = 60 * 16_384;
     for (i, row) in doc.rows().enumerate() {
@@ -544,7 +560,7 @@ pub fn gff_sidecar(path: &Path) -> PathBuf {
 
 /// A tree file's sidecar: `NAME.nwk.basecraft.json` beside `NAME.nwk`.
 pub fn tree_sidecar(path: &Path) -> PathBuf {
-    if let Ok(Some(run)) = crate::analysis_store::ArtifactRun::for_result(path) {
+    if let Ok(Some(run)) = crate::records::analysis_store::ArtifactRun::for_result(path) {
         let name = path.file_name().unwrap_or_default().to_string_lossy();
         return run.join(format!("{name}.basecraft.json"));
     }
@@ -629,7 +645,8 @@ fn load_tree_bytes(
             return Err(Error::Io(io::Error::other(issue)));
         }
         // A broken hidden binding never falls back to the companion beside the file.
-        let run = crate::analysis_store::ArtifactRun::for_result_with_hash(path, exchange_hash)?;
+        let run =
+            crate::records::analysis_store::ArtifactRun::for_result_with_hash(path, exchange_hash)?;
         let bound = run.is_some();
         let (sidecar, side) = match run {
             Some(run) => {
@@ -859,10 +876,20 @@ fn open_fasta_with_gff(
 
 /// Serialise the main file of a document.
 pub fn write_main(opened: &Opened, w: &mut dyn Write) -> io::Result<()> {
+    #[cfg(feature = "test-counters")]
+    basecraft_io::counters::record_serialization("sequence");
     let doc = &opened.doc;
     match opened.format {
         Format::GenBank => {
-            genbank::write(w, &doc.to_genbank())?;
+            genbank::write_stream(
+                w,
+                &doc.genbank_metadata(),
+                doc.len(),
+                doc.features().map(|(_, feature)| feature),
+                (0..doc.len())
+                    .step_by(60 * 1024)
+                    .map(|start| doc.read(start, (start + 60 * 1024).min(doc.len()))),
+            )?;
             w.write_all(&opened.others.genbank)
         }
         Format::SangerReview => Err(io::Error::other(
@@ -1293,7 +1320,7 @@ fn load_delimitation_bytes(
         basecraft_io::spart::parse_text(text)?
     };
     // A broken hidden binding never falls back to the companion beside the file.
-    let hidden = crate::analysis_store::ArtifactRun::for_result(path)?;
+    let hidden = crate::records::analysis_store::ArtifactRun::for_result(path)?;
     if hidden.is_some() && captured_side.is_none() {
         return Err(crate::error::invalid(
             "Hidden species workspace metadata is missing; restore its folder context or explicitly open a standalone SPART copy",

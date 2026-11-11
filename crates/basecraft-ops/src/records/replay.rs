@@ -263,7 +263,7 @@ fn materialise(
             .into_iter()
             .map(Some)
             .chain(std::iter::once_with(|| {
-                crate::analysis_store::retained_source(root, hash)
+                crate::records::analysis_store::retained_source(root, hash)
                     .ok()
                     .flatten()
             }))
@@ -742,7 +742,7 @@ fn artifacts(root: &Path) -> Result<Vec<ArtifactObservation>> {
                 object_identity(path, OrdinaryKind::File)?,
                 Some((
                     basecraft_io::hash_file(path)?,
-                    crate::input_evidence::stamp(path)?,
+                    crate::records::input_evidence::stamp(path)?,
                 )),
             )
         } else {
@@ -877,7 +877,7 @@ impl RecoveryAttempt {
         &self,
         document: usize,
         token: &str,
-        known: crate::input_evidence::SavePolicy,
+        known: crate::records::input_evidence::SavePolicy,
         acknowledge_incomplete: bool,
     ) -> Result<crate::session::SaveDecision> {
         self.validate()?;
@@ -920,13 +920,13 @@ impl RecoveryAttempt {
         }
         let doc = self.document(document)?;
         let id = doc.id;
-        let _target = match crate::save_guard::lock(&self.destination) {
+        let _target = match crate::records::save_guard::lock(&self.destination) {
             Ok(lock) => lock,
             Err(error) => return Err(refuse(&mut self.session, error)),
         };
         let finalizing = doc.written;
         let observed = if doc.written {
-            let _evidence = match crate::input_evidence::Mutation::begin() {
+            let _evidence = match crate::records::input_evidence::Mutation::begin() {
                 Ok(guard) => guard,
                 Err(error) => return Err(refuse(&mut self.session, error)),
             };
@@ -961,7 +961,7 @@ impl RecoveryAttempt {
             self.documents[document].written = true;
             self.artifacts = artifacts(self.stage_path()?)?;
             outcome
-                .recovery_observation
+                .recovery_check
                 .ok_or_else(|| crate::error::invalid("recovery write observation missing"))??
         };
         if finalizing && !observed.complete() {
@@ -1008,8 +1008,8 @@ impl RecoveryAttempt {
 
     fn publish_inner(&mut self) -> Result<RecoveryCompletion> {
         self.validate()?;
-        let _target = crate::save_guard::lock(&self.destination)?;
-        let evidence = crate::input_evidence::Mutation::begin()?;
+        let _target = crate::records::save_guard::lock(&self.destination)?;
+        let evidence = crate::records::input_evidence::Mutation::begin()?;
         for doc in &self.documents {
             if !doc.written {
                 return Err(crate::error::invalid(

@@ -1,6 +1,6 @@
 //! One transient save receipt owner and the common authorization implementation.
 //!
-//! Each live document owns exactly one non-cloning `PendingSaveAuthority`. Advisory
+//! Each live document owns exactly one non-cloning `PendingSaveCheck`. Advisory
 //! checks may be cloned/serialized, but cannot recreate its pending cell. The
 //! caller resolves the origin in its existing document collection and consumes
 //! before validation, locks or IO. Foreign owners and older tokens cannot spend
@@ -9,7 +9,7 @@
 //! Callers construct the complete fresh scope under their existing guards and
 //! retain ownership of source validation, document writes, logs and publication.
 //! Authorization resolves known evidence through the existing evidence owner;
-//! it returns only advisory observations/warnings, never a reusable permit.
+//! it returns only advisory warnings, never a reusable permit.
 //! Finalization authorizes evidence effects without invoking a document writer.
 //! The diagnostic shape (including full tagged object identities) is unchanged.
 use std::path::{Path, PathBuf};
@@ -18,11 +18,11 @@ use std::sync::Mutex;
 use basecraft_platform::files::ObjectIdentity;
 use serde::Serialize;
 
-use crate::input_evidence::{EvidenceCheck, InspectionIssue, SavePolicy};
+use crate::records::input_evidence::{EvidenceCheck, InspectionIssue, SavePolicy};
 use crate::{Result, error::invalid};
 
 /// A fresh advisory check, or the fresh scope returned after refusing stale
-/// consent. Fields cannot be changed to manufacture authority.
+/// consent. Fields cannot be changed to manufacture consent.
 #[derive(Clone, Debug, Serialize)]
 pub struct SaveCheck {
     pub(super) token: String,
@@ -58,13 +58,15 @@ impl SaveScope {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct TargetRevision {
-    hash: String,
+    pub(super) hash: String,
+    /// Size, modification time and identity. Change time is left out: our own
+    /// recovery hard links change it, and the hash already binds the content.
     stamp: basecraft_protocol::provenance::FileStamp,
 }
 
 impl SaveCheck {
-    /// Builds an observation from the caller's complete guarded context, without
-    /// publishing a receipt. Only the live owner can publish authority for it.
+    /// Builds an check from the caller's complete guarded context, without
+    /// publishing a receipt. Only the live owner can publish consent for it.
     pub(crate) fn from_scope(scope: SaveScope) -> Result<Self> {
         let scope_revision = scope.revision()?;
         Ok(Self {
@@ -147,7 +149,7 @@ impl SaveCheck {
                     completed: false,
                 });
             }
-            crate::input_evidence::resolve_group(&group.conflict, policy, &mut removed)?;
+            crate::records::input_evidence::resolve_group(&group.conflict, policy, &mut removed)?;
             if let Some(actions) = &mut actions
                 && let Some(action) = actions.last_mut()
             {
@@ -157,8 +159,8 @@ impl SaveCheck {
         Ok(())
     }
 
-    /// A post-write observation may describe newly discovered issues. It must
-    /// force finalization consent, never grant authority from that observation.
+    /// A post-write check may describe newly discovered issues. It must
+    /// force finalization consent, never grant consent from that check.
     pub(crate) fn require_final_decision(&mut self) {
         self.scope_revision.clear();
     }
@@ -168,8 +170,12 @@ impl SaveCheck {
     }
 
     pub(super) fn target_is_current(&self, target: &Path) -> Result<bool> {
-        Ok(crate::save_guard::target_path(target)? == self.scope.target
-            && target_revision(target)? == self.scope.target_revision)
+        let same = crate::records::save_guard::target_path(target)? == self.scope.target
+            && crate::records::save_guard::change_stamp(target)?.map(|stamp| stamp.0)
+                == self.scope.target_revision.as_ref().map(|r| r.stamp.clone());
+        #[cfg(not(unix))]
+        let same = same && target_revision(target)? == self.scope.target_revision;
+        Ok(same)
     }
 
     /// Consumes this advisory snapshot. `acknowledge_incomplete` is independent
@@ -187,14 +193,14 @@ impl SaveCheck {
 #[derive(Debug)]
 pub struct SaveDecision {
     pub(super) check: SaveCheck,
-    pub(super) known: SavePolicy,
+    pub(crate) known: SavePolicy,
     pub(super) acknowledge_incomplete: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Default, Serialize)]
 pub struct SaveOutcome {
     #[serde(skip)]
-    pub(crate) recovery_observation: Option<Result<SaveCheck>>,
+    pub(crate) recovery_check: Option<Result<SaveCheck>>,
     pub warnings: Vec<SaveWarning>,
 }
 
@@ -204,14 +210,14 @@ pub enum SaveWarning {
     EvidenceNotChecked { issues: Vec<InspectionIssue> },
 }
 
-/// The single pending cell. Moving the owner retains authority; cloning or
+/// The single pending cell. Moving the owner retains consent; cloning or
 /// deserializing advisory checks never creates another owner.
 #[derive(Default)]
-pub(crate) struct PendingSaveAuthority {
+pub(crate) struct PendingSaveCheck {
     pending: Mutex<Option<SaveCheck>>,
 }
 
-impl PendingSaveAuthority {
+impl PendingSaveCheck {
     pub(crate) fn publish(&self, mut check: SaveCheck) -> Result<SaveCheck> {
         check.token = ulid::Ulid::generate().to_string();
         *self
@@ -257,7 +263,7 @@ impl PendingSaveAuthority {
         Ok(false)
     }
 
-    fn validate_decision(
+    pub(crate) fn validate_decision(
         &self,
         fresh: &SaveCheck,
         decision: &SaveDecision,
@@ -278,7 +284,7 @@ impl PendingSaveAuthority {
 
     /// Called under the target/evidence guards. Nonwaivable source validation
     /// runs after consent checks but before any known-evidence effect.
-    pub(crate) fn authorize_write(
+    pub(crate) fn consent(
         &self,
         fresh: &SaveCheck,
         decision: Option<(SaveDecision, bool)>,
@@ -309,7 +315,7 @@ impl PendingSaveAuthority {
         })
     }
 
-    /// A matching post-write observation needs no new decision. Changed scope
+    /// A matching post-write check needs no new decision. Changed scope
     /// requires a fresh receipt; explicit decisions authorize evidence only.
     pub(crate) fn authorize_finalization(
         &self,
@@ -337,12 +343,25 @@ impl PendingSaveAuthority {
 pub(crate) fn target_revision(target: &Path) -> Result<Option<TargetRevision>> {
     Ok(match std::fs::symlink_metadata(target) {
         Ok(metadata) => {
-            if !metadata.is_file() || metadata.file_type().is_symlink() {
-                return Err(invalid("save target must be an ordinary file"));
+            if !metadata.is_file() && !metadata.file_type().is_symlink() {
+                return Err(crate::Error::Unsupported(
+                    "save target must be an ordinary file".into(),
+                ));
+            }
+            let stamp = crate::records::save_guard::change_stamp(target)?.ok_or_else(|| {
+                crate::Error::ChangedOnDisk {
+                    path: target.into(),
+                }
+            })?;
+            let hash = basecraft_io::hash_file(target)?;
+            if crate::records::save_guard::change_stamp(target)?.as_ref() != Some(&stamp) {
+                return Err(crate::Error::ChangedOnDisk {
+                    path: target.into(),
+                });
             }
             Some(TargetRevision {
-                hash: basecraft_io::hash_file(target)?,
-                stamp: crate::input_evidence::stamp(target)?,
+                hash,
+                stamp: stamp.0,
             })
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
@@ -354,7 +373,7 @@ pub(crate) fn target_revision(target: &Path) -> Result<Option<TargetRevision>> {
 /// modified some backing ledgers before failure; it is never a rollback claim.
 #[derive(Clone, Debug, Serialize)]
 pub struct EvidenceAction {
-    pub conflict: crate::input_evidence::EvidenceConflict,
+    pub conflict: crate::records::input_evidence::EvidenceConflict,
     pub policy: SavePolicy,
     pub completed: bool,
 }

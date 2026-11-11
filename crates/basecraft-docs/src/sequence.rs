@@ -350,6 +350,17 @@ impl SequenceDoc {
     // Saving.
 
     pub fn to_genbank(&self) -> genbank::Record {
+        let mut record = self.genbank_metadata();
+        record.sequence = self.read(0, self.len());
+        record.features = self
+            .features()
+            .map(|(_, feature)| feature.clone())
+            .collect();
+        record
+    }
+
+    /// Header for a streaming writer; features and sequence bytes stay borrowed.
+    pub fn genbank_metadata(&self) -> genbank::Record {
         let meta = self.genbank.clone().unwrap_or_else(|| GenbankMeta {
             molecule: "DNA".into(),
             division: "UNK".into(),
@@ -363,8 +374,8 @@ impl SequenceDoc {
             division: meta.division,
             date: meta.date,
             header: meta.header,
-            features: self.features().map(|(_, f)| f.clone()).collect(),
-            sequence: self.read(0, self.len()),
+            features: Vec::new(),
+            sequence: Vec::new(),
         }
     }
 

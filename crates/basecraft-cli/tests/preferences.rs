@@ -1,7 +1,10 @@
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use std::process::Command;
 
 #[test]
 fn preferences_reader_is_shared_validated_and_read_only() {
+    crate::isolated_profile::isolate!();
     let profile = tempfile::tempdir().unwrap();
     let read = || {
         Command::new(env!("CARGO_BIN_EXE_basecraft"))

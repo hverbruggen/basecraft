@@ -2,6 +2,8 @@
 //! mitochondrion (41.7 kb, genetic code 4). Skips when Pyrodigal isn't
 //! installed.
 
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use std::path::Path;
 
 use basecraft_ops::Session;
@@ -31,6 +33,7 @@ fn fixture() -> std::path::PathBuf {
 
 #[test]
 fn predicts_genes_with_the_mitochondrial_code() {
+    crate::isolated_profile::isolate!();
     let Some(mut p) = plugin() else { return };
     let dir = tempfile::tempdir().unwrap();
     let mut session = Session::unlogged(dir.path());
@@ -83,6 +86,7 @@ fn predicts_genes_with_the_mitochondrial_code() {
 
 #[test]
 fn short_sequences_need_code_4_or_11() {
+    crate::isolated_profile::isolate!();
     let Some(mut p) = plugin() else { return };
     let dir = tempfile::tempdir().unwrap();
     let text = std::fs::read_to_string(fixture()).unwrap();

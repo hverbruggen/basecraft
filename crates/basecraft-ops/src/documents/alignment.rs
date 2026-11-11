@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use basecraft_docs::FeatureId;
 use basecraft_docs::alignment::Undo as AlnUndo;
@@ -69,24 +69,19 @@ impl Document for OpenedAlignment {
         Ok(())
     }
 
-    fn write(
+    fn prepare_write(
         &self,
         target: &Path,
         format: Format,
         _recovery_root: &Path,
         _publication: &super::WritePublication,
-    ) -> Result<Vec<(PathBuf, String)>> {
+    ) -> Result<super::PreparedWrite> {
         if format != self.format {
             return Err(invalid("saving to a different format isn't supported yet"));
         }
-        let mut hash = String::new();
-        basecraft_io::write_atomic(target, |w| {
-            let mut hw = HashingWriter::new(w);
-            files::write_alignment(&self.doc, &mut hw)?;
-            hash = hw.hash();
-            Ok(())
-        })?;
-        Ok(vec![(target.to_path_buf(), hash)])
+        let mut prepared = super::PreparedWrite::default();
+        prepared.push(target, |w| files::write_alignment(&self.doc, w))?;
+        Ok(prepared)
     }
 
     fn saved_hashes(

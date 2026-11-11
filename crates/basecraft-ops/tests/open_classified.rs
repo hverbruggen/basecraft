@@ -1,4 +1,6 @@
 //! Classification belongs to the payload admitted by the common open path.
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use std::path::Path;
 
 use basecraft_io::hash_bytes;
@@ -41,6 +43,7 @@ fn agree(path: &Path, expected: files::Kind) {
 #[test]
 fn all_six_payloads_agree_across_open_apis() {
     use files::Kind;
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     for (name, bytes, kind) in [
         ("one.fasta", b">a\nACGT\n".as_slice(), Kind::Sequence),
@@ -101,6 +104,7 @@ fn all_fasta_fixtures_return_the_loaded_kind() {
             }
         }
     }
+    crate::isolated_profile::isolate!();
     let mut count = 0;
     visit(
         &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures"),
@@ -111,6 +115,7 @@ fn all_fasta_fixtures_return_the_loaded_kind() {
 
 #[test]
 fn explicit_alignment_names_keep_precedence_over_gff() {
+    crate::isolated_profile::isolate!();
     for name in ["rows.fasta", "rows.afa", "rows.aln.fasta"] {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(name);
@@ -129,6 +134,7 @@ fn explicit_alignment_names_keep_precedence_over_gff() {
 
 #[test]
 fn failed_preparation_admits_no_document_and_preserves_errors() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let valid = dir.path().join("valid.fasta");
     std::fs::write(&valid, b">a\nACGT\n").unwrap();
@@ -160,6 +166,7 @@ fn failed_preparation_admits_no_document_and_preserves_errors() {
 
 #[test]
 fn loaded_hash_and_first_durable_action_guards_are_preserved() {
+    crate::isolated_profile::isolate!();
     for companion in [false, true] {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("one.fasta");
@@ -204,7 +211,8 @@ fn loaded_hash_and_first_durable_action_guards_are_preserved() {
 #[test]
 fn classified_route_reads_main_once_without_passive_sync() {
     use basecraft_io::counters;
-    use basecraft_ops::analysis_store::ArtifactRun;
+    use basecraft_ops::records::ArtifactRun;
+    crate::isolated_profile::isolate!();
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/compact");
     for (name, bytes, bound) in [
         (
@@ -256,6 +264,7 @@ fn classified_route_reads_main_once_without_passive_sync() {
 
 #[test]
 fn classification_validates_through_the_last_record() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("late.fasta");
     let mut bytes = b">a\nA\n>b\nT\n>later\n".to_vec();
@@ -276,7 +285,8 @@ fn classification_validates_through_the_last_record() {
 
 #[test]
 fn bound_tree_errors_warn_and_preserve_the_standard_tree() {
-    use basecraft_ops::analysis_store::ArtifactRun;
+    use basecraft_ops::records::ArtifactRun;
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("bound.nwk");
     std::fs::write(&path, b"(a,b);\n").unwrap();
@@ -303,6 +313,7 @@ fn bound_tree_errors_warn_and_preserve_the_standard_tree() {
 #[test]
 fn companion_capture_counts_every_read_on_both_session_routes() {
     use basecraft_io::counters;
+    crate::isolated_profile::isolate!();
     let main = b">a description\nACGT\n>b retained\nTTAA\n";
     let gff = b"##gff-version 3\na\t.\tgene\t1\t3\t.\t+\t.\tID=gene1\n";
     for name in ["records.fasta", "records.afa", "records.aln.fasta"] {
@@ -355,6 +366,7 @@ fn companion_capture_counts_every_read_on_both_session_routes() {
 #[test]
 fn gff_capture_preserves_error_and_alignment_contracts() {
     use basecraft_ops::Error;
+    crate::isolated_profile::isolate!();
     for name in ["records.fasta", "records.afa", "records.aln.fasta"] {
         for gff in [
             b"".as_slice(),
@@ -401,6 +413,7 @@ fn gff_capture_preserves_error_and_alignment_contracts() {
 #[test]
 fn invalid_main_with_present_gff_keeps_empty_and_parse_errors() {
     use basecraft_ops::Error;
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("invalid.fasta");
     std::fs::write(files::gff_sidecar(&path), b"##gff-version 3\n").unwrap();
@@ -431,6 +444,7 @@ fn invalid_main_with_present_gff_keeps_empty_and_parse_errors() {
 fn unreadable_gff_is_not_absent_and_direct_errors_remain_io() {
     use basecraft_ops::Error;
     use std::os::unix::fs::PermissionsExt;
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("denied.fasta");
     let sidecar = files::gff_sidecar(&path);

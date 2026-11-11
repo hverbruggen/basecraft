@@ -1,4 +1,6 @@
 //! Independent REV-0004 probes: failures describe the required persistence contract.
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_ops::records::AlignmentLinkExt;
 use basecraft_ops::{Session, files, records, records::AlignmentLink};
 
@@ -8,6 +10,7 @@ fn write_alignment(path: &std::path::Path, bases: &str) {
 
 #[test]
 fn save_as_replaces_destination_view_association() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let source = root.join("source.afa");
@@ -37,6 +40,7 @@ fn save_as_replaces_destination_view_association() {
 
 #[test]
 fn failed_save_as_does_not_expose_origin_as_explicit_view() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let source = root.join("source.afa");
@@ -77,6 +81,7 @@ fn failed_save_as_does_not_expose_origin_as_explicit_view() {
 #[cfg(unix)]
 #[test]
 fn dangling_explicit_view_link_refuses_fallback() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let source = root.join("source.afa");
@@ -93,6 +98,7 @@ fn dangling_explicit_view_link_refuses_fallback() {
 
 #[test]
 fn failed_view_replacement_preserves_retained_snapshot() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let source = root.join("source.afa");

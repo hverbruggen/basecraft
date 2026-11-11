@@ -25,8 +25,6 @@ pub mod qobject {
         #[qinvokable]
         fn update(self: Pin<&mut AppSettings>, key: &QString, value: &QString) -> bool;
         #[qinvokable]
-        fn import_legacy(self: Pin<&mut AppSettings>, values: &QString) -> bool;
-        #[qinvokable]
         fn project_history(self: &AppSettings) -> QString;
         #[qinvokable]
         fn remember_project(self: Pin<&mut AppSettings>, path: &QString) -> QString;
@@ -93,8 +91,6 @@ fn change(key: &str, value: &serde_json::Value) -> Result<Change, String> {
         "inputBoxHeight" => Change::InputBoxHeight(integer()?),
         "localCpuThreads" => Change::CpuThreads(integer()?),
         "recovery" => Change::Recovery(boolean()?),
-        "rememberWorkspace" => Change::RememberWorkspace(boolean()?),
-        "persistentBrowsingIndexes" => Change::PersistentBrowsingIndexes(boolean()?),
         "shortcut" => Change::Shortcut {
             id: value
                 .get("id")
@@ -188,16 +184,6 @@ impl qobject::AppSettings {
             .map_err(|e| e.to_string())
             .and_then(|v| change(&key.to_string(), &v))
             .and_then(|change| store()?.update(change).map_err(|e| e.to_string()));
-        self.publish(result)
-    }
-    fn import_legacy(self: Pin<&mut Self>, values: &QString) -> bool {
-        let result = store().and_then(|store| {
-            import_legacy_values(
-                &store,
-                &values.to_string(),
-                std::env::var_os("BASECRAFT_PROFILE_DIR").is_some(),
-            )
-        });
         self.publish(result)
     }
 }
@@ -453,84 +439,14 @@ fn history_reply(result: Result<Vec<PathBuf>, String>) -> QString {
     )
 }
 
-fn import_legacy_values(
-    store: &SettingsStore,
-    values: &str,
-    isolated: bool,
-) -> Result<Preferences, String> {
-    let existing = store.load().map_err(|e| e.to_string())?;
-    if isolated || existing.migration.qsettings_imported {
-        return Ok(existing);
-    }
-    let values: serde_json::Map<String, serde_json::Value> =
-        serde_json::from_str(values).map_err(|e| e.to_string())?;
-    if values.values().all(serde_json::Value::is_null) {
-        return Ok(existing);
-    }
-    // QSettings INI values can arrive as strings after restarting Qt. Only
-    // migration accepts these representations; live edits stay strictly typed.
-    // A bad legacy field must not discard valid neighbours or block startup.
-    let changes = values
-        .iter()
-        .filter_map(|(key, value)| {
-            let normalized = match (key.as_str(), value.as_str()) {
-                ("showGc" | "sidebarOpen" | "alignmentInsert", Some(text)) => {
-                    match text.trim().to_ascii_lowercase().as_str() {
-                        "true" | "1" => serde_json::json!(true),
-                        "false" | "0" => serde_json::json!(false),
-                        _ => return None,
-                    }
-                }
-                ("orfMinCodons" | "localCpuThreads", Some(text)) => {
-                    serde_json::json!(text.trim().parse::<u32>().ok()?)
-                }
-                _ => value.clone(),
-            };
-            let candidate = change(key, &normalized).ok()?;
-            Preferences::default()
-                .resolve_session(std::slice::from_ref(&candidate))
-                .ok()?;
-            Some(candidate)
-        })
-        .collect();
-    store.import_qsettings(changes).map_err(|e| e.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn legacy_ini_strings_and_invalid_fields_migrate_independently() {
-        let temp = tempfile::tempdir().unwrap();
-        let store = SettingsStore::new(temp.path().join("preferences.toml"));
-        let prefs = import_legacy_values(&store, r#"{"alignmentInsert":"false","showGc":"true","sidebarOpen":"bogus","orfMinCodons":"250","localCpuThreads":"0","unknown":"old"}"#, false).unwrap();
-        assert!(!prefs.ui.alignment_insert);
-        assert!(prefs.ui.show_gc && prefs.ui.sidebar_open);
-        assert_eq!(prefs.ui.orf_min_codons, 250);
-        assert_eq!(prefs.compute.local_cpu_threads, 4);
-        assert!(prefs.migration.qsettings_imported);
-        assert_eq!(
-            import_legacy_values(&store, r#"{"alignmentInsert":"true"}"#, false).unwrap(),
-            prefs
-        );
-    }
     #[test]
     fn settings_snapshot_has_complete_defaults_before_loading() {
         let state = SettingsRust::default();
         let prefs: Preferences = serde_json::from_str(&state.snapshot.to_string()).unwrap();
         assert_eq!(prefs, Preferences::default());
-    }
-    #[test]
-    fn isolated_profile_ignores_global_legacy_store_without_writes() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("config/preferences.toml");
-        let store = SettingsStore::new(path.clone());
-        let prefs =
-            import_legacy_values(&store, r#"{"showGc":false,"localCpuThreads":8}"#, true).unwrap();
-        assert!(prefs.ui.show_gc);
-        assert_eq!(prefs.compute.local_cpu_threads, 4);
-        assert!(!path.parent().unwrap().exists());
-        assert!(!prefs.migration.qsettings_imported);
     }
     #[test]
     fn qml_values_require_the_declared_type() {

@@ -28,5 +28,25 @@ pub fn enter(name: &str) -> Option<PathBuf> {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+    if std::env::var_os("BASECRAFT_TEST_REPORT").is_some() {
+        eprint!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
     None
 }
+
+#[allow(unused_macros)]
+macro_rules! isolate {
+    () => {
+        if $crate::isolated_profile::enter(std::thread::current().name().expect("test thread"))
+            .is_none()
+        {
+            return;
+        }
+    };
+}
+#[allow(unused_imports)]
+pub(crate) use isolate;

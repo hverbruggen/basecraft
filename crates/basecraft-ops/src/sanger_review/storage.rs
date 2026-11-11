@@ -1,6 +1,8 @@
 //! Sanger adapters for the common artifact store and one-source evidence ledgers.
 use super::{SangerReview, StoredReview};
-use crate::{analysis_store::ArtifactRun, error::invalid, input_evidence as inputs};
+use crate::{
+    error::invalid, records::analysis_store::ArtifactRun, records::input_evidence as inputs,
+};
 use basecraft_docs::sanger::SangerPlacementExt;
 use basecraft_docs::sanger::{SangerDraft, SangerPlacement};
 use basecraft_protocol::provenance::{ArtifactRevision, Completeness, Publication};
@@ -1095,12 +1097,14 @@ impl SangerReview {
         }
     }
 
-    pub(crate) fn write_session_review(
+    /// Publish the review's support run and stage its bytes; the shared save
+    /// owner replaces the target, then `bind_session_review` links the run.
+    pub(crate) fn prepare_session_review(
         &self,
         target: &Path,
         logical: &Path,
         publication_context: &crate::documents::WritePublication,
-    ) -> crate::Result<Vec<(PathBuf, String)>> {
+    ) -> crate::Result<crate::documents::PreparedWrite> {
         for set in std::iter::once(self).chain(self.retained.iter()) {
             for input in std::iter::once(&set.draft_path)
                 .chain(set.draft.inputs.iter().map(|read| &read.path))
@@ -1170,38 +1174,20 @@ impl SangerReview {
             reference: None,
         });
         crate::records::provenance::publish(run.directory(), &support)?;
-        if matches!(
-            publication_context,
-            crate::documents::WritePublication::Create
-        ) {
-            let mut staged = tempfile::NamedTempFile::new_in(
-                target
-                    .parent()
-                    .filter(|p| !p.as_os_str().is_empty())
-                    .unwrap_or(Path::new(".")),
-            )?;
-            std::io::Write::write_all(staged.as_file_mut(), &bytes)?;
-            staged.as_file().sync_all()?;
-            staged
-                .persist_noclobber(target)
-                .map_err(|error| crate::Error::Io(error.error))?;
-            basecraft_platform::files::sync_directory(
-                target
-                    .parent()
-                    .filter(|p| !p.as_os_str().is_empty())
-                    .unwrap_or(Path::new(".")),
-            )?;
-        } else {
-            basecraft_io::write_atomic(target, |writer| writer.write_all(&bytes))?;
-        }
+        let mut prepared = crate::documents::PreparedWrite::default();
+        prepared.push(target, |writer| writer.write_all(&bytes))?;
+        prepared.run = Some(run);
+        Ok(prepared)
+    }
+
+    pub(crate) fn bind_session_review(target: &Path, run: &ArtifactRun) -> crate::Result<()> {
         run.bind(target).map_err(|error| crate::Error::Damaged {
             path: target.into(),
             detail: format!(
                 "review data saved; binding incomplete: {error}; repair evidence: {}",
                 run.directory().display()
             ),
-        })?;
-        Ok(vec![(target.to_owned(), basecraft_io::hash_bytes(&bytes))])
+        })
     }
 }
 
@@ -1548,44 +1534,8 @@ mod tests {
         let doc = session.open(&result).unwrap();
         let saved_again = package.join("saved-again.afa");
         let packaged_bytes = std::fs::read(&result).unwrap();
-        let refused = match session.save(doc, Some(&saved_again)).unwrap_err() {
-            crate::Error::SaveCheckRequired(check) => check,
-            error => panic!("expected incomplete-inspection consent, got {error}"),
-        };
-        assert!(!refused.evidence().is_complete());
-        assert!(!saved_again.exists());
-        assert_eq!(std::fs::read(&result).unwrap(), packaged_bytes);
-
-        // Inspect a fresh check, then explicitly acknowledge only this missing
-        // store on the same Session/document. Unknown inspection is independent
-        // of known-conflict policy; no known conflicts authorize a policy change.
-        let check = session.check_save(doc, Some(&saved_again)).unwrap();
-        assert_ne!(check.token(), refused.token());
-        assert_eq!(check.target(), saved_again);
-        assert!(check.evidence().conflict.analyses.is_empty());
-        assert!(matches!(
-            &check.evidence().issues[..],
-            [issue] if issue.code == inputs::InspectionCode::StoreUnavailable
-                && issue.relevance == inputs::InspectionRelevance::Unknown
-                && issue.location == folder.join(".basecraft/analyses-v1")
-        ));
-        let decision = session
-            .decide_save(
-                doc,
-                Some(&saved_again),
-                check.token(),
-                inputs::SavePolicy::Cancel,
-                true,
-            )
-            .unwrap();
-        let outcome = session
-            .save_with_decision(doc, Some(&saved_again), decision)
-            .unwrap();
-        assert!(matches!(
-            &outcome.warnings[..],
-            [crate::session::SaveWarning::EvidenceNotChecked { issues }]
-                if issues == &check.evidence().issues
-        ));
+        // Save As to a new path is never blocked by the deleted original project.
+        session.save(doc, Some(&saved_again)).unwrap();
         assert_eq!(std::fs::read(&saved_again).unwrap(), packaged_bytes);
         assert_eq!(
             crate::records::provenance::verify(&saved_again).unwrap(),

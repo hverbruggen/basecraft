@@ -22,7 +22,7 @@ fn hidden_sidecar(run: &Path, tree: &Path) -> PathBuf {
 }
 
 pub fn sidecar(tree: &Path) -> PathBuf {
-    if let Ok(Some(run)) = crate::analysis_store::ArtifactRun::for_result(tree) {
+    if let Ok(Some(run)) = crate::records::analysis_store::ArtifactRun::for_result(tree) {
         return hidden_sidecar(&run, tree);
     }
     let mut name = tree.as_os_str().to_os_string();
@@ -329,7 +329,7 @@ pub trait AlignmentLinkExt: Sized {
         source: &Path,
         input: &Path,
         version: u64,
-        run: &crate::analysis_store::ArtifactRun,
+        run: &crate::records::analysis_store::ArtifactRun,
     ) -> Result<Vec<PathBuf>>;
     fn create(
         tree: &Path,
@@ -374,7 +374,7 @@ impl LinkEvidence for AlignmentLink {
             .join(name)
             .canonicalize()?;
         // Never trust an arbitrary run supplied by association metadata.
-        if let Some(bound) = crate::analysis_store::ArtifactRun::for_result(tree_path)?
+        if let Some(bound) = crate::records::analysis_store::ArtifactRun::for_result(tree_path)?
             && bound != run
         {
             return Err(invalid(
@@ -385,19 +385,19 @@ impl LinkEvidence for AlignmentLink {
             .parent()
             .and_then(Path::parent)
             .ok_or_else(|| invalid("reference run has no store"))?;
-        crate::analysis_store::ArtifactRun::validate_store(store)?;
+        crate::records::analysis_store::ArtifactRun::validate_store(store)?;
         Ok(run)
     }
 
     fn verify_snapshot(&self, tree_path: &Path) -> Result<PathBuf> {
         if self.schema == 2 {
             let run = self.evidence_run(tree_path)?;
-            let input = crate::input_evidence::read_input(&run)?;
+            let input = crate::records::input_evidence::read_input(&run)?;
             if input.state == basecraft_protocol::input_records::EvidenceState::Broken {
                 return Err(invalid("alignment evidence explicitly broken"));
             }
             let source = if let Some(reference) = &input.source {
-                crate::input_evidence::verified_source(&run, reference)?
+                crate::records::input_evidence::verified_source(&run, reference)?
             } else {
                 run.join("submitted.fasta")
             };
@@ -476,10 +476,10 @@ impl AlignmentLinkExt for AlignmentLink {
         source: &Path,
         input: &Path,
         version: u64,
-        run: &crate::analysis_store::ArtifactRun,
+        run: &crate::records::analysis_store::ArtifactRun,
     ) -> Result<Vec<PathBuf>> {
         names(input)?;
-        let record = crate::input_evidence::read_input(run.directory())?;
+        let record = crate::records::input_evidence::read_input(run.directory())?;
         let link = Self {
             schema: 2,
             source: relative_to(&std::path::absolute(source)?, tree)?,
@@ -495,7 +495,7 @@ impl AlignmentLinkExt for AlignmentLink {
             extra: BTreeMap::new(),
         };
         let metadata = hidden_sidecar(run.directory(), tree);
-        crate::input_evidence::write_json(&metadata, &link)?;
+        crate::records::input_evidence::write_json(&metadata, &link)?;
         run.bind(tree)?;
         Ok(vec![metadata])
     }
@@ -539,7 +539,7 @@ impl AlignmentLinkExt for AlignmentLink {
     }
 
     fn read(tree: &Path) -> Result<Self> {
-        crate::analysis_store::ArtifactRun::for_result(tree)?;
+        crate::records::analysis_store::ArtifactRun::for_result(tree)?;
         let metadata: serde_json::Value =
             serde_json::from_reader(std::fs::File::open(sidecar(tree))?)?;
         if let Some(reason) = metadata
@@ -592,10 +592,9 @@ impl AlignmentLinkExt for AlignmentLink {
         };
         let mut status = format!("{label}: {}", self.source.display());
         if self.schema == 2 {
-            return match self
-                .evidence_run(tree_path)
-                .and_then(|run| crate::input_evidence::read_input(&run).map(|input| (run, input)))
-            {
+            return match self.evidence_run(tree_path).and_then(|run| {
+                crate::records::input_evidence::read_input(&run).map(|input| (run, input))
+            }) {
                 Ok((_, input))
                     if input.state
                         == basecraft_protocol::input_records::EvidenceState::Generated =>
@@ -615,7 +614,7 @@ impl AlignmentLinkExt for AlignmentLink {
                 }
                 Ok((run, input)) => {
                     if input.source.as_ref().is_some_and(|r| {
-                        crate::input_evidence::stamp(&run.join(&r.path)).is_ok_and(|s| {
+                        crate::records::input_evidence::stamp(&run.join(&r.path)).is_ok_and(|s| {
                             s.size == r.stamp.size
                                 && s.modified_seconds == r.stamp.modified_seconds
                                 && s.modified_nanos == r.stamp.modified_nanos
@@ -660,14 +659,14 @@ impl AlignmentLinkExt for AlignmentLink {
             link.source = relative_to(&self.source, to)?;
             // Same-folder forest components share one run; no input copy.
             let metadata = hidden_sidecar(&run, to);
-            crate::input_evidence::write_json(&metadata, &link)?;
-            let original_binding = crate::analysis_store::ArtifactRun::for_result(from)?
+            crate::records::input_evidence::write_json(&metadata, &link)?;
+            let original_binding = crate::records::analysis_store::ArtifactRun::for_result(from)?
                 .ok_or_else(|| invalid("missing run binding"))?;
             let id = original_binding
                 .file_name()
                 .ok_or_else(|| invalid("run identity missing"))?
                 .to_string_lossy();
-            crate::analysis_store::bind_existing(&run, &id, to)?;
+            crate::records::analysis_store::bind_existing(&run, &id, to)?;
             return Ok(metadata);
         }
         link.snapshot = relative_to(
@@ -705,6 +704,7 @@ mod tests {
     use super::*;
     #[test]
     fn tree_save_as_carries_snapshot_and_replays() {
+        crate::isolated_profile::isolate!();
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("a.afa");
         let tree_path = dir.path().join("a.nwk");
@@ -725,6 +725,7 @@ mod tests {
 
     #[test]
     fn linkage_checks_labels_snapshot_and_changed_source() {
+        crate::isolated_profile::isolate!();
         let d = tempfile::tempdir().unwrap();
         let source = d.path().join("a.afa");
         let tree_path = d.path().join("a.nwk");

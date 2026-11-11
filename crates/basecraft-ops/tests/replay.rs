@@ -1,4 +1,6 @@
-//! Record sessions, then replay the log and check every step.
+#[path = "support/isolated_profile.rs"]
+mod isolated_profile;
+// Record sessions, then replay the log and check every step.
 
 use std::path::Path;
 
@@ -88,6 +90,7 @@ fn record_session(root: &Path) {
 
 #[test]
 fn recorded_session_replays_exactly() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     std::fs::create_dir_all(root.join("seqs")).unwrap();
@@ -110,6 +113,7 @@ fn recorded_session_replays_exactly() {
 
 #[test]
 fn extract_clips_annotations_and_marks_cuts_incomplete() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     std::fs::create_dir_all(root.join("seqs")).unwrap();
@@ -132,6 +136,7 @@ fn extract_clips_annotations_and_marks_cuts_incomplete() {
 
 #[test]
 fn extracts_spliced_cds_and_reverse_complements() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     std::fs::create_dir_all(root.join("seqs")).unwrap();
@@ -199,6 +204,7 @@ fn extracts_spliced_cds_and_reverse_complements() {
 
 #[test]
 fn grouped_operations_undo_together_and_replay() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     std::fs::create_dir_all(root.join("seqs")).unwrap();
@@ -246,6 +252,7 @@ fn grouped_operations_undo_together_and_replay() {
 
 #[test]
 fn replay_detects_divergence() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     std::fs::create_dir_all(root.join("seqs")).unwrap();
@@ -292,6 +299,7 @@ fn replay_detects_divergence() {
 
 #[test]
 fn fasta_with_gff_sidecar_saves_and_replays() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     std::fs::write(root.join("g.fasta"), ">chr1 test\nACGTACGTAC\nACGTACGTAC\n").unwrap();
@@ -342,6 +350,7 @@ fn rows_text(s: &Session, d: basecraft_ops::DocId) -> Vec<String> {
 /// a save; replay must reproduce each step.
 #[test]
 fn alignment_session_replays_exactly() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     std::fs::write(root.join("x.aln.fasta"), ALN).unwrap();
@@ -490,6 +499,7 @@ fn alignment_session_replays_exactly() {
 #[test]
 fn multi_record_fasta_opens_as_alignment() {
     use basecraft_ops::files::Kind;
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     std::fs::write(root.join("set.fasta"), ">a\nACGT\n>b\nACG\n").unwrap();
@@ -521,6 +531,7 @@ fn clade(tips: &[&str]) -> Vec<String> {
 #[test]
 fn tree_session_replays_exactly() {
     use basecraft_protocol::{CladeAnnotation, SupportPlacement, TreeStyle};
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     std::fs::write(root.join("t.nwk"), "(A:1,B:2,(C:3,(D:4,E:5)90:6)80:7);\n").unwrap();
@@ -650,6 +661,7 @@ fn tree_session_replays_exactly() {
 
 #[test]
 fn sequence_addition_expands_reference_and_replays_with_undo() {
+    crate::isolated_profile::isolate!();
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let path = root.join("addition.afa");
@@ -704,6 +716,7 @@ fn sequence_addition_expands_reference_and_replays_with_undo() {
 
 #[test]
 fn automatic_root_operations_undo_redo_save_reload_and_replay() {
+    crate::isolated_profile::isolate!();
     for op in [Op::TreeMidpointRoot {}, Op::TreeMinimumVarianceRoot {}] {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
@@ -757,6 +770,7 @@ fn automatic_root_operations_undo_redo_save_reload_and_replay() {
 
 #[test]
 fn automatic_root_error_keeps_document_and_history() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("missing.nwk");
     std::fs::write(&path, "(A,B:2);").unwrap();
@@ -777,6 +791,7 @@ fn automatic_root_error_keeps_document_and_history() {
 
 #[test]
 fn strict_sequence_proposals_stage_invalid_batches_and_replay_one_undo_group() {
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("sequence.fa");
     std::fs::write(&path, ">sequence\nACGTACGT\n").unwrap();
@@ -844,6 +859,7 @@ fn strict_sequence_proposals_stage_invalid_batches_and_replay_one_undo_group() {
 #[test]
 fn script_actor_edits_read_back_replay_and_show_as_script() {
     use basecraft_protocol::Actor;
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     std::fs::write(root.join("g.fasta"), ">g\nACGTACGT\n").unwrap();
@@ -904,6 +920,7 @@ fn submission_edits_undo_save_and_replay() {
     use basecraft_protocol::submission::{
         BatchSettings, Decision, FrameChoice, ItsComponent, Marker, RowDecision, SubmissionEdit,
     };
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     std::fs::write(root.join("its.afa"), ">a\nACGTACGT\n>b\nACGTAC--\n").unwrap();

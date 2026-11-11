@@ -87,44 +87,35 @@ impl Document for OpenedTree {
         Some(files::tree_sidecar(target))
     }
 
-    fn write(
+    fn prepare_write(
         &self,
         target: &Path,
         format: Format,
         _recovery_root: &Path,
         _publication: &super::WritePublication,
-    ) -> Result<Vec<(PathBuf, String)>> {
+    ) -> Result<super::PreparedWrite> {
         if format != Format::Tree {
             return Err(Error::Unsupported(
                 "a tree can only be saved as a tree file".into(),
             ));
         }
-        let mut hashes = Vec::new();
+        let mut prepared = super::PreparedWrite::default();
         let sidecar = files::tree_sidecar(target);
-        for (path, sidecar_file) in [(target, false), (sidecar.as_path(), true)] {
-            let mut hash = String::new();
-            basecraft_io::write_atomic(path, |w| {
-                let mut hw = HashingWriter::new(w);
-                if sidecar_file {
-                    files::write_companion(
-                        &files::tree_companion(
-                            &self.doc,
-                            &basecraft_io::hash_file(target).map_err(std::io::Error::other)?,
-                        ),
-                        &mut hw,
-                    )?;
-                } else {
-                    files::write_tree(self, &mut hw)?;
-                }
-                hash = hw.hash();
-                Ok(())
-            }).map_err(|error| if sidecar_file {
-                Error::Damaged { path: target.into(), detail: format!("tree data saved; metadata incomplete: {error}. Keep the open document or temporary recovery and retry saving") }
-            } else { error.into() })?;
-            hashes.push((path.to_path_buf(), hash));
-        }
-        crate::analysis_store::ArtifactRun::refresh_binding(target).map_err(|error| Error::Damaged { path: target.into(), detail: format!("tree and metadata saved; binding publication incomplete: {error}. Keep the open document and retry saving") })?;
-        Ok(hashes)
+        let hash = prepared.push(target, |w| files::write_tree(self, w))?;
+        prepared.push(&sidecar, |w| {
+            files::write_companion(&files::tree_companion(&self.doc, &hash), w)
+        })?;
+        Ok(prepared)
+    }
+
+    fn finish_write(
+        &self,
+        target: &Path,
+        _: &[(PathBuf, String)],
+        _: Option<&crate::records::analysis_store::ArtifactRun>,
+        _: &super::WritePublication,
+    ) -> Result<()> {
+        crate::records::analysis_store::ArtifactRun::refresh_binding(target)
     }
 
     fn saved_hashes(

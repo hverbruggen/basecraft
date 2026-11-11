@@ -18,7 +18,7 @@ pub fn companion(path: &Path) -> PathBuf {
 /// The final fallback is the original companion spelling, even if it does not
 /// exist. Selection does not validate content or establish complete provenance.
 pub fn bundle_for_result(result: &Path) -> PathBuf {
-    if let Ok(Some(hidden)) = crate::analysis_store::ArtifactRun::for_result(result)
+    if let Ok(Some(hidden)) = crate::records::analysis_store::ArtifactRun::for_result(result)
         && hidden.join("manifest.json").is_file()
     {
         // A support-only binding retains input evidence, while LocalOnly history
@@ -162,7 +162,7 @@ fn copy_atomic(source: &Path, target: &Path) -> Result<()> {
 
 pub fn inspect(result: &Path) -> Result<Publication> {
     // A damaged hidden binding is an error, never a reason to use stale legacy context.
-    crate::analysis_store::ArtifactRun::for_result(result)?;
+    crate::records::analysis_store::ArtifactRun::for_result(result)?;
     let bundle = bundle_for_result(result);
     let publication: Publication =
         serde_json::from_slice(&read_record(&bundle.join("manifest.json"))?)?;
@@ -180,12 +180,12 @@ pub fn verify(result: &Path) -> Result<Vec<String>> {
     let bundle = bundle_for_result(result);
     let mut issues = verify_records(&bundle, &publication)?;
     if bundle.join("input.json").is_file() {
-        if crate::input_evidence::read_input(&bundle)?.state
+        if crate::records::input_evidence::read_input(&bundle)?.state
             == basecraft_protocol::input_records::EvidenceState::Broken
         {
             issues.push("Input evidence explicitly broken".into());
         }
-        match crate::input_evidence::verify_ancestors(&bundle) {
+        match crate::records::input_evidence::verify_ancestors(&bundle) {
             Ok(upstream) => issues.extend(upstream),
             Err(e) => issues.push(format!("Upstream evidence unavailable: {e}")),
         }
@@ -208,7 +208,7 @@ pub fn verify(result: &Path) -> Result<Vec<String>> {
                     artifact.id
                 ));
             }
-            if let Err(e) = crate::input_evidence::verified_source(&bundle, reference) {
+            if let Err(e) = crate::records::input_evidence::verified_source(&bundle, reference) {
                 issues.push(format!("{}: {e}", artifact.id));
             }
         }
@@ -216,7 +216,7 @@ pub fn verify(result: &Path) -> Result<Vec<String>> {
     if publication.outputs.is_empty() {
         return Err(invalid("publication has no output"));
     }
-    let hidden = crate::analysis_store::ArtifactRun::for_result(result)?.is_some();
+    let hidden = crate::records::analysis_store::ArtifactRun::for_result(result)?.is_some();
     for (index, output) in publication.outputs.iter().enumerate() {
         let path = if index == 0 && !hidden {
             result.to_path_buf()
@@ -337,7 +337,7 @@ pub(crate) fn verify_records(bundle: &Path, current: &Publication) -> Result<Vec
                         artifact.id
                     ));
                 }
-                if let Err(e) = crate::input_evidence::verified_source(bundle, reference) {
+                if let Err(e) = crate::records::input_evidence::verified_source(bundle, reference) {
                     issues.push(format!("{}: {e}", artifact.id));
                 }
             }
@@ -367,7 +367,11 @@ pub(crate) fn verify_records(bundle: &Path, current: &Publication) -> Result<Vec
     Ok(issues)
 }
 
-fn atomic_json(path: &Path, value: &impl serde::Serialize) -> Result<()> {
+fn stage_json(
+    prepared: &mut crate::documents::PreparedWrite,
+    path: &Path,
+    value: &impl serde::Serialize,
+) -> Result<()> {
     let mut bytes = serde_json::to_vec_pretty(value)?;
     bytes.push(b'\n');
     if bytes.len() > 64 << 20 {
@@ -376,7 +380,7 @@ fn atomic_json(path: &Path, value: &impl serde::Serialize) -> Result<()> {
             limit: 64 << 20,
         });
     }
-    basecraft_io::write_atomic(path, |w| w.write_all(&bytes))?;
+    prepared.push(path, |w| w.write_all(&bytes))?;
     Ok(())
 }
 
@@ -418,13 +422,13 @@ fn link_selected_inputs(bundle: &Path, publication: &Publication) -> Result<()> 
         return Ok(());
     }
     let mut input = if path.is_file() {
-        crate::input_evidence::read_input(bundle)?
+        crate::records::input_evidence::read_input(bundle)?
     } else {
         let output = publication
             .outputs
             .first()
             .ok_or_else(|| invalid("input publication has no result"))?;
-        crate::input_evidence::SubmittedInput {
+        crate::records::input_evidence::SubmittedInput {
             schema_version: 1,
             source: None,
             submitted_hash: output.hash.clone(),
@@ -459,7 +463,7 @@ fn link_selected_inputs(bundle: &Path, publication: &Publication) -> Result<()> 
         input
             .extra
             .insert("sanger_input_events".into(), serde_json::json!(processed));
-        return crate::input_evidence::write_json(&path, &input);
+        return crate::records::input_evidence::write_json(&path, &input);
     }
     let mut upstream = input.upstream.clone();
     // Keep ownership of selected edges separate from unrelated scientific inputs.
@@ -498,7 +502,7 @@ fn link_selected_inputs(bundle: &Path, publication: &Publication) -> Result<()> 
         }
         processed.retain(|id| id.as_str() != Some(event.as_str()));
     }
-    let inherited = crate::input_evidence::ancestors(bundle)?;
+    let inherited = crate::records::input_evidence::ancestors(bundle)?;
     for (event, dependency) in dependencies {
         if processed.iter().any(|id| id.as_str() == Some(event)) {
             continue;
@@ -526,10 +530,13 @@ fn link_selected_inputs(bundle: &Path, publication: &Publication) -> Result<()> 
                 return Err(invalid("Inherited selected input identity differs"));
             }
         } else {
-            let directory = crate::input_evidence::registered_run(id, expected)?;
+            let directory = crate::records::input_evidence::registered_run(id, expected)?;
             let reference = basecraft_protocol::input_records::UpstreamLink {
-                bundle: (crate::input_evidence::relative(&bundle.canonicalize()?, &directory)?)
-                    .into(),
+                bundle: (crate::records::input_evidence::relative(
+                    &bundle.canonicalize()?,
+                    &directory,
+                )?)
+                .into(),
                 id: (id).to_owned(),
                 hash: (expected).to_owned(),
             };
@@ -554,7 +561,7 @@ fn link_selected_inputs(bundle: &Path, publication: &Publication) -> Result<()> 
     input
         .extra
         .insert("sanger_input_events".into(), serde_json::json!(processed));
-    crate::input_evidence::write_json(&path, &input)
+    crate::records::input_evidence::write_json(&path, &input)
 }
 
 /// Publish a finished analysis run into its own bundle, keeping the events and
@@ -665,25 +672,47 @@ pub fn tool_run_entry(
 
 /// Artifacts must already be durable before this final manifest publication.
 pub fn publish(bundle: &Path, publication: &Publication) -> Result<()> {
+    stage(bundle, publication)?.publish().map(|_| ())
+}
+
+/// Stage the record, reports, README and manifest. They sync together on
+/// publication and are renamed in order, the manifest last.
+pub(crate) fn stage(
+    bundle: &Path,
+    publication: &Publication,
+) -> Result<crate::documents::PreparedWrite> {
     std::fs::create_dir_all(bundle.join("records"))?;
     link_selected_inputs(bundle, publication)?;
-    atomic_json(
+    let mut prepared = crate::documents::PreparedWrite::default();
+    stage_json(
+        &mut prepared,
         &bundle
             .join("records")
             .join(format!("{}.json", publication.id)),
         publication,
     )?;
-    write_reports(bundle, publication)?;
-    basecraft_io::write_atomic(&bundle.join("README.md"), |w| {
+    stage_reports(&mut prepared, bundle, publication)?;
+    prepared.push(&bundle.join("README.md"), |w| {
         w.write_all(
         b"# Basecraft provenance v1\n\nmanifest.json selects the latest publication. records/ holds immutable publication records; artifacts/ holds BLAKE3-addressed original and saved bytes. Reports are generated descriptions, not inferred laboratory protocols. Imported history before Basecraft is unknown. Checksums detect changes; they are not signatures. No file in this bundle should be executed to inspect or verify it.\n"
     )
     })?;
-    atomic_json(&bundle.join("manifest.json"), publication)
+    stage_json(&mut prepared, &bundle.join("manifest.json"), publication)?;
+    Ok(prepared)
 }
 
 /// Deterministic evidence-based reports. User-authored methods.md is untouched.
 pub fn write_reports(output: &Path, publication: &Publication) -> Result<()> {
+    let mut prepared = crate::documents::PreparedWrite::default();
+    stage_reports(&mut prepared, output, publication)?;
+    prepared.publish().map(|_| ())
+}
+
+fn stage_reports(
+    prepared: &mut crate::documents::PreparedWrite,
+    output: &Path,
+    publication: &Publication,
+) -> Result<()> {
     std::fs::create_dir_all(output.join("reports"))?;
     let report =
         crate::records::document_record::DocumentRecord::from_publication(publication).report()?;
@@ -715,10 +744,11 @@ pub fn write_reports(output: &Path, publication: &Publication) -> Result<()> {
         ("methods.generated.md", methods.as_bytes()),
         ("parameters.tsv", params.as_bytes()),
     ] {
-        basecraft_io::write_atomic(&output.join("reports").join(name), |w| w.write_all(bytes))?;
+        prepared.push(&output.join("reports").join(name), |w| w.write_all(bytes))?;
     }
-    atomic_json(&output.join("reports/source-map.json"), &mappings)?;
-    atomic_json(
+    stage_json(prepared, &output.join("reports/source-map.json"), &mappings)?;
+    stage_json(
+        prepared,
         &output.join("reports/manifest.json"),
         &serde_json::to_value(
             basecraft_protocol::report_records::ProvenanceReportManifest {
@@ -759,10 +789,10 @@ fn copy_tree(source: &Path, target: &Path) -> Result<()> {
 /// Result and complete retained bundle copied into a new directory. This is a
 /// data package, not a promise that external software can reproduce the result.
 pub fn package(result: &Path, destination: &Path) -> Result<()> {
-    if crate::analysis_store::ArtifactRun::for_result(result)?.is_some()
+    if crate::records::analysis_store::ArtifactRun::for_result(result)?.is_some()
         || bundle_for_result(result).join("input.json").is_file()
     {
-        return crate::input_evidence::package(result, destination);
+        return crate::records::input_evidence::package(result, destination);
     }
     let issues = verify(result)?;
     if !issues.is_empty() {

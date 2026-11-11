@@ -215,6 +215,30 @@ pub struct AlignmentLink {
     pub extra: BTreeMap<String, serde_json::Value>,
 }
 
+/// Current source catalogue. Per-source shards hold the affected store closure.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct IndexFile<T> {
+    pub checksum: String,
+    pub value: T,
+}
+
+/// Local source and store locations, without unrelated run records.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct AnalysisInputIndex {
+    pub schema_version: u32,
+    pub stores: BTreeMap<PathBuf, String>,
+    pub sources: Vec<PathBuf>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct IndexedAnalysisStore {
+    pub identity: String,
+    pub sources: Vec<PathBuf>,
+    pub dependencies: Vec<PathBuf>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
 /// Checksummed JSONL envelope. Its flattened entry already carries log version `v`.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct JournalEntry<T = crate::LogEntry> {
@@ -247,6 +271,13 @@ pub struct ActivityInputRun {
     pub hash: String,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+/// Sources a pending ledger change can introduce. None means coverage is unknown.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct IndexChange {
+    pub store: PathBuf,
+    pub sources: Option<std::collections::BTreeSet<PathBuf>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]

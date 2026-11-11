@@ -74,7 +74,7 @@ impl Lifecycle {
         let run = query
             .parent()
             .ok_or_else(|| Error::Protocol("missing query evidence directory".into()))?;
-        let input = basecraft_ops::input_evidence::read_input(run)?;
+        let input = basecraft_ops::records::read_input(run)?;
         if input.state != basecraft_protocol::input_records::EvidenceState::Generated
             || Some(input.transformation.as_str()) != transformation
             || input.submitted_hash != basecraft_io::hash_file(query)?
@@ -83,7 +83,7 @@ impl Lifecycle {
                 "retained query differs from shared input evidence".into(),
             ));
         }
-        let mut diagnostics = basecraft_ops::input_evidence::verify_ancestors(run)?;
+        let mut diagnostics = basecraft_ops::records::verify_ancestors(run)?;
         if run.join("manifest.json").is_file() {
             diagnostics.extend(basecraft_ops::records::verify(receipt)?);
             let publication = basecraft_ops::records::inspect(receipt)?;
@@ -167,7 +167,7 @@ impl Lifecycle {
             if now - previous >= 10.0 {
                 // If startup/shutdown fails before completion can be recorded,
                 // conservatively cover initialization + invocation + teardown.
-                basecraft_ops::input_evidence::write_json(&stamp, &(now + 60.0))?;
+                basecraft_ops::records::write_json(&stamp, &(now + 60.0))?;
                 return Ok(Some(ContactPermit { _lock: lock, stamp }));
             }
             std::thread::sleep(Duration::from_millis(50));
@@ -243,7 +243,7 @@ impl ContactPermit {
             .duration_since(UNIX_EPOCH)
             .map_err(|e| Error::Protocol(e.to_string()))?
             .as_secs_f64();
-        basecraft_ops::input_evidence::write_json(&self.stamp, &now)?;
+        basecraft_ops::records::write_json(&self.stamp, &now)?;
         Ok(())
     }
 }

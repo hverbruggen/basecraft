@@ -1,4 +1,6 @@
 //! Real local/pixi tool runs through the same registered route as the GUI.
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_ops::records::AlignmentLinkExt;
 mod common;
 
@@ -15,6 +17,7 @@ fn available(name: &str) -> bool {
 
 #[test]
 fn trimal_and_iqtree_preserve_identifiers_and_provenance() {
+    crate::isolated_profile::isolate!();
     if !available("trimal") || !available("iqtree") {
         eprintln!("Skipping: install pixi bio tools");
         return;

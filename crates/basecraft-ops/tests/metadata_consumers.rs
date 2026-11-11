@@ -1,4 +1,6 @@
 //! Canonical identity boundaries: explicit links, projection, display-only labels.
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_ops::{Session, metadata, records};
 use basecraft_protocol::{
     Op,
@@ -85,6 +87,7 @@ fn setup(root: &std::path::Path) -> (Session, basecraft_ops::DocId, basecraft_op
 
 #[test]
 fn explicit_roster_links_partitions_undo_replay_and_moved_project() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("original");
     std::fs::create_dir(&root).unwrap();
@@ -221,6 +224,7 @@ fn explicit_roster_links_partitions_undo_replay_and_moved_project() {
 
 #[test]
 fn partial_unknown_and_conflicting_links_are_truthful() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let (s, m, d) = setup(dir.path());
     let mut work = s.delimitation(d).unwrap().clone();
@@ -286,6 +290,7 @@ fn partial_unknown_and_conflicting_links_are_truthful() {
 
 #[test]
 fn composed_labels_skip_empty_fields_and_keep_scientific_ids() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let (mut s, m, _) = setup(dir.path());
     std::fs::write(dir.path().join("tree.nwk"), "(r1:1,r2:2,unknown:3);").unwrap();
@@ -353,6 +358,7 @@ fn composed_labels_skip_empty_fields_and_keep_scientific_ids() {
 
 #[test]
 fn copied_consumers_reject_another_metadata_owner_with_identical_ids() {
+    crate::isolated_profile::isolate!();
     let first = tempfile::tempdir().unwrap();
     let other = tempfile::tempdir().unwrap();
     let (mut a, am, aw) = setup(first.path());

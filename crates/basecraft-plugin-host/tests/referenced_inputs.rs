@@ -2,11 +2,15 @@
 //! without numerical mocks masquerading as scientific validation. Real
 //! scientific tools have separate tests.
 mod common;
+#[path = "../../basecraft-ops/tests/support/decided_save.rs"]
+mod decided_save;
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 
 use basecraft_ops::{
     Session,
-    analysis_store::ArtifactRun,
-    input_evidence::{self, SavePolicy},
+    records::ArtifactRun,
+    records::{self, SavePolicy},
 };
 use basecraft_protocol::Op;
 use std::{fmt::Write as _, path::Path};
@@ -26,6 +30,7 @@ fn files(root: &Path) -> Vec<std::path::PathBuf> {
 
 #[test]
 fn synthetic_large_clean_source_has_metadata_only_evidence_and_relocates() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let folder = dir.path().join("working");
     std::fs::create_dir(&folder).unwrap();
@@ -48,7 +53,7 @@ fn synthetic_large_clean_source_has_metadata_only_evidence_and_relocates() {
     let run = ArtifactRun::for_result(&result).unwrap().unwrap();
     // The clean source is referenced in place: its bytes are never copied.
     assert_eq!(
-        input_evidence::read_input(&run).unwrap().state,
+        records::read_input(&run).unwrap().state,
         basecraft_protocol::input_records::EvidenceState::Referenced
     );
     assert!(!run.join("submitted.fasta").exists());
@@ -94,6 +99,7 @@ fn synthetic_large_clean_source_has_metadata_only_evidence_and_relocates() {
 
 #[test]
 fn common_save_route_preserves_actual_original_and_dirty_submitted_input() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("input.fasta");
     std::fs::write(&source, ">a\nAAAA\n>b\nAAAT\n").unwrap();
@@ -125,7 +131,7 @@ fn common_save_route_preserves_actual_original_and_dirty_submitted_input() {
     let run = ArtifactRun::for_result(&dirty_output).unwrap().unwrap();
     assert_eq!(run, common::evidence(&dirty));
     assert_eq!(
-        input_evidence::read_input(&run).unwrap().state,
+        records::read_input(&run).unwrap().state,
         basecraft_protocol::input_records::EvidenceState::Generated
     );
     // The unsaved bytes that were analysed are retained with the run.
@@ -139,9 +145,7 @@ fn common_save_route_preserves_actual_original_and_dirty_submitted_input() {
         .save(doc, Some(&dir.path().join("new.fasta")))
         .unwrap();
     assert_eq!(std::fs::read(&source).unwrap(), old);
-    session
-        .save_with_evidence(doc, None, SavePolicy::PreserveCopy)
-        .unwrap();
+    decided_save::save_with_policy(&mut session, doc, None, SavePolicy::PreserveCopy).unwrap();
     let run = ArtifactRun::for_result(&output).unwrap().unwrap();
     assert_eq!(std::fs::read(common::verified_input(&run)).unwrap(), old);
     assert_eq!(
@@ -166,11 +170,13 @@ fn common_save_route_preserves_actual_original_and_dirty_submitted_input() {
         basecraft_ops::records::verify(&copied_result).unwrap(),
         Vec::<String>::new()
     );
-    assert!(basecraft_ops::records::replay(dir.path()).unwrap().ok());
+    let report = basecraft_ops::records::replay(dir.path()).unwrap();
+    assert!(report.ok(), "{:?}", report.problems);
 }
 
 #[test]
 fn downstream_evidence_follows_preservation_and_complete_export_keeps_dependency_closure() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source.afa");
     std::fs::write(&source, ">a\nAAAA\n>b\nAAAT\n").unwrap();
@@ -181,11 +187,11 @@ fn downstream_evidence_follows_preservation_and_complete_export_keeps_dependency
     for (source, output) in [(&source, &first), (&first, &second)] {
         common::align_copy(&registry, &mut session, source, output);
     }
-    let conflict = input_evidence::conflicts(&source).unwrap();
+    let conflict = records::conflicts(&source).unwrap();
     let analyses = common::analyses(&conflict);
     assert_eq!(analyses.len(), 2);
     assert_eq!(analyses.iter().filter(|a| a.direct).count(), 1);
-    input_evidence::resolve(&conflict, SavePolicy::PreserveCopy).unwrap();
+    records::resolve(&conflict, SavePolicy::PreserveCopy).unwrap();
     std::fs::remove_file(&source).unwrap();
     assert_eq!(
         basecraft_ops::records::verify(&second).unwrap(),
@@ -208,6 +214,7 @@ fn downstream_evidence_follows_preservation_and_complete_export_keeps_dependency
 
 #[test]
 fn save_as_descendants_receive_each_explicit_evidence_decision() {
+    crate::isolated_profile::isolate!();
     for policy in [
         SavePolicy::PreserveCopy,
         SavePolicy::RemoveAnalysis,
@@ -228,9 +235,9 @@ fn save_as_descendants_receive_each_explicit_evidence_decision() {
                 session.save(doc, Some(&saved)).unwrap();
             }
         }
-        let conflict = input_evidence::conflicts(&source).unwrap();
+        let conflict = records::conflicts(&source).unwrap();
         assert_eq!(common::analyses(&conflict).len(), 2, "{conflict:?}");
-        input_evidence::resolve(&conflict, policy).unwrap();
+        records::resolve(&conflict, policy).unwrap();
         std::fs::write(&source, ">a\nTTTT\n>b\nTTTA\n").unwrap();
         match policy {
             SavePolicy::PreserveCopy => {
@@ -248,7 +255,7 @@ fn save_as_descendants_receive_each_explicit_evidence_decision() {
                     conflict
                         .analyses
                         .iter()
-                        .all(|a| input_evidence::read_input(&a.run).unwrap().state
+                        .all(|a| records::read_input(&a.run).unwrap().state
                             == basecraft_protocol::input_records::EvidenceState::Broken)
                 );
                 assert_ne!(
@@ -263,6 +270,7 @@ fn save_as_descendants_receive_each_explicit_evidence_decision() {
 
 #[test]
 fn complete_export_remaps_history_and_retains_original_records_without_store() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source.afa");
     std::fs::write(&source, ">a\nAAAA\n>b\nAAAT\n").unwrap();
@@ -339,6 +347,7 @@ fn complete_export_remaps_history_and_retains_original_records_without_store() {
 
 #[test]
 fn one_save_decision_covers_every_backing_reference_without_merging_analyses() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source.afa");
     let old = b">a\nAAAA\n>b\nAAAT\n";
@@ -349,7 +358,7 @@ fn one_save_decision_covers_every_backing_reference_without_merging_analyses() {
     let second = root.path().join("second.afa");
     common::align_copy(&registry, &mut session, &source, &first);
     common::align_copy(&registry, &mut session, &source, &second);
-    let conflict = input_evidence::conflicts(&source).unwrap();
+    let conflict = records::conflicts(&source).unwrap();
     assert_eq!(
         conflict.analyses.len(),
         2,
@@ -358,12 +367,12 @@ fn one_save_decision_covers_every_backing_reference_without_merging_analyses() {
     for analysis in &conflict.analyses {
         assert_eq!(analysis.backing_analyses.len(), 2, "run plus input ledger");
     }
-    assert!(input_evidence::resolve(&conflict, SavePolicy::Cancel).is_err());
+    assert!(records::resolve(&conflict, SavePolicy::Cancel).is_err());
     assert_eq!(std::fs::read(&source).unwrap(), old);
-    input_evidence::resolve(&conflict, SavePolicy::PreserveCopy).unwrap();
+    records::resolve(&conflict, SavePolicy::PreserveCopy).unwrap();
     std::fs::remove_file(&source).unwrap();
     // Retries verify retained bytes, even after the source has disappeared.
-    input_evidence::resolve(&conflict, SavePolicy::PreserveCopy).unwrap();
+    records::resolve(&conflict, SavePolicy::PreserveCopy).unwrap();
     for analysis in &conflict.analyses {
         assert_eq!(
             analysis
@@ -374,10 +383,9 @@ fn one_save_decision_covers_every_backing_reference_without_merging_analyses() {
             1
         );
         for backing in &analysis.backing_analyses {
-            let input = input_evidence::read_input(&backing.run).unwrap();
+            let input = records::read_input(&backing.run).unwrap();
             let retained =
-                input_evidence::verified_source(&backing.run, input.source.as_ref().unwrap())
-                    .unwrap();
+                records::verified_source(&backing.run, input.source.as_ref().unwrap()).unwrap();
             assert_eq!(std::fs::read(retained).unwrap(), old);
         }
     }
@@ -389,5 +397,5 @@ fn one_save_decision_covers_every_backing_reference_without_merging_analyses() {
     }
     let original = common::verified_input(&conflict.analyses[0].run);
     std::fs::write(original, "damaged").unwrap();
-    assert!(input_evidence::resolve(&conflict, SavePolicy::PreserveCopy).is_err());
+    assert!(records::resolve(&conflict, SavePolicy::PreserveCopy).is_err());
 }

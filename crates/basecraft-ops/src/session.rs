@@ -9,12 +9,6 @@
 //! one after another, a block slid step by step. A cursor jump, another
 //! command, another document, undo or redo ends the burst.
 
-pub(crate) mod save_attempt_observation;
-use save_attempt_observation::{
-    Disposition as SaveDisposition, Hooks as SaveHooks, Legacy as LegacySave,
-    Milestone as SaveMilestone, Site as SaveSite,
-};
-
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -35,12 +29,13 @@ mod history;
 mod open;
 use open::SavedMark;
 mod proposals;
-mod publish;
 #[cfg(test)]
 mod retention_tests;
 mod save;
-pub(crate) mod save_authority;
+pub(crate) mod save_consent;
 mod save_decision;
+#[cfg(test)]
+mod save_failure_tests;
 #[cfg(test)]
 mod saved_mark_tests;
 mod tool_runs;
@@ -70,7 +65,7 @@ struct Slot {
     key: String,
     content: Loaded,
     generation: u64,
-    save_authority: save_authority::PendingSaveAuthority,
+    pending_check: save_consent::PendingSaveCheck,
     undo: Vec<Applied>,
     redo: Vec<Applied>,
     baseline: Option<LogEntry>,
@@ -108,8 +103,7 @@ pub struct Outcome {
 
 /// Target-save and evidence locks held while writing an export or extract.
 struct DerivedTarget {
-    _target: Option<std::fs::File>,
-    _evidence: std::fs::File,
+    _evidence: crate::records::input_evidence::SaveLock,
 }
 
 enum ReplayMode {
@@ -446,14 +440,50 @@ impl Session {
         Ok(!self.slot(id)?.redo.is_empty())
     }
 
-    /// Project-relative path, or the absolute path for files outside it.
     fn relative(&self, path: &Path) -> String {
-        let abs = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-        let root = std::fs::canonicalize(&self.root).unwrap_or_else(|_| self.root.clone());
-        abs.strip_prefix(&root).map_or_else(
-            |_| abs.to_string_lossy().into_owned(),
-            |p| p.to_string_lossy().into_owned(),
-        )
+        relative(&self.root, path)
+    }
+
+    /// What provenance publication reads about one document.
+    fn history(&self, id: DocId) -> Result<crate::records::publish::History<'_>> {
+        let slot = self.slot(id)?;
+        Ok(crate::records::publish::History {
+            session: &self.id,
+            policy: self.provenance_policy,
+            tracked: self.tracked,
+            root: &self.root,
+            storage_root: &self.storage_root,
+            local_root: &self.local_provenance_root,
+            events: &self.events,
+            pending: &self.pending_baselines,
+            key: &slot.key,
+            undo: &slot.undo,
+            origin: slot.origin.as_ref(),
+            origin_bundle: &slot.origin_bundle,
+            delimitation: slot.content.kind() == files::Kind::Delimitation,
+        })
+    }
+
+    /// Publish an analysis against the evidence frozen when its job was submitted.
+    pub fn publish_analysis_snapshot(
+        &self,
+        id: DocId,
+        target: &Path,
+        inputs: &[(String, String)],
+        snapshot: &crate::records::DocumentRecord,
+    ) -> Result<()> {
+        self.history(id)?.analysis(target, inputs, snapshot)
+    }
+
+    /// Add a captured input revision and its producing activity to an
+    /// operation's existing inventory.
+    pub fn complete_operation_publication(
+        &self,
+        id: DocId,
+        snapshot: &crate::records::DocumentRecord,
+        run: &crate::records::ArtifactRun,
+    ) -> Result<()> {
+        self.history(id)?.complete_operation(snapshot, run)
     }
 
     fn resolve(&self, key: &str) -> PathBuf {
@@ -498,94 +528,6 @@ pub fn apply_drawing_edits(
     }
 }
 
-pub(crate) fn portable_analysis_activity(
-    snapshot: &crate::records::document_record::DocumentRecord,
-    activity: &LogEntry,
-) -> (
-    Vec<LogEntry>,
-    Vec<basecraft_protocol::provenance::EditActivity>,
-) {
-    use basecraft_protocol::provenance::EditActivity;
-    let mut events = snapshot.events.clone();
-    if !events.iter().any(|event| event.id == activity.id) {
-        events.push(activity.clone());
-    }
-    let mut effective = snapshot.effective.clone();
-    effective.push(EditActivity {
-        id: activity.id.clone(),
-        operation: activity.op.clone(),
-    });
-    for event in &mut events {
-        event.host.clear();
-        event.doc = Path::new(&event.doc)
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .into_owned();
-        if matches!(event.actor, Actor::Human { .. }) {
-            event.actor = Actor::Human {
-                user: "redacted".into(),
-            };
-        }
-        redact_operation_paths(&mut event.op);
-        for (key, _) in &mut event.result.hashes {
-            *key = Path::new(key)
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned();
-        }
-    }
-    for edit in &mut effective {
-        redact_operation_paths(&mut edit.operation);
-    }
-    (events, effective)
-}
-
-fn redact_operation_paths(operation: &mut Op) {
-    fn scrub(value: &mut serde_json::Value) {
-        match value {
-            serde_json::Value::String(text) if Path::new(text).is_absolute() => {
-                *text = Path::new(text)
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into_owned();
-            }
-            serde_json::Value::Array(values) => {
-                for value in values {
-                    scrub(value);
-                }
-            }
-            serde_json::Value::Object(values) => {
-                for value in values.values_mut() {
-                    scrub(value);
-                }
-            }
-            _ => {}
-        }
-    }
-    if let Op::CreateSangerReview { review } | Op::SangerUpdate { review } = operation {
-        review.path = Path::new("artifacts").join(review.hash.trim_start_matches("b3:"));
-    }
-    if let Op::ToolRun {
-        inputs,
-        outputs,
-        params,
-        ..
-    } = operation
-    {
-        for name in inputs.iter_mut().chain(outputs.iter_mut()) {
-            *name = Path::new(name)
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned();
-        }
-        scrub(params);
-    }
-}
-
 fn restore_inverse(content: &mut Loaded, inverse: &Inverse) -> Result<()> {
     content.as_document_mut().revert(inverse)
 }
@@ -609,33 +551,14 @@ fn typing(op: &Op) -> bool {
     }
 }
 
-/// Copy a parent bundle's ancestry folder into a new bundle, keeping existing
-/// files. A registered run's retained collection lives under `artifacts/` and
-/// may hold folders; anything other than files and folders is refused.
-fn copy_ancestry(from: &Path, to: &Path, depth: usize) -> Result<()> {
-    if depth > 16 {
-        return Err(invalid("parent bundle ancestry is nested too deeply"));
-    }
-    std::fs::create_dir_all(to)?;
-    if !from.exists() {
-        return Ok(());
-    }
-    for entry in std::fs::read_dir(from)? {
-        let entry = entry?;
-        let kind = entry.file_type()?;
-        let destination = to.join(entry.file_name());
-        if kind.is_dir() {
-            copy_ancestry(&entry.path(), &destination, depth + 1)?;
-        } else if !kind.is_file() {
-            return Err(invalid("parent bundle contains non-file ancestry"));
-        } else if !destination.exists() {
-            basecraft_io::write_atomic(&destination, |w| {
-                std::io::copy(&mut std::fs::File::open(entry.path())?, w)?;
-                Ok(())
-            })?;
-        }
-    }
-    Ok(())
+/// Project-relative path, or the absolute path for files outside it.
+pub(crate) fn relative(root: &Path, path: &Path) -> String {
+    let abs = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    abs.strip_prefix(&root).map_or_else(
+        |_| abs.to_string_lossy().into_owned(),
+        |p| p.to_string_lossy().into_owned(),
+    )
 }
 
 pub fn objects_dir(root: &Path) -> PathBuf {

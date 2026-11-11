@@ -1,3 +1,5 @@
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -24,6 +26,7 @@ fn value(output: &Output) -> Value {
 
 #[test]
 fn external_metadata_install_warning_and_disable_policy_from_outside_repository() {
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/registry-plugin");

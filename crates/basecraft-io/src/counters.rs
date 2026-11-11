@@ -18,6 +18,7 @@ pub struct Reads {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Counters {
     pub reads: BTreeMap<PathBuf, Reads>,
+    pub serializations: BTreeMap<&'static str, u64>,
     /// Attempted scanner visits, keyed by the exact supplied store path. Includes
     /// missing/corrupt stores and every repeated visit; no canonicalization I/O.
     pub store_inspections: BTreeMap<PathBuf, u64>,
@@ -38,6 +39,10 @@ pub fn reset() {
 
 pub fn snapshot() -> Counters {
     COUNTERS.with(|c| c.borrow().clone())
+}
+
+pub fn record_serialization(kind: &'static str) {
+    COUNTERS.with(|c| *c.borrow_mut().serializations.entry(kind).or_default() += 1);
 }
 
 /// Record only at the completed read, never again in a delegating hash helper.

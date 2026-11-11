@@ -1,3 +1,5 @@
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use serde_json::{Value, json};
 use std::{
     io::Write,
@@ -6,6 +8,7 @@ use std::{
 
 #[test]
 fn new_sequence_cli_refuses_overwrite_and_mcp_uses_shared_creation() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let output = root.path().join("cli.gb");
     let args = [

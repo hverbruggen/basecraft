@@ -33,6 +33,8 @@ mod document_open;
 #[path = "../src/editor_core.rs"]
 #[allow(unused_imports, dead_code)] // harness=false omits pure #[test] bodies.
 mod editor_core;
+#[path = "../src/editor_save.rs"]
+mod editor_save;
 #[path = "../src/figure_png.rs"]
 #[allow(unused_imports, dead_code)] // harness=false omits the included module's test bodies.
 mod figure_png;
@@ -564,7 +566,7 @@ fn main() {
                 "chosen.gb"
             });
             std::fs::write(&chosen, original).unwrap();
-            basecraft_ops::input_evidence::reference_input_with_dependencies(
+            basecraft_ops::records::reference_input_with_dependencies(
                 &folder.path().join("result.txt"),
                 &chosen,
                 &basecraft_io::hash_file(&chosen).unwrap(),
@@ -573,7 +575,7 @@ fn main() {
             )
             .unwrap();
             assert!(
-                !basecraft_ops::input_evidence::conflicts(&chosen)
+                !basecraft_ops::records::conflicts(&chosen)
                     .unwrap()
                     .analyses
                     .is_empty()
@@ -641,7 +643,7 @@ fn main() {
             let chosen = folder.path().join("chosen.gb");
             assert_eq!(std::fs::read(&chosen).unwrap(), original);
             assert!(
-                !basecraft_ops::input_evidence::conflicts(&chosen)
+                !basecraft_ops::records::conflicts(&chosen)
                     .unwrap()
                     .analyses
                     .is_empty(),
@@ -750,9 +752,11 @@ fn main() {
             .unwrap();
             let trace = folder.path().join("trace.ab1");
             std::fs::copy(fixtures.join("sanger-review/forward.ab1"), &trace).unwrap();
-            basecraft_ops::sanger_review::instrument_review(&trace)
-                .unwrap()
-                .save(&folder.path().join("trace.submission.json"))
+            let review = basecraft_ops::sanger_review::instrument_review(&trace).unwrap();
+            let mut session = basecraft_ops::Session::new(folder.path());
+            let id = session.create_sanger_review(&review).unwrap();
+            session
+                .save(id, Some(&folder.path().join("trace.submission.json")))
                 .unwrap();
             std::fs::write(folder.path().join("unknown.data"), "unsupported").unwrap();
         }

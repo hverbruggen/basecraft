@@ -1,8 +1,11 @@
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_ops::{Session, files};
 use basecraft_protocol::{Op, SupportKind};
 
 #[test]
 fn same_path_replacement_cannot_reuse_tree_metadata() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("tree.nwk");
     std::fs::write(&path, "((a,b)90,c);\n").unwrap();
@@ -29,6 +32,7 @@ fn same_path_replacement_cannot_reuse_tree_metadata() {
 
 #[test]
 fn undone_import_is_absent_from_methods() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let target = dir.path().join("tree.nwk");
     let source = dir.path().join("source.nwk");
@@ -56,6 +60,7 @@ fn paths(root: &std::path::Path) -> basecraft_platform::paths::AppPaths {
 
 #[test]
 fn unversioned_tree_metadata_is_ignored_without_changing_files() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("tree.nwk");
     std::fs::write(&path, "(a,b);").unwrap();
@@ -74,7 +79,8 @@ fn unversioned_tree_metadata_is_ignored_without_changing_files() {
 
 #[test]
 fn hidden_binding_errors_never_fall_back_to_adjacent_metadata() {
-    use basecraft_ops::analysis_store::ArtifactRun;
+    use basecraft_ops::records::ArtifactRun;
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("forest.nwk");
     std::fs::write(&path, "((a,b)90,c);\n(a,b,c);\n").unwrap();
@@ -134,6 +140,7 @@ fn hidden_binding_errors_never_fall_back_to_adjacent_metadata() {
 #[test]
 fn imported_support_partial_removal_undo_save_reopen_and_redo() {
     use basecraft_ops::records;
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let target = dir.path().join("tree.nwk");
     let source = dir.path().join("source.nwk");
@@ -179,8 +186,7 @@ fn imported_support_partial_removal_undo_save_reopen_and_redo() {
             .methods
             .contains("import_support")
     );
-    let input =
-        basecraft_ops::input_evidence::read_input(&records::bundle_for_result(&target)).unwrap();
+    let input = basecraft_ops::records::read_input(&records::bundle_for_result(&target)).unwrap();
     assert_eq!(
         serde_json::to_value(&input.upstream)
             .unwrap()
@@ -264,6 +270,7 @@ fn annotate(session: &mut Session, doc: basecraft_ops::DocId, label: &str, start
 
 #[test]
 fn annotation_runs_follow_partial_deletion_and_feature_ids_after_reopen() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("gene.fasta");
     std::fs::write(&file, ">gene\nACGTACGTACGT\n").unwrap();
@@ -324,6 +331,7 @@ fn annotation_runs_follow_partial_deletion_and_feature_ids_after_reopen() {
 
 #[test]
 fn generic_no_output_activity_does_not_own_unrelated_manual_edits() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("gene.fasta");
     std::fs::write(&file, ">gene\nACGTACGT\n").unwrap();
@@ -358,6 +366,7 @@ fn generic_no_output_activity_does_not_own_unrelated_manual_edits() {
 #[test]
 fn extraction_is_reference_first_and_packages_exact_source_and_mapping() {
     use basecraft_ops::records;
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("gene.fasta");
     let result = dir.path().join("extract.gb");
@@ -368,7 +377,7 @@ fn extraction_is_reference_first_and_packages_exact_source_and_mapping() {
         .extract(doc, (1, 7), &[(1, 3), (5, 7)], true, &result)
         .unwrap();
     let publication = records::inspect(&result).unwrap();
-    let conflicts = basecraft_ops::input_evidence::conflicts(&source).unwrap();
+    let conflicts = basecraft_ops::records::conflicts(&source).unwrap();
     assert!(
         !conflicts.analyses.is_empty(),
         "extraction did not register its referenced source in shared save protection"
@@ -383,8 +392,7 @@ fn extraction_is_reference_first_and_packages_exact_source_and_mapping() {
     assert!(publication.inputs[0].reference.is_some());
     let issues = records::verify(&result).unwrap();
     assert!(issues.is_empty(), "{issues:?}");
-    let input =
-        basecraft_ops::input_evidence::read_input(&records::bundle_for_result(&result)).unwrap();
+    let input = basecraft_ops::records::read_input(&records::bundle_for_result(&result)).unwrap();
     assert_eq!(
         input.extra["extraction"]["selection"]["params"]["segments"],
         serde_json::json!([[1, 3], [5, 7]])
@@ -401,7 +409,8 @@ fn extraction_is_reference_first_and_packages_exact_source_and_mapping() {
 
 #[test]
 fn saving_a_forest_preserves_other_members_and_refreshes_bound_identity() {
-    use basecraft_ops::analysis_store::ArtifactRun;
+    use basecraft_ops::records::ArtifactRun;
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("forest.nwk");
     std::fs::write(&file, "((a,b)90,c);\n((x,y)42,z);\n").unwrap();
@@ -450,6 +459,7 @@ fn saving_a_forest_preserves_other_members_and_refreshes_bound_identity() {
 
 #[test]
 fn nexus_forest_retains_member_identity_rooting_and_untouched_annotations() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("forest.nex");
     let text = "#NEXUS\nbegin trees;\ntranslate 1 a, 2 b, 3 c;\ntree 'selected tree' = [&U] ((1:1,2:2)90:3,3:4);\ntree 'rooted member' = [&R] ((1:1,3:2)[&prob=0.99,note=x]:3,2:4);\nutree 'unrooted member' = ((2:5,3:6),1);\ntree 'unknown member' = (1:1,2:2,3:3);\nend;\n";
@@ -489,6 +499,7 @@ fn nexus_forest_retains_member_identity_rooting_and_untouched_annotations() {
 
 #[test]
 fn interrupted_tree_metadata_save_is_explicit_and_never_reuses_old_semantics() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let original = dir.path().join("original.nwk");
     std::fs::write(&original, "((a,b)90,c);\n").unwrap();
@@ -506,7 +517,8 @@ fn interrupted_tree_metadata_save_is_explicit_and_never_reuses_old_semantics() {
     let target = dir.path().join("partial.nwk");
     std::fs::create_dir(files::tree_sidecar(&target)).unwrap();
     let error = session.save(doc, Some(&target)).unwrap_err().to_string();
-    assert!(error.contains("metadata incomplete"), "{error}");
+    // Every file is staged first; the tree replaced, its sidecar could not be.
+    assert!(error.contains("sidecar incomplete"), "{error}");
     assert!(target.is_file());
     assert!(
         files::load_tree(&target)

@@ -1,5 +1,7 @@
 //! CLI analyses use the same registered runner, host allocation and shared
 //! guarded save as the GUI.
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use std::path::Path;
 use std::process::Command;
 
@@ -34,6 +36,7 @@ fn run(project: &Path, profile: &Path, request: &Value) -> Value {
 
 #[test]
 fn bootstrap_trees_are_retained_and_inputs_guarded() {
+    crate::isolated_profile::isolate!();
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().join("project");
     std::fs::create_dir(&root).unwrap();
@@ -73,7 +76,7 @@ fn bootstrap_trees_are_retained_and_inputs_guarded() {
     visible.sort();
     assert_eq!(visible, [".basecraft", "bootstrap.nwk", "input.afa"]);
     assert!(
-        basecraft_ops::analysis_store::ArtifactRun::for_result(&output)
+        basecraft_ops::records::ArtifactRun::for_result(&output)
             .unwrap()
             .is_some()
     );
@@ -119,6 +122,7 @@ fn bootstrap_trees_are_retained_and_inputs_guarded() {
 
 #[test]
 fn species_cli_and_public_sdk_add_to_one_canonical_workspace() {
+    crate::isolated_profile::isolate!();
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().join("working");
     std::fs::create_dir(&root).unwrap();
@@ -196,6 +200,7 @@ print(json.dumps(run(sys.argv[1], method='gmyc_multiple', workspace=sys.argv[2],
 
 #[test]
 fn distance_matrix_keeps_only_the_table_visible() {
+    crate::isolated_profile::isolate!();
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().join("working");
     std::fs::create_dir(&root).unwrap();

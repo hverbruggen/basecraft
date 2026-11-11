@@ -132,11 +132,10 @@ pub fn output_beside(file: &Path, suffix: &str, ext: &str) -> PathBuf {
 
 /// Freeze and verify the accepted bytes for a registered operation.
 pub(crate) fn freeze_file(source: &Path, destination: &Path) -> Result<String> {
-    let before = basecraft_ops::input_evidence::stamp(source)?;
+    let before = basecraft_ops::records::stamp(source)?;
     std::fs::copy(source, destination)?;
     let hash = basecraft_io::hash_file(destination)?;
-    if before != basecraft_ops::input_evidence::stamp(source)?
-        || basecraft_io::hash_file(source)? != hash
+    if before != basecraft_ops::records::stamp(source)? || basecraft_io::hash_file(source)? != hash
     {
         return Err(Error::Protocol("input changed during submission".into()));
     }
@@ -146,9 +145,9 @@ pub(crate) fn freeze_file(source: &Path, destination: &Path) -> Result<String> {
 /// Both execution families promote only validated staging files through the
 /// common store's no-clobber primitive.
 pub(crate) fn publish_artifact(
-    run: &basecraft_ops::analysis_store::ArtifactRun,
+    run: &basecraft_ops::records::ArtifactRun,
     name: &str,
-    location: basecraft_ops::analysis_store::ArtifactDestination,
+    location: basecraft_ops::records::ArtifactDestination,
 ) -> Result<PathBuf> {
     Ok(run.publish(name, location)?)
 }

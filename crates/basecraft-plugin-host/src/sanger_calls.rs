@@ -418,12 +418,10 @@ mod live_tests {
         let mut future = receipt.clone();
         future.schema = 99;
         assert!(verify_completed_result(&future, &query).is_err());
-        let fake =
-            basecraft_ops::analysis_store::ArtifactRun::create(&source, "0000-future").unwrap();
-        basecraft_ops::input_evidence::write_json(&fake.artifact("runtime.json").unwrap(), &future)
+        let fake = basecraft_ops::records::ArtifactRun::create(&source, "0000-future").unwrap();
+        basecraft_ops::records::write_json(&fake.artifact("runtime.json").unwrap(), &future)
             .unwrap();
-        let corrupt =
-            basecraft_ops::analysis_store::ArtifactRun::create(&source, "0001-corrupt").unwrap();
+        let corrupt = basecraft_ops::records::ArtifactRun::create(&source, "0001-corrupt").unwrap();
         std::fs::write(
             corrupt.artifact("runtime.json").unwrap(),
             b"corrupt receipt",

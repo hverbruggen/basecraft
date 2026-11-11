@@ -104,15 +104,51 @@ copy repairs that effective owning ledger only after checking original identity.
 CLI/MCP/default Rust Session saves return a structured conflict/options
 without an interactive prompt; Rust callers can choose `save_with_evidence`.
 
+Save checks return known affected analyses separately from incomplete inspection
+issues. An incomplete check requires an explicit, single-use acknowledgement bound
+to the live document, destination and inspected evidence. Cancel is the default;
+acknowledging an incomplete check does not select a policy for known analyses.
+Stale or reused decisions return a fresh check. Successful overrides retain the
+inspection issues as warnings. GUI, CLI, Python and MCP use the same typed result.
+
+The private index lives in the profile's state folder. `analysis-input-index.json`
+is a checksummed catalogue of indexed stores and source keys, used by writers.
+Below `analysis-inputs`, `sources/<hash of path>` lists the connected stores that
+may own or depend on an input path (recorded and canonical spellings),
+`files/<hash of device:inode>` lists the source paths recorded for one file, and
+`stores/<hash of store path>` holds each store's identity, sources and
+dependencies. Registration updates these records explicitly. A durable dirty
+marker records the direct-source paths a pending ledger change can introduce, so
+unrelated saves continue; pending dependency changes have unknown coverage until
+registration succeeds. The ledger directory is synced before the updated index
+can clear its marker.
+
+A save reads only the shards for its own target: its path spellings, its file
+identity (which finds a source that was moved or hard-linked on the same disk),
+any pending dirty markers, and the store records of `.basecraft/analyses-v1`
+folders in its ancestor folders. An ancestor store the index does not cover at
+that location (moved or never registered) is scanned in full; its identity
+retires the vanished old location. Only a target with more than one hard link
+reads the catalogue, to compare against every indexed source. No unrelated run
+or input ledger, and no store registry, is opened. A deleted source or store
+elsewhere does not concern the save. A damaged shard or dirty marker makes the
+check incomplete and never authorizes an unchecked save.
+
+Saves and mutations reserve source paths, file identities and affected stores.
+Conflicting operations return Busy and can retry; unrelated saves may overlap.
+A catalogue lock makes selection and reservation atomic with index publication.
+Direct-source updates scan outside it; ancestry updates retain it through ledger
+and index publication because their pending coverage is unknown. Large ancestry
+updates can therefore delay unrelated lookups until publication finishes. There is no filesystem journal or support for older record layouts.
+
 External editors cannot be intercepted. Verification reports changed/missing
 originals. Verified-original relink accepts only matching bytes and updates the
 read-only source location. No startup scan/hash of a filesystem occurs. Unknown
 input/reference/registry fields survive updates; future schema versions fail.
 `upstream` entries reference immutable publication ID/hash/location. Bounded
 verification traverses declared records and their owning evidence decisions.
-Older companion publications and schema-1 tree links remain readable. New inferred
-schema-2 links refer to the run, not to a nonexistent `.alignment.afa` snapshot.
-Existing explicit presentation/Save-As guard companions remain compatible.
+Current inferred links refer to the owning run. Presentation and Save As guard
+companions use their current formats; there are no older-format migration paths.
 
 Bindings select the hidden run for a primary/component basename. The run retains
 `execution.json`, a compact `run.json`, optional publication/reports and declared

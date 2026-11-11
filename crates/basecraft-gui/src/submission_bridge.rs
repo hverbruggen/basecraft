@@ -41,6 +41,19 @@ pub mod qobject {
         #[qproperty(bool, can_undo)]
         #[qproperty(bool, can_redo)]
         type SubmissionController = super::SubmissionRust;
+        #[qsignal]
+        #[cxx_name = "saveQuestion"]
+        fn save_question(self: Pin<&mut SubmissionController>);
+        #[qinvokable]
+        fn check_save(self: &SubmissionController, path: &QString) -> QString;
+        #[qinvokable]
+        fn save_confirmed(
+            self: Pin<&mut SubmissionController>,
+            path: &QString,
+            token: &QString,
+            policy: &QString,
+            acknowledge: bool,
+        ) -> bool;
         #[qinvokable]
         fn use_project(self: Pin<&mut SubmissionController>, path: &QString);
         #[qinvokable]
@@ -562,8 +575,7 @@ impl qobject::SubmissionController {
                 false
             }
             Ok(Err(error)) => {
-                self.as_mut()
-                    .report("error", &format!("Changed but not saved: {error}"));
+                self.as_mut().save_error(&error);
                 true
             }
             Ok(Ok(())) => {
@@ -775,7 +787,7 @@ impl qobject::SubmissionController {
             done.and_then(|_| session.save(doc, None))
         };
         if let Err(error) = result {
-            self.as_mut().report("error", &error.to_string());
+            self.as_mut().save_error(&error);
         } else {
             self.as_mut()
                 .report("ok", if undo { "Undone" } else { "Redone" });
@@ -981,3 +993,5 @@ mod tests {
         );
     }
 }
+
+crate::editor_save::auto_save!(qobject::SubmissionController);

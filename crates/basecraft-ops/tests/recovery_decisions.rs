@@ -1,7 +1,7 @@
 //! Retained recovery authority and publication, using isolated real files.
 use basecraft_ops::{
     Error, Session,
-    input_evidence::SavePolicy,
+    records::SavePolicy,
     records::{self, RecoveryMode},
 };
 use basecraft_platform::files::{OrdinaryKind, object_identity};
@@ -37,8 +37,9 @@ fn registry() -> PathBuf {
         .state
         .join("analysis-stores.json")
 }
+// An unreadable pending index update leaves every save's relevance unknown.
 fn damage() {
-    let path = registry();
+    let path = registry().with_file_name("analysis-inputs/dirty/unreadable");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, b"damaged inventory").unwrap();
 }
@@ -259,9 +260,9 @@ fn destination_competitors_and_replaced_parent_fail_closed() {
     assert!(!parent.join("out").exists());
 }
 
-fn reference(anchor: &Path, source: &Path) -> basecraft_ops::analysis_store::ArtifactRun {
+fn reference(anchor: &Path, source: &Path) -> basecraft_ops::records::ArtifactRun {
     std::fs::create_dir_all(anchor.parent().unwrap()).unwrap();
-    basecraft_ops::input_evidence::reference_input_with_dependencies(
+    basecraft_ops::records::reference_input_with_dependencies(
         anchor,
         source,
         &basecraft_io::hash_file(source).unwrap(),
@@ -293,12 +294,10 @@ fn stage_and_final_policies_validate_all_groups_before_any_mutation() {
     let stage_run = reference(&root.join("stage-analysis/result"), &stage_file);
     let owner = reference(&root.join("owner/result"), &root.join("source/0.fasta"));
     for run in [&stage_run, &final_run] {
-        let mut input = basecraft_ops::input_evidence::read_input(run.directory()).unwrap();
-        input.analysis_run = Some(
-            basecraft_ops::input_evidence::relative(run.directory(), owner.directory()).unwrap(),
-        );
-        basecraft_ops::input_evidence::write_json(&run.directory().join("input.json"), &input)
-            .unwrap();
+        let mut input = basecraft_ops::records::read_input(run.directory()).unwrap();
+        input.analysis_run =
+            Some(basecraft_ops::records::relative(run.directory(), owner.directory()).unwrap());
+        basecraft_ops::records::write_json(&run.directory().join("input.json"), &input).unwrap();
     }
     let original = std::fs::read(stage_run.directory().join("input.json")).unwrap();
     let check = attempt.check(0).unwrap();
@@ -375,7 +374,7 @@ fn stage_and_final_policies_validate_all_groups_before_any_mutation() {
     );
     for run in [stage_run, final_run] {
         assert_eq!(
-            basecraft_ops::input_evidence::read_input(run.directory())
+            basecraft_ops::records::read_input(run.directory())
                 .unwrap()
                 .state,
             basecraft_protocol::input_records::EvidenceState::Broken
@@ -493,10 +492,10 @@ fn nested_delimitation_registers_only_final_stores_and_reopens() {
             value["delimitation"]["path_base"],
             file.parent().unwrap().to_str().unwrap()
         );
-        let run = basecraft_ops::analysis_store::ArtifactRun::for_result(&file)
+        let run = basecraft_ops::records::ArtifactRun::for_result(&file)
             .unwrap()
             .unwrap();
-        let input = basecraft_ops::input_evidence::read_input(&run).unwrap();
+        let input = basecraft_ops::records::read_input(&run).unwrap();
         let upstream = serde_json::to_value(&input.upstream).unwrap();
         let upstream = upstream.as_array().unwrap();
         assert!(upstream.iter().any(|record| {
@@ -645,12 +644,10 @@ fn removal_of_shared_backing_ledgers_across_target_groups_is_once() {
     );
     let owner = reference(&root.join("owner/result"), &root.join("source/0.fasta"));
     for run in [&stage_run, &final_run] {
-        let mut input = basecraft_ops::input_evidence::read_input(run.directory()).unwrap();
-        input.analysis_run = Some(
-            basecraft_ops::input_evidence::relative(run.directory(), owner.directory()).unwrap(),
-        );
-        basecraft_ops::input_evidence::write_json(&run.directory().join("input.json"), &input)
-            .unwrap();
+        let mut input = basecraft_ops::records::read_input(run.directory()).unwrap();
+        input.analysis_run =
+            Some(basecraft_ops::records::relative(run.directory(), owner.directory()).unwrap());
+        basecraft_ops::records::write_json(&run.directory().join("input.json"), &input).unwrap();
     }
     let check = attempt.check(0).unwrap();
     attempt
@@ -701,14 +698,15 @@ fn new_unsaved_sequence_has_final_only_issue_group_and_explicit_recovery() {
     let original = root.join("original.fasta");
     std::fs::write(&original, b">gene\nACGT\n").unwrap();
     let run = reference(&root.join("external/result"), &original);
-    let mut input = basecraft_ops::input_evidence::read_input(run.directory()).unwrap();
+    let mut input = basecraft_ops::records::read_input(run.directory()).unwrap();
     input.source.as_mut().unwrap().path =
-        basecraft_ops::input_evidence::relative(run.directory(), &stage_target).unwrap();
-    basecraft_ops::input_evidence::write_json(&run.directory().join("input.json"), &input).unwrap();
+        basecraft_ops::records::relative(run.directory(), &stage_target).unwrap();
+    basecraft_ops::records::write_json(&run.directory().join("input.json"), &input).unwrap();
     let check = attempt.check(0).unwrap();
     let groups: Vec<_> = check.evidence_groups().collect();
     assert!(groups[0].is_complete());
-    assert!(!groups[1].is_complete());
+    // A missing recorded source does not concern the unrelated final destination.
+    assert!(groups[1].is_complete());
     assert!(!groups[0].conflict.analyses.is_empty());
     assert!(groups[1].conflict.analyses.is_empty());
     assert!(matches!(

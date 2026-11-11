@@ -3,7 +3,7 @@ use super::{
     Arc, ArtifactRevision, ArtifactRun, BTreeMap, DocumentTarget, Error, ExecutionFamily,
     InputReference, InputView, InvocationContext, InvocationInputEvidence, OperationRequest, Path,
     PathBuf, PreparedOperation, RegisteredOperation, Result, SequenceTarget, SessionPolicy, Value,
-    captures, contract, input_evidence, sources_from_upstream,
+    captures, contract, records, sources_from_upstream,
 };
 use basecraft_protocol::operation::QueryPreparation;
 
@@ -399,8 +399,8 @@ impl PreparedOperation {
             input_evidence: evidence,
             legacy_parameters: BTreeMap::new(),
         };
-        input_evidence::write_json(&run.artifact("descriptor.json")?, &operation.descriptor)?;
-        input_evidence::write_json(&run.artifact("request.json")?, &request)?;
+        records::write_json(&run.artifact("descriptor.json")?, &operation.descriptor)?;
+        records::write_json(&run.artifact("request.json")?, &request)?;
         let mut prepared = Self {
             lifecycle,
             input_diagnostics,
@@ -657,7 +657,7 @@ fn allocate_run(
         .as_ref()
         .map(serde_json::to_vec)
         .transpose()?;
-    let mutation = input_evidence::Mutation::begin()?;
+    let mutation = records::Mutation::begin()?;
     let run = ArtifactRun::create(&anchor, &run_id)?;
     let mut ledger_inputs = Vec::new();
     let mut upstream = Vec::new();
@@ -673,10 +673,7 @@ fn allocate_run(
             &format!("Input for {}", operation.id),
         )?;
         let mut record = mutation.read_input(ledger.directory())?;
-        record.analysis_run = Some(input_evidence::relative(
-            ledger.directory(),
-            run.directory(),
-        )?);
+        record.analysis_run = Some(records::relative(ledger.directory(), run.directory())?);
         record.submitted_hash = submitted_hash;
         record.submitted_size = std::fs::metadata(&frozen)?.len();
         record.transformation = transformation.into();
@@ -705,7 +702,7 @@ fn allocate_run(
         }
         let manifest = ledger.artifact("manifest.json")?;
         upstream.push(basecraft_protocol::input_records::UpstreamLink {
-            bundle: (input_evidence::relative(run.directory(), ledger.directory())?).into(),
+            bundle: (records::relative(run.directory(), ledger.directory())?).into(),
             id: (ledger.id()).to_owned(),
             hash: basecraft_io::hash_file(&manifest)?,
         });
@@ -713,7 +710,7 @@ fn allocate_run(
             .source
             .clone()
             .ok_or_else(|| Error::Protocol("missing source reference".into()))?;
-        reference.path = input_evidence::relative(run.directory(), &source)?;
+        reference.path = records::relative(run.directory(), &source)?;
         ledger_inputs.push(ArtifactRevision {
             id: format!("{}:source", ledger.id()),
             logical_name: source
@@ -743,16 +740,9 @@ fn allocate_run(
         let result = exported_name
             .clone()
             .unwrap_or_else(|| operation.id.clone());
-        input_evidence::write_json(
-            &run.artifact("run.json")?,
-            &serde_json::to_value(basecraft_protocol::records::AnalysisRun {
-                schema_version: 1,
-                id: run.id().into(),
-                result: Some(result),
-                status: basecraft_protocol::records::AnalysisRunStatus::Prepared,
-                outputs: None,
-                extra: BTreeMap::new(),
-            })?,
+        run.write_run(
+            basecraft_protocol::records::AnalysisRunStatus::Prepared,
+            Some(result),
         )?;
         mutation.register(&run)?;
     }
@@ -790,7 +780,7 @@ impl AllocatedRun {
 
     fn document_inputs(
         &mut self,
-        mutation: &input_evidence::Mutation,
+        mutation: &records::Mutation,
         generated: &BTreeMap<String, Vec<GeneratedInput>>,
     ) -> Result<()> {
         for (name, inputs) in generated {
@@ -822,7 +812,7 @@ impl AllocatedRun {
 
     fn sequence_snapshot(
         &mut self,
-        mutation: &input_evidence::Mutation,
+        mutation: &records::Mutation,
         target: &SequenceTarget,
         payload: &[u8],
     ) -> Result<()> {
@@ -841,7 +831,7 @@ impl AllocatedRun {
 
     fn query_preparation(
         &mut self,
-        mutation: &input_evidence::Mutation,
+        mutation: &records::Mutation,
         payload: &[u8],
         inputs: &mut BTreeMap<String, Vec<String>>,
     ) -> Result<()> {

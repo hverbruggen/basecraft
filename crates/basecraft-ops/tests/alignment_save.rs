@@ -1,4 +1,6 @@
 //! Ordinary saves must not turn ragged input into an asserted alignment.
+#[path = "support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_ops::Session;
 use basecraft_protocol::Op;
 
@@ -6,6 +8,7 @@ const RAGGED: &str = ">a long description\nACGT--\n>b short description\nA.-\n";
 
 #[test]
 fn ragged_save_and_save_as_reopen_preserve_explicit_lengths_and_gaps() {
+    crate::isolated_profile::isolate!();
     for save_as in [false, true] {
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("source.afa");
@@ -67,6 +70,7 @@ fn ragged_save_and_save_as_reopen_preserve_explicit_lengths_and_gaps() {
 
 #[test]
 fn ragged_extent_tracks_explicit_gap_edits_undo_redo_and_snapshots() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("source.afa");
     std::fs::write(&source, RAGGED).unwrap();
@@ -150,6 +154,7 @@ fn ragged_extent_tracks_explicit_gap_edits_undo_redo_and_snapshots() {
 
 #[test]
 fn ragged_row_extents_follow_reordering_and_undo_after_width_growth() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("source.afa");
     std::fs::write(&source, RAGGED).unwrap();
@@ -201,6 +206,7 @@ fn ragged_row_extents_follow_reordering_and_undo_after_width_growth() {
 
 #[test]
 fn equal_alignment_preserves_literal_terminal_gaps_and_existing_delete_semantics() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("source.afa");
     std::fs::write(&source, ">a description\nAC--..\n>b\nA-CG--\n").unwrap();
@@ -247,6 +253,7 @@ fn equal_alignment_preserves_literal_terminal_gaps_and_existing_delete_semantics
 
 #[test]
 fn alignment_interface_rejections_normalization_and_hashes() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("source.afa");
     std::fs::write(&source, RAGGED).unwrap();
@@ -329,6 +336,7 @@ fn alignment_interface_rejections_normalization_and_hashes() {
 #[test]
 fn alignment_bursts_respect_actor_group_and_nonadjacent_boundaries() {
     use basecraft_protocol::Actor;
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("source.afa");
     std::fs::write(&source, ">a\nAAAAAAAA\n>b\nAAAAAAAA\n").unwrap();

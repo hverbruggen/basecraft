@@ -11,7 +11,6 @@ AppContentDialog {
     property int featureId: -1
 
     title: featureId < 0 ? "Add annotation" : "Edit annotation"
-    modal: true
     padding: 16
 
     function load(json) {

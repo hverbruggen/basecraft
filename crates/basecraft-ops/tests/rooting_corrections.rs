@@ -1,4 +1,6 @@
 //! SCI-0003 correction policies supplement the unchanged independent probes.
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_ops::{DocId, Session, files};
 use basecraft_protocol::Op;
 
@@ -8,6 +10,7 @@ fn methods() -> [Op; 2] {
 
 #[test]
 fn unrepresentable_tip_support_is_refused_before_recovery_tracking() {
+    crate::isolated_profile::isolate!();
     for text in [
         "(A:1,(B:10,C:1)90:1);",
         "((B:10,C:1)90:1,A:1);",
@@ -47,6 +50,7 @@ fn unrepresentable_tip_support_is_refused_before_recovery_tracking() {
 
 #[test]
 fn tip_support_refusal_preserves_existing_history_and_redo() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("supported.nwk");
     std::fs::write(&path, "(A:1,(B:10,C:1)90:1);").unwrap();
@@ -83,6 +87,7 @@ fn tip_support_refusal_preserves_existing_history_and_redo() {
 
 #[test]
 fn automatic_root_checks_out_of_range_ids_in_populated_session() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("tree.nwk");
     std::fs::write(&path, "(A:1,B:2,C:3);").unwrap();

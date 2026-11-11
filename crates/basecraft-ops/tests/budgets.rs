@@ -11,14 +11,7 @@ use std::path::Path;
 // Each child owns a profile: the save evidence lock discovers AppPaths directly,
 // independently of the paths supplied to Session. Do not mutate process env in
 // the parallel test harness.
-fn scenario(
-    name: &str,
-    fixture: &str,
-    open_reads: u64,
-    saved_reads: u64,
-    save_sync_all: u64,
-    edit: impl Fn(u32) -> Op,
-) {
+fn scenario(name: &str, fixture: &str, open_reads: u64, edit: impl Fn(u32) -> Op) {
     let Some(root) = child_profile(name) else {
         return;
     };
@@ -50,20 +43,9 @@ fn scenario(
     }
     counters::reset();
     session.save(doc, None).unwrap();
-    // Saving reads twice before replacement. History keeps fingerprints only.
-    // Tree sidecar serialization also hashes the newly written tree once.
-    let saved_size = file.metadata().unwrap().len();
-    record(
-        name,
-        "save",
-        &file,
-        (
-            2 + saved_reads,
-            2 * original_size + saved_reads * saved_size,
-            1,
-            save_sync_all,
-        ),
-    );
+    // Saving reads the original once; history keeps fingerprints, not copies.
+    // Staged data and history files sync on worker threads, outside this count.
+    record(name, "save", &file, (1, original_size, 1, 0));
 }
 
 fn record(name: &str, stage: &str, file: &Path, expected: (u64, u64, u64, u64)) {
@@ -100,24 +82,19 @@ fn record(name: &str, stage: &str, file: &Path, expected: (u64, u64, u64, u64)) 
 
 #[test]
 fn fasta() {
-    scenario(
-        "fasta",
-        "alignment-editing/ambiguous-gappy.afa",
-        1,
-        0,
-        10,
-        |i| Op::AlnReplace {
+    scenario("fasta", "alignment-editing/ambiguous-gappy.afa", 1, |i| {
+        Op::AlnReplace {
             row: 0,
             start: u64::from(i),
             end: u64::from(i) + 1,
             residues: "C".into(),
-        },
-    );
+        }
+    });
 }
 
 #[test]
 fn genbank() {
-    scenario("genbank", "sequences-annotations/locus.gb", 1, 0, 10, |i| {
+    scenario("genbank", "sequences-annotations/locus.gb", 1, |i| {
         Op::SeqReplace {
             start: u64::from(i),
             end: u64::from(i) + 1,
@@ -128,7 +105,7 @@ fn genbank() {
 
 #[test]
 fn newick() {
-    scenario("newick", "tree-inference/unrooted.nwk", 1, 1, 11, |i| {
+    scenario("newick", "tree-inference/unrooted.nwk", 1, |i| {
         Op::TreeRenameTip {
             from: if i == 0 { "a".into() } else { format!("a{i}") },
             to: format!("a{}", i + 1),

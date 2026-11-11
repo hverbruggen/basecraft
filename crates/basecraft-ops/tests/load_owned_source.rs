@@ -1,4 +1,6 @@
 //! Main-file hashes and parsers must describe one owned snapshot.
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_io::{Source, hash_bytes};
 use basecraft_ops::{Session, files};
 use std::path::Path;
@@ -18,6 +20,7 @@ fn rendered(loaded: &files::Loaded) -> Vec<u8> {
 
 #[test]
 fn mutation_after_read_cannot_change_loaded_bytes_or_hash() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     for (name, original) in [
         ("single.fasta", b">first description\nACGT\n".as_slice()),
@@ -67,6 +70,7 @@ fn mutation_after_read_cannot_change_loaded_bytes_or_hash() {
 
 #[test]
 fn multirecord_sequence_and_companion_survive_owned_loading() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("records.fasta");
     let bytes = b">a description\nACGT\n>b retained\nTTAA\n";
@@ -91,6 +95,7 @@ fn multirecord_sequence_and_companion_survive_owned_loading() {
 
 #[test]
 fn malformed_empty_missing_and_unsupported_sources_fail() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     for (name, bytes) in [
         ("bad.fasta", b"not FASTA".as_slice()),
@@ -115,6 +120,7 @@ fn malformed_empty_missing_and_unsupported_sources_fail() {
 
 #[test]
 fn session_records_loaded_hash_and_refuses_edits_after_external_change() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("sequence.fasta");
     let original = b">a\nACGT\n";
@@ -149,6 +155,7 @@ fn session_records_loaded_hash_and_refuses_edits_after_external_change() {
 
 #[test]
 fn companion_hash_remains_guarded_on_the_captured_path() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("sequence.fasta");
     let sidecar = files::gff_sidecar(&path);
@@ -190,6 +197,7 @@ fn companion_hash_remains_guarded_on_the_captured_path() {
 #[test]
 fn actual_session_read_counts_separate_kind_probe_and_companion_capture() {
     use basecraft_io::counters;
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     for (name, bytes, expected_session, expected_probe, companion) in [
         ("single.fasta", b">a\nACGT\n".as_slice(), 1, 1, false),
@@ -243,6 +251,7 @@ fn actual_session_read_counts_separate_kind_probe_and_companion_capture() {
 
 #[test]
 fn missing_inputs_report_filesystem_errors() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     for name in ["missing.fa", "missing.gb", "missing.nwk"] {
         assert!(matches!(
@@ -255,7 +264,8 @@ fn missing_inputs_report_filesystem_errors() {
 
 #[test]
 fn bound_tree_verifies_owned_snapshot_after_main_mutation_or_removal() {
-    use basecraft_ops::analysis_store::ArtifactRun;
+    use basecraft_ops::records::ArtifactRun;
+    crate::isolated_profile::isolate!();
     let original = b"(a:1,b:2);\n(c:3,d:4);\n";
     for metadata in [false, true] {
         for mutation in ["unchanged", "write", "replace", "remove"] {
@@ -317,7 +327,8 @@ fn bound_tree_verifies_owned_snapshot_after_main_mutation_or_removal() {
 #[test]
 fn bound_tree_session_with_missing_metadata_reads_main_once() {
     use basecraft_io::counters;
-    use basecraft_ops::analysis_store::ArtifactRun;
+    use basecraft_ops::records::ArtifactRun;
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("bound.nwk");
     let bytes = b"(a,b);\n";
@@ -346,7 +357,8 @@ fn bound_tree_session_with_missing_metadata_reads_main_once() {
 
 #[test]
 fn bound_tree_snapshot_verification_keeps_binding_run_namespace_and_metadata_guards() {
-    use basecraft_ops::analysis_store::ArtifactRun;
+    use basecraft_ops::records::ArtifactRun;
+    crate::isolated_profile::isolate!();
     let original = b"(a,b);\n";
     for fault in [
         "snapshot",
@@ -442,6 +454,7 @@ fn bound_tree_snapshot_verification_keeps_binding_run_namespace_and_metadata_gua
 #[test]
 fn captured_companion_refusals_preserve_baseline_undo_and_journal() {
     use basecraft_protocol::Op;
+    crate::isolated_profile::isolate!();
     if !isolated_capture_test("captured_companion_refusals_preserve_baseline_undo_and_journal") {
         return;
     }
@@ -504,6 +517,7 @@ fn captured_companion_refusals_preserve_baseline_undo_and_journal() {
 
 #[test]
 fn captured_multirecord_writer_and_retained_replay_inputs_match_legacy() {
+    crate::isolated_profile::isolate!();
     if !isolated_capture_test("captured_multirecord_writer_and_retained_replay_inputs_match_legacy")
     {
         return;
@@ -568,6 +582,7 @@ fn isolated_capture_test(name: &str) -> bool {
 
 #[test]
 fn cold_recoverable_retention_reads_each_raw_input_once_and_recovers_without_sources() {
+    crate::isolated_profile::isolate!();
     if !isolated_capture_test(
         "cold_recoverable_retention_reads_each_raw_input_once_and_recovers_without_sources",
     ) {

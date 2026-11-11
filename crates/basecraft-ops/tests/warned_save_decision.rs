@@ -1,9 +1,8 @@
 //! One-attempt incomplete-evidence decisions at the authoritative save boundary.
 use basecraft_ops::{
     DocId, Error, Session,
-    analysis_store::ArtifactRun,
-    input_evidence::{self, SavePolicy},
-    records,
+    records::ArtifactRun,
+    records::{self, SavePolicy},
     session::{SaveCheck, SaveWarning},
 };
 use basecraft_platform::paths::AppPaths;
@@ -31,7 +30,7 @@ fn folder(root: &Path, name: &str) -> std::path::PathBuf {
 }
 
 fn reference(root: &Path, source: &Path) -> ArtifactRun {
-    input_evidence::reference_input_with_dependencies(
+    records::reference_input_with_dependencies(
         &root.join("result.txt"),
         source,
         &basecraft_io::hash_file(source).unwrap(),
@@ -65,6 +64,9 @@ fn damage(root: &Path, source: &Path) -> ArtifactRun {
     let original = std::fs::read(run.artifact("input.json").unwrap()).unwrap();
     std::fs::write(run.directory().join("test-original-input"), original).unwrap();
     std::fs::write(run.artifact("input.json").unwrap(), b"damaged a").unwrap();
+    // The index refresh cannot read the damaged ledger, so the store's coverage
+    // becomes unknown for every save until the ledger is repaired.
+    records::register(&run).unwrap();
     run
 }
 
@@ -105,11 +107,10 @@ fn assert_recovery(session: &mut Session, root: &Path) {
     let runs = root.join("distant/.basecraft/analyses-v1/runs");
     for entry in std::fs::read_dir(runs).unwrap() {
         let run = entry.unwrap().path();
-        std::fs::write(
-            run.join("input.json"),
-            std::fs::read(run.join("test-original-input")).unwrap(),
-        )
-        .unwrap();
+        let input: records::SubmittedInput =
+            serde_json::from_slice(&std::fs::read(run.join("test-original-input")).unwrap())
+                .unwrap();
+        records::write_json(&run.join("input.json"), &input).unwrap();
     }
     let outputs = records::recover(session.recovery_root(), &root.join("recovered")).unwrap();
     assert_eq!(std::fs::read(&outputs[0]).unwrap(), b">gene\nATGT\n");
@@ -163,7 +164,7 @@ fn known_policy_and_incomplete_acknowledgement_are_independent() {
                 Err(Error::EvidenceConflict(_))
             ));
             assert_eq!(
-                input_evidence::read_input(known.directory()).unwrap().state,
+                records::read_input(known.directory()).unwrap().state,
                 basecraft_protocol::input_records::EvidenceState::Referenced
             );
             let check = session.check_save(doc, None).unwrap();
@@ -181,7 +182,7 @@ fn known_policy_and_incomplete_acknowledgement_are_independent() {
                 ORIGINAL
             );
             assert_eq!(
-                input_evidence::read_input(known.directory()).unwrap().state,
+                records::read_input(known.directory()).unwrap().state,
                 basecraft_protocol::input_records::EvidenceState::Preserved
             );
         },
@@ -248,11 +249,11 @@ fn stale_document_target_issue_and_inventory_require_new_decisions() {
             ));
             // Equal bytes at the same path do not imply the same file identity.
             let check = session.check_save(doc, None).unwrap();
-            let before_identity = input_evidence::stamp(&file).unwrap();
+            let before_identity = records::stamp(&file).unwrap();
             let replacement = root.join("replacement.fasta");
             std::fs::write(&replacement, ORIGINAL).unwrap();
             std::fs::rename(&replacement, &file).unwrap();
-            assert_ne!(input_evidence::stamp(&file).unwrap(), before_identity);
+            assert_ne!(records::stamp(&file).unwrap(), before_identity);
             assert!(matches!(
                 session.save_with_decision(doc, None, check.decide(SavePolicy::Cancel, true)),
                 Err(Error::SaveDecisionStale(_))
@@ -281,11 +282,8 @@ fn save_as_rechecks_and_save_new_never_overwrites() {
         ));
         assert_eq!(std::fs::read(&new).unwrap(), b"keep me");
         std::fs::remove_file(&new).unwrap();
-        let check = required(session.save_new(doc, Some(&new)).unwrap_err());
-        let outcome = session
-            .save_new_with_decision(doc, Some(&new), check.decide(SavePolicy::Cancel, true))
-            .unwrap();
-        assert_eq!(outcome.warnings.len(), 1);
+        // A new file holds no recorded bytes: the unchecked store only warns.
+        session.save_new(doc, Some(&new)).unwrap();
         assert_eq!(std::fs::read(&file).unwrap(), ORIGINAL);
         assert_eq!(std::fs::read(&new).unwrap(), b">gene\nATGT\n");
     });
@@ -327,7 +325,7 @@ fn preservation_and_changed_source_failures_are_not_waivable() {
                     | Error::EvidenceCheckIncomplete(_)
             ));
             assert_eq!(
-                input_evidence::read_input(known.directory()).unwrap().state,
+                records::read_input(known.directory()).unwrap().state,
                 basecraft_protocol::input_records::EvidenceState::Referenced
             );
             assert_eq!(std::fs::read(&file).unwrap(), b">external\nTTTT\n");
@@ -432,7 +430,7 @@ fn late_registrar() {
     };
     let anchor = std::path::PathBuf::from(std::env::var_os("BASECRAFT_LATE_ANCHOR").unwrap());
     let source = std::path::PathBuf::from(source);
-    input_evidence::reference_input_with_dependencies(
+    records::reference_input_with_dependencies(
         &anchor,
         &source,
         &basecraft_io::hash_file(&source).unwrap(),
@@ -470,7 +468,7 @@ fn session_tokens_support_adapter_round_trip_and_cannot_be_replayed() {
                 Err(Error::SaveDecisionStale(_))
             ));
             assert_eq!(
-                input_evidence::read_input(known.directory()).unwrap().state,
+                records::read_input(known.directory()).unwrap().state,
                 basecraft_protocol::input_records::EvidenceState::Referenced
             );
             assert_eq!(std::fs::read(&file).unwrap(), ORIGINAL);
@@ -512,7 +510,7 @@ fn incomplete_inspection_keeps_descendants_ownership_and_backing() {
             let ledger = reference(&anchor, &file);
             let unrelated = root.join("other.fasta");
             std::fs::write(&unrelated, ORIGINAL).unwrap();
-            let child = input_evidence::reference_input_with_dependencies(
+            let child = records::reference_input_with_dependencies(
                 &anchor.join("child.txt"),
                 &unrelated,
                 &basecraft_io::hash_file(&unrelated).unwrap(),
@@ -520,7 +518,7 @@ fn incomplete_inspection_keeps_descendants_ownership_and_backing() {
                 "child",
             )
             .unwrap();
-            let grandchild = input_evidence::reference_input_with_dependencies(
+            let grandchild = records::reference_input_with_dependencies(
                 &anchor.join("grandchild.txt"),
                 &unrelated,
                 &basecraft_io::hash_file(&unrelated).unwrap(),
@@ -528,10 +526,10 @@ fn incomplete_inspection_keeps_descendants_ownership_and_backing() {
                 "grandchild",
             )
             .unwrap();
-            let mut input = input_evidence::read_input(ledger.directory()).unwrap();
+            let mut input = records::read_input(ledger.directory()).unwrap();
             input.analysis_run =
-                Some(input_evidence::relative(ledger.directory(), child.directory()).unwrap());
-            input_evidence::write_json(&ledger.artifact("input.json").unwrap(), &input).unwrap();
+                Some(records::relative(ledger.directory(), child.directory()).unwrap());
+            records::write_json(&ledger.artifact("input.json").unwrap(), &input).unwrap();
             // Damage in this very store must not discard any successfully read
             // ledger, known descendant, logical owner or backing decision.
             let damaged = reference(&anchor, &unrelated);
@@ -593,7 +591,8 @@ fn damaged_display_and_registry_entries_do_not_hide_known_conflicts() {
             std::fs::write(&registry, serde_json::to_vec(&value).unwrap()).unwrap();
             let check = required(session.save(doc, None).unwrap_err());
             assert_eq!(check.evidence().conflict.analyses.len(), 1);
-            assert!(check.evidence().issues.len() >= 2);
+            // The damaged registry entry is not read by saves; it hides nothing.
+            assert_ne!(check.evidence().issues.len(), 0);
             assert_eq!(check.evidence().conflict.analyses[0].run, known.directory());
             assert_eq!(std::fs::read(&file).unwrap(), ORIGINAL);
             assert!(session.can_undo(doc).unwrap());
@@ -640,7 +639,7 @@ fn invalid_document_attempt_consumes_originating_receipt() {
                 None,
                 check.decide(SavePolicy::Cancel, true),
             );
-            assert!(matches!(invalid, Err(Error::Invalid(_))));
+            assert!(matches!(invalid, Err(Error::UnknownDocument { .. })));
             assert_eq!(std::fs::read(&file).unwrap(), ORIGINAL);
             assert!(session.can_undo(doc).unwrap());
             assert!(matches!(
@@ -679,7 +678,7 @@ fn invalid_document_attempt_does_not_consume_newer_receipt() {
                     None,
                     old.decide(SavePolicy::Cancel, true)
                 ),
-                Err(Error::Invalid(_))
+                Err(Error::UnknownDocument { .. })
             ));
             assert_eq!(std::fs::read(&file).unwrap(), ORIGINAL);
             let outcome = session
@@ -717,7 +716,7 @@ fn foreign_receipt_cannot_consume_local_or_originating_session_authority() {
                     None,
                     check.decide(SavePolicy::Cancel, true)
                 ),
-                Err(Error::Invalid(_))
+                Err(Error::UnknownDocument { .. })
             ));
             assert_eq!(std::fs::read(&file).unwrap(), ORIGINAL);
             assert_eq!(std::fs::read(&other_file).unwrap(), ORIGINAL);

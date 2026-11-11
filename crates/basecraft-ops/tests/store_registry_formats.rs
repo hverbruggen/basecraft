@@ -1,5 +1,7 @@
 //! Byte oracles run against original writers before their typed substitution.
-use basecraft_ops::{analysis_store::ArtifactRun, input_evidence};
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
+use basecraft_ops::{records, records::ArtifactRun};
 use basecraft_platform::paths::AppPaths;
 use serde_json::{Value, json};
 use std::{path::Path, process::Command};
@@ -19,6 +21,7 @@ fn capture(name: &str, bytes: &[u8]) {
 
 #[test]
 fn store_writer_bytes_and_validation() {
+    crate::isolated_profile::isolate!();
     if std::env::var_os("BASECRAFT_STORE_CHILD").is_none() {
         let root = tempfile::tempdir().unwrap();
         let status = Command::new(std::env::current_exe().unwrap())
@@ -74,13 +77,13 @@ fn store_writer_bytes_and_validation() {
     ArtifactRun::validate_store(store).unwrap();
     capture("store-extended.json", extended_marker);
 
-    let _lock = input_evidence::lock().unwrap();
+    let _lock = records::lock().unwrap();
     let registry = AppPaths::discover()
         .unwrap()
         .state
         .join("analysis-stores.json");
     assert!(!registry.exists());
-    input_evidence::register(&run).unwrap();
+    records::register(&run).unwrap();
     let expected = json!({"schema_version":1,"stores":[store]});
     assert_eq!(std::fs::read(&registry).unwrap(), pretty(&expected));
     capture("registry-first.json", &std::fs::read(&registry).unwrap());
@@ -88,24 +91,24 @@ fn store_writer_bytes_and_validation() {
     let empty = json!({"schema_version":1,"stores":[]});
     std::fs::write(&registry, pretty(&empty)).unwrap();
     capture("registry-empty.json", &std::fs::read(&registry).unwrap());
-    input_evidence::register(&run).unwrap();
+    records::register(&run).unwrap();
     assert_eq!(std::fs::read(&registry).unwrap(), pretty(&expected));
     let extended =
         json!({"schema_version":1,"stores":[],"z_extension":{"b":[null,{"extra":true}],"a":1}});
     std::fs::write(&registry, pretty(&extended)).unwrap();
-    input_evidence::register(&run).unwrap();
+    records::register(&run).unwrap();
     let mut expected = extended;
     expected["stores"] = json!([store]);
     let bytes = std::fs::read(&registry).unwrap();
     assert_eq!(bytes, pretty(&expected));
     capture("registry-extended.json", &bytes);
-    input_evidence::register(&run).unwrap();
+    records::register(&run).unwrap();
     assert_eq!(std::fs::read(&registry).unwrap(), bytes);
     let second_root = root.join("other");
     std::fs::create_dir(&second_root).unwrap();
     let second = ArtifactRun::create(&second_root.join("result.json"), "second").unwrap();
     let second_store = second.directory().parent().unwrap().parent().unwrap();
-    input_evidence::register(&second).unwrap();
+    records::register(&second).unwrap();
     expected["stores"] = json!([store, second_store]);
     assert_eq!(std::fs::read(&registry).unwrap(), pretty(&expected));
     capture("registry-update.json", &std::fs::read(&registry).unwrap());
@@ -116,7 +119,7 @@ fn store_writer_bytes_and_validation() {
     ] {
         std::fs::write(&registry, pretty(&bad)).unwrap();
         assert!(
-            input_evidence::register(&run)
+            records::register(&run)
                 .unwrap_err()
                 .to_string()
                 .contains("unsupported known-store registry")
@@ -127,7 +130,7 @@ fn store_writer_bytes_and_validation() {
         let bad = pretty(&json!({"schema_version":1,"stores":paths}));
         std::fs::write(&registry, &bad).unwrap();
         assert!(
-            input_evidence::register(&run)
+            records::register(&run)
                 .unwrap_err()
                 .to_string()
                 .contains("absolute and bounded")
@@ -140,24 +143,25 @@ fn store_writer_bytes_and_validation() {
     )
     .unwrap();
     assert!(
-        input_evidence::register(&run)
+        records::register(&run)
             .unwrap_err()
             .to_string()
             .contains("registry limit reached")
     );
     std::fs::write(&registry, vec![b' '; 1024 * 1024 + 1]).unwrap();
     assert!(
-        matches!(input_evidence::register(&run), Err(basecraft_ops::Error::Limit { limit, .. }) if limit == 1 << 20)
+        matches!(records::register(&run), Err(basecraft_ops::Error::Limit { limit, .. }) if limit == 1 << 20)
     );
     std::fs::write(&registry, b"{broken").unwrap();
-    assert!(input_evidence::register(&run).is_err());
+    assert!(records::register(&run).is_err());
     std::fs::write(&registry, pretty(&json!({"schema_version":1,"stores":[7]}))).unwrap();
-    assert!(input_evidence::register(&run).is_err());
+    assert!(records::register(&run).is_err());
 }
 
 #[test]
 fn committed_store_examples_round_trip() {
     use basecraft_protocol::records::{StoreMarker, StoreRegistry};
+    crate::isolated_profile::isolate!();
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/records-v1");
     for name in ["store.json", "store-extended.json"] {
         let bytes = std::fs::read(fixtures.join(name)).unwrap();

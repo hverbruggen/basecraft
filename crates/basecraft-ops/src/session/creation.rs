@@ -232,7 +232,7 @@ impl Slot {
             origin_bundle,
             disk_stamp,
             generation: 0,
-            save_authority: super::save_authority::PendingSaveAuthority::default(),
+            pending_check: super::save_consent::PendingSaveCheck::default(),
             undo: vec![],
             redo: vec![],
             baseline: None,

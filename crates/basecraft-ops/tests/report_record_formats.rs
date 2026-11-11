@@ -1,4 +1,6 @@
 //! Original writer oracles intentionally use literal JSON, independently of protocol types.
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_ops::records::ReportExt;
 use basecraft_ops::{
     records,
@@ -137,6 +139,7 @@ fn custom_report() -> Report {
 }
 #[test]
 fn export_selected_ownership_acceptance_and_refusal() {
+    crate::isolated_profile::isolate!();
     let report = custom_report();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
@@ -226,6 +229,7 @@ fn snapshot(root: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
 }
 #[test]
 fn export_partial_writes_keep_order_and_authored_text() {
+    crate::isolated_profile::isolate!();
     let report = custom_report();
     let dir = tempfile::tempdir().unwrap();
     let generated = [
@@ -281,6 +285,7 @@ fn export_partial_writes_keep_order_and_authored_text() {
 }
 #[test]
 fn provenance_regeneration_and_partial_writes() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let publication = empty_publication();
     let bundle = dir.path().join("bundle");
@@ -314,10 +319,11 @@ fn provenance_regeneration_and_partial_writes() {
         std::fs::create_dir(reports.join(obstructed)).unwrap();
         let before = snapshot(&reports);
         let error = records::write_reports(folder.path(), &publication).unwrap_err();
-        assert!(matches!(
-            error,
-            basecraft_ops::Error::Format(basecraft_io::Error::Io(_))
-        ));
+        // Reports stage together; an obstructed name stops the renames there.
+        assert!(
+            matches!(error, basecraft_ops::Error::Damaged { .. }),
+            "{error}"
+        );
         let after = snapshot(&reports);
         for (i, name) in generated.iter().enumerate() {
             assert_eq!(
@@ -336,6 +342,7 @@ fn provenance_regeneration_and_partial_writes() {
 #[cfg(unix)]
 #[test]
 fn export_follows_existing_manifest_symlink() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let marker = dir.path().join("marker.json");
     let bytes = pretty(

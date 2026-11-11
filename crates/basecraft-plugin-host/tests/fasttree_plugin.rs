@@ -1,5 +1,7 @@
 //! End to end: infer a tree from an alignment with the registered `FastTree`
 //! operation, open it, and record the run. Skips when `FastTree` isn't available.
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_ops::records::AlignmentLinkExt;
 mod common;
 
@@ -29,6 +31,7 @@ fn fasttree_available() -> bool {
 
 #[test]
 fn builds_a_tree_with_fasttree_and_logs_the_run() {
+    crate::isolated_profile::isolate!();
     if !fasttree_available() {
         return;
     }

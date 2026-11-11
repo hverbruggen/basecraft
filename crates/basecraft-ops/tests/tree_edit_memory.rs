@@ -2,8 +2,11 @@
 #[global_allocator]
 static ALLOCATOR: basecraft_io::heap::Allocator = basecraft_io::heap::Allocator;
 
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 #[test]
 fn ten_tip_renames_on_fifty_thousand_tips_keep_less_than_one_mib() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("tree.nwk");
     let tips = (0..50_000)

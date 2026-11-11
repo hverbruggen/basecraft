@@ -1,4 +1,6 @@
 //! Reviewer regression for SCI-0015: exercise the real saved call-set envelope.
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_ops::Session;
 use basecraft_ops::sanger_review::{ReviewChoice, ReviewOp, SangerReview, instrument_review};
 use basecraft_protocol::Op;
@@ -6,6 +8,7 @@ use std::path::Path;
 
 #[test]
 fn secondary_evidence_survives_call_set_selection_save_and_replay() {
+    crate::isolated_profile::isolate!();
     let tmp = tempfile::tempdir().unwrap();
     let source = tmp.path().join("trace.ab1");
     std::fs::copy(

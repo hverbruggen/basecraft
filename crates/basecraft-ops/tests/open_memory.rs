@@ -1,5 +1,7 @@
 //! Every editable kind: exact source reads and measured requested heap.
 #![cfg(all(feature = "test-counters", feature = "test-heap"))]
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_io::{counters, heap};
 use basecraft_ops::{Session, files::Kind};
 use std::path::{Path, PathBuf};
@@ -34,6 +36,7 @@ fn files(root: &Path) -> std::collections::BTreeMap<PathBuf, Option<Vec<u8>>> {
 
 #[test]
 fn every_kind_reads_each_input_once() {
+    crate::isolated_profile::isolate!();
     let Ok(case) = std::env::var("BASECRAFT_OPEN_CASE") else {
         for case in [
             "sequence-fasta",
@@ -163,6 +166,7 @@ fn every_kind_reads_each_input_once() {
 
 #[test]
 fn large_documents_keep_one_copy() {
+    crate::isolated_profile::isolate!();
     let Ok(case) = std::env::var("BASECRAFT_LARGE_OPEN") else {
         for case in ["fasta", "alignment", "genbank", "genbank-tail"] {
             let root = tempfile::tempdir().unwrap();

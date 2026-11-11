@@ -1,4 +1,7 @@
 //! The GUI and headless adapters use these same ops entry points.
+#[path = "support/isolated_profile.rs"]
+mod isolated_profile;
+
 use basecraft_ops::{Session, delimitation as workflow, files};
 use basecraft_protocol::{Actor, Op, delimitation::HypothesisOrigin};
 use std::{collections::BTreeSet, path::PathBuf};
@@ -18,6 +21,7 @@ fn inputs(dir: &std::path::Path) -> Vec<PathBuf> {
 
 #[test]
 fn inspection_and_naming_are_read_only_and_keep_stable_order() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let paths = inputs(dir.path());
     let mut work = files::load_delimitation(&paths[0]).unwrap();
@@ -71,6 +75,7 @@ fn inspection_and_naming_are_read_only_and_keep_stable_order() {
 
 #[test]
 fn selected_combination_preserves_sources_actor_lineage_and_replay() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let paths = inputs(dir.path());
     let output = dir.path().join("combined.spart");
@@ -118,6 +123,7 @@ fn selected_combination_preserves_sources_actor_lineage_and_replay() {
 
 #[test]
 fn explicit_selection_can_keep_only_the_first_file() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let paths = inputs(dir.path());
     let output = dir.path().join("only-first.spart.xml");
@@ -131,6 +137,7 @@ fn explicit_selection_can_keep_only_the_first_file() {
 
 #[test]
 fn rejects_bad_selections_wrong_kind_roster_and_existing_destinations() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let paths = inputs(dir.path());
     let output = dir.path().join("combined.spart");
@@ -172,6 +179,7 @@ fn rejects_bad_selections_wrong_kind_roster_and_existing_destinations() {
 
 #[test]
 fn omitted_selection_keeps_every_hypothesis_and_replays() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let paths = inputs(dir.path());
     let mut session = Session::new(dir.path());
@@ -184,6 +192,7 @@ fn omitted_selection_keeps_every_hypothesis_and_replays() {
 
 #[test]
 fn refused_save_keeps_the_unsaved_batch_replayable() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let paths = inputs(dir.path());
     let mut session = Session::new(dir.path());
@@ -202,6 +211,7 @@ fn refused_save_keeps_the_unsaved_batch_replayable() {
 
 #[test]
 fn path_aliases_match_selection_without_merging_input_entries() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let paths = inputs(dir.path());
     std::fs::create_dir(dir.path().join("sub")).unwrap();
@@ -270,6 +280,7 @@ fn path_aliases_match_selection_without_merging_input_entries() {
 // replay correction must preserve both source and retained bytes throughout.
 #[test]
 fn repeated_combine_and_refused_save_preserve_retained_objects_and_recover() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let paths = inputs(dir.path());
     let mut session = Session::new(dir.path());
@@ -364,6 +375,7 @@ fn hint_workspace(
 
 #[test]
 fn linked_alignment_selector_preserves_presence_order_extensions_and_spelling() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let cases = [
         (
@@ -444,6 +456,7 @@ fn linked_alignment_selector_preserves_presence_order_extensions_and_spelling() 
 #[test]
 fn linked_alignment_refuses_all_other_kinds_and_missing_ids() {
     use basecraft_ops::{DocId, Error};
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let mut session = Session::unlogged(dir.path());
     let sequence = session.create_sequence("sequence", "ACGT").unwrap();
@@ -494,6 +507,7 @@ fn linked_alignment_refuses_all_other_kinds_and_missing_ids() {
 #[test]
 fn linked_alignment_observation_preserves_unsaved_undo_redo_journal_and_replay() {
     use basecraft_protocol::delimitation::DelimitationEdit;
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let path = hint_workspace(dir.path(), "edited.spart", |_| {});
     let original_bytes = std::fs::read(&path).unwrap();

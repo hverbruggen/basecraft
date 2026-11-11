@@ -1,5 +1,7 @@
 //! Faults after visible publication must resume owned work without rerunning tools.
 mod common;
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 
 use basecraft_ops::{Session, records};
 use basecraft_plugin_host::{jobs::JobManager, policy::SessionPolicy};
@@ -23,6 +25,7 @@ plugin.run()
 
 #[test]
 fn member_metadata_repair_requires_owned_bytes_and_retries_companions() {
+    crate::isolated_profile::isolate!();
     for replace_with_foreign in [false, true] {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("input.afa"), ALIGNMENT).unwrap();
@@ -68,6 +71,7 @@ fn member_metadata_repair_requires_owned_bytes_and_retries_companions() {
 
 #[test]
 fn workspace_inventory_survives_repair_and_rejects_changed_export() {
+    crate::isolated_profile::isolate!();
     for corrupt in [false, true] {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("tree.nwk"), "(a:0.1,b:0.2);\n").unwrap();
@@ -122,6 +126,7 @@ fn workspace_inventory_survives_repair_and_rejects_changed_export() {
 
 #[test]
 fn owner_save_failure_stays_partial_and_repair_does_not_reapply_hypotheses() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let tree = root.path().join("tree.nwk");
     std::fs::write(&tree, "((a:0.1,b:0.1):0.9,(c:0.2,d:0.2):0.8);\n").unwrap();
@@ -250,6 +255,7 @@ fn assert_reopened_completion(workspace: &std::path::Path, run_id: &str, hypothe
 
 #[test]
 fn automatically_saved_workspace_retains_completion_after_owner_closes() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let tree = root.path().join("tree.nwk");
     std::fs::write(&tree, "((a:0.1,b:0.1):0.9,(c:0.2,d:0.2):0.8);\n").unwrap();
@@ -280,6 +286,7 @@ fn automatically_saved_workspace_retains_completion_after_owner_closes() {
 
 #[test]
 fn genuine_workspace_edit_keeps_new_results_as_artifacts_and_records_completion() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let tree = root.path().join("tree.nwk");
     std::fs::write(&tree, "((a:0.1,b:0.1):0.9,(c:0.2,d:0.2):0.8);\n").unwrap();
@@ -335,6 +342,7 @@ fn genuine_workspace_edit_keeps_new_results_as_artifacts_and_records_completion(
 
 #[test]
 fn terminal_report_publication_failure_repairs_without_duplicate_completion_or_data_write() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     std::fs::write(
         root.path().join("tree.nwk"),
