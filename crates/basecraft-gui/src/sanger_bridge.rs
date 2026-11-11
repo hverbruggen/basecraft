@@ -1001,16 +1001,13 @@ impl qobject::SangerController {
         self.as_mut().set_calling(false);
         let path = PathBuf::from(path.to_string());
         let result = (|| -> Result<_, String> {
-            let session = work::ReviewDocument::open(&path)?;
+            let (session, recovered) = work::ReviewDocument::open(&path)?;
             let view = session_view(session.review().ok_or("No review is open")?)?;
-            Ok((view, session))
+            Ok((view, session, recovered))
         })();
         match result {
-            Ok((mut review, session)) => {
+            Ok((mut review, session, recovered)) => {
                 self.as_mut().cancel_calls();
-                let recovered = session
-                    .review()
-                    .is_some_and(|review| review.recovery_path().is_some());
                 {
                     let mut r = self.as_mut().rust_mut();
                     review.resize(r.view.width, r.view.height);
@@ -1233,7 +1230,12 @@ impl qobject::SangerController {
         if self.rust().stage.is_some() {
             return false;
         }
-        let rebuild = matches!(op, ReviewOp::Undo | ReviewOp::Redo);
+        let before_view = self
+            .rust()
+            .review_session
+            .as_ref()
+            .and_then(work::ReviewDocument::review)
+            .map(|review| (review.draft_sha256.clone(), review.evidence_runs().to_vec()));
         let result = self
             .as_mut()
             .rust_mut()
@@ -1241,20 +1243,37 @@ impl qobject::SangerController {
             .as_mut()
             .ok_or_else(|| "No Sanger review is open".to_string())
             .and_then(|document| document.apply(op));
+        if result.is_ok() {
+            self.as_mut().set_dirty(true);
+        }
         let result = result.and_then(|()| {
-            if rebuild {
+            let after_view = self
+                .rust()
+                .review_session
+                .as_ref()
+                .and_then(work::ReviewDocument::review)
+                .map(|review| (review.draft_sha256.clone(), review.evidence_runs().to_vec()));
+            if before_view != after_view {
                 let mut r = self.as_mut().rust_mut();
-                let mut view = session_view(
+                let view = session_view(
                     r.review_session
                         .as_ref()
                         .and_then(work::ReviewDocument::review)
                         .ok_or("No review is open")?,
-                )?;
+                );
+                let mut view = match view {
+                    Ok(view) => view,
+                    Err(error) => {
+                        r.review = None;
+                        return Err(error);
+                    }
+                };
                 view.resize(r.view.width, r.view.height);
                 if let Some(old) = &r.review {
                     view.selected = old.selected.min(view.draft.columns.len().saturating_sub(1));
                     view.left = old.left;
                     view.column_width = old.column_width;
+                    view.pan(0.0);
                 }
                 r.review = Some(view);
                 r.overview_cache = basecraft_viewmodel::overview::Cache::default();

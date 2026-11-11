@@ -1,5 +1,8 @@
 //! Headless access to saved records the GUI already reads: Sanger reviews
 //! (history, methods, verification, packaging, recovery) and support import.
+#[path = "../../basecraft-ops/tests/support/sanger_fixture.rs"]
+mod sanger_fixture;
+
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -101,11 +104,8 @@ fn reviews(project: &Path) -> (PathBuf, PathBuf) {
 
 /// The report the GUI shows for a saved review it opened.
 fn gui_report(path: &Path) -> Value {
-    let review = SangerReview::load(path).unwrap();
     serde_json::to_value(
-        review
-            .document_report(review.recovery_path().is_some())
-            .unwrap(),
+        basecraft_ops::document_record::DocumentRecord::saved_report(path).unwrap(),
     )
     .unwrap()
 }
@@ -324,11 +324,35 @@ fn review_recovery_restores_all_call_sets_into_a_new_folder() {
     // The isolated child and its CLI share the checkpoint in application state.
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("project");
-    let (_, v2) = reviews(&project);
-    let mut review = SangerReview::load(&v2).unwrap();
-    review.start_recovery().unwrap();
-    edit(&mut review, 1, 'T');
-    let checkpoint = review.recovery_path().unwrap().to_path_buf();
+    std::fs::create_dir_all(&project).unwrap();
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../testdata/fixtures/sanger-legacy")
+        .canonicalize()
+        .unwrap();
+    let index: Value =
+        serde_json::from_slice(&std::fs::read(fixture.join("capture-index.json")).unwrap())
+            .unwrap();
+    let captured = fixture.join(index["checkpoint"].as_str().unwrap());
+    let mut bytes: Value = serde_json::from_slice(&std::fs::read(&captured).unwrap()).unwrap();
+    for set in bytes["sets"].as_array_mut().unwrap() {
+        let evidence = &mut set["evidence"];
+        for run in evidence["runs"].as_array_mut().unwrap() {
+            *run = json!(captured.parent().unwrap().join(run.as_str().unwrap()));
+        }
+        for source in evidence["sources"].as_array_mut().unwrap() {
+            for field in ["path", "ledger"] {
+                if let Some(path) = source[field].as_str() {
+                    source[field] = json!(captured.parent().unwrap().join(path));
+                }
+            }
+        }
+    }
+    let checkpoint = basecraft_platform::paths::AppPaths::discover()
+        .unwrap()
+        .state
+        .join("jobs/legacy-review/review.sanger-review.json");
+    std::fs::create_dir_all(checkpoint.parent().unwrap()).unwrap();
+    std::fs::write(&checkpoint, serde_json::to_vec(&bytes).unwrap()).unwrap();
     let run = |args: &[&str]| {
         Command::new(env!("CARGO_BIN_EXE_basecraft"))
             .args(args)
@@ -581,13 +605,7 @@ fn sanger_edits_share_cli_mcp_history_and_undo() {
     let project = root.join("project");
     let profile = root.join("profile");
     std::fs::create_dir_all(&project).unwrap();
-    let path = project.join("review.json");
-    std::fs::copy(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../testdata/fixtures/sanger-legacy/multi.json"),
-        &path,
-    )
-    .unwrap();
+    let path = sanger_fixture::copy_to(&project, "multi.json");
     let call_set = SangerReview::load(&path).unwrap().draft_sha256;
     let operation = Op::SangerReview {
         call_set: call_set.clone(),
@@ -614,7 +632,7 @@ fn sanger_edits_share_cli_mcp_history_and_undo() {
     ));
     assert!(history.contains("Sanger review ") && history.contains(&call_set));
     let mut mcp = Mcp::start(&project, &profile, true);
-    let opened = mcp.tool("open", &json!({"path":"review.json"}));
+    let opened = mcp.tool("open", &json!({"path":"multi.json"}));
     assert_eq!(opened["isError"], false, "{opened}");
     let state = &opened["structuredContent"];
     let id = state["document"].clone();

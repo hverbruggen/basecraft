@@ -28,7 +28,8 @@ Use an isolated empty directory mounted as `/fixture`, with application profile
 `/fixture/profile`, and the pinned production source plus
 `crates/basecraft-ops/src/sanger_review/legacy_fixtures.rs` and its test-module
 registration. Set `BASECRAFT_CAPTURE=legacy-writer`. Run only the ignored
-`capture_legacy_writer` unit test. It copies the small synthetic trace, creates
+`capture_legacy_writer` unit test in the pre-migration source. That writer has
+been retired; use the pinned historical source for an intentional recapture. It copies the small synthetic trace, creates
 two drafts, executes the real review methods, exports, saves v1, selects B,
 saves v2 and records the actual checkpoint location. Compiler output and TMP
 must be outside source. The capture guard refuses an existing `single.json`.

@@ -90,7 +90,14 @@ impl Mutation {
         transformation: &str,
         result_label: &str,
     ) -> Result<()> {
-        link_generated_input_locked(run, dependencies, payload, transformation, result_label)
+        link_generated_input_locked(
+            run,
+            dependencies,
+            payload,
+            transformation,
+            result_label,
+            register,
+        )
     }
 
     /// Recheck the caller's frozen original hash under the held evidence lock.
@@ -2118,6 +2125,8 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
         if original == result {
             publication.outputs[0].hash = hash;
             publication.outputs[0].size = size;
+            // Relocation changes the visible review, not its retained original artifact.
+            publication.outputs[0].retained = None;
         } else {
             publication.outputs.push(ArtifactRevision {
                 id: format!("{}:sanger-review", publication.id),
@@ -2195,10 +2204,15 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
     if authored.is_file() {
         copy(&authored, &target_bundle.join("reports/methods.md"))?;
     }
-    if !crate::provenance::verify(&copied)?.is_empty() {
-        return Err(invalid(
-            "export verification failed; original source and records preserved",
-        ));
+    let issues = crate::provenance::verify(&copied)?;
+    if !issues.is_empty() {
+        return Err(crate::Error::Damaged {
+            path: copied.clone(),
+            detail: format!(
+                "export verification failed: {}; original source and records preserved",
+                issues.join("; ")
+            ),
+        });
     }
     if destination.exists() {
         return Err(invalid("package destination appeared during export"));
@@ -2527,6 +2541,7 @@ pub(crate) fn link_generated_input_locked(
     payload: &[u8],
     transformation: &str,
     result_label: &str,
+    register: impl FnOnce(&ArtifactRun) -> Result<()>,
 ) -> Result<()> {
     let mut upstream = Vec::new();
     for dependency in dependencies {
@@ -2558,7 +2573,7 @@ pub(crate) fn link_generated_input_locked(
             extra: BTreeMap::new(),
         })?,
     )?;
-    crate::input_evidence::register(run)
+    register(run)
 }
 
 #[cfg(test)]

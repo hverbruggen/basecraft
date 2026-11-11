@@ -111,7 +111,13 @@ impl Session {
     ) -> Result<DocId> {
         let key = format!("new-review-{}.json", self.next_id());
         let mut review = review.clone();
-        review.ensure_sources(review.storage_anchor().to_path_buf().as_path())?;
+        let anchor = review.storage_anchor().to_path_buf();
+        if review.ensure_sources(&anchor).is_err() {
+            // A read-only source folder must not prevent review. Durable private
+            // evidence outlives the disposable session recovery directory.
+            std::fs::create_dir_all(&self.local_provenance_root)?;
+            review.ensure_sources(&self.local_provenance_root.join(&key))?;
+        }
         let snapshot = review.session_snapshot(&self.resolve(&key))?;
         self.create_sanger_review_with_key(&key, &snapshot)
     }
@@ -126,13 +132,14 @@ impl Session {
             snapshot,
             &self.resolve(key),
         )?;
+        let (undo, redo) = review.session_history()?;
         self.docs.push(Slot {
             key: key.into(),
             content: Loaded::SangerReview(Box::new(review)),
             generation: 0,
             save_authority: super::save_authority::PendingSaveAuthority::default(),
-            undo: vec![],
-            redo: vec![],
+            undo,
+            redo,
             baseline: None,
             baseline_logged: false,
             accepted_hashes: vec![],

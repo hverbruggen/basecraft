@@ -1,15 +1,15 @@
 //! Sanger continuations run outside Qt. Scientific execution and receipts belong
 //! exclusively to the registry/JobManager; this module only adapts review state.
-use super::{Path, PathBuf, ReviewOp, ReviewChoice, SangerReview, SangerReviewView};
+use super::{Path, PathBuf, ReviewChoice, ReviewOp, SangerReview, SangerReviewView};
 use basecraft_docs::{AlignmentDoc, sanger::SangerDraft};
 use basecraft_io::abif::{self, Trace};
-use std::sync::Arc;
 use basecraft_plugin_host::{
     jobs::JobManager,
     policy::SessionPolicy,
     registry::{Registry, RegistryConfig},
 };
 use basecraft_protocol::operation::{OperationOutcome, RuntimeState};
+use std::sync::Arc;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     mpsc,
@@ -340,7 +340,6 @@ fn execute(
     };
     check(cancelled)?;
     let view = session_view(&session)?;
-    session.start_recovery()?;
     check(cancelled)?;
     Ok(Completion {
         session,
@@ -468,13 +467,16 @@ impl ReviewDocument {
             .map_err(|e| e.to_string())?;
         Ok(Self { session, id })
     }
-    pub fn open(path: &Path) -> Result<Self, String> {
+    pub fn open(path: &Path) -> Result<(Self, bool), String> {
         let mut session =
             basecraft_ops::Session::recoverable(path.parent().ok_or("Review has no parent")?)
                 .map_err(|e| e.to_string())?;
         let id = session.open(path).map_err(|e| e.to_string())?;
-        session.sanger_review(id).map_err(|e| e.to_string())?;
-        Ok(Self { session, id })
+        let review = session.sanger_review(id).map_err(|e| e.to_string())?;
+        if review.recovery_path().is_some() {
+            return Ok((Self::new(review.clone())?, true));
+        }
+        Ok((Self { session, id }, false))
     }
     pub fn report(&self, dirty: bool) -> Result<basecraft_ops::document_record::Report, String> {
         let mut report = self
@@ -484,8 +486,14 @@ impl ReviewDocument {
         let shared = self
             .session
             .document_record(self.id)
-            .and_then(|record| record.report())
+            .and_then(|mut record| {
+                record
+                    .events
+                    .retain(|event| !matches!(event.op, basecraft_protocol::Op::Open { .. }));
+                record.report()
+            })
             .map_err(|e| e.to_string())?;
+        report.warnings.extend(shared.warnings);
         report.history.extend(shared.history);
         report.history_text = report
             .history
@@ -636,4 +644,3 @@ pub(super) fn session_view(session: &SangerReview) -> Result<SangerReviewView, S
     }
     Ok(view)
 }
-

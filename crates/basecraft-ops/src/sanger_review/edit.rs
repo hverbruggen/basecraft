@@ -195,10 +195,18 @@ impl SangerReview {
         }
         let set = self.call_set_mut(call_set)?;
         let before = set.events.len();
+        let can_record_redo = record && set.session_history()?.1.last().is_some_and(|entry| &entry.op == op && matches!(&entry.inverse, crate::session::Inverse::SangerReview { change: prior, .. } if prior == change));
         set.install_change(change, true)
             .map_err(crate::Error::Unsupported)?;
-        if record {
+        if can_record_redo {
             set.events.push(ReviewOp::Redo);
+        } else if record {
+            let basecraft_protocol::Op::SangerReview { edit, .. } = op else {
+                return Err(crate::Error::Unsupported(
+                    "redo requires a review decision".into(),
+                ));
+            };
+            set.events.push((**edit).clone());
         } else {
             set.events.pop();
         }

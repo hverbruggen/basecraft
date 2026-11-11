@@ -79,35 +79,20 @@ pub fn saved_review(path: &Path) -> Option<Result<SangerReview, String>> {
 /// folder, with every retained call set. The original checkpoint is unchanged.
 /// Failed saves leave the destination and any partial output in place.
 pub fn recover(checkpoint: &Path, destination: &Path) -> crate::Result<PathBuf> {
-    recover_with_saver(checkpoint, destination, |review, target| {
-        review.save_with_evidence(target, crate::input_evidence::SavePolicy::Cancel)
-    })
-}
-
-fn recover_with_saver(
-    checkpoint: &Path,
-    destination: &Path,
-    saver: impl FnOnce(&mut SangerReview, &Path) -> Result<(), String>,
-) -> crate::Result<PathBuf> {
-    use crate::error::invalid;
-    let review = SangerReview::load(checkpoint).map_err(invalid)?;
+    let review = SangerReview::load(checkpoint).map_err(|detail| crate::Error::Damaged {
+        path: checkpoint.into(),
+        detail,
+    })?;
     let name = review
         .recovery_path()
         .and(review.storage_anchor().file_name())
-        .ok_or_else(|| invalid("not a Sanger review recovery checkpoint"))?
+        .ok_or_else(|| crate::Error::Unsupported("not a Sanger review recovery checkpoint".into()))?
         .to_owned();
-    // Refuses an existing destination, including a concurrent recovery.
-    std::fs::create_dir(destination).map_err(|error| {
-        if error.kind() == std::io::ErrorKind::AlreadyExists {
-            invalid("recovery destination already exists")
-        } else {
-            error.into()
-        }
-    })?;
+    std::fs::create_dir(destination)?;
     let target = destination.join(name);
-    // A continuation owns a separate checkpoint, even when saving fails.
-    let mut review = review.fork_for_operation();
-    saver(&mut review, &target).map_err(invalid)?;
+    let mut session = crate::Session::recoverable(destination)?;
+    let id = session.create_sanger_review(&review)?;
+    session.save_new(id, Some(&target))?;
     Ok(target)
 }
 
@@ -462,17 +447,11 @@ impl SangerReview {
         {
             self.retained.push(session);
         }
-        self.checkpoint()
+        Ok(())
     }
 
     pub fn select_call_set(&mut self, id: &str) -> Result<(), String> {
-        let previous = self.draft_sha256.clone();
-        self.swap_call_set(id)?;
-        if let Err(error) = self.checkpoint() {
-            self.swap_call_set(&previous)?;
-            return Err(error);
-        }
-        Ok(())
+        self.swap_call_set(id)
     }
 
     fn swap_call_set(&mut self, id: &str) -> Result<(), String> {
@@ -506,7 +485,34 @@ impl SangerReview {
         path: &Path,
         policy: crate::input_evidence::SavePolicy,
     ) -> Result<(), String> {
-        self.save_durable(path, policy).map_err(|e| e.to_string())
+        // Compatibility convenience for payload callers. Session owns the write.
+        (|| -> crate::Result<()> {
+            let mut session = crate::Session::recoverable(
+                path.parent()
+                    .filter(|p| !p.as_os_str().is_empty())
+                    .unwrap_or(Path::new(".")),
+            )?;
+            crate::save_guard::Revision::check(self.accepted.as_ref(), path)?;
+            let id = if path.exists() {
+                let id = session.open(path)?;
+                crate::save_guard::Revision::check(self.accepted.as_ref(), path)?;
+                session.update_sanger_review(id, self)?;
+                id
+            } else {
+                crate::save_guard::Revision::check(self.accepted.as_ref(), path)?;
+                session.create_sanger_review(self)?
+            };
+            let expected = session.save_hashes_at(id, path)?;
+            let result = session.save_with_evidence(id, Some(path), policy);
+            if result.is_ok() || basecraft_io::hash_file(path).ok().as_ref() == expected.first() {
+                *self = Self::load(path).map_err(|detail| crate::Error::Damaged {
+                    path: path.into(),
+                    detail,
+                })?;
+            }
+            result
+        })()
+        .map_err(|e| e.to_string())
     }
 
     pub fn decision(&self, column: usize) -> Option<&ReviewChoice> {
@@ -574,7 +580,7 @@ impl SangerReview {
             }
         }
         self.events.push(op);
-        self.checkpoint()
+        Ok(())
     }
 
     /// Export only a fully resolved specimen sequence. The output hash is a
@@ -606,7 +612,6 @@ impl SangerReview {
             return Err("Give the specimen a name".into());
         }
         let fasta = format!(">{label}\n{sequence}\n");
-        self.start_recovery()?;
         // Same-filesystem no-clobber promotion protects a file created after
         // preflight; do not replace another writer's output.
         let parent = path
@@ -1094,7 +1099,6 @@ mod call_set_tests {
         let tmp = tempfile::tempdir().unwrap();
         let mut session = instrument(tmp.path());
         std::fs::write(tmp.path().join(".basecraft"), "foreign file").unwrap();
-        assert!(session.start_recovery().is_err());
         session
             .apply(ReviewOp::Set {
                 columns: vec![0],
@@ -1159,9 +1163,6 @@ mod readonly_tests {
 #[cfg(test)]
 mod moved_and_failed_recovery_tests {
     use super::*;
-    mod recover_cleanup_tests {
-        include!("sanger_review/recover_cleanup_tests.rs");
-    }
     pub(super) fn pair(folder: &Path) -> SangerReview {
         std::fs::create_dir(folder).unwrap();
         let source = folder.join("source.ab1");
@@ -1191,47 +1192,6 @@ mod moved_and_failed_recovery_tests {
             .unwrap();
         review.retain_call_set(alternative).unwrap();
         review
-    }
-    #[test]
-    fn stale_review_save_preserves_both_call_sets_and_recovery() {
-        let tmp = tempfile::tempdir().unwrap();
-        let folder = tmp.path().join("source");
-        let mut original = pair(&folder);
-        let path = folder.join("review.json");
-        original.save(&path).unwrap();
-        let mut a = SangerReview::load(&path).unwrap();
-        let mut b = SangerReview::load(&path).unwrap();
-        a.apply(ReviewOp::Set {
-            columns: vec![1],
-            choice: ReviewChoice::Edit('A'),
-        })
-        .unwrap();
-        a.save(&path).unwrap();
-        let accepted = std::fs::read(&path).unwrap();
-        b.start_recovery().unwrap();
-        b.apply(ReviewOp::Set {
-            columns: vec![1],
-            choice: ReviewChoice::Edit('T'),
-        })
-        .unwrap();
-        let other = b.retained[0].draft_sha256.clone();
-        b.select_call_set(&other).unwrap();
-        b.apply(ReviewOp::Set {
-            columns: vec![1],
-            choice: ReviewChoice::Edit('G'),
-        })
-        .unwrap();
-        assert!(b.save(&path).is_err(), "stale review must not overwrite A");
-        assert_eq!(std::fs::read(&path).unwrap(), accepted);
-        assert_eq!(b.decision(1), Some(&ReviewChoice::Edit('G')));
-        let mut recovered = SangerReview::load(b.recovery_path().unwrap()).unwrap();
-        assert!(recovered.save(&path).is_err());
-        assert!(recovered.save(b.recovery_path().unwrap()).is_err());
-        assert_eq!(recovered.decision(1), Some(&ReviewChoice::Edit('G')));
-        assert_eq!(
-            recovered.retained[0].decision(1),
-            Some(&ReviewChoice::Edit('T'))
-        );
     }
 
     #[test]
@@ -1374,7 +1334,7 @@ mod moved_and_failed_recovery_tests {
     }
 
     #[test]
-    fn failed_binding_reports_saved_data_and_allows_safe_retry() {
+    fn failed_binding_preserves_data_and_allows_safe_retry() {
         let tmp = tempfile::tempdir().unwrap();
         let folder = tmp.path().join("source");
         let mut review = pair(&folder);
@@ -1393,20 +1353,11 @@ mod moved_and_failed_recovery_tests {
         let previous_binding = std::fs::read(&binding).unwrap();
         std::fs::remove_file(&binding).unwrap();
         std::fs::create_dir(&binding).unwrap();
+        let before = std::fs::read(&path).unwrap();
         let error = review.save(&path).unwrap_err();
-        assert!(error.contains("data saved; binding incomplete"), "{error}");
-        assert!(error.contains("repair evidence"));
-        assert_eq!(
-            SangerReview::load(&path).unwrap().decision(1),
-            Some(&ReviewChoice::Edit('T'))
-        );
-        assert_eq!(
-            SangerReview::load(review.recovery_path().unwrap())
-                .unwrap()
-                .call_sets()
-                .len(),
-            2
-        );
+        assert!(error.contains("binding"), "{error}");
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(review.decision(1), Some(&ReviewChoice::Edit('T')));
         std::fs::remove_dir(&binding).unwrap();
         std::fs::write(&binding, previous_binding).unwrap();
         review.save(&path).unwrap();
@@ -1501,45 +1452,5 @@ mod moved_and_failed_recovery_tests {
         assert!(reopened.working_draft().is_ok());
         assert_eq!(reopened.decision(0), Some(&ReviewChoice::Edit('C')));
         reopened.save(&moved.join("saved-again.json")).unwrap();
-    }
-    #[test]
-    fn failed_recovery_and_save_keep_both_histories_and_previous_file() {
-        let tmp = tempfile::tempdir().unwrap();
-        let folder = tmp.path().join("source");
-        let mut review = pair(&folder);
-        let saved = folder.join("review.json");
-        review.save(&saved).unwrap();
-        let previous = std::fs::read(&saved).unwrap();
-        review.recovery = Some(tmp.path().to_path_buf()); // Cannot atomically replace a directory.
-        assert!(
-            review
-                .apply(ReviewOp::Set {
-                    columns: vec![1],
-                    choice: ReviewChoice::Edit('T')
-                })
-                .is_err()
-        );
-        assert_eq!(review.decision(0), Some(&ReviewChoice::Edit('G')));
-        assert_eq!(review.decision(1), Some(&ReviewChoice::Edit('T')));
-        assert_eq!(
-            review.retained[0].decision(0),
-            Some(&ReviewChoice::Edit('C'))
-        );
-        let other = review.retained[0].draft_sha256.clone();
-        assert!(review.select_call_set(&other).is_err());
-        assert_eq!(
-            review.draft.engine, "ABI",
-            "failed selection checkpoint rolls back selection"
-        );
-        assert!(review.save(&saved).is_err());
-        assert_eq!(std::fs::read(&saved).unwrap(), previous);
-        review.recovery = None;
-        review.save(&saved).unwrap();
-        let reopened = SangerReview::load(&saved).unwrap();
-        assert_eq!(reopened.decision(1), Some(&ReviewChoice::Edit('T')));
-        assert_eq!(
-            reopened.retained[0].decision(0),
-            Some(&ReviewChoice::Edit('C'))
-        );
     }
 }

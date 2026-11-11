@@ -1,6 +1,9 @@
 //! The common lifecycle contract for the six existing Session kinds.
 //! Keep semantic assertions as well as fingerprints: equal counts do not imply
 //! equal documents. Sanger review is not a Session kind yet.
+#[path = "support/sanger_fixture.rs"]
+mod sanger_fixture;
+
 use std::{
     collections::BTreeMap,
     fmt::Debug,
@@ -621,12 +624,7 @@ fn sanger_scenario(name: &str, filename: &str) {
     };
     scenario(
         name,
-        |root| {
-            let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../testdata/fixtures/sanger-legacy")
-                .join(filename);
-            fixture(root, "review.json", &std::fs::read(source).unwrap())
-        },
+        |root| sanger_fixture::copy_to(root, filename),
         snapshot,
         |session, id| {
             let original = snapshot(session, id);

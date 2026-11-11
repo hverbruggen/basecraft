@@ -78,7 +78,12 @@ pub enum Kind {
 pub fn kind(path: &Path) -> Result<Kind> {
     match Format::from_path(path)? {
         Format::SangerReview => {
-            crate::sanger_review::SangerReview::load(path).map_err(crate::error::invalid)?;
+            crate::sanger_review::SangerReview::load(path).map_err(|detail| {
+                crate::Error::Damaged {
+                    path: path.into(),
+                    detail,
+                }
+            })?;
             return Ok(Kind::SangerReview);
         }
         Format::Delimitation => return Ok(Kind::Delimitation),
@@ -249,7 +254,10 @@ pub fn load(path: &Path) -> Result<Loaded> {
     if format == Format::SangerReview {
         return crate::sanger_review::SangerReview::load(path)
             .map(|review| Loaded::SangerReview(Box::new(review)))
-            .map_err(crate::error::invalid);
+            .map_err(|detail| crate::Error::Damaged {
+                path: path.into(),
+                detail,
+            });
     }
     if format == Format::Metadata {
         return crate::metadata::load(path).map(Loaded::Metadata);

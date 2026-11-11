@@ -266,7 +266,8 @@ impl Session {
         Ok(last)
     }
 
-    /// Verify an explicitly named history target before changing anything.
+    /// Verify an explicitly named history target before changing anything. An empty
+    /// target selects the latest edit, including history imported from a saved review.
     pub fn apply_history(&mut self, id: DocId, op: &Op) -> Result<String> {
         let slot = self.docs.get(id.0).ok_or(Error::UnknownDocument { id })?;
         let (of, stack, action) = match op {

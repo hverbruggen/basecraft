@@ -26,7 +26,7 @@ pub struct ReviewStateMut<'a> {
 
 /// A private in-memory delta, not an on-disk record or an undo stack. The owner
 /// retains it for undo; columns address this one immutable source draft.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ReviewChange {
     columns: Vec<usize>,
     before: Vec<ReviewChoice>,

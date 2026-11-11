@@ -230,7 +230,7 @@ impl Session {
             hooks.disposition(SaveDisposition::History);
             self.log_save_with(id, &target, self.docs[id.0].accepted_hashes.clone(), hooks)
         } else {
-            self.save_inner(id, path, hooks)
+            self.save_inner(id, path, before.is_none(), hooks)
         };
         if outcome.is_ok() {
             self.docs[id.0].saved_state_hashes = self.save_hashes(id)?;
@@ -354,6 +354,7 @@ impl Session {
         &mut self,
         id: DocId,
         path: Option<&Path>,
+        create: bool,
         hooks: &mut impl SaveHooks,
     ) -> Result<()> {
         hooks.at(SaveSite::InnerFlush);
@@ -375,15 +376,16 @@ impl Session {
             hooks.at(SaveSite::OtherKind);
         }
         let links = document.prepare_links(&original, &target, format)?;
-        let mut write = || {
-            hooks.write(
-                document,
-                &target,
-                format,
-                &self.storage_root,
-                &self.write_publication,
-            )
+        let publication = if create
+            && matches!(
+                self.write_publication,
+                crate::documents::WritePublication::Immediate
+            ) {
+            &crate::documents::WritePublication::Create
+        } else {
+            &self.write_publication
         };
+        let mut write = || hooks.write(document, &target, format, &self.storage_root, publication);
         let (hashes, outputs) = if let Some(links) = links {
             links.publish(write)?
         } else {

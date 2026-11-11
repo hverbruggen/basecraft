@@ -1,9 +1,7 @@
 //! Kind-specific behavior borrowed by the shared Session.
 //!
-//! Migration is incremental: Submission, Metadata, Alignment, Tree, Sequence and Delimitation implement this interface today.
-//! All six existing payloads participate; Sanger review integration remains separate.
-//! Payloads are not constrained to a single sequence/record, so future result,
-//! multi-record and Sanger documents can retain their own models here.
+//! Seven payloads share identity, journal, undo and save ownership. Each payload
+//! supplies its own edits and serializer; scientific review history stays specialised.
 
 use std::path::{Path, PathBuf};
 
@@ -45,13 +43,13 @@ pub(crate) trait Document {
     /// Detached proposal staging retains the same payload and writer metadata.
     /// Unsupported kinds cannot be mutated through the proposal route.
     fn proposal_candidate(&self) -> Result<crate::files::Loaded> {
-        Err(crate::error::invalid(
-            "this document kind does not support proposals",
+        Err(crate::Error::Unsupported(
+            "this document kind does not support proposals".into(),
         ))
     }
     fn apply_proposal(&mut self, _op: &Op) -> Result<(Inverse, Option<FeatureId>)> {
-        Err(crate::error::invalid(
-            "this document kind does not support proposals",
+        Err(crate::Error::Unsupported(
+            "this document kind does not support proposals".into(),
         ))
     }
     /// Older self-contained formats can restore saved undo history. Ordinary
@@ -74,8 +72,8 @@ pub(crate) trait Document {
         prepared: Option<PreparedEdit>,
     ) -> Result<(Inverse, Option<FeatureId>)> {
         if prepared.is_some() {
-            return Err(crate::error::invalid(
-                "prepared edit has the wrong document kind",
+            return Err(crate::Error::Unsupported(
+                "prepared edit has the wrong document kind".into(),
             ));
         }
         self.apply(op)
@@ -153,6 +151,8 @@ pub(crate) use tree::execute_tree;
 pub(crate) enum WritePublication {
     #[default]
     Immediate,
+    /// The owner accepted an absent destination; promotion must not replace another writer.
+    Create,
     Recovery {
         stage: PathBuf,
         destination: PathBuf,
@@ -163,7 +163,7 @@ pub(crate) enum WritePublication {
 impl WritePublication {
     pub(crate) fn logical(&self, path: &Path) -> Result<PathBuf> {
         match self {
-            Self::Immediate => Ok(path.into()),
+            Self::Immediate | Self::Create => Ok(path.into()),
             Self::Recovery {
                 stage, destination, ..
             } => Ok(destination.join(
@@ -175,7 +175,7 @@ impl WritePublication {
 
     pub(crate) fn register(&self, run: &crate::analysis_store::ArtifactRun) -> Result<()> {
         match self {
-            Self::Immediate => crate::input_evidence::register(run),
+            Self::Immediate | Self::Create => crate::input_evidence::register(run),
             Self::Recovery { stores, .. } => {
                 let mut stores = stores
                     .lock()

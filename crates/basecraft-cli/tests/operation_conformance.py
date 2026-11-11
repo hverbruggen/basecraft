@@ -127,6 +127,7 @@ def main():
                         help="Run only read-only linked-alignment inspection conformance")
     parser.add_argument("--only-delimitation", action="store_true",
                         help="Run only the shared native delimitation workflow slice")
+    parser.add_argument("--only-sanger", action="store_true", help="Run the shared Sanger review editing slice")
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     root = args.root.absolute()
@@ -168,6 +169,38 @@ def main():
         completed = subprocess.run([str(binary), *arguments], cwd=root, env=env,
                                    capture_output=True, text=True, timeout=45, check=True)
         return json.loads(completed.stdout), completed.stderr
+
+    if not args.only_linked_alignment and not args.only_delimitation:
+        reviews = project / "reviews"
+        shutil.copytree(Path(__file__).resolve().parents[3] / "testdata/fixtures/sanger-legacy", reviews)
+        review = reviews / "multi.json"
+        selected = json.loads(review.read_text())["selected"]
+        operation = {"op": "sanger.review", "params": {"call_set": selected,
+                     "edit": {"op": "set", "columns": [0], "choice": {"choice": "edit", "base": "N"}}}}
+        subprocess.run([str(binary), "edit", str(review), json.dumps(operation)], env=env, check=True, timeout=45, capture_output=True)
+        for action in ("undo", "redo"):
+            subprocess.run([str(binary), "edit", str(review), json.dumps({"op": action, "params": {"of": ""}})], env=env, check=True, timeout=45, capture_output=True)
+        history, _ = cli("history", str(review), "--json")
+        assert any("Sanger review " in row["summary"] for row in history["history"]), history
+        client = Mcp(binary, project, env)
+        try:
+            opened = client.tool("open", {"path": "reviews/multi.json"})["structuredContent"]
+            assert opened["kind"] == "sanger_review"
+            operation["params"]["edit"]["choice"]["base"] = "A"
+            changed = client.tool("apply", {"document": opened["document"], "version": opened["version"], "operation": operation})
+            assert not changed["isError"], changed
+            undone = client.tool("undo", {"document": opened["document"]})
+            assert undone["structuredContent"]["decisions"][0]["base"] == "N", undone
+            assert not client.tool("redo", {"document": opened["document"]})["isError"]
+            assert not client.tool("save", {"document": opened["document"]})["isError"]
+        finally:
+            client.close()
+        record("Sanger CLI/MCP edits, common history, undo, redo and save")
+        if args.only_sanger:
+            receipt["status"] = "passed"
+            receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
+            print(receipt_path)
+            return
 
     # Native file workflow: the GUI calls the same ops functions as these adapters.
     from basecraft import delimitation

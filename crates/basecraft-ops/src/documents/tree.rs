@@ -68,9 +68,9 @@ impl Document for OpenedTree {
         prepared: Option<super::PreparedEdit>,
     ) -> Result<(Inverse, Option<FeatureId>)> {
         if let Some(candidate) = prepared {
-            let candidate = candidate
-                .downcast::<TreeDoc>()
-                .map_err(|_| invalid("prepared edit has the wrong document kind"))?;
+            let candidate = candidate.downcast::<TreeDoc>().map_err(|_| {
+                crate::Error::Unsupported("prepared edit has the wrong document kind".into())
+            })?;
             Ok((
                 Inverse::Tree(Box::new(std::mem::replace(&mut self.doc, *candidate))),
                 None,

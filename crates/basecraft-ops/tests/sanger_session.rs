@@ -1,4 +1,7 @@
 //! Review decisions, structural continuations and recovery through the public Session.
+#[path = "support/sanger_fixture.rs"]
+mod sanger_fixture;
+
 use basecraft_ops::{Session, replay, sanger_review::SangerReview};
 use basecraft_protocol::{
     Op,
@@ -164,13 +167,7 @@ fn opening_legacy_review_restores_selected_undo_and_replays_it() {
     else {
         return;
     };
-    let path = root.join("review.json");
-    std::fs::copy(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../testdata/fixtures/sanger-legacy/single.json"),
-        &path,
-    )
-    .unwrap();
+    let path = sanger_fixture::copy_to(&root, "single.json");
     let mut legacy = SangerReview::load(&path).unwrap();
     legacy.apply(ReviewOp::Undo).unwrap();
     let mut session = Session::new(&root);
@@ -189,4 +186,90 @@ fn opening_legacy_review_restores_selected_undo_and_replays_it() {
     session.redo(id).unwrap();
     session.save(id, None).unwrap();
     assert!(replay::replay(&root).unwrap().ok());
+}
+
+#[test]
+fn stale_and_failed_saves_keep_decisions_recoverable() {
+    let Some(root) = isolated_profile::enter("stale_and_failed_saves_keep_decisions_recoverable")
+    else {
+        return;
+    };
+    let path = sanger_fixture::copy_to(&root.join("source"), "multi.json");
+    let mut first = Session::recoverable(path.parent().unwrap()).unwrap();
+    let a = first.open(&path).unwrap();
+    let mut second = Session::recoverable(path.parent().unwrap()).unwrap();
+    let b = second.open(&path).unwrap();
+    edit(&mut first, a, 'N');
+    edit(&mut second, b, 'A');
+    first.save(a, None).unwrap();
+    let accepted = std::fs::read(&path).unwrap();
+    assert!(second.save(b, None).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), accepted);
+    let blocked = root.join("blocked.json");
+    std::fs::create_dir(&blocked).unwrap();
+    std::fs::write(blocked.join("unrelated"), b"keep").unwrap();
+    assert!(second.save_new(b, Some(&blocked)).is_err());
+    assert_eq!(std::fs::read(blocked.join("unrelated")).unwrap(), b"keep");
+    let recovered = replay::recover(second.recovery_root(), &root.join("recovered")).unwrap();
+    let review = SangerReview::load(&recovered[0]).unwrap();
+    assert_eq!(review.call_sets().len(), 2);
+    assert_eq!(review.decision(0), Some(&ReviewChoice::Edit('A')));
+    assert_eq!(std::fs::read(path).unwrap(), accepted);
+}
+
+#[test]
+fn structural_redo_keeps_legacy_audit_readable_and_shared_ancestry() {
+    let Some(root) =
+        isolated_profile::enter("structural_redo_keeps_legacy_audit_readable_and_shared_ancestry")
+    else {
+        return;
+    };
+    let path = sanger_fixture::copy_to(&root, "multi.json");
+    let mut session = Session::recoverable(&root).unwrap();
+    let id = session.open(&path).unwrap();
+    let mut selected = session.sanger_review(id).unwrap().clone();
+    selected
+        .select_call_set(&selected.call_sets()[1].0.to_owned())
+        .unwrap();
+    session.update_sanger_review(id, &selected).unwrap();
+    edit(&mut session, id, 'N');
+    session.undo(id).unwrap();
+    session.undo(id).unwrap();
+    session.redo(id).unwrap();
+    session.redo(id).unwrap();
+    assert_eq!(
+        session.sanger_review(id).unwrap().decision(0),
+        Some(&ReviewChoice::Edit('N'))
+    );
+    session.save(id, None).unwrap();
+    drop(session);
+    assert_eq!(
+        SangerReview::load(&path).unwrap().decision(0),
+        Some(&ReviewChoice::Edit('N'))
+    );
+    let first = basecraft_ops::provenance::inspect(&path).unwrap();
+    let first_decision = first
+        .events
+        .iter()
+        .find(|event| matches!(event.op, Op::SangerReview { .. }))
+        .unwrap()
+        .id
+        .clone();
+    let mut session = Session::recoverable(&root).unwrap();
+    let id = session.open(&path).unwrap();
+    edit(&mut session, id, 'A');
+    session.save(id, None).unwrap();
+    let record = basecraft_ops::document_record::DocumentRecord::from_file(&path).unwrap();
+    assert!(
+        record
+            .report()
+            .unwrap()
+            .history
+            .iter()
+            .any(|row| row.id == first_decision)
+    );
+    assert_eq!(
+        SangerReview::load(&path).unwrap().decision(0),
+        Some(&ReviewChoice::Edit('A'))
+    );
 }

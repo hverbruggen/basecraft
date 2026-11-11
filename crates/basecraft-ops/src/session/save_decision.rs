@@ -77,7 +77,8 @@ impl Session {
         let target = crate::save_guard::target_path(target)?;
         let target_revision = target_revision(&target)?;
         let publication = match &self.write_publication {
-            crate::documents::WritePublication::Immediate => None,
+            crate::documents::WritePublication::Immediate
+            | crate::documents::WritePublication::Create => None,
             crate::documents::WritePublication::Recovery { destination, .. } => Some((
                 self.write_publication.logical(&target)?,
                 crate::replay::directory_identity(
@@ -201,7 +202,8 @@ impl Session {
 
     pub(crate) fn recovery_stores(&self) -> Result<Vec<crate::analysis_store::ArtifactRun>> {
         match &self.write_publication {
-            crate::documents::WritePublication::Immediate => Err(invalid("not a recovery Session")),
+            crate::documents::WritePublication::Immediate
+            | crate::documents::WritePublication::Create => Err(invalid("not a recovery Session")),
             crate::documents::WritePublication::Recovery { stores, .. } => Ok(stores
                 .lock()
                 .map_err(|_| invalid("recovery stores unavailable"))?

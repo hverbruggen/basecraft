@@ -153,7 +153,10 @@ impl DocumentRecord {
             return Self::from_file(path)?.report();
         }
         if let Some(review) = crate::sanger_review::saved_review(path) {
-            let review = review.map_err(crate::error::invalid)?;
+            let review = review.map_err(|detail| crate::Error::Damaged {
+                path: path.into(),
+                detail,
+            })?;
             // A checkpoint recovered from application state is unsaved work.
             let mut report = review
                 .document_report(review.recovery_path().is_some())

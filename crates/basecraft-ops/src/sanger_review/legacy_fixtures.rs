@@ -1,6 +1,6 @@
 //! Compatibility oracles captured before the protocol extraction. No production writer changes.
 use super::*;
-use crate::sanger_review::{MaskSettings, ReviewChoice, ReviewOp};
+use crate::sanger_review::{ReviewChoice, ReviewOp};
 use basecraft_docs::sanger::{ReviewReference, ReviewSettings};
 use serde_json::json;
 
@@ -27,129 +27,6 @@ fn evaluate(version: u32) -> ReviewOp {
 
 fn fixture_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/sanger-legacy")
-}
-
-/// Run only in an empty, isolated capture directory, before moving the types.
-/// The recipe mounts it at /fixture; no host path enters opaque draft bytes.
-#[test]
-#[ignore = "explicit baseline capture only; never regenerate compatibility oracles during tests"]
-fn capture_legacy_writer() {
-    assert_eq!(
-        std::env::var("BASECRAFT_CAPTURE").as_deref(),
-        Ok("legacy-writer")
-    );
-    std::env::set_current_dir("/fixture").unwrap();
-    assert!(!Path::new("single.json").exists());
-    std::fs::copy(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../testdata/fixtures/compact/sanger-review/forward.ab1"),
-        "trace.ab1",
-    )
-    .unwrap();
-    std::fs::write("reference.afa", b">one\nACGT\n").unwrap();
-    let columns: Vec<_> = "ACGT"
-        .chars()
-        .enumerate()
-        .map(|(i, b)| {
-            json!({
-                "column":i+1,"consensus":b,"support":[{"read":1,"base":b,"kind":"call"}],
-                "conflict":false,"review":true
-            })
-        })
-        .collect();
-    let mut draft = json!({
-        "status":"draft_requires_review","engine":"Tracy","version_output":"synthetic legacy fixture",
-        "engine_sha256":"a".repeat(64),"mode":"basecall",
-        "inputs":[{"read":1,"path":"trace.ab1","sha256":basecraft_io::sha256_file(Path::new("trace.ab1")).unwrap(),"orientation":"forward"}],
-        "consensus":"ACGT","consensus_length":4,"minimum_overlap":1,"minimum_identity":0.8,
-        "overlaps":[],"aligned_columns":4,"conflict_columns":0,"columns":columns,
-        "opaque_extension":{"keep":"original whitespace and this unknown field"}
-    });
-    // Deliberately retain pretty formatting and a trailing newline as opaque input.
-    std::fs::write(
-        "draft-a.json",
-        format!("{}\n", serde_json::to_string_pretty(&draft).unwrap()),
-    )
-    .unwrap();
-    draft["version_output"] = json!("alternative synthetic caller version");
-    std::fs::write(
-        "draft-b.json",
-        format!("{}\n", serde_json::to_string_pretty(&draft).unwrap()),
-    )
-    .unwrap();
-    let mut a = SangerReview::new(Path::new("draft-a.json")).unwrap();
-    a.apply(ReviewOp::AutoAccept {
-        columns: vec![0, 1],
-    })
-    .unwrap();
-    a.apply(evaluate(1)).unwrap();
-    a.apply(ReviewOp::Undo).unwrap();
-    assert_eq!(
-        a.decisions,
-        vec![
-            ReviewChoice::Accept,
-            ReviewChoice::Accept,
-            ReviewChoice::Pending,
-            ReviewChoice::Pending
-        ]
-    );
-    a.apply(ReviewOp::Redo).unwrap();
-    for (column, choice) in [
-        (0, ReviewChoice::Edit('G')),
-        (1, ReviewChoice::Reject),
-        (2, ReviewChoice::Pending),
-        (3, ReviewChoice::Accept),
-    ] {
-        a.apply(ReviewOp::Set {
-            columns: vec![column],
-            choice,
-        })
-        .unwrap();
-    }
-    a.apply(ReviewOp::Mask {
-        settings: MaskSettings {
-            start: 0,
-            end: 1,
-            forward: "AC".into(),
-            reverse: "GT".into(),
-            minimum_overlap: 8,
-            error_percent: 10,
-            evidence: "synthetic primer evidence".into(),
-        },
-    })
-    .unwrap();
-    a.apply(ReviewOp::Undo).unwrap();
-    a.apply(ReviewOp::Redo).unwrap();
-    a.export_consensus(Path::new("/fixture/consensus.fa"), "synthetic")
-        .unwrap();
-    a.apply(evaluate(2)).unwrap();
-    a.save(Path::new("/fixture/single.json")).unwrap();
-    let mut b = SangerReview::new(Path::new("draft-b.json")).unwrap();
-    b.apply(evaluate(2)).unwrap();
-    assert!(b.apply(ReviewOp::Undo).is_err());
-    b.apply(ReviewOp::Set {
-        columns: vec![1],
-        choice: ReviewChoice::Edit('T'),
-    })
-    .unwrap();
-    b.apply(ReviewOp::Undo).unwrap();
-    b.apply(ReviewOp::Redo).unwrap();
-    let selected = b.draft_sha256.clone();
-    a.retain_call_set(b).unwrap();
-    a.select_call_set(&selected).unwrap();
-    a.save(Path::new("/fixture/multi.json")).unwrap();
-    let checkpoint = a.recovery_path().unwrap();
-    std::fs::write(
-        "capture-index.json",
-        serde_json::to_vec_pretty(&json!({
-            "checkpoint": checkpoint.strip_prefix("/fixture").unwrap(),
-            "selected":selected,
-            "single_sequence":"G", "multi_sequence":null,
-            "writer_base":"4044160b17a8de501fe7518faa3e5d67ca03dd8c"
-        }))
-        .unwrap(),
-    )
-    .unwrap();
 }
 
 #[test]
