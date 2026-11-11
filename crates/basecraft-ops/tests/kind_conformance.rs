@@ -299,10 +299,15 @@ fn tree() {
             assert!(s.tree(d).unwrap().find_tip("specimen_02").is_some());
             let a = CladeAnnotation::new(vec!["specimen_01".into()], "Reviewed tip");
             let b = CladeAnnotation::new(vec!["specimen_02".into()], "Second tip");
+            // The tree records the tips each label was made for.
+            let made = |label: &CladeAnnotation| CladeAnnotation {
+                tips: label.clade.iter().cloned().collect(),
+                ..label.clone()
+            };
             let mut first = original.clone();
-            first.2.insert(1, a.clone());
+            first.2.insert(1, made(&a));
             let mut second = first.clone();
-            second.2.insert(2, b.clone());
+            second.2.insert(2, made(&b));
             (
                 [
                     Op::TreeAnnotate {
