@@ -178,18 +178,23 @@ pub fn plan_inclusion_submission(
         .ok_or_else(|| invalid("Choose a source alignment"))?;
     let hash = basecraft_io::hash_file(&project.join(&source.document))?;
     if hash != source.hash {
-        return Err(invalid(
-            "Source changed; choose it again before previewing inclusion",
-        ));
+        return Err(crate::Error::ChangedOnDisk {
+            path: project.join(&source.document),
+        });
     }
     let metadata_stamp = metadata_evidence(project)?;
     let (meta, metadata_hash) = project_metadata(project)?;
     let rows = read_rows(&project.join(&source.document))?;
     // Detect replacement between hashing and reading; immutable byte input is cached by GUI review separately.
-    if basecraft_io::hash_file(&project.join(&source.document))? != hash
-        || metadata_evidence(project)? != metadata_stamp
-    {
-        return Err(invalid("Source changed while planning"));
+    if basecraft_io::hash_file(&project.join(&source.document))? != hash {
+        return Err(crate::Error::ChangedOnDisk {
+            path: project.join(&source.document),
+        });
+    }
+    if metadata_evidence(project)? != metadata_stamp {
+        return Err(crate::Error::ChangedOnDisk {
+            path: crate::metadata::manifest_path(project),
+        });
     }
     let records: Vec<_> = rows
         .iter()
@@ -327,7 +332,9 @@ pub fn project_metadata(project: &Path) -> Result<(ProjectMetadata, Option<Strin
     let manifest_hash = basecraft_io::hash_file(&manifest)?;
     let opened = crate::metadata::load(&manifest)?;
     if metadata_evidence(project)? != before {
-        return Err(invalid("Metadata changed while reading"));
+        return Err(crate::Error::ChangedOnDisk {
+            path: manifest.clone(),
+        });
     }
     Ok((opened.metadata, Some(manifest_hash)))
 }
@@ -414,7 +421,9 @@ pub fn review_submission_cached_with_stage(
     {
         let (metadata, read_hash) = project_metadata(project)?;
         if read_hash != metadata_hash || metadata_evidence(project)? != metadata_stamp {
-            return Err(invalid("Metadata changed while reading"));
+            return Err(crate::Error::ChangedOnDisk {
+                path: manifest.clone(),
+            });
         }
         cache.metadata = Some((metadata_stamp.clone(), metadata));
     }
@@ -437,7 +446,7 @@ pub fn review_submission_cached_with_stage(
                 {
                     let parsed = read_rows(&path)?;
                     if basecraft_io::hash_file(&path)? != hash {
-                        return Err(invalid("Source changed while reading"));
+                        return Err(crate::Error::ChangedOnDisk { path: path.clone() });
                     }
                     cache.source = Some((source.clone(), std::sync::Arc::new(parsed)));
                 }

@@ -454,9 +454,7 @@ impl LinkEvidence for AlignmentLink {
         }
         let snapshot = self.snapshot_path(tree_path);
         if basecraft_io::hash_file(&snapshot)? != self.snapshot_hash {
-            return Err(invalid(
-                "linked alignment snapshot has changed; link the alignment again",
-            ));
+            return Err(crate::Error::ChangedOnDisk { path: snapshot });
         }
         Ok(snapshot)
     }

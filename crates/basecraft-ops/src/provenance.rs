@@ -307,9 +307,10 @@ pub(crate) fn verify_records(bundle: &Path, current: &Publication) -> Result<Vec
                 let size = std::fs::metadata(&retained)?.len();
                 artifact_bytes = artifact_bytes.saturating_add(size);
                 if artifact_bytes > 8u64 << 30 {
-                    return Err(invalid(
-                        "ancestry exceeds 8 GiB artifact verification work limit",
-                    ));
+                    return Err(crate::Error::Limit {
+                        what: "ancestry artifact verification".into(),
+                        limit: 8 << 30,
+                    });
                 }
                 if size != artifact.size || basecraft_io::hash_file(&retained)? != artifact.hash {
                     issues.push(format!("{}: ancestor retained bytes differ", artifact.id));
@@ -337,9 +338,10 @@ pub(crate) fn verify_records(bundle: &Path, current: &Publication) -> Result<Vec
             }
             scheduled += 1;
             if scheduled > 10_000 {
-                return Err(invalid(
-                    "provenance ancestry exceeds 10,000-reference verification limit",
-                ));
+                return Err(crate::Error::Limit {
+                    what: "provenance ancestry references".into(),
+                    limit: 10_000,
+                });
             }
             let expected = publication
                 .parent_hashes
@@ -356,9 +358,10 @@ fn atomic_json(path: &Path, value: &impl serde::Serialize) -> Result<()> {
     let mut bytes = serde_json::to_vec_pretty(value)?;
     bytes.push(b'\n');
     if bytes.len() > 64 << 20 {
-        return Err(invalid(
-            "provenance record exceeds 64 MiB publication limit",
-        ));
+        return Err(crate::Error::Limit {
+            what: "provenance record publication".into(),
+            limit: 64 << 20,
+        });
     }
     basecraft_io::write_atomic(path, |w| w.write_all(&bytes))?;
     Ok(())

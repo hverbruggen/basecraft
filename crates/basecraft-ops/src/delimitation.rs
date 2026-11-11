@@ -222,9 +222,9 @@ pub fn checked_display_tree(
         if let Some(hash) = work.exchange_fields.get("basecraft_display_hash")
             && &basecraft_io::hash_file(std::path::Path::new(path))? != hash
         {
-            return Err(invalid(
-                "Display tree changed; select an unchanged tree explicitly",
-            ));
+            return Err(crate::Error::ChangedOnDisk {
+                path: PathBuf::from(path),
+            });
         }
         return Ok(Some(PathBuf::from(path)));
     };
@@ -244,9 +244,7 @@ pub fn checked_display_tree(
         .map(String::as_str)
         != Some(basecraft_io::hash_file(&source)?.as_str())
     {
-        return Err(invalid(
-            "Display tree changed; select an unchanged tree explicitly",
-        ));
+        return Err(crate::Error::ChangedOnDisk { path: source });
     }
     Ok(Some(source))
 }
@@ -387,9 +385,9 @@ fn combined_hypotheses(
                 None
             }) != side_hash
         {
-            return Err(invalid(
-                "A source changed while combining; retry with unchanged files",
-            ));
+            return Err(crate::Error::ChangedOnDisk {
+                path: path.clone(),
+            });
         }
         if let Some(wanted) = keep.and_then(|keep| keep.get(path)) {
             let available = work.hypotheses.iter().map(|h| h.id.clone()).collect();
