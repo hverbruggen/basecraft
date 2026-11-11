@@ -340,6 +340,7 @@ fn measure_save(root: &Path, label: &str, residue: &str, interactive: bool) {
     basecraft_io::counters::reset();
     let started = std::time::Instant::now();
     session.save(doc, None).unwrap();
+    let elapsed = started.elapsed();
     let counts = basecraft_io::counters::snapshot();
     assert!(counts.store_inspections.is_empty());
     assert!(counts.reads.values().map(|r| r.bytes).sum::<u64>() < 100_000);
@@ -351,7 +352,7 @@ fn measure_save(root: &Path, label: &str, residue: &str, interactive: bool) {
     }));
     eprintln!(
         "200 stores x 50 runs {label} Session save: {:?}; complete reads: {}; bytes: {}",
-        started.elapsed(),
+        elapsed,
         counts.reads.values().map(|r| r.full_reads).sum::<u64>(),
         counts.reads.values().map(|r| r.bytes).sum::<u64>()
     );

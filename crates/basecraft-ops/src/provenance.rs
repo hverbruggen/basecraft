@@ -707,6 +707,14 @@ pub fn publish_operation(bundle: &Path, publication: &Publication) -> Result<()>
 
 /// Artifacts must already be durable before this final manifest publication.
 pub(crate) fn publish(bundle: &Path, publication: &Publication) -> Result<()> {
+    prepare_publication(bundle, publication)?.publish()?;
+    Ok(())
+}
+
+pub(crate) fn prepare_publication(
+    bundle: &Path,
+    publication: &Publication,
+) -> Result<crate::documents::PreparedWrite> {
     std::fs::create_dir_all(bundle.join("records"))?;
     link_selected_inputs(bundle, publication)?;
     let mut prepared = crate::documents::PreparedWrite::default();
@@ -731,8 +739,7 @@ pub(crate) fn publish(bundle: &Path, publication: &Publication) -> Result<()> {
     )
     })?;
     prepared.push(&bundle.join("manifest.json"), |w| w.write_all(&bytes))?;
-    prepared.publish()?;
-    Ok(())
+    Ok(prepared)
 }
 
 /// Deterministic evidence-based reports. User-authored methods.md is untouched.

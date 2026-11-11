@@ -28,7 +28,9 @@ impl Session {
             .cloned()
             .ok_or_else(|| invalid("analysis has no recorded activity"))?;
         activity.result.hashes.retain(|pair| !inputs.contains(pair));
-        self.publish_save(id, target, &activity, inputs, None)
+        self.prepare_save_history(id, target, &activity, inputs, None)?
+            .publish()?;
+        Ok(())
     }
 
     /// Publish against the evidence frozen when the job was submitted.
@@ -56,17 +58,19 @@ impl Session {
             .cloned()
             .ok_or_else(|| invalid("analysis has no recorded activity"))?;
         activity.result.hashes.retain(|pair| !inputs.contains(pair));
-        self.publish_save(id, target, &activity, inputs, Some(snapshot))
+        self.prepare_save_history(id, target, &activity, inputs, Some(snapshot))?
+            .publish()?;
+        Ok(())
     }
 
-    pub(super) fn publish_save(
+    pub(super) fn prepare_save_history(
         &self,
         id: DocId,
         target: &Path,
         save: &LogEntry,
         analysis_inputs: &[(String, String)],
         snapshot: Option<&crate::document_record::DocumentRecord>,
-    ) -> Result<()> {
+    ) -> Result<crate::documents::PreparedWrite> {
         use basecraft_protocol::provenance::{
             ArtifactRevision, Completeness, EditActivity, Publication,
         };
@@ -89,7 +93,9 @@ impl Session {
                         .trim_start_matches("b3:"),
                 )
             }
-            basecraft_platform::settings::ProvenancePolicy::None => return Ok(()),
+            basecraft_platform::settings::ProvenancePolicy::None => {
+                return Ok(crate::documents::PreparedWrite::default());
+            }
         };
         std::fs::create_dir_all(bundle.join("artifacts"))?;
         let source_bundle = snapshot.and_then(|r| r.origins.first()).map_or_else(
@@ -360,6 +366,9 @@ impl Session {
             .filter(|e| e.doc == self.docs[id.0].key)
             .cloned()
             .collect();
+        if !events.iter().any(|event| event.id == save.id) {
+            events.push(save.clone());
+        }
         for event in &mut events {
             event.doc = target
                 .file_name()
@@ -511,7 +520,7 @@ impl Session {
             },
             report_template_version: 2,
         };
-        crate::provenance::publish(&bundle, &publication)
+        crate::provenance::prepare_publication(&bundle, &publication)
     }
 
     /// Add a captured input revision and its recorded producing activity to an

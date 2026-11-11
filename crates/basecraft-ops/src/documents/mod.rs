@@ -56,10 +56,16 @@ impl PreparedWrite {
             .map(|(path, hash, _)| (path.clone(), hash.clone()))
             .collect()
     }
-    pub(crate) fn publish(mut self) -> Result<Vec<(PathBuf, String)>> {
+    pub(crate) fn publish(self) -> Result<Vec<(PathBuf, String)>> {
+        self.publish_with(|| Ok(()))
+    }
+    pub(crate) fn publish_with(
+        mut self,
+        before_publish: impl FnOnce() -> Result<()>,
+    ) -> Result<Vec<(PathBuf, String)>> {
         // Independent candidates may share a disk flush. Every file is durable
         // before any destination is replaced; errors leave originals untouched.
-        std::thread::scope(|scope| -> std::io::Result<()> {
+        std::thread::scope(|scope| -> Result<()> {
             let jobs: Vec<_> = self
                 .files
                 .iter()
@@ -73,10 +79,11 @@ impl PreparedWrite {
                     })
                 })
                 .collect();
+            let result = before_publish();
             for job in jobs {
                 job.join().expect("file sync worker panicked")?;
             }
-            Ok(())
+            result
         })?;
         // Publish the durable recovery intent before replacing any user file.
         if let Some((path, file)) = self.intent.take() {

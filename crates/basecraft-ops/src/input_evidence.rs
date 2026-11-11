@@ -204,7 +204,7 @@ fn reference_input_locked(
     };
     crate::provenance::publish(run.directory(), &publication)?;
     // Publication can refresh the input ledger after its initial registration.
-    index::register(run.directory().parent().unwrap().parent().unwrap())?;
+    index::register(run.directory().parent().unwrap().parent().unwrap(), None)?;
     Ok(run)
 }
 
@@ -505,14 +505,22 @@ pub fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
         } else {
             sources = None;
         }
+        // An ancestry change cannot be scoped until its index is published.
+        // Keep it atomic to lookups; direct-source updates need no long lock.
+        let ancestry = sources.is_none();
         let store = index::changing(path, sources)?;
-        drop(guard);
+        let guard = if ancestry {
+            Some(guard)
+        } else {
+            drop(guard);
+            None
+        };
         basecraft_io::write_atomic(path, |w| w.write_all(&bytes))?;
         basecraft_platform::files::sync_directory(path.parent().unwrap())?;
         if let Some(store) = store {
             // A damaged sibling must not prevent an explicitly acknowledged
             // evidence decision. The durable dirty marker keeps coverage unknown.
-            let _ = index::register(&store);
+            let _ = index::register(&store, guard);
         }
     } else {
         basecraft_io::write_atomic(path, |w| w.write_all(&bytes))?;
@@ -820,7 +828,7 @@ pub fn register(run: &ArtifactRun) -> Result<()> {
         write_json(&registry()?, &serde_json::to_value(value)?)?;
     }
     drop(registry_guard);
-    index::register(store)?;
+    index::register(store, None)?;
     Ok(())
 }
 
@@ -865,7 +873,9 @@ fn conservative(check: EvidenceCheck) -> Result<EvidenceConflict> {
 /// Side-effect-free full inspection; callers must recheck under `lock` before
 /// acting. Failure of the lock or of an actual write is never an inspection issue.
 pub fn check(target: &Path) -> Result<EvidenceCheck> {
+    let catalogue = registry_lock()?;
     let (canonical, selected, inspection) = selection(target)?;
+    drop(catalogue);
     inspect_in(&canonical, &selected, inspection)
 }
 
@@ -1534,7 +1544,7 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
                     basecraft_platform::files::sync_directory(&trash)?;
                     basecraft_platform::files::sync_directory(store)?;
                     drop(catalogue);
-                    index::register(store)?;
+                    index::register(store, None)?;
                 }
                 SavePolicy::Cancel => return Err(invalid("save cancelled")),
             }

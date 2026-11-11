@@ -207,12 +207,12 @@ pub(super) fn changing(path: &Path, sources: Option<BTreeSet<PathBuf>>) -> Resul
     Ok(Some(store.into()))
 }
 
-pub(super) fn register(store: &Path) -> Result<()> {
+pub(super) fn register(store: &Path, guard: Option<std::fs::File>) -> Result<()> {
     let entry = match snapshot(store) {
         Ok(entry) => entry,
         Err(error @ crate::Error::Busy(_)) => return Err(error),
         Err(_) => {
-            let _guard = registry_lock()?;
+            let _guard = guard.map_or_else(registry_lock, Ok)?;
             let marker = shard("dirty", store)?;
             if !marker.try_exists()? {
                 write(
@@ -226,7 +226,7 @@ pub(super) fn register(store: &Path) -> Result<()> {
             return Ok(());
         }
     };
-    let _guard = registry_lock()?;
+    let _guard = guard.map_or_else(registry_lock, Ok)?;
     publish(store, &entry)
 }
 

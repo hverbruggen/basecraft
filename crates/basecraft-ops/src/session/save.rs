@@ -455,28 +455,37 @@ impl Session {
             },
         );
 
-        #[cfg(test)]
-        super::save_failure_tests::fail_write(super::save_failure_tests::WriteStep::Journal)?;
-        self.write(&entry)?;
-
-        if target == self.resolve(&self.docs[id.0].key) {
-            self.docs[id.0]
-                .accepted_hashes
-                .clone_from(&entry.result.hashes);
-            self.docs[id.0].absent_sidecars.clear();
-        }
-        if self.tracked
+        let prepared = if self.tracked
             && self.provenance_policy != basecraft_platform::settings::ProvenancePolicy::None
         {
-            self.publish_save(id, target, &entry, &[], None)
-                .map_err(|e| Error::Damaged {
-                    path: target.into(),
-                    detail: format!(
-                        "data saved; provenance incomplete: {e}. Recovery has been retained at {}",
-                        self.storage_root.display()
-                    ),
-                })?;
-        }
+            self.prepare_save_history(id, target, &entry, &[], None)?
+        } else {
+            crate::documents::PreparedWrite::default()
+        };
+        // Sync staged history alongside the journal, but publish no history
+        // destination until the Save record and every candidate are durable.
+        prepared
+            .publish_with(|| {
+                #[cfg(test)]
+                super::save_failure_tests::fail_write(
+                    super::save_failure_tests::WriteStep::Journal,
+                )?;
+                self.write(&entry)?;
+                if target == self.resolve(&self.docs[id.0].key) {
+                    self.docs[id.0]
+                        .accepted_hashes
+                        .clone_from(&entry.result.hashes);
+                    self.docs[id.0].absent_sidecars.clear();
+                }
+                Ok(())
+            })
+            .map_err(|error| Error::Damaged {
+                path: target.into(),
+                detail: format!(
+                    "data saved; history incomplete: {error}. Recovery remains at {}",
+                    self.storage_root.display()
+                ),
+            })?;
         Ok(())
     }
 

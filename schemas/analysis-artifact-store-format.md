@@ -130,8 +130,10 @@ dependency closures before releasing the relevant source/store reservations.
 
 Saves and mutations reserve source paths, file identities and affected stores.
 Conflicting operations return Busy and can retry; unrelated saves may overlap.
-A short catalogue lock makes selection and reservation atomic with index
-publication. There is no filesystem journal or support for older record layouts.
+A catalogue lock makes selection and reservation atomic with index publication.
+Direct-source updates scan outside it; ancestry updates retain it through ledger
+and index publication because their pending coverage is unknown. Large ancestry
+updates can therefore delay unrelated lookups until publication finishes. There is no filesystem journal or support for older record layouts.
 
 External editors cannot be intercepted. Verification reports changed/missing
 originals. Verified-original relink accepts only matching bytes and updates the

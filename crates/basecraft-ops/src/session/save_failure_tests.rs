@@ -160,6 +160,40 @@ fn late_write_failures_retain_recovery_and_retry() {
 }
 
 #[test]
+fn failed_save_journal_keeps_previous_history_and_recovers_written_data() {
+    crate::isolated_profile::isolate!();
+    let root = tempfile::tempdir().unwrap();
+    let (mut session, id, target) = fixture(root.path());
+    session.save(id, None).unwrap();
+    let bundle = crate::provenance::companion(&target);
+    let manifest = fs::read(bundle.join("manifest.json")).unwrap();
+    let records = fs::read_dir(bundle.join("records")).unwrap().count();
+    session
+        .apply(
+            id,
+            Op::SeqReplace {
+                start: 1,
+                end: 2,
+                residues: "A".into(),
+            },
+        )
+        .unwrap();
+    FAILURE.with(|failure| failure.set(Some(WriteStep::Journal)));
+    assert!(session.save(id, None).is_err());
+    assert_eq!(fs::read(bundle.join("manifest.json")).unwrap(), manifest);
+    assert_eq!(
+        fs::read_dir(bundle.join("records")).unwrap().count(),
+        records
+    );
+    let recovery = session.recovery_root().to_path_buf();
+    assert!(recovery.join("pending-save.json").is_file());
+    assert_eq!(fs::read(&target).unwrap(), b">source\nTAGT\n");
+    drop(session);
+    let restored = crate::replay::recover(&recovery, &root.path().join("restored")).unwrap();
+    assert_eq!(fs::read(&restored[0]).unwrap(), b">source\nTAGT\n");
+}
+
+#[test]
 fn recovery_inspection_failure_retries_without_replacing_written_data() {
     let Some(root) = crate::isolated_profile::enter(
         "session::save_failure_tests::recovery_inspection_failure_retries_without_replacing_written_data",
