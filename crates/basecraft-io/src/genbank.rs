@@ -25,24 +25,51 @@ pub struct Record {
 }
 
 pub fn parse(data: &[u8]) -> Result<Vec<Record>> {
-    read_records(io::Cursor::new(data), data.len(), false).map(|(records, _)| records)
+    read_records(&mut io::Cursor::new(data), data.len(), false)
 }
 
-/// Parse only the editable first record; count later records without retaining them.
-pub fn parse_first(data: &[u8]) -> Result<(Record, usize)> {
-    first(read_records(io::Cursor::new(data), data.len(), true)?)
+/// The editable first record of a file, and the exact bytes of the records after it.
+#[derive(Clone, Debug)]
+pub struct First {
+    pub record: Record,
+    /// Records in the file, the first included.
+    pub records: usize,
+    /// Everything after the first record, unparsed; empty when only blank lines follow.
+    pub rest: Vec<u8>,
 }
 
-fn first((records, count): (Vec<Record>, usize)) -> Result<(Record, usize)> {
-    records
+/// Parse only the editable first record; keep the later ones as bytes.
+pub fn parse_first(data: &[u8]) -> Result<First> {
+    let mut cursor = io::Cursor::new(data);
+    let records = read_records(&mut cursor, data.len(), true)?;
+    #[allow(clippy::cast_possible_truncation)]
+    let rest = data[cursor.position() as usize..].to_vec();
+    first(records, rest)
+}
+
+fn first(records: Vec<Record>, rest: Vec<u8>) -> Result<First> {
+    let record = records
         .into_iter()
         .next()
-        .map(|record| (record, count))
-        .ok_or_else(|| parse_error("GenBank", 1, "expected LOCUS"))
+        .ok_or_else(|| parse_error("GenBank", 1, "expected LOCUS"))?;
+    let later = rest
+        .split(|&byte| byte == b'\n')
+        .filter(|line| line.starts_with(b"LOCUS"))
+        .count();
+    let rest = if rest.iter().all(u8::is_ascii_whitespace) {
+        Vec::new()
+    } else {
+        rest
+    };
+    Ok(First {
+        record,
+        records: 1 + later,
+        rest,
+    })
 }
 
-/// Read, hash and parse together. No raw whole-file buffer is constructed.
-pub fn open_hashed(path: &std::path::Path) -> Result<(Record, usize, String)> {
+/// Read, hash and parse together. Only the bytes after the first record are kept raw.
+pub fn open_hashed(path: &std::path::Path) -> Result<(First, String)> {
     let file = std::fs::File::open(path)?;
     let size = usize::try_from(file.metadata()?.len()).unwrap_or(usize::MAX);
     let mut reader = HashingReader {
@@ -50,15 +77,18 @@ pub fn open_hashed(path: &std::path::Path) -> Result<(Record, usize, String)> {
         hash: crate::Hasher::new(),
         bytes: 0,
     };
-    let result = first(read_records(
-        io::BufReader::with_capacity(size.clamp(1, 64 * 1024), &mut reader),
-        size,
-        true,
-    )?);
+    let mut buffered = io::BufReader::with_capacity(size.clamp(1, 64 * 1024), &mut reader);
+    let records = read_records(&mut buffered, size, true)?;
+    // The later records are kept once, in a buffer sized to what remains.
+    #[allow(clippy::cast_possible_truncation)]
+    let consumed = buffered.get_ref().bytes as usize - buffered.buffer().len();
+    let mut rest = Vec::new();
+    rest.try_reserve_exact(size.saturating_sub(consumed))
+        .map_err(io::Error::other)?;
+    buffered.read_to_end(&mut rest)?;
     #[cfg(feature = "test-counters")]
     crate::counters::record_read(path, reader.bytes);
-    let (record, count) = result?;
-    Ok((record, count, reader.hash.finish()))
+    Ok((first(records, rest)?, reader.hash.finish()))
 }
 
 struct HashingReader {
@@ -84,14 +114,13 @@ fn peek<R: BufRead>(lines: &mut Lines<R>) -> Result<Option<(usize, &str)>> {
     }
 }
 
-fn read_records(
-    reader: impl BufRead,
-    size: usize,
-    first_only: bool,
-) -> Result<(Vec<Record>, usize)> {
+/// With `first_only`, stop after the first complete record, leaving the reader
+/// at the start of the next one.
+fn read_records<R: BufRead>(reader: &mut R, size: usize, first_only: bool) -> Result<Vec<Record>> {
     let mut records = Vec::new();
-    let mut count = 0;
-    let mut lines = reader.lines().enumerate().peekable();
+    let mut lines = (&mut *reader).lines().enumerate().peekable();
+    // Whether the last record ended on its `//` line, leaving no line peeked.
+    let mut terminated = true;
     while let Some((no, line)) = lines.next() {
         let line = line.map_err(|error| parse_error("GenBank", no + 1, error.to_string()))?;
         if line.trim().is_empty() {
@@ -100,17 +129,10 @@ fn read_records(
         if !line.starts_with("LOCUS") {
             return Err(parse_error("GenBank", no + 1, "expected LOCUS"));
         }
-        count += 1;
-        if first_only && count > 1 {
-            for (no, line) in lines.by_ref() {
-                let line =
-                    line.map_err(|error| parse_error("GenBank", no + 1, error.to_string()))?;
-                if line.starts_with("//") {
-                    break;
-                }
-            }
-            continue;
+        if !terminated {
+            return Err(unterminated(no));
         }
+        terminated = false;
         let mut rec = parse_locus(&line);
         let declared = line
             .split_whitespace()
@@ -121,7 +143,10 @@ fn read_records(
             .try_reserve_exact(declared.min(size))
             .map_err(io::Error::other)?;
         while let Some((_, line)) = peek(&mut lines)? {
-            if line.starts_with("FEATURES") || line.starts_with("ORIGIN") || line.starts_with("//")
+            if line.starts_with("FEATURES")
+                || line.starts_with("ORIGIN")
+                || line.starts_with("//")
+                || line.starts_with("LOCUS")
             {
                 break;
             }
@@ -138,7 +163,11 @@ fn read_records(
                 let line =
                     line.map_err(|error| parse_error("GenBank", no + 1, error.to_string()))?;
                 if line.starts_with("//") {
+                    terminated = true;
                     break;
+                }
+                if line.starts_with("LOCUS") {
+                    return Err(unterminated(no));
                 }
                 rec.sequence.extend(
                     line.bytes()
@@ -148,10 +177,24 @@ fn read_records(
             }
         } else if peek(&mut lines)?.is_some_and(|(_, line)| line.starts_with("//")) {
             lines.next();
+            terminated = true;
         }
         records.push(rec);
+        // An unterminated record may not be followed by another one: read on.
+        if first_only && terminated {
+            break;
+        }
     }
-    Ok((records, count))
+    Ok(records)
+}
+
+/// A record must end with `//` before the next one starts; never merge them.
+fn unterminated(line: usize) -> crate::Error {
+    parse_error(
+        "GenBank",
+        line + 1,
+        "a new LOCUS starts before the previous record's // line; add the missing // and open again",
+    )
 }
 
 fn parse_locus(line: &str) -> Record {

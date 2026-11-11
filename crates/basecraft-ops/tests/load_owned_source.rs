@@ -200,7 +200,7 @@ fn actual_session_read_counts_separate_kind_probe_and_companion_capture() {
             1,
             false,
         ),
-        ("with-gff.fasta", b">a\nACGT\n".as_slice(), 2, 1, true),
+        ("with-gff.fasta", b">a\nACGT\n".as_slice(), 1, 1, true),
         ("tree.nwk", b"(a,b);\n".as_slice(), 1, 0, false),
         (
             "locus.gb",

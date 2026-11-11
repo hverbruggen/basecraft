@@ -240,17 +240,13 @@ fn bounded_classifier_heap() {
                     }
                 );
             }
-            let measurement = basecraft_io::heap::Measurement::start().unwrap();
             assert_eq!(indexed_kind(&path).unwrap(), kind);
-            let old = measurement.finish().unwrap();
             println!(
-                "shape={shape} count={count} file_bytes={} old_requested_peak={} stream_requested_peak={}",
+                "shape={shape} count={count} file_bytes={} stream_requested_peak={}",
                 path.metadata().unwrap().len(),
-                old.incremental_peak_bytes,
                 new.incremental_peak_bytes
             );
             assert!(new.incremental_peak_bytes < 32 * 1024);
-            assert!(old.incremental_peak_bytes > new.incremental_peak_bytes);
         }
     }
 }

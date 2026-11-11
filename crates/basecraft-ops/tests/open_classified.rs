@@ -323,8 +323,8 @@ fn companion_capture_counts_every_read_on_both_session_routes() {
                 assert_eq!(
                     counts.reads[&file.canonicalize().unwrap()],
                     counters::Reads {
-                        full_reads: 2,
-                        bytes: 2 * bytes.len() as u64,
+                        full_reads: 1,
+                        bytes: bytes.len() as u64,
                     }
                 );
             }
@@ -343,9 +343,9 @@ fn companion_capture_counts_every_read_on_both_session_routes() {
             }
             assert_eq!(open.result.hashes, expected);
             println!(
-                "{name} classified={classified}: main=2/{} GFF=2/{} unresolved=0 sync=0",
-                2 * main.len(),
-                2 * gff.len()
+                "{name} classified={classified}: main=1/{} GFF=1/{} unresolved=0 sync=0",
+                main.len(),
+                gff.len()
             );
         }
     }

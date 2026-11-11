@@ -11,11 +11,19 @@ use crate::files::{self, Format, HashingWriter, OpenedAlignment};
 use crate::session::{Inverse, normalise};
 
 impl Document for OpenedAlignment {
-    fn retains_companions(&self) -> bool {
-        self.save_refusal.is_some()
-    }
-    fn save_refusal(&self) -> Option<&str> {
-        self.save_refusal
+    fn save_refusal(&self, own_target: bool) -> Option<String> {
+        if !own_target {
+            return None;
+        }
+        self.annotated.iter().find_map(|(name, len)| {
+            let row = self.doc.rows().position(|row| row.name == *name);
+            (row.map(|row| files::ungapped_len(&self.doc, row)) != Some(*len)).then(|| {
+                format!(
+                    "The GFF3 annotations for row {name} would no longer match: the row was \
+                     renamed, removed or changed length. Undo that change, or save to a new file."
+                )
+            })
+        })
     }
     fn accepts(&self, op: &Op) -> bool {
         matches!(
