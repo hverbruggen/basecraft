@@ -873,7 +873,17 @@ fn conservative(check: EvidenceCheck) -> Result<EvidenceConflict> {
 /// Side-effect-free full inspection; callers must recheck under `lock` before
 /// acting. Failure of the lock or of an actual write is never an inspection issue.
 pub fn check(target: &Path) -> Result<EvidenceCheck> {
-    let catalogue = registry_lock()?;
+    // Advisory inspection creates no profile state. Writers create the lock
+    // before their first index change; an empty profile needs no reservation.
+    let catalogue = match std::fs::File::open(registry()?.with_file_name("analysis-registry.lock"))
+    {
+        Ok(file) => {
+            FileExt::lock_shared(&file).map_err(|e| crate::Error::Busy(e.to_string()))?;
+            Some(file)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
     let (canonical, selected, inspection) = selection(target)?;
     drop(catalogue);
     inspect_in(&canonical, &selected, inspection)
