@@ -43,6 +43,19 @@ check:
 # Everything. Run before every push.
 ci: check schemas-check deny protocol-license replay qml-test
     python3 benches/run.py --compact --samples 3 --gate gross
+    {{just_executable()}} fixtures-unchanged
+
+# Tests must copy fixtures before writing beside them. Fails when anything,
+# including ignored records such as .basecraft folders, appeared under
+# testdata/fixtures. Delete what it lists after fixing the test.
+fixtures-unchanged:
+    #!/usr/bin/env bash
+    changed=$(git status --porcelain --ignored --untracked-files=all -- testdata/fixtures ':(exclude,glob)testdata/fixtures/**/__pycache__/**')
+    if [ -n "$changed" ]; then
+        echo "The tests changed testdata/fixtures:"
+        echo "$changed"
+        exit 1
+    fi
 
 # Generate JSON Schema and Arrow schemas from basecraft-protocol.
 schemas:

@@ -1187,12 +1187,37 @@ fn main() {
         )),
         &QUrl::default(),
     );
-    std::thread::spawn(|| {
-        std::thread::sleep(std::time::Duration::from_secs(15));
-        eprintln!("Bootstrap QML timer did not exit the event loop within 15 seconds");
-        std::process::exit(1);
+    // Turns a scene that never quits into a failure. It guards the event loop
+    // only; the checks after it may take longer. Saves on the window thread
+    // wait for the disk, which on a busy build host has taken over a minute,
+    // so the limit is generous. On expiry, print each thread's blocking call.
+    let exited = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let watched = exited.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(300));
+        if !watched.load(std::sync::atomic::Ordering::Acquire) {
+            for task in std::fs::read_dir("/proc/self/task")
+                .into_iter()
+                .flatten()
+                .flatten()
+            {
+                let read = |name: &str| {
+                    std::fs::read_to_string(task.path().join(name)).unwrap_or_default()
+                };
+                eprintln!(
+                    "TASK {} {} | {} | {}",
+                    task.file_name().to_string_lossy(),
+                    read("comm").trim(),
+                    read("wchan").trim(),
+                    read("syscall").trim()
+                );
+            }
+            eprintln!("Bootstrap QML timer did not exit the event loop within 300 seconds");
+            std::process::exit(1);
+        }
     });
     assert_eq!(app.as_mut().exec(), 0);
+    exited.store(true, std::sync::atomic::Ordering::Release);
     for index in 0..5 {
         let prefix = figure_folder.path().join(format!("figure-{index}"));
         let svg = std::fs::read_to_string(prefix.with_extension("svg")).unwrap();

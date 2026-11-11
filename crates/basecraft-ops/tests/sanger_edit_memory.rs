@@ -3,6 +3,8 @@
 static ALLOCATOR: basecraft_io::heap::Allocator = basecraft_io::heap::Allocator;
 #[path = "support/isolated_profile.rs"]
 mod isolated_profile;
+#[path = "support/sanger_fixture.rs"]
+mod sanger_fixture;
 
 #[test]
 fn two_hundred_selections_retain_less_than_one_mib() {
@@ -10,8 +12,7 @@ fn two_hundred_selections_retain_less_than_one_mib() {
     else {
         return;
     };
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/fixtures/sanger-review/multi.json");
+    let path = sanger_fixture::copy_to(&root.join("fixture"), "multi.json");
     let review = basecraft_ops::sanger_review::SangerReview::load(&path).unwrap();
     let mut session = basecraft_ops::Session::new(&root);
     let id = session.create_sanger_review(&review).unwrap();
