@@ -468,3 +468,38 @@ fn symlinked_folder_spelling_and_new_inode_are_still_detected() {
     assert_eq!(check.conflict.analyses.len(), 1);
     assert_eq!(check.conflict.analyses[0].run, run.directory());
 }
+
+#[test]
+fn private_and_vanished_stores_do_not_concern_other_saves() {
+    let Some(root) =
+        isolated_profile::enter("private_and_vanished_stores_do_not_concern_other_saves")
+    else {
+        return;
+    };
+    // Recovery staging inside the profile's state folder is never indexed.
+    let state = basecraft_platform::paths::AppPaths::discover()
+        .unwrap()
+        .state;
+    let staging = state.join("recovery/session/.basecraft/objects/stage");
+    std::fs::create_dir_all(&staging).unwrap();
+    let staged = staging.join("tree.fasta");
+    std::fs::write(&staged, b">a\nACGT\n").unwrap();
+    reference(&staging, &staged);
+    // A store whose index refresh failed, then deleted with its folder.
+    let project = root.join("gone");
+    std::fs::create_dir(&project).unwrap();
+    let source = project.join("source.fasta");
+    std::fs::write(&source, b">a\nACGT\n").unwrap();
+    let run = reference(&project, &source);
+    std::fs::write(run.directory().join("input.json"), b"damaged").unwrap();
+    records::register(&run).unwrap();
+    std::fs::remove_dir_all(&project).unwrap();
+    std::fs::remove_dir_all(state.join("recovery")).unwrap();
+
+    let other = root.join("other.fasta");
+    std::fs::write(&other, b">b\nAAAA\n").unwrap();
+    let check = records::check(&other).unwrap();
+    assert!(check.is_complete(), "{:?}", check.issues);
+    let registry = std::fs::read_to_string(state.join("analysis-stores.json")).unwrap();
+    assert!(!registry.contains("recovery"), "{registry}");
+}
