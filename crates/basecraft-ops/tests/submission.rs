@@ -1214,7 +1214,7 @@ fn rejected_edit_and_wrong_save_format_preserve_submission_undo_redo() {
     .unwrap();
     let edited = session.submission(doc).unwrap().clone();
     assert_ne!(edited, before);
-    let revision = session.revision(doc);
+    let revision = session.revision(doc).unwrap();
     let hashes = session.save_hashes(doc).unwrap();
 
     assert!(
@@ -1229,7 +1229,7 @@ fn rejected_edit_and_wrong_save_format_preserve_submission_undo_redo() {
             .is_err()
     );
     assert_eq!(session.submission(doc).unwrap(), &edited);
-    assert_eq!(session.revision(doc), revision);
+    assert_eq!(session.revision(doc).unwrap(), revision);
     assert_eq!(session.save_hashes(doc).unwrap(), hashes);
 
     changed.title = "invalid\npublication".into();
@@ -1244,7 +1244,7 @@ fn rejected_edit_and_wrong_save_format_preserve_submission_undo_redo() {
         .is_err()
     );
     assert_eq!(session.submission(doc).unwrap(), &edited);
-    assert_eq!(session.revision(doc), revision);
+    assert_eq!(session.revision(doc).unwrap(), revision);
 
     let wrong_target = root.path().join("wrong.fasta");
     assert!(session.save(doc, Some(&wrong_target)).is_err());

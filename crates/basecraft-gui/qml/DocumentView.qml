@@ -7,7 +7,6 @@ import Basecraft
 // for through signals.
 FocusScope {
     id: doc
-    property alias findBar: findBar
     function openFind() { findBar.openFind() }
     FindBar {
         id: findBar
@@ -56,6 +55,15 @@ FocusScope {
 
     GenomeController { id: localController }
 
+    function finishOpening(success) {
+        if (!success || !doc.lifetimeAlive) return
+        if (doc.defaultLayout !== "wrapped") { ctl.switch_view(doc.defaultLayout); ctl.fit() }
+        doc.initializationCompleted()
+    }
+    Connections { target: ctl; ignoreUnknownSignals: true
+        function onOpened(success) { doc.finishOpening(success) }
+    }
+
     // Open once the view has its real size, so the fitted zoom is right.
     Component.onCompleted: {
         const owner = ctl
@@ -63,13 +71,12 @@ FocusScope {
             if (!doc.lifetimeAlive || ctl !== owner) return
             ctl.resize(view.width, view.height)
             ctl.set_show_gc(doc.showGc)
-            if (doc.path.startsWith("untitled:")) doc.initializeNew()
-            else if (!doc.adopted) ctl.open_file(doc.path)
-            if (doc.defaultLayout !== "wrapped") {
-                ctl.switch_view(doc.defaultLayout)
-                ctl.fit()
+            const created = doc.path.startsWith("untitled:")
+            if (!doc.adopted && !created) ctl.open_file(doc.path)
+            else {
+                if (created) doc.initializeNew()
+                doc.finishOpening(true)
             }
-            doc.initializationCompleted()
         })
     }
 

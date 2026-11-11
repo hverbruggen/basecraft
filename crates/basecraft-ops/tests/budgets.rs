@@ -34,12 +34,8 @@ fn scenario(
     assert_eq!(AppPaths::discover().unwrap().state, paths.state);
     let original_size = file.metadata().unwrap().len();
     counters::reset();
-    // Main.qml openPath resolves file_kind once and reuses it for routing
-    // and the tab row. Its FASTA probe remains a separate read; Session now
-    // hashes and parses one owned main-file read when companions are absent.
-    basecraft_ops::files::kind(&file).unwrap();
     let mut session = Session::recoverable_with_paths(&root, &paths).unwrap();
-    let doc = session.open(&file).unwrap();
+    let (doc, _) = session.open_classified(&file).unwrap();
     record(
         name,
         "open",
@@ -49,17 +45,12 @@ fn scenario(
     for i in 0..3 {
         counters::reset();
         session.apply(doc, edit(i)).unwrap();
-        let expected = if i == 0 {
-            // One fresh owned read now both verifies and retains cold originals.
-            (1, original_size, 2, 2)
-        } else {
-            (0, 0, 1, 0)
-        };
+        let expected = (0, 0, 1, 0);
         record(name, &format!("edit {}", i + 1), &file, expected);
     }
     counters::reset();
     session.save(doc, None).unwrap();
-    // Saving reads twice before replacement and then retains the new bytes.
+    // Saving reads twice before replacement. History keeps fingerprints only.
     // Tree sidecar serialization also hashes the newly written tree once.
     let saved_size = file.metadata().unwrap().len();
     record(
@@ -112,9 +103,9 @@ fn fasta() {
     scenario(
         "fasta",
         "alignment-editing/ambiguous-gappy.afa",
-        2,
         1,
-        12,
+        0,
+        10,
         |i| Op::AlnReplace {
             row: 0,
             start: u64::from(i),
@@ -126,7 +117,7 @@ fn fasta() {
 
 #[test]
 fn genbank() {
-    scenario("genbank", "sequences-annotations/locus.gb", 1, 1, 12, |i| {
+    scenario("genbank", "sequences-annotations/locus.gb", 1, 0, 10, |i| {
         Op::SeqReplace {
             start: u64::from(i),
             end: u64::from(i) + 1,
@@ -137,7 +128,7 @@ fn genbank() {
 
 #[test]
 fn newick() {
-    scenario("newick", "tree-inference/unrooted.nwk", 1, 2, 14, |i| {
+    scenario("newick", "tree-inference/unrooted.nwk", 1, 1, 11, |i| {
         Op::TreeRenameTip {
             from: if i == 0 { "a".into() } else { format!("a{i}") },
             to: format!("a{}", i + 1),
@@ -175,4 +166,115 @@ fn child_profile(name: &str) -> Option<std::path::PathBuf> {
     Some(std::path::PathBuf::from(
         std::env::var_os("BASECRAFT_BUDGET_ROOT").unwrap(),
     ))
+}
+
+#[test]
+fn companions_are_read_once() {
+    let Some(root) = child_profile("companions_are_read_once") else {
+        return;
+    };
+    let fasta = root.join("sequence.fa");
+    std::fs::write(&fasta, b">sequence\nACGT\n").unwrap();
+    std::fs::write(
+        fasta.with_extension("gff3"),
+        b"##gff-version 3\nsequence\t.\tgene\t1\t3\t.\t+\t.\tID=g\n",
+    )
+    .unwrap();
+    let metadata = basecraft_ops::metadata::create(&root).unwrap();
+    let alignment = root.join("source.afa");
+    std::fs::write(&alignment, b">a\nACGT\n>b\nACGA\n").unwrap();
+    let submission = root.join("review.submission.json");
+    basecraft_ops::submission::create(&mut Session::unlogged(&root), &submission, &alignment)
+        .unwrap();
+    let tree = root.join("tree.nwk");
+    std::fs::write(&tree, b"(a:1,b:2);\n").unwrap();
+    let mut writer = Session::unlogged(&root);
+    let doc = writer.open(&tree).unwrap();
+    writer.save(doc, None).unwrap();
+    let spart = root.join("species.spart");
+    std::fs::write(
+        &spart,
+        include_bytes!("../../../testdata/fixtures/delimitation/manual.spart"),
+    )
+    .unwrap();
+    let doc = writer.open(&spart).unwrap();
+    writer.save(doc, None).unwrap();
+    for path in [&fasta, &metadata, &submission, &tree, &spart] {
+        counters::reset();
+        let mut session = Session::unlogged(&root);
+        let doc = session.open(path).unwrap();
+        assert!(!session.document_record(doc).unwrap().unsaved);
+        let expected: std::collections::BTreeSet<_> = if path == &metadata {
+            basecraft_ops::metadata::files(path)
+        } else if path == &fasta {
+            vec![path.clone(), path.with_extension("gff3")]
+        } else if path == &tree || path == &spart {
+            vec![path.clone(), basecraft_ops::files::tree_sidecar(path)]
+        } else {
+            vec![path.clone()]
+        }
+        .into_iter()
+        .map(|p| p.canonicalize().unwrap())
+        .collect();
+        assert_eq!(
+            counters::snapshot()
+                .reads
+                .keys()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>(),
+            expected
+        );
+        for (file, reads) in counters::snapshot().reads {
+            assert_eq!(
+                reads.full_reads,
+                1,
+                "{} while opening {}",
+                file.display(),
+                path.display()
+            );
+            assert_eq!(reads.bytes, file.metadata().unwrap().len());
+        }
+    }
+}
+
+#[test]
+fn large_first_edit_retains_without_reading() {
+    use std::io::Write;
+    let Some(root) = child_profile("large_first_edit_retains_without_reading") else {
+        return;
+    };
+    let file = root.join("large.fa");
+    let mut output = std::fs::File::create(&file).unwrap();
+    output.write_all(b">large\n").unwrap();
+    let chunk = vec![b'A'; 1 << 20];
+    for _ in 0..101 {
+        output.write_all(&chunk).unwrap();
+    }
+    drop(output);
+    let mut session = Session::recoverable(&root).unwrap();
+    let doc = session.open(&file).unwrap();
+    let recovery = session.recovery_root().to_path_buf();
+    counters::reset();
+    session
+        .apply(
+            doc,
+            Op::SeqReplace {
+                start: 0,
+                end: 1,
+                residues: "C".into(),
+            },
+        )
+        .unwrap();
+    assert!(counters::snapshot().reads.is_empty());
+    assert_eq!(counters::snapshot().sync_all, 0);
+    assert_eq!(counters::snapshot().sync_data, 1);
+    drop(session);
+    let recovered = basecraft_ops::records::recover(&recovery, &root.join("recovered")).unwrap();
+    let mut reopened = Session::unlogged(&root);
+    let doc = reopened.open(&recovered[0]).unwrap();
+    assert_eq!(reopened.doc(doc).unwrap().read(0, 4), b"CAAA");
+    std::fs::remove_file(&file).unwrap();
+    let retained = basecraft_ops::records::recover(&recovery, &root.join("missing")).unwrap();
+    let current = reopened.open(&retained[0]).unwrap();
+    assert_eq!(reopened.doc(current).unwrap().read(0, 4), b"CAAA");
 }

@@ -6,9 +6,9 @@ fn state(controller: &qobject::TreeController, original: DocId) -> Value {
     let session = r.session.as_ref().unwrap();
     json!({
         "doc": r.doc.map(|id| id.0), "path": r.file_path.to_string(),
-        "session": session.id(), "key": session.doc_key(original),
-        "revision": session.revision(original),
-        "undo": session.can_undo(original), "redo": session.can_redo(original),
+        "session": session.id(), "key": session.doc_key(original).unwrap(),
+        "revision": session.revision(original).unwrap(),
+        "undo": session.can_undo(original).unwrap(), "redo": session.can_redo(original).unwrap(),
         "record": session.document_record(original).unwrap(),
         "selected": r.view.selected, "multi": r.view.multi_taxa,
         "find": crate::find_bridge::status(&r.find, 0.0),
@@ -23,11 +23,12 @@ pub(crate) fn run(mut controller: Pin<&mut qobject::TreeController>) {
     let sequence = folder.path().join("sequence.fa");
     std::fs::write(&path, "((A:1,B:2):3,(C:4,D:5):6);\n").unwrap();
     std::fs::write(&sequence, ">sequence\nACGT\n").unwrap();
-    assert!(
-        controller
-            .as_mut()
-            .open_file(&QString::from(path.to_str().unwrap()))
-    );
+    let candidate = crate::document_open::Candidate::acquire(
+        path.to_str().unwrap(),
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .unwrap();
+    controller.as_mut().install_fresh(candidate).unwrap();
     let original = controller.rust().doc.unwrap();
     let mut style = controller
         .rust()
@@ -48,6 +49,7 @@ pub(crate) fn run(mut controller: Pin<&mut qobject::TreeController>) {
             .as_ref()
             .unwrap()
             .can_undo(original)
+            .unwrap()
     );
     let wrong = controller
         .as_mut()

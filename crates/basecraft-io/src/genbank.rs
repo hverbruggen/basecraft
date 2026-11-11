@@ -4,7 +4,7 @@
 //! spaces with residues, so it can't be read straight from a mapped file.
 //! Header lines between `LOCUS` and `FEATURES` are kept verbatim.
 
-use std::io::{self, Write};
+use std::io::{self, BufRead, Read, Write};
 
 use basecraft_protocol::{Feature, Location, Qualifier, Segment, Strand};
 
@@ -25,50 +25,133 @@ pub struct Record {
 }
 
 pub fn parse(data: &[u8]) -> Result<Vec<Record>> {
-    let text = std::str::from_utf8(data).map_err(|e| {
-        let line = memchr::memchr_iter(b'\n', &data[..e.valid_up_to()]).count() + 1;
-        parse_error("GenBank", line, "invalid UTF-8")
-    })?;
+    read_records(io::Cursor::new(data), data.len(), false).map(|(records, _)| records)
+}
+
+/// Parse only the editable first record; count later records without retaining them.
+pub fn parse_first(data: &[u8]) -> Result<(Record, usize)> {
+    first(read_records(io::Cursor::new(data), data.len(), true)?)
+}
+
+fn first((records, count): (Vec<Record>, usize)) -> Result<(Record, usize)> {
+    records
+        .into_iter()
+        .next()
+        .map(|record| (record, count))
+        .ok_or_else(|| parse_error("GenBank", 1, "expected LOCUS"))
+}
+
+/// Read, hash and parse together. No raw whole-file buffer is constructed.
+pub fn open_hashed(path: &std::path::Path) -> Result<(Record, usize, String)> {
+    let file = std::fs::File::open(path)?;
+    let size = usize::try_from(file.metadata()?.len()).unwrap_or(usize::MAX);
+    let mut reader = HashingReader {
+        file,
+        hash: crate::Hasher::new(),
+        bytes: 0,
+    };
+    let result = first(read_records(
+        io::BufReader::with_capacity(size.clamp(1, 64 * 1024), &mut reader),
+        size,
+        true,
+    )?);
+    #[cfg(feature = "test-counters")]
+    crate::counters::record_read(path, reader.bytes);
+    let (record, count) = result?;
+    Ok((record, count, reader.hash.finish()))
+}
+
+struct HashingReader {
+    file: std::fs::File,
+    hash: crate::Hasher,
+    bytes: u64,
+}
+impl Read for HashingReader {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        let count = self.file.read(buffer)?;
+        self.hash.update(&buffer[..count]);
+        self.bytes += count as u64;
+        Ok(count)
+    }
+}
+
+type Lines<R> = std::iter::Peekable<std::iter::Enumerate<io::Lines<R>>>;
+fn peek<R: BufRead>(lines: &mut Lines<R>) -> Result<Option<(usize, &str)>> {
+    match lines.peek() {
+        Some((no, Ok(line))) => Ok(Some((*no, line.as_str()))),
+        Some((no, Err(error))) => Err(parse_error("GenBank", no + 1, error.to_string())),
+        None => Ok(None),
+    }
+}
+
+fn read_records(
+    reader: impl BufRead,
+    size: usize,
+    first_only: bool,
+) -> Result<(Vec<Record>, usize)> {
     let mut records = Vec::new();
-    let mut lines = text.lines().enumerate().peekable();
+    let mut count = 0;
+    let mut lines = reader.lines().enumerate().peekable();
     while let Some((no, line)) = lines.next() {
+        let line = line.map_err(|error| parse_error("GenBank", no + 1, error.to_string()))?;
         if line.trim().is_empty() {
             continue;
         }
         if !line.starts_with("LOCUS") {
             return Err(parse_error("GenBank", no + 1, "expected LOCUS"));
         }
-        let mut rec = parse_locus(line);
-        // Header, up to FEATURES or ORIGIN.
-        while let Some(&(_, l)) = lines.peek() {
-            if l.starts_with("FEATURES") || l.starts_with("ORIGIN") || l.starts_with("//") {
+        count += 1;
+        if first_only && count > 1 {
+            for (no, line) in lines.by_ref() {
+                let line =
+                    line.map_err(|error| parse_error("GenBank", no + 1, error.to_string()))?;
+                if line.starts_with("//") {
+                    break;
+                }
+            }
+            continue;
+        }
+        let mut rec = parse_locus(&line);
+        let declared = line
+            .split_whitespace()
+            .nth(2)
+            .and_then(|n| n.parse::<usize>().ok())
+            .unwrap_or(0);
+        rec.sequence
+            .try_reserve_exact(declared.min(size))
+            .map_err(io::Error::other)?;
+        while let Some((_, line)) = peek(&mut lines)? {
+            if line.starts_with("FEATURES") || line.starts_with("ORIGIN") || line.starts_with("//")
+            {
                 break;
             }
-            rec.header.push(l.to_string());
+            rec.header.push(line.to_owned());
             lines.next();
         }
-        if lines.peek().is_some_and(|(_, l)| l.starts_with("FEATURES")) {
+        if peek(&mut lines)?.is_some_and(|(_, line)| line.starts_with("FEATURES")) {
             lines.next();
             parse_features(&mut lines, &mut rec)?;
         }
-        if lines.peek().is_some_and(|(_, l)| l.starts_with("ORIGIN")) {
+        if peek(&mut lines)?.is_some_and(|(_, line)| line.starts_with("ORIGIN")) {
             lines.next();
-            for (_, l) in lines.by_ref() {
-                if l.starts_with("//") {
+            for (no, line) in lines.by_ref() {
+                let line =
+                    line.map_err(|error| parse_error("GenBank", no + 1, error.to_string()))?;
+                if line.starts_with("//") {
                     break;
                 }
                 rec.sequence.extend(
-                    l.bytes()
+                    line.bytes()
                         .filter(u8::is_ascii_alphabetic)
                         .map(|b| b.to_ascii_uppercase()),
                 );
             }
-        } else if lines.peek().is_some_and(|(_, l)| l.starts_with("//")) {
+        } else if peek(&mut lines)?.is_some_and(|(_, line)| line.starts_with("//")) {
             lines.next();
         }
         records.push(rec);
     }
-    Ok(records)
+    Ok((records, count))
 }
 
 fn parse_locus(line: &str) -> Record {
@@ -103,9 +186,7 @@ fn parse_locus(line: &str) -> Record {
     }
 }
 
-type Lines<'a> = std::iter::Peekable<std::iter::Enumerate<std::str::Lines<'a>>>;
-
-fn parse_features(lines: &mut Lines, rec: &mut Record) -> Result<()> {
+fn parse_features<R: BufRead>(lines: &mut Lines<R>, rec: &mut Record) -> Result<()> {
     // Collect each feature's raw text first: key, location text, qualifier lines.
     struct Raw {
         line: usize,
@@ -114,11 +195,10 @@ fn parse_features(lines: &mut Lines, rec: &mut Record) -> Result<()> {
         qualifiers: Vec<String>,
     }
     let mut raws: Vec<Raw> = Vec::new();
-    while let Some(&(no, l)) = lines.peek() {
+    while let Some((no, l)) = peek(lines)? {
         if !l.starts_with(' ') {
             break;
         }
-        lines.next();
         let key_field = l.get(5..21).unwrap_or("").trim();
         let rest = l.get(21..).unwrap_or("").trim_end();
         if !key_field.is_empty() {
@@ -128,6 +208,7 @@ fn parse_features(lines: &mut Lines, rec: &mut Record) -> Result<()> {
                 location: rest.to_string(),
                 qualifiers: Vec::new(),
             });
+            lines.next();
             continue;
         }
         let Some(raw) = raws.last_mut() else {
@@ -150,6 +231,7 @@ fn parse_features(lines: &mut Lines, rec: &mut Record) -> Result<()> {
         } else {
             raw.location.push_str(rest);
         }
+        lines.next();
     }
     for raw in raws {
         let location = parse_location(&raw.location).ok_or_else(|| {

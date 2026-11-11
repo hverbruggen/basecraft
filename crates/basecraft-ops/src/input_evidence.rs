@@ -1,8 +1,10 @@
 //! Referenced-input lifecycle. Only known stores are inspected, never filesystem trees.
+
 use crate::records::links::AlignmentLinkExt;
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
+use basecraft_protocol::export_records::{ProvenanceExportMap, ProvenanceExportMapping};
 use basecraft_protocol::provenance::{FileStamp, InputReference};
 use basecraft_protocol::records::StoreRegistry;
 use fs4::fs_std::FileExt;
@@ -90,7 +92,14 @@ impl Mutation {
         transformation: &str,
         result_label: &str,
     ) -> Result<()> {
-        link_generated_input_locked(run, dependencies, payload, transformation, result_label)
+        link_generated_input_locked(
+            run,
+            dependencies,
+            payload,
+            transformation,
+            result_label,
+            register,
+        )
     }
 
     /// Recheck the caller's frozen original hash under the held evidence lock.
@@ -102,16 +111,17 @@ impl Mutation {
         dependencies: &[PathBuf],
         origin: &str,
     ) -> Result<ArtifactRun> {
-        reference_input_locked(anchor, source, hash, dependencies, origin)
+        reference_input_locked(anchor, source, hash, dependencies, origin, None)
     }
 }
 
-fn reference_input_locked(
+pub(crate) fn reference_input_locked(
     anchor: &Path,
     source: &Path,
     hash: &str,
     dependencies: &[PathBuf],
     origin: &str,
+    captured_stamp: Option<&FileStamp>,
 ) -> Result<ArtifactRun> {
     use basecraft_protocol::provenance::{
         ArtifactRevision, Completeness, InputReference, Publication,
@@ -119,12 +129,19 @@ fn reference_input_locked(
     let run =
         crate::analysis_store::ArtifactRun::create(anchor, &ulid::Ulid::generate().to_string())?;
     let source = source.canonicalize()?;
-    if basecraft_io::hash_file(&source)? != hash {
-        return Err(invalid("Input changed while registering its evidence"));
+    if captured_stamp.map_or_else(
+        || {
+            basecraft_io::hash_file(&source)
+                .map(|actual| actual != hash)
+                .map_err(crate::Error::from)
+        },
+        |before| stamp(&source).map(|now| &now != before),
+    )? {
+        return Err(crate::Error::ChangedOnDisk { path: source });
     }
     let reference = InputReference {
         path: crate::input_evidence::relative(run.directory(), &source)?,
-        stamp: crate::input_evidence::stamp(&source)?,
+        stamp: captured_stamp.cloned().map_or_else(|| stamp(&source), Ok)?,
         hash: hash.into(),
         extra: BTreeMap::new(),
     };
@@ -381,24 +398,25 @@ impl std::fmt::Display for EvidenceConflict {
 }
 
 pub fn stamp(path: &Path) -> Result<FileStamp> {
-    let metadata = std::fs::metadata(path)?;
+    stamp_metadata(path, &std::fs::metadata(path)?)
+}
+
+pub(crate) fn stamp_metadata(_path: &Path, metadata: &std::fs::Metadata) -> Result<FileStamp> {
     if !metadata.is_file() {
-        return Err(invalid("analysis input must be an ordinary file"));
+        return Err(crate::Error::Unsupported("input is not a file".into()));
     }
     let time = metadata
         .modified()?
         .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|_| invalid("input timestamp is before Unix epoch"))?;
+        .map_err(|_| crate::Error::Unsupported("input timestamp is before Unix epoch".into()))?;
     #[cfg(unix)]
     let (device, inode) = {
         use std::os::unix::fs::MetadataExt;
         (Some(metadata.dev()), Some(metadata.ino()))
     };
     #[cfg(windows)]
-    let (device, inode) = {
-        let (device, inode) = basecraft_platform::files::identity(path)?;
-        (Some(device), Some(inode))
-    };
+    let (device, inode) = basecraft_platform::files::identity(_path)
+        .map(|(device, inode)| (Some(device), Some(inode)))?;
     Ok(FileStamp {
         size: metadata.len(),
         modified_seconds: time.as_secs(),
@@ -1053,7 +1071,6 @@ pub fn register(run: &ArtifactRun) -> Result<()> {
         all.push(store.into());
         let mut value = store_registry()?;
         value.stores = all;
-        // The legacy Value builder sorted nested extension keys as well.
         write_json(&registry()?, &serde_json::to_value(value)?)?;
     }
     Ok(())
@@ -1711,6 +1728,18 @@ fn owning_ledger(bundle: &Path) -> Result<(PathBuf, SubmittedInput)> {
 
 /// Resolve evidence only on explicit verification/export/relink. No UI-event hashing.
 pub fn verified_source(bundle: &Path, reference: &InputReference) -> Result<PathBuf> {
+    let path = source_location(bundle, reference)?;
+    if basecraft_io::hash_file(&path)? != reference.hash
+        || std::fs::metadata(&path)?.len() != reference.stamp.size
+    {
+        return Err(invalid(
+            "referenced input changed; original evidence unavailable (timestamp alone is not identity)",
+        ));
+    }
+    Ok(path.canonicalize()?)
+}
+
+pub(crate) fn source_location(bundle: &Path, reference: &InputReference) -> Result<PathBuf> {
     let (mut location, mut input) = owning_ledger(bundle)?;
     if input.state == basecraft_protocol::input_records::EvidenceState::Broken {
         return Err(invalid("evidence chain explicitly broken"));
@@ -1762,14 +1791,7 @@ pub fn verified_source(bundle: &Path, reference: &InputReference) -> Result<Path
     } else {
         location.join(&effective.path)
     };
-    if basecraft_io::hash_file(&path)? != reference.hash
-        || std::fs::metadata(&path)?.len() != reference.stamp.size
-    {
-        return Err(invalid(
-            "referenced input changed; original evidence unavailable (timestamp alone is not identity)",
-        ));
-    }
-    Ok(path.canonicalize()?)
+    Ok(path)
 }
 
 /// Honest repair: only a byte-verified original may replace a missing/changed reference.
@@ -2040,6 +2062,8 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
         if original == result {
             publication.outputs[0].hash = hash;
             publication.outputs[0].size = size;
+            // Relocation changes the visible review, not its retained original artifact.
+            publication.outputs[0].retained = None;
         } else {
             publication.outputs.push(ArtifactRevision {
                 id: format!("{}:sanger-review", publication.id),
@@ -2062,7 +2086,7 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
     {
         let link = crate::records::links::AlignmentLink::read(result)?;
         let input_path = link.checked_snapshot(result, &tree.doc)?;
-        let indexed = std::sync::Arc::new(basecraft_io::cache::open_fasta(&input_path)?);
+        let indexed = std::sync::Arc::new(basecraft_io::fasta::IndexedFasta::open(&input_path)?);
         let alignment = basecraft_docs::AlignmentDoc::from_fasta("Exported input", &indexed);
         let mut canonical = tempfile::Builder::new()
             .suffix(".afa")
@@ -2117,10 +2141,15 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
     if authored.is_file() {
         copy(&authored, &target_bundle.join("reports/methods.md"))?;
     }
-    if !crate::records::provenance::verify(&copied)?.is_empty() {
-        return Err(invalid(
-            "export verification failed; original source and records preserved",
-        ));
+    let issues = crate::records::provenance::verify(&copied)?;
+    if !issues.is_empty() {
+        return Err(crate::Error::Damaged {
+            path: copied.clone(),
+            detail: format!(
+                "export verification failed: {}; original source and records preserved",
+                issues.join("; ")
+            ),
+        });
     }
     if destination.exists() {
         return Err(invalid("package destination appeared during export"));
@@ -2250,14 +2279,12 @@ fn export_history(
         basecraft_io::write_atomic(&target.join(&name), |w| w.write_all(&bytes))?;
         let old_id = publication.id.clone();
         publication.id = ulid::Ulid::generate().to_string();
-        mapping.push(
-            basecraft_protocol::export_records::ProvenanceExportMapping {
-                original_id: old_id.clone(),
-                original_hash: hash.clone(),
-                export_id: publication.id.clone(),
-                extra: BTreeMap::new(),
-            },
-        );
+        mapping.push(ProvenanceExportMapping {
+            original_id: old_id.clone(),
+            original_hash: hash.clone(),
+            export_id: publication.id.clone(),
+            extra: BTreeMap::new(),
+        });
         archives.push(ArtifactRevision {
             id: format!("{}:original-record", publication.id),
             logical_name: format!("original-record-{old_id}.json"),
@@ -2298,13 +2325,11 @@ fn export_history(
         hashes.insert(key.clone(), basecraft_io::hash_file(&path)?);
         rebased.insert(key, publication);
     }
-    let bytes = serde_json::to_vec_pretty(&serde_json::to_value(
-        basecraft_protocol::export_records::ProvenanceExportMap {
-            schema_version: 1,
-            records: mapping,
-            extra: BTreeMap::new(),
-        },
-    )?)?;
+    let bytes = serde_json::to_vec_pretty(&serde_json::to_value(ProvenanceExportMap {
+        schema_version: 1,
+        records: mapping,
+        extra: BTreeMap::new(),
+    })?)?;
     let hash = basecraft_io::hash_bytes(&bytes);
     let name = format!("artifacts/{}", hash.trim_start_matches("b3:"));
     basecraft_io::write_atomic(&target.join(&name), |w| w.write_all(&bytes))?;
@@ -2440,6 +2465,7 @@ pub(crate) fn link_generated_input_locked(
     payload: &[u8],
     transformation: &str,
     result_label: &str,
+    register: impl FnOnce(&ArtifactRun) -> Result<()>,
 ) -> Result<()> {
     let mut upstream = Vec::new();
     for dependency in dependencies {
@@ -2479,7 +2505,7 @@ pub(crate) fn link_generated_input_locked(
             extra: BTreeMap::new(),
         })?,
     )?;
-    crate::input_evidence::register(run)
+    register(run)
 }
 
 #[cfg(test)]

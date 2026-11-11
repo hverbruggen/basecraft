@@ -181,7 +181,7 @@ fn every_annotation_route_keeps_the_same_invocation_evidence() {
     let request = serde_json::from_value(json!({
         "operation": "basecraft.orf-finder/find_orfs@1",
         "inputs": {"sequence": [{"kind": "document", "doc": doc.0.to_string(),
-            "generation": session.generation(doc),
+            "generation": session.generation(doc).unwrap(),
             "revision": session.checked_sequence(doc).unwrap().version()}]},
         "parameters": {"min_codons": 100}}))
     .unwrap();

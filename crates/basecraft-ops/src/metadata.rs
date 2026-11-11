@@ -90,9 +90,18 @@ fn optional(text: &str) -> Option<String> {
 
 /// Read a metadata document from its manifest.
 pub fn load(manifest_path: &Path) -> Result<OpenedMetadata> {
+    load_with(manifest_path, &mut |path| {
+        Ok(basecraft_io::Source::open_hashed(path)?)
+    })
+}
+
+pub(crate) fn load_with(
+    manifest_path: &Path,
+    read: &mut impl FnMut(&Path) -> Result<(basecraft_io::Source, String)>,
+) -> Result<OpenedMetadata> {
     let dir = manifest_path.parent().unwrap_or(Path::new("."));
     let value: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(manifest_path)?).map_err(|e| {
+        serde_json::from_slice(read(manifest_path)?.0.bytes()).map_err(|e| {
             crate::Error::Damaged {
                 path: manifest_path.to_path_buf(),
                 detail: format!("not valid JSON: {e}"),
@@ -125,13 +134,14 @@ pub fn load(manifest_path: &Path) -> Result<OpenedMetadata> {
                 ),
             });
         }
-        let bytes = std::fs::read(dir.join(expected))?;
-        if basecraft_io::hash_bytes(&bytes) != entry.hash {
+        let (source, hash) = read(&dir.join(expected))?;
+        let bytes = source.bytes();
+        if hash != entry.hash {
             notices.push(format!(
                 "{expected} was changed outside Basecraft since the last save; it was read and checked against its column types"
             ));
         }
-        basecraft_io::table::read_tsv(&bytes).map_err(|e| crate::Error::Damaged {
+        basecraft_io::table::read_tsv(bytes).map_err(|e| crate::Error::Damaged {
             path: dir.join(expected),
             detail: format!("{expected}: {e}"),
         })
@@ -713,7 +723,7 @@ impl<'a> Planner<'a> {
 /// The records of a FASTA file: ID (up to the first whitespace) and full
 /// header line.
 pub fn fasta_headers(path: &Path) -> Result<Vec<(String, String)>> {
-    let file = basecraft_io::cache::open_fasta(path)?;
+    let file = basecraft_io::fasta::IndexedFasta::open(path)?;
     Ok(file
         .index
         .records
@@ -1347,7 +1357,7 @@ pub fn consumer_plan(
             let mut checked = meta.clone();
             model::apply(&mut checked, &edit).map_err(|e| invalid(e.0))?;
             return Ok(
-                serde_json::json!({"target":session.doc_key(doc), "operation": Op::MetadataEdit { edit: Box::new(edit) }, "metadata_hash": metadata_hash}),
+                serde_json::json!({"target":session.doc_key(doc)?, "operation": Op::MetadataEdit { edit: Box::new(edit) }, "metadata_hash": metadata_hash}),
             );
         }
         ConsumerRequest::Labels {
@@ -1432,7 +1442,7 @@ pub fn consumer_plan(
                 .map_err(|e| invalid(e.to_string()))?,
         );
         (
-            session.doc_key(doc).to_string(),
+            session.doc_key(doc)?.to_string(),
             Op::MetadataEdit {
                 edit: Box::new(MetadataEdit::PutPartition {
                     partition: Box::new(partition),
@@ -1457,7 +1467,7 @@ pub fn consumer_source(
     let (_, stamp, hash) = session
         .saved_source(doc)?
         .ok_or_else(|| invalid("Save the specimen metadata before binding consumers"))?;
-    let path = session.root().join(session.doc_key(doc));
+    let path = session.root().join(session.doc_key(doc)?);
     let publication = crate::records::provenance::inspect(&path).map_err(|_| invalid("Metadata owner evidence is unavailable; save its document history before binding consumers"))?;
     let event = publication
         .events
@@ -1467,7 +1477,7 @@ pub fn consumer_source(
             invalid("Metadata owner Open activity is unavailable; restore its provenance")
         })?;
     Ok(basecraft_protocol::provenance::InputReference {
-        path: session.doc_key(doc).into(),
+        path: session.doc_key(doc)?.into(),
         stamp,
         hash,
         extra: BTreeMap::from([("owner_event".into(), serde_json::json!(event.id))]),

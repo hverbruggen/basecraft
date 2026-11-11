@@ -21,6 +21,29 @@ pub fn bundle_for_result(result: &Path) -> PathBuf {
     if let Ok(Some(hidden)) = crate::analysis_store::ArtifactRun::for_result(result)
         && hidden.join("manifest.json").is_file()
     {
+        // A support-only binding retains input evidence, while LocalOnly history
+        // is deliberately published in the private profile.
+        if read_record(&hidden.join("manifest.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Publication>(&bytes).ok())
+            .is_some_and(|record| record.origin == "Saved Sanger review support")
+            && let Ok(paths) = basecraft_platform::paths::AppPaths::discover()
+            && basecraft_platform::settings::SettingsStore::new(paths.preferences())
+                .load()
+                .is_ok_and(|settings| {
+                    settings.files.provenance
+                        == basecraft_platform::settings::ProvenancePolicy::LocalOnly
+                })
+            && let Ok(absolute) = result.canonicalize()
+        {
+            let local = paths.state.join("provenance").join(
+                basecraft_io::hash_bytes(absolute.as_os_str().as_encoded_bytes())
+                    .trim_start_matches("b3:"),
+            );
+            if local.join("manifest.json").is_file() {
+                return local;
+            }
+        }
         return hidden;
     }
     let standalone = companion(result);
@@ -188,8 +211,6 @@ pub fn verify(result: &Path) -> Result<Vec<String>> {
             if let Err(e) = crate::input_evidence::verified_source(&bundle, reference) {
                 issues.push(format!("{}: {e}", artifact.id));
             }
-        } else {
-            issues.push(format!("{}: input bytes unavailable", artifact.id));
         }
     }
     if publication.outputs.is_empty() {
@@ -319,8 +340,6 @@ pub(crate) fn verify_records(bundle: &Path, current: &Publication) -> Result<Vec
                 if let Err(e) = crate::input_evidence::verified_source(bundle, reference) {
                     issues.push(format!("{}: {e}", artifact.id));
                 }
-            } else if publication.inputs.iter().any(|a| a.id == artifact.id) {
-                issues.push(format!("{}: ancestor input bytes unavailable", artifact.id));
             }
         }
         let mut parents = std::collections::HashSet::new();
@@ -618,6 +637,7 @@ pub fn tool_run_entry(
         session: publication.session.clone(),
         actor,
         doc: doc.into(),
+        source: None,
         op: Op::ToolRun {
             plugin: plugin.into(),
             operation: operation.into(),

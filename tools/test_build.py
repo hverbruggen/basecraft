@@ -18,6 +18,7 @@ from pathlib import Path
 from build_runtime import output, runtime
 from bundled_tools import stage_tools
 from check_ptp import check_ptp
+from startup import startup_samples
 
 REPO = Path(__file__).resolve().parents[1]
 BINARIES = (
@@ -288,6 +289,11 @@ sha256sum {" ".join(BINARIES)} > SHA256SUMS
         raise RuntimeError("Validated Sanderson executable unavailable: set BASECRAFT_SANDERSON_BINARY to the executable from the matching method validation receipt")
     run(["python3", sanderson / "native/tools/stage_package.py", "--package", sanderson, "--binary", native])
     checks = stage / "checks"
+    try:
+        previous_startup = json.loads((root / "current/build.json").read_text()).get("startup", {})
+    except (OSError, ValueError):
+        previous_startup = {}
+    startup = {}
     for backend in ("software", "opengl"):
         run(
             [
@@ -299,6 +305,8 @@ sha256sum {" ".join(BINARIES)} > SHA256SUMS
                 backend,
             ]
         )
+        startup[backend] = startup_samples(bundle / "bin/basecraft-gui", checks / "startup", backend,
+                                           previous_startup.get(backend))
     if args.ribbon_screenshots:
         run(
             [
@@ -342,6 +350,7 @@ sha256sum {" ".join(BINARIES)} > SHA256SUMS
             "real PTP/mPTP fits and provenance through public operations",
             "native Sanderson CLI/Python/MCP fits, bounds, CV and provenance",
         ],
+        "startup": startup,
         "engines": engines,
         "bundled_tools": bundled_tools,
         "ptp_receipt_sha256": digest(Path(ptp_receipt)),

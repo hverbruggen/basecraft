@@ -112,7 +112,7 @@ fn a_source_without_support_or_a_clashing_name_changes_and_records_nothing() {
     std::fs::write(&other, "((A:1,E:1)75:1,(C:1,D:1)60:1);").unwrap();
     assert!(session.import_support(doc, &other, "x").is_err());
     assert_eq!(session.tree(doc).unwrap().supports(), before.as_slice());
-    assert!(!session.can_undo(doc));
+    assert!(!session.can_undo(doc).unwrap());
     assert!(!target.parent().unwrap().join(".basecraft").exists());
 }
 

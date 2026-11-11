@@ -88,13 +88,13 @@ impl Session {
         if self.tracked
             && self.provenance_policy != basecraft_platform::settings::ProvenancePolicy::None
         {
-            let anchor = self.resolve(self.doc_key(id));
+            let anchor = self.resolve(self.doc_key(id)?);
             let ledger = crate::input_evidence::reference_input_with_dependencies(
                 &anchor,
                 &source,
                 &hash,
                 &[],
-                &format!("Support values imported into {}", self.doc_key(id)),
+                &format!("Support values imported into {}", self.doc_key(id)?),
             )?;
             let record = ledger
                 .directory()

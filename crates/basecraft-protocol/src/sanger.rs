@@ -106,8 +106,6 @@ pub enum ReviewOp {
     Mask {
         settings: MaskSettings,
     },
-    Undo,
-    Redo,
     Export {
         path: PathBuf,
         sha256: String,

@@ -1,6 +1,7 @@
 //! Registered-operation preparation, execution and validated finalization: the
 //! one route every interface uses to run an analysis. Host workflows run their
 //! stages through registered child jobs with the same lifecycle as other runs.
+mod captures;
 mod execute;
 mod finalize;
 mod prepare;
@@ -622,12 +623,12 @@ impl PreparedOperation {
             .original_path
             .clone()
             .unwrap_or_else(|| "generated input".into());
-        let path = session.root().join(session.doc_key(doc));
+        let path = session.root().join(session.doc_key(doc)?);
         self.document = Some(DocumentTarget {
             doc,
             session: session.id().into(),
-            generation: session.generation(doc),
-            revision: session.revision(doc),
+            generation: session.generation(doc)?,
+            revision: session.revision(doc)?,
             record: session.document_record(doc)?,
             input: (key, evidence.submitted_hash.clone()),
             saved: session.saved_source(doc)?.map(|(path, _, _)| path),

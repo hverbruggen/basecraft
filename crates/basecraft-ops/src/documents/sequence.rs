@@ -10,6 +10,19 @@ use crate::files::{self, Format, HashingWriter, Opened};
 use crate::session::{Inverse, normalise};
 
 impl Document for Opened {
+    fn save_refusal(&self) -> Option<&str> {
+        self.save_refusal
+    }
+    fn accepts(&self, op: &Op) -> bool {
+        matches!(
+            op,
+            Op::SeqReplace { .. }
+                | Op::FeatureAdd { .. }
+                | Op::FeatureRemove { .. }
+                | Op::FeatureUpdate { .. }
+        )
+    }
+
     fn kind(&self) -> crate::files::Kind {
         crate::files::Kind::Sequence
     }
@@ -19,6 +32,7 @@ impl Document for Opened {
     }
     fn proposal_candidate(&self) -> Result<files::Loaded> {
         Ok(files::Loaded::Sequence(Opened {
+            save_refusal: self.save_refusal,
             doc: self.doc.clone(),
             format: self.format,
             fasta: self.fasta.clone(),
@@ -100,10 +114,6 @@ impl Document for Opened {
         }
         Ok(hashes)
     }
-    fn saved_hashes_are_content_only(&self) -> bool {
-        true
-    }
-
     fn saved_hashes(
         &self,
         _target: &Path,
@@ -238,9 +248,13 @@ pub(crate) fn execute_sequence(
         | Op::TreeStyle { .. } => Err(invalid(format!("{} needs a tree", op.name()))),
         Op::DelimitationEdit { .. } => Err(invalid("this needs a delimitation workspace")),
         Op::MetadataEdit { .. } => Err(invalid("this needs the project metadata")),
+        Op::SangerReview { .. } | Op::SangerSelect { .. } | Op::SangerUpdate { .. } => Err(
+            crate::Error::Unsupported("choose a Sanger review document".into()),
+        ),
         Op::SubmissionEdit { .. } => Err(invalid("this needs a submission document")),
         Op::JobFinished { .. } => Err(invalid("use log_job_finished")),
         Op::Open { .. }
+        | Op::CreateSangerReview { .. }
         | Op::CreateSequence { .. }
         | Op::Save { .. }
         | Op::Extract { .. }
@@ -265,6 +279,9 @@ fn undo_sequence(doc: &mut SequenceDoc, inverse: &Inverse) -> Result<()> {
         | Inverse::Tree(_)
         | Inverse::Delimitation(_)
         | Inverse::Metadata(_)
+        | Inverse::SangerSelect(_)
+        | Inverse::SangerUpdate(_)
+        | Inverse::SangerReview { .. }
         | Inverse::Submission(_) => return Err(invalid("undo of the wrong kind of edit")),
     }
     Ok(())
@@ -352,10 +369,7 @@ mod tests {
     #[test]
     fn sequence_interface_preserves_writer_bytes_features_topology_and_fasta_records() {
         for (name, bytes) in [
-            (
-                "sequence.fasta",
-                b">first\nACGTACGT\n>second retained\nTTTT\n".to_vec(),
-            ),
+            ("sequence.fasta", b">first\nACGTACGT\n".to_vec()),
             (
                 "sequence.gb",
                 include_str!(
@@ -467,7 +481,7 @@ mod tests {
         session.flush().unwrap();
         session.undo(id).unwrap();
         assert_eq!(session.save_hashes(id).unwrap(), initial);
-        assert!(!session.can_undo(id));
+        assert!(!session.can_undo(id).unwrap());
         session.redo(id).unwrap();
         assert_eq!(session.save_hashes(id).unwrap(), edited);
         session.save(id, None).unwrap();

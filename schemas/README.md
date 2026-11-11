@@ -61,12 +61,12 @@ Basecraft builds is promised.
 | **DS06** `metadata.basecraft.json`: table names/hashes/columns, import settings, partitions | Project metadata folder | [metadata.rs](../crates/basecraft-ops/src/metadata.rs) `encode`, `write` | `metadata::load` | `format`, `version: 1` | protocol `metadata_records::{MetadataManifest, Tables, TableEntry}` / [metadata-manifest.schema.json](metadata-manifest.schema.json) | Manifest top-level extra kept; nested table wrappers drop extras; unknown TSV columns retained by model |
 | **DS07** `specimens.tsv`, `taxa.tsv`, `identifications.tsv`, `records.tsv` | Same metadata folder | `metadata::encode`, `create`, session save | `metadata::load` | Via metadata manifest | protocol metadata row/column types; standard TSV | Header/column handling preserves extra data; no JSON schema for TSV bytes |
 | **DS08** `*.submission.json` | Project / chosen document path | [submission.rs](../crates/basecraft-ops/src/submission.rs) `encode`, `create`; session save | `submission::load` | `version: 1` | protocol `Submission` / [submission.schema.json](submission.schema.json) | Extra maps on Submission and selected nested types kept; other nested structs have their own rules |
-| **DS09** Saved `*.sanger-review.json` / recovery `review.sanger-review.json` / immutable retained review snapshots | Document / R / A | [sanger_review/storage.rs](../crates/basecraft-ops/src/sanger_review/storage.rs) `write_embedded`, `save_durable`, checkpoint | [sanger_review.rs](../crates/basecraft-ops/src/sanger_review.rs) `decode`, `from_stored`, `load`, `recover` | `StoredReview.version: 1`; `StoredCallSets.version: 2`; embedded `ReviewEvidence.schema_version: 1` | protocol `sanger_records::{SavedReview, SavedCallSets, ReviewEvidence, ReviewSource, ReviewSupport}`; generated `sanger-saved-*.schema.json` and `sanger-review-{evidence,source,support}.schema.json`; docs specialized draft payload retained | StoredReview/ReviewEvidence extras kept; call-set envelope rejects unknowns; nested payload rules differ |
+| **DS09** Saved Sanger review | User-selected JSON | shared Session save, Sanger Document writer | SangerReview current envelope | version 3 | protocol SavedCallSets and SavedReview | Current forward scientific decisions; shared Session owns undo/recovery |
 | **DS10** `draft.json` and embedded `draft_json`: automatic Sanger draft, trace evidence | A / embedded review | `save_durable` retains exact draft bytes produced by plugin | `SangerReviewSession::from_draft`, `basecraft_docs::sanger::SangerDraft` | No schema version; `version_output` is tool output, not format version | protocol `sanger_records::SangerDraft`; [sanger-draft.schema.json](sanger-draft.schema.json) | Existing typed draft fields drop unknowns on typed reserialization; original JSON retained in review |
 | **DS11** Sanger placement artifact (retained JSON) | A / plugin output | Registered plugin produces it; Sanger storage retains/copies it | storage placement verification, docs `SangerPlacement` | Existing producer format; tool `version` is not a schema version | protocol `sanger_records::SangerPlacement`; [sanger-placement.schema.json](sanger-placement.schema.json) | Existing typed payload behavior; no migration here |
 | **DS12** Sanger `request.json`, `parameters.json` | A | storage `SangerRun::prepare_with_dependencies`, `parameters` | Sanger provenance/Methods and retained evidence readers | Request has no version; parameters are operation-specific | protocol `sanger_records::SangerRequest` / [sanger-request.schema.json](sanger-request.schema.json); parameters remain operation-specific JSON | Raw parameters retained; not rewritten through a common schema |
 | **DS13** Sanger `execution.json` and J `manifest.json`: status, owner, source, result/diagnostic, run path | A / J | storage `SangerRun::status` | `document_record::jobs`, Sanger resume/storage readers | `schema_version: 1` | protocol `sanger_records::SangerJobRecord` / [sanger-job-record.schema.json](sanger-job-record.schema.json) | Selective reads; status updates build fresh record |
-| **DS14** Sanger recovery `manifest.json`: owner, source, unresolved diagnostic, checkpoint path | R (job recovery) | storage `checkpoint` | job/history inspection and explicit Sanger recovery | `schema_version: 1` | protocol `sanger_records::SangerJobRecord` / [sanger-job-record.schema.json](sanger-job-record.schema.json) | Selective reads; regenerated at checkpoint |
+| **DS14** Retired Sanger job checkpoint | — | — | Removed; recovery uses RP01 session journals | — | — | No legacy reader |
 
 ## Registered operations, jobs and exports
 
@@ -151,8 +151,8 @@ engine `main` writes version 1, wrapper `invoke` recalculates exchange hashes an
 rewrites that wrapper from selected fields after publishing SPART. Version 2 is
 used by ops path-base-aware writes. These are not interchangeable byte formats.
 DS12/DS13's concrete owner is `SangerRun::prepare_with_dependencies`, `parameters`,
-`status` (not a type named `ReviewRun`). DS14's owner is
-`SangerReviewSession::checkpoint`; `decode` accepts version 1 or 2 and rejects
+`status` (not a type named `ReviewRun`). DS14 is retired; recovery uses the shared
+Session journal. `decode` accepts version 1 or 2 and rejects
 other review versions. Nested draft/tool versions do not replace that check.
 
 ### Boundary exclusions and standard outputs
@@ -248,3 +248,10 @@ operation parameters and third-party outputs remain governed by their operation
 contracts. Provenance, links, document records, contributions and replay live in
 `basecraft-ops/src/records/`; input evidence, the analysis store and the save guard
 move there after the save lane merges. The PRD compatibility-promise item is deferred.
+
+### Saved Sanger reviews after Session integration
+
+The current version-3 `SavedCallSets` envelope covers single and multiple sets.
+Session owns typed edits, undo, replay, recovery and guarded save; immutable draft
+records are addressed by digest. Current examples are in `testdata/fixtures/sanger-review`.
+Old payload checkpoints and old envelope/undo readers are removed.

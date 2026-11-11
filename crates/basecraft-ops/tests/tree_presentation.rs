@@ -73,34 +73,19 @@ fn support_precision_scale_unknown_settings_save_undo_and_replay() {
 }
 
 #[test]
-fn support_kind_survives_sidecar_and_legacy_bootstrap_requires_matching_evidence() {
+fn support_kind_survives_current_sidecar() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("tree.nwk");
-    let text = "((a,b)0.5,c);";
-    std::fs::write(&path, text).unwrap();
-    let report = json!({"tool":"basecraft-distance", "bootstrap":{"completed":200,"support_withheld":false},"tree":{"trees":[text]}});
-    let report_path = dir.path().join("tree.nwk.run.json");
-    std::fs::write(&report_path, report.to_string()).unwrap();
-    let tree = files::load_tree(&path).unwrap().doc;
-    assert_eq!(tree.supports()[0].name, "Bootstrap");
-    assert_eq!(tree.supports()[0].kind, SupportKind::Bootstrap);
-    assert!(!tree.supports()[0].proportions);
-    assert_eq!(tree.supports()[0].decimals(tree.style()), 0);
+    std::fs::write(&path, "((a,b)0.5,c);").unwrap();
+    let mut tree = files::load_tree(&path).unwrap().doc;
+    assert_eq!(tree.supports()[0].kind, SupportKind::Unknown);
+    tree.set_support_kind("Support", SupportKind::Bootstrap);
     let mut sidecar = Vec::new();
     files::write_tree_sidecar(&tree, &mut sidecar).unwrap();
     std::fs::write(files::tree_sidecar(&path), sidecar).unwrap();
-    std::fs::remove_file(&report_path).unwrap();
-    assert_eq!(
-        files::load_tree(&path).unwrap().doc.supports()[0].kind,
-        SupportKind::Bootstrap
-    );
-    std::fs::remove_file(files::tree_sidecar(&path)).unwrap();
-    std::fs::write(&report_path, report.to_string()).unwrap();
-    std::fs::write(&path, "((a,b)0.75,c);").unwrap();
-    let imported = files::load_tree(&path).unwrap().doc;
-    assert_eq!(imported.supports()[0].name, "Support");
-    assert_eq!(imported.supports()[0].kind, SupportKind::Unknown);
-    assert_eq!(imported.supports()[0].decimals(imported.style()), 2);
+    let reopened = files::load_tree(&path).unwrap().doc;
+    assert_eq!(reopened.supports()[0].kind, SupportKind::Bootstrap);
+    assert!(!reopened.supports()[0].proportions);
 }
 
 #[test]
@@ -285,9 +270,6 @@ fn invalid_style_and_removal_do_not_mutate_or_start_recovery_tracking() {
     );
     assert_eq!(session.tree(doc).unwrap().style(), &style);
     assert!(!dir.path().join(".basecraft").exists());
-    // Old operation logs still deserialize with no staged removals.
-    let old: Op = serde_json::from_value(json!({"op":"tree.style","params":{"style":{}}})).unwrap();
-    assert!(matches!(old, Op::TreeStyle { remove_supports, .. } if remove_supports.is_empty()));
 }
 
 #[test]
@@ -346,4 +328,37 @@ fn imported_supports_retain_recorded_names_kinds_and_evidence() {
     let unknown = files::load_tree(&path).unwrap().doc;
     assert_eq!(unknown.supports()[0].name, "Support 1");
     assert_eq!(unknown.supports()[0].kind, SupportKind::Unknown);
+}
+
+#[test]
+fn unreadable_metadata_never_blocks_the_exchange_tree() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tree.nwk");
+    let original = b"((a,b)0.5,c);\n";
+    std::fs::write(&path, original).unwrap();
+    let tree = files::load_tree(&path).unwrap().doc;
+    let mut bytes = Vec::new();
+    files::write_tree_sidecar(&tree, &mut bytes).unwrap();
+    let mut side: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let sidecar = files::tree_sidecar(&path);
+    for version in [0, 99] {
+        side["schema_version"] = version.into();
+        std::fs::write(&sidecar, serde_json::to_vec(&side).unwrap()).unwrap();
+        let mut session = Session::unlogged(dir.path());
+        let id = session.open(&path).unwrap();
+        assert_eq!(session.tree(id).unwrap().to_newick(), tree.to_newick());
+        assert!(session.tree_metadata_warning(id).unwrap().is_some());
+    }
+    for bytes in [b"broken JSON".as_slice(), b"{}".as_slice()] {
+        std::fs::write(&sidecar, bytes).unwrap();
+        let mut session = Session::unlogged(dir.path());
+        let id = session.open(&path).unwrap();
+        assert!(session.tree_metadata_warning(id).unwrap().is_some());
+    }
+    std::fs::remove_file(&sidecar).unwrap();
+    std::fs::create_dir(&sidecar).unwrap();
+    let mut session = Session::unlogged(dir.path());
+    let id = session.open(&path).unwrap();
+    assert!(session.tree_metadata_warning(id).unwrap().is_some());
+    assert_eq!(std::fs::read(&path).unwrap(), original);
 }

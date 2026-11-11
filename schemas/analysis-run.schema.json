@@ -42,19 +42,12 @@
   "$defs": {
     "AnalysisRunStatus": {
       "description": "Labels in `run.json`, distinct from the registered operation runtime lifecycle.\nUnfamiliar labels survive a typed round-trip without being reinterpreted.",
-      "anyOf": [
-        {
-          "type": "string",
-          "enum": [
-            "referenced",
-            "prepared",
-            "saved",
-            "completed"
-          ]
-        },
-        {
-          "type": "string"
-        }
+      "type": "string",
+      "enum": [
+        "referenced",
+        "prepared",
+        "saved",
+        "completed"
       ]
     },
     "ArtifactRevision": {

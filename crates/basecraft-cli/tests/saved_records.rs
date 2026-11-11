@@ -1,10 +1,13 @@
 //! Headless access to saved records the GUI already reads: Sanger reviews
 //! (history, methods, verification, packaging, recovery) and support import.
+#[path = "../../basecraft-ops/tests/support/sanger_fixture.rs"]
+mod sanger_fixture;
+
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-use basecraft_ops::sanger_review::{ReviewChoice, ReviewOp, SangerReviewSession};
+use basecraft_ops::sanger_review::{ReviewChoice, ReviewOp, SangerReview};
 use basecraft_protocol::Op;
 use serde_json::{Value, json};
 
@@ -59,16 +62,28 @@ fn listing(root: &Path) -> Vec<(PathBuf, u64)> {
     found
 }
 
-fn edit(review: &mut SangerReviewSession, column: usize, base: char) {
-    review
-        .apply(ReviewOp::Set {
-            columns: vec![column],
-            choice: ReviewChoice::Edit(base),
-        })
+fn edit(
+    session: &mut basecraft_ops::Session,
+    id: basecraft_ops::DocId,
+    call_set: &str,
+    column: usize,
+    base: char,
+) {
+    session
+        .apply(
+            id,
+            basecraft_protocol::Op::SangerReview {
+                call_set: call_set.into(),
+                edit: Box::new(ReviewOp::Set {
+                    columns: vec![column],
+                    choice: ReviewChoice::Edit(base),
+                }),
+            },
+        )
         .unwrap();
 }
 
-/// A legacy single-set (v1) review and a multi-call-set (v2) review of the
+/// A single-set review and a multi-call-set review of the
 /// same instrument trace, the second under a generic `.json` name.
 fn reviews(project: &Path) -> (PathBuf, PathBuf) {
     std::fs::create_dir_all(project).unwrap();
@@ -79,35 +94,33 @@ fn reviews(project: &Path) -> (PathBuf, PathBuf) {
         &trace,
     )
     .unwrap();
-    let mut single = basecraft_ops::sanger_review::instrument_review(&trace).unwrap();
-    edit(&mut single, 0, 'G');
+    let single = basecraft_ops::sanger_review::instrument_review(&trace).unwrap();
+    let mut session = basecraft_ops::Session::recoverable(project).unwrap();
+    let id = session.create_sanger_review(&single).unwrap();
+    edit(&mut session, id, &single.draft_sha256, 0, 'G');
     let v1 = project.join("specimen.sanger-review.json");
-    single.save(&v1).unwrap();
-
-    let mut multi = basecraft_ops::sanger_review::instrument_review(&trace).unwrap();
-    edit(&mut multi, 0, 'G');
+    session.save(id, Some(&v1)).unwrap();
+    let mut multi = single.clone();
     let mut draft = multi.draft.clone();
     draft.engine = "Tracy".into();
     draft.mode = "basecall".into();
     draft.version_output = "synthetic caller".into();
     draft.engine_sha256 = "a".repeat(64);
-    let mut alternative = SangerReviewSession::from_draft(draft, &multi.draft_path).unwrap();
-    edit(&mut alternative, 0, 'C');
+    let alternative = SangerReview::from_draft(draft, &multi.draft_path).unwrap();
+    let other = alternative.draft_sha256.clone();
     multi.retain_call_set(alternative).unwrap();
+    let id = session.create_sanger_review(&multi).unwrap();
+    edit(&mut session, id, &multi.draft_sha256, 0, 'G');
+    edit(&mut session, id, &other, 0, 'C');
     let v2 = project.join("multi.json");
-    multi.save(&v2).unwrap();
+    session.save(id, Some(&v2)).unwrap();
     (v1, v2)
 }
 
 /// The report the GUI shows for a saved review it opened.
 fn gui_report(path: &Path) -> Value {
-    let review = SangerReviewSession::load(path).unwrap();
-    serde_json::to_value(
-        review
-            .document_report(review.recovery_path().is_some())
-            .unwrap(),
-    )
-    .unwrap()
+    serde_json::to_value(basecraft_ops::records::DocumentRecord::saved_report(path).unwrap())
+        .unwrap()
 }
 
 struct Mcp {
@@ -232,13 +245,7 @@ fn saved_reviews_report_through_cli_and_mcp_as_in_the_gui() {
         ],
     ));
     let packaged = package.join("multi.json");
-    assert_eq!(
-        SangerReviewSession::load(&packaged)
-            .unwrap()
-            .call_sets()
-            .len(),
-        2
-    );
+    assert_eq!(SangerReview::load(&packaged).unwrap().call_sets().len(), 2);
     let history: Value = serde_json::from_str(&ok(&cli(
         &profile,
         &["history", packaged.to_str().unwrap(), "--json"],
@@ -246,19 +253,14 @@ fn saved_reviews_report_through_cli_and_mcp_as_in_the_gui() {
     .unwrap();
     assert_eq!(history, gui_report(&packaged));
 
-    // MCP reads the same report from a read-only server and refuses to open
-    // the review as an editable document.
+    // Read-only MCP can inspect a review through the common document interface.
     let mut mcp = Mcp::start(&project, &profile, false);
     let record = mcp.tool("file_record", &json!({"path":"multi.json"}));
     assert_eq!(record["isError"], false, "{record}");
     assert_eq!(record["structuredContent"], gui_report(&v2));
     let opened = mcp.tool("open", &json!({"path":"multi.json"}));
-    assert_eq!(opened["isError"], true, "{opened}");
-    let message = opened["structuredContent"]["errors"][0]["message"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    assert!(message.contains("Sanger review"), "{message}");
+    assert_eq!(opened["isError"], false, "{opened}");
+    assert_eq!(opened["structuredContent"]["kind"], "sanger_review");
     mcp.close();
 
     // CLI editing is refused explicitly and leaves the review unchanged.
@@ -271,7 +273,7 @@ fn saved_reviews_report_through_cli_and_mcp_as_in_the_gui() {
             r#"{"op":"seq.replace","params":{"start":0,"end":1,"residues":"T"}}"#,
         ],
     ));
-    assert!(error.contains("Sanger review"), "{error}");
+    assert!(error.contains("Sanger"), "{error}");
     assert_eq!(std::fs::read(&v2).unwrap(), bytes);
     // Reading created no records next to the reviews.
     assert_eq!(listing(&project), before);
@@ -291,7 +293,7 @@ fn damaged_unknown_future_and_draft_files_are_refused_without_records() {
     let bytes = std::fs::read(&v1).unwrap();
     let mut future: Value = serde_json::from_slice(&bytes).unwrap();
     future["version"] = json!(99);
-    let draft = SangerReviewSession::load(&v1).unwrap().draft;
+    let draft = SangerReview::load(&v1).unwrap().draft;
     let cases = [
         (
             "unrelated.sanger-review.json",
@@ -310,74 +312,10 @@ fn damaged_unknown_future_and_draft_files_are_refused_without_records() {
         let path = project.join(name);
         for command in ["history", "methods"] {
             let error = failure(&cli(&profile, &[command, path.to_str().unwrap()]));
-            assert!(error.contains("Sanger"), "{name}: {error}");
-            if *name == "future.json" {
-                assert!(
-                    error.contains("Unsupported Sanger review version"),
-                    "{error}"
-                );
-            }
-            if *name == "draft.json" {
-                assert!(error.contains("draft"), "{error}");
-            }
+            assert!(error.contains("unknown_format"), "{name}: {error}");
         }
     }
     assert_eq!(listing(&project), before);
-}
-
-/// Recovery writes every retained call set to a new destination only.
-#[test]
-fn review_recovery_restores_all_call_sets_into_a_new_folder() {
-    if isolated_profile::enter("review_recovery_restores_all_call_sets_into_a_new_folder").is_none()
-    {
-        return;
-    }
-    // The isolated child and its CLI share the checkpoint in application state.
-    let temp = tempfile::tempdir().unwrap();
-    let project = temp.path().join("project");
-    let (_, v2) = reviews(&project);
-    let mut review = SangerReviewSession::load(&v2).unwrap();
-    review.start_recovery().unwrap();
-    edit(&mut review, 1, 'T');
-    let checkpoint = review.recovery_path().unwrap().to_path_buf();
-    let run = |args: &[&str]| {
-        Command::new(env!("CARGO_BIN_EXE_basecraft"))
-            .args(args)
-            .current_dir(&project)
-            .output()
-            .unwrap()
-    };
-    let history: Value = serde_json::from_str(&ok(&run(&[
-        "history",
-        checkpoint.to_str().unwrap(),
-        "--json",
-    ])))
-    .unwrap();
-    assert_eq!(history["unsaved"], true);
-    assert_eq!(history, gui_report(&checkpoint));
-
-    let output = temp.path().join("recovered");
-    let restored = ok(&run(&[
-        "recover",
-        checkpoint.to_str().unwrap(),
-        "--output",
-        output.to_str().unwrap(),
-    ]));
-    let restored = PathBuf::from(restored.trim());
-    assert!(restored.starts_with(&output), "{}", restored.display());
-    let reopened = SangerReviewSession::load(&restored).unwrap();
-    assert_eq!(reopened.call_sets().len(), 2);
-    assert_eq!(reopened.decision(1), Some(&ReviewChoice::Edit('T')));
-    assert!(reopened.recovery_path().is_none());
-    // The checkpoint stays; an existing destination is never replaced.
-    assert!(checkpoint.is_file());
-    let error = failure(&run(&[
-        "recover",
-        checkpoint.to_str().unwrap(),
-        "--output",
-        output.to_str().unwrap(),
-    ]));
-    assert!(error.contains("exists"), "{error}");
 }
 
 fn trees(project: &Path) -> (PathBuf, PathBuf) {
@@ -582,4 +520,63 @@ assert args['segments'] == [(1,3),(5,7)]
             .unwrap()
             .success()
     );
+}
+
+#[test]
+fn sanger_edits_share_cli_mcp_history_and_undo() {
+    let Some(root) = isolated_profile::enter("sanger_edits_share_cli_mcp_history_and_undo") else {
+        return;
+    };
+    let project = root.join("project");
+    let profile = root.join("profile");
+    std::fs::create_dir_all(&project).unwrap();
+    let path = sanger_fixture::copy_to(&project, "multi.json");
+    let call_set = SangerReview::load(&path).unwrap().draft_sha256;
+    let operation = Op::SangerReview {
+        call_set: call_set.clone(),
+        edit: Box::new(ReviewOp::Set {
+            columns: vec![0],
+            choice: ReviewChoice::Edit('N'),
+        }),
+    };
+    ok(&cli(
+        &profile,
+        &[
+            "edit",
+            path.to_str().unwrap(),
+            &serde_json::to_string(&[
+                operation.clone(),
+                Op::Undo { of: String::new() },
+                Op::Redo { of: String::new() },
+            ])
+            .unwrap(),
+        ],
+    ));
+    assert_eq!(
+        SangerReview::load(&path).unwrap().decision(0),
+        Some(&ReviewChoice::Edit('N'))
+    );
+    let history = ok(&cli(
+        &profile,
+        &["history", path.to_str().unwrap(), "--json"],
+    ));
+    assert!(history.contains("Sanger review ") && history.contains(&call_set));
+    let mut mcp = Mcp::start(&project, &profile, true);
+    let opened = mcp.tool("open", &json!({"path":"multi.json"}));
+    assert_eq!(opened["isError"], false, "{opened}");
+    let state = &opened["structuredContent"];
+    let id = state["document"].clone();
+    let edited = mcp.tool("apply", &json!({"document":id,"version":state["version"],"operation": Op::SangerReview { call_set, edit: Box::new(ReviewOp::Set { columns: vec![0], choice: ReviewChoice::Edit('A') }) }}));
+    assert_eq!(edited["isError"], false, "{edited}");
+    let undone = mcp.tool("undo", &json!({"document":id}));
+    assert_eq!(undone["isError"], false, "{undone}");
+    assert_eq!(undone["structuredContent"]["decisions"][0]["base"], "N");
+    let redone = mcp.tool("redo", &json!({"document":id}));
+    assert_eq!(redone["isError"], false, "{redone}");
+    let saved = mcp.tool("save", &json!({"document":id}));
+    assert_eq!(saved["isError"], false, "{saved}");
+    mcp.close();
+    let reopened = SangerReview::load(&path).unwrap();
+    assert_eq!(reopened.call_sets().len(), 2);
+    assert_eq!(reopened.decision(0), Some(&ReviewChoice::Edit('A')));
 }

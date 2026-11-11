@@ -385,8 +385,8 @@ impl qobject::DocumentOpens {
         let identity = (
             candidate.session.id().to_owned(),
             candidate.doc,
-            candidate.session.generation(candidate.doc),
-            candidate.session.revision(candidate.doc),
+            candidate.session.generation(candidate.doc).unwrap(),
+            candidate.session.revision(candidate.doc).unwrap(),
         );
         #[cfg(all(test, feature = "test-counters"))]
         testing::admitted(candidate.path.clone(), candidate.reads.clone());

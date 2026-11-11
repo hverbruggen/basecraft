@@ -71,12 +71,15 @@ fn provenance_lookup_returns_existing_bundle_then_nearest_project_then_fallback(
 
 #[test]
 fn journal_writer_original_bytes() {
-    let fixture: serde_json::Value = serde_json::from_slice(include_bytes!(
-        "../../../testdata/fixtures/records-v1/recovery.json"
+    // The writer adds the checksum and sequence; the entry is the rest.
+    let mut fixture: serde_json::Value = serde_json::from_slice(include_bytes!(
+        "../../../testdata/fixtures/records-v1/journal-entry.jsonl"
     ))
     .unwrap();
-    let entry: basecraft_protocol::LogEntry =
-        serde_json::from_value(fixture["baseline"].clone()).unwrap();
+    let fields = fixture.as_object_mut().unwrap();
+    fields.remove("_checksum");
+    fields.remove("_sequence");
+    let entry: basecraft_protocol::LogEntry = serde_json::from_value(fixture).unwrap();
     let root = tempfile::tempdir().unwrap();
     let mut log = basecraft_ops::log::LogWriter::new(root.path(), "fixture");
     log.append(&entry).unwrap();
@@ -123,17 +126,6 @@ fn sanger_invocation_original_records() {
         assert_eq!(value["operation"], "fixture");
     }
     run.failed("fixture failure").unwrap();
-    let mut review = basecraft_ops::sanger_review::instrument_review(&source).unwrap();
-    review.start_recovery().unwrap();
-    let path = review
-        .recovery_path()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("manifest.json");
-    if std::env::var_os("BASECRAFT_CAPTURE_ADDITIONAL_RECORDS").is_some() {
-        golden("sanger-recovery.json", &std::fs::read(path).unwrap());
-    }
 }
 
 #[test]

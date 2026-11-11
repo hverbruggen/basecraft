@@ -220,7 +220,7 @@ Item {
                     property alias secondStarts: second.starts
                     QtObject { id: tabs; property int currentIndex: 0 }
                     QtObject { id: openFiles; property int count: 2; function get(i) { return {path: i === 0 ? "one" : "two"} } }
-                    QtObject { id: docs; function itemAt(i) { return i === 0 ? first : second } }
+                    function documentAt(i) { return i === 0 ? first : second }
                     QtObject {
                         id: first
                         property string kind: "trace"

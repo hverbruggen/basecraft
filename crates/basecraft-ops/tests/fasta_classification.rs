@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use basecraft_io::{cache, fasta};
+use basecraft_io::fasta;
 use basecraft_ops::files::{self, Kind, LONGEST_ALIGNMENT_ROW};
 
 #[cfg(feature = "test-heap")]
@@ -9,7 +9,7 @@ static ALLOCATOR: basecraft_io::heap::Allocator = basecraft_io::heap::Allocator;
 
 // The pre-streaming decision, kept independent of the production summary.
 fn indexed_kind(path: &Path) -> basecraft_ops::Result<Kind> {
-    let file = cache::open_fasta(path)?;
+    let file = fasta::IndexedFasta::open(path)?;
     let named = path
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("afa"))

@@ -75,6 +75,7 @@ fn publication_setup(
         "publication fixture".into(),
         None,
         &registry,
+        &[],
     )
     .unwrap();
     if visible {

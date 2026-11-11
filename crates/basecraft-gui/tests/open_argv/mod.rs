@@ -2,13 +2,13 @@
 use crate::{
     app_bridge, application, application_test_bridge, bridge, metadata_bridge, submission_bridge,
 };
-use cxx_qt::{QObject, casting::Downcast};
+use cxx_qt::{QObject, Threading, casting::Downcast};
 use cxx_qt_lib::{QByteArray, QQmlApplicationEngine, QString, QUrl};
 use std::{
     path::Path,
     pin::Pin,
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicUsize, Ordering},
     },
 };
@@ -57,15 +57,11 @@ pub fn run(folder: &Path) {
     let mut app = app.as_mut().unwrap();
     app_bridge::barriers::configure(
         folder.join("A/sequence.gb").to_string_lossy().into_owned(),
-        folder
-            .join("B/alignment.afa")
-            .to_string_lossy()
-            .into_owned(),
+        String::new(),
     );
     let root = Arc::new(AtomicUsize::new(0));
-    let initial: Arc<Mutex<Option<(Identity, Identity)>>> = Arc::new(Mutex::new(None));
     let object_root = root.clone();
-    let snapshot = initial.clone();
+    let ready = Arc::new(AtomicUsize::new(0));
     let mut engine = QQmlApplicationEngine::new();
     engine
         .pin_mut()
@@ -74,40 +70,51 @@ pub fn run(folder: &Path) {
     engine
         .pin_mut()
         .on_object_created(move |_, object, _| {
-            let checked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                object_root.store(object as usize, Ordering::Relaxed);
-                // SAFETY: this callback runs after construction, before the event loop
-                // delivers the asynchronous canvas completions. Owners remain Qt-owned.
-                let object = unsafe { object.as_ref().unwrap() };
-                let (metadata, submission) = owners(object);
-                let mut metadata = unsafe { Pin::new_unchecked(metadata.as_mut().unwrap()) };
-                let mut metadata = metadata
-                    .as_mut()
-                    .downcast_pin::<metadata_bridge::qobject::MetadataController>()
-                    .unwrap();
-                assert!(
-                    metadata
-                        .as_mut()
-                        .add_specimen(&QString::from("argv-fixture"))
-                );
-                let mut submission = unsafe { Pin::new_unchecked(submission.as_mut().unwrap()) };
-                let mut submission = submission
-                    .as_mut()
-                    .downcast_pin::<submission_bridge::qobject::SubmissionController>()
-                    .unwrap();
-                assert!(submission.as_mut().set_publication(
-                    &QString::from("Owner retained"),
-                    &QString::from("Tester, Example")
-                ));
-                assert!(*metadata.can_undo() && *submission.can_undo());
-                *snapshot.lock().unwrap() = Some((
-                    metadata.open_identity().unwrap(),
-                    submission.open_identity().unwrap(),
-                ));
-            }));
-            if checked.is_err() {
-                std::process::exit(2);
-            }
+            object_root.store(object as usize, Ordering::Relaxed);
+            // SAFETY: the engine owns Main and both children during setup.
+            let (metadata, submission) = owners(unsafe { object.as_ref().unwrap() });
+            let mut metadata = unsafe { Pin::new_unchecked(metadata.as_mut().unwrap()) };
+            let metadata = metadata
+                .as_mut()
+                .downcast_pin::<metadata_bridge::qobject::MetadataController>()
+                .unwrap();
+            let done = ready.clone();
+            let thread = metadata.qt_thread();
+            metadata
+                .on_opened(move |_, success| {
+                    assert!(success);
+                    if done.fetch_add(1, Ordering::Relaxed) == 1 {
+                        let thread = thread.clone();
+                        std::thread::spawn(move || {
+                            std::thread::sleep(std::time::Duration::from_millis(250));
+                            thread
+                                .queue(|_| application_test_bridge::qt::QCoreApplication::quit())
+                                .unwrap();
+                        });
+                    }
+                })
+                .release();
+            let mut submission = unsafe { Pin::new_unchecked(submission.as_mut().unwrap()) };
+            let submission = submission
+                .as_mut()
+                .downcast_pin::<submission_bridge::qobject::SubmissionController>()
+                .unwrap();
+            let done = ready.clone();
+            let thread = submission.qt_thread();
+            submission
+                .on_opened(move |_, success| {
+                    assert!(success);
+                    if done.fetch_add(1, Ordering::Relaxed) == 1 {
+                        let thread = thread.clone();
+                        std::thread::spawn(move || {
+                            std::thread::sleep(std::time::Duration::from_millis(250));
+                            thread
+                                .queue(|_| application_test_bridge::qt::QCoreApplication::quit())
+                                .unwrap();
+                        });
+                    }
+                })
+                .release();
         })
         .release();
     let source = include_str!("../fixtures/open-argv.qml")
@@ -115,6 +122,48 @@ pub fn run(folder: &Path) {
     engine
         .pin_mut()
         .load_data(&QByteArray::from(&source), &QUrl::default());
+    assert_eq!(app.as_mut().exec(), 0, "project documents opened");
+    let initial: (Identity, Identity) = {
+        // SAFETY: no event processing occurs while these owners are borrowed.
+        let object = unsafe {
+            (root.load(Ordering::Relaxed) as *mut QObject)
+                .as_ref()
+                .unwrap()
+        };
+        let frames = application_test_bridge::property(object, c"paintsWhileOpening")
+            .value::<i32>()
+            .unwrap();
+        assert!(
+            frames >= 2,
+            "window must repaint while its file worker is blocked: {frames}"
+        );
+        let (metadata, submission) = owners(object);
+        let mut metadata = unsafe { Pin::new_unchecked(metadata.as_mut().unwrap()) };
+        let mut metadata = metadata
+            .as_mut()
+            .downcast_pin::<metadata_bridge::qobject::MetadataController>()
+            .unwrap();
+        assert!(
+            metadata
+                .as_mut()
+                .add_specimen(&QString::from("argv-fixture"))
+        );
+        let mut submission = unsafe { Pin::new_unchecked(submission.as_mut().unwrap()) };
+        let mut submission = submission
+            .as_mut()
+            .downcast_pin::<submission_bridge::qobject::SubmissionController>()
+            .unwrap();
+        assert!(submission.as_mut().set_publication(
+            &QString::from("Owner retained"),
+            &QString::from("Tester, Example")
+        ));
+        assert!(*metadata.can_undo() && *submission.can_undo());
+        (
+            metadata.open_identity().unwrap(),
+            submission.open_identity().unwrap(),
+        )
+    };
+    app_bridge::barriers::release_and_wait();
     assert_eq!(app.as_mut().exec(), 0, "real argv dispatcher");
     // SAFETY: engine still owns the captured root and children; event processing
     // has stopped and no references escape this test.
@@ -135,7 +184,7 @@ pub fn run(folder: &Path) {
             metadata.open_identity().unwrap(),
             submission.open_identity().unwrap()
         ),
-        initial.lock().unwrap().take().unwrap()
+        initial
     );
     assert!(
         *metadata.can_undo() && *submission.can_undo(),

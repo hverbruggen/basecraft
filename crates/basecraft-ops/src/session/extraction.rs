@@ -93,7 +93,7 @@ impl Session {
                 },
                 ArtifactRevision {
                     id: format!("{}:source", activity.id),
-                    logical_name: self.doc_key(id).into(),
+                    logical_name: self.doc_key(id)?.into(),
                     hash,
                     size: bytes.len() as u64,
                     retained: Some("submitted.fasta".into()),

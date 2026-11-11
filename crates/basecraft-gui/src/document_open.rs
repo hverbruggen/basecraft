@@ -12,6 +12,37 @@ use std::{
     },
 };
 
+/// All editor entry points use the same acquisition worker and queued completion.
+pub(crate) fn start(
+    path: String,
+    root: Option<PathBuf>,
+    completed: impl FnOnce(Result<Candidate, OpenError>) + Send + 'static,
+) -> Result<(), OpenError> {
+    crate::document_jobs::background_initialized(
+        "document-open",
+        move || Candidate::acquire_in(&path, root, &AtomicBool::new(false)),
+        || OpenError::Interrupted,
+        completed,
+    )
+    .map_err(OpenError::Spawn)
+}
+
+pub(crate) fn open_file<T: cxx_qt::Threading + 'static>(
+    mut controller: std::pin::Pin<&mut T>,
+    path: &cxx_qt_lib::QString,
+    completed: impl Fn(std::pin::Pin<&mut T>, Result<Candidate, OpenError>) + Copy + Send + 'static,
+) -> bool {
+    let thread = controller.qt_thread();
+    let started = start(path.to_string(), None, move |result| {
+        let _ = thread.queue(move |controller| completed(controller, result));
+    });
+    if let Err(error) = started {
+        completed(controller.as_mut(), Err(error));
+        return false;
+    }
+    true
+}
+
 #[derive(Debug)]
 pub(crate) enum OpenError {
     Admission(basecraft_ops::Error),
@@ -52,6 +83,34 @@ pub(crate) fn eligible(path: &str) -> bool {
     )
 }
 
+pub(crate) struct DisplayTree {
+    pub path: PathBuf,
+    pub tree: basecraft_docs::tree::TreeDoc,
+    pub time: Option<basecraft_delimitation::time_tree::TimeTree>,
+    pub hash: String,
+}
+
+fn display_tree(session: &Session, doc: DocId) -> Result<DisplayTree, String> {
+    let work = session.delimitation(doc).map_err(|e| e.to_string())?;
+    let path = basecraft_ops::delimitation::checked_display_tree(work)
+        .map_err(|e| e.to_string())?
+        .ok_or("No display tree")?;
+    let (source, hash) = basecraft_io::Source::open_hashed(&path).map_err(|e| e.to_string())?;
+    let text = std::str::from_utf8(source.bytes()).map_err(|e| e.to_string())?;
+    let trees = basecraft_io::newick::parse_trees(text).map_err(|e| e.to_string())?;
+    if trees.len() != 1 {
+        return Err("Choose a file containing exactly one display tree".into());
+    }
+    let tree = basecraft_docs::tree::TreeDoc::from_parsed(&trees[0].name, &trees[0]);
+    let time = basecraft_delimitation::time_tree::validate(&tree, true, 1e-4, false).ok();
+    Ok(DisplayTree {
+        path,
+        tree,
+        time,
+        hash,
+    })
+}
+
 pub(crate) struct Candidate {
     pub session: Session,
     pub doc: DocId,
@@ -59,6 +118,7 @@ pub(crate) struct Candidate {
     pub path: PathBuf,
     pub title_file: String,
     pub root: PathBuf,
+    pub display_tree: Option<Result<DisplayTree, String>>,
     generation: u64,
     revision: u64,
     #[cfg(all(test, feature = "test-counters"))]
@@ -66,13 +126,20 @@ pub(crate) struct Candidate {
 }
 impl Candidate {
     pub fn acquire(path: &str, cancelled: &AtomicBool) -> Result<Self, OpenError> {
+        Self::acquire_in(path, None, cancelled)
+    }
+    fn acquire_in(
+        path: &str,
+        root: Option<PathBuf>,
+        cancelled: &AtomicBool,
+    ) -> Result<Self, OpenError> {
         if cancelled.load(Ordering::Acquire) {
             return Err(OpenError::Cancelled);
         }
         #[cfg(all(test, feature = "test-counters"))]
         basecraft_io::counters::reset();
         let path = PathBuf::from(path);
-        let root = crate::bridge::project_root(&path);
+        let root = root.unwrap_or_else(|| crate::bridge::project_root(&path));
         let mut session = Session::recoverable(&root)?;
         let (doc, kind) = session.open_classified(&path)?;
         if cancelled.load(Ordering::Acquire) {
@@ -88,8 +155,15 @@ impl Candidate {
         root: PathBuf,
     ) -> Result<Self, OpenError> {
         validate(&session, doc, kind)?;
-        let generation = session.generation(doc);
-        let revision = session.revision(doc);
+        let display_tree = if kind == Kind::Delimitation
+            && session.delimitation(doc)?.view.display_tree.is_some()
+        {
+            Some(display_tree(&session, doc))
+        } else {
+            None
+        };
+        let generation = session.generation(doc)?;
+        let revision = session.revision(doc)?;
         let title_file = path
             .file_name()
             .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
@@ -102,6 +176,7 @@ impl Candidate {
             path,
             title_file,
             root,
+            display_tree,
             generation,
             revision,
             #[cfg(all(test, feature = "test-counters"))]
@@ -113,8 +188,8 @@ impl Candidate {
             return Err(OpenError::RouteMismatch);
         }
         validate(&self.session, self.doc, expected)?;
-        if self.session.generation(self.doc) != self.generation
-            || self.session.revision(self.doc) != self.revision
+        if self.session.generation(self.doc)? != self.generation
+            || self.session.revision(self.doc)? != self.revision
         {
             return Err(OpenError::StaleIdentity);
         }
@@ -135,7 +210,18 @@ fn validate(session: &Session, doc: DocId, kind: Kind) -> Result<(), OpenError> 
         Kind::Tree => {
             session.tree(doc)?;
         }
-        _ => return Err(OpenError::RouteMismatch),
+        Kind::Delimitation => {
+            session.delimitation(doc)?;
+        }
+        Kind::SangerReview => {
+            session.sanger_review(doc)?;
+        }
+        Kind::Metadata => {
+            session.metadata(doc)?;
+        }
+        Kind::Submission => {
+            session.submission(doc)?;
+        }
     }
     Ok(())
 }
@@ -266,6 +352,16 @@ impl Drop for Opens {
     fn drop(&mut self) {
         self.stop();
     }
+}
+
+// All six editors already have a message area; no new presentation or dialog.
+pub(crate) fn recovery_notice(
+    session: Option<&Session>,
+    doc: Option<DocId>,
+) -> Option<cxx_qt_lib::QString> {
+    session?
+        .recovery_warning(doc?)
+        .map(cxx_qt_lib::QString::from)
 }
 
 #[cfg(test)]

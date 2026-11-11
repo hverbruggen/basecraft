@@ -8,6 +8,10 @@ use super::Document;
 use crate::{Result, error::invalid, files, session::Inverse};
 
 impl Document for DelimitationWorkspace {
+    fn accepts(&self, op: &Op) -> bool {
+        matches!(op, Op::DelimitationEdit { .. })
+    }
+
     fn kind(&self) -> crate::files::Kind {
         crate::files::Kind::Delimitation
     }

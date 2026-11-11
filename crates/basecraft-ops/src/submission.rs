@@ -50,11 +50,14 @@ pub fn is_submission(path: &Path) -> bool {
 
 /// Read a submission document.
 pub fn load(path: &Path) -> Result<Submission> {
-    let sub: Submission =
-        serde_json::from_slice(&std::fs::read(path)?).map_err(|e| crate::Error::Damaged {
-            path: path.to_path_buf(),
-            detail: format!("not a submission: {e}"),
-        })?;
+    load_from(path, basecraft_io::Source::open(path)?.bytes())
+}
+
+pub(crate) fn load_from(path: &Path, bytes: &[u8]) -> Result<Submission> {
+    let sub: Submission = serde_json::from_slice(bytes).map_err(|e| crate::Error::Damaged {
+        path: path.to_path_buf(),
+        detail: format!("not a submission: {e}"),
+    })?;
     if sub.version != SUBMISSION_VERSION {
         return Err(crate::Error::Unsupported(format!(
             "submission format version {} is not supported",
@@ -1155,7 +1158,7 @@ pub fn export(
         note: DISCLAIMER.into(),
         status: summary.status.clone(),
         submission: PackageDocument {
-            document: session.doc_key(doc).into(),
+            document: session.doc_key(doc)?.into(),
             hash: basecraft_io::hash_bytes(&encode(&sub)?),
         },
         source: sub.source.clone(),

@@ -1,5 +1,5 @@
 use basecraft_ops::records::ReportExt;
-use basecraft_ops::{Session, records};
+use basecraft_ops::{Session, log, records};
 use basecraft_protocol::Op;
 use std::path::Path;
 
@@ -49,7 +49,7 @@ fn edit_undo_redo_save_move_verify_and_report() {
         let doc = session.open(&file).unwrap();
         assert!(!recovery.exists());
         session.apply(doc, edit()).unwrap();
-        assert!(recovery.join("recovery.json").is_file());
+        assert_eq!(log::read_all(&recovery).unwrap().len(), 2);
         assert!(!dir.path().join(".basecraft").exists());
         session.undo(doc).unwrap();
         session.redo(doc).unwrap();
@@ -119,30 +119,24 @@ fn changed_source_refused_before_mutation_and_before_save() {
     let mut session = Session::new(dir.path());
     let doc = session.open(&file).unwrap();
     std::fs::write(&file, ">gene\nGGGG\n").unwrap();
-    assert!(
-        session
-            .apply(doc, edit())
-            .unwrap_err()
-            .to_string()
-            .contains("source changed")
+    assert_eq!(
+        session.apply(doc, edit()).unwrap_err().code(),
+        "changed_on_disk"
     );
-    assert_eq!(session.generation(doc), 0);
+    assert_eq!(session.generation(doc).unwrap(), 0);
     assert!(!dir.path().join(".basecraft").exists());
     let doc = session.open(&file).unwrap();
     session.apply(doc, edit()).unwrap();
     std::fs::write(&file, ">gene\nTTTT\n").unwrap();
-    assert!(
-        session
-            .save(doc, None)
-            .unwrap_err()
-            .to_string()
-            .contains("source changed")
-    );
+    assert!(matches!(
+        session.save(doc, None),
+        Err(basecraft_ops::Error::ChangedOnDisk { .. })
+    ));
     assert_eq!(std::fs::read_to_string(&file).unwrap(), ">gene\nTTTT\n");
 }
 
 #[test]
-fn tampered_retained_original_and_path_escape_are_detected() {
+fn history_is_fingerprints_only_and_path_escape_is_detected() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("gene.fasta");
     std::fs::write(&file, ">gene\nACGT\n").unwrap();
@@ -151,9 +145,21 @@ fn tampered_retained_original_and_path_escape_are_detected() {
     session.apply(doc, edit()).unwrap();
     session.save(doc, None).unwrap();
     let publication = records::inspect(&file).unwrap();
-    let retained = publication.inputs[0].retained.as_ref().unwrap();
-    std::fs::write(records::companion(&file).join(retained), b"changed").unwrap();
-    assert_ne!(records::verify(&file).unwrap(), Vec::<String>::new());
+    assert!(
+        publication
+            .inputs
+            .iter()
+            .chain(&publication.outputs)
+            .all(|artifact| artifact.retained.is_none())
+    );
+    assert!(
+        std::fs::read_dir(records::companion(&file).join("artifacts"))
+            .map_or(true, |mut retained| retained.next().is_none())
+    );
+    assert_eq!(
+        records::verify(&file).unwrap(),
+        [] as [std::string::String; 0]
+    );
     let mut publication = publication;
     publication.inputs[0].retained = Some("../gene.fasta".into());
     std::fs::write(
@@ -189,7 +195,10 @@ fn sidecar_failure_reports_partial_save_and_keeps_pending_recovery() {
             .contains("data saved")
     );
     assert!(session.recovery_root().join("pending-save.json").exists());
-    assert!(std::fs::read_to_string(file).unwrap().contains("ATGT"));
+    assert!(std::fs::read_to_string(&file).unwrap().contains("ATGT"));
+    std::fs::remove_file(bundle.join("artifacts")).unwrap();
+    session.save(doc, None).unwrap();
+    assert!(!session.recovery_root().join("pending-save.json").exists());
 }
 
 #[test]
@@ -224,13 +233,10 @@ fn save_as_does_not_disable_original_conflict_detection() {
     session.save(doc, Some(&copy)).unwrap();
     session.apply(doc, edit()).unwrap();
     std::fs::write(&original, ">external\nAAAA\n").unwrap();
-    assert!(
-        session
-            .save(doc, None)
-            .unwrap_err()
-            .to_string()
-            .contains("source changed")
-    );
+    assert!(matches!(
+        session.save(doc, None),
+        Err(basecraft_ops::Error::ChangedOnDisk { .. })
+    ));
     assert_eq!(
         std::fs::read_to_string(original).unwrap(),
         ">external\nAAAA\n"
@@ -377,7 +383,7 @@ fn reopen_and_save_as_preserve_contributing_ancestry() {
 }
 
 #[test]
-fn recovery_rejects_checked_traversal_and_corrupt_retained_baseline() {
+fn recovery_rejects_traversal_and_skips_corrupt_retained_candidates() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("gene.fasta");
     std::fs::write(&file, ">gene\nACGT\n").unwrap();
@@ -432,17 +438,14 @@ fn recovery_rejects_checked_traversal_and_corrupt_retained_baseline() {
     std::fs::write(&journal, original).unwrap();
     let baseline = basecraft_ops::log::read_all(recovery).unwrap();
     let digest = baseline[0].result.hashes[0].1.trim_start_matches("b3:");
+    std::fs::create_dir_all(basecraft_ops::session::objects_dir(recovery)).unwrap();
     std::fs::write(
         basecraft_ops::session::objects_dir(recovery).join(digest),
         "corrupt",
     )
     .unwrap();
-    assert!(
-        basecraft_ops::records::recover(recovery, &dir.path().join("output"))
-            .unwrap_err()
-            .to_string()
-            .contains("hash differs")
-    );
+    let outputs = basecraft_ops::records::recover(recovery, &dir.path().join("output")).unwrap();
+    assert_eq!(std::fs::read(&outputs[0]).unwrap(), b">gene\nATGT\n");
 }
 
 #[test]
@@ -467,16 +470,16 @@ fn ancestor_only_artifacts_and_duplicate_parent_references_are_checked() {
         .unwrap();
     session.save(doc, None).unwrap();
     let bundle = records::companion(&file);
-    let old_output = bundle.join(ancestor.outputs[0].retained.as_ref().unwrap());
-    let original_bytes = std::fs::read(&old_output).unwrap();
-    std::fs::write(&old_output, "corrupt ancestor-only output").unwrap();
     assert!(
-        records::verify(&file)
-            .unwrap()
+        ancestor
+            .outputs
             .iter()
-            .any(|issue| issue.contains("ancestor retained"))
+            .all(|artifact| artifact.retained.is_none())
     );
-    std::fs::write(old_output, original_bytes).unwrap();
+    assert_eq!(
+        records::verify(&file).unwrap(),
+        [] as [std::string::String; 0]
+    );
     let mut current = records::inspect(&file).unwrap();
     current.parents.push(current.parents[0].clone());
     let bytes = serde_json::to_vec(&current).unwrap();
@@ -709,7 +712,16 @@ fn provenance_works_with_recovery_disabled_and_preserves_frozen_reports() {
     );
     session.redo(doc).unwrap();
     session.save(doc, None).unwrap();
-    assert_eq!(records::verify(&file).unwrap(), Vec::<String>::new());
+    assert_eq!(
+        records::verify(&file).unwrap(),
+        [] as [std::string::String; 0]
+    );
+    assert!(
+        !records::inspect(&file)
+            .unwrap()
+            .completeness
+            .input_bytes_available
+    );
     assert!(!paths.state.join("recovery").exists());
 }
 
@@ -737,4 +749,28 @@ fn methods_use_frozen_plugin_metadata_and_reject_unmatched_contribution() {
     assert_eq!(report.citations, vec!["A recorded citation"]);
     record.effective[0].id = "missing".into();
     assert!(record.report().is_err());
+}
+
+#[test]
+fn partial_save_as_can_retry_its_verified_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("gene.fasta");
+    std::fs::write(&file, ">gene\nACGT\n").unwrap();
+    let target = dir.path().join("copy.fasta");
+    let mut session = Session::recoverable_with_paths(dir.path(), &paths(dir.path())).unwrap();
+    let id = session.open(&file).unwrap();
+    session.apply(id, edit()).unwrap();
+    let bundle = records::companion(&target);
+    std::fs::create_dir(&bundle).unwrap();
+    std::fs::write(bundle.join("artifacts"), b"blocked").unwrap();
+    assert!(
+        session
+            .save_new(id, Some(&target))
+            .unwrap_err()
+            .to_string()
+            .contains("data saved")
+    );
+    std::fs::remove_file(bundle.join("artifacts")).unwrap();
+    session.save_new(id, Some(&target)).unwrap();
+    assert!(std::fs::read_to_string(target).unwrap().contains("ATGT"));
 }

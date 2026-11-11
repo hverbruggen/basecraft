@@ -37,8 +37,8 @@ fn unrepresentable_tip_support_is_refused_before_recovery_tracking() {
             );
             assert_eq!(session.tree(id).unwrap().version(), before.version());
             assert_eq!(session.record_revision(id).unwrap(), revision);
-            assert!(!session.can_undo(id));
-            assert!(!session.can_redo(id));
+            assert!(!session.can_undo(id).unwrap());
+            assert!(!session.can_redo(id).unwrap());
             assert!(!session.recovery_root().exists());
             assert!(!files::tree_sidecar(&path).exists());
             assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
@@ -74,8 +74,8 @@ fn tip_support_refusal_preserves_existing_history_and_redo() {
         );
         assert_eq!(session.tree(id).unwrap().to_newick(), before);
         assert_eq!(session.record_revision(id).unwrap(), revision);
-        assert!(!session.can_undo(id));
-        assert!(session.can_redo(id));
+        assert!(!session.can_undo(id).unwrap());
+        assert!(session.can_redo(id).unwrap());
     }
     session.redo(id).unwrap();
     session.undo(id).unwrap();
@@ -95,7 +95,7 @@ fn automatic_root_checks_out_of_range_ids_in_populated_session() {
             let error = session.apply(id, op).unwrap_err().to_string();
             assert!(error.contains("unknown document"), "{error}");
             assert_eq!(session.record_revision(valid).unwrap(), revision);
-            assert!(!session.can_undo(valid));
+            assert!(!session.can_undo(valid).unwrap());
         }
     }
 }

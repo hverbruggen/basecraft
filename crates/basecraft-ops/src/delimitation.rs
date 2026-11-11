@@ -335,8 +335,8 @@ pub fn combine_selected(
     keep: Option<&BTreeMap<PathBuf, BTreeSet<String>>>,
 ) -> Result<()> {
     session.delimitation(doc)?;
-    let generation = session.generation(doc);
-    let revision = session.revision(doc);
+    let generation = session.generation(doc)?;
+    let revision = session.revision(doc)?;
     let hypotheses = combined_hypotheses(session, doc, paths, keep)?;
     if hypotheses.is_empty() {
         if keep.is_some() && !session.delimitation(doc)?.hypotheses.is_empty() {
@@ -396,7 +396,7 @@ fn combined_hypotheses(
                 )));
             }
         }
-        let anchor = session.root().join(session.doc_key(doc));
+        let anchor = session.root().join(session.doc_key(doc)?);
         if work
             .specimens
             .iter()
@@ -578,8 +578,8 @@ pub fn combine_to(
     if !session.is_delimitation(doc) {
         return Err(invalid("Choose saved species hypothesis files"));
     }
-    let generation = session.generation(doc);
-    let revision = session.revision(doc);
+    let generation = session.generation(doc)?;
+    let revision = session.revision(doc)?;
     let mut ops = Vec::new();
     let current = session.delimitation(doc)?;
     let retained = if let Some(keep) = keep {

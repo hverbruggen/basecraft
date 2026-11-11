@@ -60,15 +60,18 @@ fn save_as_alias_of_own_file_keeps_stale_source_protection() {
         aliases.push(dir.path().join("folder-link/gene.fasta"));
     }
     for alias in aliases {
-        let error = session.save(doc, Some(&alias)).unwrap_err().to_string();
-        assert!(error.contains("source changed"), "{alias:?}: {error}");
+        let error = session.save(doc, Some(&alias)).unwrap_err();
+        assert!(
+            matches!(error, basecraft_ops::Error::ChangedOnDisk { .. }),
+            "{alias:?}: {error}"
+        );
         assert_eq!(
             std::fs::read_to_string(&file).unwrap(),
             ">external\nAAAA\n",
             "{alias:?} replaced an external edit"
         );
     }
-    assert!(session.can_undo(doc));
+    assert!(session.can_undo(doc).unwrap());
 
     // Unchanged on disk: the alias save is an ordinary save of the document.
     let other = dir.path().join("other.fasta");
@@ -194,7 +197,7 @@ fn read_only_folder_refuses_save_and_keeps_original_and_edits() {
     assert_eq!(std::fs::read_to_string(&file).unwrap(), ">gene\nACGT\n");
     assert_eq!(listing(&data), before);
     assert!(session.document_record(doc).unwrap().unsaved);
-    assert!(session.can_undo(doc));
+    assert!(session.can_undo(doc).unwrap());
     session.save(doc, None).unwrap();
     assert!(std::fs::read_to_string(&file).unwrap().contains("ATGT"));
 }
@@ -280,7 +283,7 @@ fn full_disk_journal_append_rolls_back_and_keeps_a_recoverable_prefix() {
     let doc = session.open(&file).unwrap();
     session.apply(doc, replace(1, "T")).unwrap();
     let filler = fill(&full);
-    let generation = session.generation(doc);
+    let generation = session.generation(doc).unwrap();
     // A long insertion needs more journal space than is left.
     let long = "A".repeat(256 << 10);
     let error = session.apply(
@@ -293,7 +296,11 @@ fn full_disk_journal_append_rolls_back_and_keeps_a_recoverable_prefix() {
     );
     eprintln!("full-disk journal error: {error:?}");
     assert!(error.is_err());
-    assert_eq!(session.generation(doc), generation, "edit not rolled back");
+    assert_eq!(
+        session.generation(doc).unwrap(),
+        generation,
+        "edit not rolled back"
+    );
     assert_eq!(session.doc(doc).unwrap().len(), 4);
     let root = session.recovery_root().to_path_buf();
     assert!(!root.join("recovery-integrity-error.json").exists());
@@ -558,7 +565,7 @@ fn interrupted_result_group_resumes_after_journal_failure_as_one_undo_step() {
     };
     let group = session.begin_group();
     session.apply(doc, op(&edits[0])).unwrap();
-    let revision = session.revision(doc);
+    let revision = session.revision(doc).unwrap();
     // Force journal rotation, then make its parent unavailable for the second
     // attachment. This is a real append failure after the first edit committed.
     let host = listing(&log::log_dir(dir.path())).remove(0);
@@ -578,7 +585,7 @@ fn interrupted_result_group_resumes_after_journal_failure_as_one_undo_step() {
     std::fs::write(&host, b"fault").unwrap();
     assert!(session.apply(doc, op(&edits[1])).is_err());
     session.end_group();
-    assert_eq!(session.revision(doc), revision);
+    assert_eq!(session.revision(doc).unwrap(), revision);
     std::fs::remove_file(&host).unwrap();
     std::fs::rename(&backup, &host).unwrap();
     std::fs::OpenOptions::new()
