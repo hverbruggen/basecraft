@@ -121,6 +121,10 @@ pub const LONGEST_ALIGNMENT_ROW: u64 = 1_000_000;
 /// An open alignment plus what's needed to write its file back.
 pub struct OpenedAlignment {
     pub doc: AlignmentDoc,
+    /// The letters the user said the alignment is written in.
+    pub alphabet: Option<Fact<Alphabet>>,
+    /// Why the alignment's companion could not be used, if it couldn't.
+    pub companion_warning: Option<String>,
     /// Rows the GFF3 companion annotates, with their residue counts at open.
     pub annotated: Vec<(String, u64)>,
     pub format: Format,
@@ -410,10 +414,11 @@ pub(crate) fn capture_load(path: &Path, format: Format) -> Result<CapturedLoad> 
 }
 
 fn finish_capture(
-    content: Loaded,
+    mut content: Loaded,
     files: Vec<(PathBuf, String)>,
     stamps: Vec<(PathBuf, Option<basecraft_protocol::provenance::FileStamp>)>,
 ) -> Result<CapturedLoad> {
+    restore_alphabet(&mut content, &files[0].0, &files[0].1);
     for (file, before) in &stamps {
         let after = match std::fs::metadata(file) {
             Ok(metadata) if !metadata.is_file() => None,
@@ -462,6 +467,8 @@ fn load_fasta_from(
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
         let doc = AlignmentDoc::from_fasta(name, &file);
         Ok(Loaded::Alignment(OpenedAlignment {
+            alphabet: None,
+            companion_warning: None,
             annotated: annotated_rows(&doc, captured_gff),
             doc,
             format: Format::Fasta,
@@ -572,10 +579,17 @@ pub fn tree_sidecar(path: &Path) -> PathBuf {
 use basecraft_protocol::companion_records::{
     COMPANION_VERSION, Companion, DelimitationCompanion, SupportName, TreeCompanion,
 };
+use basecraft_protocol::facts::{Alphabet, Fact};
 
-/// Read a document's companion. Refuses another layout, and a companion
-/// written for different bytes than the document's.
-fn read_companion(path: &Path, bytes: &[u8], exchange_hash: &str) -> Result<Companion> {
+/// Read a document's companion. Refuses another layout, a companion written
+/// for different bytes than the document's, and for a tree, a companion that
+/// describes a different tree.
+fn read_companion(
+    path: &Path,
+    bytes: &[u8],
+    exchange_hash: &str,
+    tree: Option<&TreeDoc>,
+) -> Result<Companion> {
     let companion: Companion = serde_json::from_slice(bytes)?;
     if companion.version != COMPANION_VERSION {
         return Err(Error::Unsupported(format!(
@@ -587,6 +601,14 @@ fn read_companion(path: &Path, bytes: &[u8], exchange_hash: &str) -> Result<Comp
         return Err(Error::Damaged {
             path: path.into(),
             detail: "the file it describes was changed outside basecraft".into(),
+        });
+    }
+    if let Some(tree) = tree
+        && companion.tree.as_ref().map(|t| &t.tree_hash) != Some(&tree_hash(tree))
+    {
+        return Err(Error::Damaged {
+            path: path.into(),
+            detail: "Tree metadata describes a different tree".into(),
         });
     }
     Ok(companion)
@@ -654,13 +676,9 @@ fn load_tree_bytes(
             None => (tree_sidecar(path), captured_side.cloned()),
         };
         if let Some(bytes) = &side {
-            let side = read_companion(&sidecar, bytes.bytes(), exchange_hash)?
+            let side = read_companion(&sidecar, bytes.bytes(), exchange_hash, Some(&doc))?
                 .tree
-                .filter(|side| side.tree_hash == tree_hash(&doc))
-                .ok_or_else(|| Error::Damaged {
-                    path: sidecar,
-                    detail: "Tree metadata describes a different tree".into(),
-                })?;
+                .expect("the reader refuses a tree companion without a tree section");
             let kinds: Vec<_> = side
                 .supports
                 .iter()
@@ -672,6 +690,7 @@ fn load_tree_bytes(
                 .map(|s| (s.name, s.source))
                 .collect();
             doc.restore(&names, side.annotations, side.style);
+            doc.restore_branch_lengths(side.branch_lengths);
             for (name, kind) in kinds {
                 doc.set_support_kind(&name, kind);
             }
@@ -726,6 +745,37 @@ fn tree_hash(doc: &TreeDoc) -> String {
     writer.hash()
 }
 
+/// The companion of an alignment or sequence that holds a stated fact, and
+/// nothing for one that holds none: a plain open and save writes no file.
+pub fn facts_companion(
+    alphabet: Option<&Fact<Alphabet>>,
+    exchange_hash: &str,
+) -> Option<Companion> {
+    alphabet.map(|alphabet| Companion {
+        alphabet: Some(alphabet.clone()),
+        ..Companion::new(exchange_hash)
+    })
+}
+
+/// Put back the alphabet an alignment's or sequence's companion keeps. A
+/// companion that no longer matches the file is ignored, with a warning.
+fn restore_alphabet(content: &mut Loaded, path: &Path, exchange_hash: &str) {
+    let (alphabet, warning) = match content {
+        Loaded::Sequence(opened) => (&mut opened.alphabet, &mut opened.companion_warning),
+        Loaded::Alignment(opened) => (&mut opened.alphabet, &mut opened.companion_warning),
+        _ => return,
+    };
+    let companion = tree_sidecar(path);
+    match read_optional(&companion).and_then(|bytes| {
+        bytes
+            .map(|bytes| read_companion(&companion, bytes.bytes(), exchange_hash, None))
+            .transpose()
+    }) {
+        Ok(found) => *alphabet = found.and_then(|c| c.alphabet),
+        Err(error) => *warning = Some(format!("The companion file was ignored: {error}")),
+    }
+}
+
 /// A tree's companion, for the saved file whose bytes hash to `exchange_hash`.
 pub fn tree_companion(doc: &TreeDoc, exchange_hash: &str) -> Companion {
     Companion {
@@ -742,6 +792,7 @@ pub fn tree_companion(doc: &TreeDoc, exchange_hash: &str) -> Companion {
                 .collect(),
             annotations: doc.annotations().clone(),
             style: doc.style().clone(),
+            branch_lengths: doc.branch_lengths().cloned(),
         }),
         ..Companion::new(exchange_hash)
     }
@@ -758,6 +809,10 @@ pub fn save_tree_companion(tree: &Path, doc: &TreeDoc) -> Result<PathBuf> {
 /// An open document plus what's needed to write its file back.
 pub struct Opened {
     pub doc: SequenceDoc,
+    /// The letters the user said the sequence is written in.
+    pub alphabet: Option<Fact<Alphabet>>,
+    /// Why the sequence's companion could not be used, if it couldn't.
+    pub companion_warning: Option<String>,
     pub format: Format,
     /// For FASTA: the original file, so records other than the open one are
     /// copied through on save.
@@ -817,6 +872,8 @@ pub fn open_from(path: &Path, source: Source) -> Result<Opened> {
 
 fn opened_genbank(first: genbank::First) -> Opened {
     Opened {
+        alphabet: None,
+        companion_warning: None,
         doc: SequenceDoc::from_genbank(first.record),
         format: Format::GenBank,
         fasta: None,
@@ -857,6 +914,8 @@ fn open_fasta_with_gff(
     let features = gff.and_then(|g| g.sequences.into_iter().find(|s| s.seqid == name));
     let doc = SequenceDoc::from_fasta(Arc::clone(&file), 0, features);
     Ok(Opened {
+        alphabet: None,
+        companion_warning: None,
         doc,
         format: Format::Fasta,
         others: OtherRecords {
@@ -1322,7 +1381,7 @@ fn load_delimitation_bytes(
     }
     if let Some(source) = captured_side {
         let companion = tree_sidecar(path);
-        let side = read_companion(&companion, source.bytes(), exchange_hash)?
+        let side = read_companion(&companion, source.bytes(), exchange_hash, None)?
             .delimitation
             .ok_or_else(|| Error::Damaged {
                 path: companion,

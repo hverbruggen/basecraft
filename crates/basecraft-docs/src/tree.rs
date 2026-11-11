@@ -10,6 +10,7 @@ mod edit;
 mod rooting;
 pub use edit::TreeUndo;
 
+use basecraft_protocol::facts::{BranchLengths, Fact};
 use std::collections::{BTreeMap, BTreeSet};
 
 use basecraft_io::newick::{self, ParsedTree};
@@ -164,10 +165,21 @@ pub struct TreeDoc {
     supports: Vec<SupportSet>,
     annotations: BTreeMap<u32, CladeAnnotation>,
     style: TreeStyle,
+    /// What the branch lengths measure, when someone said. None is unknown.
+    branch_lengths: Option<Fact<BranchLengths>>,
     version: u64,
 }
 
 impl TreeDoc {
+    pub fn branch_lengths(&self) -> Option<&Fact<BranchLengths>> {
+        self.branch_lengths.as_ref()
+    }
+
+    /// Restore the meaning kept in the tree's companion.
+    pub fn restore_branch_lengths(&mut self, meaning: Option<Fact<BranchLengths>>) {
+        self.branch_lengths = meaning;
+    }
+
     /// Restore arena identities after parsing the checkpoint's preorder stream.
     pub fn restore_node_ids(&mut self, ids: &[usize]) -> Result<(), EditError> {
         let mut order = ids.to_vec();
@@ -280,6 +292,7 @@ impl TreeDoc {
             supports,
             annotations: BTreeMap::new(),
             style: TreeStyle::default(),
+            branch_lengths: None,
             version: 0,
         };
         // The root has no branch above it to support.

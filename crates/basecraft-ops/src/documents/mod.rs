@@ -120,6 +120,31 @@ mod sequence;
 mod submission;
 pub(crate) mod tree;
 
+/// Set a stated alphabet; the inverse holds the one it replaces.
+fn set_alphabet(
+    alphabet: &mut Option<basecraft_protocol::facts::Fact<basecraft_protocol::facts::Alphabet>>,
+    value: basecraft_protocol::facts::Alphabet,
+) -> Inverse {
+    let stated = basecraft_protocol::facts::Fact {
+        value,
+        source: basecraft_protocol::facts::FactSource::User,
+    };
+    Inverse::Alphabet(alphabet.replace(stated))
+}
+
+/// The hash of the companion a save writes for a stated alphabet, if any.
+fn facts_hash(
+    alphabet: Option<&basecraft_protocol::facts::Fact<basecraft_protocol::facts::Alphabet>>,
+    main: &str,
+) -> Result<Option<String>> {
+    let Some(companion) = crate::files::facts_companion(alphabet, main) else {
+        return Ok(None);
+    };
+    let mut hw = crate::files::HashingWriter::new(std::io::sink());
+    companion.write(&mut hw)?;
+    Ok(Some(hw.hash()))
+}
+
 pub(crate) trait Document {
     fn kind(&self) -> crate::files::Kind;
     /// Why saving would leave related data inconsistent, if it would.

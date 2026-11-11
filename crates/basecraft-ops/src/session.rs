@@ -350,6 +350,11 @@ impl Session {
             .is_some_and(|slot| slot.content.kind() == files::Kind::Tree)
     }
 
+    /// Why a document's companion or metadata was set aside when it opened.
+    pub fn opening_warning(&self, id: DocId) -> Result<Option<&str>> {
+        Ok(self.content(id)?.as_document().opening_warning())
+    }
+
     pub fn tree_metadata_warning(&self, id: DocId) -> Result<Option<&str>> {
         self.content(id)?
             .tree()
@@ -358,6 +363,36 @@ impl Session {
                 expected: files::Kind::Tree,
             })
             .map(|payload| payload.metadata_warning.as_deref())
+    }
+
+    /// The letters an alignment or sequence is written in: what the user
+    /// said, kept in its companion, or else a guess from its residues.
+    pub fn alphabet(
+        &self,
+        id: DocId,
+    ) -> Result<basecraft_protocol::facts::Fact<basecraft_protocol::facts::Alphabet>> {
+        use basecraft_protocol::facts::{Alphabet, Fact, FactSource};
+        let content = &self.slot(id)?.content;
+        let guessed = |value| Fact {
+            value,
+            source: FactSource::Guessed,
+        };
+        if let Some(opened) = content.alignment() {
+            return Ok(opened.alphabet.clone().unwrap_or_else(|| {
+                guessed(if opened.doc.is_protein() {
+                    Alphabet::Protein
+                } else {
+                    Alphabet::Dna
+                })
+            }));
+        }
+        let opened = content
+            .sequence()
+            .ok_or_else(|| invalid("only alignments and sequences have an alphabet"))?;
+        Ok(opened
+            .alphabet
+            .clone()
+            .unwrap_or_else(|| guessed(Alphabet::Unknown)))
     }
 
     pub fn is_alignment(&self, id: DocId) -> bool {

@@ -23,6 +23,8 @@ pub(crate) enum Inverse {
         before: Option<Feature>,
     },
     Alignment(Vec<AlnUndo>),
+    /// The alphabet an alignment or sequence held before it was set.
+    Alphabet(Option<basecraft_protocol::facts::Fact<basecraft_protocol::facts::Alphabet>>),
     Tree(basecraft_docs::tree::TreeUndo),
     Delimitation(Box<WorkspaceUndo>),
     Metadata(Box<MetadataUndo>),

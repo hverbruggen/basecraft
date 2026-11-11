@@ -56,7 +56,24 @@ fn document_writer_bytes_require_a_version_bump() {
     };
     let mut bytes = Vec::new();
     files::write_alignment(&opened.doc, &mut bytes).unwrap();
+    let hash = basecraft_io::hash_bytes(&bytes);
     golden("fasta", "alignment", &path, bytes);
+    // Alignments and sequences keep a companion only for a stated fact.
+    for (alphabet, variant) in [
+        (basecraft_protocol::facts::Alphabet::Protein, "alignment"),
+        (basecraft_protocol::facts::Alphabet::Rna, "sequence"),
+    ] {
+        let stated = basecraft_protocol::facts::Fact {
+            value: alphabet,
+            source: basecraft_protocol::facts::FactSource::User,
+        };
+        let mut bytes = Vec::new();
+        files::facts_companion(Some(&stated), &hash)
+            .unwrap()
+            .write(&mut bytes)
+            .unwrap();
+        golden("companion", variant, &path, bytes);
+    }
     let path = root.join("tree-inference/unrooted.nwk");
     let mut opened = files::load_tree(&path).unwrap();
     opened
@@ -278,13 +295,15 @@ fn companion_record_types_round_trip_original_writer_bytes() {
     crate::isolated_profile::isolate!();
     check::<Companion>("companion-tree-v1.bin");
     check::<Companion>("companion-delimitation-v1.bin");
+    check::<Companion>("companion-alignment-v1.bin");
+    check::<Companion>("companion-sequence-v1.bin");
 }
 
 // Only current writer goldens are kept; the journal has no old-writer exceptions.
 fn writer_versions(path: &Path) -> std::collections::BTreeMap<String, u32> {
     use basecraft_ops::files::Format;
     let formats: &[(&str, u32)] = match Format::from_path(path) {
-        Ok(Format::Fasta) => &[("fasta", 1), ("gff3", 1)],
+        Ok(Format::Fasta) => &[("fasta", 1), ("gff3", 1), ("companion", 1)],
         Ok(Format::GenBank) => &[("genbank", 1)],
         Ok(Format::Tree) => &[("newick", 1), ("companion", 1), ("alignment-link", 1)],
         Ok(Format::Delimitation) => &[("spart", 1), ("companion", 1)],
@@ -331,9 +350,20 @@ fn companions_read_and_written_again_keep_their_bytes() {
     // Saving under a new name writes the workspace and its companion.
     let work = session.open(&fixture).unwrap();
     session.save(work, Some(&spart)).unwrap();
+    let alignment = dir.path().join("pair.afa");
+    std::fs::write(&alignment, ">a\nACGT\n>b\nACGA\n").unwrap();
+    let doc = session.open(&alignment).unwrap();
+    let alphabet = basecraft_protocol::facts::Alphabet::Protein;
+    let set = basecraft_protocol::Op::SetAlphabet { alphabet };
+    session.apply(doc, set).unwrap();
+    session.save(doc, None).unwrap();
     // A fresh session reads both companions and saves copies beside them.
     let mut again = basecraft_ops::Session::new(dir.path());
-    for (from, to) in [(&tree, "copy.nwk"), (&spart, "copy.spart")] {
+    for (from, to) in [
+        (&tree, "copy.nwk"),
+        (&spart, "copy.spart"),
+        (&alignment, "copy.afa"),
+    ] {
         let saved = std::fs::read(files::tree_sidecar(from)).unwrap();
         let doc = again.open(from).unwrap();
         let copy = dir.path().join(to);

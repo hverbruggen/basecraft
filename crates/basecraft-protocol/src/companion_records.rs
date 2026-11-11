@@ -1,6 +1,7 @@
 //! The companion file `<file>.basecraft.json` beside a document: what the
 //! document's own format cannot hold. One envelope for every kind, with one
 //! section per kind.
+use crate::facts::{Alphabet, BranchLengths, Fact};
 use crate::{CladeAnnotation, TreeStyle};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -15,6 +16,9 @@ pub struct Companion {
     /// Hash of the described file's bytes. A different hash means the file
     /// changed outside basecraft, and the companion no longer applies.
     pub exchange_hash: String,
+    /// The letters an alignment or sequence is written in, when the user said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alphabet: Option<Fact<Alphabet>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tree: Option<TreeCompanion>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -33,6 +37,7 @@ impl Companion {
         Self {
             version: COMPANION_VERSION,
             exchange_hash: exchange_hash.into(),
+            alphabet: None,
             tree: None,
             delimitation: None,
         }
@@ -49,6 +54,9 @@ pub struct TreeCompanion {
     pub supports: Vec<SupportName>,
     pub annotations: BTreeMap<u32, CladeAnnotation>,
     pub style: TreeStyle,
+    /// What the branch lengths measure. Absent means unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_lengths: Option<Fact<BranchLengths>>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]

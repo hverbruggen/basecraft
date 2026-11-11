@@ -994,6 +994,56 @@
       ]
     },
     {
+      "description": "State what the tree's branch lengths measure.",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "tree.set_branch_lengths"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "meaning": {
+              "$ref": "#/$defs/BranchLengths"
+            }
+          },
+          "required": [
+            "meaning"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
+      "description": "State the letters an alignment or sequence is written in.",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "doc.set_alphabet"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "alphabet": {
+              "$ref": "#/$defs/Alphabet"
+            }
+          },
+          "required": [
+            "alphabet"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
       "description": "Add, change (same `id`) or, with no annotation, remove a clade\nannotation.",
       "type": "object",
       "properties": {
@@ -1640,6 +1690,16 @@
         }
       ]
     },
+    "Alphabet": {
+      "description": "The letters a sequence or alignment is written in.",
+      "type": "string",
+      "enum": [
+        "dna",
+        "rna",
+        "protein",
+        "unknown"
+      ]
+    },
     "Author": {
       "type": "object",
       "properties": {
@@ -1696,6 +1756,48 @@
       "required": [
         "marker",
         "genetic_code"
+      ]
+    },
+    "BranchLengths": {
+      "description": "What a tree's branch lengths measure.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "unknown"
+          ]
+        },
+        {
+          "description": "Expected substitutions per site.",
+          "type": "string",
+          "const": "substitutions"
+        },
+        {
+          "description": "Time with no unit: the root is 1, or depths are only comparable.",
+          "type": "string",
+          "const": "relative_time"
+        },
+        {
+          "description": "Time in the stated unit, such as \"Ma\".",
+          "type": "object",
+          "properties": {
+            "absolute_time": {
+              "type": "object",
+              "properties": {
+                "unit": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "unit"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "absolute_time"
+          ]
+        }
       ]
     },
     "Cell": {

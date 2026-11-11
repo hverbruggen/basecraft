@@ -25,6 +25,7 @@ impl Document for Opened {
         matches!(
             op,
             Op::SeqReplace { .. }
+                | Op::SetAlphabet { .. }
                 | Op::FeatureAdd { .. }
                 | Op::FeatureRemove { .. }
                 | Op::FeatureUpdate { .. }
@@ -40,6 +41,8 @@ impl Document for Opened {
     }
     fn proposal_candidate(&self) -> Result<files::Loaded> {
         Ok(files::Loaded::Sequence(Opened {
+            alphabet: self.alphabet.clone(),
+            companion_warning: None,
             doc: self.doc.clone(),
             format: self.format,
             fasta: self.fasta.clone(),
@@ -66,10 +69,20 @@ impl Document for Opened {
     fn fingerprint(&self) -> DocState {
         sequence_state(&self.doc, self.others.count)
     }
+    fn opening_warning(&self) -> Option<&str> {
+        self.companion_warning.as_deref()
+    }
     fn apply(&mut self, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {
+        if let Op::SetAlphabet { alphabet } = op {
+            return Ok((super::set_alphabet(&mut self.alphabet, *alphabet), None));
+        }
         execute_sequence(&mut self.doc, op)
     }
     fn revert(&mut self, inverse: &Inverse) -> Result<()> {
+        if let Inverse::Alphabet(before) = inverse {
+            self.alphabet.clone_from(before);
+            return Ok(());
+        }
         undo_sequence(&mut self.doc, inverse)
     }
     fn reapply(&mut self, op: &Op, inverse: &Inverse) -> Result<Inverse> {
@@ -98,7 +111,7 @@ impl Document for Opened {
             return Err(invalid("saving to a different format isn't supported yet"));
         }
         let mut prepared = super::PreparedWrite::default();
-        prepared.push(target, |w| files::write_main(self, w))?;
+        let hash = prepared.push(target, |w| files::write_main(self, w))?;
         let sidecar = files::gff_sidecar(target);
         if format == Format::Fasta {
             prepared.push(&sidecar, |w| {
@@ -107,6 +120,9 @@ impl Document for Opened {
                 }
                 Ok(())
             })?;
+        }
+        if let Some(companion) = files::facts_companion(self.alphabet.as_ref(), &hash) {
+            prepared.push(&files::tree_sidecar(target), |w| companion.write(w))?;
         }
         Ok(prepared)
     }
@@ -117,12 +133,14 @@ impl Document for Opened {
     ) -> Result<Vec<String>> {
         let mut hw = HashingWriter::new(std::io::sink());
         files::write_main(self, &mut hw)?;
-        let mut out = vec![hw.hash()];
+        let main = hw.hash();
+        let mut out = vec![main.clone()];
         let mut hw = HashingWriter::new(std::io::sink());
         if let Some(r) = files::write_sidecar(self, &mut hw) {
             r?;
             out.push(hw.hash());
         }
+        out.extend(super::facts_hash(self.alphabet.as_ref(), &main)?);
         Ok(out)
     }
     fn merge(&self, previous: &Op, next: &Op) -> Option<Op> {
@@ -239,11 +257,14 @@ pub(crate) fn execute_sequence(
         | Op::TreeRotate { .. }
         | Op::TreeLadderize { .. }
         | Op::TreeRenameTip { .. }
+        | Op::TreeSetBranchLengths { .. }
         | Op::TreeAnnotate { .. }
         | Op::TreeAddSupport { .. }
         | Op::TreeRemoveSupport { .. }
         | Op::TreeStyle { .. } => Err(invalid(format!("{} needs a tree", op.name()))),
         Op::DelimitationEdit { .. } => Err(invalid("this needs a delimitation workspace")),
+        // Handled by the opened sequence, which keeps the alphabet.
+        Op::SetAlphabet { .. } => Err(invalid("set the alphabet on the open document")),
         Op::MetadataEdit { .. } => Err(invalid("this needs the project metadata")),
         Op::SangerReview { .. } | Op::SangerSelect { .. } | Op::SangerUpdate { .. } => Err(
             crate::Error::Unsupported("choose a Sanger review document".into()),
@@ -273,6 +294,7 @@ fn undo_sequence(doc: &mut SequenceDoc, inverse: &Inverse) -> Result<()> {
         }
         Inverse::Feature { id: fid, before } => doc.restore_feature(*fid, before.clone()),
         Inverse::Alignment(_)
+        | Inverse::Alphabet(_)
         | Inverse::Tree(_)
         | Inverse::Delimitation(_)
         | Inverse::Metadata(_)

@@ -560,6 +560,8 @@ pub fn describe(op: &Op) -> String {
             if *small_first { "small" } else { "large" }
         ),
         Op::TreeRenameTip { from, to } => format!("Renamed {from} to {to}"),
+        Op::TreeSetBranchLengths { meaning } => format!("Branch lengths measure {meaning:?}"),
+        Op::SetAlphabet { alphabet } => format!("Alphabet set to {alphabet:?}"),
         Op::TreeAnnotate {
             annotation: Some(a),
             ..

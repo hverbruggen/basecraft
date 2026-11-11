@@ -3,6 +3,17 @@
   "title": "Companion",
   "type": "object",
   "properties": {
+    "alphabet": {
+      "description": "The letters an alignment or sequence is written in, when the user said.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Fact"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "delimitation": {
       "anyOf": [
         {
@@ -38,6 +49,58 @@
     "exchange_hash"
   ],
   "$defs": {
+    "Alphabet": {
+      "description": "The letters a sequence or alignment is written in.",
+      "type": "string",
+      "enum": [
+        "dna",
+        "rna",
+        "protein",
+        "unknown"
+      ]
+    },
+    "BranchLengths": {
+      "description": "What a tree's branch lengths measure.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "unknown"
+          ]
+        },
+        {
+          "description": "Expected substitutions per site.",
+          "type": "string",
+          "const": "substitutions"
+        },
+        {
+          "description": "Time with no unit: the root is 1, or depths are only comparable.",
+          "type": "string",
+          "const": "relative_time"
+        },
+        {
+          "description": "Time in the stated unit, such as \"Ma\".",
+          "type": "object",
+          "properties": {
+            "absolute_time": {
+              "type": "object",
+              "properties": {
+                "unit": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "unit"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "absolute_time"
+          ]
+        }
+      ]
+    },
     "CladeAnnotation": {
       "description": "A highlighted clade: a name on its stem branch, a bar along its tips, a\nfield of colour behind it, or any mix of these.",
       "type": "object",
@@ -263,6 +326,58 @@
         "name",
         "specimens",
         "hypotheses"
+      ]
+    },
+    "Fact": {
+      "description": "A fact and who said so, such as `Fact<Alphabet>`.",
+      "type": "object",
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/FactSource"
+        },
+        "value": {
+          "$ref": "#/$defs/Alphabet"
+        }
+      },
+      "required": [
+        "value",
+        "source"
+      ]
+    },
+    "Fact2": {
+      "description": "A fact and who said so, such as `Fact<Alphabet>`.",
+      "type": "object",
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/FactSource"
+        },
+        "value": {
+          "$ref": "#/$defs/BranchLengths"
+        }
+      },
+      "required": [
+        "value",
+        "source"
+      ]
+    },
+    "FactSource": {
+      "description": "Who said so.",
+      "oneOf": [
+        {
+          "description": "The file or the program that made it.",
+          "type": "string",
+          "const": "stated"
+        },
+        {
+          "description": "Basecraft, from the content. Can be wrong.",
+          "type": "string",
+          "const": "guessed"
+        },
+        {
+          "description": "The user.",
+          "type": "string",
+          "const": "user"
+        }
       ]
     },
     "Group": {
@@ -625,6 +740,17 @@
               "$ref": "#/$defs/CladeAnnotation"
             }
           }
+        },
+        "branch_lengths": {
+          "description": "What the branch lengths measure. Absent means unknown.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fact2"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "style": {
           "$ref": "#/$defs/TreeStyle"
