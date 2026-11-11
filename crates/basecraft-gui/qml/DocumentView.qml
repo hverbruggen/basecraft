@@ -7,7 +7,6 @@ import Basecraft
 // for through signals.
 FocusScope {
     id: doc
-    property alias findBar: findBar
     function openFind() { findBar.openFind() }
     FindBar {
         id: findBar
@@ -72,9 +71,12 @@ FocusScope {
             if (!doc.lifetimeAlive || ctl !== owner) return
             ctl.resize(view.width, view.height)
             ctl.set_show_gc(doc.showGc)
-            if (doc.path.startsWith("untitled:")) doc.initializeNew()
-            else if (!doc.adopted) ctl.open_file(doc.path)
-            if (doc.adopted || doc.path.startsWith("untitled:")) doc.finishOpening(true)
+            const created = doc.path.startsWith("untitled:")
+            if (!doc.adopted && !created) ctl.open_file(doc.path)
+            else {
+                if (created) doc.initializeNew()
+                doc.finishOpening(true)
+            }
         })
     }
 

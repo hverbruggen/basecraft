@@ -110,31 +110,6 @@ impl Document for OpenedTree {
         }
         let mut hashes = Vec::new();
         let sidecar = files::tree_sidecar(target);
-        if sidecar.is_file() {
-            let bytes = std::fs::read(&sidecar)?;
-            let metadata: serde_json::Value = serde_json::from_slice(&bytes)?;
-            if metadata.get("schema_version").is_none() || metadata["schema_version"] == 0 {
-                let backup = sidecar.with_file_name(format!(
-                    "{}.unverified-{}",
-                    sidecar.file_name().unwrap_or_default().to_string_lossy(),
-                    basecraft_io::hash_bytes(&bytes).trim_start_matches("b3:")
-                ));
-                if backup.try_exists()? {
-                    if std::fs::read(&backup)? != bytes {
-                        return Err(invalid(
-                            "legacy metadata backup differs; original was not replaced",
-                        ));
-                    }
-                } else {
-                    let mut staged = tempfile::NamedTempFile::new_in(
-                        sidecar.parent().unwrap_or(Path::new(".")),
-                    )?;
-                    std::io::Write::write_all(&mut staged, &bytes)?;
-                    staged.as_file().sync_all()?;
-                    staged.persist_noclobber(&backup).map_err(|e| e.error)?;
-                }
-            }
-        }
         for (path, sidecar_file) in [(target, false), (sidecar.as_path(), true)] {
             let mut hash = String::new();
             basecraft_io::write_atomic(path, |w| {

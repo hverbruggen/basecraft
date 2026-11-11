@@ -3,8 +3,8 @@
 Status: draft recommendation; the product's first-paint target is unchanged.
 
 Editable documents currently read one immutable owned buffer and hash the bytes
-that their parser consumes. The index cache avoids rebuilding unchanged FASTA
-indexes. Opening and recovery preparation run on a worker. The first edit reads
+that their parser consumes. FASTA indexes are rebuilt from those bytes without a disk cache.
+Opening runs on a worker and writes no recovery files. The first edit reads
 and hashes no source bytes and forces one journal write. No live constructor
 used memory mapping; the unused variant and dependency have been removed.
 
@@ -19,10 +19,12 @@ by another program permits an external truncation to fault the process rather
 than returning an ordinary read error. Owned buffers cost memory proportional to
 the input, but preserve a stable parser and piece-table backing. The present
 measurements do not establish that a mapped implementation would be faster.
-The 100 MB requested-heap check peaks at 100,013,801 additional bytes, with
-about 14 KB above the raw file size. Small-format decoding and counter overhead
-are reported separately in REPORT.md. Mapping only an application-owned immutable snapshot remains a possible future
-optimization, but requires its own lifetime and disk-space measurements.
+The 101,666,678-byte FASTA check peaks at 101,672,185 additional requested bytes.
+GenBank parses directly from a hashed buffered reader: 118,333,408 input bytes
+with 100,000,000 residues peak at 100,066,555 additional bytes. Small-format
+measurements and the measured index-rebuild cost are in REPORT.md.
+Mapping an application-owned immutable snapshot remains a possible future
+optimization requiring its own lifetime and disk-space measurements.
 
 Read-only indexed files are a separate case. A lazy indexed reader can load only
 visible ranges and avoid allocating the whole input. Compare bounded positional
@@ -31,12 +33,15 @@ Opening a mutable external file with a read-only mapping still has the truncatio
 risk; “read-only editor” does not make the underlying file immutable. Do not use
 editable-document timings to claim constant-memory indexed browsing.
 
-Large editable files use references for crash recovery. Before Basecraft replaces
-such an original during Save, it retains the original inode through a hard link
-and updates the recovery reference before replacement. This avoids a full byte
-copy and keeps earlier undo/replay inputs available. Reference recovery always
-verifies content; an external in-place modification can invalidate the reference.
-The hard-link mechanism needs filesystem support; failures occur before replacement.
+Every editable file uses the same recovery policy. At first edit, a hard link
+in application state retains the original inode when both paths are on the same
+filesystem; otherwise the journal references the original. Recovery validates
+its content. Each edit checks stamps; an external change causes one current-
+document checkpoint. Recovery starts from the latest completed save, with
+checkpoints for undo across saved history. No size limit or next-to-source
+recovery directory remains. An external in-place rewrite followed by a crash
+before the next edit can still invalidate reference recovery; the journal is
+preserved and recovery refuses to apply it to different bytes.
 
 A decision to change the 1 GB first-paint promise or introduce live mappings still
 belongs to the user. This draft does neither.

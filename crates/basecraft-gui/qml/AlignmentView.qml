@@ -9,7 +9,6 @@ import Basecraft
 // for through signals, as in DocumentView.
 FocusScope {
     id: doc
-    property alias findBar: findBar
     function openFind() { findBar.openFind() }
     FindBar {
         id: findBar
@@ -61,7 +60,6 @@ FocusScope {
 
     signal activate
     signal reviewTraces(var paths, string reference)
-    function localPath(url) { return fileUrls.local_file_path(url) }
     function showAdditionChoices() { if (activeAdditionDialog) activeAdditionDialog.showChoices() }
     property var activeAdditionDialog: null
     function addText() { if (ctl.busy) return; activeAdditionDialog = textSequenceDialog; textSequenceDialog.prepare("") }
@@ -78,7 +76,7 @@ FocusScope {
         title: "Add all sequences from FASTA"
         nameFilters: ["FASTA (*.fa *.fasta *.fas *.fna *.afa)", "All files (*)"]
         onAccepted: {
-            const text = ctl.read_sequence_file(doc.localPath(selectedFile))
+            const text = ctl.read_sequence_file(fileUrls.local_file_path(selectedFile))
             if (text.length) doc.prepareFasta(text)
         }
     }
@@ -92,7 +90,7 @@ FocusScope {
         onAccepted: {
             if (selectedFiles.length < 1 || selectedFiles.length > 3) { tooManyReads.open(); return }
             const reference = ctl.review_snapshot()
-            if (reference.length) doc.reviewTraces(selectedFiles.map(url => doc.localPath(url)), reference)
+            if (reference.length) doc.reviewTraces(selectedFiles.map(url => fileUrls.local_file_path(url)), reference)
         }
     }
     AppFormDialog {
@@ -134,13 +132,10 @@ FocusScope {
     Connections {
         target: ctl
         function onFileCreated(path) { doc.openFile(path) }
+        function onOpened(success) { if (success && doc.lifetimeAlive) doc.initializationCompleted() }
         function onSequencesAdded() { if (doc.activeAdditionDialog) doc.activeAdditionDialog.close() }
         function onAdditionFailed(message) { additionError.show(message) }
         function onAdditionNeedsGaps(count) { insertionDialog.count = count; insertionDialog.open() }
-    }
-
-    Connections { target: ctl; ignoreUnknownSignals: true
-        function onOpened(success) { if (success && doc.lifetimeAlive) doc.initializationCompleted() }
     }
 
     // Open once the view has its real size.

@@ -27,8 +27,10 @@ impl Source {
         let len = usize::try_from(file.metadata()?.len())
             .map_err(|_| std::io::Error::other("input is too large for this platform"))?;
         let mut bytes = Vec::new();
-        bytes.try_reserve_exact(len).map_err(std::io::Error::other)?;
-        let mut block = [0; 64 * 1024];
+        bytes
+            .try_reserve_exact(len)
+            .map_err(std::io::Error::other)?;
+        let mut block = [0; 16 * 1024];
         loop {
             let count = match file.read(&mut block) {
                 Ok(0) => break,
@@ -36,7 +38,9 @@ impl Source {
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(error) => return Err(error.into()),
             };
-            bytes.try_reserve_exact(count).map_err(std::io::Error::other)?;
+            bytes
+                .try_reserve_exact(count)
+                .map_err(std::io::Error::other)?;
             consume(&block[..count]);
             bytes.extend_from_slice(&block[..count]);
         }

@@ -95,7 +95,7 @@ Main {
                 check(consent.target.controller === b, "Save As captured wrong owner")
                 consent.selectedFile = "file://" + folder + "/chosen.gb"
             } else if (scenario.includes("evidence")) {
-                saveDocument(1, folder + "/chosen.gb", success => { check(success, "evidence save failed"); completedSave = true })
+                saveTarget(documentTarget(1), folder + "/chosen.gb", success => { check(success, "evidence save failed"); completedSave = true })
                 consent = dialog("evidenceSaveDialog")
                 check(consent.visible && pendingEvidenceSave.owner.controller === b, "real evidence consent missing")
             }

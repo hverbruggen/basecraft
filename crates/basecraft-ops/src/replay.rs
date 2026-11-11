@@ -76,6 +76,15 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
             continue;
         }
         if let Op::Open { path } = &e.op {
+            if e.source.as_ref().is_some_and(|source| source.checkpoint) {
+                if docs
+                    .get(e.doc.as_str())
+                    .is_none_or(|doc| !session.state(*doc).matches_recorded(&e.state))
+                {
+                    problem("checkpoint state differs".into());
+                }
+                continue;
+            }
             // A refused baseline must not leave later edits targeting an older document.
             docs.remove(e.doc.as_str());
             if !safe_key(path) || !safe_key(&e.doc) || path != &e.doc {
@@ -83,7 +92,7 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
                 continue;
             }
             match materialise(root, &source_root, work.path(), &e.result.hashes) {
-                Ok(()) => match session.open_replay_snapshot(&work.path().join(path)) {
+                Ok(()) => match session.open(&work.path().join(path)) {
                     Ok(id) => {
                         session.restore_replay_paths(id, work.path(), &source_root);
                         docs.insert(&e.doc, id);
@@ -171,11 +180,10 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
 
 fn recorded_source_root<'a>(
     root: &Path,
-    entries: impl Iterator<Item = &'a LogEntry>,
+    mut entries: impl Iterator<Item = &'a LogEntry>,
 ) -> Result<PathBuf> {
     let source = entries
-        .filter_map(|entry| entry.source.as_ref())
-        .next()
+        .find_map(|entry| entry.source.as_ref())
         .ok_or_else(|| Error::Damaged {
             path: root.to_path_buf(),
             detail: "Recovery journal has no source record".into(),
@@ -191,12 +199,7 @@ fn materialise(
     inputs: &[(String, String)],
 ) -> std::result::Result<(), String> {
     for (rel, hash) in inputs {
-        if Path::new(rel)
-            .components()
-            .any(|c| !matches!(c, std::path::Component::Normal(_)))
-        {
-            return Err(format!("unsafe replay input path: {rel}"));
-        }
+        let local = scratch_key(rel)?;
         let Some(digest) = hash.strip_prefix("b3:") else {
             return Err("unsupported input hash".into());
         };
@@ -218,7 +221,7 @@ fn materialise(
                 "input {rel} changed or is missing and no stored copy exists; recovery requires the unchanged original"
             ));
         };
-        let mut dest = work.join(rel);
+        let mut dest = work.join(local);
         if let Some((main, _)) = inputs.first()
             && crate::files::Format::from_path(Path::new(main)).ok()
                 == Some(crate::files::Format::Delimitation)
@@ -226,12 +229,12 @@ fn materialise(
                 .components()
                 .any(|c| c.as_os_str() == "analyses-v1")
             && Path::new(rel).file_name()
-                == crate::files::tree_sidecar(&work.join(main)).file_name()
+                == crate::files::tree_sidecar(&work.join(scratch_key(main)?)).file_name()
         {
             // The replay namespace contains no live store bindings. Restore
             // the checked baseline as a standalone companion, not a partial
             // hidden namespace that could be mistaken for a real store.
-            dest = crate::files::tree_sidecar(&work.join(main));
+            dest = crate::files::tree_sidecar(&work.join(scratch_key(main)?));
         }
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -263,6 +266,27 @@ fn materialise(
         .map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+pub(crate) fn scratch_key(key: &str) -> std::result::Result<PathBuf, String> {
+    let path = Path::new(key);
+    if path
+        .components()
+        .any(|part| matches!(part, std::path::Component::ParentDir))
+    {
+        return Err(format!("unsafe replay input path: {key}"));
+    }
+    if path.is_absolute() {
+        let parent = path.parent().ok_or("input has no parent")?;
+        let hash = basecraft_io::hash_bytes(parent.as_os_str().as_encoded_bytes());
+        return Ok(PathBuf::from("external")
+            .join(&hash[3..19])
+            .join(path.file_name().ok_or("input has no filename")?));
+    }
+    if !safe_key(key) {
+        return Err(format!("unsafe replay input path: {key}"));
+    }
+    Ok(path.to_path_buf())
 }
 
 fn safe_key(key: &str) -> bool {
@@ -389,14 +413,20 @@ fn recover_entries(
             serde_json::from_slice(&std::fs::read(&pending_path)?)?;
         if !pending.baseline.result.hashes.is_empty()
             && pending.baseline.result.hashes.iter().all(|(path, hash)| {
-                safe_key(path)
+                scratch_key(path).is_ok()
                     && basecraft_io::hash_file(&source_root.join(path))
                         .ok()
                         .as_ref()
                         == Some(hash)
             })
         {
-            entries.push(pending.baseline);
+            let index = entries
+                .iter()
+                .position(|entry| {
+                    entry.session == pending.baseline.session && entry.id > pending.baseline.id
+                })
+                .unwrap_or(entries.len());
+            entries.insert(index, pending.baseline);
         }
     }
 
@@ -429,20 +459,31 @@ fn recover_entries(
             continue;
         }
         if let Op::Open { path } | Op::Save { path } = &entry.op {
-            if !safe_key(path) || !safe_key(&entry.doc) {
-                return Err(crate::error::invalid(
-                    "unsafe or inconsistent recovery document identity",
-                ));
-            }
-            materialise(root, &source_root, staging.path(), &entry.result.hashes)
-                .map_err(crate::error::invalid)?;
-            let doc = session.open(&staging.path().join(path))?;
-            let source = entry.source.as_ref().ok_or_else(|| Error::Damaged {
+            let damaged = |detail| Error::Damaged {
                 path: root.to_path_buf(),
-                detail: "Recovery baseline has no source record".into(),
-            })?;
+                detail,
+            };
+            if !entry.result.hashes.iter().any(|(key, _)| key == path)
+                || (matches!(entry.op, Op::Open { .. }) && path != &entry.doc)
+            {
+                return Err(damaged("unsafe or inconsistent recovery baseline".into()));
+            }
+            scratch_key(&entry.doc).map_err(damaged)?;
+            let local = staging.path().join(scratch_key(path).map_err(damaged)?);
+            materialise(root, &source_root, staging.path(), &entry.result.hashes)
+                .map_err(damaged)?;
+            let doc = session.open(&local)?;
+            let source = entry
+                .source
+                .as_ref()
+                .ok_or_else(|| damaged("Recovery baseline has no source record".into()))?;
             session.restore_recovery_ids(doc, source)?;
-            session.restore_replay_paths(doc, staging.path(), &source_root);
+            let original = source_root.join(path);
+            session.restore_replay_paths(
+                doc,
+                local.parent().expect("scratch parent"),
+                original.parent().expect("source parent"),
+            );
             if !session.state(doc).matches_recorded(&entry.state) {
                 return Err(Error::Damaged {
                     path: root.to_path_buf(),
@@ -480,9 +521,9 @@ fn recover_entries(
     }
     session.recovery_placement(staging.path().to_path_buf(), destination.clone());
     let documents = documents
-        .into_iter()
-        .map(|(relative, id)| RecoveryDocument {
-            relative,
+        .into_values()
+        .map(|id| RecoveryDocument {
+            relative: session.doc_key(id).to_owned(),
             id,
             saved: None,
             written: false,

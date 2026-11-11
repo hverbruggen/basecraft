@@ -3947,6 +3947,9 @@
       "description": "Original files described by an open journal record.",
       "type": "object",
       "properties": {
+        "checkpoint": {
+          "type": "boolean"
+        },
         "feature_slots": {
           "type": "array",
           "items": {
@@ -3972,6 +3975,7 @@
         }
       },
       "required": [
+        "checkpoint",
         "feature_slots",
         "node_ids",
         "root",

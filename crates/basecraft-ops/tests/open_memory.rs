@@ -74,11 +74,15 @@ fn every_kind_reads_each_input_once() {
                 2,
             )
         }
-        "sequence-genbank" => (
-            copy(&root, "sequences-annotations/locus.gb"),
-            Kind::Sequence,
-            1,
-        ),
+        "sequence-genbank" => {
+            let file = copy(&root, "sequences-annotations/locus.gb");
+            std::fs::write(
+                basecraft_ops::files::gff_sidecar(&file),
+                b"unused invalid GFF companion",
+            )
+            .unwrap();
+            (file, Kind::Sequence, 1)
+        }
         "alignment" => (
             copy(&root, "alignment-editing/ambiguous-gappy.afa"),
             Kind::Alignment,
@@ -150,4 +154,108 @@ fn every_kind_reads_each_input_once() {
     // Same gross bound as the 100 MB test: one input copy plus decoded objects,
     // counters and fixed metadata. No second saved-form or recovery buffer.
     assert!(u64::try_from(memory.incremental_peak_bytes).unwrap() <= bytes_read * 2 + 65_536);
+}
+
+#[test]
+fn large_documents_keep_one_copy() {
+    let Ok(case) = std::env::var("BASECRAFT_LARGE_OPEN") else {
+        for case in ["fasta", "alignment", "genbank"] {
+            let root = tempfile::tempdir().unwrap();
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "large_documents_keep_one_copy", "--nocapture"])
+                .env("BASECRAFT_LARGE_OPEN", case)
+                .env("BASECRAFT_OPEN_ROOT", root.path())
+                .env("BASECRAFT_PROFILE_DIR", root.path().join("profile"))
+                .env("BASECRAFT_STATE_DIR", root.path().join("profile/state"))
+                .env("BASECRAFT_CACHE_DIR", root.path().join("profile/cache"))
+                .output()
+                .unwrap();
+            println!("{}", String::from_utf8_lossy(&result.stdout));
+            assert!(
+                result.status.success(),
+                "{case}: {}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+        }
+        return;
+    };
+    let root = PathBuf::from(std::env::var_os("BASECRAFT_OPEN_ROOT").unwrap());
+    std::fs::create_dir_all(&root).unwrap();
+    let file = root.join(match case.as_str() {
+        "alignment" => "large.afa",
+        "genbank" => "large.gb",
+        _ => "large.fa",
+    });
+    let residues = 100_000_000_usize;
+    {
+        use std::io::Write;
+        let mut output = std::io::BufWriter::new(std::fs::File::create(&file).unwrap());
+        let line = [b'A'; 60];
+        let rows = if case == "alignment" { 2 } else { 1 };
+        for row in 0..rows {
+            let length = residues / rows;
+            if case == "genbank" {
+                writeln!(
+                    output,
+                    "LOCUS       sequence {length} bp DNA linear UNK 01-JAN-1970\nORIGIN"
+                )
+                .unwrap();
+            } else {
+                writeln!(output, ">sequence{row}").unwrap();
+            }
+            for offset in (0..length).step_by(60) {
+                if case == "genbank" {
+                    write!(output, "{:>9} ", offset + 1).unwrap();
+                }
+                output
+                    .write_all(&line[..(length - offset).min(60)])
+                    .unwrap();
+                output.write_all(b"\n").unwrap();
+            }
+            if case == "genbank" {
+                writeln!(output, "//").unwrap();
+            }
+        }
+    }
+    let length = file.metadata().unwrap().len();
+    let mut session = Session::recoverable(&root).unwrap();
+    counters::reset();
+    let measurement = heap::Measurement::start().unwrap();
+    let id = session.open(&file).unwrap();
+    let measured = measurement.finish().unwrap();
+    let counts = counters::snapshot();
+    let read = counts.reads[&file.canonicalize().unwrap()];
+    assert_eq!((read.full_reads, read.bytes), (1, length));
+    assert_eq!(
+        (counts.sync_all, counts.sync_data, counts.unresolved_reads),
+        (0, 0, 0)
+    );
+    let limit = if case == "genbank" {
+        residues as u64 + (8 << 20)
+    } else {
+        length * 105 / 100
+    };
+    assert!(
+        measured.incremental_peak_bytes as u64 <= limit,
+        "{case}: {measured:?}, limit {limit}"
+    );
+    if case == "alignment" {
+        assert_eq!(session.alignment(id).unwrap().row_count(), 2);
+    } else {
+        assert_eq!(session.doc(id).unwrap().len(), residues as u64);
+    }
+    assert_eq!(
+        std::fs::read_dir(&root).unwrap().count(),
+        1,
+        "open wrote state or cache files"
+    );
+    println!(
+        "LARGE OPEN {case}: bytes_read={} reads={} writes=0 syncs=0 peak_extra_bytes={} live_extra_bytes={}",
+        read.bytes,
+        read.full_reads,
+        measured.incremental_peak_bytes,
+        measured.live_bytes.saturating_sub(measured.baseline_bytes)
+    );
+    std::mem::forget(session);
+    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
 }

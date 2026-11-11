@@ -53,9 +53,6 @@ FocusScope {
     Connections {
         target: ctl
         function onFileCreated(path) { doc.openFile(path) }
-    }
-
-    Connections { target: ctl; ignoreUnknownSignals: true
         function onOpened(success) { if (success && doc.lifetimeAlive) doc.initializationCompleted() }
     }
 

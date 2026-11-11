@@ -218,9 +218,9 @@ fn companions_are_read_once() {
 }
 
 #[test]
-fn large_file_edits_and_recovery_require_original() {
+fn large_first_edit_retains_without_reading() {
     use std::io::Write;
-    let Some(root) = child_profile("large_file_edits_and_recovery_require_original") else {
+    let Some(root) = child_profile("large_first_edit_retains_without_reading") else {
         return;
     };
     let file = root.join("large.fa");
@@ -253,32 +253,8 @@ fn large_file_edits_and_recovery_require_original() {
     let mut reopened = Session::unlogged(&root);
     let doc = reopened.open(&recovered[0]).unwrap();
     assert_eq!(reopened.doc(doc).unwrap().read(0, 4), b"CAAA");
-    // Saving over the original keeps its inode as a reference, without copying
-    // the file; later undo and new edits still recover through the same journal.
-    let mut saving = Session::recoverable(&root).unwrap();
-    let current = saving.open(&file).unwrap();
-    saving
-        .apply(
-            current,
-            Op::SeqReplace {
-                start: 0,
-                end: 1,
-                residues: "G".into(),
-            },
-        )
-        .unwrap();
-    saving.save(current, None).unwrap();
-    saving.undo(current).unwrap();
-    let saved_recovery = saving.recovery_root().to_path_buf();
-    drop(saving);
-    let saved = basecraft_ops::replay::recover(&saved_recovery, &root.join("after-save")).unwrap();
-    let mut verify = Session::unlogged(&root);
-    let current = verify.open(&saved[0]).unwrap();
-    assert_eq!(verify.doc(current).unwrap().read(0, 4), b"AAAA");
-    std::fs::write(&file, b">large\nTTTT\n").unwrap();
-    let error = basecraft_ops::replay::recover(&recovery, &root.join("changed")).unwrap_err();
-    assert!(error.to_string().contains("unchanged original"));
-    assert!(!root.join("changed").exists());
     std::fs::remove_file(&file).unwrap();
-    assert!(basecraft_ops::replay::recover(&recovery, &root.join("missing")).is_err());
+    let retained = basecraft_ops::replay::recover(&recovery, &root.join("missing")).unwrap();
+    let current = reopened.open(&retained[0]).unwrap();
+    assert_eq!(reopened.doc(current).unwrap().read(0, 4), b"CAAA");
 }

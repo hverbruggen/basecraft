@@ -288,7 +288,11 @@ fn bound_tree_errors_never_fall_back_to_an_unbound_payload() {
     let run = ArtifactRun::create(&path, "bound-tree").unwrap();
     run.bind(&path).unwrap();
     // A valid adjacent sidecar cannot rescue a mismatched bound main file.
-    std::fs::write(files::tree_sidecar(&path), b"{\"schema_version\":0}").unwrap();
+    std::fs::write(
+        path.with_file_name("bound.nwk.basecraft.json"),
+        b"invalid adjacent metadata",
+    )
+    .unwrap();
     std::fs::write(&path, b"(other,tree);\n").unwrap();
     let mut session = Session::unlogged(dir.path());
     assert!(session.open_classified(&path).is_err());
@@ -445,7 +449,9 @@ fn unreadable_gff_is_not_absent_and_direct_errors_remain_io() {
         files::load(&path).err().unwrap(),
         files::open(&path).err().unwrap(),
     ] {
-        assert!(matches!(error, Error::Io(e) if e.kind() == std::io::ErrorKind::PermissionDenied));
+        assert!(
+            matches!(error, Error::Io(e) | Error::Format(basecraft_io::Error::Io(e)) if e.kind() == std::io::ErrorKind::PermissionDenied)
+        );
     }
     assert!(
         matches!(Session::new(dir.path()).open(&path).unwrap_err(), Error::Format(basecraft_io::Error::Io(e)) if e.kind() == std::io::ErrorKind::PermissionDenied)

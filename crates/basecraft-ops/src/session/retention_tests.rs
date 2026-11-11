@@ -63,7 +63,13 @@ fn recovery_retains_replaced_sources_and_checkpoints_external_edits_and_undo() {
         return;
     };
     for size in [4, 101 * 1024 * 1024] {
-        for scenario in ["replace", "rewrite-edit", "save-undo", "save-undo-redo"] {
+        for scenario in [
+            "replace",
+            "rewrite-edit",
+            "save-undo",
+            "save-undo-redo",
+            "save-edit-replace",
+        ] {
             let source = root.join(format!("{size}-{scenario}"));
             std::fs::create_dir(&source).unwrap();
             let path = source.join("sequence.fa");
@@ -108,6 +114,14 @@ fn recovery_retains_replaced_sources_and_checkpoints_external_edits_and_undo() {
                     std::fs::write(&new, b">outside\nCCCC\n").unwrap();
                     std::fs::rename(new, &path).unwrap();
                     b"TAAA"
+                }
+                "save-edit-replace" => {
+                    session.save(doc, None).unwrap();
+                    session.apply(doc, replace(0, "G")).unwrap();
+                    let new = source.join("replacement");
+                    std::fs::write(&new, b">outside\nCCCC\n").unwrap();
+                    std::fs::rename(new, &path).unwrap();
+                    b"GAAA"
                 }
                 "rewrite-edit" => {
                     std::fs::write(&path, b">outside\nCCCC\n").unwrap();
@@ -260,4 +274,79 @@ fn different_filesystems_keep_references_and_pending_save_recovers_after_rename(
             crate::replay::recover(session.recovery_root(), &source.join("recovered")).unwrap();
         assert_eq!(std::fs::read(&recovered[0]).unwrap(), b">sequence\nTAAA\n");
     }
+}
+
+#[test]
+fn recovery_after_save_keeps_feature_ids_and_external_save_as() {
+    let Some(root) = crate::isolated_profile::enter(
+        "session::retention_tests::recovery_after_save_keeps_feature_ids_and_external_save_as",
+    ) else {
+        return;
+    };
+    let source = root.join("source");
+    let other = root.join("other");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::create_dir(&other).unwrap();
+    let file = source.join("sequence.gb");
+    std::fs::write(
+        &file,
+        include_bytes!("../../../../testdata/fixtures/compact/sequences-annotations/locus.gb"),
+    )
+    .unwrap();
+    let mut session = Session::new(&source);
+    session.merge = false;
+    session.provenance_policy = basecraft_platform::settings::ProvenancePolicy::None;
+    let doc = session.open(&file).unwrap();
+    let feature = session
+        .doc(doc)
+        .unwrap()
+        .features()
+        .next()
+        .unwrap()
+        .1
+        .clone();
+    session.apply(doc, Op::FeatureRemove { id: 0 }).unwrap();
+    let saved = other.join("copy.gb");
+    session.save(doc, Some(&saved)).unwrap();
+    let added = session
+        .apply(doc, Op::FeatureAdd { feature })
+        .unwrap()
+        .feature
+        .unwrap();
+    session
+        .apply(doc, Op::FeatureRemove { id: added.0 })
+        .unwrap();
+    let expected = session.doc(doc).unwrap().to_genbank();
+    let outputs = crate::replay::recover(session.recovery_root(), &root.join("recovered")).unwrap();
+    let restored = files::open(&outputs[0]).unwrap();
+    assert_eq!(restored.doc.to_genbank(), expected);
+}
+
+#[test]
+fn external_document_checkpoint_stays_inside_recovery_storage() {
+    let Some(root) = crate::isolated_profile::enter(
+        "session::retention_tests::external_document_checkpoint_stays_inside_recovery_storage",
+    ) else {
+        return;
+    };
+    let project = root.join("project");
+    std::fs::create_dir(&project).unwrap();
+    let source = root.join("outside.fa");
+    std::fs::write(&source, b">outside\nAAAA\n").unwrap();
+    let mut session = Session::recoverable(&project).unwrap();
+    session.provenance_policy = basecraft_platform::settings::ProvenancePolicy::None;
+    let doc = session.open(&source).unwrap();
+    let edit = |start, residues: &str| Op::SeqReplace {
+        start,
+        end: start + 1,
+        residues: residues.into(),
+    };
+    session.apply(doc, edit(0, "G")).unwrap();
+    std::fs::write(&source, b">outside\nCCCC\n").unwrap();
+    session.apply(doc, edit(1, "T")).unwrap();
+    session.flush().unwrap();
+    assert_eq!(std::fs::read(&source).unwrap(), b">outside\nCCCC\n");
+    let recovered =
+        crate::replay::recover(session.recovery_root(), &root.join("recovered")).unwrap();
+    assert_eq!(std::fs::read(&recovered[0]).unwrap(), b">outside\nGTAA\n");
 }

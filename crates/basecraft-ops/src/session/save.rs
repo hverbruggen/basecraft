@@ -106,6 +106,9 @@ impl Session {
         if !self.is_open(id) {
             return Err(invalid("save document is not open"));
         }
+        if let Some(message) = self.content(id)?.as_document().save_refusal() {
+            return Err(Error::Unsupported(message.into()));
+        }
         let mut warnings = Vec::new();
         let mut target_check = None;
         let new_sequence = self.docs[id.0].accepted_hashes.is_empty();
@@ -432,7 +435,7 @@ impl Session {
         hooks: &mut impl SaveHooks,
     ) -> Result<()> {
         let key = self.relative(target);
-        let entry = self.entry(
+        let mut entry = self.entry(
             id,
             self.actor.clone(),
             Op::Save { path: key },
@@ -441,10 +444,25 @@ impl Session {
                 feature: None,
             },
         );
+        entry.source.as_mut().expect("save source").files = entry
+            .result
+            .hashes
+            .iter()
+            .map(|(path, hash)| {
+                Ok(basecraft_protocol::provenance::InputReference {
+                    path: path.clone(),
+                    stamp: crate::input_evidence::stamp(&self.resolve(path))?,
+                    hash: hash.clone(),
+                    extra: std::collections::BTreeMap::default(),
+                })
+            })
+            .collect::<Result<_>>()?;
         hooks.record(self.log.is_some());
         hooks.boundary(SaveSite::SaveRecord, self)?;
         self.write(&entry)?;
         self.docs[id.0].recovery_boundary = Some(entry.id.clone());
+        self.docs[id.0].baseline = Some(entry.clone());
+        self.docs[id.0].baseline_logged = true;
         if target == self.resolve(&self.docs[id.0].key) {
             self.refresh_source_stamps(id);
         }

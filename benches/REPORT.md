@@ -20,11 +20,17 @@ records the exact Rust source digest. Shared-host results are provisional.
 | 50,000-tip tree open / midpoint reroot | 17.571 / 23.586 ms | Headless gates met |
 
 `just check` includes exact read, sync, requested-heap and frame-size assertions.
-Main files and format companions are read once. A first durable edit reads no
-source bytes and performs one journal sync; recovery staging happens on open.
-Files larger than 100 MiB are editable and use verified references for recovery.
-The large-file regression covers edit, Save, undo, crash recovery, and changed or
-missing originals. File size must fit in RAM.
+Main files and format companions are read once. Opening writes no source, state,
+or cache files and forces no flushes. The first durable edit reads no source
+bytes and performs one journal sync. It retains a same-filesystem hard link in
+application state when possible; otherwise recovery references the original.
+Later edits check stamps and checkpoint the live document if the source changed.
+Recovery starts from the latest completed save or checkpoint. This policy is the
+same for every file size. Files must fit in RAM.
+
+Multi-record GenBank files and multi-record FASTA files with a GFF3 companion
+cannot be saved yet: their current writers would lose other records or their
+annotations. Save and Save As return a clear refusal before modifying any file.
 
 `just bench` runs the usable default scenarios; `--large` adds the 1 GB workload
 and verifies an edit and its undo outside the open timer. `just ci` runs a compact
@@ -51,16 +57,30 @@ measurement window; decoded document objects and counters are included.
 
 | Kind / format | Input files | Total bytes read | Peak extra requested heap |
 | --- | ---: | ---: | ---: |
-| Sequence FASTA + GFF3 | 2 | 644 | 16,117 B |
-| Sequence GenBank | 1 | 940 | 16,215 B |
-| Alignment FASTA | 1 | 1,600 | 18,198 B |
-| Tree Newick + sidecar | 2 | 649 | 15,438 B |
-| Delimitation SPART + sidecar | 2 | 5,069 | 27,363 B |
-| Metadata manifest + four tables | 5 | 825 | 19,313 B |
-| Submission JSON | 1 | 505 | 14,379 B |
+| Sequence FASTA + GFF3 | 2 | 644 | 7,035 B |
+| Sequence GenBank | 1 | 940 | 5,545 B |
+| Alignment FASTA | 1 | 1,600 | 9,481 B |
+| Tree Newick + sidecar | 2 | 649 | 5,887 B |
+| Delimitation SPART + sidecar | 2 | 5,069 | 20,791 B |
+| Metadata manifest + four tables | 5 | 825 | 8,995 B |
+| Submission JSON | 1 | 505 | 6,364 B |
 
-The separate 100 MB FASTA budget measured 100,013,801 B of incremental requested
-heap, and released it when the Session was dropped. This is approximately one
-input-sized buffer, not an RSS measurement. Small parsed formats have fixed and
-decoded-object overhead, as the table shows. Recovery-disabled sessions share
-the same immutable source allocation rather than retaining a second raw copy.
+All seven cases also assert zero writes and zero forced flushes, including an
+open-only simulated crash. GenBank ignores an unused same-name GFF companion.
+
+| Large input | Bytes read once | Peak extra requested heap | Open writes |
+| --- | ---: | ---: | ---: |
+| FASTA, 100 million residues | 101,666,678 | 101,672,185 B | 0 |
+| Alignment, 100 million residues | 101,666,690 | 101,672,611 B | 0 |
+| GenBank, 100 million residues | 118,333,408 | 100,066,555 B | 0 |
+
+FASTA and alignment meet the 1.05× file-size bound. GenBank streams into its
+parsed record and stays within the record plus 8 MiB bound. These measure
+requested heap, not RSS; Session setup and fixture generation are excluded.
+
+Before cache deletion, five warm-cache release samples measured FASTA index
+rebuilding at 22.011 ms for 100 MB and 209.279 ms for 1 GB. Read-and-hash medians
+were 28.593 and 288.476 ms: rebuilding was 77% and 73% of that cost, respectively.
+It was not a small fraction on this server. Removing the cache eliminates
+open-time writes and metadata-keyed cached indexes; it retains this CPU cost.
+Save peak memory and streaming publication are measured by the save lane.

@@ -1,4 +1,4 @@
-use basecraft_ops::{Session, provenance};
+use basecraft_ops::{Session, log, provenance};
 use basecraft_protocol::Op;
 use std::path::Path;
 
@@ -48,7 +48,7 @@ fn edit_undo_redo_save_move_verify_and_report() {
         let doc = session.open(&file).unwrap();
         assert!(!recovery.exists());
         session.apply(doc, edit()).unwrap();
-        assert!(recovery.join("recovery.json").is_file());
+        assert_eq!(log::read_all(&recovery).unwrap().len(), 2);
         assert!(!dir.path().join(".basecraft").exists());
         session.undo(doc).unwrap();
         session.redo(doc).unwrap();
@@ -709,7 +709,20 @@ fn provenance_works_with_recovery_disabled_and_preserves_frozen_reports() {
     );
     session.redo(doc).unwrap();
     session.save(doc, None).unwrap();
-    assert_eq!(provenance::verify(&file).unwrap(), Vec::<String>::new());
+    let warnings = provenance::verify(&file).unwrap();
+    assert!(!warnings.is_empty());
+    assert!(
+        warnings
+            .iter()
+            .all(|warning| warning.ends_with("input bytes unavailable")),
+        "{warnings:?}"
+    );
+    assert!(
+        !provenance::inspect(&file)
+            .unwrap()
+            .completeness
+            .input_bytes_available
+    );
     assert!(!paths.state.join("recovery").exists());
 }
 

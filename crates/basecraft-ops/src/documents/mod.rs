@@ -36,6 +36,9 @@ pub(crate) enum PreparedEdit {
 
 pub(crate) trait Document {
     fn kind(&self) -> crate::files::Kind;
+    fn save_refusal(&self) -> Option<&str> {
+        None
+    }
     /// Operations requiring preparation must reject the wrong payload before
     /// Session retains originals or starts a journal.
     fn check_preparation_kind(&self, op: &Op, live: bool) -> Result<()> {

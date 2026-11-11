@@ -12,7 +12,6 @@ use memchr::memchr;
 use crate::error::parse_error;
 use crate::{Error, Result};
 
-/// Classification facts, independent of record names and line layouts.
 /// Owned FASTA bytes and their index. No on-disk cache is written.
 pub struct IndexedFasta {
     pub source: crate::Source,
@@ -27,9 +26,12 @@ impl IndexedFasta {
         let index = FastaIndex::build(source.bytes())?;
         Ok(Self { source, index })
     }
-    pub fn bytes(&self) -> &[u8] { self.source.bytes() }
+    pub fn bytes(&self) -> &[u8] {
+        self.source.bytes()
+    }
 }
 
+/// Classification facts, independent of record names and line layouts.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Summary {
     pub records: u64,
@@ -305,7 +307,6 @@ impl FastaIndex {
     pub fn get(&self, name: &str) -> Option<&RecordIndex> {
         self.records.iter().find(|r| r.name == name)
     }
-
 }
 
 fn finish_record(name: String, header_offset: u64, b: LayoutBuilder) -> RecordIndex {

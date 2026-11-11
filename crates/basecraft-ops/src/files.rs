@@ -107,6 +107,7 @@ pub const LONGEST_ALIGNMENT_ROW: u64 = 1_000_000;
 
 /// An open alignment plus what's needed to write its file back.
 pub struct OpenedAlignment {
+    pub save_refusal: Option<&'static str>,
     pub doc: AlignmentDoc,
     pub format: Format,
 }
@@ -115,7 +116,7 @@ pub struct OpenedAlignment {
 pub struct OpenedTree {
     pub doc: TreeDoc,
     pub nexus: bool,
-    /// Unverifiable legacy metadata remains on disk and was not applied.
+    /// Missing bound metadata is reported without changing the exchange.
     pub metadata_warning: Option<String>,
     /// Other forest members are preserved when the first tree is edited.
     pub remaining: Vec<newick::ParsedTree>,
@@ -208,6 +209,9 @@ impl Loaded {
 /// Open a file as whatever it holds: see [`kind`].
 pub fn load(path: &Path) -> Result<Loaded> {
     let format = Format::from_path(path)?;
+    if format == Format::GenBank {
+        return open(path).map(Loaded::Sequence);
+    }
     if format == Format::Metadata {
         return crate::metadata::load(path).map(Loaded::Metadata);
     }
@@ -217,7 +221,7 @@ pub fn load(path: &Path) -> Result<Loaded> {
     if format == Format::Delimitation {
         return load_delimitation(path).map(Loaded::Delimitation);
     }
-    load_from(path, open_source(path, format)?)
+    load_from(path, Source::open(path)?)
 }
 
 /// Load FASTA, GenBank or a tree from the supplied main-file snapshot.
@@ -226,7 +230,7 @@ pub fn load(path: &Path) -> Result<Loaded> {
 /// Other formats require their existing loaders and are rejected here.
 pub fn load_from(path: &Path, source: Source) -> Result<Loaded> {
     match Format::from_path(path)? {
-        Format::Tree => load_tree_from(path, &source, false).map(Loaded::Tree),
+        Format::Tree => load_tree_from(path, &source).map(Loaded::Tree),
         Format::Fasta => {
             let gff = read_optional(&gff_sidecar(path))?;
             load_fasta_from(path, source, gff.as_ref())
@@ -241,19 +245,25 @@ pub fn load_from(path: &Path, source: Source) -> Result<Loaded> {
 /// Exact inputs retained until admission and recovery preparation finish.
 pub(crate) struct CapturedLoad {
     pub content: Loaded,
-    pub files: Vec<(PathBuf, Source, String)>,
+    pub files: Vec<(PathBuf, String)>,
     pub stamps: Vec<(PathBuf, Option<std::fs::Metadata>)>,
 }
 
-pub(crate) fn capture_load(
-    path: &Path,
-    format: Format,
-    verified: bool,
-) -> Result<CapturedLoad> {
+pub(crate) fn capture_load(path: &Path, format: Format) -> Result<CapturedLoad> {
+    if format == Format::GenBank {
+        let stamps = vec![(path.to_path_buf(), Some(std::fs::metadata(path)?))];
+        let (record, count, hash) = genbank::open_hashed(path)?;
+        return finish_capture(
+            Loaded::Sequence(opened_genbank(record, count)),
+            vec![(path.to_path_buf(), hash)],
+            stamps,
+        );
+    }
     let companions = match format {
         Format::Metadata => crate::metadata::files(path).split_off(1),
         Format::Tree | Format::Delimitation => vec![tree_sidecar(path)],
-        Format::GenBank | Format::Fasta => vec![gff_sidecar(path)],
+        Format::Fasta => vec![gff_sidecar(path)],
+        Format::GenBank => unreachable!("streamed above"),
         Format::Submission => crate::documents::submission_companions(path),
     };
     let mut stamps = Vec::new();
@@ -274,14 +284,8 @@ pub(crate) fn capture_load(
     let companion = files.get(1).map(|(_, source, _)| source);
     let content = match format {
         Format::Fasta => load_fasta_from(path, main, companion)?,
-        Format::GenBank => Loaded::Sequence(open_from(path, main)?),
-        Format::Tree => Loaded::Tree(load_tree_bytes(
-            path,
-            &main,
-            &files[0].2,
-            verified,
-            companion,
-        )?),
+        Format::GenBank => unreachable!("streamed above"),
+        Format::Tree => Loaded::Tree(load_tree_bytes(path, &main, &files[0].2, companion)?),
         Format::Delimitation => Loaded::Delimitation(load_delimitation_bytes(
             path,
             main.bytes(),
@@ -299,6 +303,21 @@ pub(crate) fn capture_load(
                 })
         })?),
     };
+    finish_capture(
+        content,
+        files
+            .into_iter()
+            .map(|(path, _, hash)| (path, hash))
+            .collect(),
+        stamps,
+    )
+}
+
+fn finish_capture(
+    content: Loaded,
+    files: Vec<(PathBuf, String)>,
+    stamps: Vec<(PathBuf, Option<std::fs::Metadata>)>,
+) -> Result<CapturedLoad> {
     for (file, before) in &stamps {
         let after = match std::fs::metadata(file) {
             Ok(metadata) => Some(metadata),
@@ -349,11 +368,7 @@ pub(crate) fn same_metadata(a: Option<&std::fs::Metadata>, b: Option<&std::fs::M
     }
 }
 
-fn load_fasta_from(
-    path: &Path,
-    source: Source,
-    captured_gff: Option<&Source>,
-) -> Result<Loaded> {
+fn load_fasta_from(path: &Path, source: Source, captured_gff: Option<&Source>) -> Result<Loaded> {
     let file = Arc::new(fasta::IndexedFasta::from_source(source)?);
     if file.index.records.is_empty() {
         return Err(Error::Empty(path.to_path_buf()));
@@ -368,6 +383,7 @@ fn load_fasta_from(
             .file_name()
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
         Ok(Loaded::Alignment(OpenedAlignment {
+            save_refusal: (file.index.records.len() > 1 && gff_present).then_some(MULTI_RECORD_GFF),
             doc: AlignmentDoc::from_fasta(name, &file),
             format: Format::Fasta,
         }))
@@ -435,53 +451,37 @@ pub fn tree_sidecar(path: &Path) -> PathBuf {
 /// What a tree's Newick can't hold.
 #[derive(Default, Serialize, Deserialize)]
 struct TreeSidecar {
-    #[serde(default)]
     schema_version: u32,
     /// Canonical topology, raw support and node ordering of the first tree.
-    #[serde(default)]
     tree_hash: String,
     /// Exact exchange bytes, including every forest component, when file-backed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     exchange_hash: Option<String>,
     /// Support set names and sources, in the order their values are joined
     /// in the Newick labels.
-    #[serde(default)]
     supports: Vec<SupportName>,
-    #[serde(default)]
     annotations: BTreeMap<u32, CladeAnnotation>,
-    #[serde(default)]
     style: TreeStyle,
 }
 
 #[derive(Serialize, Deserialize)]
 struct SupportName {
     name: String,
-    #[serde(default)]
     source: String,
-    #[serde(default)]
     kind: basecraft_protocol::SupportKind,
 }
 
 /// Read the first tree of a Newick or NEXUS file, with its sidecar.
 pub fn load_tree(path: &Path) -> Result<OpenedTree> {
-    load_tree_metadata(path, false)
+    load_tree_from(path, &Source::open(path)?)
 }
 
-fn load_tree_metadata(path: &Path, verified_snapshot: bool) -> Result<OpenedTree> {
-    load_tree_from(path, &open_source(path, Format::Tree)?, verified_snapshot)
-}
-
-pub(crate) fn load_tree_from(
-    path: &Path,
-    source: &Source,
-    verified_snapshot: bool,
-) -> Result<OpenedTree> {
+pub(crate) fn load_tree_from(path: &Path, source: &Source) -> Result<OpenedTree> {
     let side = read_optional(&tree_sidecar(path))?;
     load_tree_bytes(
         path,
         source,
         &basecraft_io::hash_bytes(source.bytes()),
-        verified_snapshot,
         side.as_ref(),
     )
 }
@@ -490,7 +490,6 @@ fn load_tree_bytes(
     path: &Path,
     source: &Source,
     exchange_hash: &str,
-    verified_snapshot: bool,
     captured_side: Option<&Source>,
 ) -> Result<OpenedTree> {
     let text = std::str::from_utf8(source.bytes())
@@ -520,72 +519,35 @@ fn load_tree_bytes(
     );
     if let Some(source) = captured_side {
         let side: TreeSidecar = serde_json::from_slice(source.bytes())?;
-        if side.schema_version == 0 && !verified_snapshot {
-            metadata_warning = Some(format!(
-                "Unverified legacy tree metadata at {} was left unapplied; the exchange tree is open and the original metadata bytes are preserved.",
-                sidecar.display()
-            ));
-        } else if side.schema_version > 1 {
-            return Err(crate::error::invalid(
-                "Unsupported future tree metadata version; bytes were preserved",
-            ));
-        } else {
-            if side.schema_version == 1
-                && (side.tree_hash != tree_hash(&doc)
-                    || side
-                        .exchange_hash
-                        .as_ref()
-                        .is_some_and(|hash| hash != exchange_hash))
-            {
-                return Err(crate::error::invalid(
-                    "Tree metadata describes different exchange contents; bytes were preserved and metadata was not applied",
-                ));
-            }
-            let kinds: Vec<_> = side
-                .supports
-                .iter()
-                .map(|s| (s.name.clone(), s.kind))
-                .collect();
-            let names: Vec<(String, String)> = side
-                .supports
-                .into_iter()
-                .map(|s| (s.name, s.source))
-                .collect();
-            doc.restore(&names, side.annotations, side.style);
-            for (name, kind) in kinds {
-                doc.set_support_kind(&name, kind);
-            }
+        if side.schema_version != 1
+            || side.tree_hash != tree_hash(&doc)
+            || side
+                .exchange_hash
+                .as_ref()
+                .is_some_and(|hash| hash != exchange_hash)
+        {
+            return Err(Error::Damaged {
+                path: sidecar,
+                detail: "Tree metadata version or exchange contents differ".into(),
+            });
+        }
+        let kinds: Vec<_> = side
+            .supports
+            .iter()
+            .map(|s| (s.name.clone(), s.kind))
+            .collect();
+        let names: Vec<(String, String)> = side
+            .supports
+            .into_iter()
+            .map(|s| (s.name, s.source))
+            .collect();
+        doc.restore(&names, side.annotations, side.style);
+        for (name, kind) in kinds {
+            doc.set_support_kind(&name, kind);
         }
     }
     if bound && captured_side.is_none() {
         metadata_warning = Some("Bound tree metadata is unavailable; exchange values remain open with unknown support meaning and default presentation.".into());
-    }
-    // Legacy Basecraft distance runs carry explicit bootstrap metadata. Require
-    // an exact matching result, so stale adjacent reports cannot relabel imports.
-    let report_path = PathBuf::from(format!("{}.run.json", path.display()));
-    if let Ok(report) = std::fs::read(&report_path)
-        && let Ok(report) = serde_json::from_slice::<serde_json::Value>(&report)
-        && report["tool"] == "basecraft-distance"
-        && report["bootstrap"]["support_withheld"] == false
-        && report["bootstrap"]["completed"]
-            .as_u64()
-            .is_some_and(|n| n > 0)
-        && report["tree"]["trees"].as_array().is_some_and(|trees| {
-            trees.iter().any(|tree| {
-                tree.as_str()
-                    .and_then(|text| TreeDoc::from_newick("", text).ok())
-                    .is_some_and(|tree| tree_hash(&tree) == tree_hash(&doc))
-            })
-        })
-        && doc.supports().len() == 1
-        && doc.supports()[0].kind == basecraft_protocol::SupportKind::Unknown
-    {
-        let name = doc.supports()[0].name.clone();
-        if name == "Support" {
-            doc.rename_support(&name, "Bootstrap");
-        }
-        let name = doc.supports()[0].name.clone();
-        doc.set_support_kind(&name, basecraft_protocol::SupportKind::Bootstrap);
     }
     Ok(OpenedTree {
         doc,
@@ -622,7 +584,6 @@ pub fn write_tree(tree: &OpenedTree, w: &mut dyn Write) -> io::Result<()> {
     Ok(())
 }
 
-
 pub fn write_tree_sidecar(doc: &TreeDoc, w: &mut dyn Write) -> io::Result<()> {
     write_tree_metadata(doc, None, w)
 }
@@ -645,7 +606,6 @@ fn write_tree_metadata(
     serde_json::to_writer_pretty(&mut *w, &side)?;
     writeln!(w)
 }
-
 
 fn tree_hash(doc: &TreeDoc) -> String {
     let mut writer = HashingWriter::new(io::sink());
@@ -675,6 +635,7 @@ fn tree_metadata(doc: &TreeDoc, exchange_hash: Option<String>) -> TreeSidecar {
 
 /// An open document plus what's needed to write its file back.
 pub struct Opened {
+    pub save_refusal: Option<&'static str>,
     pub doc: SequenceDoc,
     pub format: Format,
     /// For FASTA: the original file, so records other than the open one are
@@ -682,20 +643,15 @@ pub struct Opened {
     pub fasta: Option<Arc<fasta::IndexedFasta>>,
 }
 
-// Preserve the public loaders' historical filesystem error variants: FASTA
-// used the IO crate's wrapper; GenBank and trees used std filesystem reads.
-fn open_source(path: &Path, format: Format) -> Result<Source> {
-    Source::open(path).map_err(|error| match (format, error) {
-        (Format::GenBank | Format::Tree, basecraft_io::Error::Io(error)) => Error::Io(error),
-        (_, error) => Error::Format(error),
-    })
-}
-
 /// Open the first record of a sequence file.
 pub fn open(path: &Path) -> Result<Opened> {
     let format = Format::from_path(path)?;
+    if format == Format::GenBank {
+        let (record, count, _) = genbank::open_hashed(path)?;
+        return Ok(opened_genbank(record, count));
+    }
     if matches!(format, Format::Fasta | Format::GenBank) {
-        return open_from(path, open_source(path, format)?);
+        return open_from(path, Source::open(path)?);
     }
     open_from(path, Source::from_vec(Vec::new()))
 }
@@ -714,17 +670,22 @@ pub fn open_from(path: &Path, source: Source) -> Result<Opened> {
             path.display()
         ))),
         Format::GenBank => {
-            let rec = genbank::parse(source.bytes())?
-                .into_iter()
-                .next()
-                .ok_or_else(|| Error::Empty(path.to_path_buf()))?;
-            Ok(Opened {
-                doc: SequenceDoc::from_genbank(rec),
-                format,
-                fasta: None,
-            })
+            let (record, count) = genbank::parse_first(source.bytes())?;
+            Ok(opened_genbank(record, count))
         }
         Format::Fasta => open_fasta_from(path, Arc::new(fasta::IndexedFasta::from_source(source)?)),
+    }
+}
+
+const MULTI_RECORD_GFF: &str = "Cannot save a multi-record FASTA file with a GFF3 companion: annotations for the other records would be lost. Full multi-record saving is not supported yet.";
+const MULTI_RECORD_GENBANK: &str = "Cannot save a GenBank file with more than one record: the other records would be lost. Full multi-record saving is not supported yet.";
+
+fn opened_genbank(record: genbank::Record, count: usize) -> Opened {
+    Opened {
+        doc: SequenceDoc::from_genbank(record),
+        format: Format::GenBank,
+        fasta: None,
+        save_refusal: (count > 1).then_some(MULTI_RECORD_GENBANK),
     }
 }
 
@@ -757,6 +718,8 @@ fn open_fasta_with_gff(
     let features = gff.and_then(|g| g.sequences.into_iter().find(|s| s.seqid == name));
     let doc = SequenceDoc::from_fasta(Arc::clone(&file), 0, features);
     Ok(Opened {
+        save_refusal: (file.index.records.len() > 1 && gff_bytes.is_some())
+            .then_some(MULTI_RECORD_GFF),
         doc,
         format: Format::Fasta,
         fasta: Some(file),
@@ -765,6 +728,9 @@ fn open_fasta_with_gff(
 
 /// Serialise the main file of a document.
 pub fn write_main(opened: &Opened, w: &mut dyn Write) -> io::Result<()> {
+    if let Some(message) = opened.save_refusal {
+        return Err(io::Error::new(io::ErrorKind::Unsupported, message));
+    }
     let doc = &opened.doc;
     match opened.format {
         Format::GenBank => genbank::write(w, &doc.to_genbank()),
@@ -1167,8 +1133,7 @@ fn extract_range(doc: &SequenceDoc, start: u64, end: u64) -> genbank::Record {
 struct DelimitationSidecar {
     version: u32,
     exchange_hash: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    path_base: Option<PathBuf>,
+    path_base: PathBuf,
     workspace: basecraft_protocol::delimitation::DelimitationWorkspace,
 }
 
@@ -1202,19 +1167,15 @@ fn load_delimitation_bytes(
     }
     if let Some(source) = captured_side {
         let side: DelimitationSidecar = serde_json::from_slice(source.bytes())?;
-        if !matches!(side.version, 1 | 2) || side.exchange_hash != exchange_hash {
-            return Err(crate::error::invalid(
-                "SPART sidecar version or exchange hash differs",
-            ));
+        if side.version != 2 || side.exchange_hash != exchange_hash {
+            return Err(Error::Damaged {
+                path: tree_sidecar(path),
+                detail: "SPART sidecar version or exchange hash differs".into(),
+            });
         }
         work = side.workspace;
-        if side.version == 2 {
-            let old = side
-                .path_base
-                .ok_or_else(|| crate::error::invalid("Species metadata has no path base"))?;
-            let new = path.parent().unwrap_or(Path::new(".")).canonicalize()?;
-            rebase_delimitation_paths(&mut work, &old, &new);
-        }
+        let new = path.parent().unwrap_or(Path::new(".")).canonicalize()?;
+        rebase_delimitation_paths(&mut work, &side.path_base, &new);
     }
     basecraft_docs::delimitation::validate(&work).map_err(|e| crate::error::invalid(e.0))?;
     Ok(work)
@@ -1231,21 +1192,6 @@ pub fn write_delimitation(
         basecraft_io::spart::write_text(work).0
     };
     w.write_all(text.as_bytes())
-}
-
-pub fn write_delimitation_sidecar(
-    work: &basecraft_protocol::delimitation::DelimitationWorkspace,
-    hash: &str,
-    w: &mut dyn Write,
-) -> io::Result<()> {
-    let side = DelimitationSidecar {
-        version: 1,
-        exchange_hash: hash.into(),
-        path_base: None,
-        workspace: work.clone(),
-    };
-    serde_json::to_writer_pretty(&mut *w, &side)?;
-    writeln!(w)
 }
 
 pub fn write_delimitation_sidecar_at(
@@ -1273,7 +1219,7 @@ pub(crate) fn write_delimitation_sidecar_in(
     let side = DelimitationSidecar {
         version: 2,
         exchange_hash: hash.into(),
-        path_base: Some(base.to_path_buf()),
+        path_base: base.to_path_buf(),
         workspace: work.clone(),
     };
     serde_json::to_writer_pretty(&mut *w, &side)?;

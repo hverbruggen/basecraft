@@ -28,18 +28,10 @@ impl Session {
     /// Unlike a separate [`files::kind`] probe, this does not reread the main
     /// file to classify it. Existing companion validation still applies.
     pub fn open_classified(&mut self, path: &Path) -> Result<(DocId, files::Kind)> {
-        self.open_inner(path, false)
+        self.open_inner(path)
     }
 
-    pub(crate) fn open_replay_snapshot(&mut self, path: &Path) -> Result<DocId> {
-        self.open_inner(path, true).map(|(id, _)| id)
-    }
-
-    pub(super) fn open_inner(
-        &mut self,
-        path: &Path,
-        verified_snapshot: bool,
-    ) -> Result<(DocId, files::Kind)> {
+    pub(super) fn open_inner(&mut self, path: &Path) -> Result<(DocId, files::Kind)> {
         if crate::sanger_review::evidence_kind(path).is_some() {
             return Err(invalid(
                 "Saved Sanger reviews and drafts are edited only in the Basecraft application; read a saved Sanger review's history, methods and provenance with the history, methods and provenance commands",
@@ -48,8 +40,7 @@ impl Session {
         self.flush()?;
         let disk_stamp = crate::input_evidence::stamp(path)?;
         let format = files::Format::from_path(path)?;
-        let captured =
-            files::capture_load(path, format, verified_snapshot)?;
+        let captured = files::capture_load(path, format)?;
         let content = captured.content;
         let key = self.relative(path);
         let retain_companions = content.as_document().retains_companions();
@@ -58,7 +49,7 @@ impl Session {
             .iter()
             .enumerate()
             .filter(|(i, _)| *i == 0 || retain_companions)
-            .map(|(_, (path, _, hash))| (self.relative(path), hash.clone()))
+            .map(|(_, (path, hash))| (self.relative(path), hash.clone()))
             .collect();
         let absent_sidecars = captured
             .stamps
@@ -77,7 +68,7 @@ impl Session {
         let source_files = captured
             .files
             .iter()
-            .map(|(path, _, hash)| {
+            .map(|(path, hash)| {
                 Ok(basecraft_protocol::provenance::InputReference {
                     path: self.relative(path),
                     stamp: crate::input_evidence::stamp(path)?,
@@ -130,25 +121,44 @@ impl Session {
             .docs
             .get(id.0)
             .ok_or(crate::Error::UnknownDocument { id })?;
-        if let Some(entry) = slot.baseline.clone() {
-            if self.source_changed(id) {
+        if self.source_changed(id) {
+            if slot
+                .baseline
+                .as_ref()
+                .is_some_and(|entry| matches!(entry.op, Op::Open { .. }))
+                && !slot.baseline_logged
+            {
                 return Err(crate::Error::ChangedOnDisk {
                     path: self.resolve(&slot.key),
                 });
             }
+            if self.log.is_some() {
+                self.flush()?;
+                let entry = self.recovery_checkpoint(id)?;
+                self.docs[id.0].recovery_boundary = Some(entry.id.clone());
+                self.pending_baselines.push(entry);
+                self.refresh_source_stamps(id);
+                self.docs[id.0].origin_issue = Some("The original changed on disk. Your current edits have been preserved in recovery; save them to a new file.".into());
+                self.docs[id.0].baseline = None;
+            }
+            return Ok(());
+        }
+        if let Some(entry) = self.docs[id.0].baseline.clone() {
             if self.store_objects {
                 let directory = objects_dir(&self.storage_root);
                 std::fs::create_dir_all(&directory)?;
+                let stage = tempfile::tempdir_in(&directory)?;
                 for (key, hash) in &entry.result.hashes {
                     let source = self.resolve(key);
                     let target = directory.join(hash.trim_start_matches("b3:"));
-                    match std::fs::hard_link(&source, &target) {
-                        Ok(()) => {}
+                    let link = stage.path().join("input");
+                    match std::fs::hard_link(&source, &link) {
+                        // Replace any old link whose inode was modified externally.
+                        Ok(()) => std::fs::rename(&link, &target)?,
                         Err(error)
                             if matches!(
                                 error.kind(),
                                 std::io::ErrorKind::CrossesDevices
-                                    | std::io::ErrorKind::AlreadyExists
                                     | std::io::ErrorKind::Unsupported
                                     | std::io::ErrorKind::PermissionDenied
                             ) => {}
@@ -168,13 +178,6 @@ impl Session {
                 self.pending_baselines.push(entry);
             }
             self.docs[id.0].baseline = None;
-        } else if self.log.is_some() && self.source_changed(id) {
-            self.flush()?;
-            let entry = self.recovery_checkpoint(id)?;
-            self.docs[id.0].recovery_boundary = Some(entry.id.clone());
-            self.pending_baselines.push(entry);
-            self.refresh_source_stamps(id);
-            self.docs[id.0].origin_issue = Some("The original changed on disk. Your current edits have been preserved in recovery; save them to a new file.".into());
         }
         Ok(())
     }
@@ -194,18 +197,26 @@ impl Session {
     /// An exceptional checkpoint: external modification or undo across a save.
     /// Write each saved form once, then move it into the content-addressed store.
     pub(super) fn recovery_checkpoint(&self, id: DocId) -> Result<basecraft_protocol::LogEntry> {
+        if let Some(message) = self.docs[id.0].content.as_document().save_refusal() {
+            return Err(crate::Error::Unsupported(message.into()));
+        }
         let directory = objects_dir(&self.storage_root);
         std::fs::create_dir_all(&directory)?;
         let stage = tempfile::tempdir_in(&directory)?;
         let key = &self.docs[id.0].key;
-        let target = stage.path().join(key);
+        let local = crate::replay::scratch_key(key).map_err(|detail| crate::Error::Damaged {
+            path: self.storage_root.clone(),
+            detail,
+        })?;
+        let target = stage.path().join(&local);
+        let original = self.resolve(key);
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let publication = crate::documents::WritePublication::Recovery {
-            stage: stage.path().to_path_buf(),
-            destination: self.root.clone(),
-            stores: Default::default(),
+            stage: target.parent().expect("checkpoint parent").to_path_buf(),
+            destination: original.parent().expect("source parent").to_path_buf(),
+            stores: std::sync::Mutex::default(),
         };
         let written = self.docs[id.0].content.as_document().write(
             &target,
@@ -218,10 +229,22 @@ impl Session {
             let name = path.strip_prefix(stage.path()).map_err(|_| {
                 crate::Error::Unsupported("Recovery writer escaped its staging folder".into())
             })?;
+            let name = if Path::new(key).is_absolute() {
+                original.parent().expect("source parent").join(
+                    path.strip_prefix(target.parent().expect("checkpoint parent"))
+                        .map_err(|_| {
+                            crate::Error::Unsupported(
+                                "Recovery writer escaped its document folder".into(),
+                            )
+                        })?,
+                )
+            } else {
+                name.to_path_buf()
+            };
             hashes.push((name.to_string_lossy().into_owned(), hash.clone()));
             std::fs::rename(&path, directory.join(hash.trim_start_matches("b3:")))?;
         }
-        Ok(self.entry(
+        let mut entry = self.entry(
             id,
             self.actor.clone(),
             Op::Open { path: key.clone() },
@@ -229,7 +252,9 @@ impl Session {
                 hashes,
                 feature: None,
             },
-        ))
+        );
+        entry.source.as_mut().expect("checkpoint source").checkpoint = true;
+        Ok(entry)
     }
 
     pub(crate) fn restore_recovery_ids(

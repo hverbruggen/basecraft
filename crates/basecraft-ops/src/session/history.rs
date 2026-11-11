@@ -13,6 +13,7 @@ impl Session {
                 Op::Open { .. } | Op::CreateSequence { .. } | Op::Save { .. }
             )
             .then(|| basecraft_protocol::ops::SourceRecord {
+                checkpoint: false,
                 feature_slots: self.docs[doc.0]
                     .content
                     .sequence()
@@ -320,8 +321,9 @@ impl Session {
     }
 
     fn write_undo(&mut self, id: DocId, entry: &LogEntry, of: &str) -> Result<()> {
+        let changed = self.source_changed(id);
         if self.log.is_some()
-            && (self.source_changed(id)
+            && (changed
                 || self.docs[id.0]
                     .recovery_boundary
                     .as_deref()
@@ -330,7 +332,11 @@ impl Session {
             let checkpoint = self.recovery_checkpoint(id)?;
             self.write_entries(&[entry.clone(), checkpoint.clone()])?;
             self.docs[id.0].recovery_boundary = Some(checkpoint.id);
+            self.docs[id.0].baseline = None;
             self.refresh_source_stamps(id);
+            if changed {
+                self.docs[id.0].origin_issue = Some("The original changed on disk. Your current edits have been preserved in recovery; save them to a new file.".into());
+            }
         } else {
             self.write(entry)?;
         }

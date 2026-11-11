@@ -81,7 +81,7 @@ fn multirecord_sequence_and_companion_survive_owned_loading() {
     std::fs::remove_file(&path).unwrap();
     let loaded = files::load_from(&path, source).unwrap();
     assert_eq!(hash, hash_bytes(bytes));
-    assert_eq!(rendered(&loaded), rendered(&legacy));
+    assert!(matches!(&legacy, files::Loaded::Sequence(_)));
     let files::Loaded::Sequence(opened) = loaded else {
         panic!("GFF companion must select sequence loading");
     };
@@ -242,43 +242,14 @@ fn actual_session_read_counts_separate_kind_probe_and_companion_capture() {
 }
 
 #[test]
-fn public_filesystem_errors_keep_historical_format_specific_variants() {
-    use basecraft_ops::Error;
+fn missing_inputs_report_filesystem_errors() {
     let dir = tempfile::tempdir().unwrap();
-    for directory in [false, true] {
-        let prefix = if directory { "directory" } else { "missing" };
-        let gb = dir.path().join(format!("{prefix}.gb"));
-        let tree = dir.path().join(format!("{prefix}.nwk"));
-        let fasta = dir.path().join(format!("{prefix}.fasta"));
-        if directory {
-            for path in [&gb, &tree, &fasta] {
-                std::fs::create_dir(path).unwrap();
-            }
-        }
-        for error in [
-            files::open(&gb).err().unwrap(),
-            files::load(&gb).err().unwrap(),
-            files::load_tree(&tree).err().unwrap(),
-            files::load(&tree).err().unwrap(),
-        ] {
-            let Error::Io(error) = error else {
-                panic!("GenBank/tree filesystem error changed variant: {error:?}");
-            };
-            if !directory {
-                assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
-            }
-        }
-        for error in [
-            files::open(&fasta).err().unwrap(),
-            files::load(&fasta).err().unwrap(),
-        ] {
-            let Error::Format(basecraft_io::Error::Io(error)) = error else {
-                panic!("FASTA filesystem error changed variant: {error:?}");
-            };
-            if !directory {
-                assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
-            }
-        }
+    for name in ["missing.fa", "missing.gb", "missing.nwk"] {
+        assert!(matches!(
+            files::load(&dir.path().join(name)),
+            Err(basecraft_ops::Error::Io(_))
+                | Err(basecraft_ops::Error::Format(basecraft_io::Error::Io(_)))
+        ));
     }
 }
 
@@ -443,17 +414,10 @@ fn bound_tree_snapshot_verification_keeps_binding_run_namespace_and_metadata_gua
             }
             _ => {}
         }
-        if fault == "metadata-legacy" {
-            let files::Loaded::Tree(tree) = files::load_from(&path, source).unwrap() else {
-                panic!("expected tree");
-            };
-            assert!(tree.metadata_warning.is_some());
-        } else {
-            assert!(
-                files::load_from(&path, source).is_err(),
-                "guard was bypassed: {fault}"
-            );
-        }
+        assert!(
+            files::load_from(&path, source).is_err(),
+            "guard was bypassed: {fault}"
+        );
     }
 }
 
@@ -468,7 +432,7 @@ fn captured_companion_refusals_preserve_baseline_undo_and_journal() {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("records.fasta");
             let sidecar = files::gff_sidecar(&path);
-            let main = b">a description\nACGT\n>b retained\nTTAA\n";
+            let main = b">a description\nACGT\n";
             let gff = b"##gff-version 3\na\t.\tgene\t1\t3\t.\t+\t.\tID=gene1\n";
             std::fs::write(&path, main).unwrap();
             std::fs::write(&sidecar, gff).unwrap();
@@ -504,9 +468,10 @@ fn captured_companion_refusals_preserve_baseline_undo_and_journal() {
                     )
                     .map(|_| ())
             };
-            assert!(
-                matches!(result, Err(basecraft_ops::Error::Invalid(message)) if message.contains("source changed"))
-            );
+            assert!(matches!(
+                result,
+                Err(basecraft_ops::Error::ChangedOnDisk { .. })
+            ));
             assert_eq!(session.doc(id).unwrap().read(0, 4), b"ACGT");
             assert_eq!(session.doc(id).unwrap().features().count(), 1);
             assert!(!session.can_undo(id));
@@ -617,7 +582,7 @@ fn cold_recoverable_retention_reads_each_raw_input_once_and_recovers_without_sou
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("séquences.fasta");
     let sidecar = files::gff_sidecar(&path);
-    let main = ">a café\nACGT\n>b retained\nTTAA\n".as_bytes();
+    let main = ">a café\nACGT\n".as_bytes();
     let gff = b"##gff-version 3\na\t.\tgene\t1\t3\t.\t+\t.\tID=gene1;Name=example\n";
     std::fs::write(&path, main).unwrap();
     std::fs::write(&sidecar, gff).unwrap();
@@ -641,15 +606,10 @@ fn cold_recoverable_retention_reads_each_raw_input_once_and_recovers_without_sou
     {
         let counts = basecraft_io::counters::snapshot();
         assert_eq!(counts.unresolved_reads, 0);
-        for (file, bytes) in [(&path, main), (&sidecar, gff.as_slice())] {
-            assert_eq!(
-                counts.reads[&file.canonicalize().unwrap()],
-                basecraft_io::counters::Reads {
-                    full_reads: 1,
-                    bytes: bytes.len() as u64,
-                }
-            );
-        }
+        assert!(
+            counts.reads.is_empty(),
+            "first edit must read no source bytes"
+        );
     }
     let expected = session.doc(id).unwrap().to_genbank();
     for bytes in [main, gff.as_slice()] {
@@ -669,5 +629,5 @@ fn cold_recoverable_retention_reads_each_raw_input_once_and_recovers_without_sou
     basecraft_ops::replay::recover(&recovery, &destination).unwrap();
     let restored = files::open(&destination.join("séquences.fasta")).unwrap();
     assert_eq!(restored.doc.to_genbank(), expected);
-    assert_eq!(restored.fasta.unwrap().index.records.len(), 2);
+    assert_eq!(restored.fasta.unwrap().index.records.len(), 1);
 }

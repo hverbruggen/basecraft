@@ -55,47 +55,6 @@ fn paths(root: &std::path::Path) -> basecraft_platform::paths::AppPaths {
 }
 
 #[test]
-fn legacy_metadata_opens_with_warning_and_survives_explicit_save() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("tree.nwk");
-    std::fs::write(&path, "((a,b)90,c);\n").unwrap();
-    let side = files::tree_sidecar(&path);
-    // Use the complete default style serializer to keep this a real old format.
-    let mut value = serde_json::to_value(basecraft_protocol::TreeStyle::default()).unwrap();
-    let style = value.take();
-    let bytes = serde_json::to_vec(&serde_json::json!({"supports":[{"name":"Do not apply","source":"old"}],"annotations":{},"style":style})).unwrap();
-    std::fs::write(&side, &bytes).unwrap();
-    let opened = files::load_tree(&path).unwrap();
-    assert!(opened.metadata_warning.is_some());
-    assert_eq!(opened.doc.supports()[0].name, "Support");
-    assert_eq!(std::fs::read(&side).unwrap(), bytes);
-    let mut session = Session::new(dir.path());
-    let doc = session.open(&path).unwrap();
-    assert!(
-        session
-            .document_record(doc)
-            .unwrap()
-            .report()
-            .unwrap()
-            .warnings
-            .iter()
-            .any(|w| w.contains("Unverified legacy"))
-    );
-    session
-        .apply(doc, Op::TreeLadderize { small_first: true })
-        .unwrap();
-    session.save(doc, None).unwrap();
-    assert!(
-        std::fs::read_dir(dir.path()).unwrap().flatten().any(|e| e
-            .file_name()
-            .to_string_lossy()
-            .contains("unverified-")
-            && std::fs::read(e.path()).ok().as_deref() == Some(bytes.as_slice()))
-    );
-    assert!(files::load_tree(&path).unwrap().metadata_warning.is_none());
-}
-
-#[test]
 fn hidden_binding_errors_never_fall_back_to_adjacent_metadata() {
     use basecraft_ops::analysis_store::ArtifactRun;
     let dir = tempfile::tempdir().unwrap();

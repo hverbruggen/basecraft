@@ -21,6 +21,7 @@
     },
     "session": "01SYNTHETICSESSION000000000",
     "source": {
+      "checkpoint": false,
       "feature_slots": [],
       "files": [],
       "node_ids": [],

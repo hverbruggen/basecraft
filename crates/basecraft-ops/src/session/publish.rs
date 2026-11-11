@@ -272,30 +272,10 @@ impl Session {
                 && matches!(e.op, Op::Open { .. })
         }) {
             for (key, hash) in &event.result.hashes {
-                let original = self.resolve(key);
-                if let Some((_, Some(metadata))) = self.docs[id.0]
-                    .source_stamps
-                    .iter()
-                    .find(|(path, _)| *path == original)
-                    && !objects_dir(&self.storage_root)
-                        .join(hash.trim_start_matches("b3:"))
-                        .is_file()
+                if !objects_dir(&self.storage_root)
+                    .join(hash.trim_start_matches("b3:"))
+                    .is_file()
                 {
-                    let stamp = basecraft_protocol::provenance::FileStamp {
-                        size: metadata.len(),
-                        modified_seconds: metadata
-                            .modified()?
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs(),
-                        modified_nanos: metadata
-                            .modified()?
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .subsec_nanos(),
-                        device: None,
-                        inode: None,
-                    };
                     inputs.push(ArtifactRevision {
                         id: format!("{}:input:{}", event.id, inputs.len()),
                         logical_name: Path::new(key)
@@ -304,14 +284,13 @@ impl Session {
                             .to_string_lossy()
                             .into_owned(),
                         hash: hash.clone(),
-                        size: metadata.len(),
+                        size: event
+                            .source
+                            .as_ref()
+                            .and_then(|source| source.files.iter().find(|file| file.path == *key))
+                            .map_or(0, |file| file.stamp.size),
                         retained: None,
-                        reference: Some(basecraft_protocol::provenance::InputReference {
-                            path: crate::input_evidence::relative(&bundle, &original)?,
-                            stamp,
-                            hash: hash.clone(),
-                            extra: std::collections::BTreeMap::new(),
-                        }),
+                        reference: None,
                     });
                     continue;
                 }
