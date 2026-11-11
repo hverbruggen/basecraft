@@ -21,6 +21,18 @@ pub enum Error {
         id: crate::DocId,
         expected: crate::files::Kind,
     },
+    #[error("{path} changed on disk")]
+    ChangedOnDisk { path: PathBuf },
+    #[error("{path} was not found")]
+    NotFound { path: PathBuf },
+    #[error("{path}: {detail}")]
+    Damaged { path: PathBuf, detail: String },
+    #[error("{what} exceeds the limit of {limit}")]
+    Limit { what: String, limit: u64 },
+    #[error("{0}")]
+    Unsupported(String),
+    #[error("{0}")]
+    Busy(String),
     #[error("invalid operation: {0}")]
     Invalid(String),
     #[error("{0}")]
@@ -47,6 +59,12 @@ impl Error {
     /// Stable category for callers; message text is for people, not dispatch.
     pub fn code(&self) -> &'static str {
         match self {
+            Self::ChangedOnDisk { .. } => "changed_on_disk",
+            Self::NotFound { .. } => "not_found",
+            Self::Damaged { .. } => "damaged",
+            Self::Limit { .. } => "limit",
+            Self::Unsupported(_) => "unsupported",
+            Self::Busy(_) => "busy",
             Self::UnknownDocument { .. } => "unknown_document",
             Self::WrongKind { .. } => "wrong_document_kind",
             Self::Access(crate::access::AccessError::Denied(_)) => "permission_denied",

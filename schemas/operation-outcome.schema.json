@@ -112,6 +112,14 @@
     "OperationErrorCode": {
       "type": "string",
       "enum": [
+        "changed_on_disk",
+        "wrong_document_kind",
+        "unknown_document",
+        "not_found",
+        "damaged",
+        "limit",
+        "unsupported",
+        "busy",
         "invalid_arguments",
         "incompatible_contract",
         "plugin_disabled",

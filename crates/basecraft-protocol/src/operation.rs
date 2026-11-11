@@ -243,6 +243,14 @@ impl RuntimeState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum OperationErrorCode {
+    ChangedOnDisk,
+    WrongDocumentKind,
+    UnknownDocument,
+    NotFound,
+    Damaged,
+    Limit,
+    Unsupported,
+    Busy,
     InvalidArguments,
     IncompatibleContract,
     PluginDisabled,

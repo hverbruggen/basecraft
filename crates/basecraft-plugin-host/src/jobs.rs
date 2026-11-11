@@ -1098,13 +1098,8 @@ pub fn error_value(
 }
 
 pub fn error_code(error: &Error) -> OperationErrorCode {
-    if matches!(
-        error,
-        Error::Ops(
-            basecraft_ops::Error::UnknownDocument { .. } | basecraft_ops::Error::WrongKind { .. }
-        )
-    ) {
-        return OperationErrorCode::InvalidArguments;
+    if let Error::Ops(error) = error {
+        return ops_error_code(error);
     }
     let message = error.to_string();
     if message.contains("permission_denied") {
@@ -1125,5 +1120,42 @@ pub fn error_code(error: &Error) -> OperationErrorCode {
         OperationErrorCode::UnsupportedInput
     } else {
         OperationErrorCode::InvalidArguments
+    }
+}
+
+/// Preserve typed core failures across the CLI, MCP and registered job adapters.
+pub fn ops_error_code(error: &basecraft_ops::Error) -> OperationErrorCode {
+    use basecraft_ops::Error as Core;
+    match error {
+        Core::ChangedOnDisk { .. } => OperationErrorCode::ChangedOnDisk,
+        Core::WrongKind { .. } => OperationErrorCode::WrongDocumentKind,
+        Core::UnknownDocument { .. } => OperationErrorCode::UnknownDocument,
+        Core::NotFound { .. } => OperationErrorCode::NotFound,
+        Core::Damaged { .. } => OperationErrorCode::Damaged,
+        Core::Limit { .. } => OperationErrorCode::Limit,
+        Core::Unsupported(_) | Core::UnknownFormat(_) => OperationErrorCode::Unsupported,
+        Core::Busy(_) => OperationErrorCode::Busy,
+        Core::Access(basecraft_ops::access::AccessError::Denied(_)) => {
+            OperationErrorCode::PermissionDenied
+        }
+        Core::Access(basecraft_ops::access::AccessError::DestinationExists) => {
+            OperationErrorCode::OutputConflict
+        }
+        Core::EvidenceConflict(_)
+        | Core::EvidenceCheckIncomplete(_)
+        | Core::SaveCheckRequired(_) => OperationErrorCode::EvidenceIncomplete,
+        Core::SaveDecisionStale(_) => OperationErrorCode::StaleRevision,
+        Core::PublishedWithFailure(_) => OperationErrorCode::PublicationIncomplete,
+        Core::Io(e)
+        | Core::Access(basecraft_ops::access::AccessError::Io(e))
+        | Core::Format(basecraft_io::Error::Io(e)) => match e.kind() {
+            std::io::ErrorKind::NotFound => OperationErrorCode::NotFound,
+            std::io::ErrorKind::PermissionDenied => OperationErrorCode::PermissionDenied,
+            _ => OperationErrorCode::ToolFailure,
+        },
+        Core::Json(_) | Core::Format(_) => OperationErrorCode::Damaged,
+        Core::Empty(_) | Core::Invalid(_) | Core::NothingTo(_) => {
+            OperationErrorCode::InvalidArguments
+        }
     }
 }
