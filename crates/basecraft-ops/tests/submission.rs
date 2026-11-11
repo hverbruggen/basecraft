@@ -821,7 +821,7 @@ fn inclusion_preview_is_atomic_stale_safe_undoable_and_replayable() {
     submission::edit(
         &mut session,
         doc,
-        SubmissionEdit::SetBatchDraft {
+        SubmissionEdit::SetBatch {
             batch: BatchSettings {
                 marker: Marker::Rrna {
                     product: "18S ribosomal RNA".into(),

@@ -66,20 +66,8 @@
       ]
     },
     "AccessionPolicy": {
-      "description": "Legacy suggestions are retained on old documents. Configured sources prevent\nspecimen identifiers elsewhere in a name from influencing inclusion suggestions.",
+      "description": "Where accession candidates come from. Configured sources keep specimen\nidentifiers elsewhere in a name from influencing inclusion suggestions.",
       "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "policy": {
-              "type": "string",
-              "const": "legacy_heuristic"
-            }
-          },
-          "required": [
-            "policy"
-          ]
-        },
         {
           "type": "object",
           "properties": {
@@ -226,7 +214,7 @@
           "type": "string"
         },
         "middle": {
-          "description": "Middle names or initials, without the first name's, such as `Marie` or `M.R.`.\nBare uppercase runs (`MR`) retain their legacy initials meaning; uppercase full names are ambiguous.",
+          "description": "Middle names or initials, without the first name's, such as `Marie` or `M.R.`.\nBare uppercase runs (`MR`) are initials; uppercase full names are ambiguous.",
           "type": "string"
         }
       },
@@ -4572,28 +4560,12 @@
           ]
         },
         {
+          "description": "Save annotation settings, keeping a draft of each marker type.",
           "type": "object",
           "properties": {
             "action": {
               "type": "string",
               "const": "set_batch"
-            },
-            "batch": {
-              "$ref": "#/$defs/BatchSettings"
-            }
-          },
-          "required": [
-            "action",
-            "batch"
-          ]
-        },
-        {
-          "description": "Save annotation settings with type-specific drafts. Legacy `set_batch`\nretains its historical meaning so previously saved histories replay exactly.",
-          "type": "object",
-          "properties": {
-            "action": {
-              "type": "string",
-              "const": "set_batch_draft"
             },
             "batch": {
               "$ref": "#/$defs/BatchSettings"

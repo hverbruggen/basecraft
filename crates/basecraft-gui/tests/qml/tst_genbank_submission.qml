@@ -132,7 +132,7 @@ Item {
             box.toggled()
             compare(edits.count, 1)
             const edit = JSON.parse(edits.signalArguments[0][0])
-            compare(edit.action, "set_batch_draft")
+            compare(edit.action, "set_batch")
             compare(edit.batch.marker, {kind: "its", components: ["ITS1", "5.8S"]})
             compare(edit.batch.organelle, "chloroplast")
             compare(edit.batch.genetic_code, 11)

@@ -318,18 +318,12 @@ mod tests {
         }
         assert_eq!(reversed.reverse_complemented(), draft);
 
-        for secondary in [serde_json::Value::Null, serde_json::json!("missing")] {
-            let mut legacy = native.clone();
-            if secondary.is_null() {
-                legacy["secondary_sequence"] = secondary;
-            } else {
-                legacy.as_object_mut().unwrap().remove("secondary_sequence");
-            }
-            let calls: TraceCalls = serde_json::from_value(legacy).unwrap();
-            assert_eq!(calls.secondary_sequence, None);
-            draft.inputs[0].calls = Some(calls);
-            draft.validate().unwrap();
-        }
+        let mut without = native.clone();
+        without["secondary_sequence"] = serde_json::Value::Null;
+        let calls: TraceCalls = serde_json::from_value(without).unwrap();
+        assert_eq!(calls.secondary_sequence, None);
+        draft.inputs[0].calls = Some(calls);
+        draft.validate().unwrap();
         for (key, value) in [
             ("secondary_sequence", serde_json::json!("TA")),
             ("secondary_sequence", serde_json::json!("T-T")),

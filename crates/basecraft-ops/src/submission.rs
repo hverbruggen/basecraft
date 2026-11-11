@@ -133,7 +133,7 @@ pub fn describe(edit: &SubmissionEdit) -> String {
         SubmissionEdit::SetSource { source } => format!("Submission source {}", source.document),
         SubmissionEdit::SetRows { rows } => format!("Submission decisions for {} rows", rows.len()),
         SubmissionEdit::ConfirmSelection { .. } => "Confirmed submission row selection".into(),
-        SubmissionEdit::SetBatch { .. } | SubmissionEdit::SetBatchDraft { .. } => {
+        SubmissionEdit::SetBatch { .. } => {
             "Submission batch settings".into()
         }
         SubmissionEdit::SetFrames { frames, clear } => format!(
