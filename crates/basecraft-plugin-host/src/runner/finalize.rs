@@ -1,9 +1,9 @@
 //! Publish validated artifacts and retain an outcome for repair.
 use super::{
     ArtifactDestination, ArtifactRevision, BTreeMap, CollectionExportIntent, CollectionIntent,
-    Completeness, Error, InvokeResult, OperationOutcome, Path, PathBuf, PreparedOperation,
-    Publication, PublishedArtifact, Result, export_collection, export_member, file_tool,
-    input_evidence, verify_collection, verify_member_receipt,
+    Error, InvokeResult, OperationOutcome, Path, PathBuf, PreparedOperation, PublishedArtifact,
+    Result, export_collection, export_member, file_tool, input_evidence, verify_collection,
+    verify_member_receipt,
 };
 
 type PublishedFiles = Vec<(String, PathBuf, String)>;
@@ -385,77 +385,27 @@ impl PreparedOperation {
         outcome: &mut OperationOutcome,
     ) -> Result<()> {
         outcome.data = result.data.as_deref().cloned();
-        let previous = std::fs::read(self.run.directory().join("manifest.json"))
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<Publication>(&bytes).ok());
-        let (events, effective_edits) = previous
-            .map(|p| (p.events, p.effective_edits))
-            .unwrap_or_default();
-        let publication = Publication {
-            schema_version: 1,
-            id: self.run.id().into(),
-            session: basecraft_platform::process_instance().into(),
-            parents: vec![],
-            parent_hashes: BTreeMap::new(),
-            created: basecraft_platform::now_rfc3339(),
-            origin: format!(
+        let publication = basecraft_ops::records::publish_run(
+            self.run.directory(),
+            self.run.id(),
+            format!(
                 "{} executed by {}; initiated by {}",
                 self.operation.id, self.operation.package.manifest.id, self.initiator
             ),
-            inputs: self.ledger_inputs.clone(),
-            outputs: publication_outputs,
-            events,
-            effective_edits,
-            completeness: Completeness {
-                ancestry_known: false,
-                input_bytes_available: true,
-                execution_specification_available: true,
-                replay_verified: false,
-            },
-            report_template_version: 2,
-        };
-        basecraft_ops::records::publish_operation(self.run.directory(), &publication)?;
+            self.ledger_inputs.clone(),
+            publication_outputs,
+        )?;
         if self.document.is_none() && self.sequence.is_none() {
             let (actor, params) = self.tool_activity(outcome)?;
-            let activity = basecraft_protocol::LogEntry {
-                v: basecraft_protocol::ops::LOG_VERSION,
-                id: self.run.id().into(),
-                t: self.started.clone(),
-                host: String::new(),
-                session: publication.session.clone(),
+            let activity = basecraft_ops::records::tool_run_entry(
+                &publication,
+                &self.started,
                 actor,
-                doc: self.operation.id.clone(),
-                op: basecraft_protocol::Op::ToolRun {
-                    plugin: self.operation.package.manifest.id.clone(),
-                    operation: self.operation.descriptor.implementation.clone(),
-                    params,
-                    inputs: self
-                        .ledger_inputs
-                        .iter()
-                        .map(|input| input.logical_name.clone())
-                        .collect(),
-                    outputs: publication
-                        .outputs
-                        .iter()
-                        .map(|output| output.logical_name.clone())
-                        .collect(),
-                },
-                result: basecraft_protocol::OpResult {
-                    hashes: self
-                        .ledger_inputs
-                        .iter()
-                        .chain(&publication.outputs)
-                        .map(|artifact| (artifact.logical_name.clone(), artifact.hash.clone()))
-                        .collect(),
-                    feature: None,
-                },
-                state: basecraft_protocol::DocState {
-                    counts: None,
-                    len: 0,
-                    features: 0,
-                    rows: None,
-                },
-            };
+                &self.operation.id,
+                &self.operation.package.manifest.id,
+                &self.operation.descriptor.implementation,
+                params,
+            );
             self.publication_input_record()?
                 .publish_operation_activity(&self.run, &activity)?;
         }

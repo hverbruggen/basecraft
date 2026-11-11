@@ -1,5 +1,4 @@
 use super::*;
-use crate::access::{Access, AccessError, Denial, ResourceAction, TrustedLegacy};
 
 #[test]
 fn reads_keep_bytes_and_enforce_shared_budget() {
@@ -9,37 +8,18 @@ fn reads_keep_bytes_and_enforce_shared_budget() {
     let mut remaining = 16;
     for _ in 0..2 {
         assert_eq!(
-            read_record_with_access(&path, &mut remaining, &TrustedLegacy).unwrap(),
+            read_record_with_budget(&path, &mut remaining).unwrap(),
             b"not JSON"
         );
     }
     assert_eq!(remaining, 0);
     assert!(matches!(
-        read_record_with_access(&path, &mut remaining, &TrustedLegacy),
+        read_record_with_budget(&path, &mut remaining),
         Err(crate::Error::Limit { limit: 0, .. })
     ));
     assert!(
         matches!(read_record(&root.path().join("missing")), Err(crate::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound)
     );
-}
-
-#[test]
-fn denied_reads_return_permission_error() {
-    struct Denied;
-    impl Access for Denied {
-        fn boundary(&self) -> Option<&Path> {
-            None
-        }
-        fn resource(&self, _: &Path, _: ResourceAction) -> crate::access::Result<PathBuf> {
-            Err(AccessError::Denied(Denial::OutsideRoot))
-        }
-    }
-    assert!(matches!(
-        read_record_with_access(Path::new("missing"), &mut 10, &Denied),
-        Err(crate::Error::Access(AccessError::Denied(
-            Denial::OutsideRoot
-        )))
-    ));
 }
 
 #[test]

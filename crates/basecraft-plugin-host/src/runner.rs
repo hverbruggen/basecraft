@@ -28,7 +28,7 @@ use basecraft_protocol::{
         PublishedArtifact,
     },
     plugin::InvokeResult,
-    provenance::{ArtifactRevision, Completeness, Publication},
+    provenance::{ArtifactRevision, Publication},
     records::{
         ExternalExecution, HostWorkflowExecution, JobIndexPlugin, JobIndexSource, LocalJobIndex,
     },
@@ -748,34 +748,14 @@ impl PreparedOperation {
         outcome: &OperationOutcome,
     ) -> Result<(basecraft_protocol::Actor, Value)> {
         let manifest = &self.operation.package.manifest;
-        // The external program and its process evidence, when the plugin reported
-        // them, name the software in history and methods text.
-        let execution: serde_json::Value = std::fs::read(self.run.artifact("execution.json")?)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default();
-        let tool = serde_json::from_value::<basecraft_protocol::plugin::ToolInfo>(
-            execution["tool"].clone(),
-        )
-        .ok();
-        let actor = tool.as_ref().map_or_else(
-            || basecraft_protocol::Actor::Plugin {
-                id: manifest.id.clone(),
-                version: manifest.version.clone(),
-            },
-            |tool| basecraft_protocol::Actor::Tool {
-                tool: tool.name.clone(),
-                version: tool.version.clone(),
-            },
-        );
         let mut params = json!({"requested":self.request.parameters,"effective":outcome.effective_parameters,
         "operation":self.operation.id,"pins":outcome.pins,"initiator":self.initiator,"run_id":outcome.run_id});
-        if !execution["execution"].is_null() {
-            params["_execution"] = execution["execution"].clone();
-        }
-        if !execution["tool"].is_null() {
-            params["_observed_tool"] = execution["tool"].clone();
-        }
+        let plugin = basecraft_protocol::Actor::Plugin {
+            id: manifest.id.clone(),
+            version: manifest.version.clone(),
+        };
+        let execution = self.run.artifact("execution.json")?;
+        let actor = basecraft_ops::records::tool_actor(&execution, plugin, &mut params);
         Ok((actor, params))
     }
 

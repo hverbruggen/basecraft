@@ -1,6 +1,10 @@
 //! Inspectable portable save history. No bundle content is ever executed.
 use crate::{Result, error::invalid};
-use basecraft_protocol::provenance::Publication;
+use basecraft_protocol::{
+    Actor, DocState, LogEntry, Op, OpResult,
+    provenance::{ArtifactRevision, Completeness, Publication},
+};
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Component, Path, PathBuf};
 
@@ -73,19 +77,7 @@ pub fn read_record(path: &Path) -> Result<Vec<u8>> {
 
 /// Share the per-record cap with callers enforcing an aggregate read budget.
 pub(crate) fn read_record_with_budget(path: &Path, remaining: &mut u64) -> Result<Vec<u8>> {
-    read_record_with_access(path, remaining, &crate::access::TrustedLegacy)
-}
-
-/// Authorize before this reader's metadata/open and use the returned spelling.
-/// This raw-byte entry is unwired: namespace safety belongs to the supplied
-/// access owner, not this reader. It does not decode records or call services.
-pub(crate) fn read_record_with_access(
-    path: &Path,
-    remaining: &mut u64,
-    access: &dyn crate::access::Access,
-) -> Result<Vec<u8>> {
-    let checked = access.resource(path, crate::access::ResourceAction::ReadFile)?;
-    let file = basecraft_platform::files::open_regular_read(&checked)?;
+    let file = basecraft_platform::files::open_regular_read(path)?;
     let length = file.metadata()?.len();
     read_record_from_open(file, length, remaining, 64 << 20, RecordLimit::Provenance)
 }
@@ -545,14 +537,113 @@ fn link_selected_inputs(bundle: &Path, publication: &Publication) -> Result<()> 
     crate::input_evidence::write_json(&path, &input)
 }
 
-/// Publish a host-validated operation using the ordinary provenance writer.
-/// Callers retain pending artifacts and report partial writes if this fails.
-pub fn publish_operation(bundle: &Path, publication: &Publication) -> Result<()> {
-    publish(bundle, publication)
+/// Publish a finished analysis run into its own bundle, keeping the events and
+/// effective edits of the publication already there. Callers retain pending
+/// artifacts and report partial writes if this fails.
+pub fn publish_run(
+    bundle: &Path,
+    id: &str,
+    origin: String,
+    inputs: Vec<ArtifactRevision>,
+    outputs: Vec<ArtifactRevision>,
+) -> Result<Publication> {
+    let (events, effective_edits) = std::fs::read(bundle.join("manifest.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Publication>(&bytes).ok())
+        .map(|previous| (previous.events, previous.effective_edits))
+        .unwrap_or_default();
+    let publication = Publication {
+        schema_version: 1,
+        id: id.into(),
+        session: basecraft_platform::process_instance().into(),
+        parents: vec![],
+        parent_hashes: BTreeMap::new(),
+        created: basecraft_platform::now_rfc3339(),
+        origin,
+        inputs,
+        outputs,
+        events,
+        effective_edits,
+        completeness: Completeness {
+            ancestry_known: false,
+            input_bytes_available: true,
+            execution_specification_available: true,
+            replay_verified: false,
+        },
+        report_template_version: 2,
+    };
+    publish(bundle, &publication)?;
+    Ok(publication)
+}
+
+/// Who ran an analysis: the external program its execution record names, or
+/// else the plugin. The recorded execution and tool are added to `params`.
+pub fn tool_actor(execution: &Path, plugin: Actor, params: &mut serde_json::Value) -> Actor {
+    let execution: serde_json::Value = std::fs::read(execution)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default();
+    if !execution["execution"].is_null() {
+        params["_execution"] = execution["execution"].clone();
+    }
+    if !execution["tool"].is_null() {
+        params["_observed_tool"] = execution["tool"].clone();
+    }
+    serde_json::from_value::<basecraft_protocol::plugin::ToolInfo>(execution["tool"].clone())
+        .map_or(plugin, |tool| Actor::Tool {
+            tool: tool.name,
+            version: tool.version,
+        })
+}
+
+/// The journal entry for a tool run that changed no open document; `doc`
+/// names the operation.
+pub fn tool_run_entry(
+    publication: &Publication,
+    started: &str,
+    actor: Actor,
+    doc: &str,
+    plugin: &str,
+    operation: &str,
+    params: serde_json::Value,
+) -> LogEntry {
+    let names =
+        |artifacts: &[ArtifactRevision]| artifacts.iter().map(|a| a.logical_name.clone()).collect();
+    LogEntry {
+        v: basecraft_protocol::ops::LOG_VERSION,
+        id: publication.id.clone(),
+        t: started.into(),
+        host: String::new(),
+        session: publication.session.clone(),
+        actor,
+        doc: doc.into(),
+        op: Op::ToolRun {
+            plugin: plugin.into(),
+            operation: operation.into(),
+            params,
+            inputs: names(&publication.inputs),
+            outputs: names(&publication.outputs),
+        },
+        result: OpResult {
+            hashes: publication
+                .inputs
+                .iter()
+                .chain(&publication.outputs)
+                .map(|artifact| (artifact.logical_name.clone(), artifact.hash.clone()))
+                .collect(),
+            feature: None,
+        },
+        state: DocState {
+            counts: None,
+            len: 0,
+            features: 0,
+            rows: None,
+        },
+    }
 }
 
 /// Artifacts must already be durable before this final manifest publication.
-pub(crate) fn publish(bundle: &Path, publication: &Publication) -> Result<()> {
+pub fn publish(bundle: &Path, publication: &Publication) -> Result<()> {
     std::fs::create_dir_all(bundle.join("records"))?;
     link_selected_inputs(bundle, publication)?;
     atomic_json(

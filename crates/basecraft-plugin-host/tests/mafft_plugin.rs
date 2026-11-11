@@ -102,7 +102,7 @@ fn realigns_with_mafft_and_logs_the_run() {
     let methods_path = bundle.join("methods.md");
     std::fs::write(&methods_path, "User-authored explanation.\n").unwrap();
     let publication = basecraft_ops::records::inspect(&output).unwrap();
-    basecraft_ops::records::publish_operation(&bundle, &publication).unwrap();
+    basecraft_ops::records::publish(&bundle, &publication).unwrap();
     assert_eq!(
         std::fs::read_to_string(&methods_path).unwrap(),
         "User-authored explanation.\n"

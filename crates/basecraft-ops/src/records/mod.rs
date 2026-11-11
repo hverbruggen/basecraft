@@ -11,8 +11,8 @@ pub(crate) mod replay;
 pub use document_record::{DocumentRecord, MethodsParagraph, Report, ReportExt, jobs};
 pub use links::{AlignmentLink, AlignmentLinkExt, metadata_present, sidecar, view_sidecar};
 pub use provenance::{
-    bundle_for_result, companion, inspect, package, publish_operation, read_record, verify,
-    write_reports,
+    bundle_for_result, companion, inspect, package, publish, publish_run, read_record, tool_actor,
+    tool_run_entry, verify, write_reports,
 };
 pub use replay::{
     PublishedWithFailure, RecoveryCompletion, RecoveryMode, RecoveryPhase, ReplayReport,

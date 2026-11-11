@@ -211,27 +211,6 @@ pub(crate) struct ObservedSave {
 }
 #[cfg(test)]
 impl Session {
-    pub(crate) fn save_recovery_observed(
-        &mut self,
-        id: DocId,
-        path: Option<&Path>,
-        decision: Option<SaveDecision>,
-        observer: Observer,
-    ) -> ObservedSave {
-        let target = self.resolve(&self.docs[id.0].key);
-        let policy = decision
-            .as_ref()
-            .map_or(crate::input_evidence::SavePolicy::Cancel, |d| d.known);
-        self.save_observed(
-            id,
-            path.or(Some(&target)),
-            policy,
-            true,
-            false,
-            decision,
-            observer,
-        )
-    }
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn save_observed(
         &mut self,

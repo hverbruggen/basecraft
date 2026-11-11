@@ -245,4 +245,6 @@ The supplemental inventory still lists GUI history, settings and IO text/index f
 other lanes without complete shared protocol/golden coverage.
 Their rows remain the checklist; this does not claim all of M6 complete. Arbitrary
 operation parameters and third-party outputs remain governed by their operation
-contracts. Moving record modules and the PRD compatibility-promise item are deferred.
+contracts. Provenance, links, document records, contributions and replay live in
+`basecraft-ops/src/records/`; input evidence, the analysis store and the save guard
+move there after the save lane merges. The PRD compatibility-promise item is deferred.

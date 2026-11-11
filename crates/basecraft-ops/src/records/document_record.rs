@@ -84,7 +84,7 @@ impl DocumentRecord {
             input.upstream = upstream;
             crate::input_evidence::write_json(&run.directory().join("input.json"), &input)?;
         }
-        crate::records::provenance::publish_operation(run.directory(), &publication)
+        crate::records::provenance::publish(run.directory(), &publication)
     }
 
     /// In-memory locations of contributing publication bundles. Reading them
