@@ -38,7 +38,6 @@ impl Session {
             ));
         }
         self.flush()?;
-        let disk_stamp = crate::input_evidence::stamp(path)?;
         let format = files::Format::from_path(path)?;
         let captured = files::capture_load(path, format)?;
         let content = captured.content;
@@ -71,12 +70,18 @@ impl Session {
             .map(|(path, hash)| {
                 Ok(basecraft_protocol::provenance::InputReference {
                     path: self.relative(path),
-                    stamp: crate::input_evidence::stamp(path)?,
+                    stamp: captured
+                        .stamps
+                        .iter()
+                        .find(|(file, _)| file == path)
+                        .and_then(|(_, stamp)| stamp.clone())
+                        .expect("captured file stamp"),
                     hash: hash.clone(),
                     extra: std::collections::BTreeMap::new(),
                 })
             })
             .collect::<Result<_>>()?;
+        let disk_stamp = captured.stamps[0].1.clone().expect("main file stamp");
         self.docs.push(Slot {
             key: key.clone(),
             content,
@@ -90,6 +95,7 @@ impl Session {
             recovery_boundary: None,
             saved_at: Some(super::SavedMark(None)),
             source_stamps: captured.stamps,
+            recovery_changed: false,
             absent_sidecars,
             origin,
             origin_issue,
@@ -134,27 +140,58 @@ impl Session {
             }
             if self.log.is_some() {
                 self.flush()?;
-                let entry = self.recovery_checkpoint(id)?;
-                self.docs[id.0].recovery_boundary = Some(entry.id.clone());
-                self.pending_baselines.push(entry);
+                if let Some(entry) = self.recovery_checkpoint(id)? {
+                    self.docs[id.0].recovery_boundary = Some(entry.id.clone());
+                    self.pending_baselines.push(entry);
+                }
                 self.refresh_source_stamps(id);
-                self.docs[id.0].origin_issue = Some("The original changed on disk. Your current edits have been preserved in recovery; save them to a new file.".into());
+                self.docs[id.0].recovery_changed = true;
                 self.docs[id.0].baseline = None;
             }
             return Ok(());
         }
-        if let Some(entry) = self.docs[id.0].baseline.clone() {
+        if let Some(mut entry) = self.docs[id.0].baseline.clone() {
             if self.store_objects {
-                let directory = objects_dir(&self.storage_root);
-                std::fs::create_dir_all(&directory)?;
-                let stage = tempfile::tempdir_in(&directory)?;
-                for (key, hash) in &entry.result.hashes {
-                    let source = self.resolve(key);
-                    let target = directory.join(hash.trim_start_matches("b3:"));
-                    let link = stage.path().join("input");
-                    match std::fs::hard_link(&source, &link) {
-                        // Replace any old link whose inode was modified externally.
-                        Ok(()) => std::fs::rename(&link, &target)?,
+                let originals = self.storage_root.join(".basecraft/originals");
+                recovery_directory(&originals)?;
+                let stage = tempfile::tempdir_in(&originals)?;
+                let directory = originals.join(&entry.id);
+                for (index, reference) in entry
+                    .source
+                    .as_ref()
+                    .expect("baseline source")
+                    .files
+                    .clone()
+                    .iter()
+                    .enumerate()
+                {
+                    let original = self.resolve(&reference.path);
+                    if crate::input_evidence::stamp(&original)? != reference.stamp {
+                        return Err(crate::Error::ChangedOnDisk { path: original });
+                    }
+                    let link = stage.path().join(index.to_string());
+                    match std::fs::hard_link(&original, &link) {
+                        Ok(()) => {
+                            if crate::input_evidence::stamp(&link)? != reference.stamp
+                                || crate::input_evidence::stamp(&original)? != reference.stamp
+                            {
+                                std::fs::remove_file(&link)?;
+                                return Err(crate::Error::ChangedOnDisk { path: original });
+                            }
+                            entry
+                                .source
+                                .as_mut()
+                                .expect("baseline source")
+                                .links
+                                .insert(
+                                    reference.path.clone(),
+                                    directory
+                                        .join(index.to_string())
+                                        .strip_prefix(&self.storage_root)
+                                        .expect("recovery link")
+                                        .to_path_buf(),
+                                );
+                        }
                         Err(error)
                             if matches!(
                                 error.kind(),
@@ -165,16 +202,46 @@ impl Session {
                         Err(error) => return Err(error.into()),
                     }
                 }
-                for reference in &entry.source.as_ref().expect("baseline source").files {
-                    let source = self.resolve(&reference.path);
-                    if crate::input_evidence::stamp(&source)? != reference.stamp {
-                        return Err(crate::Error::ChangedOnDisk { path: source });
-                    }
+                if !entry
+                    .source
+                    .as_ref()
+                    .expect("baseline source")
+                    .links
+                    .is_empty()
+                {
+                    basecraft_platform::files::sync_directory(stage.path())?;
+                    std::fs::rename(stage.path(), &directory)?;
+                    basecraft_platform::files::sync_directory(&originals)?;
                 }
-                // Hard linking changes ctime. Retain the new stamps without reading bytes.
-                self.refresh_source_stamps(id);
             }
-            if !self.docs[id.0].baseline_logged {
+            if self.docs[id.0].baseline_logged {
+                // The baseline is already durable. Record its newly retained source
+                // as a checkpoint, without pretending another save occurred.
+                if !entry
+                    .source
+                    .as_ref()
+                    .expect("baseline source")
+                    .links
+                    .is_empty()
+                {
+                    let (Op::Open { path } | Op::Save { path }) = &entry.op else {
+                        unreachable!("logged baseline")
+                    };
+                    let mut retained = self.entry(
+                        id,
+                        self.actor.clone(),
+                        Op::Open { path: path.clone() },
+                        entry.result.clone(),
+                    );
+                    retained.source = entry.source;
+                    retained
+                        .source
+                        .as_mut()
+                        .expect("baseline source")
+                        .checkpoint = true;
+                    self.pending_baselines.push(retained);
+                }
+            } else {
                 self.pending_baselines.push(entry);
             }
             self.docs[id.0].baseline = None;
@@ -183,25 +250,34 @@ impl Session {
     }
 
     pub(super) fn source_changed(&self, id: DocId) -> bool {
-        self.docs[id.0].source_stamps.iter().any(|(path, before)| {
-            !files::same_metadata(before.as_ref(), std::fs::metadata(path).ok().as_ref())
-        })
+        self.docs[id.0]
+            .source_stamps
+            .iter()
+            .any(|(path, before)| *before != crate::input_evidence::stamp(path).ok())
     }
 
     pub(super) fn refresh_source_stamps(&mut self, id: DocId) {
         for (path, stamp) in &mut self.docs[id.0].source_stamps {
-            *stamp = std::fs::metadata(path).ok();
+            *stamp = crate::input_evidence::stamp(path).ok();
         }
     }
 
     /// An exceptional checkpoint: external modification or undo across a save.
     /// Write each saved form once, then move it into the content-addressed store.
-    pub(super) fn recovery_checkpoint(&self, id: DocId) -> Result<basecraft_protocol::LogEntry> {
-        if let Some(message) = self.docs[id.0].content.as_document().save_refusal() {
-            return Err(crate::Error::Unsupported(message.into()));
+    pub(super) fn recovery_checkpoint(
+        &self,
+        id: DocId,
+    ) -> Result<Option<basecraft_protocol::LogEntry>> {
+        if self.docs[id.0]
+            .content
+            .as_document()
+            .save_refusal()
+            .is_some()
+        {
+            return Ok(None);
         }
         let directory = objects_dir(&self.storage_root);
-        std::fs::create_dir_all(&directory)?;
+        recovery_directory(&directory)?;
         let stage = tempfile::tempdir_in(&directory)?;
         let key = &self.docs[id.0].key;
         let local = crate::replay::scratch_key(key).map_err(|detail| crate::Error::Damaged {
@@ -254,7 +330,8 @@ impl Session {
             },
         );
         entry.source.as_mut().expect("checkpoint source").checkpoint = true;
-        Ok(entry)
+        basecraft_platform::files::sync_directory(&directory)?;
+        Ok(Some(entry))
     }
 
     pub(crate) fn restore_recovery_ids(
@@ -276,11 +353,12 @@ impl Session {
     }
 
     pub fn recovery_warning(&self, id: DocId) -> Option<&str> {
-        self.docs
-            .get(id.0)?
-            .origin_issue
-            .as_deref()
-            .filter(|text| text.starts_with("The original changed on disk."))
+        let slot = self.docs.get(id.0)?;
+        slot.recovery_changed.then_some(if slot.content.as_document().save_refusal().is_some() {
+            "The original changed on disk. Your edits remain in the journal, but recovery requires the unchanged original; this multi-record file cannot be saved yet."
+        } else {
+            "The original changed on disk. Your current edits have been preserved in recovery; save them to a new file."
+        })
     }
 
     /// Cheap change token for readers; saves and job outcomes also invalidate a report.
@@ -317,6 +395,9 @@ impl Session {
         record.document.clone_from(&slot.key);
         record.revision = format!("{}:{}:{}", self.id, id.0, slot.generation);
         record.unsaved = !slot.is_clean();
+        if let Some(warning) = self.recovery_warning(id) {
+            record.warnings.push(warning.into());
+        }
         if let Some(issue) = &slot.origin_issue {
             record.warnings.push(issue.clone());
         }
@@ -431,4 +512,16 @@ impl Session {
         }
         Ok(hash)
     }
+}
+
+/// Publish newly created directory entries before a synced journal can name them.
+fn recovery_directory(path: &Path) -> std::io::Result<()> {
+    let missing: Vec<_> = path.ancestors().take_while(|dir| !dir.exists()).collect();
+    std::fs::create_dir_all(path)?;
+    for directory in missing.into_iter().rev() {
+        if let Some(parent) = directory.parent() {
+            basecraft_platform::files::sync_directory(parent)?;
+        }
+    }
+    Ok(())
 }

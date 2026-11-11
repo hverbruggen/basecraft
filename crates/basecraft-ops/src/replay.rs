@@ -91,7 +91,13 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
                 problem("unsafe or inconsistent document identity".into());
                 continue;
             }
-            match materialise(root, &source_root, work.path(), &e.result.hashes) {
+            match materialise(
+                root,
+                &source_root,
+                work.path(),
+                &e.result.hashes,
+                e.source.as_ref(),
+            ) {
                 Ok(()) => match session.open(&work.path().join(path)) {
                     Ok(id) => {
                         session.restore_replay_paths(id, work.path(), &source_root);
@@ -197,31 +203,18 @@ fn materialise(
     source_root: &Path,
     work: &Path,
     inputs: &[(String, String)],
+    record: Option<&basecraft_protocol::ops::SourceRecord>,
 ) -> std::result::Result<(), String> {
+    let stage = tempfile::tempdir_in(work).map_err(|e| e.to_string())?;
+    let mut written = Vec::new();
     for (rel, hash) in inputs {
-        let local = scratch_key(rel)?;
+        let mut local = scratch_key(rel)?;
         let Some(digest) = hash.strip_prefix("b3:") else {
             return Err("unsupported input hash".into());
         };
         if digest.len() != 64 || !digest.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err("invalid input hash".into());
         }
-        let stored = objects_dir(root).join(hash.trim_start_matches("b3:"));
-        let original = source_root.join(rel);
-        let source = if stored.exists() {
-            stored
-        } else if basecraft_io::hash_file(&original).ok().as_deref() == Some(hash) {
-            original
-        } else if let Some(retained) =
-            crate::analysis_store::retained_source(root, hash).map_err(|e| e.to_string())?
-        {
-            retained
-        } else {
-            return Err(format!(
-                "input {rel} changed or is missing and no stored copy exists; recovery requires the unchanged original"
-            ));
-        };
-        let mut dest = work.join(local);
         if let Some((main, _)) = inputs.first()
             && crate::files::Format::from_path(Path::new(main)).ok()
                 == Some(crate::files::Format::Delimitation)
@@ -231,39 +224,72 @@ fn materialise(
             && Path::new(rel).file_name()
                 == crate::files::tree_sidecar(&work.join(scratch_key(main)?)).file_name()
         {
-            // The replay namespace contains no live store bindings. Restore
-            // the checked baseline as a standalone companion, not a partial
-            // hidden namespace that could be mistaken for a real store.
-            dest = crate::files::tree_sidecar(&work.join(scratch_key(main)?));
+            local = crate::files::tree_sidecar(&scratch_key(main)?);
         }
-        if let Some(parent) = dest.parent() {
+        let destination = stage.path().join(&local);
+        if let Some(parent) = destination.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        // Always replace with an independent inode. The destination may already
-        // alias a retained input (or contain bytes from an earlier baseline).
-        // Copying onto it in place would truncate the immutable source.
-        basecraft_io::write_atomic(&dest, |writer| {
-            use std::io::Read;
-            let mut input = std::fs::File::open(&source)?;
-            let mut hasher = basecraft_io::Hasher::new();
-            let mut buffer = [0_u8; 16 * 1024];
-            loop {
-                let count = input.read(&mut buffer)?;
-                if count == 0 {
-                    break;
+        let mut candidates = vec![objects_dir(root).join(digest)];
+        if let Some(link) = record.and_then(|record| record.links.get(rel)) {
+            if !safe_key(&link.to_string_lossy()) {
+                return Err("unsafe recovery link".into());
+            }
+            candidates.push(root.join(link));
+        }
+        candidates.push(source_root.join(rel));
+        let mut verified = false;
+        for source in candidates
+            .into_iter()
+            .map(Some)
+            .chain(std::iter::once_with(|| {
+                crate::analysis_store::retained_source(root, hash)
+                    .ok()
+                    .flatten()
+            }))
+            .flatten()
+        {
+            // Verify while copying; a stale mutable link never masks another
+            // valid candidate and never aliases the writable recovery output.
+            if basecraft_io::write_atomic(&destination, |writer| {
+                use std::io::Read;
+                let mut input = std::fs::File::open(&source)?;
+                let mut hasher = basecraft_io::Hasher::new();
+                let mut buffer = [0_u8; 16 * 1024];
+                loop {
+                    let count = input.read(&mut buffer)?;
+                    if count == 0 {
+                        break;
+                    }
+                    hasher.update(&buffer[..count]);
+                    writer.write_all(&buffer[..count])?;
                 }
-                hasher.update(&buffer[..count]);
-                writer.write_all(&buffer[..count])?;
+                if hasher.finish() != *hash {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "retained input hash differs",
+                    ));
+                }
+                Ok(())
+            })
+            .is_ok()
+            {
+                verified = true;
+                break;
             }
-            if hasher.finish() != *hash {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "retained input hash differs during recovery copy",
-                ));
-            }
-            Ok(())
-        })
-        .map_err(|e| e.to_string())?;
+        }
+        if !verified {
+            return Err(format!(
+                "input {rel} changed or is missing (hash differs or unavailable); recovery requires the unchanged original or a verified retained copy"
+            ));
+        }
+        written.push((destination, work.join(local)));
+    }
+    for (source, destination) in written {
+        if let Some(parent) = destination.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::rename(source, destination).map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -431,71 +457,104 @@ fn recover_entries(
     }
 
     let mut documents = std::collections::BTreeMap::<String, DocId>::new();
-    let mut baselines = HashMap::new();
+    let mut baselines = std::collections::BTreeMap::<String, Vec<usize>>::new();
     for (index, entry) in entries.iter().enumerate() {
         if matches!(
             entry.op,
             Op::Open { .. } | Op::CreateSequence { .. } | Op::Save { .. }
         ) {
-            baselines.insert(entry.doc.clone(), index);
+            baselines.entry(entry.doc.clone()).or_default().push(index);
         }
     }
-    for (index, entry) in entries.into_iter().enumerate() {
-        if baselines
-            .get(&entry.doc)
-            .is_some_and(|baseline| index < *baseline)
-        {
-            continue;
-        }
-        if let Op::CreateSequence { name, residues } = &entry.op {
-            if !safe_key(&entry.doc) {
-                return Err(crate::error::invalid("unsafe recovery document identity"));
-            }
-            let doc = session.create_sequence_with_key(&entry.doc, name, residues)?;
-            if !session.state(doc).matches_recorded(&entry.state) {
-                return Err(crate::error::invalid("created sequence state differs"));
-            }
-            documents.insert(entry.doc.clone(), doc);
-            continue;
-        }
-        if let Op::Open { path } | Op::Save { path } = &entry.op {
+    // Open documents in journal order of their latest baseline.
+    let mut baselines: Vec<_> = baselines.into_iter().collect();
+    baselines.sort_by_key(|(_, candidates)| candidates.last().copied());
+    let mut selected = HashMap::new();
+    let mut skipped = Vec::new();
+    for (key, candidates) in baselines {
+        let mut failures = Vec::new();
+        for index in candidates.into_iter().rev() {
+            let entry = &entries[index];
             let damaged = |detail| Error::Damaged {
                 path: root.to_path_buf(),
                 detail,
             };
-            if !entry.result.hashes.iter().any(|(key, _)| key == path)
-                || (matches!(entry.op, Op::Open { .. }) && path != &entry.doc)
-            {
-                return Err(damaged("unsafe or inconsistent recovery baseline".into()));
+            scratch_key(&key).map_err(damaged)?;
+            let opened = match &entry.op {
+                Op::CreateSequence { name, residues } => {
+                    session.create_sequence_with_key(&key, name, residues)
+                }
+                Op::Open { path } | Op::Save { path } => {
+                    if !entry.result.hashes.iter().any(|(key, _)| key == path) {
+                        return Err(damaged("unsafe or inconsistent recovery baseline".into()));
+                    }
+                    let local = staging.path().join(scratch_key(path).map_err(damaged)?);
+                    match materialise(
+                        root,
+                        &source_root,
+                        staging.path(),
+                        &entry.result.hashes,
+                        entry.source.as_ref(),
+                    ) {
+                        Ok(()) => session.open(&local).and_then(|doc| {
+                            let source = entry.source.as_ref().ok_or_else(|| {
+                                damaged("Recovery baseline has no source record".into())
+                            })?;
+                            session.restore_recovery_ids(doc, source)?;
+                            let original = source_root.join(path);
+                            session.restore_replay_paths(
+                                doc,
+                                local.parent().expect("scratch parent"),
+                                original.parent().expect("source parent"),
+                            );
+                            Ok(doc)
+                        }),
+                        Err(detail) => Err(damaged(detail)),
+                    }
+                }
+                _ => unreachable!("baseline operation"),
+            };
+            match opened {
+                Ok(doc) if session.state(doc).matches_recorded(&entry.state) => {
+                    documents.insert(key.clone(), doc);
+                    selected.insert(key.clone(), index);
+                    break;
+                }
+                Ok(_) => failures.push("Recovery baseline state differs".into()),
+                Err(error) => failures.push(error.to_string()),
             }
-            scratch_key(&entry.doc).map_err(damaged)?;
-            let local = staging.path().join(scratch_key(path).map_err(damaged)?);
-            materialise(root, &source_root, staging.path(), &entry.result.hashes)
-                .map_err(damaged)?;
-            let doc = session.open(&local)?;
-            let source = entry
-                .source
-                .as_ref()
-                .ok_or_else(|| damaged("Recovery baseline has no source record".into()))?;
-            session.restore_recovery_ids(doc, source)?;
-            let original = source_root.join(path);
-            session.restore_replay_paths(
-                doc,
-                local.parent().expect("scratch parent"),
-                original.parent().expect("source parent"),
-            );
-            if !session.state(doc).matches_recorded(&entry.state) {
-                return Err(Error::Damaged {
-                    path: root.to_path_buf(),
-                    detail: "Recovery baseline state differs".into(),
-                });
-            }
-            documents.insert(entry.doc.clone(), doc);
+        }
+        if !documents.contains_key(&key) {
+            skipped.push(format!("{key}: {}", failures.join("; ")));
+        }
+    }
+    if documents.is_empty() {
+        return Err(Error::Damaged {
+            path: root.to_path_buf(),
+            detail: skipped.join("\n"),
+        });
+    }
+    let damage = match (damage, skipped.is_empty()) {
+        (damage, true) => damage,
+        (previous, false) => Some(format!(
+            "{}Recovery skipped documents; journals are unchanged:\n{}",
+            previous.map_or(String::new(), |text| text + "\n"),
+            skipped.join("\n")
+        )),
+    };
+    for (index, entry) in entries.into_iter().enumerate() {
+        let Some(baseline) = selected.get(&entry.doc) else {
+            continue;
+        };
+        if index <= *baseline
+            || matches!(
+                entry.op,
+                Op::Open { .. } | Op::CreateSequence { .. } | Op::Save { .. }
+            )
+        {
             continue;
         }
-        let doc = *documents
-            .get(&entry.doc)
-            .ok_or_else(|| crate::error::invalid("recovery event precedes its baseline"))?;
+        let doc = documents[&entry.doc];
         match entry.op {
             Op::Save { .. }
             | Op::ToolRun { .. }
@@ -1357,12 +1416,12 @@ mod tests {
             }
             std::fs::hard_link(&source, &dest).unwrap();
             let inputs = vec![("a.fa".into(), hash.clone())];
-            materialise(root.path(), root.path(), work.path(), &inputs).unwrap();
+            materialise(root.path(), root.path(), work.path(), &inputs, None).unwrap();
             assert_eq!(std::fs::read(&dest).unwrap(), bytes);
             // Editing scratch must also be independent of the retained inode.
             std::fs::write(&dest, "scratch edit").unwrap();
             assert_eq!(basecraft_io::hash_file(&source).unwrap(), hash);
-            materialise(root.path(), root.path(), work.path(), &inputs).unwrap();
+            materialise(root.path(), root.path(), work.path(), &inputs, None).unwrap();
             assert_eq!(std::fs::read(&dest).unwrap(), bytes);
             assert_eq!(basecraft_io::hash_file(&source).unwrap(), hash);
         }
@@ -1379,18 +1438,18 @@ mod tests {
         let inputs = vec![("a.fa".into(), hash)];
         let dest = work.path().join("a.fa");
         std::fs::write(&dest, "previous").unwrap();
-        assert!(materialise(root.path(), root.path(), work.path(), &inputs).is_err());
+        assert!(materialise(root.path(), root.path(), work.path(), &inputs, None).is_err());
         assert_eq!(std::fs::read(&object).unwrap(), b"corrupt");
         assert_eq!(std::fs::read(&dest).unwrap(), b"previous");
         std::fs::remove_file(&object).unwrap();
-        assert!(materialise(root.path(), root.path(), work.path(), &inputs).is_err());
+        assert!(materialise(root.path(), root.path(), work.path(), &inputs, None).is_err());
         std::fs::write(root.path().join("a.fa"), "changed").unwrap();
-        assert!(materialise(root.path(), root.path(), work.path(), &inputs).is_err());
+        assert!(materialise(root.path(), root.path(), work.path(), &inputs, None).is_err());
         // Force atomic persistence failure after the temporary copy is written.
         std::fs::write(root.path().join("a.fa"), "expected").unwrap();
         std::fs::remove_file(&dest).unwrap();
         std::fs::create_dir(&dest).unwrap();
-        assert!(materialise(root.path(), root.path(), work.path(), &inputs).is_err());
+        assert!(materialise(root.path(), root.path(), work.path(), &inputs, None).is_err());
         assert_eq!(std::fs::read_dir(work.path()).unwrap().count(), 1);
         assert_eq!(
             std::fs::read(root.path().join("a.fa")).unwrap(),
@@ -1402,7 +1461,8 @@ mod tests {
                     root.path(),
                     root.path(),
                     work.path(),
-                    &[(rel.into(), inputs[0].1.clone())]
+                    &[(rel.into(), inputs[0].1.clone())],
+                    None
                 )
                 .is_err()
             );
@@ -1410,7 +1470,7 @@ mod tests {
     }
 
     #[test]
-    fn refused_baselines_invalidate_previous_mapping() {
+    fn refused_later_baseline_falls_back_to_the_earlier_one() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("a.fa");
         std::fs::write(&path, ">a\nACGT\n").unwrap();
@@ -1466,15 +1526,21 @@ mod tests {
                 "{report:#?}"
             );
             let destination = root.path().join("recovered");
-            assert!(
-                recover_entries(
-                    root.path(),
-                    &destination,
-                    vec![baseline.clone(), attempt, edit.clone()],
-                    None
-                )
-                .is_err()
+            let escapes = matches!(&attempt.op, Op::Open { path } if path.starts_with(".."));
+            let recovered = recover_entries(
+                root.path(),
+                &destination,
+                vec![baseline.clone(), attempt, edit.clone()],
+                None,
             );
+            if escapes {
+                // A journal naming a path outside its root is damaged.
+                assert!(recovered.is_err());
+            } else {
+                // A refused later baseline falls back to the earlier one; the
+                // edit's recorded state still has to match.
+                assert_eq!(recovered.unwrap().documents.len(), 1);
+            }
             assert!(!destination.exists());
             assert!(!std::fs::read_dir(root.path()).unwrap().any(|e| {
                 e.unwrap()

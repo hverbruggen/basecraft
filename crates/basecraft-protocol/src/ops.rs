@@ -405,6 +405,7 @@ pub struct OpResult {
 /// Original files described by an open journal record.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SourceRecord {
+    pub links: std::collections::BTreeMap<String, std::path::PathBuf>,
     pub checkpoint: bool,
     pub feature_slots: Vec<bool>,
     pub node_ids: Vec<usize>,
@@ -453,7 +454,7 @@ mod tests {
             include_str!("../../../testdata/fixtures/records-v1/document-fingerprints.jsonl");
         let lines: Vec<_> = fixtures.lines().collect();
         assert_eq!(lines.len(), 12);
-        for pair in lines.chunks_exact(2) {
+        for pair in lines.as_chunks::<2>().0 {
             let old: DocState = serde_json::from_str(pair[0]).unwrap();
             let current: DocState = serde_json::from_str(pair[1]).unwrap();
             assert_eq!(serde_json::to_string(&old).unwrap(), pair[0]);

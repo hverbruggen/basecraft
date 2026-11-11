@@ -1,6 +1,6 @@
 use super::*;
 use basecraft_platform::{paths::AppPaths, settings::ProvenancePolicy};
-use std::{cell::RefCell, fs, io::ErrorKind};
+use std::{cell::RefCell, fmt::Write, fs, io::ErrorKind};
 
 thread_local! {
     static CALLS: RefCell<Vec<ResolverStage>> = const { RefCell::new(Vec::new()) };
@@ -39,12 +39,12 @@ fn inventory(root: &Path) -> Vec<(PathBuf, String)> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
-            record.push_str(&format!(":{}:{}", m.dev(), m.ino()));
+            write!(record, ":{}:{}", m.dev(), m.ino()).unwrap();
         }
         if m.file_type().is_symlink() {
-            record.push_str(&format!(":{:?}", fs::read_link(path).unwrap()));
+            write!(record, ":{:?}", fs::read_link(path).unwrap()).unwrap();
         } else if m.is_file() {
-            record.push_str(&format!(":{:?}", fs::read(path).map_err(|e| e.kind())));
+            write!(record, ":{:?}", fs::read(path).map_err(|e| e.kind())).unwrap();
         }
         rows.push((path.to_path_buf(), record));
         if m.is_dir() {
@@ -57,7 +57,7 @@ fn inventory(root: &Path) -> Vec<(PathBuf, String)> {
                     }
                 }
                 Err(error) => {
-                    rows.push((path.to_path_buf(), format!("read-dir:{:?}", error.kind())))
+                    rows.push((path.to_path_buf(), format!("read-dir:{:?}", error.kind())));
                 }
             }
         }
@@ -472,7 +472,7 @@ fn native_paths_links_and_denials() {
     fs::remove_dir(&manifest).unwrap();
     let denied = root.join("denied");
     write(&denied.join("file"), b"blocked by parent");
-    fs::set_permissions(&denied, fs::Permissions::from_mode(0)).unwrap();
+    fs::set_permissions(&denied, fs::Permissions::from_mode(0o0)).unwrap();
     assert_eq!(
         fs::metadata(denied.join("file")).unwrap_err().kind(),
         ErrorKind::PermissionDenied,
@@ -531,7 +531,7 @@ fn native_paths_links_and_denials() {
     );
     write(&target, b"still unparsed");
     check(&root, &source, &local, BundleSelection::Local);
-    fs::set_permissions(paths.preferences(), fs::Permissions::from_mode(0)).unwrap();
+    fs::set_permissions(paths.preferences(), fs::Permissions::from_mode(0o0)).unwrap();
     let observed = check(
         &root,
         &source,
@@ -592,7 +592,7 @@ fn native_paths_links_and_denials() {
     // Content unreadable does not make following metadata fail.
     fs::remove_file(&manifest).unwrap();
     write(&manifest, b"unreadable but regular");
-    fs::set_permissions(&manifest, fs::Permissions::from_mode(0)).unwrap();
+    fs::set_permissions(&manifest, fs::Permissions::from_mode(0o0)).unwrap();
     check(&root, &source, &companion, BundleSelection::Companion);
     fs::set_permissions(&manifest, fs::Permissions::from_mode(0o600)).unwrap();
     fs::set_permissions(&denied, fs::Permissions::from_mode(0o700)).unwrap();

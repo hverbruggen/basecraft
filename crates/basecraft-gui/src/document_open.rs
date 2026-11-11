@@ -27,35 +27,21 @@ pub(crate) fn start(
     .map_err(OpenError::Spawn)
 }
 
-macro_rules! open_file {
-    ($this:ident, $path:ident) => {{
-        if $this.rust().busy {
-            $this.fail("Wait for the running operation before replacing this document");
-            return false;
-        }
-        $this.as_mut().set_busy(true);
-        let thread = $this.qt_thread();
-        let started = crate::document_open::start($path.to_string(), None, move |result| {
-            let _ = thread.queue(move |mut this| {
-                let result = result.and_then(|candidate| this.as_mut().install_opened(candidate));
-                this.as_mut().set_busy(false);
-                let ok = result.is_ok();
-                if let Err(error) = result {
-                    this.as_mut().fail(&error.to_string());
-                }
-                this.opened(ok);
-            });
-        });
-        if let Err(error) = started {
-            $this.as_mut().set_busy(false);
-            $this.as_mut().fail(&error.to_string());
-            $this.opened(false);
-            return false;
-        }
-        true
-    }};
+pub(crate) fn open_file<T: cxx_qt::Threading + 'static>(
+    mut controller: std::pin::Pin<&mut T>,
+    path: &cxx_qt_lib::QString,
+    completed: impl Fn(std::pin::Pin<&mut T>, Result<Candidate, OpenError>) + Copy + Send + 'static,
+) -> bool {
+    let thread = controller.qt_thread();
+    let started = start(path.to_string(), None, move |result| {
+        let _ = thread.queue(move |controller| completed(controller, result));
+    });
+    if let Err(error) = started {
+        completed(controller.as_mut(), Err(error));
+        return false;
+    }
+    true
 }
-pub(crate) use open_file;
 
 #[derive(Debug)]
 pub(crate) enum OpenError {
@@ -365,6 +351,16 @@ impl Drop for Opens {
     }
 }
 
+// All six editors already have a message area; no new presentation or dialog.
+pub(crate) fn recovery_notice(
+    session: Option<&Session>,
+    doc: Option<DocId>,
+) -> Option<cxx_qt_lib::QString> {
+    session?
+        .recovery_warning(doc?)
+        .map(cxx_qt_lib::QString::from)
+}
+
 #[cfg(test)]
 mod tests {
     #[allow(unused_imports)]
@@ -479,18 +475,3 @@ mod tests {
         ));
     }
 }
-
-// All six editors already have a message area; no new presentation or dialog.
-macro_rules! recovery_notice {
-    ($controller:ident) => {
-        if let (Some(session), Some(doc)) = (&$controller.rust().session, $controller.rust().doc) {
-            if let Some(warning) = session.recovery_warning(doc).map(str::to_owned) {
-                $controller
-                    .as_mut()
-                    .set_message_kind(QString::from("error"));
-                $controller.as_mut().set_message(QString::from(&warning));
-            }
-        }
-    };
-}
-pub(crate) use recovery_notice;

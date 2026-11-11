@@ -313,7 +313,10 @@ fn preservation_and_changed_source_failures_are_not_waivable() {
             ));
             assert_eq!(std::fs::read(&file).unwrap(), ORIGINAL);
             std::fs::remove_dir(known.directory().join("preserved-input")).unwrap();
-            std::fs::write(&file, b">external\nTTTT\n").unwrap();
+            // Replace by rename, as editors do; recovery keeps the old inode.
+            let replacement = file.with_extension("tmp");
+            std::fs::write(&replacement, b">external\nTTTT\n").unwrap();
+            std::fs::rename(&replacement, &file).unwrap();
             let check = session.check_save(doc, None).unwrap();
             let error = session
                 .save_with_decision(doc, None, check.decide(SavePolicy::BreakEvidence, true))

@@ -1944,7 +1944,7 @@ impl PreparedOperation {
         if self.document.is_none() && self.sequence.is_none() {
             let (actor, params) = self.tool_activity(outcome)?;
             let activity = basecraft_protocol::LogEntry {
-            source: None,
+                source: None,
                 v: basecraft_protocol::ops::LOG_VERSION,
                 id: self.run.id().into(),
                 t: self.started.clone(),
@@ -2553,9 +2553,7 @@ mod completed_result_tests {
         let mut other = prepared.context.input_evidence.remove("sources").unwrap();
         assert_ne!(first[0].original_path, other[0].original_path);
         assert_eq!(first[0].source_hash, other[0].source_hash);
-        // Preparation naturally uses the same BTreeMap order as evidence. This
-        // synthetic permutation exercises delegation independent of that order
-        // on a real registered prepared operation, without a production hook.
+        // Exercise delegation with a different input order on a registered operation.
         std::mem::swap(&mut first, &mut other);
         prepared
             .context

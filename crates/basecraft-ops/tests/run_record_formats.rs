@@ -161,7 +161,7 @@ fn original_referenced_publication_run_writer() {
 }
 
 #[test]
-fn run_examples_roundtrip_and_preserve_extensions() {
+fn run_examples_roundtrip_and_reject_unknown_status() {
     use basecraft_protocol::records::{AnalysisRun, AnalysisRunStatus};
     let fixture_root =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/records-v1");
@@ -182,33 +182,15 @@ fn run_examples_roundtrip_and_preserve_extensions() {
         let mut actual = serde_json::to_vec_pretty(&value).unwrap();
         actual.push(b'\n');
         assert_eq!(actual, bytes, "{name}");
-        let mut extended = value;
-        extended["future"] = json!({"z":[null,{"z":3,"a":true}],"a":"kept"});
-        extended["status"] = json!("future-status-v2");
-        if let Some(outputs) = extended.get_mut("outputs").and_then(Value::as_array_mut) {
-            for output in outputs {
-                output["future"] = json!({"nested":[null, "kept"]});
-            }
-        }
-        let parsed: AnalysisRun = serde_json::from_value(extended.clone()).unwrap();
-        assert_eq!(
-            parsed.status,
-            AnalysisRunStatus::Unknown("future-status-v2".into())
-        );
-        let actual = serde_json::to_value(parsed).unwrap();
-        assert_eq!(actual, extended, "{name} extensions/null/omission");
-        // Also pin sorted bytes, including nested extra maps.
-        assert_eq!(
-            serde_json::to_vec_pretty(&actual).unwrap(),
-            serde_json::to_vec_pretty(&extended).unwrap()
-        );
+        let mut invalid = value;
+        invalid["status"] = json!("future-status-v2");
+        assert!(serde_json::from_value::<AnalysisRun>(invalid).is_err());
     }
     for (label, expected) in [
         ("referenced", AnalysisRunStatus::Referenced),
         ("prepared", AnalysisRunStatus::Prepared),
         ("saved", AnalysisRunStatus::Saved),
         ("completed", AnalysisRunStatus::Completed),
-        ("", AnalysisRunStatus::Unknown(String::new())),
     ] {
         let state: AnalysisRunStatus = serde_json::from_value(json!(label)).unwrap();
         assert_eq!(state, expected);

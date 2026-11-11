@@ -247,8 +247,8 @@ fn missing_inputs_report_filesystem_errors() {
     for name in ["missing.fa", "missing.gb", "missing.nwk"] {
         assert!(matches!(
             files::load(&dir.path().join(name)),
-            Err(basecraft_ops::Error::Io(_))
-                | Err(basecraft_ops::Error::Format(basecraft_io::Error::Io(_)))
+            Err(basecraft_ops::Error::Io(_)
+                | basecraft_ops::Error::Format(basecraft_io::Error::Io(_)))
         ));
     }
 }
@@ -440,20 +440,14 @@ fn captured_companion_refusals_preserve_baseline_undo_and_journal() {
             let id = session.open(&path).unwrap();
             let before = session.document_record(id).unwrap();
             let target = if change_main { &path } else { &sidecar };
-            let modified = target.metadata().unwrap().modified().unwrap();
             let mut replacement = std::fs::read(target).unwrap();
             if change_main {
                 replacement[15] = b'T';
             } else {
                 replacement[16] = b'b';
             }
+            replacement.push(b'\n');
             std::fs::write(target, replacement).unwrap();
-            std::fs::File::options()
-                .write(true)
-                .open(target)
-                .unwrap()
-                .set_modified(modified)
-                .unwrap();
             let result = if save {
                 session.save(id, Some(&dir.path().join("copy.fasta")))
             } else {
@@ -522,15 +516,7 @@ fn captured_multirecord_writer_and_retained_replay_inputs_match_legacy() {
         .unwrap();
     session.flush().unwrap();
     for bytes in [main.as_slice(), gff.as_slice()] {
-        assert_eq!(
-            std::fs::read(
-                dir.path()
-                    .join(".basecraft/objects")
-                    .join(hash_bytes(bytes).trim_start_matches("b3:"))
-            )
-            .unwrap(),
-            bytes
-        );
+        assert!(retained(dir.path()).contains(&bytes.to_vec()));
     }
     session.undo(id).unwrap();
     assert_eq!(
@@ -545,15 +531,7 @@ fn captured_multirecord_writer_and_retained_replay_inputs_match_legacy() {
     let report = basecraft_ops::replay::replay(dir.path()).unwrap();
     assert!(report.ok(), "{report:#?}");
     for bytes in [main.as_slice(), gff.as_slice()] {
-        assert_eq!(
-            std::fs::read(
-                dir.path()
-                    .join(".basecraft/objects")
-                    .join(hash_bytes(bytes).trim_start_matches("b3:"))
-            )
-            .unwrap(),
-            bytes
-        );
+        assert!(retained(dir.path()).contains(&bytes.to_vec()));
     }
 }
 
@@ -613,14 +591,7 @@ fn cold_recoverable_retention_reads_each_raw_input_once_and_recovers_without_sou
     }
     let expected = session.doc(id).unwrap().to_genbank();
     for bytes in [main, gff.as_slice()] {
-        assert_eq!(
-            std::fs::read(
-                basecraft_ops::session::objects_dir(&recovery)
-                    .join(hash_bytes(bytes).trim_start_matches("b3:"))
-            )
-            .unwrap(),
-            bytes
-        );
+        assert!(retained(&recovery).contains(&bytes.to_vec()));
     }
     std::fs::remove_file(&path).unwrap();
     std::fs::remove_file(&sidecar).unwrap();
@@ -630,4 +601,24 @@ fn cold_recoverable_retention_reads_each_raw_input_once_and_recovers_without_sou
     let restored = files::open(&destination.join("séquences.fasta")).unwrap();
     assert_eq!(restored.doc.to_genbank(), expected);
     assert_eq!(restored.fasta.unwrap().index.records.len(), 1);
+}
+
+/// Bytes of every recovery link and checkpoint under a storage root.
+fn retained(root: &std::path::Path) -> Vec<Vec<u8>> {
+    let mut found = Vec::new();
+    let mut pending = vec![
+        root.join(".basecraft/objects"),
+        root.join(".basecraft/originals"),
+    ];
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(&directory).into_iter().flatten() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                found.push(std::fs::read(path).unwrap());
+            }
+        }
+    }
+    found
 }

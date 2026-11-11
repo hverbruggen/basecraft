@@ -9,7 +9,6 @@ import json
 import os
 import shlex
 import shutil
-import statistics
 import subprocess
 import tarfile
 import tempfile
@@ -19,6 +18,7 @@ from pathlib import Path
 from build_runtime import output, runtime
 from bundled_tools import stage_tools
 from check_ptp import check_ptp
+from startup import startup_samples
 
 REPO = Path(__file__).resolve().parents[1]
 BINARIES = (
@@ -49,69 +49,6 @@ def ci_receipt(commit):
     except (OSError, ValueError):
         return None
     return path if receipt.get("success") and receipt.get("commit") == commit else None
-
-
-def startup_samples(executable, destination, backend, previous=None):
-    """Five launches; first swapped frame and idle RSS belong to the same PID."""
-    destination.mkdir(parents=True, exist_ok=True)
-    samples = []
-    prefix = "basecraft-gui-startup-v1 "
-    for index in range(5):
-        log = destination / f"startup-{backend}-{index}.log"
-        env = dict(os.environ, BASECRAFT_GUI_TEST="1", QT_QPA_PLATFORM="offscreen", QT_QPA_PLATFORMTHEME="",
-                   QT_QUICK_BACKEND="software" if backend == "software" else "rhi",
-                   BASECRAFT_PROFILE_DIR=str(destination / f"profile-{backend}-{index}"))
-        profile = destination / f"profile-{backend}-{index}"
-        env.update(BASECRAFT_STATE_DIR=str(profile / "state"),
-                   BASECRAFT_CACHE_DIR=str(profile / "cache"))
-        env.pop("BASECRAFT_STARTUP_TRACE_TOKEN", None)
-        if backend == "opengl":
-            env["QSG_RHI_BACKEND"] = "opengl"
-        else:
-            env.pop("QSG_RHI_BACKEND", None)
-        with log.open("w") as output_log:
-            started = time.monotonic()
-            process = subprocess.Popen([str(executable), "--startup-trace"], env=env,
-                                       stdin=subprocess.DEVNULL, stdout=output_log, stderr=output_log)
-            try:
-                events = {}
-                while time.monotonic() - started < 30:
-                    for line in log.read_text().splitlines():
-                        if line.startswith(prefix):
-                            row = json.loads(line[len(prefix):])
-                            if row["pid"] == process.pid:
-                                events[row["event"]] = row["elapsed_ns"] / 1e6
-                    if "first_frame" in events:
-                        break
-                    if process.poll() is not None:
-                        raise RuntimeError(f"startup exited before first frame: {log}")
-                    time.sleep(0.02)
-                else:
-                    raise RuntimeError(f"no first frame within 30 seconds: {log}")
-                time.sleep(0.5)
-                status = Path(f"/proc/{process.pid}/status")
-                if status.is_file():
-                    rss = next(int(line.split()[1]) * 1024 for line in status.read_text().splitlines()
-                               if line.startswith("VmRSS:"))
-                else:
-                    rss = int(subprocess.check_output(["ps", "-o", "rss=", "-p", str(process.pid)])) * 1024
-                samples.append(dict(process_start_ms=events["main_entered"],
-                                    qml_loaded_ms=events["qml_load_returned"],
-                                    first_frame_ms=events["first_frame"], idle_rss_bytes=rss))
-            finally:
-                process.terminate()
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
-    medians = {key: statistics.median(sample[key] for sample in samples) for key in samples[0]}
-    result = dict(samples=samples, medians=medians, backend=backend,
-                  clock="Rust main entry; excludes process loader time", cache="uncontrolled; not cold-start qualification")
-    if previous and previous.get("medians"):
-        result["previous_ratios"] = {key: value / previous["medians"][key] for key, value in medians.items()
-                                     if previous["medians"].get(key, 0) > 0}
-    return result
 
 
 def snapshot(destination):

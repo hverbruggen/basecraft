@@ -159,6 +159,8 @@ pub mod qobject {
         #[qinvokable]
         fn poll_job(self: Pin<&mut DelimitationController>);
         #[qinvokable]
+        fn analysis_running(self: &DelimitationController) -> bool;
+        #[qinvokable]
         fn flush(self: Pin<&mut DelimitationController>);
         #[qinvokable]
         fn check_theme(self: Pin<&mut DelimitationController>);
@@ -346,7 +348,12 @@ impl qobject::DelimitationController {
         self.set_message(QString::from(&summary));
     }
     fn refresh(mut self: Pin<&mut Self>) {
-        crate::document_open::recovery_notice!(self);
+        if let Some(warning) =
+            crate::document_open::recovery_notice(self.rust().session.as_ref(), self.rust().doc)
+        {
+            self.as_mut().set_message_kind(QString::from("error"));
+            self.as_mut().set_message(warning);
+        }
         let access_thread = self.qt_thread();
         if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
             crate::bridge::checked_document!(sync self, session.delimitation(doc));
@@ -434,7 +441,20 @@ impl qobject::DelimitationController {
         result
     }
     pub fn open_file(mut self: Pin<&mut Self>, path: &QString) -> bool {
-        crate::document_open::open_file!(self, path)
+        if self.rust().busy {
+            self.fail("Wait for the running operation before replacing this document");
+            return false;
+        }
+        self.as_mut().set_busy(true);
+        crate::document_open::open_file(self, path, |mut this, result| {
+            let result = result.and_then(|candidate| this.as_mut().install_opened(candidate));
+            this.as_mut().set_busy(false);
+            let ok = result.is_ok();
+            if let Err(error) = result {
+                this.as_mut().fail(&error.to_string());
+            }
+            this.opened(ok);
+        })
     }
 
     fn install_opened(
@@ -2049,6 +2069,10 @@ impl qobject::DelimitationController {
             analysis.job.cancel();
         }
     }
+    pub fn analysis_running(&self) -> bool {
+        self.rust().analysis.is_some()
+    }
+
     pub fn poll_job(mut self: Pin<&mut Self>) {
         let progress = self.rust().analysis.as_ref().and_then(|analysis| {
             let path = analysis.job.progress_file()?;

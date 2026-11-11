@@ -10,15 +10,18 @@ pub mod qt {
         type TestObject;
         include!("cxx-qt-lib/core/qlist/qlist_QObjectMutPtr.h");
         type QList_QObjectMutPtr = cxx_qt_lib::QList<cxx_qt_lib::QObjectMutPtr>;
+        #[cfg(feature = "test-counters")]
         fn children(self: &TestObject) -> &QList_QObjectMutPtr;
         include!("cxx-qt-lib/qvariant.h");
         type QVariant = cxx_qt_lib::QVariant;
+        #[cfg(feature = "test-counters")]
         unsafe fn property(self: &TestObject, name: *const c_char) -> QVariant;
         include!(<QtCore/QCoreApplication>);
         type QCoreApplication;
         #[Self = "QCoreApplication"]
         fn instance() -> *mut QCoreApplication;
         #[Self = "QCoreApplication"]
+        #[cfg(feature = "test-counters")]
         fn quit();
         unsafe fn inherits(self: &QCoreApplication, class_name: *const c_char) -> bool;
     }

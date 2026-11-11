@@ -11,17 +11,31 @@ pub struct Source(std::sync::Arc<Vec<u8>>);
 
 impl Source {
     pub fn open(path: &Path) -> Result<Self> {
-        Self::read(path, |_| {})
+        Self::read(path, |_| Ok(()))
     }
 
     /// Hash each block as it arrives, without a second pass over the full file.
     pub fn open_hashed(path: &Path) -> Result<(Self, String)> {
         let mut hasher = crate::Hasher::new();
-        let source = Self::read(path, |bytes| hasher.update(bytes))?;
+        let source = Self::read(path, |bytes| {
+            hasher.update(bytes);
+            Ok(())
+        })?;
         Ok((source, hasher.finish()))
     }
 
-    fn read(path: &Path, mut consume: impl FnMut(&[u8])) -> Result<Self> {
+    /// Read, hash and index each FASTA block while it is hot in memory.
+    pub fn open_fasta(path: &Path) -> Result<(Self, crate::fasta::FastaIndex, String)> {
+        let mut hasher = crate::Hasher::new();
+        let mut index = crate::fasta::IndexBuilder::default();
+        let source = Self::read(path, |bytes| {
+            hasher.update(bytes);
+            index.push(bytes)
+        })?;
+        Ok((source, index.finish()?, hasher.finish()))
+    }
+
+    fn read(path: &Path, mut consume: impl FnMut(&[u8]) -> Result<()>) -> Result<Self> {
         use std::io::Read;
         let mut file = File::open(path)?;
         let len = usize::try_from(file.metadata()?.len())
@@ -41,7 +55,7 @@ impl Source {
             bytes
                 .try_reserve_exact(count)
                 .map_err(std::io::Error::other)?;
-            consume(&block[..count]);
+            consume(&block[..count])?;
             bytes.extend_from_slice(&block[..count]);
         }
         #[cfg(feature = "test-counters")]

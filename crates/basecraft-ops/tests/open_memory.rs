@@ -115,8 +115,13 @@ fn every_kind_reads_each_input_once() {
     }
     // Warm only discovery and caches. Fixture generation and Session setup are
     // excluded from open's allocation window, as in the large-file heap budget.
-    Session::recoverable(&root).unwrap().open(&file).unwrap();
     let before = files(&root);
+    Session::recoverable(&root).unwrap().open(&file).unwrap();
+    assert_eq!(
+        files(&root),
+        before,
+        "first open must not write source, state or cache"
+    );
     let mut session = Session::recoverable(&root).unwrap();
     counters::reset();
     let measurement = heap::Measurement::start().unwrap();

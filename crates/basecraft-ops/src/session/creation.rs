@@ -73,6 +73,7 @@ impl Session {
             recovery_boundary: None,
             saved_at: None,
             source_stamps: Vec::new(),
+            recovery_changed: false,
             absent_sidecars: vec![],
             origin: None,
             origin_issue: None,
@@ -96,7 +97,9 @@ impl Session {
             },
         );
         self.docs[id.0].baseline = Some(entry);
-        if let Err(error) = self.track(id) {
+        // Unlike an open, creation holds residues that exist nowhere else.
+        if let Err(error) = self.track(id).and_then(|()| self.write_entries(&[])) {
+            self.pending_baselines.retain(|entry| entry.doc != key);
             self.docs.pop();
             return Err(error);
         }

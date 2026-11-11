@@ -277,6 +277,12 @@ fn original_index_writer_bytes_and_synthetic_mutations() {
 
 #[test]
 fn original_runtime_serializer_only_and_compact_identity() {
+    #[derive(Serialize)]
+    struct OldDiagnostic {
+        path: PathBuf,
+        message: String,
+    }
+
     for populated in [false, true] {
         let mut actual = Vec::new();
         // Same call shape as provision's runtime.json writer; no provisioning.
@@ -293,11 +299,6 @@ fn original_runtime_serializer_only_and_compact_identity() {
             },
             &actual,
         );
-    }
-    #[derive(Serialize)]
-    struct OldDiagnostic {
-        path: PathBuf,
-        message: String,
     }
     // Synthetic tuples in the exact registry generation call shape, including
     // managed_runtime. No Registry::load, manifest discovery or semantic verify.
@@ -344,11 +345,11 @@ fn original_runtime_serializer_only_and_compact_identity() {
 fn outcome(result: Result<InstallationIndex>) -> Value {
     match result {
         Ok(index) => json!({"kind":"Ok", "value":serde_json::to_value(index).unwrap()}),
-        Err(error) => error_outcome(error),
+        Err(error) => error_outcome(&error),
     }
 }
 
-fn error_outcome(error: Error) -> Value {
+fn error_outcome(error: &Error) -> Value {
     match &error {
         Error::Json(e) => {
             json!({"kind":"Json", "display":error.to_string(), "line":e.line(), "column":e.column(), "category":format!("{:?}",e.classify())})
@@ -494,9 +495,9 @@ fn original_load_index_reader_observations() {
     for (label, value) in [
         ("zero", json!(0)),
         ("future", json!(2)),
-        ("max", json!(4294967295u32)),
+        ("max", json!(4_294_967_295_u32)),
         ("negative", json!(-1)),
-        ("overflow", json!(4294967296u64)),
+        ("overflow", json!(4_294_967_296_u64)),
         ("float", json!(1.0)),
     ] {
         let mut input = runtime_input();
@@ -610,10 +611,7 @@ fn original_load_index_reader_observations() {
 #[cfg(unix)]
 #[test]
 fn original_writer_limits_and_reached_failure_stages() {
-    assert!(
-        cfg!(unix),
-        "Unix native-path evidence requires Unix; qualify other targets separately"
-    );
+    const { assert!(cfg!(unix), "native-path evidence requires Unix") };
     let temp = tempfile::tempdir().unwrap();
     let config = config(temp.path());
     write_index(&config, |_| Ok(())).unwrap();
@@ -640,7 +638,7 @@ fn original_writer_limits_and_reached_failure_stages() {
         Ok(())
     })
     .unwrap_err();
-    observations.push(json!({"stage":"serialization-size-check-before-atomic-write", "outcome":error_outcome(error)}));
+    observations.push(json!({"stage":"serialization-size-check-before-atomic-write", "outcome":error_outcome(&error)}));
     assert_eq!(std::fs::read(&config.index).unwrap(), exact);
     std::fs::write(&config.index, &original).unwrap();
     let error = write_index(&config, |_| {
@@ -648,7 +646,7 @@ fn original_writer_limits_and_reached_failure_stages() {
     })
     .unwrap_err();
     observations.push(
-        json!({"stage":"change-closure-before-serialization", "outcome":error_outcome(error)}),
+        json!({"stage":"change-closure-before-serialization", "outcome":error_outcome(&error)}),
     );
     assert_eq!(std::fs::read(&config.index).unwrap(), original);
     std::fs::write(&config.index, b"null").unwrap();
@@ -661,7 +659,7 @@ fn original_writer_limits_and_reached_failure_stages() {
     assert!(!reached.get());
     assert_eq!(std::fs::read(&config.index).unwrap(), b"null");
     observations
-        .push(json!({"stage":"load-before-change-closure", "outcome":error_outcome(error)}));
+        .push(json!({"stage":"load-before-change-closure", "outcome":error_outcome(&error)}));
     assert!(config.index.with_extension("lock").exists());
     std::fs::write(&config.index, &original).unwrap();
     #[cfg(unix)]
@@ -673,7 +671,7 @@ fn original_writer_limits_and_reached_failure_stages() {
             Ok(())
         })
         .unwrap_err();
-        observations.push(json!({"stage":"native-path-serialization-before-atomic-write", "outcome":error_outcome(error)}));
+        observations.push(json!({"stage":"native-path-serialization-before-atomic-write", "outcome":error_outcome(&error)}));
         assert_eq!(std::fs::read(&config.index).unwrap(), original);
     }
     fixture(

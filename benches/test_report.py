@@ -2,6 +2,9 @@
 import importlib.util
 from pathlib import Path
 import unittest
+import json
+import tempfile
+from types import SimpleNamespace
 
 spec = importlib.util.spec_from_file_location("bench", Path(__file__).with_name("run.py"))
 bench = importlib.util.module_from_spec(spec)
@@ -21,3 +24,20 @@ class ReportTests(unittest.TestCase):
     def test_missing_budget_is_an_error(self):
         with self.assertRaises(KeyError):
             bench.ceiling("new-scenario", {"limits_ms": {}})
+
+    def test_absolute_gate_and_explicit_history_recording(self):
+        with tempfile.TemporaryDirectory() as directory:
+            history = Path(directory) / "history.jsonl"
+            history.write_text('{"median_ms": 999999, "passed": true}\n')
+            before = history.read_bytes()
+            args = SimpleNamespace(gate="benchmark", machine="test", history=history, record=False)
+            limits = {"limits_ms": {"open-alignment": 100}}
+            for value in [101, 1000]:
+                self.assertFalse(bench.record("open-alignment", [value], "ms", "test",
+                    args, limits, None, "source"))
+            self.assertEqual(history.read_bytes(), before)
+            args.record = True
+            self.assertTrue(bench.record("open-alignment", [50], "ms", "test",
+                args, limits, None, "source"))
+            self.assertEqual(len(history.read_text().splitlines()), 2)
+            self.assertEqual(json.loads(history.read_text().splitlines()[-1])["limit_ms"], 100)

@@ -180,14 +180,7 @@ fn loaded_hash_and_first_durable_action_guards_are_preserved() {
         if companion {
             std::fs::write(&side, b"##gff-version 3\n# changed\n").unwrap();
         } else {
-            let modified = path.metadata().unwrap().modified().unwrap();
-            std::fs::write(&path, b">a\nTTTT\n").unwrap();
-            std::fs::File::options()
-                .write(true)
-                .open(&path)
-                .unwrap()
-                .set_modified(modified)
-                .unwrap();
+            std::fs::write(&path, b">a\nTTTTT\n").unwrap();
         }
         assert!(
             session

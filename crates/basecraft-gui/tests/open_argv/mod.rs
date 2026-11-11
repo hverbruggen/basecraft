@@ -2,7 +2,7 @@
 use crate::{
     app_bridge, application, application_test_bridge, bridge, metadata_bridge, submission_bridge,
 };
-use cxx_qt::{QObject, casting::Downcast};
+use cxx_qt::{QObject, Threading, casting::Downcast};
 use cxx_qt_lib::{QByteArray, QQmlApplicationEngine, QString, QUrl};
 use std::{
     path::Path,
@@ -79,11 +79,18 @@ pub fn run(folder: &Path) {
                 .downcast_pin::<metadata_bridge::qobject::MetadataController>()
                 .unwrap();
             let done = ready.clone();
+            let thread = metadata.qt_thread();
             metadata
                 .on_opened(move |_, success| {
                     assert!(success);
                     if done.fetch_add(1, Ordering::Relaxed) == 1 {
-                        application_test_bridge::qt::QCoreApplication::quit();
+                        let thread = thread.clone();
+                        std::thread::spawn(move || {
+                            std::thread::sleep(std::time::Duration::from_millis(250));
+                            thread
+                                .queue(|_| application_test_bridge::qt::QCoreApplication::quit())
+                                .unwrap();
+                        });
                     }
                 })
                 .release();
@@ -93,11 +100,18 @@ pub fn run(folder: &Path) {
                 .downcast_pin::<submission_bridge::qobject::SubmissionController>()
                 .unwrap();
             let done = ready.clone();
+            let thread = submission.qt_thread();
             submission
                 .on_opened(move |_, success| {
                     assert!(success);
                     if done.fetch_add(1, Ordering::Relaxed) == 1 {
-                        application_test_bridge::qt::QCoreApplication::quit();
+                        let thread = thread.clone();
+                        std::thread::spawn(move || {
+                            std::thread::sleep(std::time::Duration::from_millis(250));
+                            thread
+                                .queue(|_| application_test_bridge::qt::QCoreApplication::quit())
+                                .unwrap();
+                        });
                     }
                 })
                 .release();
@@ -116,6 +130,13 @@ pub fn run(folder: &Path) {
                 .as_ref()
                 .unwrap()
         };
+        let frames = application_test_bridge::property(object, c"paintsWhileOpening")
+            .value::<i32>()
+            .unwrap();
+        assert!(
+            frames >= 2,
+            "window must repaint while its file worker is blocked: {frames}"
+        );
         let (metadata, submission) = owners(object);
         let mut metadata = unsafe { Pin::new_unchecked(metadata.as_mut().unwrap()) };
         let mut metadata = metadata

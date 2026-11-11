@@ -14,6 +14,7 @@ impl Session {
             )
             .then(|| basecraft_protocol::ops::SourceRecord {
                 checkpoint: false,
+                links: std::collections::BTreeMap::new(),
                 feature_slots: self.docs[doc.0]
                     .content
                     .sequence()
@@ -329,14 +330,15 @@ impl Session {
                     .as_deref()
                     .is_some_and(|boundary| of <= boundary))
         {
-            let checkpoint = self.recovery_checkpoint(id)?;
-            self.write_entries(&[entry.clone(), checkpoint.clone()])?;
-            self.docs[id.0].recovery_boundary = Some(checkpoint.id);
+            if let Some(checkpoint) = self.recovery_checkpoint(id)? {
+                self.write_entries(&[entry.clone(), checkpoint.clone()])?;
+                self.docs[id.0].recovery_boundary = Some(checkpoint.id);
+            } else {
+                self.write(entry)?;
+            }
             self.docs[id.0].baseline = None;
             self.refresh_source_stamps(id);
-            if changed {
-                self.docs[id.0].origin_issue = Some("The original changed on disk. Your current edits have been preserved in recovery; save them to a new file.".into());
-            }
+            self.docs[id.0].recovery_changed |= changed;
         } else {
             self.write(entry)?;
         }

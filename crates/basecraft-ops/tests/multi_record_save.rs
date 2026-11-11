@@ -75,5 +75,26 @@ fn multi_record_genbank_and_annotated_fasta_refuse_save_and_save_as() {
         );
         assert!(!recovery.exists());
         assert!(session.recovery_root().exists());
+        std::fs::write(&path, b"external replacement").unwrap();
+        let op = if kind == Kind::Alignment {
+            Op::AlnReplace {
+                row: 0,
+                start: 1,
+                end: 2,
+                residues: "A".into(),
+            }
+        } else {
+            Op::SeqReplace {
+                start: 1,
+                end: 2,
+                residues: "A".into(),
+            }
+        };
+        session.apply(doc, op).unwrap();
+        assert!(session.recovery_warning(doc).unwrap().contains("original"));
+        assert!(matches!(
+            session.save(doc, Some(&new)),
+            Err(basecraft_ops::Error::Unsupported(_))
+        ));
     }
 }

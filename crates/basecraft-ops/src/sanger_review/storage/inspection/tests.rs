@@ -128,7 +128,7 @@ fn current_membership_is_borrowed_without_simulation_or_authority_changes() {
             assert_eq!(r.sets.len(), 2);
             assert_eq!(r.sets[0].position, 0);
             assert_eq!(r.sets[1].position, 1);
-            assert!(std::ptr::eq(r.sets[1].set, &s.retained[0]));
+            assert!(std::ptr::eq(r.sets[1].set, &raw const s.retained[0]));
             assert!(matches!(
                 r.sets[0].inputs[0].selection,
                 Selection::Existing(0)
@@ -137,7 +137,7 @@ fn current_membership_is_borrowed_without_simulation_or_authority_changes() {
             assert!(r.sets[0].sources.iter().all(|v| v.checked.is_ok()));
             assert!(std::ptr::eq(
                 r.sets[0].sources[0].source,
-                &s.evidence.sources[0]
+                &raw const s.evidence.sources[0]
             ));
             assert_eq!(
                 r.sets[0].inputs[0].requirement(),
@@ -264,6 +264,7 @@ fn legacy_registration_rechecks_and_stops_after_prior_real_effects() {
         return;
     };
     let mut s = reference_set(&root.join("data"));
+    #[cfg(feature = "test-counters")]
     let path = s.draft.inputs[0].path.clone();
     let anchor = root.join("data/review.json");
     #[cfg(feature = "test-counters")]
@@ -466,7 +467,7 @@ fn existing_sources_use_real_verification_without_reselection() {
     broken.state = "broken".into();
     crate::input_evidence::write_json(&ledger.join("input.json"), &broken).unwrap();
     unchanged(&root, &s, &target, |r| {
-        assert!(r.sets[0].sources[0].checked.is_err())
+        assert!(r.sets[0].sources[0].checked.is_err());
     });
     let cycle = root.join("cycle");
     fs::create_dir(&cycle).unwrap();
@@ -477,7 +478,7 @@ fn existing_sources_use_real_verification_without_reselection() {
     unchanged(&root, &s, &target, |r| {
         assert!(
             matches!(&r.sets[0].sources[0].checked, Err(crate::Error::Invalid(message)) if message == "input evidence contains a cycle")
-        )
+        );
     });
     for i in 0..34 {
         let dir = root.join(format!("chain{i}"));
@@ -493,7 +494,7 @@ fn existing_sources_use_real_verification_without_reselection() {
     unchanged(&root, &s, &target, |r| {
         assert!(
             matches!(&r.sets[0].sources[0].checked, Err(crate::Error::Invalid(message)) if message == "input evidence ancestry exceeds 32 references")
-        )
+        );
     });
 }
 
@@ -683,7 +684,7 @@ fn placement_and_recovery_diagnostics_preserve_errors_and_remaining_facts() {
         assert!(
             matches!(&r.recovery, Ok(RecoveryRole::Existing { review, .. }) if !review.exists())
         );
-        assert!(r.sets[0].set.draft_json == s.draft_json);
+        assert_eq!(r.sets[0].set.draft_json, s.draft_json);
     });
     let alignment = root.join("context.afa");
     fs::write(&alignment, ">a\nAC\n>b\nAC\n").unwrap();
@@ -729,11 +730,11 @@ fn placement_and_recovery_diagnostics_preserve_errors_and_remaining_facts() {
     });
     s.retained[0].evidence.placement.as_mut().unwrap().hash = "changed".into();
     unchanged(&root, &s, &target, |r| {
-        assert!(r.sets[1].placement_context.as_ref().unwrap().is_err())
+        assert!(r.sets[1].placement_context.as_ref().unwrap().is_err());
     });
     fs::remove_file(&support).unwrap();
     unchanged(&root, &s, &target, |r| {
-        assert!(r.sets[1].placement_context.as_ref().unwrap().is_err())
+        assert!(r.sets[1].placement_context.as_ref().unwrap().is_err());
     });
 }
 

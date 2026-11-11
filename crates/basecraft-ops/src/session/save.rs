@@ -463,14 +463,23 @@ impl Session {
         self.docs[id.0].recovery_boundary = Some(entry.id.clone());
         self.docs[id.0].baseline = Some(entry.clone());
         self.docs[id.0].baseline_logged = true;
-        if target == self.resolve(&self.docs[id.0].key) {
-            self.refresh_source_stamps(id);
-        }
+        self.docs[id.0].source_stamps = entry
+            .source
+            .as_ref()
+            .expect("save source")
+            .files
+            .iter()
+            .map(|file| (self.resolve(&file.path), Some(file.stamp.clone())))
+            .collect();
+        self.docs[id.0].recovery_changed = false;
         hooks.returned(SaveSite::SaveRecord);
         if target == self.resolve(&self.docs[id.0].key) {
             self.docs[id.0]
                 .accepted_hashes
                 .clone_from(&entry.result.hashes);
+            self.docs[id.0].disk_stamp = entry.source.as_ref().expect("save source").files[0]
+                .stamp
+                .clone();
             self.docs[id.0].absent_sidecars.clear();
             hooks.executed(SaveMilestone::AcceptedLog);
         }

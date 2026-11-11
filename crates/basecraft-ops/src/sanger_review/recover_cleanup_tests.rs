@@ -394,7 +394,7 @@ fn r3_real_partial_registration_precedes_incomplete_refusal() {
         .map(|e| e.unwrap().path())
         .filter(|p| p.join("input.json").is_file())
         .collect();
-    assert!(!ledgers.is_empty());
+    assert_ne!(ledgers, [] as [std::path::PathBuf; 0]);
     for ledger in ledgers {
         let input = inputs::read_input(&ledger).unwrap();
         assert_eq!(input.state, "referenced");

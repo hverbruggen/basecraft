@@ -331,7 +331,7 @@ fn error(e: &Error) -> Value {
 }
 fn example() -> Value {
     // Deliberately inconsistent size/hash/path facts are accepted by this reader.
-    json!({"schema_version":1,"source":{"path":"missing/原本.fasta","stamp":{"size":7,"modified_seconds":0,"modified_nanos":4294967295u32},"hash":"not-a-hash"},"submitted_hash":"","submitted_size":9,"transformation":"identity-v1","state":"referenced"})
+    json!({"schema_version":1,"source":{"path":"missing/原本.fasta","stamp":{"size":7,"modified_seconds":0,"modified_nanos":4_294_967_295_u32},"hash":"not-a-hash"},"submitted_hash":"","submitted_size":9,"transformation":"identity-v1","state":"referenced"})
 }
 fn reader_cases() -> Vec<(String, String)> {
     let mut cases = vec![];
@@ -373,7 +373,7 @@ fn reader_cases() -> Vec<(String, String)> {
         v["transformation"] = json!(t);
         add(format!("transform/{t}"), v);
     }
-    for version in [0u64, 2, 4294967295] {
+    for version in [0u64, 2, 4_294_967_295] {
         for state in ["referenced", "generated", "future"] {
             let mut v = example();
             v["schema_version"] = json!(version);
@@ -437,7 +437,7 @@ fn reader_cases() -> Vec<(String, String)> {
             ("object", json!({})),
             ("float", json!(1.5)),
             ("string", json!("x")),
-            ("overflow-u32", json!(4294967296u64)),
+            ("overflow-u32", json!(4_294_967_296_u64)),
             ("u64-max", json!(u64::MAX)),
         ] {
             let mut v = example();
@@ -546,7 +546,7 @@ fn reader_cases() -> Vec<(String, String)> {
 }
 // Filled once from the ORIGINAL readers; input strings and full observed diagnostics
 // are embedded here because this allocation reserves only eight writer fixtures.
-const READER_OBSERVATIONS: &str = r###"[
+const READER_OBSERVATIONS: &str = r#"[
 {"case":"state/referenced/absent","direct":{"accepted":{"schema_version":1,"source":null,"state":"referenced","submitted_hash":"","submitted_size":9,"transformation":"identity-v1"}},"host":{"code":"invalid_operation","detail":"unsupported or inconsistent submitted input evidence","display":"invalid operation: unsupported or inconsistent submitted input evidence","variant":"Invalid"},"input":"{\"schema_version\":1,\"state\":\"referenced\",\"submitted_hash\":\"\",\"submitted_size\":9,\"transformation\":\"identity-v1\"}"},
 {"case":"state/referenced/null","direct":{"accepted":{"schema_version":1,"source":null,"state":"referenced","submitted_hash":"","submitted_size":9,"transformation":"identity-v1"}},"host":{"code":"invalid_operation","detail":"unsupported or inconsistent submitted input evidence","display":"invalid operation: unsupported or inconsistent submitted input evidence","variant":"Invalid"},"input":"{\"schema_version\":1,\"source\":null,\"state\":\"referenced\",\"submitted_hash\":\"\",\"submitted_size\":9,\"transformation\":\"identity-v1\"}"},
 {"case":"state/referenced/some","direct":{"accepted":{"schema_version":1,"source":{"hash":"not-a-hash","path":"missing/原本.fasta","stamp":{"modified_nanos":4294967295,"modified_seconds":0,"size":7}},"state":"referenced","submitted_hash":"","submitted_size":9,"transformation":"identity-v1"}},"host":{"accepted":{"schema_version":1,"source":{"hash":"not-a-hash","path":"missing/原本.fasta","stamp":{"modified_nanos":4294967295,"modified_seconds":0,"size":7}},"state":"referenced","submitted_hash":"","submitted_size":9,"transformation":"identity-v1"}},"input":"{\"schema_version\":1,\"source\":{\"hash\":\"not-a-hash\",\"path\":\"missing/原本.fasta\",\"stamp\":{\"modified_nanos\":4294967295,\"modified_seconds\":0,\"size\":7}},\"state\":\"referenced\",\"submitted_hash\":\"\",\"submitted_size\":9,\"transformation\":\"identity-v1\"}"},
@@ -728,7 +728,7 @@ const READER_OBSERVATIONS: &str = r###"[
 {"case":"syntax/178","direct":{"category":"Eof","code":"json","column":1,"display":"EOF while parsing an object at line 1 column 1","line":1,"variant":"Json"},"host":{"category":"Eof","code":"json","column":1,"display":"EOF while parsing an object at line 1 column 1","line":1,"variant":"Json"},"input":"{"},
 {"case":"syntax/179","direct":{"category":"Data","code":"json","column":38,"display":"invalid type: floating point `1.8446744073709552e+19`, expected u32 at line 1 column 38","line":1,"variant":"Json"},"host":{"category":"Data","code":"json","column":38,"display":"invalid type: floating point `1.8446744073709552e+19`, expected u32 at line 1 column 38","line":1,"variant":"Json"},"input":"{\"schema_version\":18446744073709551616}"},
 {"case":"syntax/180","direct":{"category":"Data","code":"json","column":38,"display":"invalid type: floating point `1.8446744073709552e+19`, expected u64 at line 1 column 38","line":1,"variant":"Json"},"host":{"category":"Data","code":"json","column":38,"display":"invalid type: floating point `1.8446744073709552e+19`, expected u64 at line 1 column 38","line":1,"variant":"Json"},"input":"{\"submitted_size\":18446744073709551616}"}
-]"###;
+]"#;
 #[test]
 fn original_direct_serde_and_host_reader_matrix() {
     let Some(root) = isolated_profile::enter("original_direct_serde_and_host_reader_matrix") else {

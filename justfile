@@ -29,9 +29,11 @@ hooks:
 # Format, lint, test. The pre-commit hook runs the first two.
 check:
     python3 -m unittest discover -s testdata/compact
+    python3 -m unittest discover -s benches
     cargo fmt --all --check
     cargo clippy --workspace --all-targets -- -D warnings
-    cargo test --workspace
+    python3 tools/isolated_tests.py
+    cargo test --workspace --doc
     cargo test -p basecraft-ops --features test-counters --test budgets
     cargo test -p basecraft-io --features test-heap --lib heap::tests
     cargo test -p basecraft-ops --features test-heap --test heap_budgets
@@ -40,15 +42,20 @@ check:
 
 # Everything. Run before every push.
 ci: check schemas-check deny protocol-license replay qml-test
-    python3 benches/run.py --compact --samples 1 --gate gross
+    python3 benches/run.py --compact --samples 3 --gate gross
 
 # Generate JSON Schema and Arrow schemas from basecraft-protocol.
 schemas:
     cargo run -q -p basecraft-cli -- schemas schemas
 
 # Fail if the committed schemas differ from freshly generated ones.
-schemas-check: schemas
-    git diff --exit-code -- schemas
+schemas-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    generated=$(mktemp -d)
+    trap 'rm -rf "$generated"' EXIT
+    cargo run --locked --offline -q -p basecraft-cli -- schemas "$generated"
+    diff -ru schemas "$generated"
 
 deny:
     cargo deny check
@@ -81,6 +88,9 @@ replay:
 # Warm-cache headless timings. Run on the build host under its shared lock.
 bench *args:
     python3 benches/run.py {{args}}
+
+bench-record *args:
+    python3 benches/run.py --record {{args}}
 
 # Compact defaults need no compilation. Legacy small/full stress tiers remain opt-in.
 # Run compiler-backed tiers on the configured remote build machine.

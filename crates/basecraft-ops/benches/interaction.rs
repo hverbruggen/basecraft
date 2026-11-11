@@ -1,4 +1,4 @@
-//! Headless, warm-cache Session timings. Orchestrated by benches/run.py.
+//! Headless warm and cache-evicted Session timings. Orchestrated by benches/run.py.
 use basecraft_ops::{
     Session,
     files::{self, Kind},
@@ -59,6 +59,7 @@ fn verify(session: &Session, id: basecraft_ops::DocId, edited: bool) -> Result<(
 struct Sample<'a> {
     scenario: &'a str,
     duration_ns: u128,
+    storage_read_bytes: u64,
     operations: usize,
     schema_version: u8,
     verified: bool,
@@ -69,6 +70,16 @@ struct Sample<'a> {
     edits: usize,
     source_commit: &'a str,
     debug_assertions: bool,
+}
+
+fn storage_reads() -> u64 {
+    std::fs::read_to_string("/proc/self/io")
+        .ok()
+        .and_then(|text| {
+            text.lines()
+                .find_map(|line| line.strip_prefix("read_bytes: ")?.trim().parse().ok())
+        })
+        .unwrap_or(0)
 }
 
 fn run() -> Result<()> {
@@ -96,8 +107,8 @@ fn run() -> Result<()> {
         return frame_cases::run(scenario, Path::new(&args[1]));
     }
     let bytes = match scenario.as_str() {
-        "open-fasta-100mb" => Some(100_000_000),
-        "open-fasta-1gb" => Some(1_000_000_000),
+        "open-fasta-100mb" | "open-fasta-100mb-cold" => Some(100_000_000),
+        "open-fasta-1gb" | "open-fasta-1gb-cold" => Some(1_000_000_000),
         "open-alignment" | "edit-alignment" | "undo-alignment" | "save-alignment" => None,
         _ => return Err("unknown scenario".into()),
     };
@@ -113,14 +124,30 @@ fn run() -> Result<()> {
     });
     fixtures::fixture(&file, bytes)?;
     let fixture_bytes = file.metadata()?.len();
-    // Explicit untimed warmup, including index/cache population; no cold-cache claim.
+    // Warm parser/runtime state equally; evict only the input for cold samples.
     let mut warm = Session::recoverable_with_paths(root, &paths)?;
     warm.open(&file)?;
     drop(warm);
+    let cold = scenario.ends_with("-cold");
+    if cold {
+        #[cfg(target_os = "linux")]
+        {
+            let input = std::fs::File::open(&file)?;
+            input.sync_all()?;
+            rustix::fs::fadvise(&input, 0, None, rustix::fs::Advice::DontNeed)?;
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("cold-cache measurements require Linux fadvise and IO counters".into());
+    }
+    let before = storage_reads();
     let mut session = Session::recoverable_with_paths(root, &paths)?;
     let start = Instant::now();
     let opened = session.open(&file);
     let open_ns = start.elapsed().as_nanos();
+    let storage_read_bytes = storage_reads().saturating_sub(before);
+    if cold && storage_read_bytes < fixture_bytes {
+        return Err("input cache eviction was ineffective; cold sample refused".into());
+    }
     let id = opened?;
     let mut duration_ns = open_ns;
     let mut operations = 1;
@@ -213,6 +240,7 @@ fn run() -> Result<()> {
         serde_json::to_string(&Sample {
             scenario,
             duration_ns,
+            storage_read_bytes,
             operations,
             schema_version: 2,
             verified: true,

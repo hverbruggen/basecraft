@@ -20,7 +20,8 @@ pub struct IndexedFasta {
 
 impl IndexedFasta {
     pub fn open(path: &std::path::Path) -> Result<Self> {
-        Self::from_source(crate::Source::open(path)?)
+        let (source, index, _) = crate::Source::open_fasta(path)?;
+        Ok(Self { source, index })
     }
     pub fn from_source(source: crate::Source) -> Result<Self> {
         let index = FastaIndex::build(source.bytes())?;
@@ -262,46 +263,90 @@ impl LayoutBuilder {
     }
 }
 
+/// Incremental index: only names and line offsets outlive a read block.
+#[derive(Default)]
+pub(crate) struct IndexBuilder {
+    records: Vec<RecordIndex>,
+    current: Option<(String, u64, LayoutBuilder)>,
+    line: LineScan,
+    name: Vec<u8>,
+    name_done: bool,
+    offset: u64,
+    line_no: usize,
+}
+
+impl IndexBuilder {
+    pub(crate) fn push(&mut self, mut bytes: &[u8]) -> Result<()> {
+        while !bytes.is_empty() {
+            let end = memchr(b'\n', bytes).unwrap_or(bytes.len());
+            let fragment = &bytes[..end];
+            if self.line.first.is_none() {
+                self.line.first = fragment.first().copied();
+            }
+            if self.line.is_header() {
+                let start = usize::from(self.line.bytes == 0);
+                if !self.name_done && start <= fragment.len() {
+                    let name = &fragment[start..];
+                    let end = name
+                        .iter()
+                        .position(u8::is_ascii_whitespace)
+                        .unwrap_or(name.len());
+                    self.name.extend_from_slice(&name[..end]);
+                    self.name_done = end < name.len();
+                }
+                self.line.bytes += fragment.len() as u64;
+            } else {
+                self.line.push(fragment);
+            }
+            if end == bytes.len() {
+                break;
+            }
+            self.end_line(1)?;
+            bytes = &bytes[end + 1..];
+        }
+        Ok(())
+    }
+
+    fn end_line(&mut self, newline: u64) -> Result<()> {
+        self.line_no += 1;
+        if self.line.is_header() {
+            if let Some((name, header, layout)) = self.current.take() {
+                self.records.push(finish_record(name, header, layout));
+            }
+            let name = String::from_utf8_lossy(&self.name).into_owned();
+            self.current = Some((name, self.offset, LayoutBuilder::new()));
+            self.name.clear();
+            self.name_done = false;
+        } else {
+            let residues = self.line.validate(self.current.is_some(), self.line_no)?;
+            if let Some((_, _, layout)) = &mut self.current {
+                layout.line(self.offset, residues, self.line.bytes + newline);
+            }
+        }
+        self.offset += self.line.bytes + newline;
+        self.line = LineScan::default();
+        Ok(())
+    }
+
+    pub(crate) fn finish(mut self) -> Result<FastaIndex> {
+        if self.line.bytes != 0 {
+            self.end_line(0)?;
+        }
+        if let Some((name, header, layout)) = self.current {
+            self.records.push(finish_record(name, header, layout));
+        }
+        Ok(FastaIndex {
+            records: self.records,
+        })
+    }
+}
+
 impl FastaIndex {
     /// Scan a FASTA file and index every record.
     pub fn build(data: &[u8]) -> Result<Self> {
-        let mut records = Vec::new();
-        let mut current: Option<(String, u64, LayoutBuilder)> = None;
-        let mut pos = 0usize;
-        let mut line_no = 0usize;
-        while pos < data.len() {
-            line_no += 1;
-            let end = memchr(b'\n', &data[pos..]).map_or(data.len(), |i| pos + i);
-            let next = (end + 1).min(data.len());
-            let mut content_end = end;
-            if content_end > pos && data[content_end - 1] == b'\r' {
-                content_end -= 1;
-            }
-            let line = &data[pos..content_end];
-            if line.first() == Some(&b'>') {
-                if let Some((name, header, b)) = current.take() {
-                    records.push(finish_record(name, header, b));
-                }
-                let name_end = line
-                    .iter()
-                    .position(u8::is_ascii_whitespace)
-                    .unwrap_or(line.len());
-                let name = String::from_utf8_lossy(&line[1..name_end]).into_owned();
-                current = Some((name, pos as u64, LayoutBuilder::new()));
-            } else {
-                let mut scan = LineScan::default();
-                scan.push(line);
-                let residues = scan.validate(current.is_some(), line_no)?;
-                if let Some((_, _, b)) = &mut current {
-                    b.line(pos as u64, residues, (next - pos) as u64);
-                }
-            }
-            pos = next;
-        }
-        if let Some((name, header, b)) = current {
-            records.push(finish_record(name, header, b));
-        }
-        Ok(Self { records })
+        let mut builder = IndexBuilder::default();
+        builder.push(data)?;
+        builder.finish()
     }
 
     pub fn get(&self, name: &str) -> Option<&RecordIndex> {
@@ -432,6 +477,16 @@ mod tests {
         for &data in cases {
             for chunk in 1..=17 {
                 let result = scan_summary(&mut Chunked { data, chunk });
+                let mut streamed = IndexBuilder::default();
+                let streamed = data
+                    .chunks(chunk)
+                    .try_for_each(|bytes| streamed.push(bytes))
+                    .and_then(|()| streamed.finish());
+                assert_eq!(
+                    FastaIndex::build(data).map_err(|e| e.to_string()),
+                    streamed.map_err(|e| e.to_string()),
+                    "chunk {chunk}"
+                );
                 match (FastaIndex::build(data), result) {
                     (Ok(index), Ok((summary, bytes))) => {
                         assert_eq!(summary.records, index.records.len() as u64);

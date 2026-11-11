@@ -50,7 +50,7 @@ fn scenario(
     }
     counters::reset();
     session.save(doc, None).unwrap();
-    // Saving reads twice before replacement and then retains the new bytes.
+    // Saving reads twice before replacement. History keeps fingerprints only.
     // Tree sidecar serialization also hashes the newly written tree once.
     let saved_size = file.metadata().unwrap().len();
     record(
@@ -104,8 +104,8 @@ fn fasta() {
         "fasta",
         "alignment-editing/ambiguous-gappy.afa",
         1,
-        1,
-        12,
+        0,
+        10,
         |i| Op::AlnReplace {
             row: 0,
             start: u64::from(i),
@@ -117,7 +117,7 @@ fn fasta() {
 
 #[test]
 fn genbank() {
-    scenario("genbank", "sequences-annotations/locus.gb", 1, 1, 12, |i| {
+    scenario("genbank", "sequences-annotations/locus.gb", 1, 0, 10, |i| {
         Op::SeqReplace {
             start: u64::from(i),
             end: u64::from(i) + 1,
@@ -128,7 +128,7 @@ fn genbank() {
 
 #[test]
 fn newick() {
-    scenario("newick", "tree-inference/unrooted.nwk", 1, 2, 14, |i| {
+    scenario("newick", "tree-inference/unrooted.nwk", 1, 1, 11, |i| {
         Op::TreeRenameTip {
             from: if i == 0 { "a".into() } else { format!("a{i}") },
             to: format!("a{}", i + 1),
@@ -204,6 +204,26 @@ fn companions_are_read_once() {
         let mut session = Session::unlogged(&root);
         let doc = session.open(path).unwrap();
         assert!(!session.document_record(doc).unwrap().unsaved);
+        let expected: std::collections::BTreeSet<_> = if path == &metadata {
+            basecraft_ops::metadata::files(path)
+        } else if path == &fasta {
+            vec![path.clone(), path.with_extension("gff3")]
+        } else if path == &tree || path == &spart {
+            vec![path.clone(), basecraft_ops::files::tree_sidecar(path)]
+        } else {
+            vec![path.clone()]
+        }
+        .into_iter()
+        .map(|p| p.canonicalize().unwrap())
+        .collect();
+        assert_eq!(
+            counters::snapshot()
+                .reads
+                .keys()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>(),
+            expected
+        );
         for (file, reads) in counters::snapshot().reads {
             assert_eq!(
                 reads.full_reads,

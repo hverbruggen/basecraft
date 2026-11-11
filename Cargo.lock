@@ -347,6 +347,7 @@ dependencies = [
  "basecraft-protocol",
  "basecraft-viewmodel",
  "fs4",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",

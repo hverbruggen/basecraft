@@ -233,7 +233,11 @@ pub fn load_from(path: &Path, source: Source) -> Result<Loaded> {
         Format::Tree => load_tree_from(path, &source).map(Loaded::Tree),
         Format::Fasta => {
             let gff = read_optional(&gff_sidecar(path))?;
-            load_fasta_from(path, source, gff.as_ref())
+            load_fasta_from(
+                path,
+                fasta::IndexedFasta::from_source(source)?,
+                gff.as_ref(),
+            )
         }
         Format::GenBank => open_from(path, source).map(Loaded::Sequence),
         _ => Err(crate::error::invalid(
@@ -246,12 +250,15 @@ pub fn load_from(path: &Path, source: Source) -> Result<Loaded> {
 pub(crate) struct CapturedLoad {
     pub content: Loaded,
     pub files: Vec<(PathBuf, String)>,
-    pub stamps: Vec<(PathBuf, Option<std::fs::Metadata>)>,
+    pub stamps: Vec<(PathBuf, Option<basecraft_protocol::provenance::FileStamp>)>,
 }
 
 pub(crate) fn capture_load(path: &Path, format: Format) -> Result<CapturedLoad> {
     if format == Format::GenBank {
-        let stamps = vec![(path.to_path_buf(), Some(std::fs::metadata(path)?))];
+        let stamps = vec![(
+            path.to_path_buf(),
+            Some(crate::input_evidence::stamp(path)?),
+        )];
         let (record, count, hash) = genbank::open_hashed(path)?;
         return finish_capture(
             Loaded::Sequence(opened_genbank(record, count)),
@@ -268,14 +275,25 @@ pub(crate) fn capture_load(path: &Path, format: Format) -> Result<CapturedLoad> 
     };
     let mut stamps = Vec::new();
     let mut files = Vec::new();
+    let mut fasta_index = None;
     for file in std::iter::once(path.to_path_buf()).chain(companions) {
         let metadata = match std::fs::metadata(&file) {
-            Ok(metadata) => Some(metadata),
+            Ok(metadata) if !metadata.is_file() => {
+                let error = io::Error::new(io::ErrorKind::InvalidInput, "not an ordinary file");
+                return Err(basecraft_io::Error::Io(error).into());
+            }
+            Ok(metadata) => Some(crate::input_evidence::stamp_metadata(&file, &metadata)?),
             Err(error) if error.kind() == io::ErrorKind::NotFound && file != path => None,
             Err(error) => return Err(error.into()),
         };
         if metadata.is_some() {
-            let (source, hash) = Source::open_hashed(&file)?;
+            let (source, hash) = if format == Format::Fasta && file == path {
+                let (source, index, hash) = Source::open_fasta(&file)?;
+                fasta_index = Some(index);
+                (source, hash)
+            } else {
+                Source::open_hashed(&file)?
+            };
             files.push((file.clone(), source, hash));
         }
         stamps.push((file, metadata));
@@ -283,7 +301,14 @@ pub(crate) fn capture_load(path: &Path, format: Format) -> Result<CapturedLoad> 
     let main = files[0].1.clone();
     let companion = files.get(1).map(|(_, source, _)| source);
     let content = match format {
-        Format::Fasta => load_fasta_from(path, main, companion)?,
+        Format::Fasta => load_fasta_from(
+            path,
+            fasta::IndexedFasta {
+                source: main,
+                index: fasta_index.expect("FASTA indexed during capture"),
+            },
+            companion,
+        )?,
         Format::GenBank => unreachable!("streamed above"),
         Format::Tree => Loaded::Tree(load_tree_bytes(path, &main, &files[0].2, companion)?),
         Format::Delimitation => Loaded::Delimitation(load_delimitation_bytes(
@@ -316,15 +341,15 @@ pub(crate) fn capture_load(path: &Path, format: Format) -> Result<CapturedLoad> 
 fn finish_capture(
     content: Loaded,
     files: Vec<(PathBuf, String)>,
-    stamps: Vec<(PathBuf, Option<std::fs::Metadata>)>,
+    stamps: Vec<(PathBuf, Option<basecraft_protocol::provenance::FileStamp>)>,
 ) -> Result<CapturedLoad> {
     for (file, before) in &stamps {
         let after = match std::fs::metadata(file) {
-            Ok(metadata) => Some(metadata),
+            Ok(metadata) => Some(crate::input_evidence::stamp_metadata(file, &metadata)?),
             Err(error) if error.kind() == io::ErrorKind::NotFound => None,
             Err(error) => return Err(error.into()),
         };
-        if !same_metadata(before.as_ref(), after.as_ref()) {
+        if *before != after {
             return Err(Error::ChangedOnDisk { path: file.clone() });
         }
     }
@@ -343,33 +368,12 @@ fn read_optional(path: &Path) -> Result<Option<Source>> {
     }
 }
 
-pub(crate) fn same_metadata(a: Option<&std::fs::Metadata>, b: Option<&std::fs::Metadata>) -> bool {
-    match (a, b) {
-        (None, None) => true,
-        (Some(a), Some(b)) => {
-            let same = a.is_file()
-                && b.is_file()
-                && a.len() == b.len()
-                && a.modified().ok() == b.modified().ok();
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::MetadataExt;
-                same && a.dev() == b.dev()
-                    && a.ino() == b.ino()
-                    && a.ctime() == b.ctime()
-                    && a.ctime_nsec() == b.ctime_nsec()
-            }
-            #[cfg(not(unix))]
-            {
-                same
-            }
-        }
-        _ => false,
-    }
-}
-
-fn load_fasta_from(path: &Path, source: Source, captured_gff: Option<&Source>) -> Result<Loaded> {
-    let file = Arc::new(fasta::IndexedFasta::from_source(source)?);
+fn load_fasta_from(
+    path: &Path,
+    file: fasta::IndexedFasta,
+    captured_gff: Option<&Source>,
+) -> Result<Loaded> {
+    let file = Arc::new(file);
     if file.index.records.is_empty() {
         return Err(Error::Empty(path.to_path_buf()));
     }
