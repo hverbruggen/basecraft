@@ -175,6 +175,29 @@ impl SequenceDoc {
             .filter_map(|(i, f)| f.as_ref().map(|f| (Self::id(i), f)))
     }
 
+    /// Stable feature slots recorded alongside recovery checkpoints.
+    pub fn feature_slots(&self) -> Vec<bool> {
+        self.features.iter().map(Option::is_some).collect()
+    }
+
+    pub fn restore_feature_slots(
+        &mut self,
+        slots: &[bool],
+    ) -> Result<(), crate::alignment::EditError> {
+        if slots.iter().filter(|present| **present).count() != self.feature_count() {
+            return Err(crate::alignment::EditError(
+                "Recovery feature slots differ".into(),
+            ));
+        }
+        let mut features = std::mem::take(&mut self.features).into_iter().flatten();
+        self.features = slots
+            .iter()
+            .map(|present| if *present { features.next() } else { None })
+            .collect();
+        self.index = Mutex::new(None);
+        Ok(())
+    }
+
     pub fn feature_count(&self) -> usize {
         self.features.iter().flatten().count()
     }

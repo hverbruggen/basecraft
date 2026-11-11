@@ -51,10 +51,6 @@ use crate::{Error, Result};
 /// merges into one operation.
 const MERGE_WINDOW: Duration = Duration::from_secs(1);
 
-/// Files up to this size are copied into the project's object store when
-/// opened, so replay works after the original is overwritten.
-pub const OBJECT_STORE_LIMIT: u64 = 100 << 20;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct DocId(pub usize);
 
@@ -96,6 +92,7 @@ struct Slot {
     baseline_logged: bool,
     accepted_hashes: Vec<(String, String)>,
     saved_at: Option<SavedMark>,
+    recovery_boundary: Option<String>,
     source_stamps: Vec<(PathBuf, Option<std::fs::Metadata>)>,
     absent_sidecars: Vec<String>,
     origin: Option<basecraft_protocol::provenance::Publication>,
@@ -361,7 +358,6 @@ impl Session {
             .as_document_mut()
             .rebase_replay_paths(from, to);
     }
-
 
     pub fn is_tree(&self, id: DocId) -> bool {
         self.docs

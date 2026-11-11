@@ -277,7 +277,9 @@ impl Session {
                     .source_stamps
                     .iter()
                     .find(|(path, _)| *path == original)
-                    && metadata.len() > super::OBJECT_STORE_LIMIT
+                    && !objects_dir(&self.storage_root)
+                        .join(hash.trim_start_matches("b3:"))
+                        .is_file()
                 {
                     let stamp = basecraft_protocol::provenance::FileStamp {
                         size: metadata.len(),
@@ -510,6 +512,7 @@ impl Session {
             parent_hashes.insert(parent.clone(), basecraft_io::hash_file(&path)?);
         }
         crate::contributions::project(&events, &mut effective_edits);
+        let input_bytes_available = inputs.iter().all(|input| input.retained.is_some());
         let publication = Publication {
             schema_version: 1,
             id: save.id.clone(),
@@ -524,10 +527,7 @@ impl Session {
             effective_edits,
             completeness: Completeness {
                 ancestry_known: false,
-                input_bytes_available: self.docs[id.0].source_stamps.iter().all(|(_, m)| {
-                    m.as_ref()
-                        .is_none_or(|m| m.len() <= super::OBJECT_STORE_LIMIT)
-                }),
+                input_bytes_available,
                 execution_specification_available: false,
                 replay_verified: false,
             },

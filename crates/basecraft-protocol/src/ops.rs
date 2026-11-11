@@ -405,6 +405,8 @@ pub struct OpResult {
 /// Original files described by an open journal record.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SourceRecord {
+    pub feature_slots: Vec<bool>,
+    pub node_ids: Vec<usize>,
     pub root: std::path::PathBuf,
     pub files: Vec<crate::provenance::InputReference>,
 }

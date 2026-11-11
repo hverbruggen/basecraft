@@ -1,6 +1,6 @@
 //! Document loading, baseline tracking and retained originals.
 use super::{DocId, Op, OpResult, Path, PathBuf, Result, Slot, files, invalid, objects_dir};
-use super::{OBJECT_STORE_LIMIT, Session, save_authority};
+use super::{Session, save_authority};
 
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct SavedMark(pub(super) Option<String>);
@@ -96,6 +96,7 @@ impl Session {
             baseline: None,
             baseline_logged: false,
             accepted_hashes: hashes.clone(),
+            recovery_boundary: None,
             saved_at: Some(super::SavedMark(None)),
             source_stamps: captured.stamps,
             absent_sidecars,
@@ -119,31 +120,142 @@ impl Session {
         Ok((id, kind))
     }
 
-    /// Promote a read-only load before its first durable action. Validate and
-    /// retain the accepted originals before any edit or replacement can occur.
+    /// First edit retains an inode when possible. Later edits check only stamps;
+    /// a changed original requires a snapshot of the live document before editing.
     pub(super) fn track(&mut self, id: DocId) -> Result<()> {
-        let Some(entry) = self
+        if !self.tracked {
+            return Ok(());
+        }
+        let slot = self
             .docs
             .get(id.0)
-            .ok_or_else(|| invalid("unknown document"))?
-            .baseline
-            .clone()
-        else {
-            return Ok(());
-        };
-        if self.tracked {
-            for (path, before) in &self.docs[id.0].source_stamps {
-                let after = std::fs::metadata(path).ok();
-                if !files::same_metadata(before.as_ref(), after.as_ref()) {
-                    return Err(crate::Error::ChangedOnDisk { path: path.clone() });
-                }
+            .ok_or(crate::Error::UnknownDocument { id })?;
+        if let Some(entry) = slot.baseline.clone() {
+            if self.source_changed(id) {
+                return Err(crate::Error::ChangedOnDisk {
+                    path: self.resolve(&slot.key),
+                });
             }
-        }
-        if !self.docs[id.0].baseline_logged {
+            if self.store_objects {
+                let directory = objects_dir(&self.storage_root);
+                std::fs::create_dir_all(&directory)?;
+                for (key, hash) in &entry.result.hashes {
+                    let source = self.resolve(key);
+                    let target = directory.join(hash.trim_start_matches("b3:"));
+                    match std::fs::hard_link(&source, &target) {
+                        Ok(()) => {}
+                        Err(error)
+                            if matches!(
+                                error.kind(),
+                                std::io::ErrorKind::CrossesDevices
+                                    | std::io::ErrorKind::AlreadyExists
+                                    | std::io::ErrorKind::Unsupported
+                                    | std::io::ErrorKind::PermissionDenied
+                            ) => {}
+                        Err(error) => return Err(error.into()),
+                    }
+                }
+                for reference in &entry.source.as_ref().expect("baseline source").files {
+                    let source = self.resolve(&reference.path);
+                    if crate::input_evidence::stamp(&source)? != reference.stamp {
+                        return Err(crate::Error::ChangedOnDisk { path: source });
+                    }
+                }
+                // Hard linking changes ctime. Retain the new stamps without reading bytes.
+                self.refresh_source_stamps(id);
+            }
+            if !self.docs[id.0].baseline_logged {
+                self.pending_baselines.push(entry);
+            }
+            self.docs[id.0].baseline = None;
+        } else if self.log.is_some() && self.source_changed(id) {
+            self.flush()?;
+            let entry = self.recovery_checkpoint(id)?;
+            self.docs[id.0].recovery_boundary = Some(entry.id.clone());
             self.pending_baselines.push(entry);
+            self.refresh_source_stamps(id);
+            self.docs[id.0].origin_issue = Some("The original changed on disk. Your current edits have been preserved in recovery; save them to a new file.".into());
         }
-        self.docs[id.0].baseline = None;
         Ok(())
+    }
+
+    pub(super) fn source_changed(&self, id: DocId) -> bool {
+        self.docs[id.0].source_stamps.iter().any(|(path, before)| {
+            !files::same_metadata(before.as_ref(), std::fs::metadata(path).ok().as_ref())
+        })
+    }
+
+    pub(super) fn refresh_source_stamps(&mut self, id: DocId) {
+        for (path, stamp) in &mut self.docs[id.0].source_stamps {
+            *stamp = std::fs::metadata(path).ok();
+        }
+    }
+
+    /// An exceptional checkpoint: external modification or undo across a save.
+    /// Write each saved form once, then move it into the content-addressed store.
+    pub(super) fn recovery_checkpoint(&self, id: DocId) -> Result<basecraft_protocol::LogEntry> {
+        let directory = objects_dir(&self.storage_root);
+        std::fs::create_dir_all(&directory)?;
+        let stage = tempfile::tempdir_in(&directory)?;
+        let key = &self.docs[id.0].key;
+        let target = stage.path().join(key);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let publication = crate::documents::WritePublication::Recovery {
+            stage: stage.path().to_path_buf(),
+            destination: self.root.clone(),
+            stores: Default::default(),
+        };
+        let written = self.docs[id.0].content.as_document().write(
+            &target,
+            files::Format::from_path(&target)?,
+            &self.storage_root,
+            &publication,
+        )?;
+        let mut hashes = Vec::new();
+        for (path, hash) in written {
+            let name = path.strip_prefix(stage.path()).map_err(|_| {
+                crate::Error::Unsupported("Recovery writer escaped its staging folder".into())
+            })?;
+            hashes.push((name.to_string_lossy().into_owned(), hash.clone()));
+            std::fs::rename(&path, directory.join(hash.trim_start_matches("b3:")))?;
+        }
+        Ok(self.entry(
+            id,
+            self.actor.clone(),
+            Op::Open { path: key.clone() },
+            OpResult {
+                hashes,
+                feature: None,
+            },
+        ))
+    }
+
+    pub(crate) fn restore_recovery_ids(
+        &mut self,
+        id: DocId,
+        source: &basecraft_protocol::ops::SourceRecord,
+    ) -> Result<()> {
+        let result = match self.docs[id.0].content_mut() {
+            files::Loaded::Sequence(opened) => {
+                opened.doc.restore_feature_slots(&source.feature_slots)
+            }
+            files::Loaded::Tree(opened) => opened.doc.restore_node_ids(&source.node_ids),
+            _ => Ok(()),
+        };
+        result.map_err(|error| crate::Error::Damaged {
+            path: self.root.clone(),
+            detail: error.to_string(),
+        })
+    }
+
+    pub fn recovery_warning(&self, id: DocId) -> Option<&str> {
+        self.docs
+            .get(id.0)?
+            .origin_issue
+            .as_deref()
+            .filter(|text| text.starts_with("The original changed on disk."))
     }
 
     /// Cheap change token for readers; saves and job outcomes also invalidate a report.
@@ -285,13 +397,7 @@ impl Session {
     /// Hash and retain the exact immutable buffer consumed by an analysis.
     pub fn snapshot_bytes(&self, bytes: &[u8]) -> Result<String> {
         let hash = basecraft_io::hash_bytes(bytes);
-        if self.tracked && bytes.len() as u64 > OBJECT_STORE_LIMIT {
-            return Err(crate::Error::Limit {
-                what: "exact input retention".into(),
-                limit: OBJECT_STORE_LIMIT,
-            });
-        }
-        if self.store_objects && bytes.len() as u64 <= OBJECT_STORE_LIMIT {
+        if self.store_objects {
             let dest = objects_dir(&self.storage_root).join(hash.trim_start_matches("b3:"));
             if !dest.exists() {
                 std::fs::create_dir_all(objects_dir(&self.storage_root))?;

@@ -8,14 +8,24 @@ use super::{
 impl Session {
     pub(super) fn entry(&self, doc: DocId, actor: Actor, op: Op, result: OpResult) -> LogEntry {
         LogEntry {
-            source: matches!(&op, Op::Open { .. } | Op::CreateSequence { .. }).then(|| {
-                basecraft_protocol::ops::SourceRecord {
-                    root: self
-                        .root
-                        .canonicalize()
-                        .unwrap_or_else(|_| self.root.clone()),
-                    files: Vec::new(),
-                }
+            source: matches!(
+                &op,
+                Op::Open { .. } | Op::CreateSequence { .. } | Op::Save { .. }
+            )
+            .then(|| basecraft_protocol::ops::SourceRecord {
+                feature_slots: self.docs[doc.0]
+                    .content
+                    .sequence()
+                    .map_or_else(Vec::new, |opened| opened.doc.feature_slots()),
+                node_ids: self.docs[doc.0]
+                    .content
+                    .tree()
+                    .map_or_else(Vec::new, |opened| opened.doc.preorder()),
+                root: self
+                    .root
+                    .canonicalize()
+                    .unwrap_or_else(|_| self.root.clone()),
+                files: Vec::new(),
             }),
             v: LOG_VERSION,
             id: self.next_id(),
@@ -277,7 +287,7 @@ impl Session {
             Op::Undo { of: of.clone() },
             OpResult::default(),
         );
-        if let Err(error) = self.write(&entry) {
+        if let Err(error) = self.write_undo(id, &entry, &of) {
             let inverse = self.reexecute(id, &applied)?;
             self.docs[id.0].generation -= 1;
             self.docs[id.0].undo.push(Applied { inverse, ..applied });
@@ -299,7 +309,7 @@ impl Session {
             Op::Redo { of: of.clone() },
             OpResult::default(),
         );
-        if let Err(error) = self.write(&entry) {
+        if let Err(error) = self.write_undo(id, &entry, &of) {
             restore_inverse(self.docs[id.0].content_mut(), &inverse)?;
             self.docs[id.0].generation -= 1;
             self.docs[id.0].redo.push(applied);
@@ -307,6 +317,24 @@ impl Session {
         }
         self.docs[id.0].undo.push(Applied { inverse, ..applied });
         Ok(of)
+    }
+
+    fn write_undo(&mut self, id: DocId, entry: &LogEntry, of: &str) -> Result<()> {
+        if self.log.is_some()
+            && (self.source_changed(id)
+                || self.docs[id.0]
+                    .recovery_boundary
+                    .as_deref()
+                    .is_some_and(|boundary| of <= boundary))
+        {
+            let checkpoint = self.recovery_checkpoint(id)?;
+            self.write_entries(&[entry.clone(), checkpoint.clone()])?;
+            self.docs[id.0].recovery_boundary = Some(checkpoint.id);
+            self.refresh_source_stamps(id);
+        } else {
+            self.write(entry)?;
+        }
+        Ok(())
     }
 
     pub(super) fn reexecute(&mut self, id: DocId, applied: &Applied) -> Result<Inverse> {

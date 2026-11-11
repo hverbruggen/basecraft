@@ -479,3 +479,18 @@ mod tests {
         ));
     }
 }
+
+// All six editors already have a message area; no new presentation or dialog.
+macro_rules! recovery_notice {
+    ($controller:ident) => {
+        if let (Some(session), Some(doc)) = (&$controller.rust().session, $controller.rust().doc) {
+            if let Some(warning) = session.recovery_warning(doc).map(str::to_owned) {
+                $controller
+                    .as_mut()
+                    .set_message_kind(QString::from("error"));
+                $controller.as_mut().set_message(QString::from(&warning));
+            }
+        }
+    };
+}
+pub(crate) use recovery_notice;

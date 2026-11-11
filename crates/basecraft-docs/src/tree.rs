@@ -166,6 +166,39 @@ pub struct TreeDoc {
 }
 
 impl TreeDoc {
+    /// Restore arena identities after parsing the checkpoint's preorder stream.
+    pub fn restore_node_ids(&mut self, ids: &[usize]) -> Result<(), EditError> {
+        let mut order = ids.to_vec();
+        order.sort_unstable();
+        if order != (0..self.nodes.len()).collect::<Vec<_>>() {
+            return err("Recovery tree node identities differ");
+        }
+        let mut nodes: Vec<_> = std::mem::take(&mut self.nodes)
+            .into_iter()
+            .map(Some)
+            .collect();
+        for (old, &id) in ids.iter().enumerate() {
+            order[id] = old;
+        }
+        self.nodes = order
+            .iter()
+            .map(|&old| {
+                let mut node = nodes[old].take().expect("validated permutation");
+                node.parent = node.parent.map(|parent| ids[parent]);
+                for child in &mut node.children {
+                    *child = ids[*child];
+                }
+                node
+            })
+            .collect();
+        for support in &mut self.supports {
+            let mut values = std::mem::take(&mut support.values);
+            support.values = order.iter().map(|&old| values[old].take()).collect();
+        }
+        self.root = ids[self.root];
+        Ok(())
+    }
+
     /// A tree as read from a file. Numeric internal labels become support
     /// sets: one per `/`-separated part, as IQ-TREE writes SH-aLRT and
     /// bootstrap together. `prob=` comments (`MrBayes`) become a set of

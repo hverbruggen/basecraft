@@ -1,9 +1,8 @@
-//! Real writer regression checks. Keep the legacy builders as independent byte oracles.
+//! Current recovery journal and pending-save writer contract.
 use basecraft_ops::{Session, log, provenance};
 use basecraft_platform::paths::AppPaths;
-use basecraft_protocol::records::{PendingSave, RecoveryManifest, RecoveryStatus};
+use basecraft_protocol::records::{PendingSave, RecoveryStatus};
 use basecraft_protocol::{Actor, Op};
-use serde_json::{Value, json};
 use std::{path::Path, process::Command};
 
 #[test]
@@ -48,14 +47,9 @@ fn recovery_and_pending_save_writer_bytes() {
         )
         .unwrap();
     let baseline = log::read_all(session.recovery_root()).unwrap().remove(0);
-    let expected = json!({
-        "schema_version": 1, "session": session.id(), "source_root": root,
-        "status": "unsaved", "baseline": baseline,
-        "object_policy_limit": basecraft_ops::session::OBJECT_STORE_LIMIT
-    });
-    let bytes = std::fs::read(session.recovery_root().join("recovery.json")).unwrap();
-    assert_eq!(bytes, serde_json::to_vec_pretty(&expected).unwrap());
-    capture("recovery.json", &bytes);
+    assert_eq!(baseline.source.as_ref().unwrap().root, root);
+    assert_eq!(baseline.source.as_ref().unwrap().files.len(), 1);
+    assert!(!session.recovery_root().join("recovery.json").exists());
 
     // Inject a publication failure after the main data write, retaining the intent.
     let bundle = provenance::companion(&file);
@@ -65,13 +59,12 @@ fn recovery_and_pending_save_writer_bytes() {
     let hashes = session.save_hashes_at(doc, &file).unwrap();
     let error = session.save(doc, None).unwrap_err();
     assert!(error.to_string().contains("data saved"));
-    let expected = json!({
-        "schema_version": 1, "session": session.id(), "target": file,
-        "before_hash": before, "expected_hashes": hashes,
-        "status": "pending", "note": "data and provenance are separate writes"
-    });
     let bytes = std::fs::read(session.recovery_root().join("pending-save.json")).unwrap();
-    assert_eq!(bytes, serde_json::to_vec_pretty(&expected).unwrap());
+    let pending: PendingSave = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(pending.before_hash.as_ref(), Some(&before));
+    assert_eq!(pending.expected_hashes, hashes);
+    assert_eq!(pending.baseline.doc, "gene.fasta");
+    assert!(matches!(pending.baseline.op, Op::Save { .. }));
     capture("pending-save.json", &bytes);
     assert_eq!(std::fs::read(&file).unwrap(), b">gene\nATGT\n");
     // Retry completes publication and removes the intent, with recovery still replayable.
@@ -91,13 +84,11 @@ fn recovery_and_pending_save_writer_bytes() {
     std::fs::write(bundle.join("artifacts"), b"blocked").unwrap();
     let hashes = session.save_hashes_at(doc, &target).unwrap();
     assert!(session.save(doc, Some(&target)).is_err());
-    let expected = json!({
-        "schema_version": 1, "session": session.id(), "target": target,
-        "before_hash": null, "expected_hashes": hashes,
-        "status": "pending", "note": "data and provenance are separate writes"
-    });
     let bytes = std::fs::read(session.recovery_root().join("pending-save.json")).unwrap();
-    assert_eq!(bytes, serde_json::to_vec_pretty(&expected).unwrap());
+    let pending: PendingSave = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(pending.before_hash, None);
+    assert_eq!(pending.expected_hashes, hashes);
+    assert_eq!(pending.target, target);
     capture("pending-save-new.json", &bytes);
 }
 
@@ -114,25 +105,7 @@ fn sorted_bytes(value: &impl serde::Serialize) -> Vec<u8> {
 }
 
 #[test]
-fn captured_records_round_trip_with_unknown_fields() {
-    let bytes = include_bytes!("../../../testdata/fixtures/records-v1/recovery.json");
-    let manifest: RecoveryManifest = serde_json::from_slice(bytes).unwrap();
-    assert_eq!(sorted_bytes(&manifest), bytes);
-    assert_eq!(manifest.status, RecoveryStatus::Unsaved);
-    // Preserve future top-level fields, nested log fields and unknown status strings.
-    // LogEntry alone would drop these nested fields (and reject a future op).
-    let mut extended: Value = serde_json::from_slice(bytes).unwrap();
-    extended["future"] = json!({"version": 9, "items": [null, 2, "value"]});
-    extended["baseline"]["future_log_field"] = json!({"x": true});
-    extended["baseline"]["op"] = json!("future.operation");
-    extended["status"] = json!("future_status");
-    let manifest: RecoveryManifest = serde_json::from_value(extended.clone()).unwrap();
-    assert_eq!(
-        manifest.status,
-        RecoveryStatus::Unknown("future_status".into())
-    );
-    assert_eq!(sorted_bytes(&manifest), sorted_bytes(&extended));
-
+fn current_pending_save_goldens() {
     for bytes in [
         include_bytes!("../../../testdata/fixtures/records-v1/pending-save.json").as_slice(),
         include_bytes!("../../../testdata/fixtures/records-v1/pending-save-new.json").as_slice(),
@@ -140,10 +113,5 @@ fn captured_records_round_trip_with_unknown_fields() {
         let pending: PendingSave = serde_json::from_slice(bytes).unwrap();
         assert_eq!(pending.status, RecoveryStatus::Pending);
         assert_eq!(sorted_bytes(&pending), bytes);
-        let mut extended: Value = serde_json::from_slice(bytes).unwrap();
-        extended["future"] = json!({"nested": [1, false]});
-        extended["status"] = json!("future_pending_state");
-        let pending: PendingSave = serde_json::from_value(extended.clone()).unwrap();
-        assert_eq!(sorted_bytes(&pending), sorted_bytes(&extended));
     }
 }

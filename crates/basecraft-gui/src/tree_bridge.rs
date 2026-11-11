@@ -537,6 +537,7 @@ impl qobject::TreeController {
 
     /// Rebuild the frame, status line and scroll bars.
     fn refresh(mut self: Pin<&mut Self>) {
+        crate::document_open::recovery_notice!(self);
         let access_thread = self.qt_thread();
         if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
             crate::bridge::checked_document!(sync self, session.tree(doc));

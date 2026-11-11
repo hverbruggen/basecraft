@@ -5364,10 +5364,24 @@
       "description": "Original files described by an open journal record.",
       "type": "object",
       "properties": {
+        "feature_slots": {
+          "type": "array",
+          "items": {
+            "type": "boolean"
+          }
+        },
         "files": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/InputReference"
+          }
+        },
+        "node_ids": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
           }
         },
         "root": {
@@ -5375,6 +5389,8 @@
         }
       },
       "required": [
+        "feature_slots",
+        "node_ids",
         "root",
         "files"
       ]

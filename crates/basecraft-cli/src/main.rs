@@ -592,10 +592,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     schemars::schema_for!(basecraft_protocol::records::StoreRegistry),
                 ),
                 (
-                    "recovery-manifest",
-                    schemars::schema_for!(basecraft_protocol::records::RecoveryManifest),
-                ),
-                (
                     "pending-save",
                     schemars::schema_for!(basecraft_protocol::records::PendingSave),
                 ),

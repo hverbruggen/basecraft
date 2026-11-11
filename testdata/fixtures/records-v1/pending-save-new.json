@@ -1,4 +1,43 @@
 {
+  "baseline": {
+    "actor": {
+      "client": "record-fixture",
+      "kind": "script"
+    },
+    "doc": "new-gene.gb",
+    "host": "fixture-host",
+    "id": "01SYNTHETICOPEN000000000000",
+    "op": "doc.save",
+    "params": {
+      "path": "new-gene.gb"
+    },
+    "result": {
+      "hashes": [
+        [
+          "new-gene.gb",
+          "b3:26dee635ad492231e76570b0e6a2ad87a14f2e4cce2498cf9bc9a3ec991e64da"
+        ]
+      ]
+    },
+    "session": "01SYNTHETICSESSION000000000",
+    "source": {
+      "feature_slots": [],
+      "files": [],
+      "node_ids": [],
+      "root": "project"
+    },
+    "state": {
+      "counts": {
+        "features": 0,
+        "kind": "sequence",
+        "residues": 4
+      },
+      "features": 0,
+      "len": 4
+    },
+    "t": "2026-01-01T00:00:00Z",
+    "v": 1
+  },
   "before_hash": null,
   "expected_hashes": [
     "b3:26dee635ad492231e76570b0e6a2ad87a14f2e4cce2498cf9bc9a3ec991e64da"

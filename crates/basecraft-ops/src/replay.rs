@@ -169,9 +169,17 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
     Ok(())
 }
 
-fn recorded_source_root<'a>(root: &Path, entries: impl Iterator<Item = &'a LogEntry>) -> Result<PathBuf> {
-    let source = entries.filter_map(|entry| entry.source.as_ref()).next()
-        .ok_or_else(|| Error::Damaged { path: root.to_path_buf(), detail: "Recovery journal has no source record".into() })?;
+fn recorded_source_root<'a>(
+    root: &Path,
+    entries: impl Iterator<Item = &'a LogEntry>,
+) -> Result<PathBuf> {
+    let source = entries
+        .filter_map(|entry| entry.source.as_ref())
+        .next()
+        .ok_or_else(|| Error::Damaged {
+            path: root.to_path_buf(),
+            detail: "Recovery journal has no source record".into(),
+        })?;
     Ok(root.join(&source.root))
 }
 
@@ -377,10 +385,17 @@ fn recover_entries(
     let source_root = recorded_source_root(root, entries.iter())?;
     let pending_path = root.join("pending-save.json");
     if pending_path.is_file() {
-        let pending: basecraft_protocol::records::PendingSave = serde_json::from_slice(&std::fs::read(&pending_path)?)?;
-        if !pending.baseline.result.hashes.is_empty() && pending.baseline.result.hashes.iter().all(|(path, hash)| {
-            safe_key(path) && basecraft_io::hash_file(&source_root.join(path)).ok().as_ref() == Some(hash)
-        }) {
+        let pending: basecraft_protocol::records::PendingSave =
+            serde_json::from_slice(&std::fs::read(&pending_path)?)?;
+        if !pending.baseline.result.hashes.is_empty()
+            && pending.baseline.result.hashes.iter().all(|(path, hash)| {
+                safe_key(path)
+                    && basecraft_io::hash_file(&source_root.join(path))
+                        .ok()
+                        .as_ref()
+                        == Some(hash)
+            })
+        {
             entries.push(pending.baseline);
         }
     }
@@ -388,12 +403,18 @@ fn recover_entries(
     let mut documents = std::collections::BTreeMap::<String, DocId>::new();
     let mut baselines = HashMap::new();
     for (index, entry) in entries.iter().enumerate() {
-        if matches!(entry.op, Op::Open { .. } | Op::CreateSequence { .. } | Op::Save { .. }) {
+        if matches!(
+            entry.op,
+            Op::Open { .. } | Op::CreateSequence { .. } | Op::Save { .. }
+        ) {
             baselines.insert(entry.doc.clone(), index);
         }
     }
     for (index, entry) in entries.into_iter().enumerate() {
-        if baselines.get(&entry.doc).is_some_and(|baseline| index < *baseline) {
+        if baselines
+            .get(&entry.doc)
+            .is_some_and(|baseline| index < *baseline)
+        {
             continue;
         }
         if let Op::CreateSequence { name, residues } = &entry.op {
@@ -416,9 +437,17 @@ fn recover_entries(
             materialise(root, &source_root, staging.path(), &entry.result.hashes)
                 .map_err(crate::error::invalid)?;
             let doc = session.open(&staging.path().join(path))?;
+            let source = entry.source.as_ref().ok_or_else(|| Error::Damaged {
+                path: root.to_path_buf(),
+                detail: "Recovery baseline has no source record".into(),
+            })?;
+            session.restore_recovery_ids(doc, source)?;
             session.restore_replay_paths(doc, staging.path(), &source_root);
             if !session.state(doc).matches_recorded(&entry.state) {
-                return Err(Error::Damaged { path: root.to_path_buf(), detail: "Recovery baseline state differs".into() });
+                return Err(Error::Damaged {
+                    path: root.to_path_buf(),
+                    detail: "Recovery baseline state differs".into(),
+                });
             }
             documents.insert(entry.doc.clone(), doc);
             continue;

@@ -193,10 +193,28 @@ impl Session {
             let mut paths = document.independently_saved_files(&target);
             if paths.is_empty() {
                 paths.push(target.clone());
-                paths.extend(document.saved_companion(&target).filter(|_| expected.len() > 1));
+                paths.extend(
+                    document
+                        .saved_companion(&target)
+                        .filter(|_| expected.len() > 1),
+                );
             }
-            let hashes = paths.iter().zip(&expected).map(|(path, hash)| (self.relative(path), hash.clone())).collect();
-            let baseline = self.entry(id, self.actor.clone(), Op::Save { path: self.relative(&target) }, OpResult { hashes, feature: None });
+            let hashes = paths
+                .iter()
+                .zip(&expected)
+                .map(|(path, hash)| (self.relative(path), hash.clone()))
+                .collect();
+            let baseline = self.entry(
+                id,
+                self.actor.clone(),
+                Op::Save {
+                    path: self.relative(&target),
+                },
+                OpResult {
+                    hashes,
+                    feature: None,
+                },
+            );
             hooks.at(SaveSite::PendingEncode);
             let intent = serde_json::to_vec_pretty(&serde_json::to_value(
                 basecraft_protocol::records::PendingSave {
@@ -426,6 +444,10 @@ impl Session {
         hooks.record(self.log.is_some());
         hooks.boundary(SaveSite::SaveRecord, self)?;
         self.write(&entry)?;
+        self.docs[id.0].recovery_boundary = Some(entry.id.clone());
+        if target == self.resolve(&self.docs[id.0].key) {
+            self.refresh_source_stamps(id);
+        }
         hooks.returned(SaveSite::SaveRecord);
         if target == self.resolve(&self.docs[id.0].key) {
             self.docs[id.0]

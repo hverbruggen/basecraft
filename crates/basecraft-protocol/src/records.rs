@@ -11,35 +11,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Recovery lifecycle labels. Retain an unfamiliar label without reinterpreting it.
+/// Current pending-save lifecycle label.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RecoveryStatus {
-    Unsaved,
     Pending,
-    #[serde(untagged)]
-    Unknown(String),
-}
-
-/// `recovery.json` in the session's recovery directory.
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct RecoveryManifest {
-    pub schema_version: u32,
-    pub session: String,
-    /// Original source root, retained verbatim; this is local recovery state.
-    pub source_root: PathBuf,
-    pub status: RecoveryStatus,
-    /// An existing `LogEntry` snapshot. Keep its JSON intact, including unknown
-    /// nested fields: deserializing into `LogEntry` would currently discard them.
-    /// The schema reuses the shared current log type rather than duplicating it.
-    #[schemars(with = "crate::LogEntry")]
-    pub baseline: Value,
-    pub object_policy_limit: u64,
-    /// Large originals, keyed by content hash; paths are relative to recovery.json.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub references: BTreeMap<String, crate::provenance::InputReference>,
-    #[serde(flatten)]
-    pub extra: BTreeMap<String, Value>,
 }
 
 /// `pending-save.json`; data and provenance remain separate writes.
@@ -218,8 +194,6 @@ pub enum AnalysisRunStatus {
     Prepared,
     Saved,
     Completed,
-    #[serde(untagged)]
-    Unknown(String),
 }
 
 /// The existing version-one analysis-store `run.json` family.

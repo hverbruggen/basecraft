@@ -319,6 +319,7 @@ impl qobject::MetadataController {
     }
 
     fn refresh(mut self: Pin<&mut Self>) {
+        crate::document_open::recovery_notice!(self);
         if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
             crate::bridge::checked_document!(sync self, session.metadata(doc));
         }

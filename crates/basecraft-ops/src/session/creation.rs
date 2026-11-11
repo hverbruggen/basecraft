@@ -69,6 +69,7 @@ impl Session {
             baseline: None,
             baseline_logged: false,
             accepted_hashes: vec![],
+            recovery_boundary: None,
             saved_at: None,
             source_stamps: Vec::new(),
             absent_sidecars: vec![],
