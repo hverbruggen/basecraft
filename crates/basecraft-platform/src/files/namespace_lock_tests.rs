@@ -531,8 +531,13 @@ fn advisory_forwarding_uses_retained_file_and_drop_releases_it() {
         .unwrap();
     assert!(opened.try_lock_exclusive().unwrap());
     assert!(!FileExt::try_lock_exclusive(&other).unwrap());
+    // A duplicate models the description inherited by a concurrent fork before
+    // exec closes CLOEXEC descriptors. It must not extend the guard's lifetime.
+    use std::os::fd::AsFd;
+    let inherited = opened.as_fd().try_clone_to_owned().unwrap();
     drop(opened);
     assert!(FileExt::try_lock_exclusive(&other).unwrap());
+    drop(inherited);
     let opened = lock(&path).open_file().unwrap();
     assert!(!opened.try_lock_exclusive().unwrap());
     FileExt::unlock(&other).unwrap();

@@ -407,6 +407,14 @@ impl LockNamespace {
         }
     }
 }
+impl Drop for OpenedLock {
+    fn drop(&mut self) {
+        // A concurrent fork may retain the open description until exec, even
+        // with CLOEXEC. Release the reservation when its owner ends.
+        #[cfg(target_os = "linux")]
+        let _ = fs4::fs_std::FileExt::unlock(&self.inner.file);
+    }
+}
 impl OpenedLock {
     /// Forward to fs4 on the one retained file. The owner must authorize this
     /// effect and recheck the namespace after success, especially after a wait.
