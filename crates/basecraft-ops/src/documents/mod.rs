@@ -17,6 +17,8 @@ use crate::session::Inverse;
 #[derive(Default)]
 pub(crate) struct PreparedWrite {
     files: Vec<(PathBuf, String, tempfile::NamedTempFile)>,
+    /// Companions the document no longer needs, removed after the files are replaced.
+    stale: Vec<PathBuf>,
     intent: Option<(PathBuf, tempfile::NamedTempFile)>,
     pub run: Option<crate::records::analysis_store::ArtifactRun>,
     pub reverse: bool,
@@ -49,6 +51,11 @@ impl PreparedWrite {
         drop(writer);
         self.files.push((path.into(), hash.clone(), file));
         Ok(hash)
+    }
+    /// Remove `path` once the files are written, if it exists: a companion
+    /// whose facts are gone must not bring them back on reopen.
+    pub fn remove_stale(&mut self, path: &Path) {
+        self.stale.push(path.into());
     }
     pub fn hashes(&self) -> Vec<(PathBuf, String)> {
         self.files
@@ -108,6 +115,19 @@ impl PreparedWrite {
             })?;
             replaced.push(path.display().to_string());
         }
+        for path in self.stale {
+            match std::fs::remove_file(&path) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                    return Err(crate::Error::Damaged {
+                        path,
+                        detail: format!(
+                            "saved, but an outdated companion could not be removed: {error}"
+                        ),
+                    });
+                }
+                _ => {}
+            }
+        }
         Ok(hashes)
     }
 }
@@ -130,6 +150,24 @@ fn set_alphabet(
         source: basecraft_protocol::facts::FactSource::User,
     };
     Inverse::Alphabet(alphabet.replace(stated))
+}
+
+/// Stage the facts companion of an alignment or sequence: written when it
+/// states an alphabet, removed when it no longer does.
+fn stage_facts(
+    prepared: &mut PreparedWrite,
+    target: &Path,
+    alphabet: Option<&basecraft_protocol::facts::Fact<basecraft_protocol::facts::Alphabet>>,
+    main: &str,
+) -> Result<()> {
+    let path = crate::files::tree_sidecar(target);
+    match crate::files::facts_companion(alphabet, main) {
+        Some(companion) => {
+            prepared.push(&path, |w| companion.write(w))?;
+        }
+        None => prepared.remove_stale(&path),
+    }
+    Ok(())
 }
 
 /// The hash of the companion a save writes for a stated alphabet, if any.
@@ -251,10 +289,10 @@ pub(crate) trait Document {
         Vec::new()
     }
 
-    /// Companion accepted only after the main file matches the intended write.
-    /// Its expected hash is the second element of `saved_hashes`.
-    fn saved_companion(&self, _target: &Path) -> Option<PathBuf> {
-        None
+    /// Companions accepted only after the main file matches the intended write,
+    /// in the order of their hashes after the first in `saved_hashes`.
+    fn saved_companions(&self, _target: &Path) -> Vec<PathBuf> {
+        Vec::new()
     }
 
     /// Preserve the existing replay writer, including historical target handling.

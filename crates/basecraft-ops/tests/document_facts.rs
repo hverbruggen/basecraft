@@ -98,3 +98,59 @@ fn a_companion_for_another_tree_is_reported() {
     let warning = files::load_tree(&path).unwrap().metadata_warning.unwrap();
     assert!(warning.contains("different tree"), "{warning}");
 }
+
+#[test]
+fn an_undone_alphabet_does_not_come_back_on_reopen() {
+    crate::isolated_profile::isolate!();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("pair.afa");
+    std::fs::write(&path, ">a\nACGT\n>b\nACGA\n").unwrap();
+    let mut session = Session::new(dir.path());
+    let doc = session.open(&path).unwrap();
+    session
+        .apply(
+            doc,
+            Op::SetAlphabet {
+                alphabet: Alphabet::Protein,
+            },
+        )
+        .unwrap();
+    session.save(doc, None).unwrap();
+    assert!(files::tree_sidecar(&path).exists());
+    session.undo(doc).unwrap();
+    session.save(doc, None).unwrap();
+    assert!(!files::tree_sidecar(&path).exists());
+    let mut reopened = Session::new(dir.path());
+    let doc = reopened.open(&path).unwrap();
+    assert_eq!(reopened.alphabet(doc).unwrap().source, FactSource::Guessed);
+}
+
+#[test]
+fn a_sequence_with_a_stated_alphabet_saves_again_after_an_edit() {
+    crate::isolated_profile::isolate!();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("one.fasta");
+    std::fs::write(&path, ">x\nACGTACGT\n").unwrap();
+    let mut session = Session::new(dir.path());
+    let doc = session.open(&path).unwrap();
+    session
+        .apply(
+            doc,
+            Op::SetAlphabet {
+                alphabet: Alphabet::Dna,
+            },
+        )
+        .unwrap();
+    session.save(doc, None).unwrap();
+    let edit = Op::SeqReplace {
+        start: 0,
+        end: 1,
+        residues: "T".into(),
+    };
+    session.apply(doc, edit).unwrap();
+    session.save(doc, None).unwrap();
+    let mut reopened = Session::new(dir.path());
+    let doc = reopened.open(&path).unwrap();
+    assert_eq!(reopened.alphabet(doc).unwrap().source, FactSource::User);
+    assert_eq!(reopened.opening_warning(doc).unwrap(), None);
+}

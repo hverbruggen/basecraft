@@ -8,7 +8,9 @@
 //! and accessions moved; refused while a saved one isn't open), clade labels
 //! and tip labels in the tree itself (moved by the tree). Species workspaces
 //! match a tree's tips to specimens by name and keep their SPART names, so a
-//! tip rename on a tree a workspace uses is refused. Workspace specimen
+//! tip rename on a tree a workspace uses is refused. A workspace or submission
+//! in the project that can't be read refuses the rename too, since it can't
+//! be checked. Workspace specimen
 //! `sources` of alignments are provenance and keep the name they were made
 //! from; the roster id is the identity. Sanger reviews refer to files by path
 //! and hash, never by record name. Submission export mappings are history.
@@ -42,6 +44,9 @@ pub enum RenameRefusal {
     SubmissionRowTaken { path: PathBuf },
     /// A species workspace matches its specimens to this tree's tips by name.
     UsedByWorkspace { path: PathBuf },
+    /// A workspace or submission in the project couldn't be read, so it
+    /// can't be checked for the old name.
+    Unreadable { path: PathBuf },
 }
 
 impl std::fmt::Display for RenameRefusal {
@@ -71,6 +76,11 @@ impl std::fmt::Display for RenameRefusal {
             Self::UsedByWorkspace { path } => write!(
                 f,
                 "the species workspace {} matches specimens to these tips by name",
+                path.display()
+            ),
+            Self::Unreadable { path } => write!(
+                f,
+                "can't check {}: it couldn't be read; fix or move it, then rename",
                 path.display()
             ),
         }
@@ -104,8 +114,13 @@ pub fn plan(
         return Ok(Err(RenameRefusal::NameTaken { name: new.into() }));
     }
     let file = session.root().join(session.doc_key(doc)?);
+    let mut unreadable = None;
     let op = if session.is_tree(doc) {
-        if let Some(path) = workspaces_using(session, &file)?.into_iter().next() {
+        let users = workspaces_using(session, &file, &mut unreadable)?;
+        if let Some(path) = unreadable {
+            return Ok(Err(RenameRefusal::Unreadable { path }));
+        }
+        if let Some(path) = users.into_iter().next() {
             return Ok(Err(RenameRefusal::UsedByWorkspace { path }));
         }
         Op::TreeRenameTip {
@@ -132,7 +147,11 @@ pub fn plan(
         Linked::None => Vec::new(),
     };
     let mut submissions = Vec::new();
-    for (path, open) in submissions_naming(session, &document, &wanted)? {
+    let naming = submissions_naming(session, &document, &wanted, &mut unreadable)?;
+    if let Some(path) = unreadable {
+        return Ok(Err(RenameRefusal::Unreadable { path }));
+    }
+    for (path, open) in naming {
         let Some(other) = open else {
             return Ok(Err(RenameRefusal::SubmissionNotOpen { path }));
         };
@@ -299,7 +318,7 @@ fn with_references(
             .collect(),
         Linked::None => Vec::new(),
     };
-    found.submissions = submissions_naming(session, &document, &names)?
+    found.submissions = submissions_naming(session, &document, &names, &mut None)?
         .into_iter()
         .map(|(path, _)| path)
         .collect();
@@ -420,11 +439,13 @@ fn names_any(submission: &Submission, names: &BTreeSet<&str>) -> bool {
 }
 
 /// Submissions drawn from `document` that name one of `names`, open ones
-/// with their id and saved ones found in the project.
+/// with their id and saved ones found in the project. A saved one that can't
+/// be read lands in `unreadable`.
 fn submissions_naming(
     session: &Session,
     document: &str,
     names: &BTreeSet<&str>,
+    unreadable: &mut Option<PathBuf>,
 ) -> Result<Vec<(PathBuf, Option<DocId>)>> {
     let draws = |s: &Submission| {
         s.source
@@ -440,10 +461,13 @@ fn submissions_naming(
         }
     }
     for path in project_files(session.root(), &open) {
-        if crate::submission::is_submission(&path)
-            && crate::submission::load(&path).is_ok_and(|s| draws(&s))
-        {
-            found.push((path, None));
+        if !crate::submission::is_submission(&path) {
+            continue;
+        }
+        match crate::submission::load(&path) {
+            Ok(submission) if draws(&submission) => found.push((path, None)),
+            Ok(_) => {}
+            Err(_) => note_unreadable(session, unreadable, path),
         }
     }
     Ok(found)
@@ -451,8 +475,12 @@ fn submissions_naming(
 
 /// Species workspaces, open or saved in the project, that use the tree in
 /// `tree`: as their display tree, as a specimen source, or as the tree an
-/// analysis ran on.
-fn workspaces_using(session: &Session, tree: &Path) -> Result<Vec<PathBuf>> {
+/// analysis ran on. A saved one that can't be read lands in `unreadable`.
+fn workspaces_using(
+    session: &Session,
+    tree: &Path,
+    unreadable: &mut Option<PathBuf>,
+) -> Result<Vec<PathBuf>> {
     let Ok(tree) = tree.canonicalize() else {
         return Ok(Vec::new());
     };
@@ -478,10 +506,13 @@ fn workspaces_using(session: &Session, tree: &Path) -> Result<Vec<PathBuf>> {
         }
     }
     for path in project_files(session.root(), &open) {
-        if crate::files::Format::from_path(&path).ok() == Some(crate::files::Format::Delimitation)
-            && crate::files::load_delimitation(&path).is_ok_and(|work| uses(&work, &path))
-        {
-            found.push(path);
+        if crate::files::Format::from_path(&path).ok() != Some(crate::files::Format::Delimitation) {
+            continue;
+        }
+        match crate::files::load_delimitation(&path) {
+            Ok(work) if uses(&work, &path) => found.push(path),
+            Ok(_) => {}
+            Err(_) => note_unreadable(session, unreadable, path),
         }
     }
     Ok(found)
@@ -498,15 +529,26 @@ fn open_files(session: &Session) -> Result<Vec<(DocId, PathBuf)>> {
         .collect()
 }
 
-/// Files in the project outside hidden folders such as `.basecraft`, other
-/// than the ones open in the session.
+/// A file the user keeps that couldn't be read. Records inside `.basecraft`
+/// that a past analysis left are history, not documents, and don't block.
+fn note_unreadable(session: &Session, unreadable: &mut Option<PathBuf>, path: PathBuf) {
+    let store = session.root().join(".basecraft");
+    let store = store.canonicalize().unwrap_or(store);
+    if unreadable.is_none() && !path.starts_with(store) {
+        *unreadable = Some(path);
+    }
+}
+
+/// Files in the project, including results bound inside `.basecraft`, other
+/// than the ones open in the session. Git's folder and unfinished analysis
+/// output (`pending`) are skipped.
 fn project_files(root: &Path, open: &[(DocId, PathBuf)]) -> Vec<PathBuf> {
     let mut found = Vec::new();
     let mut folders = vec![root.to_path_buf()];
     while let Some(folder) = folders.pop() {
         for entry in std::fs::read_dir(&folder).into_iter().flatten().flatten() {
             let path = entry.path();
-            if entry.file_name().to_string_lossy().starts_with('.') {
+            if matches!(entry.file_name().to_str(), Some(".git" | "pending")) {
                 continue;
             }
             match entry.file_type() {

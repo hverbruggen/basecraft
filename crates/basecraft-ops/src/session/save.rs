@@ -354,11 +354,7 @@ impl Session {
         let mut paths = document.independently_saved_files(target);
         if paths.is_empty() {
             paths.push(target.to_path_buf());
-            paths.extend(
-                document
-                    .saved_companion(target)
-                    .filter(|_| expected.len() > 1),
-            );
+            paths.extend(document.saved_companions(target));
         }
         let hashes = paths
             .iter()
@@ -486,10 +482,14 @@ impl Session {
         let main_written = now.as_ref() == expected.first();
         if main_written && own {
             accepted.push((self.relative(target), expected[0].clone()));
-            if let Some((hash, sidecar)) = expected.get(1).zip(document.saved_companion(target))
-                && basecraft_io::hash_file(&sidecar).ok().as_ref() == Some(hash)
+            for (hash, sidecar) in expected
+                .iter()
+                .skip(1)
+                .zip(document.saved_companions(target))
             {
-                accepted.push((self.relative(&sidecar), hash.clone()));
+                if basecraft_io::hash_file(&sidecar).ok().as_ref() == Some(hash) {
+                    accepted.push((self.relative(&sidecar), hash.clone()));
+                }
             }
         }
         let slot = &mut self.docs[id.0];

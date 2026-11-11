@@ -471,3 +471,17 @@ fn a_saved_submission_that_names_the_row_must_be_open() {
         Err(RenameRefusal::SubmissionRowTaken { .. })
     ));
 }
+
+#[test]
+fn a_tip_rename_waits_for_a_workspace_that_cannot_be_read() {
+    crate::isolated_profile::isolate!();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("t.nwk"), "((a,b),c);\n").unwrap();
+    std::fs::write(dir.path().join("broken.spart"), "not a SPART file").unwrap();
+    let mut session = Session::new(dir.path());
+    let tree = session.open(&dir.path().join("t.nwk")).unwrap();
+    assert!(matches!(
+        renames::plan(&session, tree, "a", "a2").unwrap(),
+        Err(RenameRefusal::Unreadable { .. })
+    ));
+}

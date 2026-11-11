@@ -47,8 +47,11 @@ impl Document for OpenedAlignment {
         self.companion_warning.as_deref()
     }
 
-    fn saved_companion(&self, target: &Path) -> Option<std::path::PathBuf> {
-        self.alphabet.is_some().then(|| files::tree_sidecar(target))
+    fn saved_companions(&self, target: &Path) -> Vec<std::path::PathBuf> {
+        self.alphabet
+            .iter()
+            .map(|_| files::tree_sidecar(target))
+            .collect()
     }
 
     fn kind(&self) -> crate::files::Kind {
@@ -94,9 +97,7 @@ impl Document for OpenedAlignment {
         }
         let mut prepared = super::PreparedWrite::default();
         let hash = prepared.push(target, |w| files::write_alignment(&self.doc, w))?;
-        if let Some(companion) = files::facts_companion(self.alphabet.as_ref(), &hash) {
-            prepared.push(&files::tree_sidecar(target), |w| companion.write(w))?;
-        }
+        super::stage_facts(&mut prepared, target, self.alphabet.as_ref(), &hash)?;
         Ok(prepared)
     }
 

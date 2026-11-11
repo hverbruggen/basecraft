@@ -96,8 +96,13 @@ impl Document for Opened {
             self.apply(op).map(|(inverse, _)| inverse)
         }
     }
-    fn saved_companion(&self, target: &Path) -> Option<PathBuf> {
-        Some(files::gff_sidecar(target))
+    /// The GFF3 file when the sequence writes one, then the facts companion
+    /// when it states an alphabet: the order of `saved_hashes`.
+    fn saved_companions(&self, target: &Path) -> Vec<PathBuf> {
+        let gff = files::write_sidecar(self, &mut std::io::sink()).is_some();
+        let gff = gff.then(|| files::gff_sidecar(target));
+        let facts = self.alphabet.as_ref().map(|_| files::tree_sidecar(target));
+        gff.into_iter().chain(facts).collect()
     }
 
     fn prepare_write(
@@ -121,9 +126,7 @@ impl Document for Opened {
                 Ok(())
             })?;
         }
-        if let Some(companion) = files::facts_companion(self.alphabet.as_ref(), &hash) {
-            prepared.push(&files::tree_sidecar(target), |w| companion.write(w))?;
-        }
+        super::stage_facts(&mut prepared, target, self.alphabet.as_ref(), &hash)?;
         Ok(prepared)
     }
     fn saved_hashes(

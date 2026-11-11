@@ -3097,7 +3097,7 @@
           ]
         },
         {
-          "description": "State the letters an alignment or sequence is written in.",
+          "description": "State the letters an alignment or sequence is written in. A file has\none companion, so in a multi-record FASTA or GenBank file this states\nthe alphabet of every record in the file, not only the open one.",
           "type": "object",
           "properties": {
             "op": {

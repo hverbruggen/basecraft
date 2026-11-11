@@ -54,8 +54,8 @@ impl Document for DelimitationWorkspace {
         undo.undo(self);
         Ok(())
     }
-    fn saved_companion(&self, target: &Path) -> Option<PathBuf> {
-        Some(files::tree_sidecar(target))
+    fn saved_companions(&self, target: &Path) -> Vec<PathBuf> {
+        vec![files::tree_sidecar(target)]
     }
 
     fn prepare_write(
