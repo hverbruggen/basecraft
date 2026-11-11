@@ -56,16 +56,45 @@ fn document_writer_bytes_require_a_version_bump() {
     };
     let mut bytes = Vec::new();
     files::write_alignment(&opened.doc, &mut bytes).unwrap();
+    let hash = basecraft_io::hash_bytes(&bytes);
     golden("fasta", "alignment", &path, bytes);
+    // Alignments and sequences keep a companion only for a stated fact.
+    for (alphabet, variant) in [
+        (basecraft_protocol::facts::Alphabet::Protein, "alignment"),
+        (basecraft_protocol::facts::Alphabet::Rna, "sequence"),
+    ] {
+        let stated = basecraft_protocol::facts::Fact {
+            value: alphabet,
+            source: basecraft_protocol::facts::FactSource::User,
+        };
+        let mut bytes = Vec::new();
+        files::facts_companion(Some(&stated), &hash)
+            .unwrap()
+            .write(&mut bytes)
+            .unwrap();
+        golden("companion", variant, &path, bytes);
+    }
     let path = root.join("tree-inference/unrooted.nwk");
-    let opened = files::load_tree(&path).unwrap();
+    let mut opened = files::load_tree(&path).unwrap();
+    opened
+        .doc
+        .annotate(
+            1,
+            Some(basecraft_protocol::CladeAnnotation::new(
+                vec!["a".into(), "b".into()],
+                "ab",
+            )),
+        )
+        .unwrap();
     let mut bytes = Vec::new();
     files::write_tree(&opened, &mut bytes).unwrap();
     let hash = basecraft_io::hash_bytes(&bytes);
     golden("newick", "tree", &path, bytes);
     let mut bytes = Vec::new();
-    files::write_tree_sidecar_at(&opened.doc, &hash, &mut bytes).unwrap();
-    golden("tree-sidecar", "tree", &path, bytes);
+    files::tree_companion(&opened.doc, &hash)
+        .write(&mut bytes)
+        .unwrap();
+    golden("companion", "tree", &path, bytes);
     let path = root.join("species-delimitation/hypotheses.spart");
     let workspace = files::load_delimitation(&path).unwrap();
     for xml in [false, true] {
@@ -76,14 +105,11 @@ fn document_writer_bytes_require_a_version_bump() {
     #[cfg(unix)]
     {
         let mut bytes = Vec::new();
-        files::write_delimitation_sidecar_at(
-            &workspace,
-            "b3:fixture",
-            Path::new("/fixture.spart"),
-            &mut bytes,
-        )
-        .unwrap();
-        golden("delimitation-sidecar", "current", &path, bytes);
+        files::delimitation_companion(&workspace, "b3:fixture", Path::new("/fixture.spart"))
+            .unwrap()
+            .write(&mut bytes)
+            .unwrap();
+        golden("companion", "delimitation", &path, bytes);
     }
     {
         use basecraft_ops::records::{AlignmentLink, AlignmentLinkExt};
@@ -265,21 +291,22 @@ fn companion_record_types_round_trip_original_writer_bytes() {
         }
         assert_eq!(encoded, original);
     }
+    use basecraft_protocol::companion_records::Companion;
     crate::isolated_profile::isolate!();
-    check::<basecraft_protocol::companion_records::TreeSidecar>("tree-sidecar-tree-v1.bin");
-    check::<basecraft_protocol::companion_records::DelimitationSidecar>(
-        "delimitation-sidecar-current-v1.bin",
-    );
+    check::<Companion>("companion-tree-v1.bin");
+    check::<Companion>("companion-delimitation-v1.bin");
+    check::<Companion>("companion-alignment-v1.bin");
+    check::<Companion>("companion-sequence-v1.bin");
 }
 
 // Only current writer goldens are kept; the journal has no old-writer exceptions.
 fn writer_versions(path: &Path) -> std::collections::BTreeMap<String, u32> {
     use basecraft_ops::files::Format;
     let formats: &[(&str, u32)] = match Format::from_path(path) {
-        Ok(Format::Fasta) => &[("fasta", 1), ("gff3", 1)],
+        Ok(Format::Fasta) => &[("fasta", 1), ("gff3", 1), ("companion", 1)],
         Ok(Format::GenBank) => &[("genbank", 1)],
-        Ok(Format::Tree) => &[("newick", 1), ("tree-sidecar", 1), ("alignment-link", 1)],
-        Ok(Format::Delimitation) => &[("spart", 1), ("delimitation-sidecar", 1)],
+        Ok(Format::Tree) => &[("newick", 1), ("companion", 1), ("alignment-link", 1)],
+        Ok(Format::Delimitation) => &[("spart", 1), ("companion", 1)],
         Ok(Format::Metadata) => &[("metadata-manifest", 1), ("metadata-tsv", 1)],
         Ok(Format::Submission) => &[("submission", 1)],
         Ok(Format::SangerReview) => &[("sanger-review", 3)],
@@ -289,4 +316,59 @@ fn writer_versions(path: &Path) -> std::collections::BTreeMap<String, u32> {
         .iter()
         .map(|(name, version)| ((*name).to_owned(), *version))
         .collect()
+}
+
+#[test]
+fn companions_read_and_written_again_keep_their_bytes() {
+    crate::isolated_profile::isolate!();
+    let dir = tempfile::tempdir().unwrap();
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/compact");
+    let tree = dir.path().join("tree.nwk");
+    let spart = dir.path().join("species.spart");
+    std::fs::copy(fixtures.join("tree-inference/unrooted.nwk"), &tree).unwrap();
+    let fixture = dir.path().join("fixture.spart");
+    std::fs::copy(
+        fixtures.join("species-delimitation/hypotheses.spart"),
+        &fixture,
+    )
+    .unwrap();
+    let mut session = basecraft_ops::Session::new(dir.path());
+    let doc = session.open(&tree).unwrap();
+    session
+        .apply(
+            doc,
+            basecraft_protocol::Op::TreeAnnotate {
+                id: 1,
+                annotation: Some(basecraft_protocol::CladeAnnotation::new(
+                    vec!["a".into(), "b".into()],
+                    "ab",
+                )),
+            },
+        )
+        .unwrap();
+    session.save(doc, None).unwrap();
+    // Saving under a new name writes the workspace and its companion.
+    let work = session.open(&fixture).unwrap();
+    session.save(work, Some(&spart)).unwrap();
+    let alignment = dir.path().join("pair.afa");
+    std::fs::write(&alignment, ">a\nACGT\n>b\nACGA\n").unwrap();
+    let doc = session.open(&alignment).unwrap();
+    let alphabet = basecraft_protocol::facts::Alphabet::Protein;
+    let set = basecraft_protocol::Op::SetAlphabet { alphabet };
+    session.apply(doc, set).unwrap();
+    session.save(doc, None).unwrap();
+    // A fresh session reads both companions and saves copies beside them.
+    let mut again = basecraft_ops::Session::new(dir.path());
+    for (from, to) in [
+        (&tree, "copy.nwk"),
+        (&spart, "copy.spart"),
+        (&alignment, "copy.afa"),
+    ] {
+        let saved = std::fs::read(files::tree_sidecar(from)).unwrap();
+        let doc = again.open(from).unwrap();
+        let copy = dir.path().join(to);
+        again.save(doc, Some(&copy)).unwrap();
+        let copied = std::fs::read(files::tree_sidecar(&copy)).unwrap();
+        assert_eq!(String::from_utf8(copied), String::from_utf8(saved), "{to}");
+    }
 }

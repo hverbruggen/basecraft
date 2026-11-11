@@ -104,11 +104,22 @@ fn recorded_session_replays_exactly() {
         .count();
     assert_eq!(inserts, 7, "each keystroke is journaled");
 
-    // The original was overwritten by the save; replay uses the stored copy.
+    // The save replaced the original: replay restarts at the save, and the
+    // entries before it are not checkable.
     let report = records::replay(root).unwrap();
     assert!(report.ok(), "{:#?}", report.problems);
     assert_eq!(report.sessions, 1);
     assert_eq!(report.entries, entries.len());
+    let save = entries
+        .iter()
+        .position(|e| matches!(e.op, Op::Save { .. }))
+        .unwrap();
+    assert_eq!(report.unchecked, save);
+    // With the original back, every entry is checked.
+    std::fs::write(root.join("seqs/test.gb"), GB).unwrap();
+    let report = records::replay(root).unwrap();
+    assert!(report.ok(), "{:#?}", report.problems);
+    assert_eq!(report.unchecked, 0);
 }
 
 #[test]
@@ -292,6 +303,8 @@ fn replay_detects_divergence() {
         .collect::<String>();
     assert_ne!(text, tampered);
     std::fs::write(&file, tampered).unwrap();
+    // The save replaced the original; put it back so the edits are checked.
+    std::fs::write(root.join("seqs/test.gb"), GB).unwrap();
 
     let report = records::replay(root).unwrap();
     assert!(!report.ok());
@@ -454,16 +467,18 @@ fn alignment_session_replays_exactly() {
         s.apply(d, Op::AlnRemoveGapColumns {}).unwrap();
         // A tool run that wrote a new file.
         std::fs::write(root.join("x.mafft.fasta"), ">a\nAC\n>b\nAC\n").unwrap();
-        s.log_tool_run(
+        s.record_tool_run(
             d,
             basecraft_protocol::Actor::Tool {
                 tool: "mafft".into(),
                 version: "v7.526".into(),
             },
-            ("basecraft.mafft", "align"),
-            serde_json::json!({}),
-            &[("x.aln.fasta (ungapped)".into(), "b3:00".into())],
-            &[root.join("x.mafft.fasta")],
+            basecraft_ops::session::ToolRunRecord::new(
+                ("basecraft.mafft", "align"),
+                serde_json::json!({}),
+                &[("x.aln.fasta (ungapped)".into(), "b3:00".into())],
+                &[root.join("x.mafft.fasta")],
+            ),
         )
         .unwrap();
         // Sequence operations don't apply to an alignment.

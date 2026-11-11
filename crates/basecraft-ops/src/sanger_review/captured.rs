@@ -75,6 +75,7 @@ impl crate::records::input_evidence::Mutation {
         capture: &CapturedInput,
         dependencies: &[PathBuf],
         origin: &str,
+        project: Option<&crate::project::Project>,
     ) -> Result<crate::records::analysis_store::ArtifactRun> {
         capture.check_current()?;
         crate::records::input_evidence::reference_input_locked(
@@ -84,6 +85,7 @@ impl crate::records::input_evidence::Mutation {
             dependencies,
             origin,
             Some(capture.stamp()),
+            project,
         )
     }
 }

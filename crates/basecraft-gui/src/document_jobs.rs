@@ -36,12 +36,11 @@ pub(crate) fn primary_member(operation: &str) -> Result<String, String> {
         .resolve(operation, None)
         .map_err(|error| error.to_string())?
         .descriptor;
-    let output = descriptor
-        .legacy_adapter
-        .as_ref()
-        .and_then(|adapter| adapter.outputs.get("output"))
-        .ok_or_else(|| format!("{operation} declares no primary result"))?;
-    Ok(format!("{}/{}", output.role, output.path))
+    descriptor
+        .outputs
+        .iter()
+        .find_map(|(role, output)| Some(format!("{role}/{}", output.primary.as_ref()?)))
+        .ok_or_else(|| format!("{operation} declares no primary result"))
 }
 
 /// A destination for the policy rooted at `root`: relative when inside it.

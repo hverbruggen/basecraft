@@ -1,6 +1,7 @@
 //! New sequences share the ordinary session, typed history, save and recovery owners.
 use super::{
-    DocId, Loaded, Op, OpResult, Opened, Result, SequenceDoc, Session, Slot, files, invalid,
+    DocId, Loaded, Op, OpResult, Opened, Result, Retained, SequenceDoc, Session, Slot, UNDO_STEPS,
+    files, invalid,
 };
 use std::sync::Arc;
 
@@ -49,6 +50,8 @@ impl Session {
     ) -> Result<DocId> {
         let (name, residues) = Self::validate_new_sequence(name, text)?;
         let content = Loaded::Sequence(Opened {
+            alphabet: None,
+            companion_warning: None,
             doc: SequenceDoc::new(
                 name.clone(),
                 Arc::new(residues.as_bytes().to_vec()),
@@ -62,7 +65,10 @@ impl Session {
         self.docs.push(Slot::new(
             key.into(),
             content,
-            crate::records::provenance::bundle_for_result(&self.resolve(key)),
+            crate::records::provenance::bundle_for_result(
+                &self.resolve(key),
+                self.project.as_ref(),
+            ),
             basecraft_protocol::provenance::FileStamp {
                 size: 0,
                 modified_seconds: 0,
@@ -77,6 +83,7 @@ impl Session {
             self.actor.clone(),
             Op::CreateSequence { name, residues },
             OpResult {
+                notes: Vec::new(),
                 hashes: vec![],
                 feature: None,
             },
@@ -130,7 +137,10 @@ impl Session {
         self.docs.push(Slot::new(
             key.into(),
             Loaded::SangerReview(Box::new(review)),
-            crate::records::provenance::bundle_for_result(&self.resolve(key)),
+            crate::records::provenance::bundle_for_result(
+                &self.resolve(key),
+                self.project.as_ref(),
+            ),
             basecraft_protocol::provenance::FileStamp {
                 size: 0,
                 modified_seconds: 0,
@@ -235,6 +245,7 @@ impl Slot {
             pending_check: super::save_consent::PendingSaveCheck::default(),
             undo: vec![],
             redo: vec![],
+            settled: Retained::new(UNDO_STEPS),
             baseline: None,
             baseline_logged: false,
             accepted_hashes: vec![],

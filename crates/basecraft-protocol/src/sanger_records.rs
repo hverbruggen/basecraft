@@ -107,9 +107,8 @@ pub struct SangerJobSource {
 pub struct TraceCalls {
     pub sequence: String,
     /// Native secondary calls, indexed by the same events as sequence/positions/scores.
-    /// Missing legacy or instrument evidence is unknown, never primary agreement.
+    /// Absent when the instrument gave none; that is unknown, never primary agreement.
     /// Draft orientation and clipping do not transform these native arrays.
-    #[serde(default)]
     pub secondary_sequence: Option<String>,
     pub positions: Vec<u32>,
     pub scores: Vec<i32>,

@@ -43,6 +43,19 @@ check:
 # Everything. Run before every push.
 ci: check schemas-check deny protocol-license replay qml-test
     python3 benches/run.py --compact --samples 3 --gate gross
+    {{just_executable()}} fixtures-unchanged
+
+# Tests must copy fixtures before writing beside them. Fails when anything,
+# including ignored records such as .basecraft folders, appeared under
+# testdata/fixtures. Delete what it lists after fixing the test.
+fixtures-unchanged:
+    #!/usr/bin/env bash
+    changed=$(git status --porcelain --ignored --untracked-files=all -- testdata/fixtures ':(exclude,glob)testdata/fixtures/**/__pycache__/**')
+    if [ -n "$changed" ]; then
+        echo "The tests changed testdata/fixtures:"
+        echo "$changed"
+        exit 1
+    fi
 
 # Generate JSON Schema and Arrow schemas from basecraft-protocol.
 schemas:
@@ -79,6 +92,9 @@ protocol-license:
 qml-test:
     #!/usr/bin/env bash
     set -euo pipefail
+    # Start the real application offscreen first: a QML load error in Main.qml
+    # must fail here, not only when someone opens the app.
+    cargo test -p basecraft-gui --test application_bootstrap -- --app-starts
     for scale in 1 1.25 1.5 2; do
         QML_XHR_ALLOW_FILE_READ=1 QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME= QT_QUICK_CONTROLS_STYLE=Basic QT_SCALE_FACTOR="$scale" \
             "$(qmake6 -query QT_HOST_BINS)/qmltestrunner" -input crates/basecraft-gui/tests/qml

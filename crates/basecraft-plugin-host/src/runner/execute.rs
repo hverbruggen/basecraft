@@ -1,8 +1,9 @@
 //! Local execution stage. Preparation and publication do not launch processes.
 use super::{
-    Arc, AtomicBool, Error, ExternalExecution, HostWorkflowExecution, InvokeResult, Ordering, Path,
-    PluginArtifact, PluginProcess, PreparedOperation, Result, Value, contract, link_count, records,
+    Arc, AtomicBool, Error, InvokeResult, Ordering, PluginArtifact, PluginProcess,
+    PreparedOperation, Result, Value, contract, link_count, records,
 };
+use basecraft_protocol::records::{RUN_RECORD_SCHEMA, RunRecord, RunRuntime};
 
 impl PreparedOperation {
     pub fn execute(&self, cancelled: Arc<AtomicBool>) -> Result<InvokeResult> {
@@ -11,7 +12,7 @@ impl PreparedOperation {
         }
         let permit = crate::compute::reserve_cpu(
             self.context.cpu_threads,
-            Some(Path::new(&self.context.cancel_file)),
+            Some(&self.run_path(&self.context.cancel_file)),
         )?;
         if cancelled.load(Ordering::Acquire) {
             return Err(Error::Protocol("cancelled before spawn".into()));
@@ -45,7 +46,7 @@ impl PreparedOperation {
             .granted_parameters
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = effective.clone();
-        let mut result = process.invoke_context(
+        let mut result = process.invoke(
             &self.operation.descriptor.implementation,
             effective.clone(),
             context.clone(),
@@ -56,7 +57,7 @@ impl PreparedOperation {
             .as_ref()
             .map_or(Ok(()), crate::lifecycle::ContactPermit::complete);
         if (self.lifecycle.external() || self.lifecycle.remote_draft()) && result.is_err() {
-            let receipt = Path::new(&self.context.outputs["receipt"]);
+            let receipt = &self.run_path(&self.context.outputs["receipt"]);
             if receipt.is_file() {
                 result = (|| -> Result<InvokeResult> {
                     let metadata = receipt.symlink_metadata()?;
@@ -87,47 +88,35 @@ impl PreparedOperation {
             }
         }
         let (stdout, stderr) = process.captured_output();
-        let evidence = records::write_json(
-            &self.run.artifact("execution.json")?,
-            &serde_json::to_value(ExternalExecution {
-                schema: 1,
-                operation: self.operation.id.clone(),
-                package_version: self.operation.package.manifest.version.clone(),
-                package_digest: self.operation.package.digest.clone(),
-                descriptor_digest: self.operation.descriptor_digest.clone(),
-                runtime: self
-                    .operation
-                    .package
-                    .manifest
-                    .managed_runtime
-                    .as_ref()
-                    .map(serde_json::to_value)
-                    .transpose()?,
-                interpreter: self.operation.package.interpreter.clone(),
-                initiator: self.initiator.clone(),
-                executor: self.operation.package.manifest.id.clone(),
-                process_instance: basecraft_platform::process_instance().into(),
-                context,
-                requested_parameters: self.request.parameters.clone(),
-                effective_parameters: effective,
-                stdout,
-                stderr,
-                tool: result.as_ref().ok().and_then(|r| r.tool.clone()),
-                execution: result.as_ref().ok().and_then(|r| r.execution.clone()),
-            })?,
-        );
+        let mut record = self.run_record(effective, context.cpu_threads)?;
+        record.runtime = self
+            .operation
+            .package
+            .manifest
+            .managed_runtime
+            .as_ref()
+            .map(|runtime| RunRuntime {
+                lock_digest: runtime.0.lock_digest.clone(),
+                manifest_digest: runtime.0.manifest_digest.clone(),
+                reported_versions: runtime.0.reported_versions.clone(),
+                executable_digests: runtime.0.executable_digests.clone(),
+            });
+        record.stdout = stdout;
+        record.stderr = stderr;
+        if let Ok(result) = &result {
+            record.tool.clone_from(&result.tool);
+            record.execution.clone_from(&result.execution);
+        }
+        let evidence = self.write_run_record(&record);
         match result {
             Ok(mut result) => {
                 if self.lifecycle.external() {
-                    let diagnostics: Vec<_> = [
-                        teardown.err(),
-                        evidence.err().map(Error::from),
-                        contact_evidence.err(),
-                    ]
-                    .into_iter()
-                    .flatten()
-                    .map(|e| e.to_string())
-                    .collect();
+                    let diagnostics: Vec<_> =
+                        [teardown.err(), evidence.err(), contact_evidence.err()]
+                            .into_iter()
+                            .flatten()
+                            .map(|e| e.to_string())
+                            .collect();
                     if !diagnostics.is_empty() {
                         result.message = Some(format!(
                             "Local execution evidence incomplete: {}",
@@ -169,7 +158,7 @@ impl PreparedOperation {
         let plan: Value = serde_json::from_slice(&basecraft_ops::records::read_record(
             &self.run.artifact("query-preparation.json")?,
         )?)?;
-        let receipt = Path::new(&self.context.outputs["receipt"]);
+        let receipt = &self.run_path(&self.context.outputs["receipt"]);
         if let Ok(metadata) = receipt.symlink_metadata()
             && (!metadata.is_file()
                 || metadata.file_type().is_symlink()
@@ -216,20 +205,48 @@ impl PreparedOperation {
             stages: vec![],
         };
         let execution = workflow.run(method, effective);
+        let record = self.run_record(self.effective_parameters(), self.context.cpu_threads)?;
+        self.write_run_record(&record)?;
+        execution
+    }
+
+    /// The run's own record, without process output. Every path in it is
+    /// relative to the run folder.
+    fn run_record(&self, effective_parameters: Value, cpu_threads: usize) -> Result<RunRecord> {
+        let folder = self.run.directory();
+        let relative = |path: &str| records::relative(folder, &self.run_path(path));
+        let mut inputs = self.context.input_evidence.clone();
+        for record in inputs.values_mut().flatten() {
+            if let Some(original) = &record.original_path {
+                record.original_path = Some(relative(original)?);
+            }
+            record.run_directory = relative(&record.run_directory)?;
+        }
+        Ok(RunRecord {
+            schema: RUN_RECORD_SCHEMA,
+            operation: self.operation.id.clone(),
+            package_version: self.operation.package.manifest.version.clone(),
+            package_digest: self.operation.package.digest.clone(),
+            descriptor_digest: self.operation.descriptor_digest.clone(),
+            runtime: None,
+            initiator: self.initiator.clone(),
+            executor: self.operation.package.manifest.id.clone(),
+            process_instance: basecraft_platform::process_instance().into(),
+            inputs,
+            effective_parameters,
+            cpu_threads,
+            stdout: String::new(),
+            stderr: String::new(),
+            tool: None,
+            execution: None,
+        })
+    }
+
+    fn write_run_record(&self, record: &RunRecord) -> Result<()> {
         records::write_json(
             &self.run.artifact("execution.json")?,
-            &serde_json::to_value(HostWorkflowExecution {
-                schema: 1,
-                workflow: method.into(),
-                initiator: self.initiator.clone(),
-                executor: self.operation.package.manifest.id.clone(),
-                requested_parameters: self.request.parameters.clone(),
-                effective_parameters: self.effective_parameters(),
-                package_digest: self.operation.package.digest.clone(),
-                descriptor_digest: self.operation.descriptor_digest.clone(),
-                process_instance: basecraft_platform::process_instance().into(),
-            })?,
+            &serde_json::to_value(record)?,
         )?;
-        execution
+        Ok(())
     }
 }

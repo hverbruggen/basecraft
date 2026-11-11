@@ -25,7 +25,7 @@ Item {
         property string linked_alignment: ""
         property string source_alignment: ""
         property bool alignment_link_inferred: false
-        property var current: ({id: 2, exists: false, tips: 2, clade: ["A", "B"], label: "",
+        property var current: ({id: 2, exists: false, tip_count: 2, clade: ["A", "B"], label: "",
             on_branch: false, bar: true, bar_width: 3, field: false, colour: "#808080", opacity_left: 30, opacity_right: 30})
         function annotation_json() { return JSON.stringify(current) }
         function record_revision() { return revision }
@@ -70,7 +70,7 @@ Item {
             first.linked_alignment = ""
             first.source_alignment = ""
             first.alignment_link_inferred = false
-            first.current = {id: 2, exists: false, tips: 2, clade: ["A", "B"], label: "",
+            first.current = {id: 2, exists: false, tip_count: 2, clade: ["A", "B"], label: "",
                 on_branch: false, bar: true, bar_width: 3, field: false, colour: "#808080", opacity_left: 30, opacity_right: 30}
             renameSpy.clear()
             rejected.clear(); accepted.clear(); tipRejected.clear(); tipAccepted.clear()
@@ -166,7 +166,7 @@ Item {
             verify(field("annotationError").text.includes("tree changed"))
         }
         function test_tip_annotation_and_identity_are_distinct() {
-            first.current = Object.assign({}, first.current, {clade: ["A"], tips: 1})
+            first.current = Object.assign({}, first.current, {clade: ["A"], tip_count: 1})
             menu.showFor(first, {node: true, tip: true, annotated: false})
             tryCompare(menu, "opened", true)
             compare(findChild(menu, "nameAnnotation").text, "Annotate tip…")

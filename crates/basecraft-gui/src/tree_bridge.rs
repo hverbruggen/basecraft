@@ -288,7 +288,7 @@ use serde_json::{Value, json};
 
 use crate::bridge::{
     ALT, CTRL, KEY_0, KEY_DOWN, KEY_EQUAL, KEY_ESCAPE, KEY_LEFT, KEY_MINUS, KEY_PLUS, KEY_RIGHT,
-    KEY_UP, KEY_Y, KEY_Z, SHIFT, WHEEL_ZOOM, ZOOM_STEP, css, file_name, memory_text, project_root,
+    KEY_UP, KEY_Y, KEY_Z, SHIFT, WHEEL_ZOOM, ZOOM_STEP, css, file_folder, file_name, memory_text,
     took,
 };
 
@@ -470,7 +470,7 @@ fn annotation_request(
     let mut value = serde_json::to_value(annotation).map_err(|e| e.to_string())?;
     value["id"] = json!(id);
     value["exists"] = json!(original.is_some());
-    value["tips"] = json!(doc.tip_counts()[node]);
+    value["tip_count"] = json!(doc.tip_counts()[node]);
     value["target"] = json!({
         "revision": revision,
         "node": node,
@@ -792,18 +792,20 @@ impl qobject::TreeController {
                 session.tree(doc)?,
                 &source,
             )?;
-            session.log_tool_run(
+            session.record_tool_run(
                 doc,
                 basecraft_protocol::Actor::Human {
                     user: basecraft_platform::username(),
                 },
-                ("basecraft.links", "associate"),
-                json!({"alignment":source,"inferred":false}),
-                &[(
-                    source.to_string_lossy().into_owned(),
-                    basecraft_io::hash_file(&source)?,
-                )],
-                &outputs,
+                basecraft_ops::session::ToolRunRecord::new(
+                    ("basecraft.links", "associate"),
+                    json!({"alignment":source,"inferred":false}),
+                    &[(
+                        source.to_string_lossy().into_owned(),
+                        basecraft_io::hash_file(&source)?,
+                    )],
+                    &outputs,
+                ),
             )?;
             Ok(())
         })();
@@ -1243,7 +1245,7 @@ impl qobject::TreeController {
         };
         let path = PathBuf::from(path.to_string());
         // Replaying on a display tree leaves no records.
-        let mut session = Session::unlogged(project_root(&path));
+        let mut session = Session::unlogged(file_folder(&path));
         let doc = match session.open(&path) {
             Ok(doc) if session.is_tree(doc) => doc,
             Ok(_) => {

@@ -250,10 +250,12 @@ impl PreparedLinks {
 /// Store portable references relative to the document's directory where possible.
 fn relative_to(path: &Path, tree: &Path) -> Result<PathBuf> {
     let parent = tree.parent().unwrap_or(Path::new(".")).canonicalize()?;
+    // A relative path names a file beside the document, never one in the
+    // process's working folder.
     let path = if path.is_absolute() {
         path.to_path_buf()
     } else {
-        std::env::current_dir()?.join(path)
+        parent.join(path)
     };
     let base: Vec<_> = parent.components().collect();
     let target: Vec<_> = path.components().collect();

@@ -1,6 +1,5 @@
 //! Provenance publication from a session's document history.
 use crate::error::invalid;
-use crate::session::Applied;
 use crate::{Error, Result};
 use basecraft_platform::settings::ProvenancePolicy;
 use basecraft_protocol::provenance::Publication;
@@ -14,12 +13,14 @@ pub(crate) struct History<'a> {
     pub(crate) policy: ProvenancePolicy,
     pub(crate) tracked: bool,
     pub(crate) root: &'a Path,
+    pub(crate) project: Option<&'a crate::project::Project>,
     pub(crate) storage_root: &'a Path,
     pub(crate) local_root: &'a Path,
-    pub(crate) events: &'a [LogEntry],
+    pub(crate) events: Vec<LogEntry>,
     pub(crate) pending: &'a [LogEntry],
     pub(crate) key: &'a str,
-    pub(crate) undo: &'a [Applied],
+    /// Every edit in effect, oldest first.
+    pub(crate) effective: Vec<basecraft_protocol::provenance::EditActivity>,
     pub(crate) origin: Option<&'a Publication>,
     pub(crate) origin_bundle: &'a Path,
     pub(crate) delimitation: bool,
@@ -66,13 +67,11 @@ impl History<'_> {
                     crate::records::analysis_store::ArtifactRun::for_result(target)?
                 {
                     hidden
-                } else if self.root.join(".basecraft/project.toml").is_file() {
-                    self.root.join(".basecraft/provenance").join(
-                        basecraft_io::hash_bytes(
-                            crate::session::relative(self.root, target).as_bytes(),
-                        )
-                        .trim_start_matches("b3:"),
-                    )
+                } else if let Some(bundle) = self
+                    .project
+                    .and_then(|project| project.provenance_bundle(target))
+                {
+                    bundle
                 } else {
                     crate::records::provenance::companion(target)
                 }
@@ -362,7 +361,6 @@ impl History<'_> {
             event.doc = name(&target.to_string_lossy());
             if let Some(source) = &mut event.source {
                 source.root = PathBuf::from(".");
-                source.links.clear();
                 for file in &mut source.files {
                     file.path = name(&file.path);
                 }
@@ -372,14 +370,7 @@ impl History<'_> {
             }
             portable(event);
         }
-        let mut effective_edits: Vec<_> = self
-            .undo
-            .iter()
-            .map(|a| EditActivity {
-                id: a.entry_id.clone(),
-                operation: a.op.clone(),
-            })
-            .collect();
+        let mut effective_edits = self.effective.clone();
         if matches!(save.op, Op::ToolRun { .. }) {
             effective_edits.push(EditActivity {
                 id: save.id.clone(),

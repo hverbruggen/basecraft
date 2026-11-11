@@ -15,6 +15,7 @@ mod appearance;
 mod application;
 mod bridge;
 mod command_bridge;
+mod chosen_project;
 mod delimitation_bridge;
 mod document_jobs;
 mod document_open;

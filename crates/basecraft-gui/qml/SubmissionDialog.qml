@@ -151,7 +151,7 @@ AppDialog {
         const next = batchFromControls();
         if (JSON.stringify(next) !== JSON.stringify(batch))
             editRequested(JSON.stringify({
-                action: "set_batch_draft",
+                action: "set_batch",
                 batch: next
             }));
     }
@@ -207,7 +207,7 @@ AppDialog {
         const next = Object.assign({}, batch);
         next.marker = document.marker_drafts && document.marker_drafts[nextKind] ? document.marker_drafts[nextKind] : empty[nextKind];
         editRequested(JSON.stringify({
-            action: "set_batch_draft",
+            action: "set_batch",
             batch: next
         }));
     }
@@ -401,7 +401,7 @@ AppDialog {
                                     id: accessionInput
                                     Accessible.name: "Accession identifier evidence"
                                     model: ["Whole identifier heuristic", "Chosen identifier field", "No identifier evidence"]
-                                    currentIndex: !dialog.document || !dialog.document.accession_policy || dialog.document.accession_policy.policy === "legacy_heuristic" ? 0 : !dialog.document.accession_policy.input ? 2 : dialog.document.accession_policy.input.source === "field" ? 1 : 0
+                                    currentIndex: !dialog.document || !dialog.document.accession_policy ? 0 : !dialog.document.accession_policy.input ? 2 : dialog.document.accession_policy.input.source === "field" ? 1 : 0
                                 }
                             }
                             ColumnLayout {
@@ -432,7 +432,7 @@ AppDialog {
                             AppCheckBox {
                                 id: accessionMetadata
                                 text: "Also scan specimen metadata (heuristic)"
-                                checked: !dialog.document || !dialog.document.accession_policy || dialog.document.accession_policy.policy === "legacy_heuristic" || dialog.document.accession_policy.include_metadata
+                                checked: !dialog.document || !dialog.document.accession_policy || dialog.document.accession_policy.include_metadata
                             }
                             AppButton {
                                 text: "Set evidence source"

@@ -1,7 +1,7 @@
 //! Phylogenetic tree annotations and drawing style, as tree operations
 //! carry them and the tree's sidecar file stores them.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -38,6 +38,13 @@ pub struct CladeAnnotation {
     pub opacity_left: u8,
     #[serde(default = "default_opacity")]
     pub opacity_right: u8,
+    /// Every tip the clade held when the label was made. The tree fills this
+    /// in when it is empty; a reroot that changes the set leaves the label on
+    /// another group.
+    pub tips: BTreeSet<String>,
+    /// Whether the tree was rooted when the label was made. Unless it was, a
+    /// clade is one side of a branch, so its complement is the same group.
+    pub rooting: crate::facts::Rooting,
 }
 
 fn default_bar_width() -> u32 {
@@ -64,6 +71,8 @@ impl CladeAnnotation {
             colour: default_colour(),
             opacity_left: default_opacity(),
             opacity_right: default_opacity(),
+            tips: BTreeSet::new(),
+            rooting: crate::facts::Rooting::Unknown,
         }
     }
 }

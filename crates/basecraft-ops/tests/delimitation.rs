@@ -447,7 +447,7 @@ fn hidden_workspace_moves_with_its_folder_and_passive_open_writes_nothing() {
     let doc = session.open(&path).unwrap();
     assert!(!root.join(".basecraft").exists());
     let hash = basecraft_io::hash_file(&tree).unwrap();
-    let run = basecraft_ops::delimitation::reference_input(&path, &tree, &hash).unwrap();
+    let run = basecraft_ops::delimitation::reference_input(&path, &tree, &hash, None).unwrap();
     // The generic writer extraction must retain species reference-only semantics
     // and its established publication origin; no automatic source snapshot.
     let input = basecraft_ops::records::read_input(run.directory()).unwrap();
@@ -550,7 +550,7 @@ fn referenced_display_preserve_copy_is_idempotent_and_never_uses_changed_bytes()
     let original = "((a:1,b:1):1,(c:1,d:1):1);\n";
     std::fs::write(&tree, original).unwrap();
     let hash = basecraft_io::hash_file(&tree).unwrap();
-    let run = basecraft_ops::delimitation::reference_input(&path, &tree, &hash).unwrap();
+    let run = basecraft_ops::delimitation::reference_input(&path, &tree, &hash, None).unwrap();
     let mut work = basecraft_io::spart::parse_text(SPART).unwrap();
     basecraft_docs::delimitation::apply(
         &mut work,
@@ -581,7 +581,7 @@ fn referenced_display_preserve_copy_is_idempotent_and_never_uses_changed_bytes()
 }
 
 #[test]
-fn application_state_replay_handles_hidden_baseline_and_missing_original_folder() {
+fn application_state_replay_handles_hidden_baseline_and_moved_original_folder() {
     crate::isolated_profile::isolate!();
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().join("working");
@@ -634,9 +634,13 @@ fn application_state_replay_handles_hidden_baseline_and_missing_original_folder(
     std::fs::rename(&root, parent.path().join("unavailable")).unwrap();
     let report = records::replay(&recovery).unwrap();
     assert!(report.ok(), "{:?}", report.problems);
+    assert_ne!(report.unchecked, 0);
     let recovered = parent.path().join("recovered");
-    // A missing folder alone does not concern a new destination. An unreadable
-    // pending index update leaves relevance unknown and needs consent.
+    // Recovery needs the unchanged original.
+    assert!(records::recover(&recovery, &recovered).is_err());
+    assert!(!recovered.exists());
+    std::fs::rename(parent.path().join("unavailable"), &root).unwrap();
+    // An unreadable pending index update leaves relevance unknown and needs consent.
     let dirty = basecraft_platform::paths::AppPaths::discover()
         .unwrap()
         .state
@@ -683,7 +687,10 @@ fn visible_workspace_metadata_remains_read_only() {
     let hash = basecraft_io::hash_file(&path).unwrap();
     let sidecar = basecraft_ops::files::tree_sidecar(&path);
     let mut bytes = Vec::new();
-    basecraft_ops::files::write_delimitation_sidecar_at(&work, &hash, &path, &mut bytes).unwrap();
+    basecraft_ops::files::delimitation_companion(&work, &hash, &path)
+        .unwrap()
+        .write(&mut bytes)
+        .unwrap();
     std::fs::File::create(&sidecar)
         .unwrap()
         .write_all(&bytes)
@@ -725,12 +732,12 @@ fn combined_workspace_move_and_complete_export_keep_declared_source_evidence() {
             .is_empty()
     );
     let package = parent.path().join("package");
-    basecraft_ops::records::package(&canonical, &package).unwrap();
+    basecraft_ops::records::package(&canonical, &package, None).unwrap();
     drop(session);
     std::fs::rename(&root, parent.path().join("moved")).unwrap();
     let exported = package.join("combined.spart");
     assert_eq!(
-        basecraft_ops::records::verify(&exported).unwrap(),
+        basecraft_ops::records::verify(&exported, None).unwrap(),
         Vec::<String>::new()
     );
     let work = basecraft_ops::files::load_delimitation(&exported).unwrap();

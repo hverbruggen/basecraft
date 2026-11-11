@@ -127,6 +127,7 @@ impl SessionPolicy {
         operation.package.verify()?;
         if operation
             .descriptor
+            .needs
             .credentials
             .get(name)
             .is_none_or(|environment| !credential_environment(environment))
@@ -146,20 +147,15 @@ impl SessionPolicy {
         Ok(self)
     }
 
-    /// Bundled descriptors may request ambient credentials; installed packages
-    /// require explicit grants bound to their accepted code and descriptor.
+    /// A bundled package receives its declared credentials from the user's
+    /// environment; an installed package needs explicit grants bound to its
+    /// accepted code and descriptor.
     pub(crate) fn capture_ambient_credential(
         mut self,
         operation: &RegisteredOperation,
     ) -> Result<Self> {
         if operation.package.origin == crate::registry::Origin::Bundled {
-            for name in operation
-                .descriptor
-                .host
-                .as_ref()
-                .into_iter()
-                .flat_map(|host| &host.ambient_credentials)
-            {
+            for (name, environment) in &operation.descriptor.needs.credentials {
                 if self
                     .credential_grants
                     .iter()
@@ -167,8 +163,7 @@ impl SessionPolicy {
                 {
                     continue;
                 }
-                if let Some(environment) = operation.descriptor.credentials.get(name)
-                    && let Ok(value) = std::env::var(environment)
+                if let Ok(value) = std::env::var(environment)
                     && !value.is_empty()
                 {
                     self = self.with_runtime_credential(operation, name, value)?;
@@ -182,6 +177,7 @@ impl SessionPolicy {
         RuntimeCredentials(
             operation
                 .descriptor
+                .needs
                 .credentials
                 .iter()
                 .filter_map(|(name, environment)| {
@@ -219,9 +215,7 @@ impl SessionPolicy {
         } else {
             ResourceAction::ReadFile
         };
-        // Existing operation dispatch owns effects for this legacy entry point.
-        // Both entry points share the same path resolver, with typed foundation
-        // errors converted only at this existing protocol boundary.
+        // Typed access errors become protocol errors only here.
         self.resolve_resource(Path::new(supplied), action)
             .map_err(|error| match error {
                 AccessError::Denied(reason) => denied(&reason.to_string()),

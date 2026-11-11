@@ -13,7 +13,7 @@ prd_context = "16 ms input-to-screen target requires separate GUI/frame measurem
 
 [scenarios.undo-alignment]
 fixture = "compact alignment after 1000 single-residue edits"
-measurement = "sum of 1000 Session::undo durations / 1000"
+measurement = "sum of Session::undo durations / undo steps (typing along a row is one step)"
 
 [scenarios.save-alignment]
 fixture = "compact alignment after 1000 edits; overwrite original path"

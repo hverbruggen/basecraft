@@ -27,6 +27,22 @@ fn plugin() -> Option<PluginProcess> {
     Some(PluginProcess::spawn_with(&manifest, &python).expect("spawn"))
 }
 
+/// An empty run for sequence operations, which allocate no files.
+fn context() -> basecraft_protocol::operation::InvocationContext {
+    basecraft_protocol::operation::InvocationContext {
+        schema: 2,
+        operation: "test".into(),
+        run_id: "test".into(),
+        run_root: std::env::temp_dir().display().to_string(),
+        inputs: std::collections::BTreeMap::new(),
+        outputs: std::collections::BTreeMap::new(),
+        cpu_threads: 1,
+        cancel_file: "cancel".into(),
+        progress_file: "progress".into(),
+        input_evidence: std::collections::BTreeMap::new(),
+    }
+}
+
 fn fixture() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/pyropia-mito.fasta")
 }
@@ -44,6 +60,7 @@ fn predicts_genes_with_the_mitochondrial_code() {
         .invoke(
             "predict_genes",
             json!({ "translation_table": 4 }),
+            context(),
             Some(&snap),
         )
         .unwrap();
@@ -71,6 +88,7 @@ fn predicts_genes_with_the_mitochondrial_code() {
         .invoke(
             "predict_genes",
             json!({ "translation_table": 4, "start": 10_000, "end": 20_000 }),
+            context(),
             Some(&snap),
         )
         .unwrap();
@@ -101,6 +119,7 @@ fn short_sequences_need_code_4_or_11() {
         .invoke(
             "predict_genes",
             json!({ "translation_table": 2 }),
+            context(),
             Some(&snap),
         )
         .unwrap_err();
@@ -109,6 +128,7 @@ fn short_sequences_need_code_4_or_11() {
         .invoke(
             "predict_genes",
             json!({ "translation_table": 4 }),
+            context(),
             Some(&snap),
         )
         .unwrap();

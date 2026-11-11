@@ -177,20 +177,25 @@ impl Server {
             "file_record" => Ok(serde_json::to_value(
                 basecraft_ops::records::DocumentRecord::saved_report(
                     &self.path(text(args, "path")?)?,
+                    self.session.project(),
                 )?,
             )?),
             // The same readers as `basecraft provenance inspect|verify` and `replay`.
             "provenance_inspect" => Ok(serde_json::to_value(basecraft_ops::records::inspect(
                 &self.path(text(args, "path")?)?,
+                self.session.project(),
             )?)?),
             "provenance_verify" => {
-                let issues = basecraft_ops::records::verify(&self.path(text(args, "path")?)?)?;
+                let issues = basecraft_ops::records::verify(
+                    &self.path(text(args, "path")?)?,
+                    self.session.project(),
+                )?;
                 Ok(json!({"verified":issues.is_empty(),"issues":issues}))
             }
             "replay" => {
                 let report = basecraft_ops::records::replay(self.session.root())?;
                 Ok(
-                    json!({"sessions":report.sessions,"entries":report.entries,"problems":report.problems}),
+                    json!({"sessions":report.sessions,"entries":report.entries,"unchecked":report.unchecked,"problems":report.problems}),
                 )
             }
             "read" => {
@@ -244,7 +249,7 @@ impl Server {
                     );
                 }
                 let op: Op = serde_json::from_value(args["operation"].clone())?;
-                self.session.apply(doc, op)?;
+                basecraft_ops::renames::apply_op(&mut self.session, doc, op)?;
                 self.state(doc)
             }
             "extract" => {
@@ -801,7 +806,8 @@ pub fn serve(root: &Path, writable: bool, kind: ClientKind, model: &str) -> Resu
         registry::{Registry, RegistryConfig},
     };
     use basecraft_protocol::operation::{OperationErrorCode, OperationRequest, RuntimeState};
-    let mut session = Session::recoverable(root.canonicalize()?)?;
+    let project = basecraft_ops::project::Project::new(root)?;
+    let mut session = Session::recoverable(project.root())?.in_project(Some(project));
     session.set_actor(kind.actor(model));
     let policy = SessionPolicy::new(root, writable)?;
     let config = RegistryConfig::discover()?;
@@ -929,8 +935,8 @@ pub fn serve(root: &Path, writable: bool, kind: ClientKind, model: &str) -> Resu
                             if name == "basecraft.host.registry_refresh.v1" {
                                 let previous = operation_tools(&registry, &policy)
                                     .map_err(|e| (-32603, e.to_string()))?;
-                                registry =
-                                    Registry::load(&config).map_err(|e| (-32603, e.to_string()))?;
+                                registry = Registry::reload(&config)
+                                    .map_err(|e| (-32603, e.to_string()))?;
                                 if previous
                                     != operation_tools(&registry, &policy)
                                         .map_err(|e| (-32603, e.to_string()))?

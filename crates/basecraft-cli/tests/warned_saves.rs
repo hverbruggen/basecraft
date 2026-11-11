@@ -32,6 +32,7 @@ fn headless_save_conformance() {
             &basecraft_io::hash_file(&source).unwrap(),
             &[],
             "adapter save regression",
+            None,
         )
         .unwrap();
         known.insert(name.into(), json!(run.directory()));
@@ -44,6 +45,7 @@ fn headless_save_conformance() {
         &basecraft_io::hash_file(&unrelated).unwrap(),
         &[],
         "incomplete adapter evidence",
+        None,
     )
     .unwrap();
     let ledger = damaged.artifact("input.json").unwrap();

@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from basecraft.plugin import local_context
 from consensus import file_hash
 from tracy_plugin import consensus
 
@@ -26,7 +27,8 @@ class ExecutedIdentityTests(unittest.TestCase):
                 patch("tracy_plugin.merge", side_effect=changed),
                 self.assertRaisesRegex(ValueError, "Tracy changed during"),
             ):
-                consensus(None, {"reads": [str(source)], "output": str(Path(folder) / "output"), "engine_sha256": engine_hash})
+                consensus({"engine_sha256": engine_hash},
+                          local_context(folder, {"reads": [str(source)]}, {"artifacts": "output"}))
 
     def test_changed_input_is_not_accepted(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -45,4 +47,4 @@ class ExecutedIdentityTests(unittest.TestCase):
                 patch("tracy_plugin.merge", side_effect=changed),
                 self.assertRaisesRegex(ValueError, "input changed during"),
             ):
-                consensus(None, {"reads": [str(source)], "output": str(Path(folder) / "output")})
+                consensus({}, local_context(folder, {"reads": [str(source)]}, {"artifacts": "output"}))

@@ -7,14 +7,17 @@ A plugin is a script that registers operations and calls ``run()``::
     plugin = Plugin("me.example", "0.1.0")
 
     @plugin.operation("count_gc")
-    def count_gc(snapshot, params):
-        seq = snapshot.residues          # numpy uint8 array, no copy
+    def count_gc(params, context):
+        seq = context.snapshot.residues  # numpy uint8 array, no copy
         ...
-        return [feature("misc_feature", 10, 20, note="here")]
+        return {"ops": [feature("misc_feature", 10, 20, note="here")]}
 
     plugin.run()
 
-Operations receive an immutable snapshot and return proposed operations.
+Each operation is declared in the package's ``operations.json``. A handler
+receives its validated parameters and a ``Context`` naming the files the host
+allocated and, for sequence operations, the document snapshot.
+Sequence operations return proposed operations.
 Basecraft applies them, maps them onto newer versions if the document
 changed in the meantime, logs them and makes them undoable.
 """
@@ -27,14 +30,14 @@ import os
 import socket
 import sys
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 MAX_FDS = 16
 MAX_FRAME_BYTES = 8 * 1024 * 1024
-CONTRACT_CAPABILITY = "operation-contract-v1"
 
-Handler = Callable[["Snapshot | None", dict], "list[dict] | dict | None"]
+Handler = Callable[[dict, "Context"], dict]
 
 
 class Snapshot:
@@ -98,142 +101,118 @@ def feature(kind: str, start: int, end: int, strand: str = "+", **qualifiers: st
     }
 
 
+class Context:
+    """What the host allocated for one run.
+
+    The host sends paths relative to the run folder, or absolute for inputs
+    outside it. Every path here is absolute.
+    """
+
+    def __init__(self, raw: dict, snapshot: Snapshot | None = None):
+        if raw.get("schema") != PROTOCOL_VERSION:
+            raise ValueError("operation requires a schema-2 host context")
+        root = Path(raw["run_root"])
+        self.root = root
+        #: The sequence a sequence operation proposes edits to; None otherwise.
+        self.snapshot = snapshot
+        self.operation: str = raw["operation"]
+        self.run_id: str = raw["run_id"]
+        self.threads: int = raw["cpu_threads"]
+        self.inputs = {name: [str(root / path) for path in paths] for name, paths in raw["inputs"].items()}
+        self.outputs = {role: str(root / path) for role, path in raw["outputs"].items()}
+        self.cancel_file = str(root / raw["cancel_file"])
+        self.progress_file = str(root / raw["progress_file"])
+        self.evidence = {
+            name: [dict(record, **{key: str(root / record[key]) for key in ("original_path", "run_directory") if record.get(key)})
+                   for record in records]
+            for name, records in raw.get("input_evidence", {}).items()
+        }
+
+    def input(self, name: str) -> str | None:
+        """The one file bound to ``name``, or None when the binding is empty."""
+        paths = self.inputs.get(name, [])
+        if len(paths) > 1:
+            raise ValueError(f"{name} requires one file")
+        return paths[0] if paths else None
+
+    def output(self, role: str, member: str = ".") -> str:
+        """The allocated path for ``role``, or a member inside a collection."""
+        target = Path(self.outputs[role])
+        if member != ".":
+            target = target / member
+            target.parent.mkdir(parents=True, exist_ok=True)
+        return str(target)
+
+    def cancelled(self) -> bool:
+        return Path(self.cancel_file).exists()
+
+    def source(self, name: str) -> dict:
+        """Evidence for the first file bound to ``name``, with ``path`` naming a
+        stable copy: the original file, or the bytes the host kept for an
+        unsaved document. Empty when the host recorded none."""
+        records = self.evidence.get(name, [])
+        if not records:
+            return {}
+        record = records[0]
+        stable = record.get("original_path")
+        if not stable and record.get("run_directory"):
+            kept = Path(record["run_directory"]) / "submitted.fasta"
+            stable = str(kept) if kept.is_file() else None
+        return dict(record, path=stable) if stable else dict(record)
+
+
+def local_context(root, inputs: dict, outputs: dict, run_id: str = "local", snapshot=None) -> Context:
+    """A context for calling a handler directly, as a plugin's own tests do.
+    ``inputs`` maps bindings to lists of paths; ``outputs`` maps roles to
+    paths relative to ``root``."""
+    return Context({"schema": PROTOCOL_VERSION, "operation": "local", "run_id": run_id, "run_root": str(root),
+                    "inputs": inputs, "outputs": outputs, "cpu_threads": 1,
+                    "cancel_file": "cancel", "progress_file": "progress"}, snapshot)
+
+
+def _artifacts(context: Context) -> list[dict]:
+    """Every file the handler left in its allocated outputs."""
+    artifacts = []
+    for role, supplied in context.outputs.items():
+        root = Path(supplied)
+        if root.is_dir():
+            for member in sorted(root.rglob("*")):
+                if member.is_symlink():
+                    raise ValueError("symlink output is not allowed")
+                if member.is_file():
+                    artifacts.append({"role": role, "path": str(member.relative_to(root))})
+        elif root.is_file():
+            artifacts.append({"role": role, "path": "."})
+    return artifacts
+
+
 class Plugin:
     def __init__(self, plugin_id: str, version: str):
         self.id = plugin_id
         self.version = version
-        self._ops: dict[str, Handler] = {}
-        self._context_ops: dict[str, Callable] = {}
-        self._adapters: dict[str, Callable] = {}
+        self._ops: dict[str, Callable] = {}
+        self._queries: dict[str, Callable[[], Any]] = {}
 
     def operation(self, name: str) -> Callable[[Handler], Handler]:
+        """Register a handler ``(parameters, context)`` for a declared operation.
+        It returns a dict: ``data``, ``ops`` (sequence operations), ``message``,
+        ``tool``, ``execution`` and, optionally, ``artifacts``."""
         def register(fn: Handler) -> Handler:
-            if name in self._ops or name in self._context_ops:
+            if name in self._ops:
                 raise ValueError(f"duplicate operation {name!r}")
             self._ops[name] = fn
             return fn
 
         return register
 
-    def context_operation(self, name: str) -> Callable:
-        """Register a schema-2 handler ``(snapshot, parameters, context)``.
-
-        Context contains host-allocated inputs, outputs and controls. Legacy
-        two-argument handlers keep their original calling convention.
-        """
-        def register(fn: Callable) -> Callable:
-            if name in self._ops or name in self._context_ops:
-                raise ValueError(f"duplicate operation {name!r}")
-            self._context_ops[name] = fn
+    def query(self, name: str) -> Callable:
+        """Register a metadata query ``()``, such as which engines are installed.
+        Queries take no inputs and produce no artifacts."""
+        def register(fn: Callable[[], Any]) -> Callable[[], Any]:
+            self._queries[name] = fn
             return fn
 
         return register
-
-    def contract(self, path="operations.json") -> None:
-        """Bind declared compatibility adapters to existing public SDK handlers.
-
-        New plugins can use context_operation directly. This migration adapter
-        never changes scientific choices or interprets arbitrary control paths.
-        """
-        from pathlib import Path
-
-        path = Path(path)
-        if not path.is_absolute():
-            path = Path(sys.argv[0]).resolve().parent / path
-        contract = json.loads(path.read_text())
-        if contract["schema"] != 1:
-            raise ValueError("unsupported operation contract")
-        for descriptor in contract["operations"]:
-            name = descriptor["implementation"]
-            if name in self._context_ops:
-                continue
-            handler = self._ops.get(name)
-            adapter = descriptor.get("legacy_adapter")
-            if handler is None or adapter is None:
-                raise ValueError(f"no public handler/adapter for {name!r}")
-            self._adapters[name] = self._adapt(handler, adapter)
-
-    @staticmethod
-    def _adapt(handler, adapter):
-        def invoke(snapshot, parameters, context):
-            from pathlib import Path
-
-            effective = dict(parameters)
-            controls = context.get("legacy_parameters", {})
-            if any(key in effective for key in controls):
-                raise ValueError("legacy context overlaps scientific parameters")
-            effective.update(controls)
-            if controls:
-                # Host workflow stage. Its preallocated flat bindings and
-                # publication policy stay with the host stage runner; the same
-                # scientific schema/defaults and context capability still apply.
-                return handler(snapshot, effective)
-            for binding, parameter in adapter["inputs"].items():
-                paths = context["inputs"].get(binding, [])
-                if binding in adapter.get("input_arrays", []):
-                    effective[parameter] = paths
-                elif paths:
-                    if len(paths) != 1:
-                        raise ValueError(f"{binding} requires one file")
-                    effective[parameter] = paths[0]
-            for parameter, binding in adapter["outputs"].items():
-                root = Path(context["outputs"][binding["role"]])
-                target = root if binding["path"] == "." else root / binding["path"]
-                target.parent.mkdir(parents=True, exist_ok=True)
-                effective[parameter] = str(target)
-            effective.update(job_id=context["run_id"], cancel_file=context["cancel_file"], progress=context["progress_file"])
-            if allocation := adapter.get("allocation"):
-                root = context["outputs"][allocation]
-                effective.setdefault("analysis_artifacts", {"metadata_directory": root, "working_directory": root, "run_id": context["run_id"]})
-                all_evidence = context.get("input_evidence", {})
-                evidence = all_evidence.get(adapter.get("primary_input"), []) if adapter.get("primary_input") else next(iter(all_evidence.values()), [])
-                if evidence:
-                    record = evidence[0]
-                    stable = record.get("original_path")
-                    if not stable and record.get("run_directory"):
-                        # Unsaved document bytes are retained with the run; name
-                        # that copy, never the temporary execution input.
-                        retained = Path(record["run_directory"]) / "submitted.fasta"
-                        if retained.is_file():
-                            stable = str(retained)
-                    if stable:
-                        effective.setdefault("original_source", stable)
-                        effective.setdefault("input_evidence", dict(record, path=stable))
-            alignment_binding = next((name for name, parameter in adapter["inputs"].items()
-                                      if parameter == "alignment_snapshot"), "alignment")
-            alignment = context.get("input_evidence", {}).get(alignment_binding, [])
-            if alignment and "alignment_snapshot" in effective:
-                record = alignment[0]
-                effective.setdefault("alignment_input_hash", record["submitted_hash"])
-                effective.setdefault("alignment_evidence", dict(record, path=record.get("original_path") or effective["alignment_snapshot"]))
-            output = handler(snapshot, effective)
-            if output is None:
-                output = {"ops": []}
-            elif isinstance(output, list):
-                output = {"ops": output}
-            else:
-                output = dict(output)
-            reported = output.pop("outputs", [])
-            artifacts = []
-            allocated = []
-            for role, supplied in context["outputs"].items():
-                root = Path(supplied)
-                if root.is_dir():
-                    for member in sorted(root.rglob("*")):
-                        if member.is_symlink():
-                            raise ValueError("symlink output is not allowed")
-                        if member.is_file():
-                            artifacts.append({"role": role, "path": str(member.relative_to(root))})
-                            allocated.append(member)
-                elif root.is_file():
-                    artifacts.append({"role": role, "path": "."})
-                    allocated.append(root)
-            if any(Path(path) not in allocated for path in reported):
-                raise ValueError("handler reported an unallocated artifact")
-            output.update(artifacts=artifacts, data=output.get("data"))
-            return output
-
-        return invoke
 
     def run(self) -> None:
         portable = "BASECRAFT_TCP" in os.environ
@@ -298,38 +277,27 @@ class Plugin:
 
     def _dispatch(self, method: str | None, params: Any, fds: list[int]) -> Any:
         if method == "initialize":
-            return {
-                "protocol": PROTOCOL_VERSION,
-                "id": self.id,
-                "version": self.version,
-                "operations": sorted(self._ops.keys() | self._context_ops.keys()),
-                "capabilities": [CONTRACT_CAPABILITY] if self._context_ops or self._adapters else [],
-            }
+            return {"protocol": PROTOCOL_VERSION, "id": self.id, "version": self.version,
+                    "operations": sorted(self._ops)}
         if method in ("ping", "shutdown"):
             return None
+        if method == "query":
+            return self._queries[params["name"]]()
         if method == "invoke":
             name = params["operation"]
-            if name not in self._ops and name not in self._context_ops:
+            if name not in self._ops:
                 raise KeyError(f"no operation {name!r}")
             snap = Snapshot(params["snapshot"], fds) if params.get("snapshot") else None
             try:
-                if name in self._context_ops or (name in self._adapters and params.get("context") is not None):
-                    context = params.get("context")
-                    if not isinstance(context, dict) or context.get("schema") != 1:
-                        raise ValueError("operation requires operation-contract-v1 host context")
-                    handler = self._context_ops.get(name) or self._adapters[name]
-                    out = handler(snap, params.get("params") or {}, context)
-                else:
-                    if params.get("context") is not None:
-                        raise ValueError("legacy handler cannot accept operation contract context")
-                    out = self._ops[name](snap, params.get("params") or {})
+                context = Context(params["context"], snap)
+                out = self._ops[name](params.get("params") or {}, context)
             finally:
                 if snap is not None:
                     snap.close()
-            if out is None:
-                out = []
-            if isinstance(out, list):
-                out = {"ops": out}
+            if not isinstance(out, dict):
+                raise TypeError(f"operation {name!r} must return a dict")
+            if "artifacts" not in out:
+                out = dict(out, artifacts=_artifacts(context))
             return out
         raise ValueError(f"unknown method {method!r}")
 

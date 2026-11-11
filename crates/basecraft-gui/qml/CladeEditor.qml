@@ -75,7 +75,7 @@ AppContentDialog {
     body: ColumnLayout {
         spacing: 10
 
-        Label { text: (annotation.tips || 0) + " tips"; opacity: 0.7 }
+        Label { text: (annotation.tip_count || 0) + " tips"; opacity: 0.7 }
 
         RowLayout {
             Label { id: cladeNameLabel; text: "Name"; Layout.preferredWidth: 70 }

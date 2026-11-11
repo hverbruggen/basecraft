@@ -39,7 +39,7 @@ pub struct Submission {
     pub export: ExportSettings,
     #[serde(default)]
     pub publication: Publication,
-    /// Absent in legacy documents: their publication is also the submission citation.
+    /// Absent until set separately; the publication is then also the submission citation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub submission_details: Option<Publication>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -47,10 +47,10 @@ pub struct Submission {
     /// Marker-specific drafts survive type switches without transferring scientific text.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub marker_drafts: BTreeMap<String, Marker>,
-    /// Rule origin for explicit decisions; absent entries are manual/legacy decisions.
+    /// Rule origin for explicit decisions; absent entries are manual decisions.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub row_rules: BTreeMap<String, InclusionRule>,
-    #[serde(default, skip_serializing_if = "AccessionPolicy::is_legacy")]
+    #[serde(default, skip_serializing_if = "AccessionPolicy::is_default")]
     pub accession_policy: AccessionPolicy,
     /// Accessions returned by the archive, by record name.
     #[serde(default)]
@@ -341,7 +341,7 @@ pub struct Author {
     pub first: String,
     pub last: String,
     /// Middle names or initials, without the first name's, such as `Marie` or `M.R.`.
-    /// Bare uppercase runs (`MR`) retain their legacy initials meaning; uppercase full names are ambiguous.
+    /// Bare uppercase runs (`MR`) are initials; uppercase full names are ambiguous.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub middle: String,
 }
@@ -369,12 +369,8 @@ pub enum SubmissionEdit {
     ConfirmSelection {
         selection_hash: String,
     },
+    /// Save annotation settings, keeping a draft of each marker type.
     SetBatch {
-        batch: BatchSettings,
-    },
-    /// Save annotation settings with type-specific drafts. Legacy `set_batch`
-    /// retains its historical meaning so previously saved histories replay exactly.
-    SetBatchDraft {
         batch: BatchSettings,
     },
     /// Confirm or choose reading frames; `clear` forgets choices.
@@ -411,24 +407,36 @@ pub enum SubmissionEdit {
     SetAccessions {
         accessions: Vec<AccessionEntry>,
     },
+    /// A source row was renamed: its decision, frame, rule and accession follow it.
+    RenameRecord {
+        from: String,
+        to: String,
+    },
 }
 
-/// Legacy suggestions are retained on old documents. Configured sources prevent
-/// specimen identifiers elsewhere in a name from influencing inclusion suggestions.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+/// Where accession candidates come from. Configured sources keep specimen
+/// identifiers elsewhere in a name from influencing inclusion suggestions.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "policy", rename_all = "snake_case")]
 pub enum AccessionPolicy {
-    #[default]
-    LegacyHeuristic,
     Configured {
         input: Option<IdentifierSource>,
         include_metadata: bool,
     },
 }
 
+impl Default for AccessionPolicy {
+    fn default() -> Self {
+        Self::Configured {
+            input: Some(IdentifierSource::Identifier),
+            include_metadata: true,
+        }
+    }
+}
+
 impl AccessionPolicy {
-    fn is_legacy(&self) -> bool {
-        matches!(self, Self::LegacyHeuristic)
+    fn is_default(&self) -> bool {
+        *self == Self::default()
     }
 }
 

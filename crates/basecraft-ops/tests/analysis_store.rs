@@ -11,7 +11,6 @@ fn hidden_runs_reserve_stage_and_publish_without_replacing_files() {
     let temp = tempfile::tempdir().unwrap();
     let output = temp.path().join("result.nwk");
     let run = ArtifactRun::create(&output, "run-1").unwrap();
-    assert!(!temp.path().join(".basecraft/project.toml").exists());
     assert!(ArtifactRun::create(&output, "run-1").is_err());
     assert!(run.artifact("../escape").is_err());
     assert!(run.artifact("/escape").is_err());
@@ -385,6 +384,7 @@ fn multi_input_verification_uses_only_declared_owners_and_never_bypasses_breaks(
             &basecraft_io::hash_file(source).unwrap(),
             &[],
             "test input",
+            None,
         )
         .unwrap()
     };
@@ -466,7 +466,7 @@ fn preserved_primary_is_not_replaced_by_a_matching_ancestor_with_missing_origina
     let hash = basecraft_io::hash_file(&source).unwrap();
     let anchor = temp.path().join("result.txt");
     let ancestor =
-        records::reference_input_with_dependencies(&anchor, &source, &hash, &[], "ancestor")
+        records::reference_input_with_dependencies(&anchor, &source, &hash, &[], "ancestor", None)
             .unwrap();
     let main = records::reference_input_with_dependencies(
         &anchor,
@@ -474,6 +474,7 @@ fn preserved_primary_is_not_replaced_by_a_matching_ancestor_with_missing_origina
         &hash,
         &[ancestor.directory().to_owned()],
         "primary",
+        None,
     )
     .unwrap();
     // Preserve this primary while the ancestor still references the original.

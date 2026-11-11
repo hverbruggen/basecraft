@@ -25,8 +25,6 @@ pub struct Manifest {
     /// Frozen by registry discovery, never supplied by package metadata.
     #[serde(skip)]
     pub managed_runtime: Option<crate::runtime::Runtime>,
-    #[serde(default)]
-    pub operations: Vec<OperationDecl>,
     /// Settings forms the app shows before running an operation.
     #[serde(default)]
     pub forms: Vec<Form>,
@@ -255,13 +253,6 @@ pub struct Entry {
     pub operation: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-pub struct OperationDecl {
-    pub name: String,
-    #[serde(default)]
-    pub label: String,
-}
-
 impl Manifest {
     pub fn load(dir: &Path) -> Result<Self> {
         let path = dir.join("plugin.toml");
@@ -278,7 +269,7 @@ impl Manifest {
             return Err(err("manifest exceeds byte limit".into()));
         }
         let mut m: Manifest = toml::from_str(&text).map_err(|e| err(e.to_string()))?;
-        if m.schema != 1 && m.schema != 2 {
+        if m.schema != 2 {
             return Err(err(format!("unsupported schema {}", m.schema)));
         }
         m.dir = dir.to_path_buf();
@@ -288,15 +279,8 @@ impl Manifest {
                 m.runtime = None;
             }
         }
-        if m.schema == 2 {
-            if !m.operations.is_empty() {
-                return Err(err("schema 2 operations belong only in the contract".into()));
-            }
-            m.operation_contract()?;
-            m.python_entry()?;
-        } else if m.contract.is_some() {
-            return Err(err("schema 1 cannot declare an operation contract".into()));
-        }
+        m.operation_contract()?;
+        m.python_entry()?;
         Ok(m)
     }
 
@@ -333,16 +317,11 @@ impl Manifest {
         Ok(current)
     }
 
-    pub fn operation_contract(
-        &self,
-    ) -> Result<Option<basecraft_protocol::operation::OperationContract>> {
-        if self.schema == 1 {
-            return Ok(None);
-        }
+    pub fn operation_contract(&self) -> Result<basecraft_protocol::operation::OperationContract> {
         let relative = self
             .contract
             .as_deref()
-            .ok_or_else(|| Error::Protocol("schema 2 requires contract".into()))?;
+            .ok_or_else(|| Error::Protocol("a plugin needs an operation contract".into()))?;
         let path = self.package_file(relative)?;
         let file = std::fs::File::open(path)?;
         let mut bytes = Vec::new();
@@ -355,7 +334,7 @@ impl Manifest {
         }
         let contract = serde_json::from_slice(&bytes)?;
         crate::contract::validate_contract(&self.id, &contract)?;
-        Ok(Some(contract))
+        Ok(contract)
     }
 
     pub fn form(&self, id: &str) -> Option<&Form> {
@@ -371,11 +350,7 @@ impl Manifest {
                 path: self.dir.join("plugin.toml").display().to_string(),
                 message: format!("entry.operation {entry:?} is not python:<script>"),
             })?;
-        if self.schema == 2 {
-            self.package_file(script)
-        } else {
-            Ok(self.dir.join(script))
-        }
+        self.package_file(script)
     }
 }
 

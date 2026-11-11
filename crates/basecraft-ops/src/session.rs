@@ -29,6 +29,8 @@ mod history;
 mod open;
 use open::SavedMark;
 mod proposals;
+mod retained;
+use retained::Retained;
 #[cfg(test)]
 mod retention_tests;
 mod save;
@@ -40,6 +42,7 @@ mod save_failure_tests;
 mod saved_mark_tests;
 mod tool_runs;
 pub use save_decision::{EvidenceAction, SaveCheck, SaveDecision, SaveOutcome, SaveWarning};
+pub use tool_runs::ToolRunRecord;
 pub mod support_import;
 use crate::{Error, Result};
 
@@ -68,6 +71,8 @@ struct Slot {
     pending_check: save_consent::PendingSaveCheck,
     undo: Vec<Applied>,
     redo: Vec<Applied>,
+    /// Edits older than the undo limit: still in effect, no longer undoable.
+    settled: Retained<basecraft_protocol::provenance::EditActivity>,
     baseline: Option<LogEntry>,
     baseline_logged: bool,
     accepted_hashes: Vec<(String, String)>,
@@ -82,6 +87,52 @@ struct Slot {
     origin_issue: Option<String>,
     origin_bundle: PathBuf,
     disk_stamp: basecraft_protocol::provenance::FileStamp,
+}
+
+/// Undo reaches back at least this many steps; older edits are settled.
+const UNDO_STEPS: usize = 10_000;
+/// Journal events kept in memory; older ones move to a temporary file.
+const EVENTS_IN_MEMORY: usize = 4_096;
+
+impl Slot {
+    /// Settle the oldest undo steps beyond the limit, whole groups at a time.
+    /// At least one step stays, so the saved mark still tells an edited
+    /// document from a clean one.
+    fn settle(&mut self) {
+        if self.undo.len() <= UNDO_STEPS + UNDO_STEPS / 4 {
+            return;
+        }
+        let mut count = self.undo.len() - UNDO_STEPS;
+        while count + 1 < self.undo.len()
+            && self.undo[count].group.is_some()
+            && self.undo[count].group == self.undo[count - 1].group
+        {
+            count += 1;
+        }
+        self.settled.extend(self.undo.drain(..count).map(|applied| {
+            basecraft_protocol::provenance::EditActivity {
+                id: applied.entry_id,
+                operation: applied.op,
+            }
+        }));
+    }
+
+    /// The undo stack, or the redo stack.
+    fn stack(&mut self, undo: bool) -> &mut Vec<Applied> {
+        if undo { &mut self.undo } else { &mut self.redo }
+    }
+
+    /// Every edit in effect, oldest first.
+    fn effective(&self) -> Result<Vec<basecraft_protocol::provenance::EditActivity>> {
+        let mut effective = self.settled.matching(|_| true)?;
+        effective.extend(self.undo.iter().map(|applied| {
+            basecraft_protocol::provenance::EditActivity {
+                id: applied.entry_id.clone(),
+                operation: applied.op.clone(),
+            }
+        }));
+        Ok(effective)
+    }
 }
 
 /// The typing burst the next keystroke may join: its document, actor, last
@@ -99,6 +150,8 @@ struct Typing {
 pub struct Outcome {
     pub entry_id: String,
     pub feature: Option<FeatureId>,
+    /// Things the user should hear about, such as a label a reroot moved.
+    pub notes: Vec<String>,
 }
 
 /// Target-save and evidence locks held while writing an export or extract.
@@ -113,6 +166,8 @@ enum ReplayMode {
 
 pub struct Session {
     root: PathBuf,
+    /// The folder the user chose, or none. Set once, when the session is made.
+    project: Option<crate::project::Project>,
     storage_root: PathBuf,
     provenance_policy: basecraft_platform::settings::ProvenancePolicy,
     local_provenance_root: PathBuf,
@@ -120,7 +175,7 @@ pub struct Session {
     write_publication: crate::documents::WritePublication,
     evidence_actions: Mutex<Vec<save_decision::EvidenceAction>>,
     replay_mode: ReplayMode,
-    events: Vec<LogEntry>,
+    events: Retained<LogEntry>,
     pending_baselines: Vec<LogEntry>,
     id: String,
     host: String,
@@ -132,6 +187,9 @@ pub struct Session {
     /// The open undo group, if any, and the next group number.
     group: Option<u64>,
     next_group: u64,
+    /// The documents each undo group changed, so a group spanning several
+    /// documents is undone and redone in all of them or refused.
+    group_docs: std::collections::BTreeMap<u64, std::collections::BTreeSet<usize>>,
     /// Monotonic, so entries made within one millisecond still sort in order.
     ids: Mutex<ulid::Generator>,
 }
@@ -150,8 +208,9 @@ impl Session {
             write_publication: crate::documents::WritePublication::Immediate,
             evidence_actions: Mutex::new(Vec::new()),
             replay_mode: ReplayMode::Live,
-            events: Vec::new(),
+            events: Retained::new(EVENTS_IN_MEMORY),
             pending_baselines: Vec::new(),
+            project: None,
             root,
             id: ulid::Ulid::generate().to_string(),
             host,
@@ -164,6 +223,7 @@ impl Session {
             store_objects: true,
             group: None,
             next_group: 1,
+            group_docs: std::collections::BTreeMap::new(),
             ids: Mutex::new(ulid::Generator::new()),
         }
     }
@@ -223,6 +283,18 @@ impl Session {
         s.log = None;
         s.store_objects = false;
         s
+    }
+
+    /// Give the session the project the user chose. Opening files never
+    /// changes it; without one, every file is a loose file.
+    #[must_use]
+    pub fn in_project(mut self, project: Option<crate::project::Project>) -> Self {
+        self.project = project;
+        self
+    }
+
+    pub fn project(&self) -> Option<&crate::project::Project> {
+        self.project.as_ref()
     }
 
     pub fn id(&self) -> &str {
@@ -344,6 +416,11 @@ impl Session {
             .is_some_and(|slot| slot.content.kind() == files::Kind::Tree)
     }
 
+    /// Why a document's companion or metadata was set aside when it opened.
+    pub fn opening_warning(&self, id: DocId) -> Result<Option<&str>> {
+        Ok(self.content(id)?.as_document().opening_warning())
+    }
+
     pub fn tree_metadata_warning(&self, id: DocId) -> Result<Option<&str>> {
         self.content(id)?
             .tree()
@@ -352,6 +429,36 @@ impl Session {
                 expected: files::Kind::Tree,
             })
             .map(|payload| payload.metadata_warning.as_deref())
+    }
+
+    /// The letters an alignment or sequence is written in: what the user
+    /// said, kept in its companion, or else a guess from its residues.
+    pub fn alphabet(
+        &self,
+        id: DocId,
+    ) -> Result<basecraft_protocol::facts::Fact<basecraft_protocol::facts::Alphabet>> {
+        use basecraft_protocol::facts::{Alphabet, Fact, FactSource};
+        let content = &self.slot(id)?.content;
+        let guessed = |value| Fact {
+            value,
+            source: FactSource::Guessed,
+        };
+        if let Some(opened) = content.alignment() {
+            return Ok(opened.alphabet.clone().unwrap_or_else(|| {
+                guessed(if opened.doc.is_protein() {
+                    Alphabet::Protein
+                } else {
+                    Alphabet::Dna
+                })
+            }));
+        }
+        let opened = content
+            .sequence()
+            .ok_or_else(|| invalid("only alignments and sequences have an alphabet"))?;
+        Ok(opened
+            .alphabet
+            .clone()
+            .unwrap_or_else(|| guessed(Alphabet::Unknown)))
     }
 
     pub fn is_alignment(&self, id: DocId) -> bool {
@@ -452,12 +559,13 @@ impl Session {
             policy: self.provenance_policy,
             tracked: self.tracked,
             root: &self.root,
+            project: self.project.as_ref(),
             storage_root: &self.storage_root,
             local_root: &self.local_provenance_root,
-            events: &self.events,
+            events: self.events.matching(|event| event.doc == slot.key)?,
             pending: &self.pending_baselines,
             key: &slot.key,
-            undo: &slot.undo,
+            effective: slot.effective()?,
             origin: slot.origin.as_ref(),
             origin_bundle: &slot.origin_bundle,
             delimitation: slot.content.kind() == files::Kind::Delimitation,

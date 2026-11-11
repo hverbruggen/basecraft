@@ -238,8 +238,8 @@ def main():
             for specimen in work["specimens"]:
                 specimen["sources"] = {key: "unverified" for key in keys}
             side = Path(str(path) + ".basecraft.json")
-            payload = {"version": 2, "exchange_hash": exchange_hash,
-                       "path_base": str(project.resolve()), "workspace": work}
+            payload = {"version": 1, "exchange_hash": exchange_hash,
+                       "delimitation": {"path_base": str(project.resolve()), "workspace": work}}
             side.write_text(json.dumps(payload))
             before = {p: p.read_bytes() for p in project.rglob("*") if p.is_file()}
             inspected, _ = cli("delimitation", "linked-alignment", str(path), "--project", str(project))
@@ -257,7 +257,7 @@ def main():
             live = state["document"]
             py.apply(live, state["version"], {"op": "delimitation.edit", "params": {
                 "edit": {"action": "set_view", "view": {"visible": [], "selected": []}}}})
-            payload["workspace"]["exchange_fields"]["basecraft_alignment_snapshot"] = "saved-only.fa"
+            payload["delimitation"]["workspace"]["exchange_fields"]["basecraft_alignment_snapshot"] = "saved-only.fa"
             side.write_text(json.dumps(payload))
             state_before = py.state(live)
             record_before = py.call("document_record", {"document": live})
@@ -599,7 +599,7 @@ def main():
             (package / "operations.json").write_text(json.dumps(contract))
             script = package / "plugin.py"
             script.write_text(script.read_text().replace('if __name__ == "__main__":',
-                              'plugin.context_operation("count_again")(count)\n\nif __name__ == "__main__":'))
+                              'plugin.operation("count_again")(count)\n\nif __name__ == "__main__":'))
             cli("plugins", "install", str(package))
             mcp.tool("basecraft.host.registry_refresh.v1", {})
             assert mcp.call("tools/list", {"cursor": old_cursor}, error=True)["code"] == -32602

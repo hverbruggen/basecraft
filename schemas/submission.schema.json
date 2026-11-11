@@ -60,7 +60,7 @@
       "type": "boolean"
     },
     "row_rules": {
-      "description": "Rule origin for explicit decisions; absent entries are manual/legacy decisions.",
+      "description": "Rule origin for explicit decisions; absent entries are manual decisions.",
       "type": "object",
       "additionalProperties": {
         "$ref": "#/$defs/InclusionRule"
@@ -93,7 +93,7 @@
       ]
     },
     "submission_details": {
-      "description": "Absent in legacy documents: their publication is also the submission citation.",
+      "description": "Absent until set separately; the publication is then also the submission citation.",
       "anyOf": [
         {
           "$ref": "#/$defs/Publication"
@@ -132,20 +132,8 @@
       ]
     },
     "AccessionPolicy": {
-      "description": "Legacy suggestions are retained on old documents. Configured sources prevent\nspecimen identifiers elsewhere in a name from influencing inclusion suggestions.",
+      "description": "Where accession candidates come from. Configured sources keep specimen\nidentifiers elsewhere in a name from influencing inclusion suggestions.",
       "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "policy": {
-              "type": "string",
-              "const": "legacy_heuristic"
-            }
-          },
-          "required": [
-            "policy"
-          ]
-        },
         {
           "type": "object",
           "properties": {
@@ -184,7 +172,7 @@
           "type": "string"
         },
         "middle": {
-          "description": "Middle names or initials, without the first name's, such as `Marie` or `M.R.`.\nBare uppercase runs (`MR`) retain their legacy initials meaning; uppercase full names are ambiguous.",
+          "description": "Middle names or initials, without the first name's, such as `Marie` or `M.R.`.\nBare uppercase runs (`MR`) are initials; uppercase full names are ambiguous.",
           "type": "string"
         }
       },

@@ -21,20 +21,6 @@ struct SaveTarget {
     review: bool,
 }
 
-/// Retaining the original by hard link changes only its change time.
-fn restamp_after_retention(mut stamps: SourceStamps) -> Result<SourceStamps> {
-    for (source, stamp) in &mut stamps {
-        let now = crate::records::save_guard::change_stamp(source)?;
-        if now.as_ref().map(|now| &now.0) != stamp.as_ref().map(|stamp| &stamp.0) {
-            return Err(Error::ChangedOnDisk {
-                path: source.clone(),
-            });
-        }
-        *stamp = now;
-    }
-    Ok(stamps)
-}
-
 /// The three supported save intents; history publication never writes document data.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum SaveMode {
@@ -98,6 +84,38 @@ impl Session {
         mode: SaveMode,
         decision: Option<SaveDecision>,
     ) -> Result<SaveOutcome> {
+        let saved = self.save_checked(id, path, policy, mode, decision);
+        if saved.is_err() {
+            self.checkpoint_if_original_changed(id)?;
+        }
+        saved
+    }
+
+    /// A save refused after another program changed the original leaves the
+    /// unsaved edits recoverable only from a checkpoint of the live document.
+    fn checkpoint_if_original_changed(&mut self, id: DocId) -> Result<()> {
+        if self.log.is_none()
+            // A baseline still held back means nothing was edited yet.
+            || self.docs.get(id.0).is_none_or(|slot| slot.baseline.is_some())
+            || !self.source_changed(id)
+        {
+            return Ok(());
+        }
+        if let Some(entry) = self.recovery_checkpoint(id)? {
+            self.docs[id.0].recovery_boundary = Some(entry.id.clone());
+            self.write_entries(&[entry])?;
+        }
+        Ok(())
+    }
+
+    fn save_checked(
+        &mut self,
+        id: DocId,
+        path: Option<&Path>,
+        policy: SavePolicy,
+        mode: SaveMode,
+        decision: Option<SaveDecision>,
+    ) -> Result<SaveOutcome> {
         if mode == SaveMode::History {
             return self
                 .save_history_record(id)
@@ -141,7 +159,6 @@ impl Session {
 
         // 3. Stage every file and the recovery intent; nothing is replaced yet.
         self.track(id)?;
-        let stamps = restamp_after_retention(stamps)?;
         let mut prepared = self.docs[id.0].content.as_document().prepare_write(
             &target.path,
             self.save_format(id, &target.path)?,
@@ -354,11 +371,7 @@ impl Session {
         let mut paths = document.independently_saved_files(target);
         if paths.is_empty() {
             paths.push(target.to_path_buf());
-            paths.extend(
-                document
-                    .saved_companion(target)
-                    .filter(|_| expected.len() > 1),
-            );
+            paths.extend(document.saved_companions(target));
         }
         let hashes = paths
             .iter()
@@ -372,6 +385,7 @@ impl Session {
                 path: self.relative(target),
             },
             OpResult {
+                notes: Vec::new(),
                 hashes,
                 feature: None,
             },
@@ -485,10 +499,14 @@ impl Session {
         let main_written = now.as_ref() == expected.first();
         if main_written && own {
             accepted.push((self.relative(target), expected[0].clone()));
-            if let Some((hash, sidecar)) = expected.get(1).zip(document.saved_companion(target))
-                && basecraft_io::hash_file(&sidecar).ok().as_ref() == Some(hash)
+            for (hash, sidecar) in expected
+                .iter()
+                .skip(1)
+                .zip(document.saved_companions(target))
             {
-                accepted.push((self.relative(&sidecar), hash.clone()));
+                if basecraft_io::hash_file(&sidecar).ok().as_ref() == Some(hash) {
+                    accepted.push((self.relative(&sidecar), hash.clone()));
+                }
             }
         }
         let slot = &mut self.docs[id.0];
@@ -599,13 +617,15 @@ impl Session {
             .collect();
         self.log_save(id, &target, hashes)?;
         if !outputs.is_empty() {
-            self.log_tool_run(
+            self.record_tool_run(
                 id,
                 self.actor.clone(),
-                ("basecraft.links", "copy"),
-                serde_json::json!({"from": original, "to": target}),
-                &[],
-                &outputs,
+                crate::session::ToolRunRecord::new(
+                    ("basecraft.links", "copy"),
+                    serde_json::json!({"from": original, "to": target}),
+                    &[],
+                    &outputs,
+                ),
             )?;
         }
         Ok(())
@@ -623,6 +643,7 @@ impl Session {
             self.actor.clone(),
             Op::Save { path: key },
             OpResult {
+                notes: Vec::new(),
                 hashes,
                 feature: None,
             },

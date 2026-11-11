@@ -14,10 +14,10 @@ pub fn companion(path: &Path) -> PathBuf {
     PathBuf::from(name)
 }
 
-/// Select the existing binding, companion, project-derived or local history path.
+/// Select the existing binding, companion or local history path.
 /// The final fallback is the original companion spelling, even if it does not
 /// exist. Selection does not validate content or establish complete provenance.
-pub fn bundle_for_result(result: &Path) -> PathBuf {
+pub fn bundle_for_result(result: &Path, project: Option<&crate::project::Project>) -> PathBuf {
     if let Ok(Some(hidden)) = crate::records::analysis_store::ArtifactRun::for_result(result)
         && hidden.join("manifest.json").is_file()
     {
@@ -53,15 +53,12 @@ pub fn bundle_for_result(result: &Path) -> PathBuf {
     let absolute = result
         .canonicalize()
         .unwrap_or_else(|_| result.to_path_buf());
-    for root in absolute.ancestors().skip(1) {
-        if root.join(".basecraft/project.toml").is_file()
-            && let Ok(relative) = absolute.strip_prefix(root)
-        {
-            return root.join(".basecraft/provenance").join(
-                basecraft_io::hash_bytes(relative.to_string_lossy().as_bytes())
-                    .trim_start_matches("b3:"),
-            );
-        }
+    // The project's bundle counts only when it holds history: LocalOnly
+    // history of a project file lives in the private profile instead.
+    if let Some(bundle) = project.and_then(|project| project.provenance_bundle(&absolute))
+        && bundle.join("manifest.json").is_file()
+    {
+        return bundle;
     }
     if let Ok(paths) = basecraft_platform::paths::AppPaths::discover()
         && let Ok(preferences) =
@@ -160,12 +157,21 @@ fn copy_atomic(source: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn inspect(result: &Path) -> Result<Publication> {
+pub fn inspect(result: &Path, project: Option<&crate::project::Project>) -> Result<Publication> {
     // A damaged hidden binding is an error, never a reason to use stale legacy context.
     crate::records::analysis_store::ArtifactRun::for_result(result)?;
-    let bundle = bundle_for_result(result);
-    let publication: Publication =
-        serde_json::from_slice(&read_record(&bundle.join("manifest.json"))?)?;
+    let bundle = bundle_for_result(result, project);
+    let manifest = bundle.join("manifest.json");
+    if project.is_none() && !manifest.is_file() {
+        // Never guess a project; say where else the history could be.
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "No history beside this file. If it belongs to a project, choose that project \
+             (CLI and MCP: --project).",
+        )
+        .into());
+    }
+    let publication: Publication = serde_json::from_slice(&read_record(&manifest)?)?;
     if publication.schema_version != 1 {
         return Err(crate::Error::Unsupported(
             "unsupported provenance schema version".into(),
@@ -175,9 +181,9 @@ pub fn inspect(result: &Path) -> Result<Publication> {
 }
 
 /// Validate exact retained bytes and the current result; never launch software.
-pub fn verify(result: &Path) -> Result<Vec<String>> {
-    let publication = inspect(result)?;
-    let bundle = bundle_for_result(result);
+pub fn verify(result: &Path, project: Option<&crate::project::Project>) -> Result<Vec<String>> {
+    let publication = inspect(result, project)?;
+    let bundle = bundle_for_result(result, project);
     let mut issues = verify_records(&bundle, &publication)?;
     if bundle.join("input.json").is_file() {
         if crate::records::input_evidence::read_input(&bundle)?.state
@@ -393,30 +399,32 @@ fn link_selected_inputs(bundle: &Path, publication: &Publication) -> Result<()> 
     let mut effective = publication.effective_edits.clone();
     crate::records::contributions::project(&publication.events, &mut effective);
     let retained: std::collections::HashSet<_> = effective.iter().map(|e| e.id.as_str()).collect();
-    let dependencies: Vec<_> = publication
-        .events
-        .iter()
-        .filter_map(|event| {
-            if let basecraft_protocol::Op::ToolRun {
-                plugin,
-                operation,
-                params,
-                ..
-            } = &event.op
-            {
-                if plugin == "basecraft.sanger-review" && operation == "reviewed_consensus_input" {
-                    return Some((&event.id, &params["sanger_input"]));
-                }
-                if params.get("contributions").is_some() && !retained.contains(event.id.as_str()) {
-                    return None;
-                }
-                if let Some(run) = params.get("input_run") {
-                    return Some((&event.id, run));
-                }
-            }
-            None
-        })
-        .collect();
+    // Each selected input names the run that retains its exact bytes.
+    let mut dependencies: Vec<(&String, basecraft_protocol::records::ActivityInputRun)> =
+        Vec::new();
+    for event in &publication.events {
+        let basecraft_protocol::Op::ToolRun {
+            plugin,
+            operation,
+            params,
+            input_run,
+            contributions,
+            ..
+        } = &event.op
+        else {
+            continue;
+        };
+        if plugin == "basecraft.sanger-review" && operation == "reviewed_consensus_input" {
+            dependencies.push((
+                &event.id,
+                serde_json::from_value(params["sanger_input"].clone())?,
+            ));
+        } else if let Some(run) = input_run
+            && (contributions.is_none() || retained.contains(event.id.as_str()))
+        {
+            dependencies.push((&event.id, run.clone()));
+        }
+    }
     let path = bundle.join("input.json");
     if dependencies.is_empty() && !path.is_file() {
         return Ok(());
@@ -507,20 +515,16 @@ fn link_selected_inputs(bundle: &Path, publication: &Publication) -> Result<()> 
         if processed.iter().any(|id| id.as_str() == Some(event)) {
             continue;
         }
-        if dependency["schema_version"] != 1 {
+        if dependency.schema_version != 1 {
             return Err(crate::Error::Unsupported(
                 "Unsupported selected input dependency".into(),
             ));
         }
-        let id = dependency["id"]
-            .as_str()
-            .ok_or_else(|| invalid("Selected input has no identity"))?;
+        let id = dependency.id.as_str();
         if id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
             return Err(invalid("Unsafe selected input identity"));
         }
-        let expected = dependency["hash"]
-            .as_str()
-            .ok_or_else(|| invalid("Selected input has no checksum"))?;
+        let expected = dependency.hash.as_str();
         // An existing relative ancestor remains valid after moving the folder;
         // never replace it with an obsolete absolute path from historical events.
         if let Some((directory, _)) = inherited.iter().find(|(_, p)| p.id == id) {
@@ -651,8 +655,11 @@ pub fn tool_run_entry(
             params,
             inputs: names(&publication.inputs),
             outputs: names(&publication.outputs),
+            input_run: None,
+            contributions: None,
         },
         result: OpResult {
+            notes: Vec::new(),
             hashes: publication
                 .inputs
                 .iter()
@@ -788,13 +795,19 @@ fn copy_tree(source: &Path, target: &Path) -> Result<()> {
 
 /// Result and complete retained bundle copied into a new directory. This is a
 /// data package, not a promise that external software can reproduce the result.
-pub fn package(result: &Path, destination: &Path) -> Result<()> {
+pub fn package(
+    result: &Path,
+    destination: &Path,
+    project: Option<&crate::project::Project>,
+) -> Result<()> {
     if crate::records::analysis_store::ArtifactRun::for_result(result)?.is_some()
-        || bundle_for_result(result).join("input.json").is_file()
+        || bundle_for_result(result, project)
+            .join("input.json")
+            .is_file()
     {
-        return crate::records::input_evidence::package(result, destination);
+        return crate::records::input_evidence::package(result, destination, project);
     }
-    let issues = verify(result)?;
+    let issues = verify(result, project)?;
     if !issues.is_empty() {
         return Err(invalid(issues.join("; ")));
     }
@@ -814,7 +827,7 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
         .ok_or_else(|| invalid("result has no filename"))?;
     let copied = staging.path().join(name);
     copy_atomic(result, &copied)?;
-    let publication = inspect(result)?;
+    let publication = inspect(result, project)?;
     for artifact in publication.outputs.iter().skip(1) {
         let name = Path::new(&artifact.logical_name);
         if name
@@ -828,8 +841,9 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
             &staging.path().join(name),
         )?;
     }
-    copy_tree(&bundle_for_result(result), &companion(&copied))?;
-    let copied_issues = verify(&copied)?;
+    copy_tree(&bundle_for_result(result, project), &companion(&copied))?;
+    // The copy carries its history beside it, outside any project.
+    let copied_issues = verify(&copied, None)?;
     if !copied_issues.is_empty() {
         return Err(invalid(copied_issues.join("; ")));
     }

@@ -16,13 +16,10 @@ fn fingerprint(path: &Path) -> (u64, String) {
     )
 }
 
-/// Every retained file: checkpoints in objects/, recovery links in originals/.
+/// Every retained checkpoint in objects/.
 fn objects(root: &Path) -> BTreeMap<String, (u64, String)> {
     let mut found = BTreeMap::new();
-    let mut pending = vec![
-        root.join(".basecraft/objects"),
-        root.join(".basecraft/originals"),
-    ];
+    let mut pending = vec![root.join(".basecraft/objects")];
     while let Some(directory) = pending.pop() {
         let Ok(entries) = std::fs::read_dir(&directory) else {
             continue;
@@ -42,7 +39,6 @@ fn objects(root: &Path) -> BTreeMap<String, (u64, String)> {
 
 fn qualify(root: &Path, recovered: &Path) {
     let before = objects(root);
-    assert!(!before.is_empty());
     println!("retained objects before replay/recovery: {before:?}");
     for _ in 0..2 {
         let report = records::replay(root).unwrap();
@@ -59,11 +55,11 @@ fn qualify(root: &Path, recovered: &Path) {
 }
 
 #[test]
-fn repeated_open_with_edits_preserves_inputs_in_replay_and_recovery() {
+fn repeated_open_with_edits_replays_and_recovers_while_the_original_stays() {
     crate::isolated_profile::isolate!();
     // Successful recovery registers its final store. Keep each fixture alive
     // until the other cases finish inspecting that shared test profile.
-    let mut retained = Vec::new();
+    let mut kept = Vec::new();
     for source_state in ["unchanged", "changed", "missing"] {
         let parent = tempfile::tempdir().unwrap();
         let root = parent.path().join("project");
@@ -88,9 +84,7 @@ fn repeated_open_with_edits_preserves_inputs_in_replay_and_recovery() {
         drop(session);
         assert_eq!(fingerprint(&path), original);
         match source_state {
-            // Editors replace by rename; a hard link keeps the old inode. An
-            // in-place rewrite after the session ends cannot be recovered
-            // without a private copy.
+            // Replaced or deleted after the session: recovery needs the original.
             "changed" => {
                 let replacement = root.join("replacement.tmp");
                 std::fs::write(&replacement, "changed source").unwrap();
@@ -101,11 +95,16 @@ fn repeated_open_with_edits_preserves_inputs_in_replay_and_recovery() {
         }
         let source = path.exists().then(|| fingerprint(&path));
         let recovered = parent.path().join("recovered");
+        if source_state != "unchanged" {
+            assert!(records::recover(&root, &recovered).map_or(true, |outputs| outputs.is_empty()));
+            assert_eq!(path.exists().then(|| fingerprint(&path)), source);
+            continue;
+        }
         qualify(&root, &recovered);
         assert_eq!(path.exists().then(|| fingerprint(&path)), source);
         let loaded = basecraft_ops::files::load_delimitation(&recovered.join("a.spart")).unwrap();
         assert_eq!(loaded.hypotheses.len(), 2);
-        retained.push(parent);
+        kept.push(parent);
     }
 }
 

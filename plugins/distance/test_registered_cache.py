@@ -5,8 +5,10 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import distance_plugin
+from basecraft.plugin import local_context
 from distance_plugin import invoke
 
 
@@ -18,28 +20,32 @@ class RegisteredCacheIdentity(unittest.TestCase):
             source = root / "input.afa"
             source.write_text(">a\nAAAAAC\n>b\nAAAACC\n>c\nAAACCC\n")
             original = source.read_bytes()
-            target = root / "matrix.tsv"
-            params = {"input": str(source), "output": str(target), "model": "p"}
-            invoke("matrix", params)
+            def run(output, cache=None):
+                (root / output).mkdir()
+                inputs = {"alignment": [str(source)], **({"cache": [str(cache)]} if cache else {})}
+                invoke("matrix", {"model": "p"}, local_context(root, inputs, {"artifacts": output}))
+                return root / output / "distances.tsv"
+
+            target = run("first")
             cache = Path(str(target) + ".distances.bin")
             saved = cache.read_bytes()
-            params.update(output=str(root / "next.tsv"), cache_input=str(cache))
-            invoke("matrix", params)
-            self.assertTrue(json.loads((root / "next.tsv.run.json").read_text())["cache_reused"])
+            nxt = run("next", cache)
+            self.assertTrue(json.loads(Path(str(nxt) + ".run.json").read_text())["cache_reused"])
             source.write_text(">a\nAAAAAT\n>b\nAAAACC\n>c\nAAACCC\n")
             with self.assertRaisesRegex(ValueError, "producer do not match"):
-                invoke("matrix", dict(params, output=str(root / "changed.tsv")))
+                run("changed", cache)
             source.write_bytes(original)
             other = root / "other-engine"
             shutil.copyfile(os.environ["BASECRAFT_DISTANCE"], other)
             # An identical advertised version is insufficient for producer identity.
             with other.open("ab") as stream:
                 stream.write(b"different producer bytes")
-            with self.assertRaisesRegex(ValueError, "producer do not match"):
-                invoke("matrix", dict(params, executable=str(other), output=str(root / "other.tsv")))
+            with (patch.dict(os.environ, BASECRAFT_DISTANCE=str(other)),
+                  self.assertRaisesRegex(ValueError, "producer do not match")):
+                run("other", cache)
             self.assertEqual(cache.read_bytes(), saved)
-            self.assertFalse((root / "changed.tsv").exists())
-            self.assertFalse((root / "other.tsv").exists())
+            self.assertFalse((root / "changed" / "distances.tsv").exists())
+            self.assertFalse((root / "other" / "distances.tsv").exists())
 
 
 class MethodsTextTest(unittest.TestCase):

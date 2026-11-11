@@ -87,14 +87,21 @@ fn stdio_edits_are_version_checked_logged_and_project_scoped() {
             .unwrap()
             .contains("TCGT")
     );
-    let log = basecraft_ops::records::inspect(&d.path().join("input.afa"))
-        .unwrap()
-        .events;
+    let log = basecraft_ops::records::inspect(
+        &d.path().join("input.afa"),
+        Some(&project_of(&d.path().join("input.afa"))),
+    )
+    .unwrap()
+    .events;
     assert!(log.iter().any(
         |e| matches!(&e.actor,basecraft_protocol::Actor::Agent{model} if model=="test-agent")
     ));
     assert_eq!(
-        basecraft_ops::records::verify(&d.path().join("input.afa")).unwrap(),
+        basecraft_ops::records::verify(
+            &d.path().join("input.afa"),
+            Some(&project_of(&d.path().join("input.afa")))
+        )
+        .unwrap(),
         Vec::<String>::new()
     );
 }
@@ -146,6 +153,8 @@ fn script_clients_record_script_edits() {
     // A plain CLI edit is a script edit too, by the CLI client.
     let edited = Command::new(env!("CARGO_BIN_EXE_basecraft"))
         .args([
+            "--project",
+            d.path().to_str().unwrap(),
             "edit",
             file.to_str().unwrap(),
             r#"{"op":"aln.replace","params":{"row":1,"start":0,"end":1,"residues":"G"}}"#,
@@ -158,7 +167,9 @@ fn script_clients_record_script_edits() {
         "{}",
         String::from_utf8_lossy(&edited.stderr)
     );
-    let events = basecraft_ops::records::inspect(&file).unwrap().events;
+    let events = basecraft_ops::records::inspect(&file, Some(&project_of(&file)))
+        .unwrap()
+        .events;
     let actors: Vec<&Actor> = events
         .iter()
         .filter(|e| matches!(e.op, basecraft_protocol::Op::AlnReplace { .. }))
@@ -181,12 +192,18 @@ fn script_clients_record_script_edits() {
             .any(|e| matches!(e.actor, Actor::Agent { .. }))
     );
     assert_eq!(
-        basecraft_ops::records::verify(&file).unwrap(),
+        basecraft_ops::records::verify(&file, Some(&project_of(&file))).unwrap(),
         Vec::<String>::new()
     );
     // Read back through the history command: script edits show as script edits.
     let history = Command::new(env!("CARGO_BIN_EXE_basecraft"))
-        .args(["history", file.to_str().unwrap(), "--json"])
+        .args([
+            "--project",
+            d.path().to_str().unwrap(),
+            "history",
+            file.to_str().unwrap(),
+            "--json",
+        ])
         .env("BASECRAFT_PROFILE_DIR", &profile)
         .output()
         .unwrap();
@@ -466,7 +483,11 @@ fn species_mcp_uses_the_canonical_workspace_contract() {
             .all(|h| h.name.starts_with("GMYC species hypothesis "))
     );
     assert_eq!(
-        basecraft_ops::records::verify(&root.join("species.spart")).unwrap(),
+        basecraft_ops::records::verify(
+            &root.join("species.spart"),
+            Some(&project_of(&root.join("species.spart")))
+        )
+        .unwrap(),
         Vec::<String>::new()
     );
 }
@@ -581,7 +602,7 @@ fn tree_mcp_routes_share_hidden_storage() {
         assert!(run.join("execution.json").is_file());
         assert!(basecraft_ops::records::AlignmentLink::read(&output).is_ok());
         assert_eq!(
-            basecraft_ops::records::verify(&output).unwrap(),
+            basecraft_ops::records::verify(&output, Some(&project_of(&output))).unwrap(),
             Vec::<String>::new()
         );
     }
@@ -942,4 +963,59 @@ fn cli_submission_show_rejects_an_alignment_without_success_output() {
     assert_eq!(output.stdout, Vec::<u8>::new());
     assert!(String::from_utf8_lossy(&output.stderr).contains("Submission"));
     assert_eq!(std::fs::read(file).unwrap(), original);
+}
+
+#[test]
+fn agent_row_rename_moves_the_specimen_link() {
+    crate::isolated_profile::isolate!();
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("its.afa"), ">a\nACGT\n>b\nACGA\n").unwrap();
+    let link = json!({"op":"metadata.edit","params":{"edit":{"action":"apply","changes":{
+        "specimens":["S1"],
+        "links":[{"document":"its.afa","record":"a","specimen":"S1"}]}}}});
+    let rename =
+        |row: u32, name: &str| json!({"op":"aln.rename_row","params":{"row":row,"name":name}});
+    let replies = session(
+        d.path(),
+        true,
+        &[
+            request(1, "metadata_open", json!({"create":true})),
+            request(
+                2,
+                "apply",
+                json!({"document":0,"version":0,"operation":link}),
+            ),
+            request(3, "open", json!({"path":"its.afa"})),
+            request(
+                4,
+                "apply",
+                json!({"document":1,"version":0,"operation":rename(0, "a2")}),
+            ),
+            request(5, "read", json!({"document":0})),
+        ],
+    );
+    for reply in &replies[..4] {
+        assert_eq!(reply["result"]["isError"], false, "{reply}");
+    }
+    let links = &replies[4]["result"]["structuredContent"]["metadata"]["links"];
+    assert_eq!(links[0]["record"], "a2", "{links}");
+    // A duplicate name is refused on this route too.
+    let refused = session(
+        d.path(),
+        true,
+        &[
+            request(1, "open", json!({"path":"its.afa"})),
+            request(
+                2,
+                "apply",
+                json!({"document":0,"version":0,"operation":rename(1, "a")}),
+            ),
+        ],
+    );
+    assert_eq!(refused[1]["result"]["isError"], true);
+}
+
+/// The tests' MCP sessions use the file's folder as their project.
+fn project_of(file: &std::path::Path) -> basecraft_ops::project::Project {
+    basecraft_ops::project::Project::new(file.parent().unwrap()).unwrap()
 }

@@ -39,13 +39,10 @@ fn inspection_and_naming_are_read_only_and_keep_stable_order() {
         .attributes
         .insert("asap_rank".into(), "1".into());
     let hash = basecraft_io::hash_file(&paths[0]).unwrap();
-    files::write_delimitation_sidecar_at(
-        &work,
-        &hash,
-        &paths[0],
-        &mut std::fs::File::create(files::tree_sidecar(&paths[0])).unwrap(),
-    )
-    .unwrap();
+    files::delimitation_companion(&work, &hash, &paths[0])
+        .unwrap()
+        .write(&mut std::fs::File::create(files::tree_sidecar(&paths[0])).unwrap())
+        .unwrap();
     let before = std::fs::read_dir(dir.path()).unwrap().count();
     let files = workflow::combine_candidates(&paths).unwrap();
     let ids: Vec<_> = files[0]
@@ -103,7 +100,7 @@ fn selected_combination_preserves_sources_actor_lineage_and_replay() {
     for path in &paths {
         assert_eq!(std::fs::read_to_string(path).unwrap(), SPART);
     }
-    let record = basecraft_ops::records::inspect(&output).unwrap();
+    let record = basecraft_ops::records::inspect(&output, None).unwrap();
     assert!(
         record
             .events
@@ -294,13 +291,10 @@ fn repeated_combine_and_refused_save_preserve_retained_objects_and_recover() {
     assert!(
         workflow::combine_to(&mut session, &paths, &dir.path().join("refused.fa"), None).is_err()
     );
-    // Checkpoints live in objects/, recovery links in originals/<entry>/.
+    // Checkpoints live in objects/.
     let snapshot = || {
         let mut found = std::collections::BTreeMap::new();
-        let mut pending = vec![
-            dir.path().join(".basecraft/objects"),
-            dir.path().join(".basecraft/originals"),
-        ];
+        let mut pending = vec![dir.path().join(".basecraft/objects")];
         while let Some(directory) = pending.pop() {
             for entry in std::fs::read_dir(&directory).into_iter().flatten() {
                 let path = entry.unwrap().path();
@@ -366,13 +360,10 @@ fn hint_workspace(
     std::fs::write(&path, SPART).unwrap();
     let mut work = files::load_delimitation(&path).unwrap();
     change(&mut work);
-    files::write_delimitation_sidecar_at(
-        &work,
-        &basecraft_io::hash_file(&path).unwrap(),
-        &path,
-        &mut std::fs::File::create(files::tree_sidecar(&path)).unwrap(),
-    )
-    .unwrap();
+    files::delimitation_companion(&work, &basecraft_io::hash_file(&path).unwrap(), &path)
+        .unwrap()
+        .write(&mut std::fs::File::create(files::tree_sidecar(&path)).unwrap())
+        .unwrap();
     path
 }
 

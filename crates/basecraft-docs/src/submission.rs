@@ -353,8 +353,7 @@ pub fn apply(sub: &mut Submission, edit: &SubmissionEdit) -> Result<(), EditErro
             }
             next.selection_confirmation = Some(selection_hash.clone());
         }
-        SubmissionEdit::SetBatch { batch } => next.batch = batch.clone(),
-        SubmissionEdit::SetBatchDraft { batch } => {
+        SubmissionEdit::SetBatch { batch } => {
             next.marker_drafts.insert(
                 marker_kind(&next.batch.marker).into(),
                 next.batch.marker.clone(),
@@ -422,6 +421,27 @@ pub fn apply(sub: &mut Submission, edit: &SubmissionEdit) -> Result<(), EditErro
             upsert(&mut next.accessions, accessions, |a: &AccessionEntry| {
                 &a.record
             });
+        }
+        SubmissionEdit::RenameRecord { from, to } => {
+            if next.rows.iter().any(|r| r.record == *to)
+                || next.frames.iter().any(|f| f.record == *to)
+                || next.accessions.iter().any(|a| a.record == *to)
+                || next.row_rules.contains_key(to)
+            {
+                return Err(err(format!(
+                    "the submission already has a row named {to}; remove it first"
+                )));
+            }
+            let records = next.rows.iter_mut().map(|r| &mut r.record);
+            let records = records.chain(next.frames.iter_mut().map(|f| &mut f.record));
+            for record in records.chain(next.accessions.iter_mut().map(|a| &mut a.record)) {
+                if record == from {
+                    record.clone_from(to);
+                }
+            }
+            if let Some(rule) = next.row_rules.remove(from) {
+                next.row_rules.insert(to.clone(), rule);
+            }
         }
     }
     if next.source != sub.source
@@ -530,15 +550,10 @@ pub fn selection(
             });
         }
     };
-    let (input, include_metadata) = match &sub.accession_policy {
-        basecraft_protocol::submission::AccessionPolicy::LegacyHeuristic => {
-            (Some(IdentifierSource::Identifier), true)
-        }
-        basecraft_protocol::submission::AccessionPolicy::Configured {
-            input,
-            include_metadata,
-        } => (input.clone(), *include_metadata),
-    };
+    let basecraft_protocol::submission::AccessionPolicy::Configured {
+        input,
+        include_metadata,
+    } = sub.accession_policy.clone();
     match input {
         Some(IdentifierSource::Identifier) => {
             add(record, "whole identifier (unverified heuristic)".into());
@@ -1954,14 +1969,14 @@ mod redesign_tests {
         };
         apply(
             &mut sub,
-            &SubmissionEdit::SetBatchDraft {
+            &SubmissionEdit::SetBatch {
                 batch: rrna.clone(),
             },
         )
         .unwrap();
         apply(
             &mut sub,
-            &SubmissionEdit::SetBatchDraft {
+            &SubmissionEdit::SetBatch {
                 batch: BatchSettings {
                     marker: Marker::Coding {
                         gene: "tufA".into(),

@@ -38,6 +38,7 @@ fn reference(root: &Path, source: &Path) -> ArtifactRun {
         &basecraft_io::hash_file(source).unwrap(),
         &[],
         "save protection regression",
+        None,
     )
     .unwrap()
 }
@@ -301,6 +302,7 @@ fn registered_transitive_dependencies_are_included_in_session_conflict() {
                     &basecraft_io::hash_file(&other).unwrap(),
                     &[ancestor.directory().to_owned()],
                     "dependent regression",
+                    None,
                 )
                 .unwrap()
             };

@@ -212,13 +212,15 @@ fn run() -> Result<()> {
                     operations = EDITS;
                 }
                 "undo-alignment" => {
+                    // Typing along a row groups into undo steps; undo them all.
                     duration_ns = 0;
-                    operations = EDITS;
-                    for _ in 0..EDITS {
+                    operations = 0;
+                    while session.can_undo(id)? {
                         let start = Instant::now();
                         let result = session.undo(id);
                         duration_ns += start.elapsed().as_nanos();
                         result?;
+                        operations += 1;
                     }
                     verify(&session, id, false)?;
                 }

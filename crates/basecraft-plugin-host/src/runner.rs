@@ -5,6 +5,7 @@ mod captures;
 mod execute;
 mod finalize;
 mod prepare;
+pub use prepare::recorded_request;
 
 use basecraft_ops::records::AlignmentLinkExt;
 use basecraft_platform::files::{identity, link_count};
@@ -30,9 +31,7 @@ use basecraft_protocol::{
     },
     plugin::InvokeResult,
     provenance::{ArtifactRevision, Publication},
-    records::{
-        ExternalExecution, HostWorkflowExecution, JobIndexPlugin, JobIndexSource, LocalJobIndex,
-    },
+    records::{JobIndexPlugin, JobIndexSource, LocalJobIndex, RUN_RECORD_SCHEMA, RunRecord},
 };
 use serde_json::{Value, json};
 
@@ -104,10 +103,10 @@ pub fn verify_completed_result(
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
         return Err(Error::Protocol("unsafe completed run directory".into()));
     }
-    let execution: ExternalExecution = serde_json::from_slice(
-        &basecraft_ops::records::read_record(&directory.join("execution.json"))?,
-    )?;
-    if execution.schema != 1
+    let execution: RunRecord = serde_json::from_slice(&basecraft_ops::records::read_record(
+        &directory.join("execution.json"),
+    )?)?;
+    if execution.schema != RUN_RECORD_SCHEMA
         || execution.operation != query.operation
         || execution.package_digest != query.pins.package_digest
         || execution.descriptor_digest != query.pins.descriptor_digest
@@ -117,13 +116,9 @@ pub fn verify_completed_result(
             "execution specification differs from receipt".into(),
         ));
     }
-    let context = execution.context;
-    if context.schema != 1
-        || context.operation != query.operation
-        || context.run_id != outcome.run_id
-        || context.input_evidence.len() != query.inputs.len()
+    if execution.inputs.len() != query.inputs.len()
         || query.inputs.iter().any(|(role, expected)| {
-            context.input_evidence.get(role).is_none_or(|actual| {
+            execution.inputs.get(role).is_none_or(|actual| {
                 actual.len() != expected.len()
                     || actual.iter().zip(expected).any(|(a, b)| {
                         a.source_hash != b.source_hash
@@ -141,20 +136,20 @@ pub fn verify_completed_result(
         return Err(Error::Protocol("completed receipt has no artifacts".into()));
     }
     let first = Path::new(&outcome.artifacts[0].path);
-    let bundle = basecraft_ops::records::bundle_for_result(first);
+    let bundle = basecraft_ops::records::bundle_for_result(first, None);
     if bundle.canonicalize()? != directory.canonicalize()? {
         return Err(Error::Protocol(
             "retained artifact is bound to a different run".into(),
         ));
     }
-    let issues = basecraft_ops::records::verify(first)?;
+    let issues = basecraft_ops::records::verify(first, None)?;
     if !issues.is_empty() {
         return Err(Error::Protocol(format!(
             "completed publication is not reusable: {}",
             issues.join("; ")
         )));
     }
-    let publication = basecraft_ops::records::inspect(first)?;
+    let publication = basecraft_ops::records::inspect(first, None)?;
     for artifact in &outcome.artifacts {
         let path = Path::new(&artifact.path);
         if !path.canonicalize()?.starts_with(directory.canonicalize()?)
@@ -194,7 +189,7 @@ pub fn lookup_completed_result(
         let receipt = directory.join("runtime.json");
         if !receipt.exists() {
             continue;
-        } // Input ledgers and legacy domain runs have no runtime receipt.
+        } // Input ledgers and domain runs have no runtime receipt.
         let candidate = (|| -> Result<Option<VerifiedOperationResult>> {
             let outcome: OperationOutcome =
                 serde_json::from_slice(&basecraft_ops::records::read_record(&receipt)?)?;
@@ -310,7 +305,7 @@ impl PreparedOperation {
             }
             for record in records {
                 if record.original_path.is_some() {
-                    mutation.preserve_input(Path::new(&record.run_directory))?;
+                    mutation.preserve_input(&self.run_path(&record.run_directory))?;
                 }
             }
         }
@@ -329,19 +324,20 @@ impl PreparedOperation {
                     .flat_map(|(_, records)| records)
                     .find(|record| {
                         self.primary_input_owner.as_deref()
-                            == Some(Path::new(&record.run_directory))
+                            == Some(self.run_path(&record.run_directory).as_path())
                             && record.source_hash.as_ref() == Some(&source.hash)
                     })
             {
                 input.origin_run = Some(records::relative(
                     self.run.directory(),
-                    Path::new(&owner.run_directory),
+                    &self.run_path(&owner.run_directory),
                 )?);
                 input.state = basecraft_protocol::input_records::EvidenceState::Preserved;
                 mutation.write_input(self.run.directory(), &input)?;
             }
         }
         drop(mutation);
+        let root = self.run.directory().to_path_buf();
         for (binding, paths) in &mut self.context.inputs {
             if !retained_bindings.contains(binding) {
                 continue;
@@ -349,19 +345,19 @@ impl PreparedOperation {
             for (index, path) in paths.iter_mut().enumerate() {
                 let name = format!("submitted-{binding}-{index}");
                 let retained = self.run.artifact(&name)?;
-                if Path::new(path) == retained {
+                if root.join(&*path) == retained {
                     continue;
                 }
-                let hash = file_tool::freeze_file(Path::new(path), &retained)?;
+                let hash = file_tool::freeze_file(&root.join(&*path), &retained)?;
                 self.ledger_inputs.push(ArtifactRevision {
                     id: format!("{}:{name}", self.run.id()),
                     logical_name: name.clone(),
                     hash,
                     size: std::fs::metadata(&retained)?.len(),
-                    retained: Some(name),
+                    retained: Some(name.clone()),
                     reference: None,
                 });
-                *path = retained.display().to_string();
+                *path = name;
             }
         }
         Ok(())
@@ -377,7 +373,7 @@ impl PreparedOperation {
                 .input_evidence
                 .values()
                 .flatten()
-                .map(|input| PathBuf::from(&input.run_directory)),
+                .map(|input| self.run_path(&input.run_directory)),
         );
         for directory in ledgers {
             let mut input = mutation.read_input(&directory)?;
@@ -426,7 +422,8 @@ impl PreparedOperation {
                     continue;
                 }
                 if let Some(artifact) = stage.artifacts.first() {
-                    let publication = basecraft_ops::records::inspect(Path::new(&artifact.path))?;
+                    let publication =
+                        basecraft_ops::records::inspect(Path::new(&artifact.path), None)?;
                     record.include_input(
                         &basecraft_ops::records::DocumentRecord::from_publication(&publication),
                     );
@@ -439,13 +436,10 @@ impl PreparedOperation {
     pub fn validate_result(&self, result: &InvokeResult) -> Result<Vec<(String, PathBuf, String)>> {
         contract::BoundedSchema::compile(&self.operation.descriptor.result)?
             .validate(result.data.as_deref().unwrap_or(&Value::Null))?;
-        if (!result.ops.is_empty()
-            && (self.sequence.is_none() || !self.operation.descriptor.effects.document_write))
-            || !result.outputs.is_empty()
+        if !result.ops.is_empty()
+            && (self.sequence.is_none() || !self.operation.descriptor.effects.document_write)
         {
-            return Err(Error::Protocol(
-                "file operation returned proposals or legacy output paths".into(),
-            ));
+            return Err(Error::Protocol("file operation returned proposals".into()));
         }
         if result.ops.len() > 4096 {
             return Err(Error::Protocol("proposal count exceeds 4096".into()));
@@ -455,7 +449,7 @@ impl PreparedOperation {
         }
         if self.lifecycle.external() {
             self.submission_identity(result)?;
-            let receipt = Path::new(&self.context.outputs["receipt"]);
+            let receipt = &self.run_path(&self.context.outputs["receipt"]);
             if !receipt.try_exists()? {
                 records::write_json(receipt, result.data.as_deref().unwrap_or(&Value::Null))?;
             }
@@ -470,7 +464,7 @@ impl PreparedOperation {
                 .outputs
                 .get(&artifact.role)
                 .ok_or_else(|| Error::Protocol("undeclared artifact role".into()))?;
-            let root = PathBuf::from(&self.context.outputs[&artifact.role]);
+            let root = self.run_path(&self.context.outputs[&artifact.role]);
             let path = if binding.collection {
                 let relative = Path::new(&artifact.path);
                 if artifact.path.is_empty()
@@ -581,7 +575,7 @@ impl PreparedOperation {
             )?)?;
             self.lifecycle.validate_receipt(
                 result,
-                Path::new(&self.context.outputs["receipt"]),
+                &self.run_path(&self.context.outputs["receipt"]),
                 &plan,
             )?;
         }
@@ -613,10 +607,10 @@ impl PreparedOperation {
             .flatten()
             .next()
             .ok_or_else(|| Error::Protocol("target run has no input".into()))?;
-        let key = evidence
-            .original_path
-            .clone()
-            .unwrap_or_else(|| "generated input".into());
+        let key = evidence.original_path.as_deref().map_or_else(
+            || "generated input".into(),
+            |path| self.run_path(path).display().to_string(),
+        );
         let path = session.root().join(session.doc_key(doc)?);
         self.document = Some(DocumentTarget {
             doc,
@@ -635,7 +629,7 @@ impl PreparedOperation {
 
     /// Publish the species workspace in a validated run's result as a new
     /// SPART file in the project.
-    fn publish_workspace(&self, destination: &str) -> Result<PathBuf> {
+    fn publish_workspace(&self, destination: &str) -> Result<(PathBuf, Option<String>)> {
         let validated: Vec<(String, PathBuf, String)> = serde_json::from_slice(
             &basecraft_ops::records::read_record(&self.run.artifact("validated-artifacts.json")?)?,
         )?;
@@ -650,10 +644,12 @@ impl PreparedOperation {
             self.run.artifact(role)?.join(
                 staged
                     .strip_prefix(
-                        self.context
-                            .outputs
-                            .get(role)
-                            .ok_or_else(|| Error::Protocol("undeclared output role".into()))?,
+                        self.run_path(
+                            self.context
+                                .outputs
+                                .get(role)
+                                .ok_or_else(|| Error::Protocol("undeclared output role".into()))?,
+                        ),
                     )
                     .map_err(|_| Error::Protocol("result escapes allocation".into()))?,
             )
@@ -665,10 +661,12 @@ impl PreparedOperation {
         if value["workspace"].is_null() {
             return Err(Error::Protocol("result holds no species workspace".into()));
         }
-        let work = serde_json::from_value(value["workspace"].clone())?;
+        let mut work = serde_json::from_value(value["workspace"].clone())?;
+        let roster =
+            basecraft_ops::delimitation::link_roster(&self.policy.root, &self.run, &mut work)?;
         let target = self.policy.path(destination, true)?;
         basecraft_ops::delimitation::publish_workspace_to(&target, &work, &self.run)?;
-        Ok(target)
+        Ok((target, roster.summary()))
     }
 
     /// The file holding a delimitation run's result: the descriptor's primary
@@ -676,16 +674,13 @@ impl PreparedOperation {
     pub fn species_result_name(&self) -> String {
         self.operation
             .descriptor
-            .legacy_adapter
-            .as_ref()
-            .and_then(|adapter| adapter.outputs.get("output"))
+            .outputs
+            .values()
+            .find_map(|output| output.primary.as_deref())
+            .and_then(|member| Path::new(member).file_name())
             .map_or_else(
                 || "fit.json".into(),
-                |output| {
-                    Path::new(&output.path)
-                        .file_name()
-                        .map_or_else(String::new, |name| name.to_string_lossy().into_owned())
-                },
+                |name| name.to_string_lossy().into_owned(),
             )
     }
 
@@ -720,7 +715,7 @@ impl PreparedOperation {
                     .get("alignment")
                     .and_then(|values| values.first())
                     .and_then(|evidence| evidence.original_path.as_deref())
-                    .map(PathBuf::from)
+                    .map(|path| self.run_path(path))
                     .ok_or_else(|| Error::Protocol("tree alignment source unknown".into()))?,
                 0,
             ),
@@ -751,6 +746,11 @@ impl PreparedOperation {
         Ok((actor, params))
     }
 
+    /// A context path: relative to the run folder, or absolute outside it.
+    pub fn run_path(&self, path: &str) -> PathBuf {
+        self.run.directory().join(path)
+    }
+
     pub fn effective_parameters(&self) -> Value {
         self.granted_parameters
             .lock()
@@ -777,7 +777,8 @@ impl PreparedOperation {
                     .input_evidence
                     .values()
                     .flatten()
-                    .find_map(|evidence| evidence.original_path.clone())
+                    .find_map(|evidence| evidence.original_path.as_deref())
+                    .map(|path| self.run_path(path).display().to_string())
                     .unwrap_or_default()
             },
             |target| target.path.display().to_string(),

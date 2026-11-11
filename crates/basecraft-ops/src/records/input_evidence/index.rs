@@ -493,6 +493,7 @@ mod tests {
             &basecraft_io::hash_file(&source).unwrap(),
             &[],
             "pending update",
+            None,
         )
         .unwrap();
         let locks = super::super::lock().unwrap();
@@ -576,6 +577,7 @@ mod tests {
                     &basecraft_io::hash_file(&source).unwrap(),
                     &[],
                     "concurrent reference",
+                    None,
                 );
                 assert!(matches!(result, Err(crate::Error::Busy(_))));
             }

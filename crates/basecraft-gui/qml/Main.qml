@@ -185,7 +185,8 @@ ApplicationWindow {
     readonly property var applicationCommands: [findCommand, newSequenceCommand, addAnnotationCommand, openCommand, saveCommand, saveAsCommand, projectCommand, shortcutsCommand, aboutCommand, preferencesCommand, textRepresentationCommand, contextShortcutsCommand, learnCommand, exportSvgCommand, exportPngCommand, historyCommand, methodsCommand, showProvenanceCommand, verifyProvenanceCommand, packageCommand, recoverCommand, installedOperationsCommand].concat(ribbonCommands)
     function selectProject(path) {
         const chosen = preferences.select_project(path)
-        if (chosen.length) shell.project_dir = chosen
+        // A project still in use by a document or job refuses the switch.
+        if (chosen.length) preferences.project_error = shell.choose_project(chosen)
     }
     property bool preferencesReady: false
     AppSettings {
@@ -297,7 +298,7 @@ ApplicationWindow {
 
     // Open a file in a tab, or switch to its tab if it's already open.
     function openPath(path, reviewMethods = false) {
-        const step = JSON.parse(documentOpens.open(path, shell.project_dir, reviewMethods))
+        const step = JSON.parse(documentOpens.open(path, reviewMethods))
         if (step.error) { provenance.notification(path, step.error, "fail"); return }
         if (step.project) {
             // Project documents are edited on the Export tab.
@@ -325,7 +326,7 @@ ApplicationWindow {
     }
     function reviewLegacyDocument(index, path) {
         const document = window.documentAt(index)
-        const token = documentOpens.request(path, shell.project_dir, true)
+        const token = documentOpens.request(path, true)
         // Legacy trace acquisition retains its existing deferred completion.
         // The continuation still checks its original view/token and actual owner.
         Qt.callLater(() => {
@@ -511,7 +512,7 @@ ApplicationWindow {
     function initializeSequence(document) {
         const pending = window.pendingSequence
         if (!pending || pending.path !== document.path) return
-        const error = document.controller.create_sequence(pending.name, pending.sequence, shell.project_dir)
+        const error = document.controller.create_sequence(pending.name, pending.sequence)
         window.pendingSequence = null
         if (error.length) {
             window.removeDocument(document.index)

@@ -131,11 +131,10 @@ pub fn describe(edit: &SubmissionEdit) -> String {
     match edit {
         SubmissionEdit::SetAccessionPolicy { .. } => "Submission accession evidence source".into(),
         SubmissionEdit::SetSource { source } => format!("Submission source {}", source.document),
+        SubmissionEdit::RenameRecord { from, to } => format!("Submission row {from} renamed {to}"),
         SubmissionEdit::SetRows { rows } => format!("Submission decisions for {} rows", rows.len()),
         SubmissionEdit::ConfirmSelection { .. } => "Confirmed submission row selection".into(),
-        SubmissionEdit::SetBatch { .. } | SubmissionEdit::SetBatchDraft { .. } => {
-            "Submission batch settings".into()
-        }
+        SubmissionEdit::SetBatch { .. } => "Submission batch settings".into(),
         SubmissionEdit::SetFrames { frames, clear } => format!(
             "Reading frames: {} set, {} cleared",
             frames.len(),
@@ -1314,18 +1313,14 @@ fn verified_reports(
             "validation outcome differs from its registered run",
         ));
     }
-    let execution = read(&run.join("execution.json"))?;
-    let context: basecraft_protocol::operation::InvocationContext =
-        serde_json::from_value(execution["context"].clone())?;
-    if execution["schema"] != 1
-        || execution["operation"] != VALIDATE_OPERATION
-        || context.schema != 1
-        || context.operation != VALIDATE_OPERATION
-        || context.run_id != run_id
-        || execution["package_digest"] != outcome["pins"]["package_digest"]
-        || execution["descriptor_digest"] != outcome["pins"]["descriptor_digest"]
-        || execution["effective_parameters"] != outcome["effective_parameters"]
-        || context.input_evidence.len() != 4
+    let execution: basecraft_protocol::records::RunRecord =
+        serde_json::from_value(read(&run.join("execution.json"))?)?;
+    if execution.schema != basecraft_protocol::records::RUN_RECORD_SCHEMA
+        || execution.operation != VALIDATE_OPERATION
+        || outcome["pins"]["package_digest"] != execution.package_digest.as_str()
+        || outcome["pins"]["descriptor_digest"] != execution.descriptor_digest.as_str()
+        || outcome["effective_parameters"] != execution.effective_parameters
+        || execution.inputs.len() != 4
     {
         return Err(invalid("validation execution identity does not match"));
     }
@@ -1337,8 +1332,8 @@ fn verified_reports(
         ("template", "sbt"),
     ] {
         let current = package.join("genbank").join(format!("{BASE}.{ext}"));
-        let evidence = context
-            .input_evidence
+        let evidence = execution
+            .inputs
             .get(role)
             .filter(|e| e.len() == 1)
             .ok_or_else(|| invalid("validation has incomplete submitted input evidence"))?;
@@ -1349,8 +1344,8 @@ fn verified_reports(
             .as_deref()
             .ok_or_else(|| invalid("validation input has no source path"))?;
         let ledger =
-            crate::records::input_evidence::read_input(Path::new(&evidence.run_directory))?;
-        if Path::new(original).canonicalize()? != current.canonicalize()?
+            crate::records::input_evidence::read_input(&run.join(&evidence.run_directory))?;
+        if run.join(original).canonicalize()? != current.canonicalize()?
             || evidence.source_hash.as_deref() != Some(expected.as_str())
             || evidence.submitted_hash != expected
             || evidence.transformation != "identity-v1"
@@ -1389,14 +1384,16 @@ fn verified_reports(
         );
         if artifact["role"] != "reports"
             || basecraft_io::hash_file(&path)? != artifact["digest"].as_str().unwrap_or_default()
-            || crate::records::provenance::bundle_for_result(&path).canonicalize()?
+            || crate::records::provenance::bundle_for_result(&path, None).canonicalize()?
                 != run.canonicalize()?
         {
             return Err(invalid(
                 "validation artifact or publication evidence differs",
             ));
         }
-        let issues = crate::records::provenance::verify(&path)?;
+        // The submission's folder is the project the caller chose.
+        let project = crate::project::Project::new(root)?;
+        let issues = crate::records::provenance::verify(&path, Some(&project))?;
         if !issues.is_empty() {
             return Err(crate::Error::Damaged {
                 path: path.clone(),

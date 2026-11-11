@@ -263,12 +263,11 @@
           }
         },
         "secondary_sequence": {
-          "description": "Native secondary calls, indexed by the same events as sequence/positions/scores.\nMissing legacy or instrument evidence is unknown, never primary agreement.\nDraft orientation and clipping do not transform these native arrays.",
+          "description": "Native secondary calls, indexed by the same events as sequence/positions/scores.\nAbsent when the instrument gave none; that is unknown, never primary agreement.\nDraft orientation and clipping do not transform these native arrays.",
           "type": [
             "string",
             "null"
-          ],
-          "default": null
+          ]
         },
         "sequence": {
           "type": "string"

@@ -36,6 +36,7 @@ fn reference(root: &Path, source: &Path) -> ArtifactRun {
         &basecraft_io::hash_file(source).unwrap(),
         &[],
         "save protection regression",
+        None,
     )
     .unwrap()
 }
@@ -436,6 +437,7 @@ fn late_registrar() {
         &basecraft_io::hash_file(&source).unwrap(),
         &[],
         "late registration",
+        None,
     )
     .unwrap();
 }
@@ -516,6 +518,7 @@ fn incomplete_inspection_keeps_descendants_ownership_and_backing() {
                 &basecraft_io::hash_file(&unrelated).unwrap(),
                 &[ledger.directory().into()],
                 "child",
+                None,
             )
             .unwrap();
             let grandchild = records::reference_input_with_dependencies(
@@ -524,6 +527,7 @@ fn incomplete_inspection_keeps_descendants_ownership_and_backing() {
                 &basecraft_io::hash_file(&unrelated).unwrap(),
                 &[child.directory().into()],
                 "grandchild",
+                None,
             )
             .unwrap();
             let mut input = records::read_input(ledger.directory()).unwrap();

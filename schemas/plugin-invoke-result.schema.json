@@ -34,13 +34,6 @@
       "default": [],
       "items": true
     },
-    "outputs": {
-      "description": "Paths of the files the operation wrote, as given in its parameters.",
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
     "tool": {
       "description": "The external program that did the work.",
       "anyOf": [

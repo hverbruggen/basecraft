@@ -85,7 +85,7 @@ class NativeCallsTests(unittest.TestCase):
             with patch("consensus.subprocess.run", return_value=subprocess.CompletedProcess([], 0)):
                 return trace_calls(Path("read.ab1"), Path("tracy"), output)
 
-    def test_native_control_events_and_legacy_absence(self):
+    def test_native_control_events_and_absent_secondary_calls(self):
         raw = self.raw()
         result = self.normalize(raw)
         self.assertEqual(result, {
@@ -94,12 +94,12 @@ class NativeCallsTests(unittest.TestCase):
             "signal_bounds": [0, 3],
         })
         for secondary in (None, "missing"):
-            legacy = copy.deepcopy(raw)
+            older = copy.deepcopy(raw)
             if secondary == "missing":
-                del legacy["secondarySeq"]
+                del older["secondarySeq"]
             else:
-                legacy["secondarySeq"] = None
-            absent = self.normalize(legacy)
+                older["secondarySeq"] = None
+            absent = self.normalize(older)
             self.assertIsNone(absent.pop("secondary_sequence"))
             self.assertEqual(absent, {k: v for k, v in result.items() if k != "secondary_sequence"})
         raw["secondarySeq"] = "ryk"

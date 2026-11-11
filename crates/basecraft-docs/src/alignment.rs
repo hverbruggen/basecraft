@@ -870,6 +870,14 @@ impl AlignmentDoc {
         if name.is_empty() || name.chars().any(char::is_whitespace) {
             return err("a row name can't be empty or contain spaces");
         }
+        if self
+            .rows
+            .iter()
+            .enumerate()
+            .any(|(i, r)| i != row && r.name == name)
+        {
+            return err(format!("there's already a row named {name:?}"));
+        }
         let old = std::mem::replace(&mut self.rows[row].name, name.to_string());
         self.edited();
         Ok(vec![Undo::Rename { row, name: old }])

@@ -1,5 +1,6 @@
 //! Undo retains only changed fields, except topology-changing root operations.
 use super::{EditError, SupportSet, TreeDoc};
+use basecraft_protocol::facts::{BranchLengths, Fact, FactSource};
 use basecraft_protocol::{CladeAnnotation, Op, TreeStyle};
 use std::collections::BTreeMap;
 
@@ -21,6 +22,7 @@ enum Change {
         references: Vec<(u32, usize)>,
     },
     Annotation(u32, Option<CladeAnnotation>),
+    BranchLengths(Option<Fact<BranchLengths>>),
     AddedSupport(String),
     Style {
         style: Box<StyleUndo>,
@@ -98,6 +100,7 @@ impl TreeDoc {
     pub fn undo_edit(&mut self, undo: &TreeUndo) {
         match &undo.change {
             Change::Root(before) => *self = (**before).clone(),
+            Change::BranchLengths(before) => self.branch_lengths.clone_from(before),
             Change::Position { lengths, rooted } => {
                 for &(i, length) in lengths {
                     self.nodes[i].length = length;
@@ -114,7 +117,15 @@ impl TreeDoc {
                 name,
                 references,
             } => {
-                self.nodes[*node].name.clone_from(name);
+                let current = std::mem::replace(&mut self.nodes[*node].name, name.clone());
+                for a in self.annotations.values_mut() {
+                    if a.tips.remove(&current) {
+                        a.tips.insert(name.clone());
+                    }
+                }
+                if let Some(label) = self.style.tip_labels.remove(&current) {
+                    self.style.tip_labels.insert(name.clone(), label);
+                }
                 for &(id, index) in references {
                     self.annotations.get_mut(&id).unwrap().clade[index].clone_from(name);
                 }
@@ -234,6 +245,15 @@ impl TreeDoc {
                 style,
                 remove_supports,
             } => self.edit_style(Some(style.clone()), remove_supports)?,
+            Op::TreeSetBranchLengths { meaning } => {
+                let stated = Fact {
+                    value: meaning.clone(),
+                    source: FactSource::User,
+                };
+                let before = self.branch_lengths.replace(stated);
+                self.edited();
+                Change::BranchLengths(before)
+            }
             _ => return Err(EditError(format!("{} is not a tree edit", op.name()))),
         };
         Ok(TreeUndo { version, change })

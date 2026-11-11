@@ -33,12 +33,14 @@ pub(super) fn retain_reference(anchor: &Path, source: &Path) -> Result<PathBuf, 
             }
         }
         let hash = basecraft_io::hash_file(source)?;
+        let project = crate::chosen_project::chosen().map_err(basecraft_ops::Error::Invalid)?;
         let run = basecraft_ops::records::reference_input_with_dependencies(
             anchor,
             source,
             &hash,
             &[],
             "GUI Sanger reference",
+            project.as_ref(),
         )?;
         basecraft_ops::records::preserve_input(run.directory())?;
         let input = basecraft_ops::records::read_input(run.directory())?;
@@ -338,6 +340,7 @@ fn execute(
                     session.attach_operation_placement(
                         directory(&outcome)?,
                         &artifact(&outcome, "placement.json")?,
+                        crate::chosen_project::chosen()?.as_ref(),
                     )?;
                     let mut view = session_view(&session)?;
                     let automatic = session.automatic_only();
@@ -394,20 +397,14 @@ pub(super) struct ReviewDocument {
 }
 impl ReviewDocument {
     pub fn new(review: &SangerReview) -> Result<Self, String> {
-        let root = review
-            .storage_anchor()
-            .parent()
-            .ok_or("Review has no parent")?;
-        let mut session = basecraft_ops::Session::recoverable(root).map_err(|e| e.to_string())?;
+        let mut session = crate::chosen_project::session_for(review.storage_anchor())?;
         let id = session
             .create_sanger_review(review)
             .map_err(|e| e.to_string())?;
         Ok(Self { session, id })
     }
     pub fn open(path: &Path) -> Result<Self, String> {
-        let mut session =
-            basecraft_ops::Session::recoverable(path.parent().ok_or("Review has no parent")?)
-                .map_err(|e| e.to_string())?;
+        let mut session = crate::chosen_project::session_for(path)?;
         let id = session.open(path).map_err(|e| e.to_string())?;
         session.sanger_review(id).map_err(|e| e.to_string())?;
         Ok(Self { session, id })
@@ -473,7 +470,7 @@ impl ReviewDocument {
     pub fn addition_evidence(&mut self) -> Result<String, String> {
         self.review()
             .ok_or("No review is open")?
-            .addition_evidence()
+            .addition_evidence(crate::chosen_project::chosen()?.as_ref())
     }
 }
 

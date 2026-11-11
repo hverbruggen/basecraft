@@ -70,7 +70,12 @@ pub struct ProvenanceRust {
     notifications: QString,
     notices: Vec<serde_json::Value>,
 }
-fn run(operation: &str, result: &Path, destination: &Path) -> Result<String, String> {
+fn run(
+    operation: &str,
+    result: &Path,
+    destination: &Path,
+    project: Option<&basecraft_ops::project::Project>,
+) -> Result<String, String> {
     use basecraft_ops::records;
     let outcome = (|| -> basecraft_ops::Result<String> {
         match operation {
@@ -86,11 +91,11 @@ fn run(operation: &str, result: &Path, destination: &Path) -> Result<String, Str
                 ))
             }
             "history" => {
-                let publication = records::inspect(result)?;
+                let publication = records::inspect(result, project)?;
                 Ok(serde_json::to_string_pretty(&publication)?)
             }
             "verify" => {
-                let issues = records::verify(result)?;
+                let issues = records::verify(result, project)?;
                 if issues.is_empty() {
                     Ok("Recorded artifact hashes match. Replay verification has not been performed.".into())
                 } else {
@@ -101,7 +106,7 @@ fn run(operation: &str, result: &Path, destination: &Path) -> Result<String, Str
                 }
             }
             "methods" => {
-                let publication = records::inspect(result)?;
+                let publication = records::inspect(result, project)?;
                 records::write_reports(destination, &publication)?;
                 Ok(format!(
                     "Generated reports: {}\nUser-authored methods.md is preserved.",
@@ -109,7 +114,7 @@ fn run(operation: &str, result: &Path, destination: &Path) -> Result<String, Str
                 ))
             }
             "package" => {
-                records::package(result, destination)?;
+                records::package(result, destination, project)?;
                 Ok(format!(
                     "Package saved: {}\nThis contains retained data and recorded history; external-tool replay has not been verified.",
                     destination.display()
@@ -141,8 +146,9 @@ impl qobject::AppProvenance {
     fn relink_input(self: Pin<&mut Self>, result: &QString, original: &QString) -> bool {
         let result = (|| -> basecraft_ops::Result<()> {
             let result = std::path::PathBuf::from(result.to_string());
-            basecraft_ops::records::inspect(&result)?;
-            let run = basecraft_ops::records::bundle_for_result(&result);
+            let project = crate::chosen_project::chosen().map_err(basecraft_ops::Error::Invalid)?;
+            basecraft_ops::records::inspect(&result, project.as_ref())?;
+            let run = basecraft_ops::records::bundle_for_result(&result, project.as_ref());
             basecraft_ops::records::relink(&run, Path::new(&original.to_string()))
         })();
         let success = result.is_ok();
@@ -157,7 +163,11 @@ impl qobject::AppProvenance {
     }
     fn saved_report(&self, path: &QString) -> QString {
         report_json(
-            basecraft_ops::records::inspect(Path::new(&path.to_string()))
+            crate::chosen_project::chosen()
+                .map_err(basecraft_ops::Error::Invalid)
+                .and_then(|project| {
+                    basecraft_ops::records::inspect(Path::new(&path.to_string()), project.as_ref())
+                })
                 .and_then(|p| basecraft_ops::records::DocumentRecord::from_publication(&p).report())
                 .and_then(|r| serde_json::to_string(&r).map_err(Into::into))
                 .map_err(|e| e.to_string()),
@@ -278,12 +288,17 @@ impl qobject::AppProvenance {
 
     fn bundle_path(mut self: Pin<&mut Self>, result: &QString) -> QString {
         let path = std::path::PathBuf::from(result.to_string());
-        match basecraft_ops::records::inspect(&path) {
-            Ok(_) => QString::from(
-                basecraft_ops::records::bundle_for_result(&path)
-                    .to_string_lossy()
-                    .as_ref(),
-            ),
+        let found = crate::chosen_project::chosen()
+            .map_err(basecraft_ops::Error::Invalid)
+            .and_then(|project| {
+                basecraft_ops::records::inspect(&path, project.as_ref())?;
+                Ok(basecraft_ops::records::bundle_for_result(
+                    &path,
+                    project.as_ref(),
+                ))
+            });
+        match found {
+            Ok(bundle) => QString::from(bundle.to_string_lossy().as_ref()),
             Err(error) => {
                 self.as_mut().set_text(QString::default());
                 self.set_message(QString::from(format!("fail: {error}").as_str()));
@@ -295,8 +310,15 @@ impl qobject::AppProvenance {
         let operation = operation.to_string();
         let result = std::path::PathBuf::from(result.to_string());
         let destination = std::path::PathBuf::from(destination.to_string());
+        let project = match crate::chosen_project::chosen() {
+            Ok(project) => project,
+            Err(error) => {
+                self.set_message(QString::from(format!("fail: {error}").as_str()));
+                return;
+            }
+        };
         let label = format!("Records: {operation}");
-        self.start_work(&label, move || run(&operation, &result, &destination));
+        self.start_work(&label, move || run(&operation, &result, &destination, project.as_ref()));
     }
     fn start_work(
         mut self: Pin<&mut Self>,
@@ -414,23 +436,27 @@ mod tests {
             )
             .unwrap();
         session.save(document, None).unwrap();
-        assert!(run("history", &file, root).unwrap().contains("seq.replace"));
-        assert!(run("verify", &file, root).is_ok());
+        assert!(
+            run("history", &file, root, None)
+                .unwrap()
+                .contains("seq.replace")
+        );
+        assert!(run("verify", &file, root, None).is_ok());
         let export = root.join("export");
         std::fs::create_dir_all(export.join("reports")).unwrap();
         let authored = export.join("reports/methods.md");
         std::fs::write(&authored, "My laboratory notes").unwrap();
-        run("methods", &file, &export).unwrap();
+        run("methods", &file, &export, None).unwrap();
         assert_eq!(
             std::fs::read_to_string(authored).unwrap(),
             "My laboratory notes"
         );
         assert!(export.join("reports/methods.generated.md").is_file());
         let package = root.join("package");
-        run("package", &file, &package).unwrap();
+        run("package", &file, &package, None).unwrap();
         assert!(package.join("sequence.fasta").is_file());
-        assert!(run("package", &file, &package).is_err());
+        assert!(run("package", &file, &package, None).is_err());
         std::fs::write(&file, ">example\nAAAA\n").unwrap();
-        assert!(run("verify", &file, root).is_err());
+        assert!(run("verify", &file, root, None).is_err());
     }
 }

@@ -47,11 +47,11 @@ def orfs_on(seq: np.ndarray, min_codons: int):
 
 
 @plugin.operation("find_orfs")
-def find_orfs(snapshot, params):
+def find_orfs(params, context):
     """ORFs of at least `min_codons` codons on both strands, optionally only
     within `start`..`end` (0-based, end exclusive)."""
     min_codons = int(params.get("min_codons", 100))
-    full = snapshot.residues
+    full = context.snapshot.residues
     lo = max(0, int(params.get("start", 0)))
     hi = min(len(full), int(params.get("end", len(full))))
     seq = full[lo:hi]
@@ -66,18 +66,12 @@ def find_orfs(snapshot, params):
 
 
 @plugin.operation("selftest")
-def selftest(snapshot, params):
+def selftest(params, context):
     """Reports whether the residues arrived without a copy."""
-    seq = snapshot.residues
+    seq = context.snapshot.residues
     zero_copy = not seq.flags.owndata and not seq.flags.writeable
     return {"ops": [], "message": f"length={len(seq)} zero_copy={zero_copy}"}
 
 
-@plugin.operation("noop")
-def noop(snapshot, params):
-    return []
-
-
 if __name__ == "__main__":
-    plugin.contract()
     plugin.run()

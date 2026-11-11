@@ -34,7 +34,8 @@ impl Lifecycle {
                 .descriptor
                 .host
                 .as_ref()
-                .and_then(|host| host.lifecycle)
+                .and_then(|host| host.remote.as_ref())
+                .map(|remote| remote.lifecycle)
             {
                 Some(LifecyclePolicy::ExternalSubmission) => Self::ExternalSubmission,
                 Some(LifecyclePolicy::RetainedReceipt) => Self::RetainedReceipt,
@@ -85,8 +86,8 @@ impl Lifecycle {
         }
         let mut diagnostics = basecraft_ops::records::verify_ancestors(run)?;
         if run.join("manifest.json").is_file() {
-            diagnostics.extend(basecraft_ops::records::verify(receipt)?);
-            let publication = basecraft_ops::records::inspect(receipt)?;
+            diagnostics.extend(basecraft_ops::records::verify(receipt, None)?);
+            let publication = basecraft_ops::records::inspect(receipt, None)?;
             let hash = basecraft_io::hash_file(receipt)?;
             if !publication.outputs.iter().any(|output| output.hash == hash) {
                 return Err(Error::Protocol(
@@ -196,7 +197,6 @@ impl Lifecycle {
             || data["database"] != plan["database"]
             || data["submitted_residues"] != plan["submitted_residues"]
             || !result.ops.is_empty()
-            || !result.outputs.is_empty()
             || result.artifacts.len() != 1
             || result.artifacts[0].role != "receipt"
             || result.artifacts[0].path != "."
@@ -267,7 +267,7 @@ mod tests {
             op.descriptor
                 .host
                 .as_ref()
-                .is_some_and(|host| host.lifecycle.is_some())
+                .is_some_and(|host| host.remote.is_some())
         }) {
             let expected = Lifecycle::for_operation(original).unwrap();
             assert_ne!(expected, Lifecycle::Ordinary);
@@ -275,7 +275,7 @@ mod tests {
             renamed.id = "example.renamed/operation@1".into();
             assert_eq!(Lifecycle::for_operation(&renamed).unwrap(), expected);
             let mut undeclared = original.clone();
-            undeclared.descriptor.host.as_mut().unwrap().lifecycle = None;
+            undeclared.descriptor.host.as_mut().unwrap().remote = None;
             assert_eq!(
                 Lifecycle::for_operation(&undeclared).unwrap(),
                 Lifecycle::Ordinary

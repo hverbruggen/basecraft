@@ -15,7 +15,7 @@ pub fn retain(root: &Path, request: &Value, outcome: &mut Value) {
         let source = root.join(request["inputs"][role][0]["path"].as_str().unwrap());
         let hash = basecraft_io::hash_file(&source).unwrap();
         let ledger =
-            records::reference_input_with_dependencies(&anchor, &source, &hash, &[], "test")
+            records::reference_input_with_dependencies(&anchor, &source, &hash, &[], "test", None)
                 .unwrap();
         let record = records::read_input(ledger.directory()).unwrap();
         upstream.push(json!({"bundle":records::relative(run.directory(),ledger.directory()).unwrap(), "id":ledger.id(),"hash":basecraft_io::hash_file(&ledger.artifact("manifest.json").unwrap()).unwrap()}));
@@ -47,8 +47,7 @@ pub fn retain(root: &Path, request: &Value, outcome: &mut Value) {
     outcome["pins"] =
         json!({"package_digest":"test-package", "descriptor_digest":"test-descriptor"});
     outcome["effective_parameters"] = json!({});
-    let context = json!({"schema":1,"operation":request["operation"],"run_id":run.id(),"inputs":{},"outputs":{},"cpu_threads":1,"cancel_file":"cancel","progress_file":"progress","input_evidence":evidence});
-    records::write_json(&run.artifact("execution.json").unwrap(), &json!({"schema":1,"operation":request["operation"],"package_digest":"test-package","descriptor_digest":"test-descriptor","effective_parameters":{},"context":context})).unwrap();
+    records::write_json(&run.artifact("execution.json").unwrap(), &json!({"schema":2,"operation":request["operation"],"package_version":"1","package_digest":"test-package","descriptor_digest":"test-descriptor","runtime":null,"initiator":"test","executor":"test","process_instance":"test","inputs":evidence,"effective_parameters":{},"cpu_threads":1,"stdout":"","stderr":"","tool":null,"execution":null})).unwrap();
     records::write_json(&run.artifact("request.json").unwrap(), request).unwrap();
     records::write_json(&run.artifact("runtime.json").unwrap(), outcome).unwrap();
     let publication = serde_json::from_value(json!({"schema_version":1,"id":run.id(),"session":"test","parents":[],"parent_hashes":{},"created":"2026-10-28T00:00:00Z","origin":"test","inputs":inputs,"outputs":outputs,"events":[],"effective_edits":[],"completeness":{"ancestry_known":false,"input_bytes_available":true,"execution_specification_available":true,"replay_verified":false},"report_template_version":2})).unwrap();

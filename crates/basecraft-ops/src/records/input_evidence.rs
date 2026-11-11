@@ -22,8 +22,16 @@ pub fn reference_input_with_dependencies(
     hash: &str,
     dependencies: &[PathBuf],
     origin: &str,
+    project: Option<&crate::project::Project>,
 ) -> Result<ArtifactRun> {
-    Mutation::begin()?.reference_input_with_dependencies(anchor, source, hash, dependencies, origin)
+    Mutation::begin()?.reference_input_with_dependencies(
+        anchor,
+        source,
+        hash,
+        dependencies,
+        origin,
+        project,
+    )
 }
 
 /// One cooperating evidence mutation boundary. Keep this value alive through
@@ -82,8 +90,9 @@ impl Mutation {
         hash: &str,
         dependencies: &[PathBuf],
         origin: &str,
+        project: Option<&crate::project::Project>,
     ) -> Result<ArtifactRun> {
-        reference_input_locked(anchor, source, hash, dependencies, origin, None)
+        reference_input_locked(anchor, source, hash, dependencies, origin, None, project)
     }
 }
 
@@ -94,6 +103,7 @@ pub(crate) fn reference_input_locked(
     dependencies: &[PathBuf],
     origin: &str,
     captured_stamp: Option<&FileStamp>,
+    project: Option<&crate::project::Project>,
 ) -> Result<ArtifactRun> {
     use basecraft_protocol::provenance::{
         ArtifactRevision, Completeness, InputReference, Publication,
@@ -134,7 +144,8 @@ pub(crate) fn reference_input_locked(
         origin_run: None,
         extra: BTreeMap::new(),
     };
-    let source_bundle = crate::records::provenance::bundle_for_result(&source);
+    // A referenced source inside the project keeps its history there.
+    let source_bundle = crate::records::provenance::bundle_for_result(&source, project);
     let mut upstream = Vec::new();
     for dependency in dependencies.iter().chain(std::iter::once(&source_bundle)) {
         let manifest = dependency.join("manifest.json");
@@ -722,7 +733,7 @@ pub(crate) fn lock_save(
         selection(target)?
     };
     locks.reserve(selected.iter().cloned(), changes_stores)?;
-    let check = inspect_in(&canonical, &selected, inspection)?;
+    let check = inspect(&canonical, &selected, inspection)?;
     Ok(SaveLock {
         _locks: locks,
         check: Some(check),
@@ -896,7 +907,7 @@ pub fn check(target: &Path) -> Result<EvidenceCheck> {
     };
     let (canonical, selected, inspection) = selection(target)?;
     drop(catalogue);
-    inspect_in(&canonical, &selected, inspection)
+    inspect(&canonical, &selected, inspection)
 }
 
 fn selection(target: &Path) -> Result<(PathBuf, Vec<PathBuf>, Inspection)> {
@@ -1056,14 +1067,10 @@ pub fn conflicts_in(target: &Path, stores: &[PathBuf]) -> Result<EvidenceConflic
 }
 
 pub fn check_in(target: &Path, stores: &[PathBuf]) -> Result<EvidenceCheck> {
-    inspect_in(target, stores, Inspection::default())
+    inspect(target, stores, Inspection::default())
 }
 
-fn inspect_in(
-    target: &Path,
-    stores: &[PathBuf],
-    mut inspection: Inspection,
-) -> Result<EvidenceCheck> {
+fn inspect(target: &Path, stores: &[PathBuf], mut inspection: Inspection) -> Result<EvidenceCheck> {
     let mut scan = StoreScan::default();
     for store in stores {
         scan_store(store, target, &mut scan, &mut inspection);
@@ -1606,8 +1613,12 @@ pub fn relink(bundle: &Path, original: &Path) -> Result<()> {
 }
 
 /// Explicit portable export materializes referenced dependencies; ordinary analysis does not.
-pub fn package(result: &Path, destination: &Path) -> Result<()> {
-    let issues = crate::records::provenance::verify(result)?;
+pub fn package(
+    result: &Path,
+    destination: &Path,
+    project: Option<&crate::project::Project>,
+) -> Result<()> {
+    let issues = crate::records::provenance::verify(result, project)?;
     if !issues.is_empty() {
         return Err(invalid(issues.join("; ")));
     }
@@ -1622,8 +1633,8 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
     let staging = tempfile::Builder::new()
         .prefix(".basecraft-package-")
         .tempdir_in(parent)?;
-    let bundle = crate::records::provenance::bundle_for_result(result);
-    let mut publication = crate::records::provenance::inspect(result)?;
+    let bundle = crate::records::provenance::bundle_for_result(result, project);
+    let mut publication = crate::records::provenance::inspect(result, project)?;
     if let Some(index) = publication
         .outputs
         .iter()
@@ -1775,14 +1786,10 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
             }
         }
         let sidecar = crate::files::tree_sidecar(&copied);
-        basecraft_io::write_atomic(&sidecar, |w| {
-            crate::files::write_delimitation_sidecar_in(
-                &work,
-                &publication.outputs[0].hash,
-                &final_folder,
-                w,
-            )
-        })?;
+        let target = final_folder.join(copied.file_name().unwrap_or_default());
+        let companion =
+            crate::files::delimitation_companion(&work, &publication.outputs[0].hash, &target)?;
+        basecraft_io::write_atomic(&sidecar, |w| companion.write(w))?;
         let side_hash = basecraft_io::hash_file(&sidecar)?;
         if let Some(artifact) = publication
             .outputs
@@ -1901,7 +1908,7 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
     if authored.is_file() {
         copy(&authored, &target_bundle.join("reports/methods.md"))?;
     }
-    let issues = crate::records::provenance::verify(&copied)?;
+    let issues = crate::records::provenance::verify(&copied, None)?;
     if !issues.is_empty() {
         return Err(crate::Error::Damaged {
             path: copied.clone(),

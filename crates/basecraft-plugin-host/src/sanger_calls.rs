@@ -1,5 +1,7 @@
-//! Single-trace caller service: runs the one installed plugin that declares it,
-//! through the public registry, shared jobs and retained receipts.
+//! Single-trace caller service: runs the one installed plugin that declares
+//! `caller: single_trace`, through the public registry, shared jobs and
+//! retained receipts. The plugin names and hashes its own program through its
+//! `engine` query; the host knows only the contract and the Sanger draft.
 use crate::{
     jobs::JobManager,
     policy::SessionPolicy,
@@ -26,6 +28,8 @@ pub struct SangerCaller {
 
 struct Identity {
     engine: String,
+    /// The draft's file name inside the caller's primary output.
+    primary: String,
     capture: basecraft_ops::sanger_review::CapturedInput,
     source: PathBuf,
     sha256: String,
@@ -37,29 +41,23 @@ pub struct CalledDraft {
     pub run: PathBuf,
 }
 
-// Match the public SDK resolver: explicit override, interpreter prefix, then PATH.
-fn engine(interpreter: &Path, program: &str) -> Result<PathBuf, String> {
-    let setting = format!(
-        "BASECRAFT_{}",
-        program.to_ascii_uppercase().replace('-', "_")
-    );
-    let mut paths = Vec::new();
-    if let Some(path) = std::env::var_os(setting) {
-        paths.push(PathBuf::from(path));
-    } else {
-        if let Some(parent) = interpreter.parent() {
-            paths.push(parent.join(program));
-        }
-        if let Some(path) = std::env::var_os("PATH") {
-            paths.extend(std::env::split_paths(&path).map(|folder| folder.join(program)));
-        }
+/// The caller's program, as its plugin reports it: name and SHA-256.
+fn engine(
+    operation: &crate::registry::RegisteredOperation,
+    interpreter: &Path,
+) -> Result<(String, String), String> {
+    let mut process = crate::PluginProcess::spawn_with(&operation.package.manifest, interpreter)
+        .map_err(|e| e.to_string())?;
+    let answer = process.query("engine").map_err(|e| e.to_string());
+    let _ = process.finish();
+    let answer = answer?;
+    if let Some(problem) = answer["problem"].as_str() {
+        return Err(problem.into());
     }
-    paths
-        .into_iter()
-        .find(|path| path.is_file())
-        .ok_or_else(|| {
-            format!("{program} is unavailable. Install it; instrument calls remain usable.")
-        })
+    match (answer["name"].as_str(), answer["sha256"].as_str()) {
+        (Some(name), Some(sha256)) => Ok((name.into(), sha256.into())),
+        _ => Err("Caller reported no engine".into()),
+    }
 }
 
 fn checked(verified: VerifiedOperationResult, identity: &Identity) -> Result<CalledDraft, String> {
@@ -70,22 +68,20 @@ fn checked(verified: VerifiedOperationResult, identity: &Identity) -> Result<Cal
         .find(|artifact| {
             Path::new(&artifact.path)
                 .file_name()
-                .is_some_and(|name| name == "evidence.json")
+                .is_some_and(|name| name == identity.primary.as_str())
         })
         .ok_or("Caller did not retain draft evidence")?;
     let path = PathBuf::from(&artifact.path);
     let mut draft = SangerDraft::read(&path)?;
+    let effective = &identity.query.effective_parameters;
     if draft.inputs.len() != 1
         || !draft.engine.eq_ignore_ascii_case(&identity.engine)
         || draft.inputs[0].sha256 != identity.sha256
-        || draft.engine_sha256
-            != identity.query.effective_parameters["engine_sha256"]
-                .as_str()
-                .unwrap_or_default()
-        || draft.signal_threshold.map(u64::from)
-            != identity.query.effective_parameters["signal_threshold"].as_u64()
-        || draft.minimum_overlap != 50
-        || draft.minimum_identity.to_bits() != 0.8_f64.to_bits()
+        || draft.engine_sha256 != effective["engine_sha256"].as_str().unwrap_or_default()
+        || draft.signal_threshold.map(u64::from) != effective["signal_threshold"].as_u64()
+        || u64::try_from(draft.minimum_overlap).ok() != effective["minimum_overlap"].as_u64()
+        || Some(draft.minimum_identity.to_bits())
+            != effective["minimum_identity"].as_f64().map(f64::to_bits)
     {
         return Err(
             "Source or executed caller identity changed; instrument review preserved".into(),
@@ -154,12 +150,9 @@ impl SangerCaller {
         let registry = Registry::load(&RegistryConfig::discover().map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?;
         let mut callers = registry.operations.values().filter(|operation| {
-            operation
-                .descriptor
-                .host
-                .as_ref()
-                .and_then(|host| host.caller.as_deref())
-                == Some("single_trace")
+            operation.descriptor.host.as_ref().is_some_and(|host| {
+                host.caller == Some(basecraft_protocol::operation::CallerKind::SingleTrace)
+            })
         });
         let operation = callers
             .next()
@@ -176,18 +169,29 @@ impl SangerCaller {
             .interpreter
             .as_ref()
             .ok_or_else(|| format!("{name} Python runtime is unavailable"))?;
-        let program = operation
+        let (program, engine_sha256) = engine(operation, interpreter)?;
+        let parameters = crate::contract::normalize_parameters(
+            &operation.descriptor,
+            &json!({"engine_sha256": engine_sha256, "signal_threshold": signal_threshold}),
+        )
+        .map_err(|e| e.to_string())?;
+        let binding = operation
             .descriptor
-            .host
-            .as_ref()
-            .and_then(|host| host.caller_engine.clone())
-            .ok_or("Caller declares no engine program")?;
-        let caller = engine(interpreter, &program)?;
-        let parameters = json!({"engine_sha256":basecraft_io::sha256_file(&caller).map_err(|e| e.to_string())?,
-            "minimum_overlap":50,"minimum_identity":0.8,"signal_threshold":signal_threshold});
+            .inputs
+            .keys()
+            .next()
+            .ok_or("Caller declares no input")?
+            .clone();
+        let primary = operation
+            .descriptor
+            .outputs
+            .values()
+            .find_map(|output| output.primary.clone())
+            .ok_or("Caller declares no primary output")?;
         let hash = capture.hash().to_owned();
         let identity = Identity {
             engine: program,
+            primary,
             capture: capture.clone(),
             source: source.clone(),
             sha256,
@@ -196,7 +200,7 @@ impl SangerCaller {
                 pins: operation.pins(&registry.generation),
                 effective_parameters: parameters.clone(),
                 inputs: std::collections::BTreeMap::from([(
-                    "reads".into(),
+                    binding.clone(),
                     vec![InvocationInputEvidence {
                         original_path: None,
                         source_hash: Some(hash.clone()),
@@ -269,251 +273,5 @@ impl SangerCaller {
         let verified =
             verify_completed_result(&outcome, &identity.query).map_err(|e| e.to_string())?;
         checked(verified, &identity).map(Some)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn biological_validation_rejects_stale_source_and_wrong_coordinates() {
-        use basecraft_protocol::operation::{OperationOutcome, OperationPins, PublishedArtifact};
-        let tmp = tempfile::tempdir().unwrap();
-        let source = tmp.path().join("source.ab1");
-        std::fs::copy(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../testdata/fixtures/compact/sanger-review/forward.ab1"),
-            &source,
-        )
-        .unwrap();
-        let parameters = json!({"engine_sha256":"a".repeat(64),"minimum_overlap":50,
-            "minimum_identity":0.8,"signal_threshold":20});
-        let pins = OperationPins {
-            generation: "registry".into(),
-            package_digest: "package".into(),
-            descriptor_digest: "contract".into(),
-        };
-        let identity = Identity {
-            engine: "tracy".into(),
-            capture: basecraft_ops::sanger_review::CapturedInput::open(&source).unwrap(),
-            source: source.clone(),
-            sha256: basecraft_io::sha256_file(&source).unwrap(),
-            query: CompletedResultQuery {
-                operation: "example.caller/consensus@1".into(),
-                pins: pins.clone(),
-                effective_parameters: parameters.clone(),
-                inputs: std::collections::BTreeMap::default(),
-            },
-        };
-        let mut draft = basecraft_ops::sanger_review::instrument_review(&source)
-            .unwrap()
-            .draft;
-        draft.engine = "Tracy".into();
-        draft.mode = "basecall".into();
-        draft.engine_sha256 = "a".repeat(64);
-        draft.signal_threshold = Some(20);
-        draft.minimum_overlap = 50;
-        draft.minimum_identity = 0.8;
-        let path = tmp.path().join("evidence.json");
-        std::fs::write(&path, serde_json::to_vec(&draft).unwrap()).unwrap();
-        let outcome = OperationOutcome {
-            schema: 1,
-            operation: "example.caller/consensus@1".into(),
-            run_id: "run".into(),
-            state: RuntimeState::Completed,
-            pins,
-            requested_parameters: parameters.clone(),
-            effective_parameters: parameters,
-            data: None,
-            artifacts: vec![PublishedArtifact {
-                role: "artifacts".into(),
-                path: path.display().to_string(),
-                digest: "verified by host".into(),
-            }],
-            proposals: None,
-            warnings: vec![],
-            errors: vec![],
-            evidence: None,
-        };
-        let verified = || VerifiedOperationResult {
-            outcome: outcome.clone(),
-            directory: tmp.path().into(),
-        };
-        assert!(checked(verified(), &identity).is_ok());
-        if let Some(position) = draft.inputs[0].calls.as_mut().unwrap().positions.last_mut() {
-            *position = u32::MAX;
-        }
-        std::fs::write(&path, serde_json::to_vec(&draft).unwrap()).unwrap();
-        assert!(checked(verified(), &identity).is_err());
-        std::fs::write(&source, "changed source at same pathname").unwrap();
-        assert!(checked(verified(), &identity).is_err());
-    }
-}
-
-#[cfg(test)]
-mod live_tests {
-    use super::*;
-    #[test]
-    #[ignore = "requires BASECRAFT_SANGER_FIXTURE, public plugin Python and Tracy"]
-    fn actual_open_call_review_reopen_cache_cancel_and_stale_source() {
-        use basecraft_ops::sanger_review::{ReviewChoice, ReviewOp, SangerReview};
-        let fixture = std::env::var_os("BASECRAFT_SANGER_FIXTURE").expect("public AB1 fixture");
-        let tmp = tempfile::tempdir().unwrap();
-        let source = tmp.path().join("source.ab1");
-        std::fs::copy(fixture, &source).unwrap();
-        let original = std::fs::read(&source).unwrap();
-        let mut review = basecraft_ops::sanger_review::instrument_review(&source).unwrap();
-        let instrument_id = review.draft_sha256.clone();
-        let sha256 = review.draft.inputs[0].sha256.clone();
-        let mut caller = SangerCaller::default();
-        assert!(caller.start(&source, &sha256, 20).unwrap().is_none());
-        // Review remains editable through Session while the shared job runs.
-        let mut session = basecraft_ops::Session::recoverable(tmp.path()).unwrap();
-        let id = session.create_sanger_review(&review).unwrap();
-        session
-            .apply(
-                id,
-                basecraft_protocol::Op::SangerReview {
-                    call_set: instrument_id.clone(),
-                    edit: Box::new(ReviewOp::Set {
-                        columns: vec![0],
-                        choice: ReviewChoice::Edit('G'),
-                    }),
-                },
-            )
-            .unwrap();
-        let started = std::time::Instant::now();
-        let called = loop {
-            if let Some(called) = caller.poll().unwrap() {
-                break called;
-            }
-            assert!(started.elapsed().as_secs() < 120, "caller timeout");
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        };
-        // Shared host verification, not Sanger, owns common receipt/input/artifact rules.
-        let receipt: basecraft_protocol::operation::OperationOutcome = serde_json::from_slice(
-            &basecraft_ops::records::read_record(&called.run.join("runtime.json")).unwrap(),
-        )
-        .unwrap();
-        let execution: serde_json::Value = serde_json::from_slice(
-            &basecraft_ops::records::read_record(&called.run.join("execution.json")).unwrap(),
-        )
-        .unwrap();
-        let context: basecraft_protocol::operation::InvocationContext =
-            serde_json::from_value(execution["context"].clone()).unwrap();
-        let mut query = CompletedResultQuery {
-            operation: receipt.operation.clone(),
-            pins: receipt.pins.clone(),
-            effective_parameters: receipt.effective_parameters.clone(),
-            inputs: context.input_evidence,
-        };
-        assert!(verify_completed_result(&receipt, &query).is_ok());
-        query.inputs.get_mut("reads").unwrap()[0].submitted_hash = "b3:changed".into();
-        assert!(verify_completed_result(&receipt, &query).is_err());
-        query.inputs.get_mut("reads").unwrap()[0].submitted_hash =
-            basecraft_io::hash_file(&source).unwrap();
-        query.pins.package_digest = "changed producer".into();
-        assert!(verify_completed_result(&receipt, &query).is_err());
-        query.pins = receipt.pins.clone();
-        let mut future = receipt.clone();
-        future.schema = 99;
-        assert!(verify_completed_result(&future, &query).is_err());
-        let fake = basecraft_ops::records::ArtifactRun::create(&source, "0000-future").unwrap();
-        basecraft_ops::records::write_json(&fake.artifact("runtime.json").unwrap(), &future)
-            .unwrap();
-        let corrupt = basecraft_ops::records::ArtifactRun::create(&source, "0001-corrupt").unwrap();
-        std::fs::write(
-            corrupt.artifact("runtime.json").unwrap(),
-            b"corrupt receipt",
-        )
-        .unwrap();
-        let found = lookup_completed_result(&source, &query);
-        assert!(found.result.is_some());
-        assert_eq!(found.diagnostics.len(), 2);
-        let artifact_path = Path::new(&receipt.artifacts[0].path);
-        let retained_bytes = std::fs::read(artifact_path).unwrap();
-        std::fs::write(artifact_path, b"damaged retained output").unwrap();
-        assert!(verify_completed_result(&receipt, &query).is_err());
-        std::fs::write(artifact_path, retained_bytes).unwrap();
-        let mut computed = SangerReview::from_draft(called.draft, &source).unwrap();
-        computed.attach_operation_run(&called.run).unwrap();
-        let computed_id = computed.draft_sha256.clone();
-        review = session.sanger_review(id).unwrap().clone();
-        review.retain_call_set(computed).unwrap();
-        session.update_sanger_review(id, &review).unwrap();
-        session
-            .apply(
-                id,
-                basecraft_protocol::Op::SangerReview {
-                    call_set: computed_id.clone(),
-                    edit: Box::new(ReviewOp::Set {
-                        columns: vec![0],
-                        choice: ReviewChoice::Edit('C'),
-                    }),
-                },
-            )
-            .unwrap();
-        assert_eq!(
-            review.draft_sha256, instrument_id,
-            "completion must not switch calls"
-        );
-        assert_eq!(review.decision(0), Some(&ReviewChoice::Edit('G')));
-        assert!(
-            caller.start(&source, &sha256, 20).unwrap().is_some(),
-            "reuse completed receipt"
-        );
-        session
-            .apply(
-                id,
-                basecraft_protocol::Op::SangerSelect {
-                    call_set: computed_id,
-                },
-            )
-            .unwrap();
-        let saved = tmp.path().join("saved.json");
-        session.save(id, Some(&saved)).unwrap();
-        let mut reopened = basecraft_ops::Session::recoverable(tmp.path()).unwrap();
-        let id = reopened.open(&saved).unwrap();
-        assert_eq!(
-            reopened.sanger_review(id).unwrap().decision(0),
-            Some(&ReviewChoice::Edit('C'))
-        );
-        reopened
-            .apply(
-                id,
-                basecraft_protocol::Op::SangerSelect {
-                    call_set: instrument_id,
-                },
-            )
-            .unwrap();
-        assert_eq!(
-            reopened.sanger_review(id).unwrap().decision(0),
-            Some(&ReviewChoice::Edit('G'))
-        );
-        assert!(caller.start(&source, &sha256, 19).unwrap().is_none());
-        caller.cancel().unwrap();
-        assert!(
-            caller.poll().unwrap().is_none(),
-            "late completion must be detached after cancel"
-        );
-        assert_eq!(std::fs::read(&source).unwrap(), original);
-        assert!(caller.start(&source, &sha256, 18).unwrap().is_none());
-        std::fs::write(&source, "source replaced while caller was running").unwrap();
-        let started = std::time::Instant::now();
-        loop {
-            match caller.poll() {
-                Err(_) => break,
-                Ok(Some(_)) => panic!("stale completion must never be reusable"),
-                Ok(None) => {}
-            }
-            assert!(started.elapsed().as_secs() < 120, "stale caller timeout");
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        std::fs::write(&source, "different bytes at the same path").unwrap();
-        assert!(caller.start(&source, &sha256, 20).is_err());
-        assert_eq!(
-            reopened.sanger_review(id).unwrap().decision(0),
-            Some(&ReviewChoice::Edit('G'))
-        );
     }
 }

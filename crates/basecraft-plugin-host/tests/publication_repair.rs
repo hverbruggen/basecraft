@@ -14,10 +14,10 @@ import time
 from pathlib import Path
 from basecraft.plugin import Plugin
 plugin = Plugin("basecraft.fasttree", "test")
-@plugin.context_operation("tree")
-def tree(_snapshot, _parameters, context):
+@plugin.operation("tree")
+def tree(_parameters, context):
     time.sleep(0.3)
-    root = Path(context["outputs"]["artifacts"])
+    root = Path(context.outputs["artifacts"])
     (root / "tree.nwk").write_text("((a:0.1,b:0.2)0.9:0.1,c:0.3);\n")
     return {"artifacts":[{"role":"artifacts","path":"tree.nwk"}]}
 plugin.run()
@@ -64,7 +64,10 @@ fn member_metadata_repair_requires_owned_bytes_and_retries_companions() {
             common::assert_completed(&repaired);
             assert!(fault.is_file());
             assert!(basecraft_ops::records::sidecar(&output).is_file());
-            assert_eq!(records::verify(&output).unwrap(), Vec::<String>::new());
+            assert_eq!(
+                records::verify(&output, None).unwrap(),
+                Vec::<String>::new()
+            );
         }
     }
 }
@@ -112,14 +115,17 @@ fn workspace_inventory_survives_repair_and_rejects_changed_export() {
             assert_eq!(repaired.state, RuntimeState::Finalizing);
             let completed = common::wait_in(&jobs, &mut session, &accepted.run_id);
             common::assert_completed(&completed);
-            let publication = records::inspect(&output).unwrap();
+            let publication = records::inspect(&output, None).unwrap();
             assert!(
                 publication
                     .outputs
                     .iter()
                     .any(|artifact| artifact.logical_name == "species.spart")
             );
-            assert_eq!(records::verify(&output).unwrap(), Vec::<String>::new());
+            assert_eq!(
+                records::verify(&output, None).unwrap(),
+                Vec::<String>::new()
+            );
         }
     }
 }
@@ -224,13 +230,13 @@ fn assert_reopened_completion(workspace: &std::path::Path, run_id: &str, hypothe
         1
     );
     let portable = workspace.parent().unwrap().join("portable-completion");
-    records::package(workspace, &portable).unwrap();
+    records::package(workspace, &portable, None).unwrap();
     let portable_result = portable.join(workspace.file_name().unwrap());
     assert_eq!(
-        records::verify(&portable_result).unwrap(),
+        records::verify(&portable_result, None).unwrap(),
         Vec::<String>::new()
     );
-    let publication = records::inspect(&portable_result).unwrap();
+    let publication = records::inspect(&portable_result, None).unwrap();
     assert_eq!(
         publication
             .events
@@ -242,7 +248,7 @@ fn assert_reopened_completion(workspace: &std::path::Path, run_id: &str, hypothe
         1
     );
     let portable_record =
-        basecraft_ops::records::DocumentRecord::from_file(&portable_result).unwrap();
+        basecraft_ops::records::DocumentRecord::from_file(&portable_result, None).unwrap();
     assert!(
         portable_record
             .report()
@@ -362,7 +368,7 @@ fn terminal_report_publication_failure_repairs_without_duplicate_completion_or_d
     let workspace = root.path().join("species.spart");
     let before = std::fs::read(&workspace).unwrap();
     let metadata = std::fs::metadata(&workspace).unwrap();
-    let bundle = records::bundle_for_result(&workspace);
+    let bundle = records::bundle_for_result(&workspace, None);
     let authored = bundle.join("methods.md");
     std::fs::write(&authored, "User-authored Methods.\n").unwrap();
     let fault = bundle.join("reports/history.md");

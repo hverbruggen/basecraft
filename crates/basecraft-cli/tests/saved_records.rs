@@ -119,7 +119,7 @@ fn reviews(project: &Path) -> (PathBuf, PathBuf) {
 
 /// The report the GUI shows for a saved review it opened.
 fn gui_report(path: &Path) -> Value {
-    serde_json::to_value(basecraft_ops::records::DocumentRecord::saved_report(path).unwrap())
+    serde_json::to_value(basecraft_ops::records::DocumentRecord::saved_report(path, None).unwrap())
         .unwrap()
 }
 
@@ -328,8 +328,9 @@ fn trees(project: &Path) -> (PathBuf, PathBuf) {
 }
 
 fn import_event(target: &Path) -> Value {
-    let publication = basecraft_ops::records::inspect(target).unwrap();
-    let params = publication
+    let project = basecraft_ops::project::Project::new(target.parent().unwrap()).unwrap();
+    let publication = basecraft_ops::records::inspect(target, Some(&project)).unwrap();
+    publication
         .events
         .iter()
         .find_map(|event| match &event.op {
@@ -337,15 +338,15 @@ fn import_event(target: &Path) -> Value {
                 plugin,
                 operation,
                 params,
+                input_run,
                 ..
             } if plugin == "basecraft.tree" && operation == "import_support" => {
+                assert!(input_run.is_some(), "{params}");
                 Some(params.clone())
             }
             _ => None,
         })
-        .expect("import activity");
-    assert!(params["input_run"]["id"].is_string(), "{params}");
-    params
+        .expect("import activity")
 }
 
 #[test]
@@ -425,8 +426,9 @@ fn support_import_runs_headlessly_with_the_same_reference_evidence() {
     mcp.close();
     let params = import_event(&target);
     assert_eq!(params["sets"], json!(["Bootstrap"]));
+    let chosen = basecraft_ops::project::Project::new(&project).unwrap();
     assert_eq!(
-        basecraft_ops::records::verify(&target).unwrap(),
+        basecraft_ops::records::verify(&target, Some(&chosen)).unwrap(),
         Vec::<String>::new()
     );
 }
@@ -488,11 +490,12 @@ fn sequence_extraction_cli_mcp_and_python_share_source_and_mapping_semantics() {
     readonly.close();
     for name in ["cli.gb", "mcp.gb"] {
         let result = project.join(name);
-        let publication = basecraft_ops::records::inspect(&result).unwrap();
+        let publication = basecraft_ops::records::inspect(&result, None).unwrap();
         assert!(publication.inputs[0].reference.is_some());
-        let input =
-            basecraft_ops::records::read_input(&basecraft_ops::records::bundle_for_result(&result))
-                .unwrap();
+        let input = basecraft_ops::records::read_input(&basecraft_ops::records::bundle_for_result(
+            &result, None,
+        ))
+        .unwrap();
         assert_eq!(
             input.extra["extraction"]["selection"]["params"]["segments"],
             json!([[1, 3], [5, 7]])

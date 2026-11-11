@@ -24,6 +24,8 @@ mod application_test_bridge;
 #[path = "../src/bridge.rs"]
 #[allow(unused_imports)] // harness=false omits the included module's #[test] bodies.
 mod bridge;
+#[path = "../src/chosen_project.rs"]
+mod chosen_project;
 #[path = "../src/command_bridge.rs"]
 mod command_bridge;
 #[path = "controller_appearance/mod.rs"]
@@ -280,12 +282,13 @@ fn linked_taxa_journey(mut app: std::pin::Pin<&mut cxx_qt_lib_extras::QApplicati
             "LINKED_MEMBERS",
             &serde_json::to_string(&group.members).unwrap(),
         );
-    basecraft_ops::files::write_delimitation_sidecar_at(
+    basecraft_ops::files::delimitation_companion(
         &work,
         &basecraft_io::hash_file(&workspace).unwrap(),
         &workspace,
-        &mut std::fs::File::create(basecraft_ops::files::tree_sidecar(&workspace)).unwrap(),
     )
+    .unwrap()
+    .write(&mut std::fs::File::create(basecraft_ops::files::tree_sidecar(&workspace)).unwrap())
     .unwrap();
     app_bridge::barriers::configure(
         folder
@@ -408,7 +411,52 @@ fn linked_taxa_journey(mut app: std::pin::Pin<&mut cxx_qt_lib_extras::QApplicati
     );
 }
 
+/// The real application loads Main.qml offscreen, draws and quits. A QML load
+/// error or a startup hang fails here instead of in someone's hands.
+fn application_starts_offscreen_and_draws_its_window() {
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+    let root = tempfile::tempdir().unwrap();
+    let shot = root.path().join("start.png");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_basecraft-gui"))
+        .arg("--screenshot")
+        .arg(&shot)
+        .env("QT_QPA_PLATFORM", "offscreen")
+        .env("QT_QPA_PLATFORMTHEME", "")
+        .env("QT_QUICK_BACKEND", "software")
+        .env("BASECRAFT_PROFILE_DIR", root.path().join("profile"))
+        .env("BASECRAFT_STATE_DIR", root.path().join("profile/state"))
+        .env("BASECRAFT_CACHE_DIR", root.path().join("profile/cache"))
+        .env("BASECRAFT_SCRATCH_DIR", root.path().join("scratch"))
+        .env("HOME", root.path())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if started.elapsed() > Duration::from_secs(120) {
+            child.kill().unwrap();
+            panic!("the application did not quit within 120 s");
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    let output = child.wait_with_output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(status.success(), "{stderr}");
+    assert!(!stderr.contains("failed to load component"), "{stderr}");
+    assert!(shot.is_file(), "no window was drawn: {stderr}");
+}
+
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("--app-starts") {
+        application_starts_offscreen_and_draws_its_window();
+        println!("The application started offscreen and drew its window");
+        return;
+    }
     // The test must never open desktop windows, including when run manually.
     if std::env::var("QT_QPA_PLATFORM").as_deref() != Ok("offscreen")
         || std::env::var("QT_QPA_PLATFORMTHEME").as_deref() != Ok("")
@@ -659,6 +707,7 @@ fn main() {
                 &basecraft_io::hash_file(&chosen).unwrap(),
                 &[],
                 "consent regression",
+                None,
             )
             .unwrap();
             assert!(
@@ -1224,16 +1273,20 @@ fn main() {
         )),
         &QUrl::default(),
     );
-    // Guards the event loop only; the checks after it may take longer. Saves
-    // on the window thread wait for the disk, which on a busy build host has
-    // taken over a minute, so the limit is generous. On expiry, print each
-    // thread's blocking call.
+    // Turns a scene that never quits into a failure. It guards the event loop
+    // only; the checks after it may take longer. Saves on the window thread
+    // wait for the disk, which on a busy build host has taken over a minute,
+    // so the limit is generous. On expiry, print each thread's blocking call.
     let exited = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let watched = exited.clone();
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_secs(300));
         if !watched.load(std::sync::atomic::Ordering::Acquire) {
-            for task in std::fs::read_dir("/proc/self/task").unwrap().flatten() {
+            for task in std::fs::read_dir("/proc/self/task")
+                .into_iter()
+                .flatten()
+                .flatten()
+            {
                 let read = |name: &str| {
                     std::fs::read_to_string(task.path().join(name)).unwrap_or_default()
                 };

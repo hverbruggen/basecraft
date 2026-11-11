@@ -12,12 +12,11 @@ use std::path::Path;
 #[path = "support/isolated_profile.rs"]
 mod isolated_profile;
 
-fn fixture() -> SangerReview {
-    SangerReview::load(
-        &Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../testdata/fixtures/sanger-review/multi.json"),
-    )
-    .unwrap()
+/// Loads a copy of the fixture review, so the records basecraft writes beside
+/// its traces land in the test's folder and never in the source tree.
+fn fixture(root: &Path) -> SangerReview {
+    let path = sanger_fixture::copy_to(&root.join("fixture"), "multi.json");
+    SangerReview::load(&path).unwrap()
 }
 fn edit(session: &mut Session, id: basecraft_ops::DocId, base: char) {
     let call_set = session.sanger_review(id).unwrap().draft_sha256.clone();
@@ -40,7 +39,7 @@ fn new_review_updates_undo_replay_and_recover() {
         return;
     };
     let mut session = Session::new(&root);
-    let id = session.create_sanger_review(&fixture()).unwrap();
+    let id = session.create_sanger_review(&fixture(&root)).unwrap();
     edit(&mut session, id, 'N');
     let mut next = session.sanger_review(id).unwrap().fork_for_operation();
     let other = next.call_sets()[1].0.to_owned();
@@ -83,7 +82,7 @@ fn invalid_review_edit_preserves_redo_and_retained_call_sets() {
         return;
     };
     let mut session = Session::new(&root);
-    let id = session.create_sanger_review(&fixture()).unwrap();
+    let id = session.create_sanger_review(&fixture(&root)).unwrap();
     edit(&mut session, id, 'N');
     session.undo(id).unwrap();
     let before = session
@@ -217,7 +216,7 @@ fn structural_redo_keeps_decisions_and_shared_ancestry() {
         SangerReview::load(&path).unwrap().decision(0),
         Some(&ReviewChoice::Edit('N'))
     );
-    let first = basecraft_ops::records::inspect(&path).unwrap();
+    let first = basecraft_ops::records::inspect(&path, None).unwrap();
     let first_decision = first
         .events
         .iter()
@@ -229,7 +228,7 @@ fn structural_redo_keeps_decisions_and_shared_ancestry() {
     let id = session.open(&path).unwrap();
     edit(&mut session, id, 'A');
     session.save(id, None).unwrap();
-    let record = basecraft_ops::records::DocumentRecord::from_file(&path).unwrap();
+    let record = basecraft_ops::records::DocumentRecord::from_file(&path, None).unwrap();
     assert!(
         record
             .report()
@@ -264,7 +263,7 @@ fn support_survives_private_history_and_recovery_publication() {
         let folder = root.join(name);
         std::fs::create_dir(&folder).unwrap();
         let mut session = Session::recoverable(&folder).unwrap();
-        let id = session.create_sanger_review(&fixture()).unwrap();
+        let id = session.create_sanger_review(&fixture(&root)).unwrap();
         let target = folder.join("review.json");
         edit(&mut session, id, 'N');
         session.save_new(id, Some(&target)).unwrap();
@@ -275,7 +274,7 @@ fn support_survives_private_history_and_recovery_publication() {
             Some(&ReviewChoice::Edit('A'))
         );
         if policy == ProvenancePolicy::LocalOnly {
-            let record = basecraft_ops::records::DocumentRecord::from_file(&target).unwrap();
+            let record = basecraft_ops::records::DocumentRecord::from_file(&target, None).unwrap();
             assert!(
                 record
                     .events
@@ -304,7 +303,7 @@ fn selections_are_small_and_undo_restores_every_saved_byte() {
         return;
     };
     let mut session = Session::new(&root);
-    let id = session.create_sanger_review(&fixture()).unwrap();
+    let id = session.create_sanger_review(&fixture(&root)).unwrap();
     let selected = session.sanger_review(id).unwrap().draft_sha256.clone();
     let other = session.sanger_review(id).unwrap().call_sets()[1]
         .0
@@ -388,7 +387,7 @@ fn content_recognition_and_unknown_handles_are_checked() {
         return;
     };
     let mut session = Session::new(&root);
-    let id = session.create_sanger_review(&fixture()).unwrap();
+    let id = session.create_sanger_review(&fixture(&root)).unwrap();
     let path = root.join("review.without-json-extension");
     session.save_new(id, Some(&path)).unwrap();
     assert_eq!(
@@ -487,7 +486,7 @@ fn previous_save_as_target_requires_explicit_replacement() {
         return;
     };
     let mut session = Session::new(&root);
-    let id = session.create_sanger_review(&fixture()).unwrap();
+    let id = session.create_sanger_review(&fixture(&root)).unwrap();
     let first = root.join("first.json");
     let second = root.join("second.json");
     session.save_new(id, Some(&first)).unwrap();

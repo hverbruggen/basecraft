@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "operations": [
     {
       "name": "align",
@@ -35,29 +35,18 @@
           "min": 1,
           "max": 1024,
           "visibility": "result",
-          "collection": true
+          "collection": true,
+          "primary": "alignment.afa"
         }
       },
       "effects": {
         "document_write": false,
         "artifact_write": true
       },
-      "cpu_parameters": [
-        "threads"
-      ],
-      "legacy_adapter": {
-        "primary_input": "alignment",
-        "inputs": {
-          "alignment": "input"
-        },
-        "input_arrays": [],
-        "outputs": {
-          "output": {
-            "role": "artifacts",
-            "path": "alignment.afa"
-          }
-        },
-        "allocation": "artifacts"
+      "needs": {
+        "cpu_parameters": [
+          "threads"
+        ]
       }
     },
     {
@@ -101,29 +90,18 @@
           "min": 1,
           "max": 1024,
           "visibility": "result",
-          "collection": true
+          "collection": true,
+          "primary": "placement.json"
         }
       },
       "effects": {
         "document_write": false,
         "artifact_write": true
       },
-      "cpu_parameters": [
-        "threads"
-      ],
-      "legacy_adapter": {
-        "primary_input": "alignment",
-        "inputs": {
-          "alignment": "input"
-        },
-        "input_arrays": [],
-        "outputs": {
-          "output": {
-            "role": "artifacts",
-            "path": "placement.json"
-          }
-        },
-        "allocation": "artifacts"
+      "needs": {
+        "cpu_parameters": [
+          "threads"
+        ]
       }
     },
     {
@@ -190,29 +168,18 @@
           "min": 1,
           "max": 1024,
           "visibility": "result",
-          "collection": true
+          "collection": true,
+          "primary": "addition.json"
         }
       },
       "effects": {
         "document_write": false,
         "artifact_write": true
       },
-      "cpu_parameters": [
-        "threads"
-      ],
-      "legacy_adapter": {
-        "primary_input": "alignment",
-        "inputs": {
-          "alignment": "input"
-        },
-        "input_arrays": [],
-        "outputs": {
-          "output": {
-            "role": "artifacts",
-            "path": "addition.json"
-          }
-        },
-        "allocation": "artifacts"
+      "needs": {
+        "cpu_parameters": [
+          "threads"
+        ]
       }
     }
   ]

@@ -59,14 +59,14 @@ def load(path):
 
 
 def check_cancel(context):
-    if Path(context["cancel_file"]).exists():
+    if Path(context.cancel_file).exists():
         raise Cancelled()
 
 
 def stage(context, text):
     check_cancel(context)
     # Same line-oriented stage file used by the shared task UI.
-    Path(context["progress_file"]).write_text(text + "\n", encoding="utf-8")
+    Path(context.progress_file).write_text(text + "\n", encoding="utf-8")
 
 
 def digest_file(path, context):
@@ -95,8 +95,8 @@ def valid_name(name):
 
 
 def prepare(context):
-    paths = context["inputs"]["files"]
-    evidence = context["input_evidence"]["files"]
+    paths = context.inputs["files"]
+    evidence = context.evidence["files"]
     if not 1 <= len(paths) <= 100 or len(evidence) != len(paths):
         raise ValueError("Select between 1 and 100 files")
     files = []
@@ -110,7 +110,7 @@ def prepare(context):
         raise ValueError("Selected files exceed Zenodo's 50 GB record limit")
     plan = {"schema": 1, "selection": selection_id(files), "files": files,
             "total_bytes": sum(file["size"] for file in files)}
-    save(context["outputs"]["receipt"], plan)
+    save(context.outputs["receipt"], plan)
     return result(plan)
 
 
@@ -194,8 +194,8 @@ def upload(parameters, context, transport=request, token=None):
     token = os.environ.get("BASECRAFT_ZENODO_TOKEN", "") if token is None else token
     if not token or len(token) > 8192 or any(c in token for c in "\r\n\0"):
         raise ValueError("Enter a runtime Zenodo access token (not saved)")
-    plan = load(context["inputs"]["selection"][0])
-    paths = context["inputs"]["files"]
+    plan = load(context.inputs["selection"][0])
+    paths = context.inputs["files"]
     if (plan.get("schema") != 1 or not 1 <= len(plan["files"]) <= 100
             or len(paths) != len(plan["files"]) or selection_id(plan["files"]) != plan["selection"]):
         raise ValueError("Selection preview is invalid; prepare the files again")
@@ -209,7 +209,7 @@ def upload(parameters, context, transport=request, token=None):
                "selection": plan["selection"], "metadata": meta, "draft_id": None, "url": "",
                "files": [{k: f[k] for k in ("name", "size", "sha256", "md5")} for f in plan["files"]],
                "uploaded": [], "message": "No request sent"}
-    previous = context["inputs"].get("resume", [])
+    previous = context.inputs.get("resume", [])
     if previous:
         saved = load(previous[0])
         # Only a definitive no-side-effect rejection can accept corrected
@@ -225,7 +225,7 @@ def upload(parameters, context, transport=request, token=None):
             receipt["url"] = f"{origin}/deposit/{identifier}"
         elif identifier is not None or saved.get("status") != "not_sent":
             raise ValueError("Creation status unknown: inspect your Zenodo uploads; do not create another draft automatically")
-    output = context["outputs"]["receipt"]
+    output = context.outputs["receipt"]
     save(output, receipt)
     try:
         check_cancel(context)
@@ -302,13 +302,13 @@ def upload(parameters, context, transport=request, token=None):
     return result(receipt)
 
 
-@plugin.context_operation("prepare")
-def prepare_operation(_snapshot, _parameters, context):
+@plugin.operation("prepare")
+def prepare_operation(_parameters, context):
     return prepare(context)
 
 
-@plugin.context_operation("draft")
-def draft_operation(_snapshot, parameters, context):
+@plugin.operation("draft")
+def draft_operation(parameters, context):
     return upload(parameters, context)
 
 

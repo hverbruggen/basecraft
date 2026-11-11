@@ -277,7 +277,8 @@ fn bound_tree_verifies_owned_snapshot_after_main_mutation_or_removal() {
             let expected = files::load_tree(&path).unwrap();
             if metadata {
                 let mut bytes = Vec::new();
-                files::write_tree_sidecar_at(&expected.doc, &hash_bytes(original), &mut bytes)
+                files::tree_companion(&expected.doc, &hash_bytes(original))
+                    .write(&mut bytes)
                     .unwrap();
                 std::fs::write(run.artifact("bound.nwk.basecraft.json").unwrap(), bytes).unwrap();
             }
@@ -407,16 +408,17 @@ fn bound_tree_snapshot_verification_keeps_binding_run_namespace_and_metadata_gua
             "metadata-version" | "metadata-exchange" | "metadata-tree" | "metadata-legacy" => {
                 let opened = files::load_tree(&path).unwrap();
                 let mut bytes = Vec::new();
-                files::write_tree_sidecar_at(&opened.doc, &hash_bytes(original), &mut bytes)
+                files::tree_companion(&opened.doc, &hash_bytes(original))
+                    .write(&mut bytes)
                     .unwrap();
                 let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
                 match fault {
-                    "metadata-version" => value["schema_version"] = 2.into(),
-                    "metadata-legacy" => value["schema_version"] = 0.into(),
+                    "metadata-version" => value["version"] = 2.into(),
+                    "metadata-legacy" => value["version"] = 0.into(),
                     "metadata-exchange" => {
                         value["exchange_hash"] = hash_bytes(b"other bytes").into();
                     }
-                    _ => value["tree_hash"] = hash_bytes(b"other tree").into(),
+                    _ => value["tree"]["tree_hash"] = hash_bytes(b"other tree").into(),
                 }
                 std::fs::write(
                     run.artifact("bound.nwk.basecraft.json").unwrap(),
@@ -510,10 +512,9 @@ fn captured_companion_refusals_preserve_baseline_undo_and_journal() {
 }
 
 #[test]
-fn captured_multirecord_writer_and_retained_replay_inputs_match_legacy() {
+fn captured_multirecord_writer_and_replay_inputs_match_legacy() {
     crate::isolated_profile::isolate!();
-    if !isolated_capture_test("captured_multirecord_writer_and_retained_replay_inputs_match_legacy")
-    {
+    if !isolated_capture_test("captured_multirecord_writer_and_replay_inputs_match_legacy") {
         return;
     }
     let dir = tempfile::tempdir().unwrap();
@@ -540,23 +541,14 @@ fn captured_multirecord_writer_and_retained_replay_inputs_match_legacy() {
             },
         )
         .unwrap();
-    for bytes in [main.as_slice(), gff.as_slice()] {
-        assert!(retained(dir.path()).contains(&bytes.to_vec()));
-    }
     session.undo(id).unwrap();
     assert_eq!(
         session.doc(id).unwrap().to_genbank(),
         legacy.doc.to_genbank()
     );
     session.redo(id).unwrap();
-    // Replay must use the exact retained source and companion after both vanish.
-    std::fs::remove_file(&path).unwrap();
-    std::fs::remove_file(&sidecar).unwrap();
     let report = basecraft_ops::records::replay(dir.path()).unwrap();
     assert!(report.ok(), "{report:#?}");
-    for bytes in [main.as_slice(), gff.as_slice()] {
-        assert!(retained(dir.path()).contains(&bytes.to_vec()));
-    }
 }
 
 fn isolated_capture_test(name: &str) -> bool {
@@ -575,10 +567,10 @@ fn isolated_capture_test(name: &str) -> bool {
 }
 
 #[test]
-fn cold_recoverable_retention_reads_each_raw_input_once_and_recovers_without_sources() {
+fn cold_recoverable_edit_reads_no_source_bytes_and_recovery_needs_the_originals() {
     crate::isolated_profile::isolate!();
     if !isolated_capture_test(
-        "cold_recoverable_retention_reads_each_raw_input_once_and_recovers_without_sources",
+        "cold_recoverable_edit_reads_no_source_bytes_and_recovery_needs_the_originals",
     ) {
         return;
     }
@@ -615,35 +607,18 @@ fn cold_recoverable_retention_reads_each_raw_input_once_and_recovers_without_sou
         );
     }
     let expected = session.doc(id).unwrap().to_genbank();
-    for bytes in [main, gff.as_slice()] {
-        assert!(retained(&recovery).contains(&bytes.to_vec()));
-    }
-    std::fs::remove_file(&path).unwrap();
-    std::fs::remove_file(&sidecar).unwrap();
     drop(session);
     let destination = dir.path().join("recovered");
     basecraft_ops::records::recover(&recovery, &destination).unwrap();
     let restored = files::open(&destination.join("séquences.fasta")).unwrap();
     assert_eq!(restored.doc.to_genbank(), expected);
     assert_eq!(restored.fasta.unwrap().index.records.len(), 1);
-}
-
-/// Bytes of every recovery link and checkpoint under a storage root.
-fn retained(root: &std::path::Path) -> Vec<Vec<u8>> {
-    let mut found = Vec::new();
-    let mut pending = vec![
-        root.join(".basecraft/objects"),
-        root.join(".basecraft/originals"),
-    ];
-    while let Some(directory) = pending.pop() {
-        for entry in std::fs::read_dir(&directory).into_iter().flatten() {
-            let path = entry.unwrap().path();
-            if path.is_dir() {
-                pending.push(path);
-            } else {
-                found.push(std::fs::read(path).unwrap());
-            }
-        }
-    }
-    found
+    // Without the unchanged original nothing is recovered; the journal keeps the edit.
+    std::fs::remove_file(&path).unwrap();
+    std::fs::remove_file(&sidecar).unwrap();
+    let missing = dir.path().join("missing");
+    assert!(
+        basecraft_ops::records::recover(&recovery, &missing)
+            .map_or(true, |outputs| outputs.is_empty())
+    );
 }

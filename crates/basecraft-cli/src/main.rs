@@ -17,6 +17,10 @@ use clap::{Parser, Subcommand};
 #[derive(Parser)]
 #[command(name = "basecraft", version, about = "Basecraft command-line tool")]
 struct Cli {
+    /// The project folder you chose. Files inside it keep their history in the
+    /// project; without it every file is a loose file. Basecraft never guesses.
+    #[arg(long, global = true)]
+    project: Option<PathBuf>,
     #[command(flatten)]
     save_options: save::Options,
     #[command(subcommand)]
@@ -91,7 +95,7 @@ enum Command {
     },
     /// Serve a headless project session over MCP stdio (2025-11-25).
     Mcp {
-        #[arg(default_value = ".")]
+        /// The project folder: the session's root and access boundary.
         project: PathBuf,
         #[arg(long)]
         allow_writes: bool,
@@ -226,8 +230,22 @@ fn main() -> ExitCode {
 /// script client, not by a person or an assistant.
 pub(crate) fn script_session(
     root: impl Into<PathBuf>,
+    project: Option<&basecraft_ops::project::Project>,
 ) -> Result<basecraft_ops::Session, basecraft_ops::Error> {
-    let mut session = basecraft_ops::Session::recoverable(root)?;
+    let mut session = basecraft_ops::Session::recoverable(root)?.in_project(project.cloned());
+    session.set_actor(basecraft_protocol::Actor::Script {
+        client: "CLI".into(),
+    });
+    Ok(session)
+}
+
+/// A CLI session for a command whose folder argument is the project.
+pub(crate) fn project_session(
+    project: &std::path::Path,
+) -> Result<basecraft_ops::Session, basecraft_ops::Error> {
+    let project = basecraft_ops::project::Project::new(project)?;
+    let mut session =
+        basecraft_ops::Session::recoverable(project.root())?.in_project(Some(project));
     session.set_actor(basecraft_protocol::Actor::Script {
         client: "CLI".into(),
     });
@@ -242,6 +260,11 @@ fn save_policy(name: &str) -> Result<basecraft_ops::records::SavePolicy, String>
 }
 
 fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
+    let project = cli
+        .project
+        .as_deref()
+        .map(basecraft_ops::project::Project::new)
+        .transpose()?;
     let save_options = cli.save_options;
     match cli.command {
         Command::Delimitation { action } => delimitation::run(action)?,
@@ -250,7 +273,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Command::Metadata { action } => metadata::run(action, save_options)?,
         Command::Submission { action } => submission::run(action, save_options)?,
         Command::History { file, json } => {
-            let report = basecraft_ops::records::DocumentRecord::saved_report(&file)?;
+            let report =
+                basecraft_ops::records::DocumentRecord::saved_report(&file, project.as_ref())?;
             println!(
                 "{}",
                 if json {
@@ -261,7 +285,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         Command::Methods { file, json, output } => {
-            let report = basecraft_ops::records::DocumentRecord::saved_report(&file)?;
+            let report =
+                basecraft_ops::records::DocumentRecord::saved_report(&file, project.as_ref())?;
             if let Some(output) = output {
                 report.export(&output)?;
             }
@@ -303,22 +328,25 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             ProvenanceCommand::Inspect { result } => {
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&basecraft_ops::records::inspect(&result)?)?
+                    serde_json::to_string_pretty(&basecraft_ops::records::inspect(
+                        &result,
+                        project.as_ref()
+                    )?)?
                 );
             }
             ProvenanceCommand::Verify { result } => {
-                let issues = basecraft_ops::records::verify(&result)?;
+                let issues = basecraft_ops::records::verify(&result, project.as_ref())?;
                 if !issues.is_empty() {
                     return Err(issues.join("\n").into());
                 }
                 println!("done: recorded hashes verified; replay verification is a separate check");
             }
             ProvenanceCommand::Methods { result, output } => {
-                let publication = basecraft_ops::records::inspect(&result)?;
+                let publication = basecraft_ops::records::inspect(&result, project.as_ref())?;
                 basecraft_ops::records::write_reports(&output, &publication)?;
             }
             ProvenanceCommand::Package { result, output } => {
-                basecraft_ops::records::package(&result, &output)?;
+                basecraft_ops::records::package(&result, &output, project.as_ref())?;
             }
         },
         Command::NewSequence {
@@ -327,7 +355,10 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             output,
         } => {
             let output = std::path::absolute(output)?;
-            let mut session = script_session(output.parent().ok_or("Missing output folder")?)?;
+            let mut session = script_session(
+                output.parent().ok_or("Missing output folder")?,
+                project.as_ref(),
+            )?;
             let doc = session.create_sequence(&name, &sequence)?;
             save_options.save(&mut session, doc, Some(&output), true)?;
             println!("Created {}", output.display());
@@ -340,7 +371,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         } => mcp::serve(&project, allow_writes, client_kind, &model_id)?,
         Command::SaveCheck { file, output } => {
             let file = file.canonicalize()?;
-            let mut session = script_session(file.parent().ok_or("File has no parent")?)?;
+            let mut session =
+                script_session(file.parent().ok_or("File has no parent")?, project.as_ref())?;
             let doc = session.open(&file)?;
             let output = output.map(std::path::absolute).transpose()?;
             println!(
@@ -351,7 +383,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Command::Edit { file, operation } => {
             let file = file.canonicalize()?;
             let root = file.parent().unwrap_or(std::path::Path::new("."));
-            let mut session = script_session(root)?;
+            let mut session = script_session(root, project.as_ref())?;
             let doc = session.open(&file)?;
             let operations = match serde_json::from_str::<EditOperations>(&operation)? {
                 EditOperations::One(op) => vec![*op],
@@ -364,14 +396,15 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 ) {
                     session.apply_history(doc, &operation)?;
                 } else {
-                    session.apply(doc, operation)?;
+                    basecraft_ops::renames::apply_op(&mut session, doc, operation)?;
                 }
             }
             save_options.save(&mut session, doc, None, false)?;
         }
         Command::ImportSupport { tree, source, name } => {
             let tree = tree.canonicalize()?;
-            let mut session = script_session(tree.parent().ok_or("File has no parent")?)?;
+            let mut session =
+                script_session(tree.parent().ok_or("File has no parent")?, project.as_ref())?;
             let doc = session.open(&tree)?;
             let imported = session.import_support(doc, &source, &name)?;
             if imported.added.is_empty() {
@@ -402,7 +435,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 .canonicalize()?
                 .join(output.file_name().ok_or("Output filename missing")?);
             let segments: Vec<(u64, u64)> = serde_json::from_str(&segments)?;
-            let mut session = script_session(file.parent().ok_or("File has no parent")?)?;
+            let mut session =
+                script_session(file.parent().ok_or("File has no parent")?, project.as_ref())?;
             let doc = session.open(&file)?;
             session.extract(doc, (start, end), &segments, reverse, &output)?;
             println!(
@@ -433,9 +467,10 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 println!("problem: {p}");
             }
             println!(
-                "{} sessions, {} entries, {} problems",
+                "{} sessions, {} entries, {} not checkable (original replaced), {} problems",
                 report.sessions,
                 report.entries,
+                report.unchecked,
                 report.problems.len()
             );
             if !report.ok() {
@@ -456,6 +491,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             &params,
             save.then_some(input_conflict),
             save_options,
+            project.as_ref(),
         )?,
         Command::Schemas { dir } => {
             std::fs::create_dir_all(&dir)?;
@@ -609,14 +645,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     schemars::schema_for!(basecraft_protocol::records::WorkflowFailure),
                 ),
                 (
-                    "tree-sidecar",
-                    schemars::schema_for!(basecraft_protocol::companion_records::TreeSidecar),
-                ),
-                (
-                    "delimitation-sidecar",
-                    schemars::schema_for!(
-                        basecraft_protocol::companion_records::DelimitationSidecar
-                    ),
+                    "companion",
+                    schemars::schema_for!(basecraft_protocol::companion_records::Companion),
                 ),
                 (
                     "sequence-arrow-pair",
@@ -746,12 +776,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     schemars::schema_for!(basecraft_protocol::installation_records::Runtime),
                 ),
                 (
-                    "external-execution",
-                    schemars::schema_for!(basecraft_protocol::records::ExternalExecution),
-                ),
-                (
-                    "host-workflow-execution",
-                    schemars::schema_for!(basecraft_protocol::records::HostWorkflowExecution),
+                    "run-record",
+                    schemars::schema_for!(basecraft_protocol::records::RunRecord),
                 ),
                 (
                     "local-job-index",
@@ -865,6 +891,7 @@ fn run_plugin(
     params: &[String],
     save: Option<basecraft_ops::records::SavePolicy>,
     mut save_options: save::Options,
+    project: Option<&basecraft_ops::project::Project>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(policy) = save {
         use basecraft_ops::records::SavePolicy;
@@ -886,15 +913,13 @@ fn run_plugin(
         map.insert(k.to_string(), value);
     }
     let manifest = basecraft_plugin_host::Manifest::load(dir)?;
-    if manifest.schema < 2 {
-        return Err("Plugin requires a versioned operation contract (schema 2); migrate/install it before running analyses".into());
-    }
     run_registered_plugin(
         &manifest,
         file,
         operation,
         map,
         save.is_some().then_some(save_options),
+        project,
     )
 }
 
@@ -906,6 +931,7 @@ fn run_registered_plugin(
     operation: &str,
     parameters: serde_json::Map<String, serde_json::Value>,
     save: Option<save::Options>,
+    project: Option<&basecraft_ops::project::Project>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use basecraft_plugin_host::registry::{Registry, RegistryConfig};
     use basecraft_protocol::operation::{ExecutionFamily, InputReference, OperationRequest};
@@ -947,7 +973,7 @@ fn run_registered_plugin(
         target: None,
     };
     let policy = basecraft_plugin_host::policy::SessionPolicy::new(root, true)?;
-    let mut session = script_session(root)?;
+    let mut session = script_session(root, project)?;
     basecraft_platform::interrupt::install()?;
     let (outcome, target) =
         operations::run_foreground(&registry, &request, policy, "CLI", &mut session)?;

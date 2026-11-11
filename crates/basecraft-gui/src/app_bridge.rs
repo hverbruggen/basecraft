@@ -81,12 +81,7 @@ pub mod qobject {
         fn role_names(self: &DocumentOpens) -> QHash_i32_QByteArray;
 
         #[qinvokable]
-        fn open(
-            self: Pin<&mut DocumentOpens>,
-            path: &QString,
-            context: &QString,
-            review: bool,
-        ) -> QString;
+        fn open(self: Pin<&mut DocumentOpens>, path: &QString, review: bool) -> QString;
         #[qinvokable]
         fn add_tab(self: Pin<&mut DocumentOpens>, path: &QString, kind: &QString) -> i32;
         #[qinvokable]
@@ -152,12 +147,7 @@ pub mod qobject {
             names: &QString,
         );
         #[qinvokable]
-        fn request(
-            self: Pin<&mut DocumentOpens>,
-            path: &QString,
-            context: &QString,
-            review: bool,
-        ) -> QString;
+        fn request(self: Pin<&mut DocumentOpens>, path: &QString, review: bool) -> QString;
         #[qinvokable]
         fn start(self: Pin<&mut DocumentOpens>, token: &QString);
         #[qinvokable]
@@ -308,7 +298,7 @@ impl qobject::DocumentOpens {
 
     /// Open `path`: switch to its tab, open it on a worker in a new tab, add a
     /// tab for the views that open themselves, or name the project dialog.
-    fn open(mut self: Pin<&mut Self>, path: &QString, context: &QString, review: bool) -> QString {
+    fn open(mut self: Pin<&mut Self>, path: &QString, review: bool) -> QString {
         let text = path.to_string();
         let worker = crate::document_open::eligible(&text);
         let kind = if worker {
@@ -330,7 +320,7 @@ impl qobject::DocumentOpens {
             };
         }
         // The worker's request carries the review flag and focus either way.
-        let token = self.as_mut().request(path, context, review);
+        let token = self.as_mut().request(path, review);
         let Some(id) = self::token(&token) else {
             return json(&serde_json::json!({"error": "Could not allocate an open request"}));
         };
@@ -660,12 +650,7 @@ impl qobject::DocumentOpens {
         self.renamed(id, &path.to_string());
     }
 
-    fn request(
-        mut self: Pin<&mut Self>,
-        path: &QString,
-        context: &QString,
-        review: bool,
-    ) -> QString {
+    fn request(mut self: Pin<&mut Self>, path: &QString, review: bool) -> QString {
         let undelivered: Vec<_> = self
             .rust()
             .opens
@@ -681,7 +666,7 @@ impl qobject::DocumentOpens {
             .as_mut()
             .rust_mut()
             .opens
-            .begin(path.to_string(), context.to_string(), review)
+            .begin(path.to_string(), review)
         {
             Ok((id, _)) => QString::from(id.to_string()),
             Err(_) => QString::default(),

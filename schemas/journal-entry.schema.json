@@ -994,6 +994,56 @@
       ]
     },
     {
+      "description": "State what the tree's branch lengths measure.",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "tree.set_branch_lengths"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "meaning": {
+              "$ref": "#/$defs/BranchLengths"
+            }
+          },
+          "required": [
+            "meaning"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
+      "description": "State the letters an alignment or sequence is written in. A file has\none companion, so in a multi-record FASTA or GenBank file this states\nthe alphabet of every record in the file, not only the open one.",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "doc.set_alphabet"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "alphabet": {
+              "$ref": "#/$defs/Alphabet"
+            }
+          },
+          "required": [
+            "alphabet"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
       "description": "Add, change (same `id`) or, with no annotation, remove a clade\nannotation.",
       "type": "object",
       "properties": {
@@ -1170,6 +1220,28 @@
         "params": {
           "type": "object",
           "properties": {
+            "contributions": {
+              "description": "The document edits this activity made, such as imported values.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ActivityContributions"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "input_run": {
+              "description": "The exact input this activity read, retained in its own run.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ActivityInputRun"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "inputs": {
               "type": "array",
               "items": {
@@ -1186,6 +1258,7 @@
               }
             },
             "params": {
+              "description": "The tool's own parameters. Basecraft's bookkeeping is in the typed\nfields below, never in parameter names.",
               "default": null
             },
             "plugin": {
@@ -1490,20 +1563,8 @@
       ]
     },
     "AccessionPolicy": {
-      "description": "Legacy suggestions are retained on old documents. Configured sources prevent\nspecimen identifiers elsewhere in a name from influencing inclusion suggestions.",
+      "description": "Where accession candidates come from. Configured sources keep specimen\nidentifiers elsewhere in a name from influencing inclusion suggestions.",
       "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "policy": {
-              "type": "string",
-              "const": "legacy_heuristic"
-            }
-          },
-          "required": [
-            "policy"
-          ]
-        },
         {
           "type": "object",
           "properties": {
@@ -1530,6 +1591,50 @@
             "include_metadata"
           ]
         }
+      ]
+    },
+    "ActivityContributions": {
+      "type": "object",
+      "properties": {
+        "edits": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "schema_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "schema_version",
+        "edits"
+      ]
+    },
+    "ActivityInputRun": {
+      "description": "Embedded provenance for an activity's exact submitted input.",
+      "type": "object",
+      "properties": {
+        "hash": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "schema_version",
+        "id",
+        "hash"
       ]
     },
     "Actor": {
@@ -1640,6 +1745,16 @@
         }
       ]
     },
+    "Alphabet": {
+      "description": "The letters a sequence or alignment is written in.",
+      "type": "string",
+      "enum": [
+        "dna",
+        "rna",
+        "protein",
+        "unknown"
+      ]
+    },
     "Author": {
       "type": "object",
       "properties": {
@@ -1650,7 +1765,7 @@
           "type": "string"
         },
         "middle": {
-          "description": "Middle names or initials, without the first name's, such as `Marie` or `M.R.`.\nBare uppercase runs (`MR`) retain their legacy initials meaning; uppercase full names are ambiguous.",
+          "description": "Middle names or initials, without the first name's, such as `Marie` or `M.R.`.\nBare uppercase runs (`MR`) are initials; uppercase full names are ambiguous.",
           "type": "string"
         }
       },
@@ -1696,6 +1811,48 @@
       "required": [
         "marker",
         "genetic_code"
+      ]
+    },
+    "BranchLengths": {
+      "description": "What a tree's branch lengths measure.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "unknown"
+          ]
+        },
+        {
+          "description": "Expected substitutions per site.",
+          "type": "string",
+          "const": "substitutions"
+        },
+        {
+          "description": "Time with no unit: the root is 1, or depths are only comparable.",
+          "type": "string",
+          "const": "relative_time"
+        },
+        {
+          "description": "Time in the stated unit, such as \"Ma\".",
+          "type": "object",
+          "properties": {
+            "absolute_time": {
+              "type": "object",
+              "properties": {
+                "unit": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "unit"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "absolute_time"
+          ]
+        }
       ]
     },
     "Cell": {
@@ -1906,10 +2063,24 @@
           "default": 30,
           "maximum": 255,
           "minimum": 0
+        },
+        "rooting": {
+          "description": "Whether the tree was rooted when the label was made. Unless it was, a\nclade is one side of a branch, so its complement is the same group.",
+          "$ref": "#/$defs/Rooting"
+        },
+        "tips": {
+          "description": "Every tip the clade held when the label was made. The tree fills this\nin when it is empty; a reroot that changes the set leaves the label on\nanother group.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
         }
       },
       "required": [
-        "clade"
+        "clade",
+        "tips",
+        "rooting"
       ]
     },
     "Column": {
@@ -3782,6 +3953,13 @@
               }
             ]
           }
+        },
+        "notes": {
+          "description": "What the edit did that the user should hear about, shown in History.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       }
     },
@@ -4263,6 +4441,15 @@
         }
       }
     },
+    "Rooting": {
+      "description": "Whether a tree's root is a real root or only where the file put it.",
+      "type": "string",
+      "enum": [
+        "unknown",
+        "rooted",
+        "unrooted"
+      ]
+    },
     "RowDecision": {
       "description": "What to do with a row.",
       "type": "object",
@@ -4413,12 +4600,6 @@
             "$ref": "#/$defs/InputReference"
           }
         },
-        "links": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
-        },
         "node_ids": {
           "type": "array",
           "items": {
@@ -4432,7 +4613,6 @@
         }
       },
       "required": [
-        "links",
         "checkpoint",
         "feature_slots",
         "node_ids",
@@ -4526,28 +4706,12 @@
           ]
         },
         {
+          "description": "Save annotation settings, keeping a draft of each marker type.",
           "type": "object",
           "properties": {
             "action": {
               "type": "string",
               "const": "set_batch"
-            },
-            "batch": {
-              "$ref": "#/$defs/BatchSettings"
-            }
-          },
-          "required": [
-            "action",
-            "batch"
-          ]
-        },
-        {
-          "description": "Save annotation settings with type-specific drafts. Legacy `set_batch`\nretains its historical meaning so previously saved histories replay exactly.",
-          "type": "object",
-          "properties": {
-            "action": {
-              "type": "string",
-              "const": "set_batch_draft"
             },
             "batch": {
               "$ref": "#/$defs/BatchSettings"
@@ -4710,6 +4874,27 @@
           "required": [
             "action",
             "accessions"
+          ]
+        },
+        {
+          "description": "A source row was renamed: its decision, frame, rule and accession follow it.",
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "rename_record"
+            },
+            "from": {
+              "type": "string"
+            },
+            "to": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "action",
+            "from",
+            "to"
           ]
         }
       ]

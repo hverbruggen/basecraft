@@ -29,9 +29,8 @@ The host checks the values against the form before a run. See `fasttree`,
 
 ## Installed operation contracts
 
-See [versioned operation contracts](operation-contract.md) for schema-2 metadata,
-local installation/default enablement, safety warning, SDK compatibility and the
-bounded offline schema profile. Schema-2 packages expose shared execution and owned jobs in CLI/Python/MCP.
-Schema-1 packages retain explicit legacy routes. Forms are presentation metadata;
+See [operation contracts](operation-contract.md) for the contract, the handler
+form, installation and the schema profile. Every operation runs through the
+shared host in the GUI, CLI, Python and MCP. Forms are presentation metadata;
 operations.json supplies scientific defaults, bindings and result schemas.
 The installed-operation picker supports compatible flat file-operation forms.

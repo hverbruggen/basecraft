@@ -1,44 +1,76 @@
-//! Existing tree and species-workspace companion envelopes.
+//! The companion file `<file>.basecraft.json` beside a document: what the
+//! document's own format cannot hold. One envelope for every kind, with one
+//! section per kind.
+use crate::facts::{Alphabet, BranchLengths, Fact};
 use crate::{CladeAnnotation, TreeStyle};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::PathBuf};
 
-/// What a tree's Newick can't hold.
-#[derive(Default, Serialize, Deserialize, JsonSchema)]
-pub struct TreeSidecar {
-    #[serde(default)]
-    pub schema_version: u32,
-    /// Canonical topology, raw support and node ordering of the first tree.
-    #[serde(default)]
-    pub tree_hash: String,
-    /// Exact exchange bytes, including every forest component, when file-backed.
+/// The companion layout this build reads and writes. No other is read.
+pub const COMPANION_VERSION: u32 = 1;
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+pub struct Companion {
+    pub version: u32,
+    /// Hash of the described file's bytes. A different hash means the file
+    /// changed outside basecraft, and the companion no longer applies.
+    pub exchange_hash: String,
+    /// The letters an alignment or sequence is written in, when the user said.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub exchange_hash: Option<String>,
+    pub alphabet: Option<Fact<Alphabet>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tree: Option<TreeCompanion>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delimitation: Option<DelimitationCompanion>,
+}
+
+impl Companion {
+    /// Write the companion as basecraft keeps it: indented JSON and a final
+    /// newline. Every `*.basecraft.json` is written through here.
+    pub fn write(&self, w: &mut dyn std::io::Write) -> std::io::Result<()> {
+        serde_json::to_writer_pretty(&mut *w, self)?;
+        writeln!(w)
+    }
+
+    pub fn new(exchange_hash: impl Into<String>) -> Self {
+        Self {
+            version: COMPANION_VERSION,
+            exchange_hash: exchange_hash.into(),
+            alphabet: None,
+            tree: None,
+            delimitation: None,
+        }
+    }
+}
+
+/// What a tree's Newick can't hold.
+#[derive(Serialize, Deserialize, JsonSchema)]
+pub struct TreeCompanion {
+    /// Canonical topology, raw support and node ordering of the first tree.
+    pub tree_hash: String,
     /// Support set names and sources, in the order their values are joined
     /// in the Newick labels.
-    #[serde(default)]
     pub supports: Vec<SupportName>,
-    #[serde(default)]
     pub annotations: BTreeMap<u32, CladeAnnotation>,
-    #[serde(default)]
     pub style: TreeStyle,
+    /// What the branch lengths measure. Absent means unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_lengths: Option<Fact<BranchLengths>>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct SupportName {
     pub name: String,
-    #[serde(default)]
     pub source: String,
-    #[serde(default)]
     pub kind: crate::SupportKind,
 }
 
-/// A portable SPART file plus its versioned Basecraft workspace sidecar.
+/// A species workspace in full; the SPART file holds only part of it.
 #[derive(Serialize, Deserialize, JsonSchema)]
-pub struct DelimitationSidecar {
-    pub version: u32,
-    pub exchange_hash: String,
+pub struct DelimitationCompanion {
+    /// The folder the workspace's paths were written under. When the SPART
+    /// file has moved, paths under it move with it. None leaves them as written.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path_base: Option<PathBuf>,
     pub workspace: crate::delimitation::DelimitationWorkspace,

@@ -6,7 +6,6 @@ import re
 import shutil
 import subprocess
 import time
-import uuid
 from pathlib import Path
 
 
@@ -66,7 +65,9 @@ def engine_problem(params=None):
     return None
 
 
-def invoke(method, params, native, run_native):
+def invoke(method, params, context, run_native):
+    """Run PTP or mPTP on the allocated tree, then record the partition
+    through the native engine."""
     problem = engine_problem(params)
     if problem:
         raise RuntimeError(problem)
@@ -76,17 +77,11 @@ def invoke(method, params, native, run_native):
     minimum = params.get("min_branch", 0.0)
     if not isinstance(minimum, (int, float)) or isinstance(minimum, bool) or not math.isfinite(minimum) or minimum < 0:
         raise ValueError("Minimum branch length must be finite and nonnegative")
-    source = Path(params["input"]).resolve()
-    target = Path(params["output"]).resolve()
-    if source == target:
-        raise ValueError("Output must differ from input")
-    directory = target.with_name(target.name + ".mptp-" + params.get("job_id", str(uuid.uuid4())))
+    snapshot = Path(context.input("tree"))
+    target = Path(context.output("artifacts", "result.json"))
+    directory = target.with_name(target.name + ".mptp-" + context.run_id)
     directory.mkdir(parents=True)
-    snapshot = source if params.get("analysis_artifacts") else directory / "input.nwk"
-    if snapshot != source:
-        shutil.copyfile(source, snapshot)
-    inspect = dict(params, input=str(snapshot), output=str(directory / "input.json"))
-    run_native("inspect_tree", inspect)
+    run_native("inspect_tree", params, context, snapshot, directory / "input.json")
     expected = json.loads((directory / "input.json").read_text())["metrics"]["tips"]
     output = directory / "result"
     command = [str(executable), "--ml", "--single" if method == "ptp" else "--multi",
@@ -99,7 +94,7 @@ def invoke(method, params, native, run_native):
     with stdout.open("w") as out, stderr.open("w") as err:
         process = subprocess.Popen(command, stdout=out, stderr=err)
         while process.poll() is None:
-            if params.get("cancel_file") and Path(params["cancel_file"]).exists():
+            if context.cancelled():
                 process.terminate()
                 try:
                     process.wait(timeout=5)
@@ -110,15 +105,13 @@ def invoke(method, params, native, run_native):
             time.sleep(0.1)
     report = Path(str(target) + ".run.json")
     if process.returncode:
-        status = "cancelled" if params.get("cancel_file") and Path(params["cancel_file"]).exists() else "failed"
+        status = "cancelled" if context.cancelled() else "failed"
         diagnostic = stderr.read_text()[-16000:] or "mPTP stopped without a partition"
-        report.write_text(json.dumps({"job": {"id": params.get("job_id", directory.name), "generation": params.get("generation", 0),
+        report.write_text(json.dumps({"job": {"id": context.run_id, "generation": params.get("generation", 0),
                           "method": method, "status": status, "inputs": {}, "outputs": {},
                           "diagnostics": [diagnostic], "elapsed_seconds": time.monotonic()-started}, "command": command}, sort_keys=True)+"\n")
         raise RuntimeError(diagnostic)
     parsed = parse_result(Path(str(output) + ".txt").read_text(), expected)
-    parameters = dict(params, input=str(snapshot), **parsed, mptp_version=version, command=command,
-                      min_branch=minimum, units="substitutions per site", original_source=params.get("original_source", str(source)))
-    result = run_native(method, parameters)
-    result["outputs"] += [str(path) for path in directory.iterdir() if path.is_file()]
-    return result
+    parameters = dict(params, **parsed, mptp_version=version, command=command,
+                      min_branch=minimum, units="substitutions per site")
+    return run_native(method, parameters, context, snapshot, target)
