@@ -5,7 +5,7 @@ use super::save::SaveMode;
 pub use super::save_consent::{EvidenceAction, SaveCheck, SaveDecision, SaveOutcome, SaveWarning};
 use super::save_consent::{PendingSaveCheck, SaveScope, target_revision};
 use super::{DocId, Session};
-use crate::input_evidence::{EvidenceCheck, SavePolicy};
+use crate::records::input_evidence::{EvidenceCheck, SavePolicy};
 use crate::{Result, error::invalid};
 
 impl Session {
@@ -21,7 +21,7 @@ impl Session {
             ));
         }
         let target = path.map_or_else(|| self.resolve(&self.docs[id.0].key), Path::to_path_buf);
-        let evidence = crate::input_evidence::check(&target)?;
+        let evidence = crate::records::input_evidence::check(&target)?;
         let check = self.save_check_scope(id, &target, evidence, target_revision(&target)?)?;
         self.publish_save_check(id, check)
     }
@@ -74,7 +74,7 @@ impl Session {
         evidence: EvidenceCheck,
         target_revision: Option<super::save_consent::TargetRevision>,
     ) -> Result<SaveCheck> {
-        let target = crate::save_guard::target_path(target)?;
+        let target = crate::records::save_guard::target_path(target)?;
         let publication = match &self.write_publication {
             crate::documents::WritePublication::Immediate
             | crate::documents::WritePublication::Create => None,
@@ -89,7 +89,7 @@ impl Session {
         };
         let additional_evidence = publication
             .as_ref()
-            .map(|(target, _)| crate::input_evidence::check(target))
+            .map(|(target, _)| crate::records::input_evidence::check(target))
             .transpose()?
             .into_iter()
             .collect();
@@ -156,7 +156,7 @@ impl Session {
         let mut check = self.save_check_scope(
             id,
             &target,
-            crate::input_evidence::check(&target)?,
+            crate::records::input_evidence::check(&target)?,
             target_revision(&target)?,
         )?;
         check.scope.finalization = true;
@@ -209,7 +209,9 @@ impl Session {
         }
     }
 
-    pub(crate) fn recovery_stores(&self) -> Result<Vec<crate::analysis_store::ArtifactRun>> {
+    pub(crate) fn recovery_stores(
+        &self,
+    ) -> Result<Vec<crate::records::analysis_store::ArtifactRun>> {
         match &self.write_publication {
             crate::documents::WritePublication::Immediate
             | crate::documents::WritePublication::Create => Err(invalid("not a recovery Session")),

@@ -1,5 +1,5 @@
 //! Owned bytes shared by trace parsing, evidence registration and tool submission.
-use crate::input_evidence::stamp;
+use crate::records::input_evidence::stamp;
 use crate::{Error, Result};
 use basecraft_protocol::provenance::FileStamp;
 use std::{
@@ -68,16 +68,16 @@ impl CapturedInput {
     }
 }
 
-impl crate::input_evidence::Mutation {
+impl crate::records::input_evidence::Mutation {
     pub fn reference_captured(
         &self,
         anchor: &Path,
         capture: &CapturedInput,
         dependencies: &[PathBuf],
         origin: &str,
-    ) -> Result<crate::analysis_store::ArtifactRun> {
+    ) -> Result<crate::records::analysis_store::ArtifactRun> {
         capture.check_current()?;
-        crate::input_evidence::reference_input_locked(
+        crate::records::input_evidence::reference_input_locked(
             anchor,
             capture.path(),
             capture.hash(),

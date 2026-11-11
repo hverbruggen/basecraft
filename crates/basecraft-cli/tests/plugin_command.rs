@@ -122,7 +122,7 @@ fn plugin_command_runs_registered_sequence_operations() {
     let mut saw_proposal_target = false;
     let mut saw_retained_snapshot = false;
     for run in &records {
-        let input = basecraft_ops::input_evidence::read_input(run)
+        let input = basecraft_ops::records::read_input(run)
             .unwrap_or_else(|error| panic!("{}: {error}", run.display()));
         if let (Some(source), "identity-v1") = (&input.source, input.transformation.as_str()) {
             assert_eq!(input.submitted_hash, source.hash, "{}", run.display());

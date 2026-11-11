@@ -2,7 +2,7 @@
 use super::{
     ArtifactDestination, ArtifactRevision, BTreeMap, CollectionExportIntent, CollectionIntent,
     Error, InvokeResult, OperationOutcome, Path, PathBuf, PreparedOperation, PublishedArtifact,
-    Result, export_collection, export_member, file_tool, input_evidence, verify_collection,
+    Result, export_collection, export_member, file_tool, records, verify_collection,
     verify_member_receipt,
 };
 
@@ -72,7 +72,7 @@ impl PreparedOperation {
                 verify_collection(&retained, &expected)?;
             } else {
                 verify_collection(&staging, &expected)?;
-                input_evidence::write_json(
+                records::write_json(
                     &intent,
                     &serde_json::to_value(CollectionIntent {
                         schema: 1,
@@ -100,7 +100,7 @@ impl PreparedOperation {
                     verify_collection(&destination_path, &expected)?;
                 } else {
                     let destination = self.policy.path(destination, true)?;
-                    input_evidence::write_json(
+                    records::write_json(
                         &intent,
                         &serde_json::to_value(CollectionExportIntent {
                             schema: 1,
@@ -202,10 +202,10 @@ impl PreparedOperation {
                 let retained = retained.join(relative);
                 publication_outputs.push(ArtifactRevision {
                     id: format!("{}:output-{index}", self.run.id()),
-                    logical_name: input_evidence::relative(&self.policy.root, &retained)?,
+                    logical_name: records::relative(&self.policy.root, &retained)?,
                     hash: digest.clone(),
                     size: std::fs::metadata(&retained)?.len(),
-                    retained: Some(input_evidence::relative(self.run.directory(), &retained)?),
+                    retained: Some(records::relative(self.run.directory(), &retained)?),
                     reference: None,
                 });
                 continue;
@@ -262,7 +262,7 @@ impl PreparedOperation {
             }
             publication_outputs.push(ArtifactRevision {
                 id: format!("{}:output-{index}", self.run.id()),
-                logical_name: input_evidence::relative(
+                logical_name: records::relative(
                     self.run
                         .directory()
                         .ancestors()
@@ -272,7 +272,7 @@ impl PreparedOperation {
                 )?,
                 hash: digest.clone(),
                 size: std::fs::metadata(&retained)?.len(),
-                retained: Some(input_evidence::relative(self.run.directory(), &retained)?),
+                retained: Some(records::relative(self.run.directory(), &retained)?),
                 reference: None,
             });
         }
@@ -342,10 +342,10 @@ impl PreparedOperation {
             let path = self.policy.root.join(destination);
             exported.push(ArtifactRevision {
                 id: format!("{}:export-{}", self.run.id(), exported.len()),
-                logical_name: input_evidence::relative(&self.policy.root, &path)?,
+                logical_name: records::relative(&self.policy.root, &path)?,
                 hash: hash.clone(),
                 size: std::fs::metadata(&path)?.len(),
-                retained: Some(input_evidence::relative(self.run.directory(), retained)?),
+                retained: Some(records::relative(self.run.directory(), retained)?),
                 reference: None,
             });
             // An exported tree's support semantics and alignment link travel
@@ -361,13 +361,10 @@ impl PreparedOperation {
                     if companion.is_file() && companion.starts_with(self.run.directory()) {
                         exported.push(ArtifactRevision {
                             id: format!("{}:export-{}", self.run.id(), exported.len()),
-                            logical_name: input_evidence::relative(&self.policy.root, &companion)?,
+                            logical_name: records::relative(&self.policy.root, &companion)?,
                             hash: basecraft_io::hash_file(&companion)?,
                             size: std::fs::metadata(&companion)?.len(),
-                            retained: Some(input_evidence::relative(
-                                self.run.directory(),
-                                &companion,
-                            )?),
+                            retained: Some(records::relative(self.run.directory(), &companion)?),
                             reference: None,
                         });
                     }

@@ -11,7 +11,7 @@ use basecraft_protocol::records::StoreRegistry;
 use fs4::fs_std::FileExt;
 use serde::{Deserialize, Serialize};
 
-use crate::{Result, analysis_store::ArtifactRun, error::invalid};
+use crate::{Result, error::invalid, records::analysis_store::ArtifactRun};
 
 /// Register one clean original using the shared reference/preserve/export lifecycle.
 /// This is an explicit analysis action, never a passive-open writer. Dependencies
@@ -98,8 +98,10 @@ pub(crate) fn reference_input_locked(
     use basecraft_protocol::provenance::{
         ArtifactRevision, Completeness, InputReference, Publication,
     };
-    let run =
-        crate::analysis_store::ArtifactRun::create(anchor, &ulid::Ulid::generate().to_string())?;
+    let run = crate::records::analysis_store::ArtifactRun::create(
+        anchor,
+        &ulid::Ulid::generate().to_string(),
+    )?;
     let source = source.canonicalize()?;
     let reservation = lock()?;
     reservation.source(&source)?;
@@ -114,12 +116,12 @@ pub(crate) fn reference_input_locked(
         return Err(crate::Error::ChangedOnDisk { path: source });
     }
     let reference = InputReference {
-        path: crate::input_evidence::relative(run.directory(), &source)?,
+        path: crate::records::input_evidence::relative(run.directory(), &source)?,
         stamp: captured_stamp.cloned().map_or_else(|| stamp(&source), Ok)?,
         hash: hash.into(),
         extra: BTreeMap::new(),
     };
-    let mut input = crate::input_evidence::SubmittedInput {
+    let mut input = crate::records::input_evidence::SubmittedInput {
         schema_version: 1,
         source: Some(reference.clone()),
         submitted_hash: hash.into(),
@@ -140,7 +142,8 @@ pub(crate) fn reference_input_locked(
             let bytes = crate::records::provenance::read_record(&manifest)?;
             let record: Publication = serde_json::from_slice(&bytes)?;
             upstream.push(basecraft_protocol::input_records::UpstreamLink {
-                bundle: (crate::input_evidence::relative(run.directory(), dependency)?).into(),
+                bundle: (crate::records::input_evidence::relative(run.directory(), dependency)?)
+                    .into(),
                 id: record.id.clone(),
                 hash: basecraft_io::hash_bytes(&bytes),
             });
@@ -149,22 +152,15 @@ pub(crate) fn reference_input_locked(
     if !upstream.is_empty() {
         input.upstream = upstream;
     }
-    crate::input_evidence::write_json(&run.artifact("input.json")?, &input)?;
-    crate::input_evidence::write_json(
-        &run.artifact("run.json")?,
-        &serde_json::to_value(basecraft_protocol::records::AnalysisRun {
-            schema_version: 1,
-            id: run.id().into(),
-            result: anchor
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map(str::to_owned),
-            status: basecraft_protocol::records::AnalysisRunStatus::Referenced,
-            outputs: None,
-            extra: BTreeMap::new(),
-        })?,
+    crate::records::input_evidence::write_json(&run.artifact("input.json")?, &input)?;
+    run.write_run(
+        basecraft_protocol::records::AnalysisRunStatus::Referenced,
+        anchor
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(str::to_owned),
     )?;
-    crate::input_evidence::register(&run)?;
+    crate::records::input_evidence::register(&run)?;
     let publication = Publication {
         schema_version: 1,
         id: run.id().into(),
@@ -2234,14 +2230,14 @@ pub(crate) fn link_generated_input_locked(
         let publication: basecraft_protocol::provenance::Publication =
             serde_json::from_slice(&bytes)?;
         upstream.push(basecraft_protocol::input_records::UpstreamLink {
-            bundle: (crate::input_evidence::relative(run.directory(), dependency)?).into(),
+            bundle: (crate::records::input_evidence::relative(run.directory(), dependency)?).into(),
             id: publication.id.clone(),
             hash: basecraft_io::hash_bytes(&bytes),
         });
     }
-    crate::input_evidence::write_json(
+    crate::records::input_evidence::write_json(
         &run.artifact("input.json")?,
-        &crate::input_evidence::SubmittedInput {
+        &crate::records::input_evidence::SubmittedInput {
             schema_version: 1,
             source: None,
             submitted_hash: basecraft_io::hash_bytes(payload),
@@ -2255,16 +2251,9 @@ pub(crate) fn link_generated_input_locked(
             extra: BTreeMap::new(),
         },
     )?;
-    crate::input_evidence::write_json(
-        &run.artifact("run.json")?,
-        &serde_json::to_value(basecraft_protocol::records::AnalysisRun {
-            schema_version: 1,
-            id: run.id().into(),
-            result: Some(result_label.into()),
-            status: basecraft_protocol::records::AnalysisRunStatus::Prepared,
-            outputs: None,
-            extra: BTreeMap::new(),
-        })?,
+    run.write_run(
+        basecraft_protocol::records::AnalysisRunStatus::Prepared,
+        Some(result_label.into()),
     )?;
     register(run)
 }

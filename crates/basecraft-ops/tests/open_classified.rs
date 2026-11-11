@@ -211,7 +211,7 @@ fn loaded_hash_and_first_durable_action_guards_are_preserved() {
 #[test]
 fn classified_route_reads_main_once_without_passive_sync() {
     use basecraft_io::counters;
-    use basecraft_ops::analysis_store::ArtifactRun;
+    use basecraft_ops::records::ArtifactRun;
     crate::isolated_profile::isolate!();
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/compact");
     for (name, bytes, bound) in [
@@ -285,7 +285,7 @@ fn classification_validates_through_the_last_record() {
 
 #[test]
 fn bound_tree_errors_warn_and_preserve_the_standard_tree() {
-    use basecraft_ops::analysis_store::ArtifactRun;
+    use basecraft_ops::records::ArtifactRun;
     crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("bound.nwk");

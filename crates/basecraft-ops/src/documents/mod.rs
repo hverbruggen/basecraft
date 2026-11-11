@@ -18,7 +18,7 @@ use crate::session::Inverse;
 pub(crate) struct PreparedWrite {
     files: Vec<(PathBuf, String, tempfile::NamedTempFile)>,
     intent: Option<(PathBuf, tempfile::NamedTempFile)>,
-    pub run: Option<crate::analysis_store::ArtifactRun>,
+    pub run: Option<crate::records::analysis_store::ArtifactRun>,
     pub reverse: bool,
     /// The owner accepted an absent main file: never replace another writer's.
     pub create: bool,
@@ -214,7 +214,7 @@ pub(crate) trait Document {
         &self,
         _target: &Path,
         _hashes: &[(PathBuf, String)],
-        _run: Option<&crate::analysis_store::ArtifactRun>,
+        _run: Option<&crate::records::analysis_store::ArtifactRun>,
         _publication: &WritePublication,
     ) -> Result<()> {
         Ok(())
@@ -257,7 +257,7 @@ pub(crate) enum WritePublication {
     Recovery {
         stage: PathBuf,
         destination: PathBuf,
-        stores: std::sync::Mutex<Vec<crate::analysis_store::ArtifactRun>>,
+        stores: std::sync::Mutex<Vec<crate::records::analysis_store::ArtifactRun>>,
     },
 }
 
@@ -274,9 +274,9 @@ impl WritePublication {
         }
     }
 
-    pub(crate) fn register(&self, run: &crate::analysis_store::ArtifactRun) -> Result<()> {
+    pub(crate) fn register(&self, run: &crate::records::analysis_store::ArtifactRun) -> Result<()> {
         match self {
-            Self::Immediate | Self::Create => crate::input_evidence::register(run),
+            Self::Immediate | Self::Create => crate::records::input_evidence::register(run),
             Self::Recovery { stores, .. } => {
                 let mut stores = stores
                     .lock()

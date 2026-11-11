@@ -174,7 +174,7 @@ enum Command {
         /// their input: `cancel`, `preserve_copy`, `remove_analysis` or
         /// `break_evidence`. The same decision the application asks for.
         #[arg(long, requires = "save", value_parser = save_policy, default_value = "cancel")]
-        input_conflict: basecraft_ops::input_evidence::SavePolicy,
+        input_conflict: basecraft_ops::records::SavePolicy,
     },
     /// Write JSON Schemas for the protocol types into a directory.
     Schemas { dir: PathBuf },
@@ -235,7 +235,7 @@ pub(crate) fn script_session(
 }
 
 /// Parse an input-conflict decision by its shared serialized name.
-fn save_policy(name: &str) -> Result<basecraft_ops::input_evidence::SavePolicy, String> {
+fn save_policy(name: &str) -> Result<basecraft_ops::records::SavePolicy, String> {
     serde_json::from_value(serde_json::Value::from(name)).map_err(|_| {
         "expected cancel, preserve_copy, remove_analysis or break_evidence".to_string()
     })
@@ -863,11 +863,11 @@ fn run_plugin(
     file: &std::path::Path,
     operation: &str,
     params: &[String],
-    save: Option<basecraft_ops::input_evidence::SavePolicy>,
+    save: Option<basecraft_ops::records::SavePolicy>,
     mut save_options: save::Options,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(policy) = save {
-        use basecraft_ops::input_evidence::SavePolicy;
+        use basecraft_ops::records::SavePolicy;
         if policy != SavePolicy::Cancel {
             if save_options.save_known_policy != SavePolicy::Cancel
                 && save_options.save_known_policy != policy

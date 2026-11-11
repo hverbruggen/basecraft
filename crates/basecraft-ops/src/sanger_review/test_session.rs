@@ -64,7 +64,7 @@ impl ReviewSession {
     pub(super) fn save_with_policy(
         &mut self,
         path: &Path,
-        policy: crate::input_evidence::SavePolicy,
+        policy: crate::records::input_evidence::SavePolicy,
     ) -> Result<(), String> {
         let check = self
             .owner

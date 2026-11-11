@@ -6,9 +6,8 @@ use std::path::Path;
 
 use basecraft_ops::{
     DocId, Error, Session,
-    analysis_store::ArtifactRun,
-    input_evidence::{self, EvidenceConflict, SavePolicy},
-    records,
+    records::ArtifactRun,
+    records::{self, EvidenceConflict, SavePolicy},
 };
 use basecraft_protocol::Op;
 
@@ -33,7 +32,7 @@ fn folder(root: &Path, name: &str) -> std::path::PathBuf {
 }
 
 fn reference(root: &Path, source: &Path) -> ArtifactRun {
-    input_evidence::reference_input_with_dependencies(
+    records::reference_input_with_dependencies(
         &root.join("result.txt"),
         source,
         &basecraft_io::hash_file(source).unwrap(),
@@ -113,20 +112,18 @@ fn registered_other_folder_policies_preserve_original_and_pending_edits() {
                     );
                     assert_eq!(std::fs::read(&source).unwrap(), ORIGINAL);
                     assert_eq!(
-                        input_evidence::read_input(run.directory()).unwrap().state,
+                        records::read_input(run.directory()).unwrap().state,
                         basecraft_protocol::input_records::EvidenceState::Referenced
                     );
                     continue;
                 }
                 decided_save::save_with_policy(&mut session, doc, None, policy).unwrap();
                 assert!(std::fs::read_to_string(&source).unwrap().contains("ATGT"));
-                let input = input_evidence::read_input(run.directory()).unwrap();
+                let input = records::read_input(run.directory()).unwrap();
                 if policy == SavePolicy::PreserveCopy {
-                    let retained = input_evidence::verified_source(
-                        run.directory(),
-                        input.source.as_ref().unwrap(),
-                    )
-                    .unwrap();
+                    let retained =
+                        records::verified_source(run.directory(), input.source.as_ref().unwrap())
+                            .unwrap();
                     assert_eq!(std::fs::read(retained).unwrap(), ORIGINAL);
                     assert_eq!(
                         input.state,
@@ -138,11 +135,8 @@ fn registered_other_folder_policies_preserve_original_and_pending_edits() {
                         basecraft_protocol::input_records::EvidenceState::Broken
                     );
                     assert!(
-                        input_evidence::verified_source(
-                            run.directory(),
-                            input.source.as_ref().unwrap()
-                        )
-                        .is_err()
+                        records::verified_source(run.directory(), input.source.as_ref().unwrap())
+                            .is_err()
                     );
                 }
             }
@@ -278,7 +272,7 @@ fn lexical_old_path_still_guards_missing_or_replaced_source() {
                 )
                 .unwrap();
                 assert_eq!(
-                    input_evidence::read_input(run.directory()).unwrap().state,
+                    records::read_input(run.directory()).unwrap().state,
                     basecraft_protocol::input_records::EvidenceState::Broken
                 );
                 assert!(std::fs::read_to_string(source).unwrap().contains("ATGT"));
@@ -301,7 +295,7 @@ fn registered_transitive_dependencies_are_included_in_session_conflict() {
             let other = data.join("independent.fasta");
             std::fs::write(&other, b">other\nTTTT\n").unwrap();
             let dependent = |ancestor: &ArtifactRun| {
-                input_evidence::reference_input_with_dependencies(
+                records::reference_input_with_dependencies(
                     &elsewhere.join("dependent.txt"),
                     &other,
                     &basecraft_io::hash_file(&other).unwrap(),
@@ -333,15 +327,14 @@ fn registered_transitive_dependencies_are_included_in_session_conflict() {
             );
             for run in [&child, &grandchild] {
                 assert_eq!(
-                    input_evidence::read_input(run.directory()).unwrap().state,
+                    records::read_input(run.directory()).unwrap().state,
                     basecraft_protocol::input_records::EvidenceState::Referenced
                 );
-                let reference = input_evidence::read_input(parent.directory())
+                let reference = records::read_input(parent.directory())
                     .unwrap()
                     .source
                     .unwrap();
-                let retained =
-                    input_evidence::verified_source(run.directory(), &reference).unwrap();
+                let retained = records::verified_source(run.directory(), &reference).unwrap();
                 assert_eq!(std::fs::read(retained).unwrap(), ORIGINAL);
             }
         },

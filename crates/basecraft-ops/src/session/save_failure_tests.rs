@@ -112,9 +112,12 @@ fn new_destination_and_history_preserve_existing_bytes() {
     assert!(session.save_new(id, Some(&other)).is_err());
     assert_eq!(fs::read(other).unwrap(), b"unrelated bytes");
     session.save(id, None).unwrap();
-    let before = crate::input_evidence::stamp(&target).unwrap();
+    let before = crate::records::input_evidence::stamp(&target).unwrap();
     session.save_history(id).unwrap();
-    assert_eq!(crate::input_evidence::stamp(&target).unwrap(), before);
+    assert_eq!(
+        crate::records::input_evidence::stamp(&target).unwrap(),
+        before
+    );
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -217,15 +220,18 @@ fn recovery_inspection_failure_retries_without_replacing_written_data() {
     let path = recovery.check(0).unwrap().target().to_owned();
     FAILURE.with(|failure| failure.set(Some(WriteStep::RecoveryCheck)));
     assert!(recovery.advance(0, None).is_err());
-    let written = crate::input_evidence::stamp(&path).unwrap();
+    let written = crate::records::input_evidence::stamp(&path).unwrap();
     let check = recovery.check(0).unwrap();
     recovery
         .advance(
             0,
-            Some(check.decide(crate::input_evidence::SavePolicy::Cancel, false)),
+            Some(check.decide(crate::records::input_evidence::SavePolicy::Cancel, false)),
         )
         .unwrap();
-    assert_eq!(crate::input_evidence::stamp(&path).unwrap(), written);
+    assert_eq!(
+        crate::records::input_evidence::stamp(&path).unwrap(),
+        written
+    );
     let completed = recovery.publish().unwrap();
     assert_eq!(fs::read(&original).unwrap(), b">source\nACGT\n");
     assert!(

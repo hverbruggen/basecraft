@@ -392,7 +392,7 @@ impl JobManager {
             let snapshot_path = job.prepared.run.artifact("snapshot.arrow-pair");
             let activity = snapshot_path.and_then(|path| {
                 let hash = basecraft_io::hash_file(&path)?;
-                let key = basecraft_ops::input_evidence::relative(session.root(),&path)?;
+                let key = basecraft_ops::records::relative(session.root(),&path)?;
                 let params = json!({"requested":job.prepared.request.parameters,"effective":outcome.effective_parameters,
                     "operation":job.prepared.operation.id,"pins":outcome.pins,"initiator":job.prepared.initiator,"run_id":outcome.run_id});
                 session.log_contributing_tool_run(target.doc,basecraft_protocol::Actor::Plugin {id:job.prepared.operation.package.manifest.id.clone(),version:job.prepared.operation.package.manifest.version.clone()},

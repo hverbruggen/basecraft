@@ -4,7 +4,7 @@ use std::path::Path;
 use basecraft_ops::{
     DocId, Error, Session,
     access::{AccessError, Denial},
-    input_evidence::SavePolicy,
+    records::SavePolicy,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -107,7 +107,7 @@ pub(crate) fn error_value(error: &Error) -> Value {
 mod tests {
     use super::*;
     use basecraft_ops::{
-        input_evidence::{EvidenceConflict, InspectionCode, InspectionIssue, InspectionRelevance},
+        records::{EvidenceConflict, InspectionCode, InspectionIssue, InspectionRelevance},
         records::{PublishedWithFailure, RecoveryCompletion},
         session::{EvidenceAction, SaveWarning},
     };
@@ -359,13 +359,11 @@ mod typed_error_tests {
             (Error::Empty("empty.fa".into()), "empty_document"),
             (Error::NothingTo("undo"), "nothing_to_do"),
             (
-                Error::EvidenceConflict(Box::new(
-                    basecraft_ops::input_evidence::EvidenceConflict {
-                        target: "input.fa".into(),
-                        analyses: vec![],
-                        options: vec![],
-                    },
-                )),
+                Error::EvidenceConflict(Box::new(basecraft_ops::records::EvidenceConflict {
+                    target: "input.fa".into(),
+                    analyses: vec![],
+                    options: vec![],
+                })),
                 "analysis_input_conflict",
             ),
         ];

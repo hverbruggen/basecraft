@@ -26,7 +26,7 @@ pub(crate) fn change_stamp(path: &Path) -> Result<Option<ChangeStamp>> {
     #[cfg(not(unix))]
     let changed = (0, 0);
     Ok(Some((
-        crate::input_evidence::stamp(path)?,
+        crate::records::input_evidence::stamp(path)?,
         changed.0,
         changed.1,
     )))
@@ -52,8 +52,8 @@ pub(crate) fn same_target(a: &Path, b: &Path) -> bool {
 
 /// Reserve a save target in this thread's mutation scope. Other threads and
 /// processes get Busy until the scope ends; it does not lock external editors.
-pub(crate) fn lock(target: &Path) -> Result<crate::input_evidence::Locks> {
-    let locks = crate::input_evidence::lock()?;
+pub(crate) fn lock(target: &Path) -> Result<crate::records::input_evidence::Locks> {
+    let locks = crate::records::input_evidence::lock()?;
     locks.source(target)?;
     Ok(locks)
 }

@@ -557,8 +557,11 @@ mod tests {
         crate::isolated_profile::isolate!();
         let root = tempfile::tempdir().unwrap();
         // An ancestor store the index does not cover is read by every save here.
-        let run = crate::analysis_store::ArtifactRun::create(&root.path().join("result.txt"), "x")
-            .unwrap();
+        let run = crate::records::analysis_store::ArtifactRun::create(
+            &root.path().join("result.txt"),
+            "x",
+        )
+        .unwrap();
         let store = run
             .directory()
             .parent()
@@ -632,7 +635,8 @@ mod tests {
         for name in ["a.fasta", "b.fasta"] {
             let output = root.path().join(name);
             std::fs::write(&output, b">a\nACGT\n").unwrap();
-            let run = crate::analysis_store::ArtifactRun::create(&output, &name[..1]).unwrap();
+            let run =
+                crate::records::analysis_store::ArtifactRun::create(&output, &name[..1]).unwrap();
             run.bind(&output).unwrap();
         }
         let savers: Vec<_> = ["a.fasta", "b.fasta"]

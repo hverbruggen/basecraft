@@ -2,8 +2,8 @@
 use basecraft_io::counters;
 use basecraft_ops::{
     Session,
-    analysis_store::ArtifactRun,
-    input_evidence::{self, SavePolicy},
+    records::ArtifactRun,
+    records::{self, SavePolicy},
 };
 use basecraft_protocol::Op;
 use std::{
@@ -35,7 +35,7 @@ fn store(root: &Path, name: &str) -> PathBuf {
     let directory = root.join(name);
     std::fs::create_dir(&directory).unwrap();
     let run = ArtifactRun::create(&directory.join("result.txt"), "reserved").unwrap();
-    input_evidence::register(&run).unwrap();
+    records::register(&run).unwrap();
     run.directory()
         .parent()
         .unwrap()
@@ -113,7 +113,7 @@ fn incomplete_decision_and_recheck() {
     std::fs::remove_dir_all(&missing).unwrap();
     std::fs::create_dir(root.join("corrupt")).unwrap();
     let run = ArtifactRun::create(&root.join("corrupt/result.txt"), "reserved").unwrap();
-    input_evidence::register(&run).unwrap();
+    records::register(&run).unwrap();
     let corrupt = run
         .directory()
         .parent()
@@ -122,7 +122,7 @@ fn incomplete_decision_and_recheck() {
         .unwrap()
         .to_path_buf();
     std::fs::write(corrupt.join("store.json"), b"damaged").unwrap();
-    input_evidence::register(&run).unwrap();
+    records::register(&run).unwrap();
     let stores = [corrupt];
     counters::reset();
     let check = match session.save(doc, None).unwrap_err() {
@@ -160,7 +160,7 @@ fn unrelated_registration_and_known_preserve() {
         return;
     };
     let (mut session, doc, source) = setup(&root);
-    let run = input_evidence::reference_input_with_dependencies(
+    let run = records::reference_input_with_dependencies(
         &root.join("result.txt"),
         &source,
         &basecraft_io::hash_file(&source).unwrap(),
@@ -195,7 +195,7 @@ fn explicit_checks_and_early_failure() {
     let (mut session, doc, source) = setup(&root);
     let missing = root.join("missing");
     counters::reset();
-    let check = input_evidence::check_in(&source, &[missing.clone(), missing.clone()]).unwrap();
+    let check = records::check_in(&source, &[missing.clone(), missing.clone()]).unwrap();
     assert!(!check.is_complete());
     record("explicit repeated missing store", &[missing], 2);
     let target = root.join("existing.fasta");

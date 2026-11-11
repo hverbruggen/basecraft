@@ -43,7 +43,7 @@ pub fn linked_alignment(session: &Session, doc: DocId) -> Result<Option<&str>> {
 pub fn publish_workspace(
     target: &std::path::Path,
     work: &basecraft_protocol::delimitation::DelimitationWorkspace,
-    run: &crate::analysis_store::ArtifactRun,
+    run: &crate::records::analysis_store::ArtifactRun,
 ) -> Result<()> {
     let name = stage_workspace(target, work, run)?;
     run.publish_primary(&name)?;
@@ -55,10 +55,13 @@ pub fn publish_workspace(
 pub fn publish_workspace_to(
     target: &std::path::Path,
     work: &basecraft_protocol::delimitation::DelimitationWorkspace,
-    run: &crate::analysis_store::ArtifactRun,
+    run: &crate::records::analysis_store::ArtifactRun,
 ) -> Result<()> {
     let name = stage_workspace(target, work, run)?;
-    run.publish(&name, crate::analysis_store::ArtifactDestination::Metadata)?;
+    run.publish(
+        &name,
+        crate::records::analysis_store::ArtifactDestination::Metadata,
+    )?;
     run.publish_secondary(&name, target)?;
     run.bind(target)
 }
@@ -67,7 +70,7 @@ pub fn publish_workspace_to(
 fn stage_workspace(
     target: &std::path::Path,
     work: &basecraft_protocol::delimitation::DelimitationWorkspace,
-    run: &crate::analysis_store::ArtifactRun,
+    run: &crate::records::analysis_store::ArtifactRun,
 ) -> Result<String> {
     let name = target
         .file_name()
@@ -90,7 +93,7 @@ pub fn reference_input(
     anchor: &std::path::Path,
     source: &std::path::Path,
     hash: &str,
-) -> Result<crate::analysis_store::ArtifactRun> {
+) -> Result<crate::records::analysis_store::ArtifactRun> {
     reference_input_with_dependencies(anchor, source, hash, &[])
 }
 
@@ -99,8 +102,8 @@ fn reference_input_with_dependencies(
     source: &std::path::Path,
     hash: &str,
     dependencies: &[PathBuf],
-) -> Result<crate::analysis_store::ArtifactRun> {
-    crate::input_evidence::reference_input_with_dependencies(
+) -> Result<crate::records::analysis_store::ArtifactRun> {
+    crate::records::input_evidence::reference_input_with_dependencies(
         anchor,
         source,
         hash,
@@ -134,7 +137,7 @@ pub(crate) fn dependencies(
                     path: path.to_path_buf(),
                 });
             }
-            if let Some(run) = crate::analysis_store::ArtifactRun::for_result(path)? {
+            if let Some(run) = crate::records::analysis_store::ArtifactRun::for_result(path)? {
                 runs.insert(run);
             }
         }
@@ -169,7 +172,7 @@ pub fn checked_alignment(
     if bundle.join("input.json").is_file() {
         let mut candidates = vec![bundle.clone()];
         candidates.extend(
-            crate::input_evidence::ancestors(&bundle)?
+            crate::records::input_evidence::ancestors(&bundle)?
                 .into_iter()
                 .map(|(p, _)| p),
         );
@@ -177,7 +180,7 @@ pub fn checked_alignment(
             if !candidate.join("input.json").is_file() {
                 continue;
             }
-            let input = crate::input_evidence::read_input(&candidate)?;
+            let input = crate::records::input_evidence::read_input(&candidate)?;
             let accepted = input
                 .source
                 .as_ref()
@@ -195,12 +198,12 @@ pub fn checked_alignment(
 }
 
 fn checked_workspace_input(run: &std::path::Path, hash: &str) -> Result<PathBuf> {
-    let input = crate::input_evidence::read_input(run)?;
+    let input = crate::records::input_evidence::read_input(run)?;
     if input.state == basecraft_protocol::input_records::EvidenceState::Broken {
         return Err(invalid("Workspace input evidence was explicitly broken"));
     }
     let source = if let Some(reference) = &input.source {
-        crate::input_evidence::verified_source(run, reference)?
+        crate::records::input_evidence::verified_source(run, reference)?
     } else {
         run.join("submitted.fasta")
     };
@@ -229,12 +232,12 @@ pub fn checked_display_tree(
         return Ok(Some(PathBuf::from(path)));
     };
     let run = std::path::Path::new(run);
-    let input = crate::input_evidence::read_input(run)?;
+    let input = crate::records::input_evidence::read_input(run)?;
     if input.state == basecraft_protocol::input_records::EvidenceState::Broken {
         return Err(invalid("Display tree evidence was explicitly broken"));
     }
     let source = if let Some(reference) = &input.source {
-        crate::input_evidence::verified_source(run, reference)?
+        crate::records::input_evidence::verified_source(run, reference)?
     } else {
         run.join("submitted.fasta")
     };

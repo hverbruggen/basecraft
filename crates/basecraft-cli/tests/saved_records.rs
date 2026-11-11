@@ -490,10 +490,9 @@ fn sequence_extraction_cli_mcp_and_python_share_source_and_mapping_semantics() {
         let result = project.join(name);
         let publication = basecraft_ops::records::inspect(&result).unwrap();
         assert!(publication.inputs[0].reference.is_some());
-        let input = basecraft_ops::input_evidence::read_input(
-            &basecraft_ops::records::bundle_for_result(&result),
-        )
-        .unwrap();
+        let input =
+            basecraft_ops::records::read_input(&basecraft_ops::records::bundle_for_result(&result))
+                .unwrap();
         assert_eq!(
             input.extra["extraction"]["selection"]["params"]["segments"],
             json!([[1, 3], [5, 7]])

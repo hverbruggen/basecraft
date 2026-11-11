@@ -2,10 +2,8 @@
 
 pub mod access;
 pub mod alignment_add;
-pub mod analysis_store;
 pub mod blast;
 pub mod files;
-pub mod input_evidence;
 pub mod log;
 pub mod metadata;
 pub mod records;
@@ -15,7 +13,6 @@ pub mod submission;
 
 mod documents;
 mod error;
-mod save_guard;
 
 pub use error::{Error, Result};
 pub use session::{DocId, Session};

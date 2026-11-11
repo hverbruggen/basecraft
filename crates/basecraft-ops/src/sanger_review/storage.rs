@@ -1,6 +1,8 @@
 //! Sanger adapters for the common artifact store and one-source evidence ledgers.
 use super::{SangerReview, StoredReview};
-use crate::{analysis_store::ArtifactRun, error::invalid, input_evidence as inputs};
+use crate::{
+    error::invalid, records::analysis_store::ArtifactRun, records::input_evidence as inputs,
+};
 use basecraft_docs::sanger::SangerPlacementExt;
 use basecraft_docs::sanger::{SangerDraft, SangerPlacement};
 use basecraft_protocol::provenance::{ArtifactRevision, Completeness, Publication};

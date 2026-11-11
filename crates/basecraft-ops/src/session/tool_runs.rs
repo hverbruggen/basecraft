@@ -89,7 +89,7 @@ impl Session {
             && let Some((source, hash)) = inputs.first()
         {
             let source = self.resolve(source);
-            let ledger = crate::input_evidence::reference_input_with_dependencies(
+            let ledger = crate::records::input_evidence::reference_input_with_dependencies(
                 &self.resolve(self.doc_key(id)?),
                 &source,
                 hash,

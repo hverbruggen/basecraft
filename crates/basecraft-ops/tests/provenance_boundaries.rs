@@ -79,7 +79,7 @@ fn unversioned_tree_metadata_is_ignored_without_changing_files() {
 
 #[test]
 fn hidden_binding_errors_never_fall_back_to_adjacent_metadata() {
-    use basecraft_ops::analysis_store::ArtifactRun;
+    use basecraft_ops::records::ArtifactRun;
     crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("forest.nwk");
@@ -187,8 +187,7 @@ fn imported_support_partial_removal_undo_save_reopen_and_redo() {
             .methods
             .contains("import_support")
     );
-    let input =
-        basecraft_ops::input_evidence::read_input(&records::bundle_for_result(&target)).unwrap();
+    let input = basecraft_ops::records::read_input(&records::bundle_for_result(&target)).unwrap();
     assert_eq!(
         serde_json::to_value(&input.upstream)
             .unwrap()
@@ -379,7 +378,7 @@ fn extraction_is_reference_first_and_packages_exact_source_and_mapping() {
         .extract(doc, (1, 7), &[(1, 3), (5, 7)], true, &result)
         .unwrap();
     let publication = records::inspect(&result).unwrap();
-    let conflicts = basecraft_ops::input_evidence::conflicts(&source).unwrap();
+    let conflicts = basecraft_ops::records::conflicts(&source).unwrap();
     assert!(
         !conflicts.analyses.is_empty(),
         "extraction did not register its referenced source in shared save protection"
@@ -394,8 +393,7 @@ fn extraction_is_reference_first_and_packages_exact_source_and_mapping() {
     assert!(publication.inputs[0].reference.is_some());
     let issues = records::verify(&result).unwrap();
     assert!(issues.is_empty(), "{issues:?}");
-    let input =
-        basecraft_ops::input_evidence::read_input(&records::bundle_for_result(&result)).unwrap();
+    let input = basecraft_ops::records::read_input(&records::bundle_for_result(&result)).unwrap();
     assert_eq!(
         input.extra["extraction"]["selection"]["params"]["segments"],
         serde_json::json!([[1, 3], [5, 7]])
@@ -412,7 +410,7 @@ fn extraction_is_reference_first_and_packages_exact_source_and_mapping() {
 
 #[test]
 fn saving_a_forest_preserves_other_members_and_refreshes_bound_identity() {
-    use basecraft_ops::analysis_store::ArtifactRun;
+    use basecraft_ops::records::ArtifactRun;
     crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("forest.nwk");

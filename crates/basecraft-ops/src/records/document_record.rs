@@ -30,7 +30,7 @@ pub fn read_origin(
     path: &Path,
     hashes: &[(String, String)],
 ) -> (Option<Publication>, Option<String>) {
-    if let Err(e) = crate::analysis_store::ArtifactRun::for_result(path) {
+    if let Err(e) = crate::records::analysis_store::ArtifactRun::for_result(path) {
         return (
             None,
             Some(format!("Hidden analysis binding could not be read: {e}")),
@@ -52,23 +52,23 @@ impl DocumentRecord {
     /// chronological history and producing activity. Retry preserves user Methods.
     pub fn publish_operation_activity(
         &self,
-        run: &crate::analysis_store::ArtifactRun,
+        run: &crate::records::analysis_store::ArtifactRun,
         activity: &LogEntry,
     ) -> crate::Result<()> {
         let manifest = run.directory().join("manifest.json");
         let mut publication: Publication =
             serde_json::from_slice(&crate::records::provenance::read_record(&manifest)?)?;
-        let (events, effective) = crate::session::portable_analysis_activity(self, activity);
+        let (events, effective) = super::publish::portable_analysis_activity(self, activity);
         publication.events = events;
         publication.effective_edits = effective;
         // Preserve upstream bundles used by the submitted revision for packaging.
-        let mut input = crate::input_evidence::read_input(run.directory())?;
+        let mut input = crate::records::input_evidence::read_input(run.directory())?;
         let mut upstream = input.upstream.clone();
         for (bundle, origin) in &self.origins {
             let mut bytes = serde_json::to_vec_pretty(origin)?;
             bytes.push(b'\n');
             let reference = basecraft_protocol::input_records::UpstreamLink {
-                bundle: (crate::input_evidence::relative(
+                bundle: (crate::records::input_evidence::relative(
                     run.directory(),
                     &bundle.canonicalize()?,
                 )?)
@@ -82,7 +82,10 @@ impl DocumentRecord {
         }
         if !upstream.is_empty() {
             input.upstream = upstream;
-            crate::input_evidence::write_json(&run.directory().join("input.json"), &input)?;
+            crate::records::input_evidence::write_json(
+                &run.directory().join("input.json"),
+                &input,
+            )?;
         }
         crate::records::provenance::publish(run.directory(), &publication)
     }

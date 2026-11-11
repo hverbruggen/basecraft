@@ -2,7 +2,7 @@
 #[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
 mod isolated_profile;
 use basecraft_ops::{
-    files, input_evidence,
+    files,
     records::{self, AlignmentLink, AlignmentLinkExt},
 };
 
@@ -34,14 +34,9 @@ fn shared_reference_verifies_the_same_input() {
     std::fs::write(&source, b">a\nAC\n>b\nAT\n").unwrap();
     std::fs::write(&tree, "(a,b);").unwrap();
     let hash = basecraft_io::hash_file(&source).unwrap();
-    let run = input_evidence::reference_input_with_dependencies(
-        &tree,
-        &source,
-        &hash,
-        &[],
-        "link fixture",
-    )
-    .unwrap();
+    let run =
+        records::reference_input_with_dependencies(&tree, &source, &hash, &[], "link fixture")
+            .unwrap();
     AlignmentLink::create_referenced(&tree, &source, &source, 9, &run).unwrap();
     let shared = root.path().join("shared.nwk");
     std::fs::write(&shared, "(a,b);").unwrap();

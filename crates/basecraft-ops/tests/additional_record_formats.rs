@@ -166,7 +166,7 @@ fn embedded_activity_original_records() {
         .extract(doc, (1, 5), &[], false, &extracted)
         .unwrap();
     let bundle = basecraft_ops::records::bundle_for_result(&extracted);
-    let input = basecraft_ops::input_evidence::read_input(&bundle).unwrap();
+    let input = basecraft_ops::records::read_input(&bundle).unwrap();
     assert_eq!(input.extra["extraction"]["schema_version"], 1);
     if std::env::var_os("BASECRAFT_CAPTURE_ADDITIONAL_RECORDS").is_some() {
         golden(

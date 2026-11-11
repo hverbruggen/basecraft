@@ -112,10 +112,10 @@ impl Document for OpenedTree {
         &self,
         target: &Path,
         _: &[(PathBuf, String)],
-        _: Option<&crate::analysis_store::ArtifactRun>,
+        _: Option<&crate::records::analysis_store::ArtifactRun>,
         _: &super::WritePublication,
     ) -> Result<()> {
-        crate::analysis_store::ArtifactRun::refresh_binding(target)
+        crate::records::analysis_store::ArtifactRun::refresh_binding(target)
     }
 
     fn saved_hashes(

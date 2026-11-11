@@ -1,8 +1,7 @@
 //! Local execution stage. Preparation and publication do not launch processes.
 use super::{
     Arc, AtomicBool, Error, ExternalExecution, HostWorkflowExecution, InvokeResult, Ordering, Path,
-    PluginArtifact, PluginProcess, PreparedOperation, Result, Value, contract, input_evidence,
-    link_count,
+    PluginArtifact, PluginProcess, PreparedOperation, Result, Value, contract, link_count, records,
 };
 
 impl PreparedOperation {
@@ -88,7 +87,7 @@ impl PreparedOperation {
             }
         }
         let (stdout, stderr) = process.captured_output();
-        let evidence = input_evidence::write_json(
+        let evidence = records::write_json(
             &self.run.artifact("execution.json")?,
             &serde_json::to_value(ExternalExecution {
                 schema: 1,
@@ -217,7 +216,7 @@ impl PreparedOperation {
             stages: vec![],
         };
         let execution = workflow.run(method, effective);
-        input_evidence::write_json(
+        records::write_json(
             &self.run.artifact("execution.json")?,
             &serde_json::to_value(HostWorkflowExecution {
                 schema: 1,

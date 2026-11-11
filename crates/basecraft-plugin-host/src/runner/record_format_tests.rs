@@ -288,7 +288,7 @@ fn publication_member_selected_reader_and_foreign_identity() {
     let original = member_oracle(&destination, &hash);
     let mut extended = original.clone();
     extended["future"] = json!({"nested":[null,{}]});
-    input_evidence::write_json(&receipt, &extended).unwrap();
+    records::write_json(&receipt, &extended).unwrap();
     verify_member_receipt(&destination, &hash, &receipt).unwrap();
     for key in ["schema", "destination", "hash", "device", "inode", "size"] {
         for replacement in [
@@ -304,7 +304,7 @@ fn publication_member_selected_reader_and_foreign_identity() {
             } else {
                 bad.as_object_mut().unwrap().remove(key);
             }
-            input_evidence::write_json(&receipt, &bad).unwrap();
+            records::write_json(&receipt, &bad).unwrap();
             assert!(
                 verify_member_receipt(&destination, &hash, &receipt).is_err(),
                 "{key}: {bad}"
@@ -313,7 +313,7 @@ fn publication_member_selected_reader_and_foreign_identity() {
     }
     std::fs::write(&receipt, b"{malformed").unwrap();
     assert!(verify_member_receipt(&destination, &hash, &receipt).is_err());
-    input_evidence::write_json(&receipt, &original).unwrap();
+    records::write_json(&receipt, &original).unwrap();
     let alias = root.join("alias");
     std::fs::hard_link(&destination, &alias).unwrap();
     assert!(verify_member_receipt(&destination, &hash, &receipt).is_err());

@@ -575,7 +575,7 @@ fn tree_mcp_routes_share_hidden_storage() {
     );
     for name in ["fasttree.nwk", "iqtree.nwk", "nj.nwk", "upgma.nwk"] {
         let output = root.join(name);
-        let run = basecraft_ops::analysis_store::ArtifactRun::for_result(&output)
+        let run = basecraft_ops::records::ArtifactRun::for_result(&output)
             .unwrap()
             .unwrap();
         assert!(run.join("execution.json").is_file());
