@@ -12,8 +12,8 @@ pub mod metadata;
 pub mod provenance;
 pub mod replay;
 pub mod sanger_review;
-pub mod session;
 pub mod service_reads;
+pub mod session;
 pub mod submission;
 
 mod documents;

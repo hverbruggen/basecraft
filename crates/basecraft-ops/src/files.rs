@@ -15,6 +15,7 @@ use crate::{Error, Result};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
+    SangerReview,
     GenBank,
     Delimitation,
     /// The project's specimen metadata: a manifest with TSV tables beside
@@ -44,6 +45,7 @@ impl Format {
             .map(str::to_ascii_lowercase)
             .unwrap_or_default();
         match ext.as_str() {
+            "json" => Ok(Format::SangerReview),
             "spart" | "spartxml" | "spart-xml" | "xml" => Ok(Format::Delimitation),
             "gb" | "gbk" | "genbank" | "gbff" => Ok(Format::GenBank),
             "fa" | "fasta" | "fna" | "fas" | "ffn" | "faa" | "afa" => Ok(Format::Fasta),
@@ -57,6 +59,7 @@ impl Format {
 /// What a file opens as.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
+    SangerReview,
     Sequence,
     Delimitation,
     Metadata,
@@ -74,6 +77,10 @@ pub enum Kind {
 /// The standalone probe streams the entire file without constructing an index.
 pub fn kind(path: &Path) -> Result<Kind> {
     match Format::from_path(path)? {
+        Format::SangerReview => {
+            crate::sanger_review::SangerReview::load(path).map_err(crate::error::invalid)?;
+            return Ok(Kind::SangerReview);
+        }
         Format::Delimitation => return Ok(Kind::Delimitation),
         Format::Metadata => return Ok(Kind::Metadata),
         Format::Submission => return Ok(Kind::Submission),
@@ -122,6 +129,7 @@ pub struct OpenedTree {
 }
 
 pub enum Loaded {
+    SangerReview(Box<crate::sanger_review::SangerReview>),
     Sequence(Opened),
     Delimitation(basecraft_protocol::delimitation::DelimitationWorkspace),
     Metadata(crate::metadata::OpenedMetadata),
@@ -131,6 +139,14 @@ pub enum Loaded {
 }
 
 impl Loaded {
+    pub(crate) fn sanger_review(&self) -> Option<&crate::sanger_review::SangerReview> {
+        if let Self::SangerReview(payload) = self {
+            Some(payload)
+        } else {
+            None
+        }
+    }
+
     pub(crate) fn sequence(&self) -> Option<&Opened> {
         if let Self::Sequence(payload) = self {
             Some(payload)
@@ -184,6 +200,7 @@ impl Loaded {
     /// Borrow the shared behavior of the existing document payloads.
     pub(crate) fn as_document(&self) -> &dyn crate::documents::Document {
         match self {
+            Self::SangerReview(review) => review.as_ref(),
             Self::Submission(sub) => sub,
             Self::Metadata(opened) => opened,
             Self::Alignment(opened) => opened,
@@ -195,6 +212,7 @@ impl Loaded {
 
     pub(crate) fn as_document_mut(&mut self) -> &mut dyn crate::documents::Document {
         match self {
+            Self::SangerReview(review) => review.as_mut(),
             Self::Submission(sub) => sub,
             Self::Metadata(opened) => opened,
             Self::Alignment(opened) => opened,
@@ -228,6 +246,11 @@ pub(crate) fn load_snapshot(
 /// Open a file as whatever it holds: see [`kind`].
 pub fn load(path: &Path) -> Result<Loaded> {
     let format = Format::from_path(path)?;
+    if format == Format::SangerReview {
+        return crate::sanger_review::SangerReview::load(path)
+            .map(|review| Loaded::SangerReview(Box::new(review)))
+            .map_err(crate::error::invalid);
+    }
     if format == Format::Metadata {
         return crate::metadata::load(path).map(Loaded::Metadata);
     }
@@ -651,6 +674,7 @@ pub fn open(path: &Path) -> Result<Opened> {
 pub fn open_from(path: &Path, source: Source) -> Result<Opened> {
     let format = Format::from_path(path)?;
     match format {
+        Format::SangerReview => Err(crate::error::invalid("this is a Sanger review")),
         Format::Delimitation => Err(crate::error::invalid("this is a delimitation workspace")),
         Format::Metadata => Err(crate::error::invalid(
             "this is the project's specimen metadata",
@@ -715,6 +739,9 @@ pub fn write_main(opened: &Opened, w: &mut dyn Write) -> io::Result<()> {
     let doc = &opened.doc;
     match opened.format {
         Format::GenBank => genbank::write(w, &doc.to_genbank()),
+        Format::SangerReview => Err(io::Error::other(
+            "a sequence cannot be written as a Sanger review",
+        )),
         Format::Delimitation => Err(io::Error::other("this is a delimitation workspace")),
         Format::Metadata => Err(io::Error::other("a sequence can't be written as metadata")),
         Format::Submission => Err(io::Error::other(

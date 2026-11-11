@@ -57,31 +57,15 @@ pub const OBJECT_STORE_LIMIT: u64 = 100 << 20;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct DocId(pub usize);
 
-pub(crate) enum Inverse {
-    Residues {
-        inserted: u64,
-        result: EditResult,
-    },
-    Feature {
-        id: FeatureId,
-        before: Option<Feature>,
-    },
-    Alignment(Vec<AlnUndo>),
-    /// The whole tree as it was: trees are small.
-    Tree(Box<TreeDoc>),
-    Delimitation(Box<basecraft_protocol::delimitation::DelimitationWorkspace>),
-    /// The whole metadata as it was: one edit can touch every table.
-    Metadata(Box<basecraft_protocol::metadata::ProjectMetadata>),
-    Submission(Box<basecraft_protocol::submission::Submission>),
-}
+pub(crate) use history::Inverse;
 
-struct Applied {
-    entry_id: String,
-    op: Op,
-    inverse: Inverse,
+pub(crate) struct Applied {
+    pub(crate) entry_id: String,
+    pub(crate) op: Op,
+    pub(crate) inverse: Inverse,
     /// Operations applied together (a plugin's results) share a group and
     /// undo and redo together.
-    group: Option<u64>,
+    pub(crate) group: Option<u64>,
 }
 
 struct Slot {
@@ -96,6 +80,7 @@ struct Slot {
     baseline_logged: bool,
     accepted_hashes: Vec<(String, String)>,
     saved_state_hashes: Vec<String>,
+    saved_target: Option<(PathBuf, basecraft_protocol::provenance::FileStamp, String)>,
     absent_sidecars: Vec<String>,
     origin: Option<basecraft_protocol::provenance::Publication>,
     origin_issue: Option<String>,
@@ -272,6 +257,13 @@ impl Session {
     }
 
     /// A sequence document. Returns an error for a missing ID or a different document kind.
+    pub fn sanger_review(&self, id: DocId) -> Result<&crate::sanger_review::SangerReview> {
+        self.content(id)?.sanger_review().ok_or(Error::WrongKind {
+            id,
+            expected: files::Kind::SangerReview,
+        })
+    }
+
     pub fn doc(&self, id: DocId) -> Result<&SequenceDoc> {
         Ok(&self.sequence_of(id)?.doc)
     }
@@ -615,7 +607,7 @@ fn redact_operation_paths(operation: &mut Op) {
 }
 
 fn restore_inverse(content: &mut Loaded, inverse: &Inverse) -> Result<()> {
-    content.as_document_mut().revert(inverse)
+    content.as_document_mut().revert(inverse, false)
 }
 
 /// Edits whose log entries can grow into a burst.

@@ -17,47 +17,19 @@ use crate::session::Inverse;
 mod alignment;
 mod delimitation;
 mod metadata;
-#[cfg(test)]
-pub(crate) use metadata::observation::{Hooks as DocumentHooks, MetadataFacts};
-#[cfg(test)]
-pub(crate) struct DocumentAttempt {
-    pub result: Result<Vec<(PathBuf, String)>>,
-    pub metadata: Option<MetadataFacts>,
-}
+mod sanger;
 mod sequence;
 mod submission;
 mod tree;
 
 /// A payload staged before Session starts durable tracking. The live document
 /// stays unchanged until the journal owner is ready to apply the edit.
-pub(crate) enum PreparedEdit {
-    Tree(Box<basecraft_docs::TreeDoc>),
-}
+pub(crate) type PreparedEdit = Box<dyn std::any::Any + Send>;
 
 pub(crate) trait Document {
     fn kind(&self) -> crate::files::Kind;
-    /// Operations requiring preparation must reject the wrong payload before
-    /// Session retains originals or starts a journal.
-    fn check_preparation_kind(&self, op: &Op, live: bool) -> Result<()> {
-        if matches!(
-            op,
-            Op::TreeMidpointRoot {} | Op::TreeMinimumVarianceRoot {} | Op::TreeStyle { .. }
-        ) && self.kind() != crate::files::Kind::Tree
-        {
-            return Err(crate::error::invalid(format!("{} needs a tree", op.name())));
-        }
-        if live
-            && let Op::SubmissionEdit { edit } = op
-            && matches!(
-                edit.as_ref(),
-                basecraft_protocol::submission::SubmissionEdit::ApplyInclusion { .. }
-            )
-            && self.kind() != crate::files::Kind::Submission
-        {
-            return Err(crate::error::invalid("choose a submission document"));
-        }
-        Ok(())
-    }
+    /// Reject operations for another payload before durable tracking starts.
+    fn accepts(&self, op: &Op) -> bool;
     /// Whether admission must retain the discovered companion hashes.
     fn retains_companions(&self) -> bool {
         false
@@ -82,6 +54,13 @@ pub(crate) trait Document {
             "this document kind does not support proposals",
         ))
     }
+    /// Older self-contained formats can restore saved undo history. Ordinary
+    /// documents start empty. Entries must have deterministic identities for replay.
+    fn initial_history(
+        &self,
+    ) -> Result<(Vec<crate::session::Applied>, Vec<crate::session::Applied>)> {
+        Ok((Vec::new(), Vec::new()))
+    }
     fn revision(&self, generation: u64) -> u64;
     fn fingerprint(&self) -> DocState;
     /// Apply transactionally: an error must leave the payload unchanged.
@@ -102,10 +81,10 @@ pub(crate) trait Document {
         self.apply(op)
     }
     fn apply(&mut self, op: &Op) -> Result<(Inverse, Option<FeatureId>)>;
-    fn revert(&mut self, inverse: &Inverse) -> Result<()>;
+    fn revert(&mut self, inverse: &Inverse, _record: bool) -> Result<()>;
     /// Redo using the original inverse when an edit allocated stable identities.
     /// Session still owns stacks and the journal; payloads only restore the edit.
-    fn reapply(&mut self, op: &Op, _inverse: &Inverse) -> Result<Inverse> {
+    fn reapply(&mut self, op: &Op, _inverse: &Inverse, _record: bool) -> Result<Inverse> {
         self.apply(op).map(|(inverse, _)| inverse)
     }
 
@@ -131,20 +110,6 @@ pub(crate) trait Document {
         recovery_root: &Path,
         publication: &WritePublication,
     ) -> Result<Vec<(PathBuf, String)>>;
-    #[cfg(test)]
-    fn write_observed(
-        &self,
-        target: &Path,
-        format: Format,
-        recovery_root: &Path,
-        publication: &WritePublication,
-        _hooks: DocumentHooks,
-    ) -> DocumentAttempt {
-        DocumentAttempt {
-            result: self.write(target, format, recovery_root, publication),
-            metadata: None,
-        }
-    }
     /// Files replaced independently before the primary file. Recovery accepts
     /// each matching expected hash even when the primary replacement failed.
     /// Ordering matches `saved_hashes` (metadata includes its manifest here).

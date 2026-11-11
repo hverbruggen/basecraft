@@ -1,6 +1,6 @@
 //! Existing public import paths remain aliases of the protocol payloads.
 use basecraft_docs::sanger::{ReviewReference, ReviewSettings};
-use basecraft_ops::sanger_review::{MaskSettings, ReviewChoice, ReviewOp, SangerReviewSession};
+use basecraft_ops::sanger_review::{MaskSettings, ReviewChoice, ReviewOp, SangerReview};
 use basecraft_protocol::sanger;
 
 #[test]
@@ -22,6 +22,5 @@ fn old_paths_accept_protocol_values_without_conversion() {
     let _: sanger::ReviewChoice = choice;
     let op: ReviewOp = sanger::ReviewOp::Mask { settings: mask };
     let _: sanger::ReviewOp = op;
-    let _: fn(&mut SangerReviewSession, sanger::ReviewOp) -> Result<(), String> =
-        SangerReviewSession::apply;
+    let _: fn(&mut SangerReview, sanger::ReviewOp) -> Result<(), String> = SangerReview::apply;
 }

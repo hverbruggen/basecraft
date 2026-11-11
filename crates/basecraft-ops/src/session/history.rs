@@ -1,9 +1,35 @@
 //! Shared edit, grouping, undo, redo and journal ownership.
 use super::{
-    Actor, Applied, DocId, Error, FeatureId, Instant, Inverse, LOG_VERSION, LogEntry, MERGE_WINDOW,
-    Op, OpResult, Outcome, Pending, ReplayMode, Result, Session, invalid, mergeable,
-    restore_inverse,
+    Actor, AlnUndo, Applied, DocId, EditResult, Error, Feature, FeatureId, Instant, LOG_VERSION,
+    LogEntry, MERGE_WINDOW, Op, OpResult, Outcome, Pending, ReplayMode, Result, Session, TreeDoc,
+    invalid, mergeable, restore_inverse,
 };
+
+pub(crate) enum Inverse {
+    // Structural analysis continuations can replace all call sets; ordinary decisions use edit-sized deltas.
+    SangerUpdate(Box<crate::sanger_review::SangerReview>),
+    SangerReview {
+        call_set: String,
+        change: Box<basecraft_docs::sanger::review::ReviewChange>,
+        events: usize,
+        legacy_undo: bool,
+    },
+    Residues {
+        inserted: u64,
+        result: EditResult,
+    },
+    Feature {
+        id: FeatureId,
+        before: Option<Feature>,
+    },
+    Alignment(Vec<AlnUndo>),
+    /// The whole tree as it was: trees are small.
+    Tree(Box<TreeDoc>),
+    Delimitation(Box<basecraft_protocol::delimitation::DelimitationWorkspace>),
+    /// The whole metadata as it was: one edit can touch every table.
+    Metadata(Box<basecraft_protocol::metadata::ProjectMetadata>),
+    Submission(Box<basecraft_protocol::submission::Submission>),
+}
 
 impl Session {
     pub(super) fn entry(&self, doc: DocId, actor: Actor, op: Op, result: OpResult) -> LogEntry {
@@ -64,9 +90,13 @@ impl Session {
             .get(doc.0)
             .ok_or_else(|| invalid("unknown document"))?
             .content;
-        content
-            .as_document()
-            .check_preparation_kind(&op, matches!(self.replay_mode, ReplayMode::Live))?;
+        if !content.as_document().accepts(&op) {
+            return Err(Error::Unsupported(format!(
+                "{} cannot be applied to {:?}",
+                op.name(),
+                content.kind()
+            )));
+        }
         let prepared = content.as_document().prepare_edit(
             &op,
             self.root(),
@@ -236,6 +266,27 @@ impl Session {
         Ok(last)
     }
 
+    /// Verify an explicitly named history target before changing anything.
+    pub fn apply_history(&mut self, id: DocId, op: &Op) -> Result<String> {
+        let slot = self.docs.get(id.0).ok_or(Error::UnknownDocument { id })?;
+        let (of, stack, action) = match op {
+            Op::Undo { of } => (of, &slot.undo, "undo"),
+            Op::Redo { of } => (of, &slot.redo, "redo"),
+            _ => return Err(Error::Unsupported("expected a history operation".into())),
+        };
+        let target = stack.last().ok_or(Error::NothingTo(action))?;
+        if !of.is_empty() && *of != target.entry_id {
+            return Err(Error::Unsupported(
+                "history target is not the latest edit".into(),
+            ));
+        }
+        if matches!(op, Op::Undo { .. }) {
+            self.undo(id)
+        } else {
+            self.redo(id)
+        }
+    }
+
     /// Undo exactly one operation, ignoring groups. Replay uses this: the
     /// log holds one undo entry per operation.
     pub fn undo_single(&mut self, id: DocId) -> Result<String> {
@@ -247,12 +298,13 @@ impl Session {
     }
 
     pub(super) fn undo_one(&mut self, id: DocId) -> Result<String> {
+        self.track(id)?;
         self.flush()?;
         let applied = self.docs[id.0].undo.pop().ok_or(Error::NothingTo("undo"))?;
         self.docs[id.0]
             .content_mut()
             .as_document_mut()
-            .revert(&applied.inverse)?;
+            .revert(&applied.inverse, true)?;
         self.docs[id.0].generation += 1;
         let of = applied.entry_id.clone();
         let entry = self.entry(
@@ -262,7 +314,7 @@ impl Session {
             OpResult::default(),
         );
         if let Err(error) = self.write(&entry) {
-            let inverse = self.reexecute(id, &applied)?;
+            let inverse = self.reexecute(id, &applied, false)?;
             self.docs[id.0].generation -= 1;
             self.docs[id.0].undo.push(Applied { inverse, ..applied });
             return Err(error);
@@ -272,9 +324,10 @@ impl Session {
     }
 
     pub(super) fn redo_one(&mut self, id: DocId) -> Result<String> {
+        self.track(id)?;
         self.flush()?;
         let applied = self.docs[id.0].redo.pop().ok_or(Error::NothingTo("redo"))?;
-        let inverse = self.reexecute(id, &applied)?;
+        let inverse = self.reexecute(id, &applied, true)?;
         self.docs[id.0].generation += 1;
         let of = applied.entry_id.clone();
         let entry = self.entry(
@@ -293,10 +346,16 @@ impl Session {
         Ok(of)
     }
 
-    pub(super) fn reexecute(&mut self, id: DocId, applied: &Applied) -> Result<Inverse> {
-        self.docs[id.0]
-            .content_mut()
-            .as_document_mut()
-            .reapply(&applied.op, &applied.inverse)
+    pub(super) fn reexecute(
+        &mut self,
+        id: DocId,
+        applied: &Applied,
+        record: bool,
+    ) -> Result<Inverse> {
+        self.docs[id.0].content_mut().as_document_mut().reapply(
+            &applied.op,
+            &applied.inverse,
+            record,
+        )
     }
 }

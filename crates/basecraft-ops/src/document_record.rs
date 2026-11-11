@@ -155,9 +155,26 @@ impl DocumentRecord {
         if let Some(review) = crate::sanger_review::saved_review(path) {
             let review = review.map_err(crate::error::invalid)?;
             // A checkpoint recovered from application state is unsaved work.
-            return review
+            let mut report = review
                 .document_report(review.recovery_path().is_some())
-                .map_err(crate::error::invalid);
+                .map_err(crate::error::invalid)?;
+            // Keep the older biological audit and include new shared-journal decisions.
+            let mut shared_record = Self::from_file(path)?;
+            shared_record
+                .events
+                .retain(|event| !matches!(event.op, Op::Open { .. }));
+            let shared = shared_record.report()?;
+            report.warnings.extend(shared.warnings);
+            if !shared.history.is_empty() {
+                report.history.extend(shared.history);
+                report.history_text = report
+                    .history
+                    .iter()
+                    .map(|row| row.summary.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+            }
+            return Ok(report);
         }
         Self::from_file(path)?.report()
     }

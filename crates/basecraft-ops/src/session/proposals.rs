@@ -40,6 +40,20 @@ impl Session {
         Ok(slot)
     }
 
+    /// Apply a kind-supported batch as one undo group, recording this session's actor.
+    pub fn apply_proposals(
+        &mut self,
+        id: DocId,
+        generation: u64,
+        revision: u64,
+        ops: &[Op],
+    ) -> Result<Vec<String>> {
+        let slot = self.proposal_target(id, generation, revision, ops.len())?;
+        let candidate = slot.content.as_document().proposal_candidate()?;
+        let batch = self.stage_proposals(id, ops, &self.actor, candidate)?;
+        self.commit_proposals(batch)
+    }
+
     /// Retains the registered sequence proposal contract, including explicit
     /// plugin actor, feature identities and the four-edit allowlist.
     pub fn apply_sequence_proposals(

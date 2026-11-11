@@ -11,6 +11,10 @@ use crate::files::{self, Format, HashingWriter, OpenedAlignment};
 use crate::session::{Inverse, normalise};
 
 impl Document for OpenedAlignment {
+    fn accepts(&self, op: &Op) -> bool {
+        op.name().starts_with("aln.")
+    }
+
     fn kind(&self) -> crate::files::Kind {
         crate::files::Kind::Alignment
     }
@@ -30,7 +34,7 @@ impl Document for OpenedAlignment {
         execute_alignment(self, op).map(|steps| (Inverse::Alignment(steps), None))
     }
 
-    fn revert(&mut self, inverse: &Inverse) -> Result<()> {
+    fn revert(&mut self, inverse: &Inverse, _record: bool) -> Result<()> {
         let Inverse::Alignment(steps) = inverse else {
             return Err(invalid("undo of the wrong kind of edit"));
         };

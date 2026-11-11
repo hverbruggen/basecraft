@@ -1,7 +1,5 @@
 //! Reviewer regression for SCI-0015: exercise the real saved call-set envelope.
-use basecraft_ops::sanger_review::{
-    ReviewChoice, ReviewOp, SangerReviewSession, instrument_review,
-};
+use basecraft_ops::sanger_review::{ReviewChoice, ReviewOp, SangerReview, instrument_review};
 use std::path::Path;
 
 #[test]
@@ -27,7 +25,7 @@ fn secondary_evidence_survives_call_set_selection_save_and_replay() {
         .collect();
     raw["inputs"][0]["calls"]["secondary_sequence"] = secondary.clone().into();
     let draft = serde_json::from_value(raw).unwrap();
-    let mut computed = SangerReviewSession::from_draft(draft, &source).unwrap();
+    let mut computed = SangerReview::from_draft(draft, &source).unwrap();
     let computed_id = computed.draft_sha256.clone();
     computed
         .apply(ReviewOp::Set {
@@ -48,7 +46,7 @@ fn secondary_evidence_survives_call_set_selection_save_and_replay() {
     instrument.apply(ReviewOp::Mask { settings: mask }).unwrap();
     let saved = tmp.path().join("review.json");
     instrument.save(&saved).unwrap();
-    let mut reopened = SangerReviewSession::load(&saved).unwrap();
+    let mut reopened = SangerReview::load(&saved).unwrap();
     assert_eq!(reopened.call_sets().len(), 2);
     assert_eq!(reopened.draft_sha256, computed_id);
     assert_eq!(reopened.decision(0), Some(&ReviewChoice::Edit('C')));
@@ -70,7 +68,7 @@ fn secondary_evidence_survives_call_set_selection_save_and_replay() {
     assert_eq!(reopened.decision(0), Some(&ReviewChoice::Edit('C')));
     let saved_again = tmp.path().join("review-again.json");
     reopened.save(&saved_again).unwrap();
-    let reopened = SangerReviewSession::load(&saved_again).unwrap();
+    let reopened = SangerReview::load(&saved_again).unwrap();
     let evidence = serde_json::to_value(reopened.working_draft().unwrap()).unwrap();
     assert_eq!(
         evidence["inputs"][0]["calls"]["secondary_sequence"],

@@ -5,7 +5,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::PathBuf};
 
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SavedReview {
     pub version: u32,
     pub draft_path: PathBuf,
@@ -18,7 +18,7 @@ pub struct SavedReview {
     pub extra: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SavedCallSets {
     pub version: u32,
@@ -26,7 +26,7 @@ pub struct SavedCallSets {
     pub sets: Vec<SavedReview>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ReviewEvidence {
     pub schema_version: u32,
     #[serde(flatten)]
@@ -50,7 +50,7 @@ impl Default for ReviewEvidence {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ReviewSource {
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
@@ -63,7 +63,7 @@ pub struct ReviewSource {
     pub reference: Option<InputReference>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ReviewSupport {
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,

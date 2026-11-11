@@ -209,6 +209,22 @@ pub enum Op {
     SubmissionEdit {
         edit: Box<crate::submission::SubmissionEdit>,
     },
+    /// Initial review, retaining exact draft bytes and all older biological events.
+    #[serde(rename = "doc.create_sanger_review")]
+    CreateSangerReview {
+        review: Box<crate::sanger_records::SavedCallSets>,
+    },
+    /// An explicit analysis continuation or selected call set. Decisions use `SangerReview`.
+    #[serde(rename = "sanger.update")]
+    SangerUpdate {
+        review: Box<crate::sanger_records::SavedCallSets>,
+    },
+    /// A decision addressed to an immutable Sanger call-set digest.
+    #[serde(rename = "sanger.review")]
+    SangerReview {
+        call_set: String,
+        edit: Box<crate::sanger::ReviewOp>,
+    },
     /// A terminal job record, including failures and cancellation.
     #[serde(rename = "job.finished")]
     JobFinished {
@@ -260,6 +276,9 @@ impl Op {
             Op::DelimitationEdit { .. } => "delimitation.edit",
             Op::MetadataEdit { .. } => "metadata.edit",
             Op::SubmissionEdit { .. } => "submission.edit",
+            Op::SangerReview { .. } => "sanger.review",
+            Op::CreateSangerReview { .. } => "doc.create_sanger_review",
+            Op::SangerUpdate { .. } => "sanger.update",
             Op::JobFinished { .. } => "job.finished",
             Op::Undo { .. } => "history.undo",
             Op::Redo { .. } => "history.redo",
@@ -320,6 +339,11 @@ pub struct DocState {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DocumentCounts {
+    SangerReview {
+        columns: u64,
+        unresolved: u64,
+        call_sets: u64,
+    },
     Sequence {
         residues: u64,
         features: u64,
@@ -352,6 +376,11 @@ impl DocState {
     /// Write named counts alongside their unchanged legacy projection.
     pub fn from_counts(counts: DocumentCounts) -> Self {
         let (len, features, rows) = match &counts {
+            DocumentCounts::SangerReview {
+                columns,
+                unresolved,
+                call_sets,
+            } => (*columns, *unresolved, Some(*call_sets)),
             DocumentCounts::Sequence { residues, features } => (*residues, *features, None),
             DocumentCounts::Alignment { columns, rows } => (*columns, 0, Some(*rows)),
             DocumentCounts::Tree { tips, annotations } => (*tips, *annotations, None),

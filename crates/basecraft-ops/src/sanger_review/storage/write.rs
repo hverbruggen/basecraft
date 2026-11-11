@@ -2,7 +2,7 @@
 //! target/evidence locks, save policy, accepted revisions and recovery acceptance.
 //! No review state or undo history is mutated while preparing the write.
 use super::{
-    ArtifactRun, ReviewEvidence, SangerReviewSession, carry_authored, inputs, invalid, publication,
+    ArtifactRun, ReviewEvidence, SangerReview, carry_authored, inputs, invalid, publication,
     retained, unavailable_sources,
 };
 use basecraft_protocol::provenance::ArtifactRevision;
@@ -21,7 +21,7 @@ pub(super) struct PreparedReviewWrite {
 }
 
 impl ReviewWrite {
-    pub(super) fn allocate(review: &SangerReviewSession, target: &Path) -> crate::Result<Self> {
+    pub(super) fn allocate(review: &SangerReview, target: &Path) -> crate::Result<Self> {
         let run = ArtifactRun::create(target, &ulid::Ulid::generate().to_string())?;
         let mut evidence = review.evidence.clone();
         evidence.runs = vec![run.directory().into()];
@@ -35,10 +35,7 @@ impl ReviewWrite {
     /// Stage the immutable snapshot, draft, previous file, visible bytes and
     /// support record before the owner attempts a visible replacement. The
     /// evidence lock must already be held, matching `link_generated_input_locked`.
-    pub(super) fn prepare(
-        &self,
-        review: &SangerReviewSession,
-    ) -> crate::Result<PreparedReviewWrite> {
+    pub(super) fn prepare(&self, review: &SangerReview) -> crate::Result<PreparedReviewWrite> {
         let run = &self.run;
         let path = &self.target;
         let mut dependencies = review.evidence.runs.clone();
@@ -152,12 +149,12 @@ mod tests {
     use super::*;
     use crate::sanger_review::{ReviewChoice, ReviewOp};
 
-    fn review() -> SangerReviewSession {
+    fn review() -> SangerReview {
         let fixtures =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/sanger-legacy");
-        let mut review = SangerReviewSession::new(&fixtures.join("draft-a.json")).unwrap();
+        let mut review = SangerReview::new(&fixtures.join("draft-a.json")).unwrap();
         review
-            .retain_call_set(SangerReviewSession::new(&fixtures.join("draft-b.json")).unwrap())
+            .retain_call_set(SangerReview::new(&fixtures.join("draft-b.json")).unwrap())
             .unwrap();
         review
             .apply(ReviewOp::Set {
@@ -169,12 +166,10 @@ mod tests {
         review
     }
 
-    fn state(review: &SangerReviewSession) -> serde_json::Value {
+    fn state(review: &SangerReview) -> serde_json::Value {
         serde_json::json!({
             "report": review.document_report(false).unwrap().raw,
             "evidence": review.evidence,
-            "undo": review.undo,
-            "redo": review.redo,
             "anchor": review.anchor,
             "recovery": review.recovery,
         })
@@ -220,7 +215,7 @@ mod tests {
             "publication alone is not live acceptance"
         );
         assert!(review.accepted.is_none());
-        let reopened = SangerReviewSession::load(&target).unwrap();
+        let reopened = SangerReview::load(&target).unwrap();
         assert_eq!(
             reopened.document_report(false).unwrap().raw,
             review.document_report(false).unwrap().raw

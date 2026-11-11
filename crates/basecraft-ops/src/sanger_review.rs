@@ -3,7 +3,6 @@
 //! inferred or substituted by these operations.
 
 mod edit;
-mod save;
 mod storage;
 pub use storage::{SangerRun, record_addition};
 pub(crate) use storage::{is_review, relocate_package};
@@ -28,7 +27,7 @@ pub fn evidence_kind(path: &Path) -> Option<EvidenceKind> {
     if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes)
         && value.get("version").is_some()
     {
-        return SangerReviewSession::decode_value(value, path)
+        return SangerReview::decode_value(value, path)
             .ok()
             .map(|_| EvidenceKind::Review);
     }
@@ -41,7 +40,7 @@ pub fn evidence_kind(path: &Path) -> Option<EvidenceKind> {
 /// [`evidence_kind`]. Any other `.json` file is refused with the reason, so a
 /// damaged, unknown or future review is never mistaken for another format.
 /// `None`: not JSON, so not Sanger evidence. Creates no records.
-pub fn saved_review(path: &Path) -> Option<Result<SangerReviewSession, String>> {
+pub fn saved_review(path: &Path) -> Option<Result<SangerReview, String>> {
     if !path
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("json"))
@@ -51,7 +50,7 @@ pub fn saved_review(path: &Path) -> Option<Result<SangerReviewSession, String>> 
     let name = path.display();
     let unreadable =
         |error: String| format!("{name} is not a readable saved Sanger review: {error}");
-    let read = || -> Result<SangerReviewSession, String> {
+    let read = || -> Result<SangerReview, String> {
         // Keep the acquired bytes through classification, decoding and acceptance.
         // The accepted-revision check still verifies the current file; a second
         // classification/load pass must not select different bytes after a race.
@@ -69,7 +68,7 @@ pub fn saved_review(path: &Path) -> Option<Result<SangerReviewSession, String>> 
             }
             return Err(unreadable("Unsupported Sanger review version".into()));
         }
-        SangerReviewSession::decode_value(value, path)
+        SangerReview::decode_value(value, path)
             .and_then(|review| review.accept_loaded(path, &bytes))
             .map_err(unreadable)
     };
@@ -88,10 +87,10 @@ pub fn recover(checkpoint: &Path, destination: &Path) -> crate::Result<PathBuf> 
 fn recover_with_saver(
     checkpoint: &Path,
     destination: &Path,
-    saver: impl FnOnce(&mut SangerReviewSession, &Path) -> Result<(), String>,
+    saver: impl FnOnce(&mut SangerReview, &Path) -> Result<(), String>,
 ) -> crate::Result<PathBuf> {
     use crate::error::invalid;
-    let review = SangerReviewSession::load(checkpoint).map_err(invalid)?;
+    let review = SangerReview::load(checkpoint).map_err(invalid)?;
     let name = review
         .recovery_path()
         .and(review.storage_anchor().file_name())
@@ -121,10 +120,10 @@ use basecraft_protocol::sanger_records::{
 };
 use storage::EvidencePaths;
 
-pub struct SangerReviewSession {
-    save_authority: Option<save::RootAuthority>,
+#[derive(Clone)]
+pub struct SangerReview {
     // Only the selected session owns the inactive sets. Each set owns its replay history.
-    retained: Vec<SangerReviewSession>,
+    retained: Vec<SangerReview>,
     pub draft: SangerDraft,
     pub draft_path: PathBuf,
     pub draft_sha256: String,
@@ -135,8 +134,6 @@ pub struct SangerReviewSession {
     pub reference: Option<ReviewReference>,
     manual: Vec<bool>,
     events: Vec<ReviewOp>,
-    undo: Vec<Change>,
-    redo: Vec<Change>,
     evidence: storage::ReviewEvidence,
     anchor: PathBuf,
     recovery: Option<PathBuf>,
@@ -144,7 +141,7 @@ pub struct SangerReviewSession {
     stored_extra: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
-impl SangerReviewSession {
+impl SangerReview {
     fn default_mask(length: usize) -> MaskSettings {
         MaskSettings {
             start: 0,
@@ -293,7 +290,6 @@ impl SangerReviewSession {
         let hash = basecraft_io::sha256_bytes(draft_json.as_bytes());
         let decisions = vec![ReviewChoice::Pending; draft.columns.len()];
         Ok(Self {
-            save_authority: Some(save::RootAuthority::new()),
             retained: Vec::new(),
             mask: Self::default_mask(draft.columns.len()),
             settings: ReviewSettings::default(),
@@ -305,8 +301,6 @@ impl SangerReviewSession {
             draft_json,
             decisions,
             events: Vec::new(),
-            undo: Vec::new(),
-            redo: Vec::new(),
             evidence: storage::ReviewEvidence::default(),
             anchor: std::path::absolute(draft_path).map_err(|e| e.to_string())?,
             recovery: None,
@@ -373,7 +367,6 @@ impl SangerReviewSession {
                 }
                 for set in &mut sets {
                     set.recovery = None;
-                    set.demote_save_authority();
                 }
                 session.retained = sets;
                 Ok(session)
@@ -406,12 +399,7 @@ impl SangerReviewSession {
         evidence
             .map_paths(|p| Ok(parent.join(p)))
             .map_err(|e| e.to_string())?;
-        let bundle = crate::provenance::bundle_for_result(path);
-        if bundle.join("manifest.json").is_file() && !evidence.runs.contains(&bundle) {
-            evidence.runs.push(bundle);
-        }
         let mut session = Self {
-            save_authority: Some(save::RootAuthority::new()),
             retained: Vec::new(),
             mask: Self::default_mask(draft.columns.len()),
             settings: ReviewSettings::default(),
@@ -423,8 +411,6 @@ impl SangerReviewSession {
             draft_json: stored.draft_json,
             decisions,
             events: Vec::new(),
-            undo: Vec::new(),
-            redo: Vec::new(),
             evidence,
             anchor: std::path::absolute(path).map_err(|e| e.to_string())?,
             recovery: None,
@@ -457,9 +443,7 @@ impl SangerReviewSession {
     }
 
     /// Keep older computed sets and their decisions when a new producer is used.
-    pub fn retain_call_set(&mut self, mut session: Self) -> Result<(), String> {
-        self.invalidate_save_authority();
-        session.demote_save_authority();
+    pub fn retain_call_set(&mut self, session: Self) -> Result<(), String> {
         if !session.retained.is_empty() || self.retained.len() >= 31 {
             return Err("Too many or nested Sanger call sets".into());
         }
@@ -482,7 +466,6 @@ impl SangerReviewSession {
     }
 
     pub fn select_call_set(&mut self, id: &str) -> Result<(), String> {
-        self.invalidate_save_authority();
         let previous = self.draft_sha256.clone();
         self.swap_call_set(id)?;
         if let Err(error) = self.checkpoint() {
@@ -505,7 +488,6 @@ impl SangerReviewSession {
         let mut selected = retained.remove(index);
         std::mem::swap(self, &mut selected);
         // Recovery and save destination belong to the whole review document.
-        std::mem::swap(&mut self.save_authority, &mut selected.save_authority);
         std::mem::swap(&mut self.recovery, &mut selected.recovery);
         std::mem::swap(&mut self.anchor, &mut selected.anchor);
         std::mem::swap(&mut self.accepted, &mut selected.accepted);
@@ -524,7 +506,6 @@ impl SangerReviewSession {
         path: &Path,
         policy: crate::input_evidence::SavePolicy,
     ) -> Result<(), String> {
-        self.invalidate_save_authority();
         self.save_durable(path, policy).map_err(|e| e.to_string())
     }
 
@@ -567,23 +548,19 @@ impl SangerReviewSession {
     }
 
     pub fn apply(&mut self, op: ReviewOp) -> Result<(), String> {
-        self.invalidate_save_authority();
         match &op {
-            ReviewOp::Undo => {
-                let change = self.undo.pop().ok_or("Nothing to undo")?;
-                if let Err(error) = self.install_change(&change, false) {
-                    self.undo.push(change);
-                    return Err(error);
+            ReviewOp::Undo | ReviewOp::Redo => {
+                // Legacy event interpretation is transient. Live editors use Session's stacks.
+                let (mut undo, mut redo) = self.session_history().map_err(|e| e.to_string())?;
+                let applied = if matches!(op, ReviewOp::Undo) {
+                    undo.pop()
+                } else {
+                    redo.pop()
                 }
-                self.redo.push(change);
-            }
-            ReviewOp::Redo => {
-                let change = self.redo.pop().ok_or("Nothing to redo")?;
-                if let Err(error) = self.install_change(&change, true) {
-                    self.redo.push(change);
-                    return Err(error);
+                .ok_or("Nothing to undo or redo")?;
+                if let crate::session::Inverse::SangerReview { change, .. } = applied.inverse {
+                    self.install_change(&change, matches!(op, ReviewOp::Redo))?;
                 }
-                self.undo.push(change);
             }
             ReviewOp::Export { path, sha256 } => {
                 let actual = basecraft_io::sha256_file(path).map_err(|e| e.to_string())?;
@@ -594,13 +571,6 @@ impl SangerReviewSession {
             _ => {
                 let change = self.prepare_change(&op)?;
                 self.install_change(&change, true)?;
-                // Initial triage stays outside legacy undo history.
-                if !matches!(op, ReviewOp::AutoAccept { .. }) {
-                    if !matches!(op, ReviewOp::Evaluate { .. }) || !self.events.is_empty() {
-                        self.undo.push(change);
-                    }
-                    self.redo.clear();
-                }
             }
         }
         self.events.push(op);
@@ -610,7 +580,6 @@ impl SangerReviewSession {
     /// Export only a fully resolved specimen sequence. The output hash is a
     /// replayable operation; source AB1 and draft paths can never be replaced.
     pub fn export_consensus(&mut self, path: &Path, label: &str) -> Result<(), String> {
-        self.invalidate_save_authority();
         let sequence = self
             .resolved_sequence()
             .ok_or("Resolve every review column before export")?;
@@ -683,7 +652,7 @@ mod tests {
         let columns: Vec<_> = "ACGT".chars().enumerate().map(|(i,b)| serde_json::json!({"column": i+1,"consensus":b,"support":[{"read":1,"base":b,"kind":"call"}],"conflict":false,"review":true})).collect();
         let data = serde_json::json!({"status":"draft_requires_review","engine":"Tracy","version_output":"test","engine_sha256":"a".repeat(64),"mode":"basecall","inputs":[{"read":1,"path":"x.ab1","sha256":"b".repeat(64),"orientation":"forward"}],"consensus":"ACGT","consensus_length":4,"minimum_overlap":1,"minimum_identity":0.8,"overlaps":[],"aligned_columns":4,"conflict_columns":0,"columns":columns});
         std::fs::write(&path, serde_json::to_vec(&data).unwrap()).unwrap();
-        let mut session = SangerReviewSession::new(&path).unwrap();
+        let mut session = SangerReview::new(&path).unwrap();
         session
             .apply(ReviewOp::Set {
                 columns: vec![1, 2],
@@ -709,7 +678,7 @@ mod tests {
         let review = tmp.path().join("review.json");
         session.save(&review).unwrap();
         std::fs::remove_file(path).unwrap();
-        let mut replayed = SangerReviewSession::load(&review).unwrap();
+        let mut replayed = SangerReview::load(&review).unwrap();
         assert_eq!(replayed.mask, settings);
         assert_eq!(replayed.events(), session.events());
         let output = tmp.path().join("masked.fa");
@@ -720,7 +689,7 @@ mod tests {
         // loss/change of an exported FASTA, without rewriting the recorded path.
         replayed.save(&review).unwrap();
         std::fs::write(&output, ">changed\nA\n").unwrap();
-        let changed = SangerReviewSession::load(&review).unwrap();
+        let changed = SangerReview::load(&review).unwrap();
         assert_eq!(changed.events(), replayed.events());
         assert_eq!(changed.resolved_sequence(), replayed.resolved_sequence());
         let export = replayed.events().last().unwrap().clone();
@@ -730,7 +699,7 @@ mod tests {
         std::fs::create_dir(&moved).unwrap();
         let relocated = moved.join("review.json");
         std::fs::rename(&review, &relocated).unwrap();
-        let mut recovered = SangerReviewSession::load(&relocated).unwrap();
+        let mut recovered = SangerReview::load(&relocated).unwrap();
         assert_eq!(recovered.events(), replayed.events());
         recovered.apply(ReviewOp::Undo).unwrap();
         assert_eq!(recovered.unresolved(), 2);
@@ -741,7 +710,7 @@ mod tests {
         let events = damaged["events"].as_array_mut().unwrap();
         events.last_mut().unwrap()["sha256"] = "not-a-sha256".into();
         std::fs::write(&relocated, serde_json::to_vec(&damaged).unwrap()).unwrap();
-        assert!(SangerReviewSession::load(&relocated).is_err());
+        assert!(SangerReview::load(&relocated).is_err());
         let before = replayed.mask.clone();
         let mut invalid = before.clone();
         invalid.start = invalid.end;
@@ -760,7 +729,7 @@ mod tests {
         let columns: Vec<_> = "ACGT".chars().enumerate().map(|(i,b)| serde_json::json!({"column": i+1,"consensus":b,"support":[{"read":1,"base":b,"kind":"call"}],"conflict":false,"review":true})).collect();
         let data = serde_json::json!({"status":"draft_requires_review","engine":"Tracy","version_output":"test","engine_sha256":"a".repeat(64),"mode":"basecall","inputs":[{"read":1,"path":"x.ab1","sha256":"b".repeat(64),"orientation":"forward"}],"consensus":"ACGT","consensus_length":4,"minimum_overlap":1,"minimum_identity":0.8,"overlaps":[],"aligned_columns":4,"conflict_columns":0,"columns":columns});
         std::fs::write(&path, serde_json::to_vec(&data).unwrap()).unwrap();
-        let mut session = SangerReviewSession::new(&path).unwrap();
+        let mut session = SangerReview::new(&path).unwrap();
         let defaults = ReviewSettings::default();
         session
             .apply(ReviewOp::Evaluate {
@@ -850,7 +819,7 @@ mod tests {
         let review = tmp.path().join("review.json");
         session.save(&review).unwrap();
         std::fs::remove_file(&path).unwrap();
-        let mut loaded = SangerReviewSession::load(&review).unwrap();
+        let mut loaded = SangerReview::load(&review).unwrap();
         assert_eq!(loaded.settings, strict);
         assert_eq!(loaded.reference, Some(reference));
         assert_eq!(loaded.mask, mask);
@@ -876,7 +845,7 @@ mod tests {
             ]
         });
         std::fs::write(&source, serde_json::to_vec(&draft).unwrap()).unwrap();
-        let mut review = SangerReviewSession::new(&source).unwrap();
+        let mut review = SangerReview::new(&source).unwrap();
         review
             .apply(ReviewOp::AutoAccept { columns: vec![0] })
             .unwrap();
@@ -895,7 +864,7 @@ mod tests {
         let store = tmp.path().join("review.json");
         review.save(&store).unwrap();
         std::fs::remove_file(&source).unwrap();
-        let mut replayed = SangerReviewSession::load(&store).unwrap();
+        let mut replayed = SangerReview::load(&store).unwrap();
         assert_eq!(replayed.events(), review.events());
         assert_eq!(replayed.resolved_sequence().as_deref(), Some("AT"));
         let output = tmp.path().join("edited.fa");
@@ -921,7 +890,7 @@ mod tests {
         if !path.exists() {
             return;
         }
-        let mut review = SangerReviewSession::new(path).unwrap();
+        let mut review = SangerReview::new(path).unwrap();
         let issue = review.draft.columns.iter().position(|c| c.review).unwrap();
         let original = review.decision(issue).unwrap().clone();
         review
@@ -938,14 +907,14 @@ mod tests {
         let store = tempfile::NamedTempFile::new().unwrap().into_temp_path();
         std::fs::remove_file(&store).unwrap();
         review.save(&store).unwrap();
-        let replayed = SangerReviewSession::load(&store).unwrap();
+        let replayed = SangerReview::load(&store).unwrap();
         assert_eq!(replayed.events(), review.events());
         assert_eq!(replayed.decision(issue), review.decision(issue));
         assert_eq!(replayed.unresolved(), review.unresolved());
         let temporary = tempfile::tempdir().unwrap();
         let source = temporary.path().join("draft.json");
         std::fs::copy(path, &source).unwrap();
-        let mut complete = SangerReviewSession::new(&source).unwrap();
+        let mut complete = SangerReview::new(&source).unwrap();
         let issues = (0..complete.draft.columns.len()).collect();
         complete
             .apply(ReviewOp::Set {
@@ -959,14 +928,14 @@ mod tests {
         let portable = tempfile::NamedTempFile::new().unwrap();
         complete.save(portable.path()).unwrap();
         std::fs::remove_file(source).unwrap();
-        let loaded = SangerReviewSession::load(portable.path()).unwrap();
+        let loaded = SangerReview::load(portable.path()).unwrap();
         assert_eq!(loaded.resolved_sequence(), complete.resolved_sequence());
         assert!(std::fs::read_to_string(fasta).unwrap().contains('\n'));
     }
 }
 
 /// Open instrument evidence immediately, without requiring writable metadata storage.
-pub fn instrument_review(path: &Path) -> Result<SangerReviewSession, String> {
+pub fn instrument_review(path: &Path) -> Result<SangerReview, String> {
     use basecraft_docs::sanger::{
         DraftColumn, InputRead, Orientation, ReadSupport, SupportKind, TraceCalls,
     };
@@ -1000,14 +969,14 @@ pub fn instrument_review(path: &Path) -> Result<SangerReviewSession, String> {
             conflict: false, review: true }).collect(),
         limitations: vec!["Instrument calls; missing qualities use zero for conservative triage. Review before use.".into()],
     };
-    SangerReviewSession::from_draft(draft, &path)
+    SangerReview::from_draft(draft, &path)
 }
 
 #[cfg(test)]
 mod call_set_tests {
     use super::*;
 
-    fn instrument(folder: &Path) -> SangerReviewSession {
+    fn instrument(folder: &Path) -> SangerReview {
         let path = folder.join("trace.ab1");
         std::fs::copy(
             Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1018,13 +987,13 @@ mod call_set_tests {
         instrument_review(&path).unwrap()
     }
 
-    fn alternative(session: &SangerReviewSession, version: &str) -> SangerReviewSession {
+    fn alternative(session: &SangerReview, version: &str) -> SangerReview {
         let mut draft = session.draft.clone();
         draft.engine = "Tracy".into();
         draft.mode = "basecall".into();
         draft.version_output = version.into();
         draft.engine_sha256 = "a".repeat(64);
-        SangerReviewSession::from_draft(draft, &session.draft_path).unwrap()
+        SangerReview::from_draft(draft, &session.draft_path).unwrap()
     }
 
     #[test]
@@ -1066,7 +1035,7 @@ mod call_set_tests {
             "legacy reader must refuse v2"
         );
         assert_eq!(evidence_kind(&saved), Some(EvidenceKind::Review));
-        let mut reopened = SangerReviewSession::load(&saved).unwrap();
+        let mut reopened = SangerReview::load(&saved).unwrap();
         assert_eq!(reopened.call_sets().len(), 3);
         assert_eq!(reopened.draft_sha256, computed_id);
         assert_eq!(reopened.mask.start, 1);
@@ -1079,7 +1048,7 @@ mod call_set_tests {
         let package = tmp.path().join("package");
         crate::provenance::package(&saved, &package).unwrap();
         std::fs::remove_file(&session.draft_path).unwrap();
-        let packaged = SangerReviewSession::load(&package.join("review.json")).unwrap();
+        let packaged = SangerReview::load(&package.join("review.json")).unwrap();
         assert!(packaged.working_draft().is_ok());
         assert!(
             packaged
@@ -1095,7 +1064,7 @@ mod call_set_tests {
         let mut session = instrument(tmp.path());
         let legacy = tmp.path().join("legacy.json");
         session.save(&legacy).unwrap();
-        assert!(SangerReviewSession::load(&legacy).is_ok());
+        assert!(SangerReview::load(&legacy).is_ok());
         assert_eq!(
             serde_json::from_slice::<serde_json::Value>(&std::fs::read(&legacy).unwrap()).unwrap()
                 ["version"],
@@ -1110,11 +1079,11 @@ mod call_set_tests {
             serde_json::from_slice(&std::fs::read(&saved).unwrap()).unwrap();
         raw["sets"][1]["draft_sha256"] = "b".repeat(64).into();
         std::fs::write(&saved, serde_json::to_vec(&raw).unwrap()).unwrap();
-        assert!(SangerReviewSession::load(&saved).is_err());
+        assert!(SangerReview::load(&saved).is_err());
         assert_eq!(evidence_kind(&saved), None);
         raw["version"] = 99.into();
         std::fs::write(&saved, serde_json::to_vec(&raw).unwrap()).unwrap();
-        assert!(SangerReviewSession::load(&saved).is_err());
+        assert!(SangerReview::load(&saved).is_err());
         let unknown = tmp.path().join("unrelated.sanger-review.json");
         std::fs::write(&unknown, b"{\"other\":true}").unwrap();
         assert_eq!(evidence_kind(&unknown), None);
@@ -1193,7 +1162,7 @@ mod moved_and_failed_recovery_tests {
     mod recover_cleanup_tests {
         include!("sanger_review/recover_cleanup_tests.rs");
     }
-    pub(super) fn pair(folder: &Path) -> SangerReviewSession {
+    pub(super) fn pair(folder: &Path) -> SangerReview {
         std::fs::create_dir(folder).unwrap();
         let source = folder.join("source.ab1");
         std::fs::copy(
@@ -1207,7 +1176,7 @@ mod moved_and_failed_recovery_tests {
         draft.engine = "Tracy".into();
         draft.mode = "basecall".into();
         draft.version_output = "caller".into();
-        let mut alternative = SangerReviewSession::from_draft(draft, &source).unwrap();
+        let mut alternative = SangerReview::from_draft(draft, &source).unwrap();
         alternative
             .apply(ReviewOp::Set {
                 columns: vec![0],
@@ -1230,8 +1199,8 @@ mod moved_and_failed_recovery_tests {
         let mut original = pair(&folder);
         let path = folder.join("review.json");
         original.save(&path).unwrap();
-        let mut a = SangerReviewSession::load(&path).unwrap();
-        let mut b = SangerReviewSession::load(&path).unwrap();
+        let mut a = SangerReview::load(&path).unwrap();
+        let mut b = SangerReview::load(&path).unwrap();
         a.apply(ReviewOp::Set {
             columns: vec![1],
             choice: ReviewChoice::Edit('A'),
@@ -1255,7 +1224,7 @@ mod moved_and_failed_recovery_tests {
         assert!(b.save(&path).is_err(), "stale review must not overwrite A");
         assert_eq!(std::fs::read(&path).unwrap(), accepted);
         assert_eq!(b.decision(1), Some(&ReviewChoice::Edit('G')));
-        let mut recovered = SangerReviewSession::load(b.recovery_path().unwrap()).unwrap();
+        let mut recovered = SangerReview::load(b.recovery_path().unwrap()).unwrap();
         assert!(recovered.save(&path).is_err());
         assert!(recovered.save(b.recovery_path().unwrap()).is_err());
         assert_eq!(recovered.decision(1), Some(&ReviewChoice::Edit('G')));
@@ -1276,7 +1245,7 @@ mod moved_and_failed_recovery_tests {
             let path = folder.join("review.json");
             review.save(&path).unwrap();
             let accepted = std::fs::read(&path).unwrap();
-            let mut loaded = SangerReviewSession::load(&path).unwrap();
+            let mut loaded = SangerReview::load(&path).unwrap();
             let other = loaded.retained[0].draft_sha256.clone();
             loaded.select_call_set(&other).unwrap();
             loaded
@@ -1308,7 +1277,7 @@ mod moved_and_failed_recovery_tests {
             assert_eq!(std::fs::read(&unknown).unwrap(), b"unrelated");
             let new = folder.join("new.json");
             loaded.save(&new).unwrap();
-            let reopened = SangerReviewSession::load(&new).unwrap();
+            let reopened = SangerReview::load(&new).unwrap();
             assert_eq!(reopened.decision(1), Some(&ReviewChoice::Edit('T')));
             assert_eq!(
                 reopened.retained[0].decision(0),
@@ -1340,7 +1309,7 @@ mod moved_and_failed_recovery_tests {
         review
             .save(&folder.join("../source/./review.json"))
             .unwrap();
-        let reopened = SangerReviewSession::load(&path).unwrap();
+        let reopened = SangerReview::load(&path).unwrap();
         assert_eq!(reopened.call_sets().len(), 2);
     }
 
@@ -1397,7 +1366,7 @@ mod moved_and_failed_recovery_tests {
                 assert_eq!(input.state, "broken");
             }
             assert_eq!(
-                SangerReviewSession::load(&path).unwrap().decision(1),
+                SangerReview::load(&path).unwrap().decision(1),
                 Some(&ReviewChoice::Edit('T'))
             );
             fixtures.push(tmp);
@@ -1428,11 +1397,11 @@ mod moved_and_failed_recovery_tests {
         assert!(error.contains("data saved; binding incomplete"), "{error}");
         assert!(error.contains("repair evidence"));
         assert_eq!(
-            SangerReviewSession::load(&path).unwrap().decision(1),
+            SangerReview::load(&path).unwrap().decision(1),
             Some(&ReviewChoice::Edit('T'))
         );
         assert_eq!(
-            SangerReviewSession::load(review.recovery_path().unwrap())
+            SangerReview::load(review.recovery_path().unwrap())
                 .unwrap()
                 .call_sets()
                 .len(),
@@ -1465,7 +1434,7 @@ mod moved_and_failed_recovery_tests {
         // writers loaded before either is allowed to publish.
         if let Some(target) = std::env::var_os("BASECRAFT_SANGER_WRITER_TARGET") {
             let path = PathBuf::from(target);
-            let mut session = SangerReviewSession::load(&path).unwrap();
+            let mut session = SangerReview::load(&path).unwrap();
             session
                 .apply(ReviewOp::Set {
                     columns: vec![1],
@@ -1487,7 +1456,7 @@ mod moved_and_failed_recovery_tests {
         let mut review = pair(&folder);
         let path = folder.join("review.json");
         review.save(&path).unwrap();
-        let mut parent = SangerReviewSession::load(&path).unwrap();
+        let mut parent = SangerReview::load(&path).unwrap();
         parent
             .apply(ReviewOp::Set {
                 columns: vec![1],
@@ -1505,7 +1474,7 @@ mod moved_and_failed_recovery_tests {
         let child_saved =
             std::fs::read_to_string(path.with_extension("result")).unwrap() == "saved";
         assert_ne!(parent_saved, child_saved);
-        let loaded = SangerReviewSession::load(&path).unwrap();
+        let loaded = SangerReview::load(&path).unwrap();
         assert_eq!(
             loaded.decision(1),
             Some(&ReviewChoice::Edit(if parent_saved { 'T' } else { 'A' }))
@@ -1525,7 +1494,7 @@ mod moved_and_failed_recovery_tests {
         review.save(&original.join("review.json")).unwrap();
         let moved = tmp.path().join("moved");
         std::fs::rename(original, &moved).unwrap();
-        let mut reopened = SangerReviewSession::load(&moved.join("review.json")).unwrap();
+        let mut reopened = SangerReview::load(&moved.join("review.json")).unwrap();
         assert!(reopened.working_draft().is_ok());
         let other = reopened.retained[0].draft_sha256.clone();
         reopened.select_call_set(&other).unwrap();
@@ -1566,7 +1535,7 @@ mod moved_and_failed_recovery_tests {
         assert_eq!(std::fs::read(&saved).unwrap(), previous);
         review.recovery = None;
         review.save(&saved).unwrap();
-        let reopened = SangerReviewSession::load(&saved).unwrap();
+        let reopened = SangerReview::load(&saved).unwrap();
         assert_eq!(reopened.decision(1), Some(&ReviewChoice::Edit('T')));
         assert_eq!(
             reopened.retained[0].decision(0),

@@ -7,6 +7,7 @@ use basecraft_protocol::Op;
 
 fn payload_kind(payload: &files::Loaded) -> files::Kind {
     match payload {
+        files::Loaded::SangerReview(_) => files::Kind::SangerReview,
         files::Loaded::Sequence(_) => files::Kind::Sequence,
         files::Loaded::Alignment(_) => files::Kind::Alignment,
         files::Loaded::Tree(_) => files::Kind::Tree,
@@ -27,6 +28,7 @@ fn agree(path: &Path, expected: files::Kind) {
     assert_eq!(kind, expected);
     assert_eq!(classified.state(id), plain.state(old));
     match kind {
+        files::Kind::SangerReview => assert!(classified.sanger_review(id).is_ok()),
         files::Kind::Sequence => assert!(classified.checked_sequence(id).is_ok()),
         files::Kind::Alignment => assert!(classified.alignment(id).is_ok()),
         files::Kind::Tree => assert!(classified.tree(id).is_ok()),

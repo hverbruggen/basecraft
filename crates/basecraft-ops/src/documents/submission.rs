@@ -15,6 +15,10 @@ pub(crate) fn companions(_target: &Path) -> Vec<PathBuf> {
 }
 
 impl Document for Submission {
+    fn accepts(&self, op: &Op) -> bool {
+        op.name().starts_with("submission.")
+    }
+
     fn kind(&self) -> crate::files::Kind {
         crate::files::Kind::Submission
     }
@@ -65,7 +69,7 @@ impl Document for Submission {
         Ok((Inverse::Submission(before), None))
     }
 
-    fn revert(&mut self, inverse: &Inverse) -> Result<()> {
+    fn revert(&mut self, inverse: &Inverse, _record: bool) -> Result<()> {
         let Inverse::Submission(before) = inverse else {
             return Err(invalid("undo of the wrong kind of edit"));
         };

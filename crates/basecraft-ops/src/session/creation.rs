@@ -70,6 +70,7 @@ impl Session {
             baseline_logged: false,
             accepted_hashes: vec![],
             saved_state_hashes: vec![],
+            saved_target: None,
             current_saved_hashes: std::sync::OnceLock::new(),
             absent_sidecars: vec![],
             origin: None,
@@ -99,5 +100,105 @@ impl Session {
             return Err(error);
         }
         Ok(id)
+    }
+}
+
+impl Session {
+    /// Adopt a prepared review into the shared journal. The embedded drafts make recovery self-contained.
+    pub fn create_sanger_review(
+        &mut self,
+        review: &crate::sanger_review::SangerReview,
+    ) -> Result<DocId> {
+        let key = format!("new-review-{}.json", self.next_id());
+        let mut review = review.clone();
+        review.ensure_sources(review.storage_anchor().to_path_buf().as_path())?;
+        let snapshot = review.session_snapshot(&self.resolve(&key))?;
+        self.create_sanger_review_with_key(&key, &snapshot)
+    }
+
+    pub(crate) fn create_sanger_review_with_key(
+        &mut self,
+        key: &str,
+        snapshot: &basecraft_protocol::sanger_records::SavedCallSets,
+    ) -> Result<DocId> {
+        self.flush()?;
+        let review = crate::sanger_review::SangerReview::from_session_snapshot(
+            snapshot,
+            &self.resolve(key),
+        )?;
+        self.docs.push(Slot {
+            key: key.into(),
+            content: Loaded::SangerReview(Box::new(review)),
+            generation: 0,
+            save_authority: super::save_authority::PendingSaveAuthority::default(),
+            undo: vec![],
+            redo: vec![],
+            baseline: None,
+            baseline_logged: false,
+            accepted_hashes: vec![],
+            saved_state_hashes: vec![],
+            saved_target: None,
+            current_saved_hashes: std::sync::OnceLock::new(),
+            absent_sidecars: vec![],
+            origin: None,
+            origin_issue: None,
+            origin_bundle: crate::provenance::bundle_for_result(&self.resolve(key)),
+            disk_stamp: basecraft_protocol::provenance::FileStamp {
+                size: 0,
+                modified_seconds: 0,
+                modified_nanos: 0,
+                device: None,
+                inode: None,
+            },
+        });
+        let id = DocId(self.docs.len() - 1);
+        let entry = self.entry(
+            id,
+            self.actor.clone(),
+            Op::CreateSangerReview {
+                review: Box::new(snapshot.clone()),
+            },
+            OpResult::default(),
+        );
+        self.docs[id.0].baseline = Some(entry);
+        if let Err(error) = self.track(id) {
+            self.docs.pop();
+            return Err(error);
+        }
+        Ok(id)
+    }
+
+    /// Record an explicit analysis continuation without creating a parallel history.
+    pub fn update_sanger_review(
+        &mut self,
+        id: DocId,
+        review: &crate::sanger_review::SangerReview,
+    ) -> Result<()> {
+        self.sanger_review(id)?;
+        let snapshot = review.session_snapshot(&self.resolve(self.doc_key(id)))?;
+        self.apply(
+            id,
+            Op::SangerUpdate {
+                review: Box::new(snapshot),
+            },
+        )?;
+        Ok(())
+    }
+}
+
+impl Session {
+    // A prior Save As target remains owned by this session without changing the
+    // journal's stable document key or discarding its undo stack.
+    pub(super) fn check_previous_save_target(
+        &self,
+        id: DocId,
+        target: &std::path::Path,
+    ) -> Result<bool> {
+        let Some(entry) = self.events.iter().rev().find(|entry| entry.doc == self.docs[id.0].key
+            && matches!(&entry.op, Op::Save { path } if crate::save_guard::same_target(&self.resolve(path), target))) else { return Ok(false); };
+        for (path, hash) in &entry.result.hashes {
+            crate::save_guard::check_hash(&self.resolve(path), hash)?;
+        }
+        Ok(true)
     }
 }

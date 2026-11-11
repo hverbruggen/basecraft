@@ -77,7 +77,7 @@ fn capture_legacy_writer() {
         format!("{}\n", serde_json::to_string_pretty(&draft).unwrap()),
     )
     .unwrap();
-    let mut a = SangerReviewSession::new(Path::new("draft-a.json")).unwrap();
+    let mut a = SangerReview::new(Path::new("draft-a.json")).unwrap();
     a.apply(ReviewOp::AutoAccept {
         columns: vec![0, 1],
     })
@@ -124,7 +124,7 @@ fn capture_legacy_writer() {
         .unwrap();
     a.apply(evaluate(2)).unwrap();
     a.save(Path::new("/fixture/single.json")).unwrap();
-    let mut b = SangerReviewSession::new(Path::new("draft-b.json")).unwrap();
+    let mut b = SangerReview::new(Path::new("draft-b.json")).unwrap();
     b.apply(evaluate(2)).unwrap();
     assert!(b.apply(ReviewOp::Undo).is_err());
     b.apply(ReviewOp::Set {
@@ -155,7 +155,7 @@ fn capture_legacy_writer() {
 #[test]
 fn evaluate_initialization_depends_on_first_event_not_first_evaluate() {
     let root = fixture_root();
-    let fresh = || SangerReviewSession::new(&root.join("draft-a.json")).unwrap();
+    let fresh = || SangerReview::new(&root.join("draft-a.json")).unwrap();
     let mut first = fresh();
     first.apply(evaluate(2)).unwrap();
     assert!(first.apply(ReviewOp::Undo).is_err());
@@ -229,7 +229,7 @@ fn frozen_writer_bytes_drafts_support_and_selected_history() {
         checkpoint_path(&root),
     ] {
         let original = std::fs::read(&path).unwrap();
-        let mut review = SangerReviewSession::load(&path).unwrap();
+        let mut review = SangerReview::load(&path).unwrap();
         // Reuse the loaded run IDs and the exact logical destination. Do not save:
         // save_durable would allocate another ID and create a different record.
         let mut bytes = serde_json::to_vec_pretty(&review.stored_at(&path).unwrap()).unwrap();
@@ -345,7 +345,7 @@ fn legacy_extensions_and_invalid_records_keep_existing_contract() {
     let original: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     let decode = |value: &serde_json::Value| {
-        SangerReviewSession::decode(&serde_json::to_vec(value).unwrap(), &path)
+        SangerReview::decode(&serde_json::to_vec(value).unwrap(), &path)
     };
     let mut value = original.clone();
     value["outer_extension"] = json!({"retained":true});

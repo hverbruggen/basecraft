@@ -65,7 +65,9 @@ fn scenario<T: Debug + PartialEq>(
     let doc = session.open(&path).unwrap();
     let (ops, expected) = plan(&session, doc);
     assert_eq!(snapshot(&session, doc), expected[0]);
-    assert!(!session.can_undo(doc));
+    if !name.starts_with("sanger_review") {
+        assert!(!session.can_undo(doc));
+    }
     assert!(!session.can_redo(doc));
     let first = session.apply(doc, ops[0].clone()).unwrap();
     session.flush().unwrap(); // Distinct undo steps even for mergeable typing.
@@ -474,6 +476,11 @@ fn assert_checked_access(session: &Session, doc: DocId, name: &str) {
     let before_undo = (session.can_undo(doc), session.can_redo(doc));
     for id in [doc, DocId(usize::MAX), DocId(doc.0 + 1)] {
         let checks = [
+            (
+                Kind::SangerReview,
+                "sanger_review",
+                session.sanger_review(id).map(|_| ()),
+            ),
             (Kind::Sequence, "sequence", session.doc(id).map(|_| ())),
             (
                 Kind::Sequence,
@@ -513,7 +520,9 @@ fn assert_checked_access(session: &Session, doc: DocId, name: &str) {
                 let error = result.unwrap_err();
                 assert_eq!(error.code(), "unknown_document");
                 assert!(matches!(error, Error::UnknownDocument { id: actual } if actual == id));
-            } else if name == expected {
+            } else if name == expected
+                || (expected == "sanger_review" && name.starts_with("sanger_review"))
+            {
                 result.unwrap();
             } else {
                 let error = result.unwrap_err();
@@ -590,4 +599,61 @@ fn wrong_kind_extraction_does_not_begin_tracking_or_publish_output() {
         );
     }
     assert_eq!(std::fs::read(tree).unwrap(), b"(A:1,B:1);");
+}
+
+#[test]
+fn sanger_review() {
+    sanger_scenario("sanger_review", "single.json");
+}
+
+#[test]
+fn sanger_review_multiple_call_sets() {
+    sanger_scenario("sanger_review_multiple_call_sets", "multi.json");
+}
+
+fn sanger_scenario(name: &str, filename: &str) {
+    use basecraft_protocol::sanger::{ReviewChoice, ReviewOp};
+    let snapshot = |session: &Session, id| {
+        let review = session.sanger_review(id).unwrap();
+        (0..review.draft.columns.len())
+            .map(|i| review.decision(i).unwrap().clone())
+            .collect::<Vec<_>>()
+    };
+    scenario(
+        name,
+        |root| {
+            let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../testdata/fixtures/sanger-legacy")
+                .join(filename);
+            fixture(root, "review.json", &std::fs::read(source).unwrap())
+        },
+        snapshot,
+        |session, id| {
+            let original = snapshot(session, id);
+            let mut first = original.clone();
+            first[0] = ReviewChoice::Edit('N');
+            let mut second = first.clone();
+            second[1] = ReviewChoice::Edit('N');
+            let call_set = session.sanger_review(id).unwrap().draft_sha256.clone();
+            (
+                [
+                    Op::SangerReview {
+                        call_set: call_set.clone(),
+                        edit: Box::new(ReviewOp::Set {
+                            columns: vec![0],
+                            choice: first[0].clone(),
+                        }),
+                    },
+                    Op::SangerReview {
+                        call_set,
+                        edit: Box::new(ReviewOp::Set {
+                            columns: vec![1],
+                            choice: second[1].clone(),
+                        }),
+                    },
+                ],
+                [original, first, second],
+            )
+        },
+    );
 }

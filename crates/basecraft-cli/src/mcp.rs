@@ -82,7 +82,9 @@ impl Server {
     }
 
     fn state(&self, doc: DocId) -> Value {
-        let kind = if self.session.is_alignment(doc) {
+        let kind = if self.session.sanger_review(doc).is_ok() {
+            "sanger_review"
+        } else if self.session.is_alignment(doc) {
             "alignment"
         } else if self.session.is_tree(doc) {
             "tree"
@@ -96,8 +98,18 @@ impl Server {
             "sequence"
         };
         let version = self.session.revision(doc);
-        json!({"document":doc.0,"path":self.session.doc_key(doc),"kind":kind,"version":version,"generation":self.session.generation(doc),
-            "state":self.session.state(doc),"can_undo":self.session.can_undo(doc),"can_redo":self.session.can_redo(doc)})
+        let mut state = json!({"document":doc.0,"path":self.session.doc_key(doc),"kind":kind,"version":version,"generation":self.session.generation(doc),
+            "state":self.session.state(doc),"can_undo":self.session.can_undo(doc),"can_redo":self.session.can_redo(doc)});
+        if let Ok(review) = self.session.sanger_review(doc) {
+            state["call_sets"] = json!(review.call_sets());
+            state["selected_call_set"] = json!(review.draft_sha256);
+            state["decisions"] = json!(
+                (0..review.draft.columns.len())
+                    .map(|i| review.decision(i))
+                    .collect::<Vec<_>>()
+            );
+        }
+        state
     }
 
     fn call(&mut self, name: &str, args: &Value) -> Result<Value> {
@@ -230,7 +242,16 @@ impl Server {
                     );
                 }
                 let op: Op = serde_json::from_value(args["operation"].clone())?;
-                self.session.apply(doc, op)?;
+                if matches!(op, Op::SangerReview { .. }) {
+                    self.session.apply_proposals(
+                        doc,
+                        self.session.generation(doc),
+                        version,
+                        &[op],
+                    )?;
+                } else {
+                    self.session.apply(doc, op)?;
+                }
                 self.session.flush()?;
                 Ok(self.state(doc))
             }

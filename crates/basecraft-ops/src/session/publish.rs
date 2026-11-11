@@ -383,6 +383,7 @@ impl Session {
         let mut effective_edits: Vec<_> = self.docs[id.0]
             .undo
             .iter()
+            .filter(|a| events.iter().any(|event| event.id == a.entry_id))
             .map(|a| EditActivity {
                 id: a.entry_id.clone(),
                 operation: a.op.clone(),

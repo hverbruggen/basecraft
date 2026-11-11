@@ -10,6 +10,10 @@ use crate::files::{self, Format, HashingWriter, Opened};
 use crate::session::{Inverse, normalise};
 
 impl Document for Opened {
+    fn accepts(&self, op: &Op) -> bool {
+        op.name().starts_with("seq.") || op.name().starts_with("feature.")
+    }
+
     fn kind(&self) -> crate::files::Kind {
         crate::files::Kind::Sequence
     }
@@ -47,10 +51,10 @@ impl Document for Opened {
     fn apply(&mut self, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {
         execute_sequence(&mut self.doc, op)
     }
-    fn revert(&mut self, inverse: &Inverse) -> Result<()> {
+    fn revert(&mut self, inverse: &Inverse, _record: bool) -> Result<()> {
         undo_sequence(&mut self.doc, inverse)
     }
-    fn reapply(&mut self, op: &Op, inverse: &Inverse) -> Result<Inverse> {
+    fn reapply(&mut self, op: &Op, inverse: &Inverse, _record: bool) -> Result<Inverse> {
         if let (Op::FeatureAdd { feature }, Inverse::Feature { id, .. }) = (op, inverse) {
             self.doc.restore_feature(*id, Some(feature.clone()));
             Ok(Inverse::Feature {
@@ -238,9 +242,13 @@ pub(crate) fn execute_sequence(
         | Op::TreeStyle { .. } => Err(invalid(format!("{} needs a tree", op.name()))),
         Op::DelimitationEdit { .. } => Err(invalid("this needs a delimitation workspace")),
         Op::MetadataEdit { .. } => Err(invalid("this needs the project metadata")),
+        Op::SangerReview { .. } | Op::SangerUpdate { .. } => Err(crate::Error::Unsupported(
+            "choose a Sanger review document".into(),
+        )),
         Op::SubmissionEdit { .. } => Err(invalid("this needs a submission document")),
         Op::JobFinished { .. } => Err(invalid("use log_job_finished")),
         Op::Open { .. }
+        | Op::CreateSangerReview { .. }
         | Op::CreateSequence { .. }
         | Op::Save { .. }
         | Op::Extract { .. }
@@ -265,6 +273,8 @@ fn undo_sequence(doc: &mut SequenceDoc, inverse: &Inverse) -> Result<()> {
         | Inverse::Tree(_)
         | Inverse::Delimitation(_)
         | Inverse::Metadata(_)
+        | Inverse::SangerUpdate(_)
+        | Inverse::SangerReview { .. }
         | Inverse::Submission(_) => return Err(invalid("undo of the wrong kind of edit")),
     }
     Ok(())
@@ -327,7 +337,11 @@ mod tests {
             );
             assert_eq!(document.revision(99), revision);
         }
-        assert!(document.revert(&Inverse::Alignment(Vec::new())).is_err());
+        assert!(
+            document
+                .revert(&Inverse::Alignment(Vec::new()), true)
+                .is_err()
+        );
         let target = root.path().join("wrong.gb");
         assert!(
             document
@@ -393,7 +407,7 @@ mod tests {
                     .unwrap(),
                 initial
             );
-            document.revert(&inverse).unwrap();
+            document.revert(&inverse, true).unwrap();
             assert_eq!(
                 document
                     .saved_hashes(&source, &super::super::WritePublication::Immediate)

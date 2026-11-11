@@ -353,7 +353,15 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let root = file.parent().unwrap_or(std::path::Path::new("."));
             let mut session = script_session(root)?;
             let doc = session.open(&file)?;
-            session.apply(doc, serde_json::from_str(&operation)?)?;
+            let operation = serde_json::from_str(&operation)?;
+            if matches!(
+                operation,
+                basecraft_protocol::Op::Undo { .. } | basecraft_protocol::Op::Redo { .. }
+            ) {
+                session.apply_history(doc, &operation)?;
+            } else {
+                session.apply(doc, operation)?;
+            }
             save_options.save(&mut session, doc, None, false)?;
         }
         Command::ImportSupport { tree, source, name } => {

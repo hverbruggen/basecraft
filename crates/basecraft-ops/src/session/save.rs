@@ -141,7 +141,9 @@ impl Session {
         } else {
             None
         };
-        if new_sequence || (!overwrite && path.is_some()) {
+        if (new_sequence || (!overwrite && path.is_some()))
+            && !self.check_previous_save_target(id, &target)?
+        {
             crate::save_guard::Revision::check(None, &target)?;
         }
         hooks.at(SaveSite::Evidence);
@@ -219,7 +221,9 @@ impl Session {
                 self.check_save(id, Some(&target))?,
             )));
         }
-        if new_sequence || (!overwrite && path.is_some()) {
+        if (new_sequence || (!overwrite && path.is_some()))
+            && !self.check_previous_save_target(id, &target)?
+        {
             crate::save_guard::Revision::check(None, &target)?;
         }
         let outcome = if history_only {
@@ -229,9 +233,15 @@ impl Session {
             self.save_inner(id, path, hooks)
         };
         if outcome.is_ok() {
+            self.docs[id.0].saved_state_hashes = self.save_hashes(id)?;
+            self.docs[id.0].saved_target = Some((
+                target.clone(),
+                crate::input_evidence::stamp(&target)?,
+                expected[0].clone(),
+            ));
             if target == self.resolve(&self.docs[id.0].key) {
                 hooks.boundary(SaveSite::SavedHashes, self)?;
-                self.docs[id.0].saved_state_hashes = self.save_hashes_at(id, &target)?;
+
                 hooks.executed(SaveMilestone::SavedHashes);
                 hooks.boundary(SaveSite::DiskStamp, self)?;
                 self.docs[id.0].disk_stamp = crate::input_evidence::stamp(&target)?;

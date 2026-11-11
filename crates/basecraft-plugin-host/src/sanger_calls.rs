@@ -303,7 +303,7 @@ mod live_tests {
     #[test]
     #[ignore = "requires BASECRAFT_SANGER_FIXTURE, public plugin Python and Tracy"]
     fn actual_open_call_review_reopen_cache_cancel_and_stale_source() {
-        use basecraft_ops::sanger_review::{ReviewChoice, ReviewOp, SangerReviewSession};
+        use basecraft_ops::sanger_review::{ReviewChoice, ReviewOp, SangerReview};
         let fixture = std::env::var_os("BASECRAFT_SANGER_FIXTURE").expect("public AB1 fixture");
         let tmp = tempfile::tempdir().unwrap();
         let source = tmp.path().join("source.ab1");
@@ -376,7 +376,7 @@ mod live_tests {
         std::fs::write(artifact_path, b"damaged retained output").unwrap();
         assert!(verify_completed_result(&receipt, &query).is_err());
         std::fs::write(artifact_path, retained_bytes).unwrap();
-        let mut computed = SangerReviewSession::from_draft(called.draft, &source).unwrap();
+        let mut computed = SangerReview::from_draft(called.draft, &source).unwrap();
         computed.attach_operation_run(&called.run).unwrap();
         let computed_id = computed.draft_sha256.clone();
         computed
@@ -398,7 +398,7 @@ mod live_tests {
         review.select_call_set(&computed_id).unwrap();
         let saved = tmp.path().join("saved.json");
         review.save(&saved).unwrap();
-        let mut reopened = SangerReviewSession::load(&saved).unwrap();
+        let mut reopened = SangerReview::load(&saved).unwrap();
         assert_eq!(reopened.decision(0), Some(&ReviewChoice::Edit('C')));
         reopened.select_call_set(&instrument_id).unwrap();
         assert_eq!(reopened.decision(0), Some(&ReviewChoice::Edit('G')));

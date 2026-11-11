@@ -590,6 +590,9 @@ pub fn describe(op: &Op) -> String {
         Op::DelimitationEdit { .. } => "Edited species hypothesis".into(),
         Op::MetadataEdit { edit } => crate::metadata::describe(edit),
         Op::SubmissionEdit { edit } => crate::submission::describe(edit),
+        Op::CreateSangerReview { .. } => "Created Sanger review".into(),
+        Op::SangerUpdate { .. } => "Updated Sanger call sets and supporting evidence".into(),
+        Op::SangerReview { call_set, edit } => format!("Sanger review {call_set}: {edit:?}"),
         Op::JobFinished { report } => format!("{} {:?}", report.method, report.status),
     }
 }

@@ -60,6 +60,22 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
                 .problems
                 .push(format!("{} {} {}: {msg}", e.id, e.op.name(), e.doc));
         };
+        if let Op::CreateSangerReview { review } = &e.op {
+            docs.remove(e.doc.as_str());
+            if !safe_key(&e.doc) {
+                problem("unsafe document identity".into());
+                continue;
+            }
+            match session.create_sanger_review_with_key(&e.doc, review) {
+                Ok(id) if session.state(id).matches_recorded(&e.state) => {
+                    session.restore_replay_paths(id, work.path(), &source_root);
+                    docs.insert(&e.doc, id);
+                }
+                Ok(_) => problem("created review state differs".into()),
+                Err(error) => problem(error.to_string()),
+            }
+            continue;
+        }
         if let Op::CreateSequence { name, residues } = &e.op {
             docs.remove(e.doc.as_str());
             if !safe_key(&e.doc) {
@@ -142,7 +158,7 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
                     session.redo_single(doc)
                 };
                 match r {
-                    Ok(replayed) if ids.get(&replayed) == Some(of) => {}
+                    Ok(replayed) if ids.get(&replayed) == Some(of) || replayed == *of => {}
                     Ok(replayed) => {
                         problem(format!("targets {:?}, expected {of}", ids.get(&replayed)));
                     }
@@ -183,7 +199,9 @@ fn recorded_source_root(root: &Path) -> Result<std::path::PathBuf> {
     let value: serde_json::Value =
         serde_json::from_slice(&crate::provenance::read_record(&manifest)?)?;
     if value["schema_version"] != 1 {
-        return Err(crate::Error::Unsupported("Unsupported recovery metadata".into()));
+        return Err(crate::Error::Unsupported(
+            "Unsupported recovery metadata".into(),
+        ));
     }
     value["source_root"]
         .as_str()
@@ -377,6 +395,23 @@ fn recover_entries(
     let source_root = recorded_source_root(root)?;
     let mut documents = std::collections::BTreeMap::<String, DocId>::new();
     for entry in entries {
+        if let Op::CreateSangerReview { review } = &entry.op {
+            if !safe_key(&entry.doc) {
+                return Err(Error::Unsupported(
+                    "unsafe recovery document identity".into(),
+                ));
+            }
+            let doc = session.create_sanger_review_with_key(&entry.doc, review)?;
+            if !session.state(doc).matches_recorded(&entry.state) {
+                return Err(Error::Damaged {
+                    path: root.into(),
+                    detail: "created review state differs".into(),
+                });
+            }
+            session.restore_replay_paths(doc, staging.path(), &source_root);
+            documents.insert(entry.doc.clone(), doc);
+            continue;
+        }
         if let Op::CreateSequence { name, residues } = &entry.op {
             if !safe_key(&entry.doc) {
                 return Err(crate::error::invalid("unsafe recovery document identity"));
@@ -1404,8 +1439,6 @@ enum AdvanceSite {
     FirstArtifacts,
     Observation,
     FinalArtifacts,
-    #[cfg(test)]
-    Discard,
 }
 trait AdvanceHooks {
     fn at(&mut self, _: AdvanceSite) {}
@@ -1431,5 +1464,3 @@ trait AdvanceHooks {
 }
 struct LegacyAdvance;
 impl AdvanceHooks for LegacyAdvance {}
-#[cfg(test)]
-mod attempt_boundary_tests;

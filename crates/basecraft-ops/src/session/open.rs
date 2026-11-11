@@ -25,16 +25,12 @@ impl Session {
         path: &Path,
         verified_snapshot: bool,
     ) -> Result<(DocId, files::Kind)> {
-        if crate::sanger_review::evidence_kind(path).is_some() {
-            return Err(invalid(
-                "Saved Sanger reviews and drafts are edited only in the Basecraft application; read a saved Sanger review's history, methods and provenance with the history, methods and provenance commands",
-            ));
-        }
         self.flush()?;
         let disk_stamp = crate::input_evidence::stamp(path)?;
         let format = files::Format::from_path(path)?;
         // Files read with the main one: a sidecar, or a metadata manifest's tables.
         let companions = match format {
+            files::Format::SangerReview => Vec::new(),
             files::Format::Metadata => crate::metadata::files(path).split_off(1),
             files::Format::Tree | files::Format::Delimitation => vec![files::tree_sidecar(path)],
             files::Format::GenBank | files::Format::Fasta => vec![files::gff_sidecar(path)],
@@ -113,18 +109,20 @@ impl Session {
             );
         }
         let kind = content.kind();
+        let (undo, redo) = content.as_document().initial_history()?;
         self.docs.push(Slot {
             key: key.clone(),
             content,
             current_saved_hashes: std::sync::OnceLock::new(),
             generation: 0,
             save_authority: save_authority::PendingSaveAuthority::default(),
-            undo: Vec::new(),
-            redo: Vec::new(),
+            undo,
+            redo,
             baseline: None,
             baseline_logged: false,
             accepted_hashes: hashes.clone(),
             saved_state_hashes: Vec::new(),
+            saved_target: None,
             absent_sidecars,
             origin,
             origin_issue,
@@ -248,12 +246,15 @@ impl Session {
         {
             record.events.push(pending.entry.clone());
         }
-        record
-            .effective
-            .extend(slot.undo.iter().map(|a| EditActivity {
-                id: a.entry_id.clone(),
-                operation: a.op.clone(),
-            }));
+        record.effective.extend(
+            slot.undo
+                .iter()
+                .filter(|a| record.events.iter().any(|event| event.id == a.entry_id))
+                .map(|a| EditActivity {
+                    id: a.entry_id.clone(),
+                    operation: a.op.clone(),
+                }),
+        );
         record.deduplicate();
         crate::contributions::project(&record.events, &mut record.effective);
         Ok(record)
@@ -282,6 +283,13 @@ impl Session {
             .ok_or_else(|| invalid("unknown document"))?;
         if self.save_hashes(id)? != slot.saved_state_hashes {
             return Ok(None);
+        }
+        if let Some((path, stamp, hash)) = &slot.saved_target {
+            let current = crate::input_evidence::stamp(path)?;
+            if current != *stamp {
+                return Err(crate::Error::ChangedOnDisk { path: path.clone() });
+            }
+            return Ok(Some((path.clone(), current, hash.clone())));
         }
         let path = self.resolve(&slot.key).canonicalize()?;
         let current = crate::input_evidence::stamp(&path)?;

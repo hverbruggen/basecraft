@@ -12,6 +12,10 @@ use crate::files::{self, Format, HashingWriter, OpenedTree};
 use crate::session::Inverse;
 
 impl Document for OpenedTree {
+    fn accepts(&self, op: &Op) -> bool {
+        op.name().starts_with("tree.")
+    }
+
     fn kind(&self) -> crate::files::Kind {
         crate::files::Kind::Tree
     }
@@ -52,7 +56,7 @@ impl Document for OpenedTree {
         ) {
             let mut candidate = self.doc.clone();
             execute_tree(&mut candidate, op)?;
-            Ok(Some(super::PreparedEdit::Tree(Box::new(candidate))))
+            Ok(Some(Box::new(candidate)))
         } else {
             Ok(None)
         }
@@ -63,7 +67,10 @@ impl Document for OpenedTree {
         op: &Op,
         prepared: Option<super::PreparedEdit>,
     ) -> Result<(Inverse, Option<FeatureId>)> {
-        if let Some(super::PreparedEdit::Tree(candidate)) = prepared {
+        if let Some(candidate) = prepared {
+            let candidate = candidate
+                .downcast::<TreeDoc>()
+                .map_err(|_| invalid("prepared edit has the wrong document kind"))?;
             Ok((
                 Inverse::Tree(Box::new(std::mem::replace(&mut self.doc, *candidate))),
                 None,
@@ -77,7 +84,7 @@ impl Document for OpenedTree {
         execute_tree(&mut self.doc, op).map(|before| (Inverse::Tree(before), None))
     }
 
-    fn revert(&mut self, inverse: &Inverse) -> Result<()> {
+    fn revert(&mut self, inverse: &Inverse, _record: bool) -> Result<()> {
         let Inverse::Tree(before) = inverse else {
             return Err(invalid("undo of the wrong kind of edit"));
         };
@@ -272,7 +279,11 @@ mod tests {
             );
             assert_eq!(document.revision(0), revision);
         }
-        assert!(document.revert(&Inverse::Alignment(Vec::new())).is_err());
+        assert!(
+            document
+                .revert(&Inverse::Alignment(Vec::new()), true)
+                .is_err()
+        );
         let target = root.path().join("wrong.afa");
         assert!(
             document
@@ -324,7 +335,7 @@ mod tests {
                 .saved_hashes(&source, &super::super::WritePublication::Immediate)
                 .unwrap();
             assert_ne!(edited, initial);
-            document.revert(&inverse).unwrap();
+            document.revert(&inverse, true).unwrap();
             assert_eq!(document.revision(0), revision);
             assert_eq!(
                 document

@@ -8,6 +8,10 @@ use super::Document;
 use crate::{Result, error::invalid, files, session::Inverse};
 
 impl Document for DelimitationWorkspace {
+    fn accepts(&self, op: &Op) -> bool {
+        op.name().starts_with("delimitation.")
+    }
+
     fn kind(&self) -> crate::files::Kind {
         crate::files::Kind::Delimitation
     }
@@ -50,7 +54,7 @@ impl Document for DelimitationWorkspace {
         // remain separate debt; this migration does not change undo policy.
         execute_delimitation(self, op)
     }
-    fn revert(&mut self, inverse: &Inverse) -> Result<()> {
+    fn revert(&mut self, inverse: &Inverse, _record: bool) -> Result<()> {
         let Inverse::Delimitation(before) = inverse else {
             return Err(invalid("undo of the wrong kind of edit"));
         };
@@ -181,9 +185,9 @@ mod tests {
         assert_eq!(doc.revision(42), 42);
         let state = doc.fingerprint();
         assert!(doc.apply(&Op::TreeMidpointRoot {}).is_err());
-        assert!(doc.revert(&Inverse::Alignment(Vec::new())).is_err());
+        assert!(doc.revert(&Inverse::Alignment(Vec::new()), true).is_err());
         assert!(
-            doc.revert(&Inverse::Delimitation(Box::new(initial.clone())))
+            doc.revert(&Inverse::Delimitation(Box::new(initial.clone())), true)
                 .is_ok()
         );
         let dir = tempfile::tempdir().unwrap();
@@ -209,7 +213,7 @@ mod tests {
             })
             .unwrap();
         assert!(feature.is_none());
-        doc.revert(&inverse).unwrap();
+        doc.revert(&inverse, true).unwrap();
         let files::Loaded::Delimitation(actual) = loaded else {
             unreachable!()
         };

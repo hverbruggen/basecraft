@@ -56,13 +56,12 @@ fn tree(root: &Path) -> BTreeMap<PathBuf, Entry> {
 
 // Storage paths/evidence are relocated by the existing saver. All biological,
 // raw-draft and replay state, including inactive-set order, must stay identical.
-fn biology(s: &SangerReviewSession) -> serde_json::Value {
+fn biology(s: &SangerReview) -> serde_json::Value {
     serde_json::json!({
         "draft": s.draft, "raw": s.draft_json, "hash": s.draft_sha256,
         "path": s.draft_path, "decisions": s.decisions, "manual": s.manual,
         "mask": s.mask, "settings": s.settings, "reference": s.reference,
-        "events": s.events, "undo": format!("{:?}", s.undo),
-        "redo": format!("{:?}", s.redo), "extra": s.stored_extra,
+        "events": s.events, "extra": s.stored_extra,
         "retained": s.retained.iter().map(biology).collect::<Vec<_>>()
     })
 }
@@ -105,7 +104,7 @@ impl Fixture {
             let mut draft = review.draft.clone();
             draft.version_output = "distinct third caller".into();
             let mut alternative =
-                SangerReviewSession::from_draft(draft, &source.join("source.ab1")).unwrap();
+                SangerReview::from_draft(draft, &source.join("source.ab1")).unwrap();
             assert!(
                 !review
                     .call_sets()
@@ -129,7 +128,7 @@ impl Fixture {
         )
         .unwrap();
         fs::write(source.join("unrelated"), b"keep source sibling").unwrap();
-        let loaded = SangerReviewSession::load(&checkpoint).unwrap();
+        let loaded = SangerReview::load(&checkpoint).unwrap();
         assert_eq!(loaded.recovery_path(), Some(checkpoint.as_path()));
         let expected = biology(&loaded);
         Self {
@@ -144,12 +143,12 @@ impl Fixture {
         assert_eq!(tree(self.checkpoint.parent().unwrap()), self.original);
         assert_eq!(tree(&self.source), self.sources);
         assert_eq!(
-            biology(&SangerReviewSession::load(&self.checkpoint).unwrap()),
+            biology(&SangerReview::load(&self.checkpoint).unwrap()),
             self.expected
         );
     }
     fn output(&self, path: &Path) {
-        let mut loaded = SangerReviewSession::load(path).unwrap();
+        let mut loaded = SangerReview::load(path).unwrap();
         assert_eq!(biology(&loaded), self.expected);
         let ids: Vec<_> = loaded
             .call_sets()
@@ -166,7 +165,7 @@ impl Fixture {
     fn attempt(
         &self,
         dest: &Path,
-        save: impl FnOnce(&mut SangerReviewSession, &Path) -> Result<(), String>,
+        save: impl FnOnce(&mut SangerReview, &Path) -> Result<(), String>,
     ) -> String {
         let mut calls = 0;
         let mut actual = None;
@@ -201,14 +200,14 @@ impl Fixture {
 }
 fn target(f: &Fixture, dest: &Path) -> PathBuf {
     dest.join(
-        SangerReviewSession::load(&f.checkpoint)
+        SangerReview::load(&f.checkpoint)
             .unwrap()
             .storage_anchor()
             .file_name()
             .unwrap(),
     )
 }
-fn new_job(review: &SangerReviewSession, f: &Fixture) -> PathBuf {
+fn new_job(review: &SangerReview, f: &Fixture) -> PathBuf {
     let path = review.recovery_path().unwrap().to_owned();
     assert_ne!(path, f.checkpoint);
     assert_eq!(
