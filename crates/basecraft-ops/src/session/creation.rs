@@ -50,6 +50,8 @@ impl Session {
     ) -> Result<DocId> {
         let (name, residues) = Self::validate_new_sequence(name, text)?;
         let content = Loaded::Sequence(Opened {
+            alphabet: None,
+            companion_warning: None,
             doc: SequenceDoc::new(
                 name.clone(),
                 Arc::new(residues.as_bytes().to_vec()),
@@ -78,6 +80,7 @@ impl Session {
             self.actor.clone(),
             Op::CreateSequence { name, residues },
             OpResult {
+                notes: Vec::new(),
                 hashes: vec![],
                 feature: None,
             },

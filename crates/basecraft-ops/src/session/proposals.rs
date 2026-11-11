@@ -110,6 +110,7 @@ impl Session {
                 actor.clone(),
                 op.clone(),
                 OpResult {
+                    notes: Vec::new(),
                     hashes: vec![],
                     feature: feature.map(|id| id.0),
                 },

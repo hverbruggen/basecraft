@@ -364,7 +364,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 ) {
                     session.apply_history(doc, &operation)?;
                 } else {
-                    session.apply(doc, operation)?;
+                    basecraft_ops::renames::apply_op(&mut session, doc, operation)?;
                 }
             }
             save_options.save(&mut session, doc, None, false)?;
@@ -610,14 +610,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     schemars::schema_for!(basecraft_protocol::records::WorkflowFailure),
                 ),
                 (
-                    "tree-sidecar",
-                    schemars::schema_for!(basecraft_protocol::companion_records::TreeSidecar),
-                ),
-                (
-                    "delimitation-sidecar",
-                    schemars::schema_for!(
-                        basecraft_protocol::companion_records::DelimitationSidecar
-                    ),
+                    "companion",
+                    schemars::schema_for!(basecraft_protocol::companion_records::Companion),
                 ),
                 (
                     "sequence-arrow-pair",

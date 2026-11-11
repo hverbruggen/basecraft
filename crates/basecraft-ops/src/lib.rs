@@ -7,6 +7,7 @@ pub mod files;
 pub mod log;
 pub mod metadata;
 pub mod records;
+pub mod renames;
 pub mod sanger_review;
 pub mod session;
 pub mod submission;

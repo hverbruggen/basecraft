@@ -23,6 +23,8 @@ pub(crate) enum Inverse {
         before: Option<Feature>,
     },
     Alignment(Vec<AlnUndo>),
+    /// The alphabet an alignment or sequence held before it was set.
+    Alphabet(Option<basecraft_protocol::facts::Fact<basecraft_protocol::facts::Alphabet>>),
     Tree(basecraft_docs::tree::TreeUndo),
     Delimitation(Box<WorkspaceUndo>),
     Metadata(Box<MetadataUndo>),
@@ -315,16 +317,19 @@ impl Session {
         if checkpoints {
             self.track(doc)?;
         }
+        let displaced = crate::documents::tree::displaced(&self.docs[doc.0].content);
         let (inverse, feature) = self.docs[doc.0]
             .content_mut()
             .as_document_mut()
             .apply(&op)?;
+        let notes = crate::documents::tree::moved_labels(&self.docs[doc.0].content, &displaced);
         if !checkpoints && let Err(error) = self.track(doc) {
             restore_inverse(self.docs[doc.0].content_mut(), &inverse)?;
             return Err(error);
         }
         self.docs[doc.0].generation += 1;
         let result = OpResult {
+            notes: notes.clone(),
             hashes: Vec::new(),
             feature: feature.map(|f| f.0),
         };
@@ -342,6 +347,9 @@ impl Session {
             group: group.unwrap_or_default(),
             last: Instant::now(),
         });
+        if let Some(group) = group {
+            self.group_docs.entry(group).or_default().insert(doc.0);
+        }
         let slot = &mut self.docs[doc.0];
         slot.redo.clear();
         slot.undo.push(Applied {
@@ -351,7 +359,11 @@ impl Session {
             group,
         });
         slot.settle();
-        Ok(Outcome { entry_id, feature })
+        Ok(Outcome {
+            entry_id,
+            feature,
+            notes,
+        })
     }
 
     /// Undo the last operation on a document; returns the undone entry's id.
@@ -389,12 +401,72 @@ impl Session {
     /// Undo the last step on a document (one operation, or a whole group);
     /// returns the id of the last entry undone.
     pub fn undo(&mut self, id: DocId) -> Result<String> {
-        self.step(id, true, true)
+        self.step_group(id, false)
     }
 
     /// Redo the last undone step (one operation, or a whole group).
     pub fn redo(&mut self, id: DocId) -> Result<String> {
-        self.step(id, false, true)
+        self.step_group(id, true)
+    }
+
+    /// Undo or redo the top step of `id`, and the rest of its group in every
+    /// document the group changed. Refused when any of them has a later step
+    /// on top, so a rename never ends up half undone.
+    fn step_group(&mut self, id: DocId, redo: bool) -> Result<String> {
+        let slot = self.docs.get(id.0).ok_or(Error::UnknownDocument { id })?;
+        let top = |slot: &super::Slot| {
+            if redo { &slot.redo } else { &slot.undo }
+                .last()
+                .and_then(|a| a.group)
+        };
+        let Some(group) = top(slot) else {
+            return self.step(id, !redo, true);
+        };
+        let mut members = vec![id.0];
+        members.extend(
+            self.group_docs
+                .get(&group)
+                .into_iter()
+                .flatten()
+                .filter(|&&d| d != id.0),
+        );
+        for &member in &members {
+            if top(&self.docs[member]) != Some(group) {
+                let file = &self.docs[member].key;
+                return Err(invalid(if redo {
+                    format!("{file} was edited after this step was undone, so it can't be redone")
+                } else {
+                    format!("undo the later edit in {file} first")
+                }));
+            }
+        }
+        // Each document's part of the group goes in one journal batch.
+        let mut last = String::new();
+        for member in members {
+            let entry = self.step(DocId(member), !redo, true)?;
+            if member == id.0 {
+                last = entry;
+            }
+        }
+        Ok(last)
+    }
+
+    /// Other documents changed by the newest step of `id` that are not
+    /// saved, such as the metadata of a rename. Saving `id` alone leaves
+    /// them behind.
+    pub fn unsaved_partners(&self, id: DocId) -> Vec<DocId> {
+        let group = self
+            .docs
+            .get(id.0)
+            .and_then(|slot| slot.undo.last())
+            .and_then(|a| a.group);
+        group
+            .and_then(|g| self.group_docs.get(&g))
+            .into_iter()
+            .flatten()
+            .filter(|&&d| d != id.0 && !self.docs[d].is_clean())
+            .map(|&d| DocId(d))
+            .collect()
     }
 
     /// Verify an explicitly named history target before changing anything. An empty

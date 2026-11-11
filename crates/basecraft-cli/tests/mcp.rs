@@ -943,3 +943,53 @@ fn cli_submission_show_rejects_an_alignment_without_success_output() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("Submission"));
     assert_eq!(std::fs::read(file).unwrap(), original);
 }
+
+#[test]
+fn agent_row_rename_moves_the_specimen_link() {
+    crate::isolated_profile::isolate!();
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("its.afa"), ">a\nACGT\n>b\nACGA\n").unwrap();
+    let link = json!({"op":"metadata.edit","params":{"edit":{"action":"apply","changes":{
+        "specimens":["S1"],
+        "links":[{"document":"its.afa","record":"a","specimen":"S1"}]}}}});
+    let rename =
+        |row: u32, name: &str| json!({"op":"aln.rename_row","params":{"row":row,"name":name}});
+    let replies = session(
+        d.path(),
+        true,
+        &[
+            request(1, "metadata_open", json!({"create":true})),
+            request(
+                2,
+                "apply",
+                json!({"document":0,"version":0,"operation":link}),
+            ),
+            request(3, "open", json!({"path":"its.afa"})),
+            request(
+                4,
+                "apply",
+                json!({"document":1,"version":0,"operation":rename(0, "a2")}),
+            ),
+            request(5, "read", json!({"document":0})),
+        ],
+    );
+    for reply in &replies[..4] {
+        assert_eq!(reply["result"]["isError"], false, "{reply}");
+    }
+    let links = &replies[4]["result"]["structuredContent"]["metadata"]["links"];
+    assert_eq!(links[0]["record"], "a2", "{links}");
+    // A duplicate name is refused on this route too.
+    let refused = session(
+        d.path(),
+        true,
+        &[
+            request(1, "open", json!({"path":"its.afa"})),
+            request(
+                2,
+                "apply",
+                json!({"document":0,"version":0,"operation":rename(1, "a")}),
+            ),
+        ],
+    );
+    assert_eq!(refused[1]["result"]["isError"], true);
+}

@@ -653,6 +653,7 @@ pub fn tool_run_entry(
             outputs: names(&publication.outputs),
         },
         result: OpResult {
+            notes: Vec::new(),
             hashes: publication
                 .inputs
                 .iter()

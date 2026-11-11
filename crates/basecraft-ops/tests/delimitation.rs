@@ -687,7 +687,10 @@ fn visible_workspace_metadata_remains_read_only() {
     let hash = basecraft_io::hash_file(&path).unwrap();
     let sidecar = basecraft_ops::files::tree_sidecar(&path);
     let mut bytes = Vec::new();
-    basecraft_ops::files::write_delimitation_sidecar_at(&work, &hash, &path, &mut bytes).unwrap();
+    basecraft_ops::files::delimitation_companion(&work, &hash, &path)
+        .unwrap()
+        .write(&mut bytes)
+        .unwrap();
     std::fs::File::create(&sidecar)
         .unwrap()
         .write_all(&bytes)

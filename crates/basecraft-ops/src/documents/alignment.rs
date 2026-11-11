@@ -39,7 +39,19 @@ impl Document for OpenedAlignment {
                 | Op::AlnRenameRow { .. }
                 | Op::AlnRemoveRows { .. }
                 | Op::AlnAddSequences { .. }
+                | Op::SetAlphabet { .. }
         )
+    }
+
+    fn opening_warning(&self) -> Option<&str> {
+        self.companion_warning.as_deref()
+    }
+
+    fn saved_companions(&self, target: &Path) -> Vec<std::path::PathBuf> {
+        self.alphabet
+            .iter()
+            .map(|_| files::tree_sidecar(target))
+            .collect()
     }
 
     fn kind(&self) -> crate::files::Kind {
@@ -58,14 +70,18 @@ impl Document for OpenedAlignment {
     }
 
     fn apply(&mut self, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {
+        if let Op::SetAlphabet { alphabet } = op {
+            return Ok((super::set_alphabet(&mut self.alphabet, *alphabet), None));
+        }
         execute_alignment(self, op).map(|steps| (Inverse::Alignment(steps), None))
     }
 
     fn revert(&mut self, inverse: &Inverse) -> Result<()> {
-        let Inverse::Alignment(steps) = inverse else {
-            return Err(invalid("undo of the wrong kind of edit"));
-        };
-        self.doc.undo(steps);
+        match inverse {
+            Inverse::Alignment(steps) => self.doc.undo(steps),
+            Inverse::Alphabet(before) => self.alphabet.clone_from(before),
+            _ => return Err(invalid("undo of the wrong kind of edit")),
+        }
         Ok(())
     }
 
@@ -80,7 +96,8 @@ impl Document for OpenedAlignment {
             return Err(invalid("saving to a different format isn't supported yet"));
         }
         let mut prepared = super::PreparedWrite::default();
-        prepared.push(target, |w| files::write_alignment(&self.doc, w))?;
+        let hash = prepared.push(target, |w| files::write_alignment(&self.doc, w))?;
+        super::stage_facts(&mut prepared, target, self.alphabet.as_ref(), &hash)?;
         Ok(prepared)
     }
 
@@ -91,7 +108,9 @@ impl Document for OpenedAlignment {
     ) -> Result<Vec<String>> {
         let mut hw = HashingWriter::new(std::io::sink());
         files::write_alignment(&self.doc, &mut hw)?;
-        Ok(vec![hw.hash()])
+        let main = hw.hash();
+        let facts = super::facts_hash(self.alphabet.as_ref(), &main)?;
+        Ok(std::iter::once(main).chain(facts).collect())
     }
 
     fn merge(&self, previous: &Op, next: &Op) -> Option<Op> {

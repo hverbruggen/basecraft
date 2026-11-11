@@ -1,33 +1,181 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "DelimitationSidecar",
-  "description": "A portable SPART file plus its versioned Basecraft workspace sidecar.",
+  "title": "Companion",
   "type": "object",
   "properties": {
+    "alphabet": {
+      "description": "The letters an alignment or sequence is written in, when the user said.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Fact"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "delimitation": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DelimitationCompanion"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "exchange_hash": {
+      "description": "Hash of the described file's bytes. A different hash means the file\nchanged outside basecraft, and the companion no longer applies.",
       "type": "string"
     },
-    "path_base": {
-      "type": [
-        "string",
-        "null"
+    "tree": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TreeCompanion"
+        },
+        {
+          "type": "null"
+        }
       ]
     },
     "version": {
       "type": "integer",
       "format": "uint32",
       "minimum": 0
-    },
-    "workspace": {
-      "$ref": "#/$defs/DelimitationWorkspace"
     }
   },
   "required": [
     "version",
-    "exchange_hash",
-    "workspace"
+    "exchange_hash"
   ],
   "$defs": {
+    "Alphabet": {
+      "description": "The letters a sequence or alignment is written in.",
+      "type": "string",
+      "enum": [
+        "dna",
+        "rna",
+        "protein",
+        "unknown"
+      ]
+    },
+    "BranchLengths": {
+      "description": "What a tree's branch lengths measure.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "unknown"
+          ]
+        },
+        {
+          "description": "Expected substitutions per site.",
+          "type": "string",
+          "const": "substitutions"
+        },
+        {
+          "description": "Time with no unit: the root is 1, or depths are only comparable.",
+          "type": "string",
+          "const": "relative_time"
+        },
+        {
+          "description": "Time in the stated unit, such as \"Ma\".",
+          "type": "object",
+          "properties": {
+            "absolute_time": {
+              "type": "object",
+              "properties": {
+                "unit": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "unit"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "absolute_time"
+          ]
+        }
+      ]
+    },
+    "CladeAnnotation": {
+      "description": "A highlighted clade: a name on its stem branch, a bar along its tips, a\nfield of colour behind it, or any mix of these.",
+      "type": "object",
+      "properties": {
+        "bar": {
+          "description": "Draw a bar along the clade's tips, labelled beside it.",
+          "type": "boolean",
+          "default": false
+        },
+        "bar_width": {
+          "description": "Bar thickness in pixels.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 3,
+          "minimum": 0
+        },
+        "clade": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "colour": {
+          "description": "`#rrggbb`, for the bar and the field.",
+          "type": "string",
+          "default": "#808080"
+        },
+        "field": {
+          "description": "Fill the area the clade covers.",
+          "type": "boolean",
+          "default": false
+        },
+        "label": {
+          "type": "string",
+          "default": ""
+        },
+        "on_branch": {
+          "description": "Write the label on the clade's stem branch.",
+          "type": "boolean",
+          "default": false
+        },
+        "opacity_left": {
+          "description": "The field's opacity at its left and right edges, in percent. Two\ndifferent values make a gradient.",
+          "type": "integer",
+          "format": "uint8",
+          "default": 30,
+          "maximum": 255,
+          "minimum": 0
+        },
+        "opacity_right": {
+          "type": "integer",
+          "format": "uint8",
+          "default": 30,
+          "maximum": 255,
+          "minimum": 0
+        },
+        "rooting": {
+          "description": "Whether the tree was rooted when the label was made. Unless it was, a\nclade is one side of a branch, so its complement is the same group.",
+          "$ref": "#/$defs/Rooting"
+        },
+        "tips": {
+          "description": "Every tip the clade held when the label was made. The tree fills this\nin when it is empty; a reroot that changes the set leaves the label on\nanother group.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "clade",
+        "tips",
+        "rooting"
+      ]
+    },
     "ColumnStyle": {
       "description": "How one hypothesis column is drawn. Unset fields follow the theme.",
       "type": "object",
@@ -71,6 +219,25 @@
           "minimum": 0
         }
       }
+    },
+    "DelimitationCompanion": {
+      "description": "A species workspace in full; the SPART file holds only part of it.",
+      "type": "object",
+      "properties": {
+        "path_base": {
+          "description": "The folder the workspace's paths were written under. When the SPART\nfile has moved, paths under it move with it. None leaves them as written.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workspace": {
+          "$ref": "#/$defs/DelimitationWorkspace"
+        }
+      },
+      "required": [
+        "workspace"
+      ]
     },
     "DelimitationView": {
       "type": "object",
@@ -159,6 +326,58 @@
         "name",
         "specimens",
         "hypotheses"
+      ]
+    },
+    "Fact": {
+      "description": "A fact and who said so, such as `Fact<Alphabet>`.",
+      "type": "object",
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/FactSource"
+        },
+        "value": {
+          "$ref": "#/$defs/Alphabet"
+        }
+      },
+      "required": [
+        "value",
+        "source"
+      ]
+    },
+    "Fact2": {
+      "description": "A fact and who said so, such as `Fact<Alphabet>`.",
+      "type": "object",
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/FactSource"
+        },
+        "value": {
+          "$ref": "#/$defs/BranchLengths"
+        }
+      },
+      "required": [
+        "value",
+        "source"
+      ]
+    },
+    "FactSource": {
+      "description": "Who said so.",
+      "oneOf": [
+        {
+          "description": "The file or the program that made it.",
+          "type": "string",
+          "const": "stated"
+        },
+        {
+          "description": "Basecraft, from the content. Can be wrong.",
+          "type": "string",
+          "const": "guessed"
+        },
+        {
+          "description": "The user.",
+          "type": "string",
+          "const": "user"
+        }
       ]
     },
     "Group": {
@@ -367,6 +586,15 @@
         "version"
       ]
     },
+    "Rooting": {
+      "description": "Whether a tree's root is a real root or only where the file put it.",
+      "type": "string",
+      "enum": [
+        "unknown",
+        "rooted",
+        "unrooted"
+      ]
+    },
     "Score": {
       "type": "object",
       "properties": {
@@ -421,6 +649,43 @@
         "label"
       ]
     },
+    "SupportKind": {
+      "description": "Scientific support semantics supplied by a producer, never guessed from its name.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "unknown",
+            "bootstrap",
+            "probability"
+          ]
+        },
+        {
+          "description": "Percentage support from a method other than ordinary bootstrap.",
+          "type": "string",
+          "const": "percentage"
+        }
+      ]
+    },
+    "SupportName": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/SupportKind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "source",
+        "kind"
+      ]
+    },
     "SupportPlacement": {
       "description": "Where support values sit relative to their branch.",
       "oneOf": [
@@ -461,6 +726,52 @@
         "set",
         "high",
         "low"
+      ]
+    },
+    "TreeCompanion": {
+      "description": "What a tree's Newick can't hold.",
+      "type": "object",
+      "properties": {
+        "annotations": {
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {
+            "^\\d+$": {
+              "$ref": "#/$defs/CladeAnnotation"
+            }
+          }
+        },
+        "branch_lengths": {
+          "description": "What the branch lengths measure. Absent means unknown.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fact2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "style": {
+          "$ref": "#/$defs/TreeStyle"
+        },
+        "supports": {
+          "description": "Support set names and sources, in the order their values are joined\nin the Newick labels.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SupportName"
+          }
+        },
+        "tree_hash": {
+          "description": "Canonical topology, raw support and node ordering of the first tree.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tree_hash",
+        "supports",
+        "annotations",
+        "style"
       ]
     },
     "TreeDrawingEdit": {

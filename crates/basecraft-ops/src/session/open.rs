@@ -97,6 +97,7 @@ impl Session {
             self.actor.clone(),
             Op::Open { path: key },
             OpResult {
+                notes: Vec::new(),
                 hashes,
                 feature: None,
             },
@@ -222,6 +223,7 @@ impl Session {
             self.actor.clone(),
             Op::Open { path: key.clone() },
             OpResult {
+                notes: Vec::new(),
                 hashes,
                 feature: None,
             },

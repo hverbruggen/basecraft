@@ -244,7 +244,7 @@ impl Server {
                     );
                 }
                 let op: Op = serde_json::from_value(args["operation"].clone())?;
-                self.session.apply(doc, op)?;
+                basecraft_ops::renames::apply_op(&mut self.session, doc, op)?;
                 self.state(doc)
             }
             "extract" => {

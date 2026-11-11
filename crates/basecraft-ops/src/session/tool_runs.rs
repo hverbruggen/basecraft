@@ -35,6 +35,7 @@ impl Session {
                 outputs: keys,
             },
             OpResult {
+                notes: Vec::new(),
                 hashes,
                 feature: None,
             },
@@ -145,6 +146,7 @@ impl Session {
                 outputs: keys,
             },
             OpResult {
+                notes: Vec::new(),
                 hashes,
                 feature: None,
             },

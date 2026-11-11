@@ -238,8 +238,8 @@ def main():
             for specimen in work["specimens"]:
                 specimen["sources"] = {key: "unverified" for key in keys}
             side = Path(str(path) + ".basecraft.json")
-            payload = {"version": 2, "exchange_hash": exchange_hash,
-                       "path_base": str(project.resolve()), "workspace": work}
+            payload = {"version": 1, "exchange_hash": exchange_hash,
+                       "delimitation": {"path_base": str(project.resolve()), "workspace": work}}
             side.write_text(json.dumps(payload))
             before = {p: p.read_bytes() for p in project.rglob("*") if p.is_file()}
             inspected, _ = cli("delimitation", "linked-alignment", str(path), "--project", str(project))

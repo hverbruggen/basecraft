@@ -150,6 +150,16 @@ pub enum Op {
     TreeLadderize { small_first: bool },
     #[serde(rename = "tree.rename_tip")]
     TreeRenameTip { from: String, to: String },
+    /// State what the tree's branch lengths measure.
+    #[serde(rename = "tree.set_branch_lengths")]
+    TreeSetBranchLengths {
+        meaning: crate::facts::BranchLengths,
+    },
+    /// State the letters an alignment or sequence is written in. A file has
+    /// one companion, so in a multi-record FASTA or GenBank file this states
+    /// the alphabet of every record in the file, not only the open one.
+    #[serde(rename = "doc.set_alphabet")]
+    SetAlphabet { alphabet: crate::facts::Alphabet },
     /// Add, change (same `id`) or, with no annotation, remove a clade
     /// annotation.
     #[serde(rename = "tree.annotate")]
@@ -269,6 +279,8 @@ impl Op {
             Op::TreeRotate { .. } => "tree.rotate",
             Op::TreeLadderize { .. } => "tree.ladderize",
             Op::TreeRenameTip { .. } => "tree.rename_tip",
+            Op::TreeSetBranchLengths { .. } => "tree.set_branch_lengths",
+            Op::SetAlphabet { .. } => "doc.set_alphabet",
             Op::TreeAnnotate { .. } => "tree.annotate",
             Op::TreeAddSupport { .. } => "tree.add_support",
             Op::TreeRemoveSupport { .. } => "tree.remove_support",
@@ -427,6 +439,9 @@ pub struct OpResult {
     /// Id assigned to a new feature.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub feature: Option<u32>,
+    /// What the edit did that the user should hear about, shown in History.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
 }
 
 /// Original files described by an open journal record.

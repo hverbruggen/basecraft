@@ -317,10 +317,15 @@ fn tree() {
             assert!(s.tree(d).unwrap().find_tip("specimen_02").is_some());
             let a = CladeAnnotation::new(vec!["specimen_01".into()], "Reviewed tip");
             let b = CladeAnnotation::new(vec!["specimen_02".into()], "Second tip");
+            // The tree records the tips each label was made for.
+            let made = |label: &CladeAnnotation| CladeAnnotation {
+                tips: label.clade.iter().cloned().collect(),
+                ..label.clone()
+            };
             let mut first = original.clone();
-            first.2.insert(1, a.clone());
+            first.2.insert(1, made(&a));
             let mut second = first.clone();
-            second.2.insert(2, b.clone());
+            second.2.insert(2, made(&b));
             (
                 [
                     Op::TreeAnnotate {
@@ -702,6 +707,64 @@ fn sanger_scenario(name: &str, filename: &str) {
                     },
                 ],
                 [original, first, second],
+            )
+        },
+    );
+}
+
+/// A stated alphabet lives only in the alignment's companion; it survives
+/// undo, redo, save, reopen and replay like any edit.
+#[test]
+fn alignment_alphabet() {
+    use basecraft_protocol::facts::{Alphabet, Fact, FactSource};
+    crate::isolated_profile::isolate!();
+    let stated = |value| Fact {
+        value,
+        source: FactSource::User,
+    };
+    scenario(
+        "alignment_alphabet",
+        |root| fixture(root, "pair.afa", b">a\nACGT\n>b\nACGA\n"),
+        |s, d| s.alphabet(d).unwrap(),
+        |s, d| {
+            let original = s.alphabet(d).unwrap();
+            assert_eq!(original.source, FactSource::Guessed);
+            (
+                [Alphabet::Rna, Alphabet::Dna].map(|alphabet| Op::SetAlphabet { alphabet }),
+                [original, stated(Alphabet::Rna), stated(Alphabet::Dna)],
+            )
+        },
+    );
+}
+
+#[test]
+fn tree_branch_lengths() {
+    use basecraft_protocol::facts::{BranchLengths, Fact, FactSource};
+    crate::isolated_profile::isolate!();
+    let stated = |value| {
+        Some(Fact {
+            value,
+            source: FactSource::User,
+        })
+    };
+    scenario(
+        "tree_branch_lengths",
+        |root| fixture(root, "t.nwk", b"((a:1,b:1):1,c:2);\n"),
+        |s, d| s.tree(d).unwrap().branch_lengths().cloned(),
+        |_, _| {
+            let meanings = [
+                BranchLengths::Substitutions,
+                BranchLengths::AbsoluteTime { unit: "Ma".into() },
+            ];
+            (
+                meanings
+                    .clone()
+                    .map(|meaning| Op::TreeSetBranchLengths { meaning }),
+                [
+                    None,
+                    stated(meanings[0].clone()),
+                    stated(meanings[1].clone()),
+                ],
             )
         },
     );

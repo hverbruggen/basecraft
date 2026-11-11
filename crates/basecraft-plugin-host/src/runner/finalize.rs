@@ -299,7 +299,8 @@ impl PreparedOperation {
                     ));
                 }
             } else {
-                let published = self.publish_workspace(destination)?;
+                let (published, roster) = self.publish_workspace(destination)?;
+                outcome.warnings.extend(roster);
                 outcome.artifacts.push(PublishedArtifact {
                     role: crate::policy::WORKSPACE_DESTINATION.into(),
                     path: published.display().to_string(),

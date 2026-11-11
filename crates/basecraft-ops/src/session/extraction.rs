@@ -68,6 +68,7 @@ impl Session {
                 reverse,
             },
             OpResult {
+                notes: Vec::new(),
                 hashes: vec![(key, hash)],
                 feature: None,
             },
@@ -102,6 +103,7 @@ impl Session {
                 format: format.to_string(),
             },
             OpResult {
+                notes: Vec::new(),
                 hashes: vec![(key, hash)],
                 feature: None,
             },

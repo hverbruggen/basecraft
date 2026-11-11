@@ -265,7 +265,7 @@ fn import_expands_unassigned_specimens_and_individual_scores() {
     )
     .unwrap();
     assert_eq!(
-        sidecar["workspace"],
+        sidecar["delimitation"]["workspace"],
         serde_json::to_value(workspace).unwrap()
     );
 }
