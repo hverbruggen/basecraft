@@ -2,6 +2,8 @@
 // Preserve the independently reviewed assertions verbatim.
 #![allow(clippy::assert_is_empty)]
 mod common;
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 
 use basecraft_ops::{Session, files, provenance};
 use basecraft_plugin_host::registry::Registry;
@@ -34,6 +36,7 @@ fn referenced_hash(outcome: &basecraft_protocol::operation::OperationOutcome) ->
 
 #[test]
 fn rereview_alignment_move_and_explicit_evidence_decisions() {
+    isolated_profile::isolate!();
     use basecraft_ops::input_evidence::{SavePolicy, conflicts, resolve};
     for policy in [SavePolicy::BreakEvidence, SavePolicy::RemoveAnalysis] {
         let parent = tempfile::tempdir().unwrap();
@@ -76,6 +79,7 @@ fn rereview_alignment_move_and_explicit_evidence_decisions() {
 
 #[test]
 fn rereview_legacy_sidecar_break_and_remove_reach_combined_workspace() {
+    isolated_profile::isolate!();
     use basecraft_ops::input_evidence::{SavePolicy, conflicts, read_input, resolve};
     for policy in [SavePolicy::BreakEvidence, SavePolicy::RemoveAnalysis] {
         let root = tempfile::tempdir().unwrap();
@@ -159,6 +163,7 @@ fn fit_in_workspace(session: &mut Session, doc: basecraft_ops::DocId, tree: &Pat
 
 #[test]
 fn nexus_source_workspace_can_reuse_its_display_tree() {
+    isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source.nex");
     std::fs::write(
@@ -187,6 +192,7 @@ fn nexus_source_workspace_can_reuse_its_display_tree() {
 
 #[test]
 fn alignment_gmyc_export_preserves_display_and_declared_inputs() {
+    isolated_profile::isolate!();
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().join("working");
     std::fs::create_dir(&root).unwrap();
@@ -245,6 +251,7 @@ fn alignment_gmyc_export_preserves_display_and_declared_inputs() {
 
 #[test]
 fn preserved_tree_export_relocates_original_display_reference() {
+    isolated_profile::isolate!();
     use basecraft_ops::input_evidence::{SavePolicy, conflicts, resolve};
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().join("working");
@@ -280,6 +287,7 @@ fn preserved_tree_export_relocates_original_display_reference() {
 
 #[test]
 fn fitted_workspace_survives_folder_move_then_save_and_export() {
+    isolated_profile::isolate!();
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().join("working");
     std::fs::create_dir(&root).unwrap();
@@ -304,6 +312,7 @@ fn fitted_workspace_survives_folder_move_then_save_and_export() {
 
 #[test]
 fn preserved_alignment_remains_usable_by_workspace_default_input() {
+    isolated_profile::isolate!();
     use basecraft_ops::input_evidence::{SavePolicy, conflicts, resolve};
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source.afa");
@@ -414,6 +423,7 @@ fn preserved_alignment_remains_usable_by_workspace_default_input() {
 
 #[test]
 fn combine_complete_export_includes_legacy_sidecar_evidence() {
+    isolated_profile::isolate!();
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().join("working");
     std::fs::create_dir(&root).unwrap();
@@ -463,6 +473,7 @@ fn combine_complete_export_includes_legacy_sidecar_evidence() {
 
 #[test]
 fn combine_discovers_legacy_provenance_and_guards_sidecar_changes() {
+    isolated_profile::isolate!();
     use basecraft_ops::input_evidence::{SavePolicy, conflicts, resolve};
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("legacy.spart");
