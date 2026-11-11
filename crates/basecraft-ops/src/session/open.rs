@@ -49,7 +49,7 @@ impl Session {
         let disk_stamp = crate::input_evidence::stamp(path)?;
         let format = files::Format::from_path(path)?;
         let captured =
-            files::capture_load(path, format, verified_snapshot, self.cache_root.as_deref())?;
+            files::capture_load(path, format, verified_snapshot)?;
         let content = captured.content;
         let key = self.relative(path);
         let retain_companions = content.as_document().retains_companions();

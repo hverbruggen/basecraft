@@ -2140,7 +2140,7 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
     {
         let link = crate::links::AlignmentLink::read(result)?;
         let input_path = link.checked_snapshot(result, &tree.doc)?;
-        let indexed = std::sync::Arc::new(basecraft_io::cache::open_fasta(&input_path)?);
+        let indexed = std::sync::Arc::new(basecraft_io::fasta::IndexedFasta::open(&input_path)?);
         let alignment = basecraft_docs::AlignmentDoc::from_fasta("Exported input", &indexed);
         let mut canonical = tempfile::Builder::new()
             .suffix(".afa")

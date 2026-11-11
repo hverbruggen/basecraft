@@ -13,6 +13,23 @@ use crate::error::parse_error;
 use crate::{Error, Result};
 
 /// Classification facts, independent of record names and line layouts.
+/// Owned FASTA bytes and their index. No on-disk cache is written.
+pub struct IndexedFasta {
+    pub source: crate::Source,
+    pub index: FastaIndex,
+}
+
+impl IndexedFasta {
+    pub fn open(path: &std::path::Path) -> Result<Self> {
+        Self::from_source(crate::Source::open(path)?)
+    }
+    pub fn from_source(source: crate::Source) -> Result<Self> {
+        let index = FastaIndex::build(source.bytes())?;
+        Ok(Self { source, index })
+    }
+    pub fn bytes(&self) -> &[u8] { self.source.bytes() }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Summary {
     pub records: u64,
@@ -289,93 +306,7 @@ impl FastaIndex {
         self.records.iter().find(|r| r.name == name)
     }
 
-    /// Serialise for the index cache: little-endian, length-prefixed.
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let mut out = INDEX_MAGIC.to_vec();
-        let put = |out: &mut Vec<u8>, v: u64| out.extend_from_slice(&v.to_le_bytes());
-        put(&mut out, self.records.len() as u64);
-        for r in &self.records {
-            put(&mut out, r.name.len() as u64);
-            out.extend_from_slice(r.name.as_bytes());
-            put(&mut out, r.header_offset);
-            put(&mut out, r.seq_offset);
-            put(&mut out, r.len);
-            match &r.layout {
-                Layout::Uniform { residues, bytes } => {
-                    out.push(0);
-                    put(&mut out, *residues);
-                    put(&mut out, *bytes);
-                }
-                Layout::Ragged(lines) => {
-                    out.push(1);
-                    put(&mut out, lines.len() as u64);
-                    for &(first, offset) in lines {
-                        put(&mut out, first);
-                        put(&mut out, offset);
-                    }
-                }
-            }
-        }
-        out
-    }
-
-    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        let mut r = Reader(bytes.strip_prefix(INDEX_MAGIC)?);
-        let n = r.u64()?;
-        let mut records = Vec::new();
-        for _ in 0..n {
-            let name_len = usize::try_from(r.u64()?).ok()?;
-            let name = String::from_utf8(r.take(name_len)?.to_vec()).ok()?;
-            let header_offset = r.u64()?;
-            let seq_offset = r.u64()?;
-            let len = r.u64()?;
-            let layout = match r.take(1)?[0] {
-                0 => Layout::Uniform {
-                    residues: r.u64()?,
-                    bytes: r.u64()?,
-                },
-                1 => {
-                    let count = usize::try_from(r.u64()?).ok()?;
-                    let mut lines = Vec::with_capacity(count.min(1 << 24));
-                    for _ in 0..count {
-                        lines.push((r.u64()?, r.u64()?));
-                    }
-                    Layout::Ragged(lines)
-                }
-                _ => return None,
-            };
-            records.push(RecordIndex {
-                name,
-                header_offset,
-                seq_offset,
-                len,
-                layout,
-            });
-        }
-        r.0.is_empty().then_some(Self { records })
-    }
 }
-
-struct Reader<'a>(&'a [u8]);
-
-impl<'a> Reader<'a> {
-    fn take(&mut self, n: usize) -> Option<&'a [u8]> {
-        if self.0.len() < n {
-            return None;
-        }
-        let (head, tail) = self.0.split_at(n);
-        self.0 = tail;
-        Some(head)
-    }
-
-    fn u64(&mut self) -> Option<u64> {
-        Some(u64::from_le_bytes(self.take(8)?.try_into().ok()?))
-    }
-}
-
-/// Magic and format version for serialised indexes. Bump the version when
-/// the structure changes; old cache entries then get rebuilt.
-const INDEX_MAGIC: &[u8] = b"BCFAI\x02";
 
 fn finish_record(name: String, header_offset: u64, b: LayoutBuilder) -> RecordIndex {
     let len = b.residues;
@@ -630,13 +561,6 @@ mod tests {
         assert!(matches!(idx.records[0].layout, Layout::Uniform { .. }));
         assert_eq!(read_all(&idx, data, "b"), b"ACGTACGT");
         assert!(matches!(idx.records[1].layout, Layout::Ragged(_)));
-    }
-
-    #[test]
-    fn roundtrip_serialisation() {
-        let data = b">a\nACGT\nAC\n>r\nA\nCCC\nGG\n";
-        let idx = FastaIndex::build(data).unwrap();
-        assert_eq!(FastaIndex::from_bytes(&idx.to_bytes()), Some(idx));
     }
 
     #[test]

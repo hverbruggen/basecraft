@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::collections::BTreeMap;
 
 use basecraft_docs::{AlignmentDoc, SequenceDoc, TreeDoc};
-use basecraft_io::{Source, cache, fasta, genbank, gff3, newick};
+use basecraft_io::{Source, fasta, genbank, gff3, newick};
 use basecraft_protocol::{CladeAnnotation, Feature, Location, Qualifier, Segment, TreeStyle};
 use serde::{Deserialize, Serialize};
 
@@ -229,28 +229,13 @@ pub fn load_from(path: &Path, source: Source) -> Result<Loaded> {
         Format::Tree => load_tree_from(path, &source, false).map(Loaded::Tree),
         Format::Fasta => {
             let gff = read_optional(&gff_sidecar(path))?;
-            load_fasta_from(path, source, gff.as_ref(), None)
+            load_fasta_from(path, source, gff.as_ref())
         }
         Format::GenBank => open_from(path, source).map(Loaded::Sequence),
         _ => Err(crate::error::invalid(
             "this format does not support loading an owned source",
         )),
     }
-}
-
-/// Shared FASTA entry point using the application's configured cache root.
-/// Tiny documents cost less to index than to persist and need no cache files.
-pub(crate) fn index_fasta(path: &Path, source: Source) -> Result<cache::IndexedFasta> {
-    if source.bytes().len() < 4 << 20 {
-        return Ok(cache::index_fasta(source)?);
-    }
-    let paths = basecraft_platform::paths::AppPaths::discover()
-        .map_err(|e| crate::error::invalid(e.to_string()))?;
-    Ok(cache::index_fasta_in(path, source, &paths.cache)?)
-}
-
-pub(crate) fn indexed_fasta(path: &Path) -> Result<cache::IndexedFasta> {
-    index_fasta(path, Source::open(path)?)
 }
 
 /// Exact inputs retained until admission and recovery preparation finish.
@@ -264,7 +249,6 @@ pub(crate) fn capture_load(
     path: &Path,
     format: Format,
     verified: bool,
-    cache_root: Option<&Path>,
 ) -> Result<CapturedLoad> {
     let companions = match format {
         Format::Metadata => crate::metadata::files(path).split_off(1),
@@ -289,7 +273,7 @@ pub(crate) fn capture_load(
     let main = files[0].1.clone();
     let companion = files.get(1).map(|(_, source, _)| source);
     let content = match format {
-        Format::Fasta => load_fasta_from(path, main, companion, cache_root)?,
+        Format::Fasta => load_fasta_from(path, main, companion)?,
         Format::GenBank => Loaded::Sequence(open_from(path, main)?),
         Format::Tree => Loaded::Tree(load_tree_bytes(
             path,
@@ -369,17 +353,8 @@ fn load_fasta_from(
     path: &Path,
     source: Source,
     captured_gff: Option<&Source>,
-    cache_root: Option<&Path>,
 ) -> Result<Loaded> {
-    let file = Arc::new(
-        if let Some(cache) = cache_root
-            && source.bytes().len() >= 4 << 20
-        {
-            cache::index_fasta_in(path, source, cache)?
-        } else {
-            index_fasta(path, source)?
-        },
-    );
+    let file = Arc::new(fasta::IndexedFasta::from_source(source)?);
     if file.index.records.is_empty() {
         return Err(Error::Empty(path.to_path_buf()));
     }
@@ -704,7 +679,7 @@ pub struct Opened {
     pub format: Format,
     /// For FASTA: the original file, so records other than the open one are
     /// copied through on save.
-    pub fasta: Option<Arc<cache::IndexedFasta>>,
+    pub fasta: Option<Arc<fasta::IndexedFasta>>,
 }
 
 // Preserve the public loaders' historical filesystem error variants: FASTA
@@ -749,11 +724,11 @@ pub fn open_from(path: &Path, source: Source) -> Result<Opened> {
                 fasta: None,
             })
         }
-        Format::Fasta => open_fasta_from(path, Arc::new(index_fasta(path, source)?)),
+        Format::Fasta => open_fasta_from(path, Arc::new(fasta::IndexedFasta::from_source(source)?)),
     }
 }
 
-fn open_fasta_from(path: &Path, file: Arc<cache::IndexedFasta>) -> Result<Opened> {
+fn open_fasta_from(path: &Path, file: Arc<fasta::IndexedFasta>) -> Result<Opened> {
     if file.index.records.is_empty() {
         return Err(Error::Empty(path.to_path_buf()));
     }
@@ -771,7 +746,7 @@ fn open_fasta_from(path: &Path, file: Arc<cache::IndexedFasta>) -> Result<Opened
 
 fn open_fasta_with_gff(
     path: &Path,
-    file: Arc<cache::IndexedFasta>,
+    file: Arc<fasta::IndexedFasta>,
     gff_bytes: Option<&[u8]>,
 ) -> Result<Opened> {
     if file.index.records.is_empty() {

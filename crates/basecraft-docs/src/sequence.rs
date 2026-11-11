@@ -3,7 +3,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use basecraft_io::cache::IndexedFasta;
+use basecraft_io::fasta::IndexedFasta;
 use basecraft_io::{genbank, gff3};
 use basecraft_protocol::Feature;
 use basecraft_query::{IntervalIndex, SeqSummary};

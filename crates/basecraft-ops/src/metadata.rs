@@ -729,7 +729,7 @@ impl<'a> Planner<'a> {
 /// The records of a FASTA file: ID (up to the first whitespace) and full
 /// header line.
 pub fn fasta_headers(path: &Path) -> Result<Vec<(String, String)>> {
-    let file = crate::files::indexed_fasta(path)?;
+    let file = basecraft_io::fasta::IndexedFasta::open(path)?;
     Ok(file
         .index
         .records

@@ -207,7 +207,7 @@ fn materialise(
         let original = source_root.join(rel);
         let source = if stored.exists() {
             stored
-        } else if basecraft_io::cache::content_hash(&original).ok().as_deref() == Some(hash) {
+        } else if basecraft_io::hash_file(&original).ok().as_deref() == Some(hash) {
             original
         } else if let Some(retained) =
             crate::analysis_store::retained_source(root, hash).map_err(|e| e.to_string())?

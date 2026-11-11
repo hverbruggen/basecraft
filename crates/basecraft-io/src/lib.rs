@@ -2,7 +2,6 @@
 
 pub mod abif;
 pub mod archive;
-pub mod cache;
 #[cfg(feature = "test-counters")]
 pub mod counters;
 pub mod fasta;

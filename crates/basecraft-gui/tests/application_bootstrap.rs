@@ -194,7 +194,7 @@ fn linked_taxa_journey(mut app: std::pin::Pin<&mut cxx_qt_lib_extras::QApplicati
         );
     basecraft_ops::files::write_delimitation_sidecar(
         &work,
-        &basecraft_io::cache::content_hash(&workspace).unwrap(),
+        &basecraft_io::hash_file(&workspace).unwrap(),
         &mut std::fs::File::create(basecraft_ops::files::tree_sidecar(&workspace)).unwrap(),
     )
     .unwrap();

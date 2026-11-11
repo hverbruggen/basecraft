@@ -2086,7 +2086,7 @@ mod tests {
         ))
         .unwrap();
         let indexed =
-            Arc::new(basecraft_io::cache::open_fasta(std::path::Path::new(&source)).unwrap());
+            Arc::new(basecraft_io::fasta::IndexedFasta::open(std::path::Path::new(&source)).unwrap());
         view.attach_alignment(placement, AlignmentDoc::from_fasta("demo", &indexed))
             .unwrap();
         let context = view.alignment.as_ref().unwrap();

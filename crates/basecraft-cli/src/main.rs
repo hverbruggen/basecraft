@@ -399,7 +399,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
         Command::Index { file } => {
             let t = Instant::now();
-            let f = basecraft_io::cache::open_fasta(&file)?;
+            let f = basecraft_io::fasta::IndexedFasta::open(&file)?;
             let elapsed = t.elapsed();
             let residues: u64 = f.index.records.iter().map(|r| r.len).sum();
             let ragged = f
@@ -409,13 +409,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 .filter(|r| matches!(r.layout, basecraft_io::fasta::Layout::Ragged(_)))
                 .count();
             println!(
-                "{} records, {residues} residues, {ragged} ragged, {} in {:.1} ms",
+                "{} records, {residues} residues, {ragged} ragged, index built in {:.1} ms",
                 f.index.records.len(),
-                if f.cached {
-                    "index from cache"
-                } else {
-                    "index built"
-                },
                 elapsed.as_secs_f64() * 1e3
             );
         }
@@ -668,7 +663,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             start,
             end,
         } => {
-            let f = basecraft_io::cache::open_fasta(&file)?;
+            let f = basecraft_io::fasta::IndexedFasta::open(&file)?;
             let r = f
                 .index
                 .get(&record)

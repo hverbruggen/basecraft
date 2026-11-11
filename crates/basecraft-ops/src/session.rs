@@ -128,7 +128,6 @@ enum ReplayMode {
 
 pub struct Session {
     root: PathBuf,
-    cache_root: Option<PathBuf>,
     storage_root: PathBuf,
     provenance_policy: basecraft_platform::settings::ProvenancePolicy,
     local_provenance_root: PathBuf,
@@ -163,9 +162,6 @@ impl Session {
         let log = Some(LogWriter::new(&root, &host));
         Self {
             storage_root: root.clone(),
-            cache_root: basecraft_platform::paths::AppPaths::discover()
-                .ok()
-                .map(|paths| paths.cache),
             provenance_policy: basecraft_platform::settings::ProvenancePolicy::Portable,
             local_provenance_root: root.join(".basecraft/provenance"),
             tracked: true,
@@ -208,7 +204,6 @@ impl Session {
             .map_err(|e| invalid(e.to_string()))?;
         let mut session = Self::new(root);
         session.storage_root = paths.state.join("recovery").join(&session.id);
-        session.cache_root = Some(paths.cache.clone());
         session.local_provenance_root = paths.state.join("provenance");
         session.provenance_policy = preferences.files.provenance;
         session.log = preferences
