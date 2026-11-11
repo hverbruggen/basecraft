@@ -257,7 +257,7 @@ def main():
             live = state["document"]
             py.apply(live, state["version"], {"op": "delimitation.edit", "params": {
                 "edit": {"action": "set_view", "view": {"visible": [], "selected": []}}}})
-            payload["workspace"]["exchange_fields"]["basecraft_alignment_snapshot"] = "saved-only.fa"
+            payload["delimitation"]["workspace"]["exchange_fields"]["basecraft_alignment_snapshot"] = "saved-only.fa"
             side.write_text(json.dumps(payload))
             state_before = py.state(live)
             record_before = py.call("document_record", {"document": live})
