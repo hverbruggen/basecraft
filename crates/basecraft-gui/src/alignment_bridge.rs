@@ -226,6 +226,16 @@ pub mod qobject {
         fn redo(self: Pin<&mut AlignmentController>);
         #[qinvokable]
         fn save(self: Pin<&mut AlignmentController>);
+        #[qinvokable]
+        fn check_save(self: &AlignmentController, path: &QString) -> QString;
+        #[qinvokable]
+        fn save_confirmed(
+            self: Pin<&mut AlignmentController>,
+            path: &QString,
+            token: &QString,
+            policy: &QString,
+            acknowledge: bool,
+        ) -> bool;
         /// Save to a new file and carry on editing that one.
         #[qinvokable]
         fn save_as(self: Pin<&mut AlignmentController>, path: &QString) -> bool;
@@ -376,6 +386,7 @@ pub struct AlignmentRust {
 
     review_snapshot_dir: Option<tempfile::TempDir>,
     session: Option<Session>,
+    save_state: crate::editor_save::SaveState,
     doc: Option<DocId>,
     view: AlignmentView,
     theme: Theme,
@@ -451,6 +462,7 @@ impl Default for AlignmentRust {
             gap_scan_key: None,
             review_snapshot_dir: None,
             session: None,
+            save_state: Default::default(),
             doc: None,
             view: AlignmentView::new(800.0, 600.0),
             theme: Theme::default(),
@@ -1174,48 +1186,6 @@ impl qobject::AlignmentController {
 
     pub fn redo(self: Pin<&mut Self>) {
         self.history(true);
-    }
-
-    pub fn save(mut self: Pin<&mut Self>) {
-        let started = Instant::now();
-        let result = {
-            let mut r = self.as_mut().rust_mut();
-            let r = &mut *r;
-            let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
-                return;
-            };
-            session.save(doc, None)
-        };
-        match result {
-            Ok(()) => {
-                self.as_mut().set_dirty(false);
-                self.done(&format!("Saved{}", took(started)));
-            }
-            Err(e) => self.fail(&format!("Save failed: {e}")),
-        }
-    }
-
-    pub fn save_as(mut self: Pin<&mut Self>, path: &QString) -> bool {
-        let started = Instant::now();
-        let target = PathBuf::from(path.to_string());
-        let result = {
-            let mut r = self.as_mut().rust_mut();
-            let r = &mut *r;
-            let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
-                return false;
-            };
-            session.save(doc, Some(&target))
-        };
-        if let Err(e) = result {
-            self.fail(&format!("Save failed: {e}"));
-            return false;
-        }
-        // Carry on in the new file; its log starts with opening it.
-        if !self.as_mut().open_file(path) {
-            return false;
-        }
-        self.done(&format!("Saved as {}{}", file_name(&target), took(started)));
-        true
     }
 
     pub fn check_theme(mut self: Pin<&mut Self>) {
@@ -2127,3 +2097,7 @@ impl qobject::AlignmentController {
 #[allow(dead_code)] // Invoked by the windowless application_bootstrap harness.
 #[path = "../tests/controller_refusal/alignment.rs"]
 pub(crate) mod refusal_tests;
+
+crate::editor_save::ordinary_save!(qobject::AlignmentController);
+
+crate::editor_save::confirmed_save!(qobject::AlignmentController);

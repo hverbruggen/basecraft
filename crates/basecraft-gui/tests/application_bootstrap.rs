@@ -33,6 +33,8 @@ mod document_open;
 #[path = "../src/editor_core.rs"]
 #[allow(unused_imports, dead_code)] // harness=false omits pure #[test] bodies.
 mod editor_core;
+#[path = "../src/editor_save.rs"]
+mod editor_save;
 #[path = "../src/figure_png.rs"]
 #[allow(unused_imports, dead_code)] // harness=false omits the included module's test bodies.
 mod figure_png;

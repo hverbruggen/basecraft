@@ -129,6 +129,16 @@ pub mod qobject {
         #[qinvokable]
         fn save(self: Pin<&mut DelimitationController>);
         #[qinvokable]
+        fn check_save(self: &DelimitationController, path: &QString) -> QString;
+        #[qinvokable]
+        fn save_confirmed(
+            self: Pin<&mut DelimitationController>,
+            path: &QString,
+            token: &QString,
+            policy: &QString,
+            acknowledge: bool,
+        ) -> bool;
+        #[qinvokable]
         fn save_as(self: Pin<&mut DelimitationController>, path: &QString) -> bool;
         #[qinvokable]
         fn export_svg(self: Pin<&mut DelimitationController>, path: &QString);
@@ -226,6 +236,7 @@ pub struct DelimitationRust {
     // Modification time of the theme file last applied; empty before the first read.
     theme_stamp: crate::bridge::ThemeStamp,
     session: Option<Session>,
+    save_state: crate::editor_save::SaveState,
     doc: Option<DocId>,
     selection: Selection,
     display_tree: Option<TreeDoc>,
@@ -263,6 +274,7 @@ impl Default for DelimitationRust {
             palette: delimitation::palette(&basecraft_viewmodel::Theme::default()),
             theme_stamp: crate::bridge::ThemeStamp::default(),
             session: None,
+            save_state: Default::default(),
             doc: None,
             selection: Selection::default(),
             display_tree: None,
@@ -1403,13 +1415,19 @@ impl qobject::DelimitationController {
             // Saving to the opened path is an ordinary save, so a workspace
             // opened through a symbolic link updates its file, not the link.
             let target = (path != &r.file_path).then(|| PathBuf::from(path.to_string()));
-            r.session
-                .as_mut()
-                .zip(r.doc)
-                .map(|(s, d)| s.save(d, target.as_deref()))
+            r.session.as_mut().zip(r.doc).map(|(s, d)| {
+                crate::editor_save::save(
+                    s,
+                    d,
+                    target.as_deref(),
+                    r.save_state.decision.take(),
+                    &mut r.save_state.unchecked,
+                )
+            })
         };
         match result {
             Some(Ok(())) => {
+                self.as_mut().rust_mut().save_state.succeeded = true;
                 if path != &self.rust().file_path {
                     let adopted = (|| -> basecraft_ops::Result<_> {
                         let target = PathBuf::from(path.to_string());
@@ -2583,3 +2601,5 @@ pub(crate) mod inspection_tests {
         println!("Delimitation real-controller linked hint/reopen/refusal passed");
     }
 }
+
+crate::editor_save::confirmed_save!(qobject::DelimitationController);

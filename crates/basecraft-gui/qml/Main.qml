@@ -693,7 +693,7 @@ ApplicationWindow {
         tooltip: "Save the current file or trace review"
         defaultShortcut: "Ctrl+S"
         enabled: window.current !== null && (!window.traceOpen || window.current.review_mode)
-        onTriggered: window.traceOpen ? window.traceDocument.saveReview() : window.saveDocument(tabs.currentIndex, "", null)
+        onTriggered: window.traceOpen ? window.traceDocument.saveReview() : window.saveTarget(window.documentTarget(tabs.currentIndex), "", null)
     }
     AppCommand {
         id: saveAsCommand
@@ -1791,6 +1791,7 @@ ApplicationWindow {
     // The project's specimen metadata (Export tab). It follows the
     // project folder; opening a project never creates metadata files.
     MetadataController { id: specimenMetadata }
+    AutoSaveEvidence { controller: specimenMetadata; fileUrls: shell; evidenceService: provenance }
     readonly property string metadataProject: shell.project_dir
     onMetadataProjectChanged: {
         specimenMetadata.use_project(metadataProject)
@@ -1846,6 +1847,7 @@ ApplicationWindow {
     // GenBank marker submissions (Export tab). table2asn runs as a
     // registered operation on its own job runner, like BLAST.
     SubmissionController { id: submissions }
+    AutoSaveEvidence { controller: submissions; fileUrls: shell; evidenceService: provenance }
     Connections {
         target: specimenMetadata
         function onTableChanged() { if (submissions.available) submissions.refresh_review() }
@@ -2099,12 +2101,8 @@ ApplicationWindow {
     }
 
     property var pendingEvidenceSave: null
-    function saveDocument(index, path, continuation) {
-        saveTarget(documentTarget(index), path, continuation)
-    }
     function saveTarget(owner, path, continuation) {
-        const index = targetIndex(owner)
-        if (index < 0) { if (continuation) continuation(false); return }
+        if (targetIndex(owner) < 0) { if (continuation) continuation(false); return }
         if (!path && owner.path.startsWith("untitled:")) {
             saveDialog.target = owner
             saveDialog.continuation = continuation
@@ -2113,31 +2111,39 @@ ApplicationWindow {
             return
         }
         const target = path || owner.path
-        const conflict = JSON.parse(provenance.save_conflicts(target))
-        if (conflict.error) { provenance.notification(target, conflict.error, "fail"); return }
-        const perform = function() {
+        const inspected = JSON.parse(owner.controller.check_save(path || ""))
+        if (inspected.error) { provenance.notification(target, inspected.error, "fail"); return }
+        const check = inspected.check
+        const perform = function(policy, acknowledge) {
             const row = targetIndex(owner)
             if (row < 0) { if (continuation) continuation(false); return }
-            let success
-            if (path) {
-                success = owner.controller.save_as(path)
-                if (success) {
-                    const savedRow = targetIndex(owner)
-                    if (savedRow < 0) { if (continuation) continuation(false); return }
-                    openFiles.setProperty(savedRow, "path", path)
-                    documentOpens.path_changed(owner.token, path, owner.controller.file_path)
-                    owner.path = path
-                    Qt.callLater(window.refreshCurrent)
-                }
-            } else { owner.controller.save(); success = !owner.controller.dirty }
+            const success = owner.controller.save_confirmed(path || "", check.token, policy || "cancel", acknowledge || false)
+            if (success && path) {
+                openFiles.setProperty(row, "path", path)
+                documentOpens.path_changed(owner.token, path, owner.controller.file_path)
+                owner.path = path
+                Qt.callLater(window.refreshCurrent)
+            }
+            if (!success) {
+                const refreshed = JSON.parse(owner.controller.check_save(path || ""))
+                if (refreshed.check && (refreshed.check.evidence.issues.length || refreshed.check.evidence.conflict.analyses.length)) showEvidence(refreshed.check)
+            }
             if (continuation) continuation(success)
         }
-        if ((conflict.analyses || []).length) {
-            pendingEvidenceSave = {owner: owner, target: target, perform: perform}
-            evidenceSaveDialog.conflict = conflict
+        const showEvidence = function(fresh) {
+            pendingEvidenceSave = {owner: owner, target: target, retry: function() { window.saveTarget(owner, path, continuation) },
+                saveAs: function() { saveDialog.target = owner; saveDialog.continuation = continuation; saveDialog.open() },
+                perform: function(policy, acknowledge) {
+                    // The callback captures precisely the displayed receipt.
+                    check.token = fresh.token
+                    perform(policy, acknowledge)
+                }}
+            evidenceSaveDialog.check = fresh
             evidenceSaveDialog.errorText = ""
             evidenceSaveDialog.open()
-        } else perform()
+        }
+        if ((check.evidence.conflict.analyses || []).length || (check.evidence.issues || []).length) showEvidence(check)
+        else perform("cancel", false)
     }
     function validEvidenceSave() {
         const pending = pendingEvidenceSave
@@ -2150,6 +2156,8 @@ ApplicationWindow {
         id: evidenceSaveDialog
         objectName: "evidenceSaveDialog"
         onRejected: window.pendingEvidenceSave = null
+        onRetry: { const pending = window.validEvidenceSave(); if (pending) { close(); pending.retry() } }
+        onSaveAs: { const pending = window.validEvidenceSave(); if (pending) { close(); pending.saveAs() } }
         onRelinkOriginal: function(path) {
             const pending = window.validEvidenceSave()
             if (!pending) return
@@ -2157,24 +2165,15 @@ ApplicationWindow {
                 if (analysis.direct === false) continue
                 if (!provenance.relink_run(analysis.run, path)) { errorText = provenance.message; return }
             }
-            conflict = JSON.parse(provenance.save_conflicts(pending.target))
-            errorText = "Original input verified. Cancel to review it, or choose how to continue saving."
-            if (!(conflict.analyses || []).length) {
-                window.pendingEvidenceSave = null
-                close()
-                pending.perform()
-            }
+            close()
+            pending.retry()
         }
         onChoice: function(policy) {
             const pending = window.validEvidenceSave()
             if (!pending) return
-            if (!provenance.resolve_save(pending.target, policy)) {
-                errorText = provenance.message
-                return
-            }
             window.pendingEvidenceSave = null
             close()
-            pending.perform()
+            pending.perform(policy, acknowledgeIncomplete)
         }
     }
     function saveBeforeQuit(targets, offset) {

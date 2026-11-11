@@ -38,6 +38,19 @@ pub mod qobject {
         #[qproperty(bool, can_undo)]
         #[qproperty(bool, can_redo)]
         type MetadataController = super::MetadataRust;
+        #[qsignal]
+        #[cxx_name = "saveQuestion"]
+        fn save_question(self: Pin<&mut MetadataController>);
+        #[qinvokable]
+        fn check_save(self: &MetadataController, path: &QString) -> QString;
+        #[qinvokable]
+        fn save_confirmed(
+            self: Pin<&mut MetadataController>,
+            path: &QString,
+            token: &QString,
+            policy: &QString,
+            acknowledge: bool,
+        ) -> bool;
         #[qinvokable]
         fn use_project(self: Pin<&mut MetadataController>, path: &QString);
         #[qinvokable]
@@ -62,8 +75,6 @@ pub mod qobject {
         fn undo(self: Pin<&mut MetadataController>);
         #[qinvokable]
         fn redo(self: Pin<&mut MetadataController>);
-        #[qinvokable]
-        fn save(self: Pin<&mut MetadataController>) -> bool;
         #[qinvokable]
         fn header_preview(
             self: &MetadataController,
@@ -448,8 +459,7 @@ impl qobject::MetadataController {
             }
             Ok(Err(error)) => {
                 self.as_mut().set_dirty(true);
-                self.as_mut()
-                    .report("error", &format!("Changed but not saved: {error}"));
+                self.as_mut().save_error(&error);
                 true
             }
             Ok(Ok(())) => {
@@ -621,8 +631,7 @@ impl qobject::MetadataController {
             Err(error) => self.as_mut().report("error", &error.to_string()),
             Ok(Err(error)) => {
                 self.as_mut().set_dirty(true);
-                self.as_mut()
-                    .report("error", &format!("Changed but not saved: {error}"));
+                self.as_mut().save_error(&error);
             }
             Ok(Ok(())) => {
                 self.as_mut().set_dirty(false);
@@ -639,28 +648,6 @@ impl qobject::MetadataController {
 
     pub fn redo(self: Pin<&mut Self>) {
         self.history(false);
-    }
-
-    /// Retry a save that failed.
-    pub fn save(mut self: Pin<&mut Self>) -> bool {
-        let result = {
-            let mut rust = self.as_mut().rust_mut();
-            match (rust.doc, rust.session.as_mut()) {
-                (Some(doc), Some(session)) => session.save(doc, None),
-                _ => return false,
-            }
-        };
-        match result {
-            Ok(()) => {
-                self.as_mut().set_dirty(false);
-                self.report("ok", "Saved the specimen table");
-                true
-            }
-            Err(error) => {
-                self.report("error", &error.to_string());
-                false
-            }
-        }
     }
 
     pub fn header_preview(&self, file: &QString, separator: &QString) -> QString {
@@ -984,3 +971,5 @@ mod tests {
         assert_eq!(table_json(None, &[])["available"], false);
     }
 }
+
+crate::editor_save::auto_save!(qobject::MetadataController, set_dirty);

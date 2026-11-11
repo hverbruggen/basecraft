@@ -86,6 +86,7 @@ fn main() {
         "qml/DocumentRecordDialog.qml",
         "qml/TasksDialog.qml",
         "qml/AnalysisEvidenceDialog.qml",
+        "qml/AutoSaveEvidence.qml",
         "qml/AppRibbonButton.qml",
         "qml/AppTabButton.qml",
         "qml/RibbonGroup.qml",

@@ -147,6 +147,16 @@ pub mod qobject {
         #[qinvokable]
         fn save_review(self: Pin<&mut SangerController>, path: &QString) -> bool;
         #[qinvokable]
+        fn check_save(self: &SangerController, path: &QString) -> QString;
+        #[qinvokable]
+        fn save_confirmed(
+            self: Pin<&mut SangerController>,
+            path: &QString,
+            token: &QString,
+            policy: &QString,
+            acknowledge: bool,
+        ) -> bool;
+        #[qinvokable]
         fn review_set(self: Pin<&mut SangerController>, choice: &QString, base: &QString) -> bool;
         #[qinvokable]
         fn review_undo(self: Pin<&mut SangerController>);
@@ -1195,7 +1205,65 @@ impl qobject::SangerController {
         }
     }
 
-    pub fn save_review(mut self: std::pin::Pin<&mut Self>, path: &QString) -> bool {
+    pub fn check_save(&self, path: &QString) -> QString {
+        let path = if path.to_string().is_empty() {
+            self.rust().review_path.clone().unwrap_or_default()
+        } else {
+            PathBuf::from(path.to_string())
+        };
+        let result = self
+            .rust()
+            .review_session
+            .as_ref()
+            .ok_or_else(|| basecraft_ops::Error::Unsupported("No Sanger review is open".into()))
+            .and_then(|s| s.check_save(&path));
+        crate::editor_save::check_json(result)
+    }
+
+    pub fn save_confirmed(
+        mut self: std::pin::Pin<&mut Self>,
+        path: &QString,
+        token: &QString,
+        policy: &QString,
+        acknowledge: bool,
+    ) -> bool {
+        let path = if path.to_string().is_empty() {
+            self.rust().review_path.clone().unwrap_or_default()
+        } else {
+            PathBuf::from(path.to_string())
+        };
+        let result = (|| -> basecraft_ops::Result<_> {
+            let policy = serde_json::from_value(serde_json::Value::String(policy.to_string()))?;
+            self.rust()
+                .review_session
+                .as_ref()
+                .ok_or_else(|| {
+                    basecraft_ops::Error::Unsupported("No Sanger review is open".into())
+                })?
+                .decide_save(&path, &token.to_string(), policy, acknowledge)
+        })();
+        match result {
+            Ok(decision) => self.save_review_with(
+                &QString::from(path.to_string_lossy().as_ref()),
+                Some(decision),
+            ),
+            Err(e) => {
+                self.as_mut().set_message_kind(QString::from("error"));
+                self.set_message(QString::from(e.to_string()));
+                false
+            }
+        }
+    }
+
+    pub fn save_review(self: std::pin::Pin<&mut Self>, path: &QString) -> bool {
+        self.save_review_with(path, None)
+    }
+
+    fn save_review_with(
+        mut self: std::pin::Pin<&mut Self>,
+        path: &QString,
+        decision: Option<basecraft_ops::session::SaveDecision>,
+    ) -> bool {
         if self.rust().stage.is_some() {
             return false;
         }
@@ -1206,15 +1274,25 @@ impl qobject::SangerController {
             .review_session
             .as_mut()
             .ok_or_else(|| "No Sanger review is open".to_string())
-            .and_then(|session| session.save(&path));
+            .and_then(|session| match decision {
+                Some(decision) => session
+                    .save_with_decision(&path, decision)
+                    .map(|outcome| !outcome.warnings.is_empty())
+                    .map_err(|e| e.to_string()),
+                None => session.save(&path).map(|()| false),
+            });
         match result {
-            Ok(()) => {
+            Ok(unchecked) => {
                 self.as_mut().rust_mut().review_path = Some(path.clone());
                 self.as_mut()
                     .set_file_path(QString::from(path.to_string_lossy().as_ref()));
                 self.as_mut().set_dirty(false);
                 self.as_mut().set_message_kind(QString::from("done"));
-                self.as_mut().set_message(QString::from("Review saved"));
+                self.as_mut().set_message(QString::from(if unchecked {
+                    "Saved. Some analysis evidence was not checked."
+                } else {
+                    "Review saved"
+                }));
                 true
             }
             Err(error) => {

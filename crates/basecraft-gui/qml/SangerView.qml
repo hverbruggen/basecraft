@@ -61,6 +61,38 @@ FocusScope {
         saveReviewDialog.selectedFile = fileUrls.local_file_url(ctl.export_path.replace(/_consensus_from_basecraft\.fasta$/, ".sanger-review.json"))
         saveReviewDialog.open()
     }
+    function saveReviewTarget(path) {
+        const inspected = JSON.parse(ctl.check_save(path))
+        if (inspected.error) { if (notificationSink) notificationSink.notification(path, inspected.error, "fail"); return }
+        reviewEvidence.target = path
+        reviewEvidence.check = inspected.check
+        if (inspected.check.evidence.issues.length || inspected.check.evidence.conflict.analyses.length) reviewEvidence.open()
+        else if (!ctl.save_confirmed(path, inspected.check.token, "cancel", false)) {
+            const fresh = JSON.parse(ctl.check_save(path))
+            if (fresh.check && (fresh.check.evidence.issues.length || fresh.check.evidence.conflict.analyses.length)) { reviewEvidence.check = fresh.check; reviewEvidence.open() }
+        }
+    }
+    AppProvenance { id: reviewProvenance }
+    AnalysisEvidenceDialog {
+        id: reviewEvidence
+        property string target: ""
+        onRelinkOriginal: function(path) {
+            for (const analysis of conflict.analyses || []) {
+                if (analysis.direct !== false && !reviewProvenance.relink_run(analysis.run, path)) { errorText = reviewProvenance.message; return }
+            }
+            close(); doc.saveReviewTarget(target)
+        }
+        onRetry: { close(); doc.saveReviewTarget(target) }
+        onSaveAs: { close(); doc.saveReview() }
+        onChoice: function(policy) {
+            if (ctl.save_confirmed(target, check.token, policy, acknowledgeIncomplete)) close()
+            else {
+                errorText = ctl.message
+                const fresh = JSON.parse(ctl.check_save(target))
+                if (fresh.check) check = fresh.check
+            }
+        }
+    }
     function alignmentContext() { if (!working) alignmentDialog.open() }
     function draftReads() { if (!working) additionalDialog.open() }
     function activeFolder() { return fileUrls.parent_folder_url(ctl.export_path) }
@@ -375,7 +407,7 @@ FocusScope {
         fileMode: FileDialog.SaveFile
         defaultSuffix: "json"
         nameFilters: ["Sanger review (*.sanger-review.json)"]
-        onAccepted: ctl.save_review(doc.localPath(selectedFile))
+        onAccepted: doc.saveReviewTarget(doc.localPath(selectedFile))
     }
     FileDialog {
         currentFolder: doc.activeFolder()

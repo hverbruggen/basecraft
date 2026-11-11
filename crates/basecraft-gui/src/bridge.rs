@@ -175,6 +175,16 @@ pub mod qobject {
         fn redo(self: Pin<&mut GenomeController>);
         #[qinvokable]
         fn save(self: Pin<&mut GenomeController>);
+        #[qinvokable]
+        fn check_save(self: &GenomeController, path: &QString) -> QString;
+        #[qinvokable]
+        fn save_confirmed(
+            self: Pin<&mut GenomeController>,
+            path: &QString,
+            token: &QString,
+            policy: &QString,
+            acknowledge: bool,
+        ) -> bool;
         /// Save to a new file and carry on editing that one.
         #[qinvokable]
         fn save_as(self: Pin<&mut GenomeController>, path: &QString) -> bool;
@@ -460,6 +470,7 @@ pub struct ControllerRust {
     scroll_size: f64,
 
     session: Option<Session>,
+    save_state: crate::editor_save::SaveState,
     doc: Option<DocId>,
     view: GenomeView,
     theme: Theme,
@@ -499,6 +510,7 @@ impl Default for ControllerRust {
             overview_size: 1.0,
             scroll_size: 1.0,
             session: None,
+            save_state: Default::default(),
             doc: None,
             view: GenomeView::new(800.0, 600.0),
             theme: Theme::default(),
@@ -1522,48 +1534,6 @@ impl qobject::GenomeController {
 
     pub fn redo(self: Pin<&mut Self>) {
         self.history(true);
-    }
-
-    pub fn save(mut self: Pin<&mut Self>) {
-        let started = Instant::now();
-        let result = {
-            let mut r = self.as_mut().rust_mut();
-            let r = &mut *r;
-            let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
-                return;
-            };
-            session.save(doc, None)
-        };
-        match result {
-            Ok(()) => {
-                self.as_mut().set_dirty(false);
-                self.done(&format!("Saved{}", took(started)));
-            }
-            Err(e) => self.fail(&format!("Save failed: {e}")),
-        }
-    }
-
-    pub fn save_as(mut self: Pin<&mut Self>, path: &QString) -> bool {
-        let started = Instant::now();
-        let target = PathBuf::from(path.to_string());
-        let result = {
-            let mut r = self.as_mut().rust_mut();
-            let r = &mut *r;
-            let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
-                return false;
-            };
-            session.save(doc, Some(&target))
-        };
-        if let Err(e) = result {
-            self.fail(&format!("Save failed: {e}"));
-            return false;
-        }
-        // Carry on in the new file; its log starts with opening it.
-        if !self.as_mut().open_file(path) {
-            return false;
-        }
-        self.done(&format!("Saved as {}{}", file_name(&target), took(started)));
-        true
     }
 
     pub fn check_theme(mut self: Pin<&mut Self>) {
@@ -2711,3 +2681,7 @@ mod tests {
         assert_eq!(location_summary(&loc)["partial5"], json!(true));
     }
 }
+
+crate::editor_save::ordinary_save!(qobject::GenomeController);
+
+crate::editor_save::confirmed_save!(qobject::GenomeController);
