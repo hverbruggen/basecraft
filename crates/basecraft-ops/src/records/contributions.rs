@@ -143,18 +143,14 @@ pub(crate) fn project(events: &[LogEntry], effective: &mut Vec<EditActivity>) {
         .collect();
     let mut retained_runs = HashSet::new();
     for event in events {
-        if let Op::ToolRun { params, .. } = &event.op
-            && params
-                .pointer("/contributions/schema_version")
-                .and_then(serde_json::Value::as_u64)
-                == Some(1)
-            && let Some(edits) = params
-                .pointer("/contributions/edits")
-                .and_then(serde_json::Value::as_array)
-            && edits
+        if let Op::ToolRun {
+            contributions: Some(contributions),
+            ..
+        } = &event.op
+            && contributions
+                .edits
                 .iter()
-                .filter_map(serde_json::Value::as_str)
-                .any(|id| active.contains(id) && survivors.contains(id))
+                .any(|id| active.contains(id.as_str()) && survivors.contains(id.as_str()))
         {
             retained_runs.insert(event.id.as_str());
         }
@@ -165,7 +161,7 @@ pub(crate) fn project(events: &[LogEntry], effective: &mut Vec<EditActivity>) {
         Op::FeatureAdd { .. } | Op::FeatureUpdate { .. } | Op::TreeAddSupport { .. } => {
             survivors.contains(edit.id.as_str())
         }
-        Op::ToolRun { params, .. } => params.get("contributions").is_none(),
+        Op::ToolRun { contributions, .. } => contributions.is_none(),
         _ => true,
     });
     for event in events {

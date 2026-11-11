@@ -1170,6 +1170,28 @@
         "params": {
           "type": "object",
           "properties": {
+            "contributions": {
+              "description": "The document edits this activity made, such as imported values.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ActivityContributions"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "input_run": {
+              "description": "The exact input this activity read, retained in its own run.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ActivityInputRun"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "inputs": {
               "type": "array",
               "items": {
@@ -1186,6 +1208,7 @@
               }
             },
             "params": {
+              "description": "The tool's own parameters. Basecraft's bookkeeping is in the typed\nfields below, never in parameter names.",
               "default": null
             },
             "plugin": {
@@ -1530,6 +1553,50 @@
             "include_metadata"
           ]
         }
+      ]
+    },
+    "ActivityContributions": {
+      "type": "object",
+      "properties": {
+        "edits": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "schema_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "schema_version",
+        "edits"
+      ]
+    },
+    "ActivityInputRun": {
+      "description": "Embedded provenance for an activity's exact submitted input.",
+      "type": "object",
+      "properties": {
+        "hash": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "schema_version",
+        "id",
+        "hash"
       ]
     },
     "Actor": {

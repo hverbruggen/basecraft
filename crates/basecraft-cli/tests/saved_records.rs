@@ -338,14 +338,15 @@ fn import_event(target: &Path) -> Value {
                 plugin,
                 operation,
                 params,
+                input_run,
                 ..
             } if plugin == "basecraft.tree" && operation == "import_support" => {
+                assert!(input_run.is_some(), "{params}");
                 Some(params.clone())
             }
             _ => None,
         })
         .expect("import activity");
-    assert!(params["input_run"]["id"].is_string(), "{params}");
     params
 }
 

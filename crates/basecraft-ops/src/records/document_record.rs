@@ -169,7 +169,7 @@ impl DocumentRecord {
         record.effective.clone_from(&p.effective_edits);
         crate::records::contributions::project(&record.data.events, &mut record.data.effective);
         if record.events.iter().any(|event| matches!(&event.op,
-            Op::ToolRun { outputs, params, .. } if outputs.is_empty() && params.get("contributions").is_none())) {
+            Op::ToolRun { outputs, contributions, .. } if outputs.is_empty() && contributions.is_none())) {
             record.warnings.push("Retained contribution ownership is unknown for legacy no-output activities; historical invocation evidence was not reassigned to current edits.".into());
         }
         if p.completeness.ancestry_known {

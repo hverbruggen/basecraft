@@ -707,6 +707,8 @@ mod activity_tests {
                 params: serde_json::json!({"elapsed_seconds":metric,"metrics":{"fraction":metric}}),
                 inputs: vec![],
                 outputs: vec![],
+                input_run: None,
+                contributions: None,
             },
             result: basecraft_protocol::OpResult::default(),
             state: basecraft_protocol::DocState {

@@ -156,14 +156,25 @@ fn embedded_activity_original_records() {
     let doc = session.open(&target).unwrap();
     session.import_support(doc, &source, "Bootstrap").unwrap();
     for event in &session.document_record(doc).unwrap().events {
-        if let Op::ToolRun { params, .. } = &event.op {
-            for (key, name) in [
-                ("input_run", "activity-input-run.json"),
-                ("contributions", "activity-contributions.json"),
+        if let Op::ToolRun {
+            input_run,
+            contributions,
+            ..
+        } = &event.op
+        {
+            for (value, name) in [
+                (
+                    serde_json::to_value(input_run).unwrap(),
+                    "activity-input-run.json",
+                ),
+                (
+                    serde_json::to_value(contributions).unwrap(),
+                    "activity-contributions.json",
+                ),
             ] {
-                assert_eq!(params[key]["schema_version"], 1);
+                assert_eq!(value["schema_version"], 1);
                 if std::env::var_os("BASECRAFT_CAPTURE_ADDITIONAL_RECORDS").is_some() {
-                    golden(name, &serde_json::to_vec(&params[key]).unwrap());
+                    golden(name, &serde_json::to_vec(&value).unwrap());
                 }
             }
         }

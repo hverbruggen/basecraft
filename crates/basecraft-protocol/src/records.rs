@@ -264,7 +264,7 @@ pub struct WorkflowFailureJob {
 }
 
 /// Embedded provenance for an activity's exact submitted input.
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ActivityInputRun {
     pub schema_version: u32,
     pub id: String,
@@ -280,7 +280,7 @@ pub struct IndexChange {
     pub sources: Option<std::collections::BTreeSet<PathBuf>>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ActivityContributions {
     pub schema_version: u32,
     pub edits: Vec<String>,

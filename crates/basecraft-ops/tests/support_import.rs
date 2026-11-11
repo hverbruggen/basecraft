@@ -60,9 +60,9 @@ fn imported_source_is_referenced_verified_and_survives_a_folder_move() {
 
     let publication = records::inspect(&target).unwrap();
     assert!(publication.events.iter().any(|event| matches!(&event.op,
-        Op::ToolRun { plugin, operation, params, .. }
+        Op::ToolRun { plugin, operation, params, input_run: Some(_), .. }
             if plugin == "basecraft.tree" && operation == "import_support"
-                && params["input_run"]["id"].is_string() && params["sets"][0] == "Bootstrap")));
+                && params["sets"][0] == "Bootstrap")));
     assert_eq!(records::verify(&target).unwrap(), Vec::<String>::new());
     // Reference-first: the source bytes are not copied into any store.
     let source_hash = basecraft_io::hash_file(&source).unwrap();

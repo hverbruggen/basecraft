@@ -409,17 +409,19 @@ fn link_selected_inputs(bundle: &Path, publication: &Publication) -> Result<()> 
                 plugin,
                 operation,
                 params,
+                input_run,
+                contributions,
                 ..
             } = &event.op
             {
                 if plugin == "basecraft.sanger-review" && operation == "reviewed_consensus_input" {
-                    return Some((&event.id, &params["sanger_input"]));
+                    return Some((&event.id, params["sanger_input"].clone()));
                 }
-                if params.get("contributions").is_some() && !retained.contains(event.id.as_str()) {
+                if contributions.is_some() && !retained.contains(event.id.as_str()) {
                     return None;
                 }
-                if let Some(run) = params.get("input_run") {
-                    return Some((&event.id, run));
+                if let Some(run) = input_run {
+                    return serde_json::to_value(run).ok().map(|run| (&event.id, run));
                 }
             }
             None
@@ -659,6 +661,8 @@ pub fn tool_run_entry(
             params,
             inputs: names(&publication.inputs),
             outputs: names(&publication.outputs),
+            input_run: None,
+            contributions: None,
         },
         result: OpResult {
             hashes: publication
