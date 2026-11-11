@@ -135,7 +135,8 @@ fn publication_worker() {
                         &source,
                         &expected,
                         &[],
-                        "stale registration"
+                        "stale registration",
+                        None
                     )
                     .is_err()
             );
@@ -153,6 +154,7 @@ fn publication_worker() {
                 &expected,
                 &[],
                 "input",
+                None,
             )
             .unwrap();
         // Pause at the former post-helper gap. A save must not acquire the lock
@@ -326,6 +328,7 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
                 &hash,
                 &[],
                 "retained input",
+                None,
             )
             .unwrap();
         let mut input = mutation.read_input(leaf.directory()).unwrap();

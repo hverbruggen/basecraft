@@ -121,7 +121,7 @@ fn run_cases(root: &Path) {
         }
         check_tree(&moved_tree, label, multi);
         assert_eq!(
-            basecraft_ops::records::verify(&retained).unwrap(),
+            basecraft_ops::records::verify(&retained, None).unwrap(),
             Vec::<String>::new()
         );
     }

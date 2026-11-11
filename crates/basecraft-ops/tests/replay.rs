@@ -467,16 +467,18 @@ fn alignment_session_replays_exactly() {
         s.apply(d, Op::AlnRemoveGapColumns {}).unwrap();
         // A tool run that wrote a new file.
         std::fs::write(root.join("x.mafft.fasta"), ">a\nAC\n>b\nAC\n").unwrap();
-        s.log_tool_run(
+        s.record_tool_run(
             d,
             basecraft_protocol::Actor::Tool {
                 tool: "mafft".into(),
                 version: "v7.526".into(),
             },
-            ("basecraft.mafft", "align"),
-            serde_json::json!({}),
-            &[("x.aln.fasta (ungapped)".into(), "b3:00".into())],
-            &[root.join("x.mafft.fasta")],
+            basecraft_ops::session::ToolRunRecord::new(
+                ("basecraft.mafft", "align"),
+                serde_json::json!({}),
+                &[("x.aln.fasta (ungapped)".into(), "b3:00".into())],
+                &[root.join("x.mafft.fasta")],
+            ),
         )
         .unwrap();
         // Sequence operations don't apply to an alignment.

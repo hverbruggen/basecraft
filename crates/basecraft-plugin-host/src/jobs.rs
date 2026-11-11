@@ -395,8 +395,7 @@ impl JobManager {
                 let key = basecraft_ops::records::relative(session.root(),&path)?;
                 let params = json!({"requested":job.prepared.request.parameters,"effective":outcome.effective_parameters,
                     "operation":job.prepared.operation.id,"pins":outcome.pins,"initiator":job.prepared.initiator,"run_id":outcome.run_id});
-                session.log_contributing_tool_run(target.doc,basecraft_protocol::Actor::Plugin {id:job.prepared.operation.package.manifest.id.clone(),version:job.prepared.operation.package.manifest.version.clone()},
-                    (&job.prepared.operation.package.manifest.id,&job.prepared.operation.descriptor.implementation),params,&[(key,hash)],&edit_ids)?;
+                session.record_tool_run(target.doc, basecraft_protocol::Actor::Plugin {id:job.prepared.operation.package.manifest.id.clone(),version:job.prepared.operation.package.manifest.version.clone()}, basecraft_ops::session::ToolRunRecord { edits: Some(&edit_ids[..]), ..basecraft_ops::session::ToolRunRecord::new((&job.prepared.operation.package.manifest.id,&job.prepared.operation.descriptor.implementation), params, &[(key,hash)], &[]) })?;
                 Ok(())
             });
             if let Err(error) = activity {
@@ -984,9 +983,20 @@ fn record_document_run(
     );
     let inputs = std::slice::from_ref(&target.input);
     if target.saved.is_some() {
-        session.log_referenced_tool_run(target.doc, actor, operation, params, inputs, &outputs)?;
+        session.record_tool_run(
+            target.doc,
+            actor,
+            basecraft_ops::session::ToolRunRecord {
+                referenced: true,
+                ..basecraft_ops::session::ToolRunRecord::new(operation, params, inputs, &outputs)
+            },
+        )?;
     } else {
-        session.log_tool_run(target.doc, actor, operation, params, inputs, &outputs)?;
+        session.record_tool_run(
+            target.doc,
+            actor,
+            basecraft_ops::session::ToolRunRecord::new(operation, params, inputs, &outputs),
+        )?;
     }
     Ok(())
 }

@@ -268,6 +268,7 @@ fn reference(anchor: &Path, source: &Path) -> basecraft_ops::records::ArtifactRu
         &basecraft_io::hash_file(source).unwrap(),
         &[],
         "recovery test",
+        None,
     )
     .unwrap()
 }

@@ -72,7 +72,7 @@ fn synthetic_large_clean_source_has_metadata_only_evidence_and_relocates() {
         text.len()
     );
     assert_eq!(
-        basecraft_ops::records::verify(&result).unwrap(),
+        basecraft_ops::records::verify(&result, None).unwrap(),
         Vec::<String>::new()
     );
     println!("input_bytes={} metadata_bytes={bytes}", text.len());
@@ -81,18 +81,18 @@ fn synthetic_large_clean_source_has_metadata_only_evidence_and_relocates() {
     std::fs::rename(&folder, &moved).unwrap();
     let result = moved.join("aligned.fasta");
     assert_eq!(
-        basecraft_ops::records::verify(&result).unwrap(),
+        basecraft_ops::records::verify(&result, None).unwrap(),
         Vec::<String>::new()
     );
     let package = dir.path().join("package");
-    basecraft_ops::records::package(&result, &package).unwrap();
+    basecraft_ops::records::package(&result, &package, None).unwrap();
     std::fs::remove_file(moved.join("input.fasta")).unwrap();
     assert_ne!(
-        basecraft_ops::records::verify(&result).unwrap(),
+        basecraft_ops::records::verify(&result, None).unwrap(),
         Vec::<String>::new()
     );
     assert_eq!(
-        basecraft_ops::records::verify(&package.join("aligned.fasta")).unwrap(),
+        basecraft_ops::records::verify(&package.join("aligned.fasta"), None).unwrap(),
         Vec::<String>::new()
     );
 }
@@ -149,7 +149,7 @@ fn common_save_route_preserves_actual_original_and_dirty_submitted_input() {
     let run = ArtifactRun::for_result(&output).unwrap().unwrap();
     assert_eq!(std::fs::read(common::verified_input(&run)).unwrap(), old);
     assert_eq!(
-        basecraft_ops::records::verify(&output).unwrap(),
+        basecraft_ops::records::verify(&output, None).unwrap(),
         Vec::<String>::new()
     );
     let result_doc = session.open(&output).unwrap();
@@ -167,7 +167,7 @@ fn common_save_route_preserves_actual_original_and_dirty_submitted_input() {
     let copied_result = dir.path().join("copied-result.fasta");
     session.save(result_doc, Some(&copied_result)).unwrap();
     assert_eq!(
-        basecraft_ops::records::verify(&copied_result).unwrap(),
+        basecraft_ops::records::verify(&copied_result, None).unwrap(),
         Vec::<String>::new()
     );
     let report = basecraft_ops::records::replay(dir.path()).unwrap();
@@ -194,20 +194,20 @@ fn downstream_evidence_follows_preservation_and_complete_export_keeps_dependency
     records::resolve(&conflict, SavePolicy::PreserveCopy).unwrap();
     std::fs::remove_file(&source).unwrap();
     assert_eq!(
-        basecraft_ops::records::verify(&second).unwrap(),
+        basecraft_ops::records::verify(&second, None).unwrap(),
         Vec::<String>::new()
     );
     let package = root.path().join("portable");
-    basecraft_ops::records::package(&second, &package).unwrap();
+    basecraft_ops::records::package(&second, &package, None).unwrap();
     let first_run = ArtifactRun::for_result(&first).unwrap().unwrap();
     std::fs::write(common::verified_input(&first_run), ">a\nTTTT\n>b\nTTTT\n").unwrap();
     assert_ne!(
-        basecraft_ops::records::verify(&second).unwrap(),
+        basecraft_ops::records::verify(&second, None).unwrap(),
         Vec::<String>::new()
     );
     std::fs::remove_file(first).unwrap();
     assert_eq!(
-        basecraft_ops::records::verify(&package.join("second.afa")).unwrap(),
+        basecraft_ops::records::verify(&package.join("second.afa"), None).unwrap(),
         Vec::<String>::new()
     );
 }
@@ -242,7 +242,7 @@ fn save_as_descendants_receive_each_explicit_evidence_decision() {
         match policy {
             SavePolicy::PreserveCopy => {
                 assert_eq!(
-                    basecraft_ops::records::verify(&last).unwrap(),
+                    basecraft_ops::records::verify(&last, None).unwrap(),
                     Vec::<String>::new()
                 );
             }
@@ -259,7 +259,7 @@ fn save_as_descendants_receive_each_explicit_evidence_decision() {
                             == basecraft_protocol::input_records::EvidenceState::Broken)
                 );
                 assert_ne!(
-                    basecraft_ops::records::verify(&last).unwrap(),
+                    basecraft_ops::records::verify(&last, None).unwrap(),
                     Vec::<String>::new()
                 );
             }
@@ -295,16 +295,16 @@ fn complete_export_remaps_history_and_retains_original_records_without_store() {
         session.save(doc, None).unwrap();
     }
     session.save(doc, Some(&saved)).unwrap();
-    let bundle = basecraft_ops::records::bundle_for_result(&saved);
+    let bundle = basecraft_ops::records::bundle_for_result(&saved, None);
     let originals: Vec<_> = std::fs::read_dir(bundle.join("records"))
         .unwrap()
         .map(|e| std::fs::read(e.unwrap().path()).unwrap())
         .collect();
     let package = root.path().join("portable");
-    basecraft_ops::records::package(&saved, &package).unwrap();
+    basecraft_ops::records::package(&saved, &package, None).unwrap();
     let exported = package.join("saved.afa");
-    let exported_bundle = basecraft_ops::records::bundle_for_result(&exported);
-    let publication = basecraft_ops::records::inspect(&exported).unwrap();
+    let exported_bundle = basecraft_ops::records::bundle_for_result(&exported, None);
+    let publication = basecraft_ops::records::inspect(&exported, None).unwrap();
     for bytes in originals {
         let hash = basecraft_io::hash_bytes(&bytes);
         let artifact = publication
@@ -325,7 +325,7 @@ fn complete_export_remaps_history_and_retains_original_records_without_store() {
     .unwrap();
     std::fs::rename(bundle, root.path().join("unavailable-companion")).unwrap();
     assert_eq!(
-        basecraft_ops::records::verify(&exported).unwrap(),
+        basecraft_ops::records::verify(&exported, None).unwrap(),
         Vec::<String>::new()
     );
     // Archived immutable records participate in package verification too.
@@ -340,7 +340,7 @@ fn complete_export_remaps_history_and_retains_original_records_without_store() {
     )
     .unwrap();
     assert_ne!(
-        basecraft_ops::records::verify(&exported).unwrap(),
+        basecraft_ops::records::verify(&exported, None).unwrap(),
         Vec::<String>::new()
     );
 }
@@ -391,7 +391,7 @@ fn one_save_decision_covers_every_backing_reference_without_merging_analyses() {
     }
     for path in [&first, &second] {
         assert_eq!(
-            basecraft_ops::records::verify(path).unwrap(),
+            basecraft_ops::records::verify(path, None).unwrap(),
             Vec::<String>::new()
         );
     }

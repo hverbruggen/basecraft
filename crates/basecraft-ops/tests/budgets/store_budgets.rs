@@ -166,6 +166,7 @@ fn unrelated_registration_and_known_preserve() {
         &basecraft_io::hash_file(&source).unwrap(),
         &[],
         "budget-test",
+        None,
     )
     .unwrap();
     let nearby = root.join(".basecraft/analyses-v1");

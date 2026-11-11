@@ -52,7 +52,7 @@ impl Session {
             .map(|(path, _)| self.relative(path))
             .collect();
         let (origin, mut origin_issue) =
-            crate::records::document_record::read_origin(path, &hashes);
+            crate::records::document_record::read_origin(path, &hashes, self.project.as_ref());
         if let Some(warning) = content.as_document().opening_warning() {
             origin_issue = Some(
                 origin_issue
@@ -81,7 +81,7 @@ impl Session {
         let mut slot = Slot::new(
             key.clone(),
             content,
-            crate::records::provenance::bundle_for_result(path),
+            crate::records::provenance::bundle_for_result(path, self.project.as_ref()),
             disk_stamp,
         );
         slot.accepted_hashes.clone_from(&hashes);

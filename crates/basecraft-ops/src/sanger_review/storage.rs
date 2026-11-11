@@ -60,7 +60,13 @@ fn base(path: &Path) -> crate::Result<PathBuf> {
 }
 
 // Placement contexts can be large alignments; only traces use owned captures.
-fn source(path: &Path, sha256: &str, anchor: &Path) -> crate::Result<Source> {
+// A context inside the project links the history it keeps there.
+fn source(
+    path: &Path,
+    sha256: &str,
+    anchor: &Path,
+    project: Option<&crate::project::Project>,
+) -> crate::Result<Source> {
     let path = path.canonicalize()?;
     let hash = basecraft_io::hash_file(&path)?;
     let ledger = inputs::reference_input_with_dependencies(
@@ -69,6 +75,7 @@ fn source(path: &Path, sha256: &str, anchor: &Path) -> crate::Result<Source> {
         &hash,
         &[],
         "Explicit Sanger input reference",
+        project,
     )?;
     if !basecraft_io::sha256_file(&path)?.eq_ignore_ascii_case(sha256) {
         return Err(crate::Error::ChangedOnDisk { path });
@@ -92,6 +99,7 @@ fn source_capture(
         capture,
         &[],
         "Explicit Sanger input reference",
+        None,
     )?;
     let reference = inputs::read_input(ledger.directory())?.source;
     Ok(Source {
@@ -261,8 +269,13 @@ fn publication(run: &ArtifactRun, origin: &str, artifacts: Vec<ArtifactRevision>
 }
 
 impl SangerRun {
-    pub fn prepare(anchor: &Path, operation: &str, paths: &[PathBuf]) -> crate::Result<Self> {
-        Self::prepare_with_dependencies(anchor, operation, paths, &[])
+    pub fn prepare(
+        anchor: &Path,
+        operation: &str,
+        paths: &[PathBuf],
+        project: Option<&crate::project::Project>,
+    ) -> crate::Result<Self> {
+        Self::prepare_with_dependencies(anchor, operation, paths, &[], project)
     }
 
     pub fn prepare_with_dependencies(
@@ -270,6 +283,7 @@ impl SangerRun {
         operation: &str,
         paths: &[PathBuf],
         ancestors: &[PathBuf],
+        project: Option<&crate::project::Project>,
     ) -> crate::Result<Self> {
         if paths.is_empty() {
             return Err(crate::Error::Unsupported(
@@ -292,9 +306,12 @@ impl SangerRun {
                 evidence.sources.push(source_capture(&capture, anchor)?);
                 captures.push(capture);
             } else {
-                evidence
-                    .sources
-                    .push(source(path, &basecraft_io::sha256_file(path)?, anchor)?);
+                evidence.sources.push(source(
+                    path,
+                    &basecraft_io::sha256_file(path)?,
+                    anchor,
+                    project,
+                )?);
             }
         }
         let run = ArtifactRun::create(anchor, &ulid::Ulid::generate().to_string())?;
@@ -544,12 +561,14 @@ impl SangerReview {
         &mut self,
         directory: &Path,
         path: &Path,
+        project: Option<&crate::project::Project>,
     ) -> Result<(), String> {
         let placement = SangerPlacement::read(path)?;
         let context = source(
             &placement.source_path,
             &placement.source_sha256,
             &self.anchor,
+            project,
         )
         .map_err(|e| e.to_string())?;
         self.evidence.sources.push(context);
@@ -985,7 +1004,10 @@ struct AdditionEvidence {
 impl SangerReview {
     /// Freeze the accepted input for alignment addition without exporting an AB1
     /// or requiring a visible review file. This descriptor is never executable.
-    pub fn addition_evidence(&self) -> Result<String, String> {
+    pub fn addition_evidence(
+        &self,
+        project: Option<&crate::project::Project>,
+    ) -> Result<String, String> {
         let sequence = self
             .resolved_sequence()
             .filter(|s| !s.is_empty())
@@ -1001,6 +1023,7 @@ impl SangerReview {
             "accepted_review_input",
             &paths,
             self.evidence_runs(),
+            project,
         )
         .map_err(|e| e.to_string())?;
         let review = run.review_snapshot(self).map_err(|e| e.to_string())?;
@@ -1071,10 +1094,7 @@ pub fn record_addition(
         return Err(invalid(issues.join("; ")));
     }
     let hash = session.snapshot_file(&evidence.review)?;
-    session.log_referenced_tool_run(doc,basecraft_protocol::Actor::Plugin {id:"basecraft.sanger-review".into(),version:"1".into()},
-        ("basecraft.sanger-review","reviewed_consensus_input"),
-        serde_json::json!({"sanger_input":{"schema_version":1,"id":evidence.id,"hash":evidence.hash},"review_hash":evidence.review_hash,"sequence_hash":evidence.sequence_hash}),
-        &[(evidence.review.to_string_lossy().into_owned(),hash)],&[])
+    session.record_tool_run(doc, basecraft_protocol::Actor::Plugin {id:"basecraft.sanger-review".into(),version:"1".into()}, crate::session::ToolRunRecord { referenced: true, ..crate::session::ToolRunRecord::new(("basecraft.sanger-review","reviewed_consensus_input"), serde_json::json!({"sanger_input":{"schema_version":1,"id":evidence.id,"hash":evidence.hash},"review_hash":evidence.review_hash,"sequence_hash":evidence.sequence_hash}), &[(evidence.review.to_string_lossy().into_owned(),hash)], &[]) })
 }
 
 impl SangerReview {
@@ -1259,7 +1279,7 @@ mod tests {
         let path = folder.join("specimen.sanger-review.json");
         review.save(&path).unwrap();
         assert_eq!(
-            crate::records::provenance::verify(&path).unwrap(),
+            crate::records::provenance::verify(&path, None).unwrap(),
             Vec::<String>::new()
         );
         assert_eq!(review.evidence.sources.len(), 1);
@@ -1295,7 +1315,7 @@ mod tests {
         assert_eq!(reopened.decision(0), Some(&ReviewChoice::Edit('G')));
         assert_eq!(reopened.decision(0), Some(&ReviewChoice::Edit('G')));
         assert_eq!(
-            crate::records::provenance::verify(&path).unwrap(),
+            crate::records::provenance::verify(&path, None).unwrap(),
             Vec::<String>::new()
         );
     }
@@ -1310,7 +1330,7 @@ mod tests {
         let path = folder.join("specimen.sanger-review.json");
         review.save(&path).unwrap();
         let authored =
-            crate::records::provenance::bundle_for_result(&path).join("reports/methods.md");
+            crate::records::provenance::bundle_for_result(&path, None).join("reports/methods.md");
         std::fs::write(
             &authored,
             "User-authored laboratory methods, preserved verbatim.\n",
@@ -1318,7 +1338,7 @@ mod tests {
         .unwrap();
         review.save(&path).unwrap();
         let package = tmp.path().join("package");
-        crate::records::provenance::package(&path, &package).unwrap();
+        crate::records::provenance::package(&path, &package, None).unwrap();
         std::fs::remove_dir_all(folder).unwrap();
         let moved = tmp.path().join("moved-export");
         std::fs::rename(&package, &moved).unwrap();
@@ -1336,7 +1356,7 @@ mod tests {
         assert_eq!(reopened.unresolved(), 1);
         assert!(reopened.working_draft().unwrap().inputs[0].path.is_file());
         assert_eq!(
-            crate::records::provenance::verify(&path).unwrap(),
+            crate::records::provenance::verify(&path, None).unwrap(),
             Vec::<String>::new()
         );
         let mut saved_again = reopened;
@@ -1361,17 +1381,17 @@ mod tests {
             .unwrap();
         review.export_consensus(&output, "sample").unwrap();
         assert_eq!(
-            crate::records::provenance::verify(&output).unwrap(),
+            crate::records::provenance::verify(&output, None).unwrap(),
             Vec::<String>::new()
         );
         let package = tmp.path().join("export");
-        crate::records::provenance::package(&output, &package).unwrap();
+        crate::records::provenance::package(&output, &package, None).unwrap();
         std::fs::remove_dir_all(folder).unwrap();
         let resumed = ReviewSession::load(&package.join("consensus.sanger-review.json")).unwrap();
         assert_eq!(resumed.resolved_sequence().as_deref(), Some("AC"));
         assert!(resumed.working_draft().is_ok());
         assert_eq!(
-            crate::records::provenance::verify(&package.join("consensus.fa")).unwrap(),
+            crate::records::provenance::verify(&package.join("consensus.fa"), None).unwrap(),
             Vec::<String>::new()
         );
     }
@@ -1386,7 +1406,8 @@ mod tests {
         std::fs::write(&trace, b"ABIFdifferent bytes").unwrap();
         assert!(ReviewSession::load(&path).unwrap().working_draft().is_err());
         assert!(
-            crate::records::provenance::package(&path, &tmp.path().join("bad-export")).is_err()
+            crate::records::provenance::package(&path, &tmp.path().join("bad-export"), None)
+                .is_err()
         );
         assert!(!tmp.path().join("bad-export").exists());
         std::fs::remove_file(&trace).unwrap();
@@ -1401,14 +1422,55 @@ mod tests {
         let resolved = reopened.working_draft().unwrap();
         assert_eq!(std::fs::read(&resolved.inputs[0].path).unwrap(), original);
         assert_eq!(std::fs::read(&trace).unwrap(), b"ABIFnew user data");
-        crate::records::provenance::package(&path, &tmp.path().join("preserved-export")).unwrap();
+        crate::records::provenance::package(&path, &tmp.path().join("preserved-export"), None)
+            .unwrap();
+    }
+
+    #[test]
+    fn a_placement_context_inside_the_project_keeps_its_history_link() {
+        let tmp = tempfile::tempdir().unwrap();
+        let chosen = tmp.path().join("project");
+        std::fs::create_dir(&chosen).unwrap();
+        let context = chosen.join("context.fasta");
+        std::fs::write(&context, b">a\nACGT\n").unwrap();
+        let project = crate::project::Project::new(&chosen).unwrap();
+        let mut session = crate::Session::new(&chosen).in_project(Some(project.clone()));
+        let doc = session.open(&context).unwrap();
+        session
+            .apply(
+                doc,
+                basecraft_protocol::Op::SeqReplace {
+                    start: 0,
+                    end: 1,
+                    residues: "T".into(),
+                },
+            )
+            .unwrap();
+        session.save(doc, None).unwrap();
+        let sha256 = basecraft_io::sha256_file(&context).unwrap();
+        let placed = source(
+            &context,
+            &sha256,
+            &chosen.join("review.json"),
+            Some(&project),
+        )
+        .unwrap();
+        let upstream = inputs::read_input(placed.ledger.as_deref().unwrap())
+            .unwrap()
+            .upstream;
+        assert_eq!(upstream.len(), 1, "{upstream:?}");
+        assert_eq!(
+            upstream[0].bundle.file_name(),
+            project.provenance_bundle(&context).unwrap().file_name()
+        );
     }
 
     #[test]
     fn failed_analysis_keeps_owned_partial_output_and_declares_failure() {
         let tmp = tempfile::tempdir().unwrap();
         let (_, trace) = draft(tmp.path());
-        let run = SangerRun::prepare(&trace, "consensus", std::slice::from_ref(&trace)).unwrap();
+        let run =
+            SangerRun::prepare(&trace, "consensus", std::slice::from_ref(&trace), None).unwrap();
         let partial = run.artifact("partial-draft").unwrap();
         std::fs::write(&partial, b"partial").unwrap();
         run.failed("cancelled by user before review publication")
@@ -1431,7 +1493,7 @@ mod tests {
         let mut raw: serde_json::Value = serde_json::from_str(&first.draft_json).unwrap();
         raw["mode"] = "consensus".into();
         raw["inputs"].as_array_mut().unwrap().push(serde_json::json!({"read":2,"path":other,"sha256":basecraft_io::sha256_file(&other).unwrap(),"orientation":"forward","calls":{"sequence":"AC","positions":[3,4],"scores":[20,30]}}));
-        let run = SangerRun::prepare(&trace, "consensus", &[trace.clone(), other]).unwrap();
+        let run = SangerRun::prepare(&trace, "consensus", &[trace.clone(), other], None).unwrap();
         let evidence = run.artifact("evidence.json").unwrap();
         inputs::write_json(&evidence, &raw).unwrap();
         let reads = run.artifact("reads.align.fa").unwrap();
@@ -1447,6 +1509,7 @@ mod tests {
             "place_sanger",
             std::slice::from_ref(&alignment),
             review.evidence_runs(),
+            None,
         )
         .unwrap();
         let placement_path = placement_run.artifact("placement.json").unwrap();
@@ -1474,7 +1537,7 @@ mod tests {
         let path = folder.join("multi.sanger-review.json");
         review.save(&path).unwrap();
         let package = tmp.path().join("export");
-        crate::records::provenance::package(&path, &package).unwrap();
+        crate::records::provenance::package(&path, &package, None).unwrap();
         std::fs::remove_dir_all(folder).unwrap();
         let reopened = ReviewSession::load(&package.join("multi.sanger-review.json")).unwrap();
         assert_eq!(reopened.draft_json, review.draft_json);
@@ -1497,7 +1560,7 @@ mod tests {
                 choice: ReviewChoice::Accept,
             })
             .unwrap();
-        let descriptor = review.addition_evidence().unwrap();
+        let descriptor = review.addition_evidence(None).unwrap();
         let alignment = folder.join("alignment.afa");
         std::fs::write(&alignment, ">a\nAC\n>b\nAG\n").unwrap();
         let mut session = crate::Session::recoverable(&folder).unwrap();
@@ -1518,16 +1581,16 @@ mod tests {
         let result = folder.join("added.afa");
         session.save(doc, Some(&result)).unwrap();
         assert_eq!(
-            crate::records::provenance::verify(&result).unwrap(),
+            crate::records::provenance::verify(&result, None).unwrap(),
             Vec::<String>::new()
         );
         let package = tmp.path().join("export");
-        crate::records::provenance::package(&result, &package).unwrap();
+        crate::records::provenance::package(&result, &package, None).unwrap();
         drop(session);
         std::fs::remove_dir_all(&folder).unwrap();
         let result = package.join("added.afa");
         assert_eq!(
-            crate::records::provenance::verify(&result).unwrap(),
+            crate::records::provenance::verify(&result, None).unwrap(),
             Vec::<String>::new()
         );
         let mut session = crate::Session::recoverable(&package).unwrap();
@@ -1538,7 +1601,7 @@ mod tests {
         session.save(doc, Some(&saved_again)).unwrap();
         assert_eq!(std::fs::read(&saved_again).unwrap(), packaged_bytes);
         assert_eq!(
-            crate::records::provenance::verify(&saved_again).unwrap(),
+            crate::records::provenance::verify(&saved_again, None).unwrap(),
             Vec::<String>::new()
         );
     }
@@ -1568,8 +1631,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let (_, trace) = draft(tmp.path());
         for cancelled in [false, true] {
-            let run =
-                SangerRun::prepare(&trace, "consensus", std::slice::from_ref(&trace)).unwrap();
+            let run = SangerRun::prepare(&trace, "consensus", std::slice::from_ref(&trace), None)
+                .unwrap();
             let directory = run.directory().to_path_buf();
             std::fs::write(run.artifact("partial").unwrap(), b"recover me").unwrap();
             let job = run.job_path().unwrap();

@@ -184,7 +184,8 @@ fn imported_support_partial_removal_undo_save_reopen_and_redo() {
             .methods
             .contains("import_support")
     );
-    let input = basecraft_ops::records::read_input(&records::bundle_for_result(&target)).unwrap();
+    let input =
+        basecraft_ops::records::read_input(&records::bundle_for_result(&target, None)).unwrap();
     assert_eq!(
         serde_json::to_value(&input.upstream)
             .unwrap()
@@ -220,7 +221,7 @@ fn imported_support_partial_removal_undo_save_reopen_and_redo() {
     );
     std::fs::write(&source, "((a,b)0/0,c);\n").unwrap();
     assert!(
-        records::verify(&target).unwrap().is_empty(),
+        records::verify(&target, None).unwrap().is_empty(),
         "removed source still linked"
     );
 }
@@ -255,13 +256,18 @@ fn annotate(session: &mut Session, doc: basecraft_ops::DocId, label: &str, start
         )
         .unwrap();
     session
-        .log_contributing_tool_run(
+        .record_tool_run(
             doc,
             actor,
-            (label, "annotate"),
-            serde_json::json!({"effective":{"threshold":7}}),
-            &[],
-            &ids,
+            basecraft_ops::session::ToolRunRecord {
+                edits: Some(&ids[..]),
+                ..basecraft_ops::session::ToolRunRecord::new(
+                    (label, "annotate"),
+                    serde_json::json!({"effective":{"threshold":7}}),
+                    &[],
+                    &[],
+                )
+            },
         )
         .unwrap();
 }
@@ -339,15 +345,17 @@ fn generic_no_output_activity_does_not_own_unrelated_manual_edits() {
     session.apply(doc, annotation(0)).unwrap();
     session.end_group();
     session
-        .log_tool_run(
+        .record_tool_run(
             doc,
             basecraft_protocol::Actor::Human {
                 user: basecraft_platform::username(),
             },
-            ("unrelated-plugin", "inspect"),
-            serde_json::json!({}),
-            &[],
-            &[],
+            basecraft_ops::session::ToolRunRecord::new(
+                ("unrelated-plugin", "inspect"),
+                serde_json::json!({}),
+                &[],
+                &[],
+            ),
         )
         .unwrap();
     assert!(
@@ -374,7 +382,7 @@ fn extraction_is_reference_first_and_packages_exact_source_and_mapping() {
     session
         .extract(doc, (1, 7), &[(1, 3), (5, 7)], true, &result)
         .unwrap();
-    let publication = records::inspect(&result).unwrap();
+    let publication = records::inspect(&result, None).unwrap();
     let conflicts = basecraft_ops::records::conflicts(&source).unwrap();
     assert!(
         !conflicts.analyses.is_empty(),
@@ -388,19 +396,23 @@ fn extraction_is_reference_first_and_packages_exact_source_and_mapping() {
     );
     assert!(publication.inputs[0].retained.is_none());
     assert!(publication.inputs[0].reference.is_some());
-    let issues = records::verify(&result).unwrap();
+    let issues = records::verify(&result, None).unwrap();
     assert!(issues.is_empty(), "{issues:?}");
-    let input = basecraft_ops::records::read_input(&records::bundle_for_result(&result)).unwrap();
+    let input =
+        basecraft_ops::records::read_input(&records::bundle_for_result(&result, None)).unwrap();
     assert_eq!(
         input.extra["extraction"]["selection"]["params"]["segments"],
         serde_json::json!([[1, 3], [5, 7]])
     );
     let package = dir.path().join("package");
-    records::package(&result, &package).unwrap();
+    records::package(&result, &package, None).unwrap();
     std::fs::write(&source, ">gene\nTTTTTTTT\n").unwrap();
-    assert_ne!(records::verify(&result).unwrap(), Vec::<String>::new());
+    assert_ne!(
+        records::verify(&result, None).unwrap(),
+        Vec::<String>::new()
+    );
     assert_eq!(
-        records::verify(&package.join("extract.gb")).unwrap(),
+        records::verify(&package.join("extract.gb"), None).unwrap(),
         Vec::<String>::new()
     );
 }

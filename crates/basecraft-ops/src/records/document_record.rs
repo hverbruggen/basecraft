@@ -29,6 +29,7 @@ impl std::ops::DerefMut for DocumentRecord {
 pub fn read_origin(
     path: &Path,
     hashes: &[(String, String)],
+    project: Option<&crate::project::Project>,
 ) -> (Option<Publication>, Option<String>) {
     if let Err(e) = crate::records::analysis_store::ArtifactRun::for_result(path) {
         return (
@@ -36,11 +37,11 @@ pub fn read_origin(
             Some(format!("Hidden analysis binding could not be read: {e}")),
         );
     }
-    let bundle = crate::records::provenance::bundle_for_result(path);
+    let bundle = crate::records::provenance::bundle_for_result(path, project);
     if !bundle.join("manifest.json").exists() {
         return (None, None);
     }
-    match crate::records::provenance::inspect(path) {
+    match crate::records::provenance::inspect(path, project) {
         Ok(p) if !hashes.is_empty() && hashes.iter().all(|(_, hash)| p.outputs.iter().any(|a| &a.hash == hash)) => (Some(p), None),
         Ok(_) => (None, Some("The saved record describes different file contents. Earlier ancestry is unavailable for this revision.".into())),
         Err(e) => (None, Some(format!("The saved record could not be read: {e}"))),
@@ -111,12 +112,16 @@ impl DocumentRecord {
         }
     }
 
-    pub fn from_file(path: &Path) -> crate::Result<Self> {
+    /// `project` is the session's chosen project, or none for a loose file.
+    pub fn from_file(
+        path: &Path,
+        project: Option<&crate::project::Project>,
+    ) -> crate::Result<Self> {
         let path = path.canonicalize()?;
         let root = path
             .parent()
             .ok_or_else(|| crate::error::invalid("input has no parent"))?;
-        let mut session = crate::Session::recoverable(root)?;
+        let mut session = crate::Session::recoverable(root)?.in_project(project.cloned());
         let doc = session.open(&path)?;
         session.document_record(doc)
     }
@@ -125,9 +130,12 @@ impl DocumentRecord {
     /// read by its own reader and report adapter, exactly as the application
     /// shows it. Metadata and submission JSON use their own readers. Other
     /// documents open through [`Self::from_file`].
-    pub fn saved_report(path: &Path) -> crate::Result<Report> {
+    pub fn saved_report(
+        path: &Path,
+        project: Option<&crate::project::Project>,
+    ) -> crate::Result<Report> {
         if crate::metadata::is_manifest(path) || crate::submission::is_submission(path) {
-            return Self::from_file(path)?.report();
+            return Self::from_file(path, project)?.report();
         }
         if let Some(review) = crate::sanger_review::saved_review(path) {
             let review = review.map_err(|detail| crate::Error::Damaged {
@@ -135,10 +143,10 @@ impl DocumentRecord {
                 detail,
             })?;
             return review
-                .report_with_history(&Self::from_file(path)?)
+                .report_with_history(&Self::from_file(path, project)?)
                 .map_err(crate::error::invalid);
         }
-        Self::from_file(path)?.report()
+        Self::from_file(path, project)?.report()
     }
 
     pub fn from_publication(p: &Publication) -> Self {
@@ -151,10 +159,6 @@ impl DocumentRecord {
         record.events.clone_from(&p.events);
         record.effective.clone_from(&p.effective_edits);
         crate::records::contributions::project(&record.data.events, &mut record.data.effective);
-        if record.events.iter().any(|event| matches!(&event.op,
-            Op::ToolRun { outputs, params, .. } if outputs.is_empty() && params.get("contributions").is_none())) {
-            record.warnings.push("Retained contribution ownership is unknown for legacy no-output activities; historical invocation evidence was not reassigned to current edits.".into());
-        }
         if p.completeness.ancestry_known {
             record.warnings.clear();
         }

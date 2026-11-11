@@ -224,9 +224,8 @@ ApplicationWindow {
             recentProjectsError = result.error
             return
         }
-        shell.project_dir = path
         recentProjects = result.projects
-        recentProjectsError = ""
+        recentProjectsError = shell.choose_project(path)
     }
     property bool preferencesReady: false
     AppSettings {
@@ -344,8 +343,7 @@ ApplicationWindow {
     function openPath(path, reviewMethods = false) {
         if (documentOpens.eligible(path)) {
             const existing = documentOpens.existing(path)
-            if (!existing.length && !shell.project_dir.length) shell.use_project_of(path)
-            const token = documentOpens.request(path, shell.project_dir, reviewMethods)
+            const token = documentOpens.request(path, reviewMethods)
             if (!token.length) { provenance.notification(path, "Could not allocate an open request", "fail"); return }
             if (existing.length) {
                 applyingOpenFocus = true
@@ -380,14 +378,13 @@ ApplicationWindow {
                 return
             }
         }
-        if (!shell.project_dir.length) shell.use_project_of(path)
         window.appendLegacy({ path: path, dirty: false, kind: kind })
         tabs.currentIndex = openFiles.count - 1
         if (reviewMethods) reviewLegacyDocument(tabs.currentIndex, path)
     }
     function reviewLegacyDocument(index, path) {
         const document = window.documentAt(index)
-        const token = documentOpens.request(path, shell.project_dir, true)
+        const token = documentOpens.request(path, true)
         // Legacy trace acquisition retains its existing deferred completion.
         // The continuation still checks its original view/token and actual owner.
         Qt.callLater(() => {
@@ -630,7 +627,7 @@ ApplicationWindow {
     function initializeSequence(document) {
         const pending = window.pendingSequence
         if (!pending || pending.path !== document.path) return
-        const error = document.controller.create_sequence(pending.name, pending.sequence, shell.project_dir)
+        const error = document.controller.create_sequence(pending.name, pending.sequence)
         window.pendingSequence = null
         if (error.length) {
             window.removeDocument(document.index)
@@ -2981,7 +2978,6 @@ ApplicationWindow {
         const args = Qt.application.arguments
         for (let i = 1; i < args.length; i++) {
             if (args[i].startsWith("--")) { i++; continue }
-            shell.use_project_of(args[i])
             openPath(args[i])
         }
     }

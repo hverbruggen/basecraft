@@ -7,6 +7,7 @@ pub(super) fn freeze(
     destination: &Path,
     captures: &[CapturedInput],
     history: Option<&mut basecraft_ops::records::DocumentRecord>,
+    project: Option<&basecraft_ops::project::Project>,
 ) -> Result<String> {
     let canonical = source.canonicalize()?;
     if let Some(capture) = captures.iter().find(|c| c.path() == canonical) {
@@ -15,7 +16,7 @@ pub(super) fn freeze(
     } else {
         let hash = crate::file_tool::freeze_file(source, destination)?;
         if let Some(history) = history
-            && let Ok(record) = basecraft_ops::records::DocumentRecord::from_file(source)
+            && let Ok(record) = basecraft_ops::records::DocumentRecord::from_file(source, project)
         {
             history.include_input(&record);
             if basecraft_io::hash_file(source).map_err(basecraft_ops::Error::from)? != hash {
@@ -34,6 +35,7 @@ pub(super) fn register(
     hash: &str,
     captures: &[CapturedInput],
     origin: &str,
+    project: Option<&basecraft_ops::project::Project>,
 ) -> Result<ArtifactRun> {
     let canonical = source.canonicalize()?;
     Ok(
@@ -43,9 +45,16 @@ pub(super) fn register(
                     "captured input identity differs".into(),
                 ));
             }
-            mutation.reference_captured(anchor, capture, &[], origin)?
+            mutation.reference_captured(anchor, capture, &[], origin, project)?
         } else {
-            mutation.reference_input_with_dependencies(anchor, source, hash, &[], origin)?
+            mutation.reference_input_with_dependencies(
+                anchor,
+                source,
+                hash,
+                &[],
+                origin,
+                project,
+            )?
         },
     )
 }

@@ -12,6 +12,7 @@ fn reference(root: &Path, source: &Path) -> ArtifactRun {
         &basecraft_io::hash_file(source).unwrap(),
         &[],
         "index test",
+        None,
     )
     .unwrap()
 }

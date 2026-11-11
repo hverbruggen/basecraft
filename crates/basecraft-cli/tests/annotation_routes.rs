@@ -58,7 +58,7 @@ fn cli(profile: &Path) -> Command {
 }
 
 fn tool_run(file: &Path, plugin: &str) -> LogEntry {
-    let publication = records::inspect(file).unwrap();
+    let publication = records::inspect(file, Some(&project_of(file))).unwrap();
     let mut runs: Vec<_> = publication
         .events
         .into_iter()
@@ -266,7 +266,7 @@ fn every_annotation_route_keeps_the_same_invocation_evidence() {
         assert_eq!(features(file), features(&gui), "{}", file.display());
         assert_eq!(features(file).len(), 1);
         assert_eq!(
-            records::verify(file).unwrap(),
+            records::verify(file, Some(&project_of(file))).unwrap(),
             Vec::<String>::new(),
             "{}",
             file.display()
@@ -317,4 +317,9 @@ fn schema_one_plugin_call_is_rejected_without_execution_or_mutation() {
     assert_eq!(std::fs::read(&file).unwrap(), original);
     assert!(!file.parent().unwrap().join(".basecraft").exists());
     assert!(!records::companion(&file).exists());
+}
+
+/// The tests' MCP sessions use the file's folder as their project.
+fn project_of(file: &std::path::Path) -> basecraft_ops::project::Project {
+    basecraft_ops::project::Project::new(file.parent().unwrap()).unwrap()
 }

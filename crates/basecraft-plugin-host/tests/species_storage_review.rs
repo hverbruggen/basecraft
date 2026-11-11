@@ -73,7 +73,7 @@ fn rereview_alignment_move_and_explicit_evidence_decisions() {
         assert!(checked().is_err(), "explicit {policy:?} must prevent reuse");
         assert_eq!(std::fs::read_to_string(&source).unwrap(), original);
         assert!(canonical.is_file());
-        assert!(records::package(&canonical, &parent.path().join("rejected")).is_err());
+        assert!(records::package(&canonical, &parent.path().join("rejected"), None).is_err());
     }
 }
 
@@ -101,7 +101,7 @@ fn rereview_legacy_sidecar_break_and_remove_reach_combined_workspace() {
         basecraft_ops::delimitation::combine(&mut session, doc, std::slice::from_ref(&source))
             .unwrap();
         session.save(doc, None).unwrap();
-        assert!(records::verify(&target).unwrap().is_empty());
+        assert!(records::verify(&target, None).unwrap().is_empty());
         let conflict = conflicts(&sidecar).unwrap();
         assert!(conflict.analyses.iter().any(|a| a.direct));
         assert!(conflict.analyses.iter().any(|a| !a.direct));
@@ -119,10 +119,10 @@ fn rereview_legacy_sidecar_break_and_remove_reach_combined_workspace() {
             }
         }
         assert!(
-            !matches!(records::verify(&target), Ok(issues) if issues.is_empty()),
+            !matches!(records::verify(&target, None), Ok(issues) if issues.is_empty()),
             "explicit {policy:?} must never verify complete"
         );
-        assert!(records::package(&target, &root.path().join("rejected")).is_err());
+        assert!(records::package(&target, &root.path().join("rejected"), None).is_err());
         assert_eq!(std::fs::read(&sidecar).unwrap(), bytes);
         assert_eq!(std::fs::read_to_string(&source).unwrap(), original);
         assert!(
@@ -223,13 +223,13 @@ fn alignment_gmyc_export_preserves_display_and_declared_inputs() {
     common::assert_completed(&outcome);
     let canonical = root.join("species.spart");
     let package = parent.path().join("package");
-    records::package(&canonical, &package).unwrap();
+    records::package(&canonical, &package, None).unwrap();
     drop(session);
     std::fs::rename(&root, parent.path().join("unavailable")).unwrap();
     let moved = parent.path().join("moved-package");
     std::fs::rename(&package, &moved).unwrap();
     let exported = moved.join("species.spart");
-    assert!(records::verify(&exported).unwrap().is_empty());
+    assert!(records::verify(&exported, None).unwrap().is_empty());
     let work = files::load_delimitation(&exported).unwrap();
     let display = basecraft_ops::delimitation::checked_display_tree(&work)
         .unwrap()
@@ -271,11 +271,11 @@ fn preserved_tree_export_relocates_original_display_reference() {
             .is_file()
     );
     let package = parent.path().join("package");
-    records::package(&canonical, &package).unwrap();
+    records::package(&canonical, &package, None).unwrap();
     drop(session);
     std::fs::rename(&root, parent.path().join("unavailable")).unwrap();
     let exported = package.join("species.spart");
-    assert!(records::verify(&exported).unwrap().is_empty());
+    assert!(records::verify(&exported, None).unwrap().is_empty());
     let work = files::load_delimitation(&exported).unwrap();
     let display = basecraft_ops::delimitation::checked_display_tree(&work);
     assert!(
@@ -306,8 +306,8 @@ fn fitted_workspace_survives_folder_move_then_save_and_export() {
     let mut session = Session::recoverable(&moved).unwrap();
     let doc = session.open(&canonical).unwrap();
     session.save(doc, None).unwrap();
-    assert!(records::verify(&canonical).unwrap().is_empty());
-    records::package(&canonical, &parent.path().join("package")).unwrap();
+    assert!(records::verify(&canonical, None).unwrap().is_empty());
+    records::package(&canonical, &parent.path().join("package"), None).unwrap();
 }
 
 #[test]
@@ -342,7 +342,7 @@ fn preserved_alignment_remains_usable_by_workspace_default_input() {
     );
     resolve(&conflicts(&source).unwrap(), SavePolicy::PreserveCopy).unwrap();
     std::fs::write(&source, ">a\nTTTT\n>b\nTTTC\n>c\nTTCC\n>d\nCCCC\n").unwrap();
-    assert!(records::verify(&canonical).unwrap().is_empty());
+    assert!(records::verify(&canonical, None).unwrap().is_empty());
     let doc = session.open(&canonical).unwrap();
     let work = session.delimitation(doc).unwrap().clone();
     // The controller resolves the linked default through the shared lifecycle,
@@ -402,10 +402,10 @@ fn preserved_alignment_remains_usable_by_workspace_default_input() {
         linked
     );
     let package = root.path().join("package");
-    records::package(&copied, &package).unwrap();
+    records::package(&copied, &package, None).unwrap();
     let exported = package.join("copied.spart");
     let exported_work = files::load_delimitation(&exported).unwrap();
-    assert!(records::verify(&exported).unwrap().is_empty());
+    assert!(records::verify(&exported, None).unwrap().is_empty());
     assert_eq!(
         basecraft_io::hash_file(
             &basecraft_ops::delimitation::checked_alignment(&exported_work, &exported)
@@ -452,11 +452,11 @@ fn combine_complete_export_includes_legacy_sidecar_evidence() {
     let combined = root.join("combined.spart");
     session.save(doc, Some(&combined)).unwrap();
     let package = parent.path().join("package");
-    records::package(&combined, &package).unwrap();
+    records::package(&combined, &package, None).unwrap();
     drop(session);
     std::fs::rename(&root, parent.path().join("unavailable")).unwrap();
     let exported = package.join("combined.spart");
-    assert!(records::verify(&exported).unwrap().is_empty());
+    assert!(records::verify(&exported, None).unwrap().is_empty());
     let artifacts = records::companion(&exported).join("artifacts");
     assert!(
         std::fs::read_dir(&artifacts)
@@ -531,5 +531,5 @@ fn species_partial_save_retains_recoverable_edits_and_retries() {
             .name,
         "Pending edit"
     );
-    assert!(records::verify(&canonical).unwrap().is_empty());
+    assert!(records::verify(&canonical, None).unwrap().is_empty());
 }

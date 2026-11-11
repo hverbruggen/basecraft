@@ -131,8 +131,7 @@ fn target(name: &str) -> Result<FieldTarget> {
 }
 
 fn open(project: &Path, create: bool) -> Result<(basecraft_ops::Session, basecraft_ops::DocId)> {
-    let project = project.canonicalize()?;
-    let mut session = crate::script_session(&project)?;
+    let mut session = crate::project_session(project)?;
     let doc = metadata::open(&mut session, create)?
         .ok_or("this project has no metadata yet; run `basecraft metadata init`")?;
     for notice in session.metadata_notices(doc)? {

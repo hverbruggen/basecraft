@@ -671,7 +671,7 @@ mod call_set_tests {
         assert_eq!(reopened.decision(0), Some(&ReviewChoice::Edit('C')));
         assert_eq!(std::fs::read(&session.draft_path).unwrap(), original);
         let package = tmp.path().join("package");
-        crate::records::provenance::package(&saved, &package).unwrap();
+        crate::records::provenance::package(&saved, &package, None).unwrap();
         std::fs::remove_file(&session.draft_path).unwrap();
         let packaged = ReviewSession::load(&package.join("review.json")).unwrap();
         assert!(packaged.working_draft().is_ok());
@@ -912,6 +912,7 @@ mod moved_and_failed_recovery_tests {
                 &basecraft_io::hash_file(&path).unwrap(),
                 &[],
                 "test downstream review",
+                None,
             )
             .unwrap();
             review

@@ -63,7 +63,10 @@ fn matrix_reference_generated_failure_move_and_export_use_the_common_store() {
         input.source.unwrap().hash,
         basecraft_io::hash_file(&source).unwrap()
     );
-    assert_eq!(records::verify(&output).unwrap(), Vec::<String>::new());
+    assert_eq!(
+        records::verify(&output, None).unwrap(),
+        Vec::<String>::new()
+    );
     listing(&root, &run, "matrix-clean");
 
     session
@@ -120,20 +123,29 @@ fn matrix_reference_generated_failure_move_and_export_use_the_common_store() {
     );
     drop(session);
     std::fs::write(&source, ALIGNMENT.replace("ACGT", "TCGT")).unwrap();
-    assert_ne!(records::verify(&output).unwrap(), Vec::<String>::new());
+    assert_ne!(
+        records::verify(&output, None).unwrap(),
+        Vec::<String>::new()
+    );
     std::fs::remove_file(&source).unwrap();
-    assert_ne!(records::verify(&output).unwrap(), Vec::<String>::new());
+    assert_ne!(
+        records::verify(&output, None).unwrap(),
+        Vec::<String>::new()
+    );
     std::fs::write(&source, ALIGNMENT).unwrap();
 
     let moved = parent.path().join("moved");
     std::fs::rename(&root, &moved).unwrap();
     let output = moved.join("matrix.tsv");
-    assert_eq!(records::verify(&output).unwrap(), Vec::<String>::new());
+    assert_eq!(
+        records::verify(&output, None).unwrap(),
+        Vec::<String>::new()
+    );
     let package = parent.path().join("export");
-    records::package(&output, &package).unwrap();
+    records::package(&output, &package, None).unwrap();
     std::fs::rename(&moved, parent.path().join("unavailable")).unwrap();
     assert_eq!(
-        records::verify(&package.join("matrix.tsv")).unwrap(),
+        records::verify(&package.join("matrix.tsv"), None).unwrap(),
         Vec::<String>::new()
     );
     println!("matrix-export: {:?}", common::names(&package));

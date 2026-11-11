@@ -617,13 +617,15 @@ impl Session {
             .collect();
         self.log_save(id, &target, hashes)?;
         if !outputs.is_empty() {
-            self.log_tool_run(
+            self.record_tool_run(
                 id,
                 self.actor.clone(),
-                ("basecraft.links", "copy"),
-                serde_json::json!({"from": original, "to": target}),
-                &[],
-                &outputs,
+                crate::session::ToolRunRecord::new(
+                    ("basecraft.links", "copy"),
+                    serde_json::json!({"from": original, "to": target}),
+                    &[],
+                    &outputs,
+                ),
             )?;
         }
         Ok(())

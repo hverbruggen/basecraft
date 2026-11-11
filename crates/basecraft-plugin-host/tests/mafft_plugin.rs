@@ -74,7 +74,7 @@ fn realigns_with_mafft_and_logs_the_run() {
         assert_eq!(ungapped, seq.as_bytes(), "row {name}");
     }
     assert_eq!(
-        basecraft_ops::records::verify(&output).unwrap(),
+        basecraft_ops::records::verify(&output, None).unwrap(),
         Vec::<String>::new()
     );
     // The source document's history holds the run, by MAFFT, linked by run ID.
@@ -104,13 +104,13 @@ fn realigns_with_mafft_and_logs_the_run() {
     let bundle = common::evidence(&outcome);
     let methods_path = bundle.join("methods.md");
     std::fs::write(&methods_path, "User-authored explanation.\n").unwrap();
-    let publication = basecraft_ops::records::inspect(&output).unwrap();
+    let publication = basecraft_ops::records::inspect(&output, None).unwrap();
     basecraft_ops::records::publish(&bundle, &publication).unwrap();
     assert_eq!(
         std::fs::read_to_string(&methods_path).unwrap(),
         "User-authored explanation.\n"
     );
-    let reopened = basecraft_ops::records::DocumentRecord::from_file(&output).unwrap();
+    let reopened = basecraft_ops::records::DocumentRecord::from_file(&output, None).unwrap();
     assert!(
         reopened
             .report()

@@ -57,7 +57,13 @@ fn instrument_rendering_and_submission_share_one_trace_capture() {
     capture.write(&frozen).unwrap();
     Mutation::begin()
         .unwrap()
-        .reference_captured(&root.join("analysis"), &capture, &[], "fixture caller")
+        .reference_captured(
+            &root.join("analysis"),
+            &capture,
+            &[],
+            "fixture caller",
+            None,
+        )
         .unwrap();
     one_read(&path);
     assert_eq!(std::fs::read(&frozen).unwrap(), capture.bytes());
@@ -80,6 +86,7 @@ fn explicit_sanger_run_registers_both_identities_in_one_read() {
         &root.join("analysis"),
         "consensus",
         std::slice::from_ref(&path),
+        None,
     )
     .unwrap();
     one_read(&path);
@@ -111,6 +118,7 @@ fn large_alignment_context_still_registers_as_streamed_evidence() {
         &root.join("placement"),
         "placement",
         std::slice::from_ref(&path),
+        None,
     )
     .unwrap();
     let request = run.artifact("request.json").unwrap();

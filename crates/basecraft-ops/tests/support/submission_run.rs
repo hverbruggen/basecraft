@@ -15,7 +15,7 @@ pub fn retain(root: &Path, request: &Value, outcome: &mut Value) {
         let source = root.join(request["inputs"][role][0]["path"].as_str().unwrap());
         let hash = basecraft_io::hash_file(&source).unwrap();
         let ledger =
-            records::reference_input_with_dependencies(&anchor, &source, &hash, &[], "test")
+            records::reference_input_with_dependencies(&anchor, &source, &hash, &[], "test", None)
                 .unwrap();
         let record = records::read_input(ledger.directory()).unwrap();
         upstream.push(json!({"bundle":records::relative(run.directory(),ledger.directory()).unwrap(), "id":ledger.id(),"hash":basecraft_io::hash_file(&ledger.artifact("manifest.json").unwrap()).unwrap()}));

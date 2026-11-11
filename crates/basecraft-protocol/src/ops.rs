@@ -198,10 +198,18 @@ pub enum Op {
     ToolRun {
         plugin: String,
         operation: String,
+        /// The tool's own parameters. Basecraft's bookkeeping is in the typed
+        /// fields below, never in parameter names.
         #[serde(default)]
         params: serde_json::Value,
         inputs: Vec<String>,
         outputs: Vec<String>,
+        /// The exact input this activity read, retained in its own run.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input_run: Option<crate::records::ActivityInputRun>,
+        /// The document edits this activity made, such as imported values.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        contributions: Option<crate::records::ActivityContributions>,
     },
     /// An atomic species-hypothesis edit against a workspace.
     #[serde(rename = "delimitation.edit")]

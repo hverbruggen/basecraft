@@ -78,7 +78,7 @@ fn unsaved_clade_tree_with_referenced_alignment_retains_both_inputs_and_selectio
         std::fs::read_to_string(&result).unwrap(),
         ">a\nAC-G\n>b\nAT-G\n"
     );
-    let publication = records::inspect(&result).unwrap();
+    let publication = records::inspect(&result, None).unwrap();
     assert!(
         publication
             .inputs
@@ -97,12 +97,15 @@ fn unsaved_clade_tree_with_referenced_alignment_retains_both_inputs_and_selectio
             .any(|e| matches!(e.op, Op::TreeRenameTip { .. }))
     );
     assert!(publication.events.iter().any(|e| matches!(&e.op, Op::ToolRun { params, .. } if params.pointer("/effective/taxa") == Some(&json!(["a","b"])))));
-    assert_eq!(records::verify(&result).unwrap(), Vec::<String>::new());
+    assert_eq!(
+        records::verify(&result, None).unwrap(),
+        Vec::<String>::new()
+    );
     let package = root.join("package");
-    records::package(&result, &package).unwrap();
+    records::package(&result, &package, None).unwrap();
     std::fs::remove_file(&alignment).unwrap();
     assert_eq!(
-        records::verify(&package.join("selected.afa")).unwrap(),
+        records::verify(&package.join("selected.afa"), None).unwrap(),
         Vec::<String>::new()
     );
 }

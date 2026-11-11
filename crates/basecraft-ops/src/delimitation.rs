@@ -183,8 +183,9 @@ pub fn reference_input(
     anchor: &std::path::Path,
     source: &std::path::Path,
     hash: &str,
+    project: Option<&crate::project::Project>,
 ) -> Result<crate::records::analysis_store::ArtifactRun> {
-    reference_input_with_dependencies(anchor, source, hash, &[])
+    reference_input_with_dependencies(anchor, source, hash, &[], project)
 }
 
 fn reference_input_with_dependencies(
@@ -192,6 +193,7 @@ fn reference_input_with_dependencies(
     source: &std::path::Path,
     hash: &str,
     dependencies: &[PathBuf],
+    project: Option<&crate::project::Project>,
 ) -> Result<crate::records::analysis_store::ArtifactRun> {
     crate::records::input_evidence::reference_input_with_dependencies(
         anchor,
@@ -199,6 +201,7 @@ fn reference_input_with_dependencies(
         hash,
         dependencies,
         "Explicit species workspace input reference",
+        project,
     )
 }
 
@@ -258,7 +261,7 @@ pub fn checked_alignment(
     }
     // Workspaces written before the owning field was introduced still have a
     // bound input ledger (or its Save As delegation / contributing ancestry).
-    let bundle = crate::records::provenance::bundle_for_result(workspace_path);
+    let bundle = crate::records::provenance::bundle_for_result(workspace_path, None);
     if bundle.join("input.json").is_file() {
         let mut candidates = vec![bundle.clone()];
         candidates.extend(
@@ -505,7 +508,8 @@ fn combined_hypotheses(
         let side_evidence = side_hash
             .as_ref()
             .map(|hash| {
-                reference_input(&anchor, &sidecar, hash).map(|run| run.directory().to_path_buf())
+                reference_input(&anchor, &sidecar, hash, session.project())
+                    .map(|run| run.directory().to_path_buf())
             })
             .transpose()?;
         let evidence = reference_input_with_dependencies(
@@ -513,6 +517,7 @@ fn combined_hypotheses(
             path,
             &hash,
             &side_evidence.into_iter().collect::<Vec<_>>(),
+            session.project(),
         )?;
         let ids: BTreeMap<_, _> = work
             .hypotheses

@@ -177,14 +177,19 @@ impl Server {
             "file_record" => Ok(serde_json::to_value(
                 basecraft_ops::records::DocumentRecord::saved_report(
                     &self.path(text(args, "path")?)?,
+                    self.session.project(),
                 )?,
             )?),
             // The same readers as `basecraft provenance inspect|verify` and `replay`.
             "provenance_inspect" => Ok(serde_json::to_value(basecraft_ops::records::inspect(
                 &self.path(text(args, "path")?)?,
+                self.session.project(),
             )?)?),
             "provenance_verify" => {
-                let issues = basecraft_ops::records::verify(&self.path(text(args, "path")?)?)?;
+                let issues = basecraft_ops::records::verify(
+                    &self.path(text(args, "path")?)?,
+                    self.session.project(),
+                )?;
                 Ok(json!({"verified":issues.is_empty(),"issues":issues}))
             }
             "replay" => {
@@ -801,7 +806,8 @@ pub fn serve(root: &Path, writable: bool, kind: ClientKind, model: &str) -> Resu
         registry::{Registry, RegistryConfig},
     };
     use basecraft_protocol::operation::{OperationErrorCode, OperationRequest, RuntimeState};
-    let mut session = Session::recoverable(root.canonicalize()?)?;
+    let project = basecraft_ops::project::Project::new(root)?;
+    let mut session = Session::recoverable(project.root())?.in_project(Some(project));
     session.set_actor(kind.actor(model));
     let policy = SessionPolicy::new(root, writable)?;
     let config = RegistryConfig::discover()?;

@@ -86,8 +86,8 @@ impl Lifecycle {
         }
         let mut diagnostics = basecraft_ops::records::verify_ancestors(run)?;
         if run.join("manifest.json").is_file() {
-            diagnostics.extend(basecraft_ops::records::verify(receipt)?);
-            let publication = basecraft_ops::records::inspect(receipt)?;
+            diagnostics.extend(basecraft_ops::records::verify(receipt, None)?);
+            let publication = basecraft_ops::records::inspect(receipt, None)?;
             let hash = basecraft_io::hash_file(receipt)?;
             if !publication.outputs.iter().any(|output| output.hash == hash) {
                 return Err(Error::Protocol(

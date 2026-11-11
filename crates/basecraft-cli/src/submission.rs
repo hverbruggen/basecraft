@@ -129,7 +129,7 @@ fn json_argument(argument: &str) -> Result<String> {
 
 fn open(project: &Path, file: &Path) -> Result<(basecraft_ops::Session, basecraft_ops::DocId)> {
     let project = project.canonicalize()?;
-    let mut session = crate::script_session(&project)?;
+    let mut session = crate::project_session(&project)?;
     let file = std::path::absolute(file)?;
     let doc = session.open(&file)?;
     session.submission(doc)?;
@@ -165,7 +165,7 @@ pub fn run(command: SubmissionCommand, save_options: crate::save::Options) -> Re
             )?);
         }
         SubmissionCommand::InclusionPreset { rule, project } => {
-            let mut session = crate::script_session(&project.canonicalize()?)?;
+            let mut session = crate::project_session(&project)?;
             submission::save_inclusion_preset(
                 &mut session,
                 serde_json::from_str(&json_argument(&rule)?)?,
@@ -178,7 +178,7 @@ pub fn run(command: SubmissionCommand, save_options: crate::save::Options) -> Re
             project,
         } => {
             let project = project.canonicalize()?;
-            let mut session = crate::script_session(&project)?;
+            let mut session = crate::project_session(&project)?;
             let doc = submission::create(
                 &mut session,
                 &std::path::absolute(file)?,
@@ -270,7 +270,7 @@ pub fn run(command: SubmissionCommand, save_options: crate::save::Options) -> Re
                 &basecraft_plugin_host::registry::RegistryConfig::discover()?,
             )?;
             let policy = basecraft_plugin_host::policy::SessionPolicy::new(&project, true)?;
-            let mut session = crate::script_session(&project)?;
+            let mut session = crate::project_session(&project)?;
             basecraft_platform::interrupt::install()?;
             let (outcome, _) = crate::operations::run_foreground(
                 &registry,

@@ -110,7 +110,6 @@ pub mod qobject {
             self: Pin<&mut GenomeController>,
             name: &QString,
             text: &QString,
-            root: &QString,
         ) -> QString;
         #[qinvokable]
         fn local_file_url(self: &GenomeController, path: &QString) -> QUrl;
@@ -137,10 +136,10 @@ pub mod qobject {
             publication: bool,
             width: f64,
         );
-        /// Set `project_dir` to the project a file belongs to, without
-        /// opening it.
+        /// The user chose a project folder (empty for none). The only place
+        /// the window's project changes.
         #[qinvokable]
-        fn use_project_of(self: Pin<&mut GenomeController>, path: &QString);
+        fn choose_project(self: Pin<&mut GenomeController>, path: &QString) -> QString;
         #[qinvokable]
         fn resize(self: Pin<&mut GenomeController>, width: f64, height: f64);
         #[qinvokable]
@@ -679,16 +678,10 @@ pub(crate) fn plugin_dir(name: &str) -> PathBuf {
 
 /// The project a file belongs to: the nearest ancestor with a `.basecraft`
 /// directory, else the file's own directory.
-pub(crate) fn project_root(file: &Path) -> PathBuf {
-    let dir = file.parent().unwrap_or(Path::new(".")).to_path_buf();
-    let mut cur = Some(dir.as_path());
-    while let Some(d) = cur {
-        if d.join(".basecraft").is_dir() {
-            return d.to_path_buf();
-        }
-        cur = d.parent();
-    }
-    dir
+/// The folder holding a file. Sessions for loose files are rooted there; the
+/// project is only ever the folder the user chose.
+pub(crate) fn file_folder(file: &Path) -> PathBuf {
+    file.parent().map_or_else(PathBuf::new, Path::to_path_buf)
 }
 
 impl qobject::GenomeController {
@@ -989,22 +982,25 @@ impl qobject::GenomeController {
     }
 
     /// Create in the ordinary recoverable session, without a source-file surrogate.
-    pub fn create_sequence(
-        mut self: Pin<&mut Self>,
-        name: &QString,
-        text: &QString,
-        root: &QString,
-    ) -> QString {
+    pub fn create_sequence(mut self: Pin<&mut Self>, name: &QString, text: &QString) -> QString {
         if self.rust().session.is_some() || self.rust().busy {
             return QString::from("This controller already owns a document");
         }
         let result = (|| {
-            let root = if root.to_string().is_empty() {
-                std::env::current_dir().map_err(|e| e.to_string())?
-            } else {
-                PathBuf::from(root.to_string())
+            // A new sequence has no file yet: it lives in the chosen project,
+            // or in basecraft's own scratch folder until Save As.
+            let project = crate::chosen_project::chosen()?;
+            let root = match &project {
+                Some(project) => project.root().to_path_buf(),
+                None => {
+                    basecraft_platform::paths::AppPaths::discover()
+                        .map_err(|e| e.to_string())?
+                        .scratch
+                }
             };
-            let mut session = Session::recoverable(&root).map_err(|e| e.to_string())?;
+            let mut session = Session::recoverable(&root)
+                .map_err(|e| e.to_string())?
+                .in_project(project);
             let doc = session
                 .create_sequence(&name.to_string(), &text.to_string())
                 .map_err(|e| e.to_string())?;
@@ -1083,7 +1079,6 @@ impl qobject::GenomeController {
             doc,
             path,
             title_file,
-            root,
             ..
         } = candidate;
         let sequence = session.doc(doc)?;
@@ -1100,19 +1095,21 @@ impl qobject::GenomeController {
         self.as_mut().sync_mode();
         self.as_mut()
             .set_file_path(QString::from(path.to_string_lossy().as_ref()));
-        self.as_mut()
-            .set_project_dir(QString::from(root.to_string_lossy().as_ref()));
         self.as_mut().set_dirty(false);
         self.as_mut().notify("");
         self.refresh();
         Ok(())
     }
 
-    pub fn use_project_of(mut self: Pin<&mut Self>, path: &QString) {
-        let root = project_root(Path::new(&path.to_string()));
-        let abs = std::fs::canonicalize(&root).unwrap_or(root);
-        self.as_mut()
-            .set_project_dir(QString::from(&abs.to_string_lossy().into_owned()));
+    /// Returns an error when documents of the current project are still open.
+    pub fn choose_project(self: Pin<&mut Self>, path: &QString) -> QString {
+        match crate::chosen_project::choose(&path.to_string()) {
+            Ok(()) => {
+                self.set_project_dir(path.clone());
+                QString::default()
+            }
+            Err(error) => QString::from(error.as_str()),
+        }
     }
 
     #[allow(clippy::cast_possible_truncation)]
@@ -1555,7 +1552,7 @@ impl qobject::GenomeController {
             .to_string()
             .lines()
             .filter(|l| !l.is_empty())
-            .map(|f| project_root(Path::new(f)))
+            .map(|f| file_folder(Path::new(f)))
             .collect();
         roots.sort();
         roots.dedup();
@@ -1579,7 +1576,7 @@ impl qobject::GenomeController {
             .strip_prefix(&project)
             .ok()
             .filter(|_| !project.as_os_str().is_empty())
-            .or_else(|| path.strip_prefix(project_root(&path)).ok())
+            .or_else(|| path.strip_prefix(file_folder(&path)).ok())
             .unwrap_or(&path);
         QString::from(&rel.to_string_lossy().into_owned())
     }

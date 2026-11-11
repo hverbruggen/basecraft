@@ -85,6 +85,7 @@ impl Session {
         // Register the reference before editing: a refused registration
         // leaves the tree unchanged.
         let mut params = serde_json::json!({"source": label, "matched": matched});
+        let mut input_run = None;
         if self.tracked
             && self.provenance_policy != basecraft_platform::settings::ProvenancePolicy::None
         {
@@ -95,18 +96,9 @@ impl Session {
                 &hash,
                 &[],
                 &format!("Support values imported into {}", self.doc_key(id)?),
+                self.project.as_ref(),
             )?;
-            let record = ledger
-                .directory()
-                .join("records")
-                .join(format!("{}.json", ledger.id()));
-            params["input_run"] =
-                serde_json::to_value(basecraft_protocol::records::ActivityInputRun {
-                    schema_version: 1,
-                    id: ledger.id().into(),
-                    hash: basecraft_io::hash_file(&record)?,
-                    extra: std::collections::BTreeMap::new(),
-                })?;
+            input_run = Some(super::tool_runs::input_run_of(&ledger)?);
         }
         let added: Vec<String> = ops
             .iter()
@@ -131,13 +123,14 @@ impl Session {
             }
             return Err(error);
         }
-        self.log_contributing_tool_run(
+        self.record_tool_run(
             id,
             self.actor.clone(),
-            ACTIVITY,
-            params,
-            &[(key, hash)],
-            &edit_ids,
+            crate::session::ToolRunRecord {
+                edits: Some(&edit_ids[..]),
+                input_run,
+                ..crate::session::ToolRunRecord::new(ACTIVITY, params, &[(key, hash)], &[])
+            },
         )?;
         Ok(SupportImport { added, matched })
     }

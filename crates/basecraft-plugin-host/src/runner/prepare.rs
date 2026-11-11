@@ -437,12 +437,17 @@ impl PreparedOperation {
         let parameters =
             contract::normalize_parameters(&operation.descriptor, &supplied_parameters)?;
         operation.package.verify()?;
+        let project = session
+            .as_deref()
+            .and_then(basecraft_ops::Session::project)
+            .cloned();
         let mut frozen = freeze_inputs(
             &operation,
             query_preparation,
             &parameters,
             &mut inputs,
             captured,
+            project.as_ref(),
         )?;
         let AllocatedRun {
             run,
@@ -456,6 +461,7 @@ impl PreparedOperation {
             &inputs,
             &mut frozen,
             captured,
+            project.as_ref(),
         )?;
         let run_id = run.id().to_owned();
         let root = run.directory().to_path_buf();
@@ -578,6 +584,7 @@ fn freeze_inputs(
     parameters: &Value,
     inputs: &mut PreparationInputs,
     captured: &[basecraft_ops::sanger_review::CapturedInput],
+    project: Option<&basecraft_ops::project::Project>,
 ) -> Result<FrozenInputs> {
     let PreparationInputs {
         document,
@@ -616,9 +623,10 @@ fn freeze_inputs(
                 &path,
                 captured,
                 (!accepted_hashes.contains_key(&source)).then_some(&mut *input_record),
+                project,
             )?;
             if binding.verify {
-                let issues = basecraft_ops::records::verify(&source)?;
+                let issues = basecraft_ops::records::verify(&source, project)?;
                 if !issues.is_empty() {
                     return Err(Error::Protocol(format!(
                         "input evidence is not reusable: {}",
@@ -734,6 +742,7 @@ fn allocate_run(
     inputs: &PreparationInputs,
     frozen: &mut FrozenInputs,
     captured: &[basecraft_ops::sanger_review::CapturedInput],
+    project: Option<&basecraft_ops::project::Project>,
 ) -> Result<AllocatedRun> {
     let sequence = &inputs.sequence;
     let generated = &inputs.generated;
@@ -787,6 +796,7 @@ fn allocate_run(
             &original_hash,
             captured,
             &format!("Input for {}", operation.id),
+            project,
         )?;
         let mut record = mutation.read_input(ledger.directory())?;
         record.analysis_run = Some(records::relative(ledger.directory(), run.directory())?);

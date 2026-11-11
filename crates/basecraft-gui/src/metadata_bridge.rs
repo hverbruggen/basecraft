@@ -411,8 +411,9 @@ impl qobject::MetadataController {
         let path = metadata::manifest_path(&project)
             .to_string_lossy()
             .into_owned();
-        if let Err(error) =
-            crate::document_open::start(path, Some(project.clone()), move |result| {
+        let chosen = basecraft_ops::project::Project::new(&project);
+        if let Err(error) = chosen.map_err(Into::into).and_then(|chosen| {
+            crate::document_open::start(path, Some(chosen), move |result| {
                 let _ = thread.queue(move |mut this| {
                     if this.rust().open_epoch != epoch || this.rust().project() != project {
                         return;
@@ -432,7 +433,7 @@ impl qobject::MetadataController {
                     this.opened(ok);
                 });
             })
-        {
+        }) {
             self.as_mut().set_busy(false);
             self.as_mut().report("error", &error.to_string());
             self.opened(false);
@@ -449,7 +450,8 @@ impl qobject::MetadataController {
         // Creation has a fixed-size empty payload; callers can immediately
         // import into it. Existing project documents use the worker above.
         let result = metadata::create(&project).and_then(|path| {
-            let mut session = Session::recoverable(&project)?;
+            let chosen = basecraft_ops::project::Project::new(&project)?;
+            let mut session = Session::recoverable(&project)?.in_project(Some(chosen));
             let doc = session.open(&path)?;
             Ok((session, doc))
         });

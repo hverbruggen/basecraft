@@ -6,6 +6,7 @@ pub mod blast;
 pub mod files;
 pub mod log;
 pub mod metadata;
+pub mod project;
 pub mod records;
 pub mod renames;
 pub mod sanger_review;

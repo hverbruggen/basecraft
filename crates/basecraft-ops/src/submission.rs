@@ -1384,14 +1384,16 @@ fn verified_reports(
         );
         if artifact["role"] != "reports"
             || basecraft_io::hash_file(&path)? != artifact["digest"].as_str().unwrap_or_default()
-            || crate::records::provenance::bundle_for_result(&path).canonicalize()?
+            || crate::records::provenance::bundle_for_result(&path, None).canonicalize()?
                 != run.canonicalize()?
         {
             return Err(invalid(
                 "validation artifact or publication evidence differs",
             ));
         }
-        let issues = crate::records::provenance::verify(&path)?;
+        // The submission's folder is the project the caller chose.
+        let project = crate::project::Project::new(root)?;
+        let issues = crate::records::provenance::verify(&path, Some(&project))?;
         if !issues.is_empty() {
             return Err(crate::Error::Damaged {
                 path: path.clone(),
