@@ -8,11 +8,12 @@ Opening runs on a worker and writes no recovery files. The first edit reads
 and hashes no source bytes and forces one journal write. No live constructor
 used memory mapping; the unused variant and dependency have been removed.
 
-Initial release measurements (three warm-cache samples, neutral machine label
-`reference`) opened a 100,000,000-byte FASTA in 74.745 ms. A compact durable edit
-cost 2.210 ms and a first 4K alignment frame 2.931 ms. These numbers include core
-work only, not delivery to the window or display presentation. See the dated
-history and the budget report for memory and 1 GB measurements.
+Five isolated warm-cache release samples at `2a05000` opened a 100,000,000-byte
+FASTA in 49.057 ms and a 1,000,000,000-byte FASTA in 484.610 ms. A compact durable
+edit cost 2.053 ms and a first 4K alignment frame 2.665 ms. These numbers include
+core work only, not delivery to the window or display presentation. The shared
+host compile lock excluded concurrent compilation. See the dated history and
+budget report for all measurements.
 
 Recommendation for editable documents: keep owned buffers. Mapping a file owned
 by another program permits an external truncation to fault the process rather

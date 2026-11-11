@@ -13,7 +13,7 @@ measurement = "Session::open only; warm cache; no first-paint claim"
 
 [scenarios.edit-alignment]
 fixture = "compact alignment; 1000 distinct row-0 single-residue replacements with N"
-measurement = "sum of 1000 Session::apply durations / 1000, including first-edit promotion"
+measurement = "sum of 1000 Session::apply durations / 1000, including first-edit retention and journal write"
 prd_context = "16 ms input-to-screen target requires separate GUI/frame measurement"
 
 [scenarios.undo-alignment]

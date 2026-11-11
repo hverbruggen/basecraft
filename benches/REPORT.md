@@ -1,23 +1,25 @@
 # Interaction budget status — 11 November 2026
 
 These measurements are release builds of the headless core. They do not qualify
-end-to-end desktop performance. Initial measurements use three warm-cache
-samples on a shared host, labelled `reference` in `history.jsonl`; the history
-records the exact Rust source digest. Shared-host results are provisional.
+end-to-end desktop performance. The table uses five warm-cache samples per
+scenario at commit `2a05000`, with the shared host compile lock held exclusively.
+All 23 headless gates pass. `history.jsonl` records the exact Rust source digest
+and keeps the earlier three-sample shared-host results labelled `reference`.
 
 | Requirement or proxy | Result | Status |
 | --- | --- | --- |
 | Cold application start <300 ms | No target-machine cold launch measured | Unmeasured |
 | Idle application RSS <100 MB | Measurement wired into build receipt; no target receipt produced in this lane | Unmeasured |
-| Input to screen <16 ms | Edit 2.210 ms + first alignment frame 2.931 ms = 5.141 ms core proxy | Proxy met; end-to-end unmeasured |
+| Input to screen <16 ms | Edit 2.053 ms + first alignment frame 2.665 ms = 4.718 ms core proxy | Proxy met; end-to-end unmeasured |
 | 1 GB open to first paint <1 s | No display presentation measured | Unmeasured |
 | Constant-memory indexed browsing | Editable documents retain an owned input buffer | Not met by editable-document path; separate read-only design |
-| 100 MB core open | 74.745 ms | Headless gate met |
-| Compact core open / undo / save | 5.860 / 2.273 / 42.334 ms | Headless gates met |
-| 4K first frame, alignment / hidden alignment | 2.931 / 3.428 ms | Headless 16 ms gate met |
-| 4K first frame, linear / wrapped / hidden wrapped genome | 0.061 / 0.597 / 2.833 ms | Headless 16 ms gate met |
-| 4K scrolling, worst measured case | 0.689 ms/frame | Headless 16 ms gate met |
-| 50,000-tip tree open / midpoint reroot | 17.571 / 23.586 ms | Headless gates met |
+| 100 MB core open | 49.057 ms | Headless gate met |
+| 1 GB core open | 484.610 ms | Headless gate met; first paint unmeasured |
+| Compact core open / undo / save | 0.211 / 1.983 / 38.113 ms | Headless gates met |
+| 4K first frame, alignment / hidden alignment | 2.665 / 2.936 ms | Headless 16 ms gate met |
+| 4K first frame, linear / wrapped / hidden wrapped genome | 0.053 / 0.570 / 2.026 ms | Headless 16 ms gate met |
+| 4K scrolling, worst measured case | 0.648 ms/frame | Headless 16 ms gate met |
+| 50,000-tip tree open / midpoint reroot | 9.890 / 26.879 ms | Headless gates met |
 
 `just check` includes exact read, sync, requested-heap and frame-size assertions.
 Main files and format companions are read once. Opening writes no source, state,
@@ -51,7 +53,7 @@ not change the product's first-paint target.
 ## Open memory and disk reads
 
 The compact per-kind check runs with both read counters and requested-heap
-instrumentation in isolated processes. Every input below is read exactly once,
+instrumentation in isolated debug-build processes. Every input below is read exactly once,
 including companions. Session construction and fixture setup are outside the
 measurement window; decoded document objects and counters are included.
 
