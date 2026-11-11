@@ -11,7 +11,9 @@ use crate::{
 };
 use basecraft_docs::sanger::SangerDraft;
 use basecraft_docs::sanger::SangerDraftExt;
-use basecraft_protocol::operation::{InvocationInputEvidence, OperationRequest, RuntimeState};
+use basecraft_protocol::operation::{
+    InputReference, InvocationInputEvidence, OperationRequest, RuntimeState,
+};
 use serde_json::json;
 use std::path::{Path, PathBuf};
 
@@ -198,10 +200,21 @@ impl SangerCaller {
                 Err(error) => self.lookup_diagnostics.push(error),
             }
         }
-        let request: OperationRequest = serde_json::from_value(json!({"operation":operation.id,
-            "inputs":{"reads":[{"kind":"file","path":source}]},"parameters":parameters,
-            "pins":identity.query.pins}))
-        .map_err(|e| e.to_string())?;
+        let request = OperationRequest {
+            operation: operation.id.clone(),
+            inputs: [(
+                "reads".into(),
+                vec![InputReference::File {
+                    path: source.display().to_string(),
+                }],
+            )]
+            .into(),
+            parameters,
+            destinations: std::collections::BTreeMap::new(),
+            pins: Some(identity.query.pins.clone()),
+            request_key: None,
+            target: None,
+        };
         let accepted = self
             .jobs
             .submit(

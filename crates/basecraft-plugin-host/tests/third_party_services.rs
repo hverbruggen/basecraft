@@ -1,10 +1,10 @@
 //! Host services are declared by any package, not granted by package identity.
 use basecraft_plugin_host::registry::{self, Registry, RegistryConfig};
-use basecraft_protocol::operation::HostServices;
-use serde_json::{Value, json};
+use basecraft_protocol::operation::{HostServices, QueryPreparation};
+use serde_json::json;
 use std::path::Path;
 
-fn load(root: &Path, host: &Value) -> basecraft_plugin_host::Result<Registry> {
+fn load(root: &Path, host: &HostServices) -> basecraft_plugin_host::Result<Registry> {
     let source = root.join("source");
     std::fs::create_dir_all(&source).unwrap();
     std::fs::write(source.join("plugin.toml"), "schema=2\ncontract='operations.json'\nid='org.example.services'\nname='Service fixture'\nversion='1.0.0'\n[entry]\noperation='python:plugin.py'\n").unwrap();
@@ -33,25 +33,45 @@ fn load(root: &Path, host: &Value) -> basecraft_plugin_host::Result<Registry> {
 
 #[test]
 fn installed_packages_declare_the_services_built_in_plugins_use() {
-    let host = json!({"species_workspace":true,"bootstrap_exports":true,"verify_inputs":["reads"],
-        "ambient_credentials":["access"],"caller":"single_trace","caller_engine":"example-caller",
-        "query_preparation":"blast"});
+    let names = |names: &[&str]| names.iter().map(|&name| name.to_owned()).collect();
+    let host = HostServices {
+        species_workspace: true,
+        bootstrap_exports: true,
+        verify_inputs: names(&["reads"]),
+        ambient_credentials: names(&["access"]),
+        caller: Some("single_trace".into()),
+        caller_engine: Some("example-caller".into()),
+        query_preparation: Some(QueryPreparation::Blast),
+        ..HostServices::default()
+    };
     let temp = tempfile::tempdir().unwrap();
     let registry = load(temp.path(), &host).unwrap();
     let operation = registry
         .resolve("org.example.services/call@1", None)
         .unwrap();
-    let declared: HostServices = serde_json::from_value(host).unwrap();
-    assert_eq!(operation.descriptor.host.as_ref(), Some(&declared));
+    assert_eq!(operation.descriptor.host.as_ref(), Some(&host));
 
     // The same contract checks refuse invalid declarations on installation.
+    let caller = HostServices {
+        caller: Some("single_trace".into()),
+        ..HostServices::default()
+    };
     for invalid in [
-        json!({"caller":"single_trace"}),
-        json!({"caller":"single_trace","caller_engine":"Bad Name"}),
-        json!({"verify_inputs":["missing"]}),
-        json!({"ambient_credentials":["undeclared"]}),
+        caller.clone(),
+        HostServices {
+            caller_engine: Some("Bad Name".into()),
+            ..caller
+        },
+        HostServices {
+            verify_inputs: names(&["missing"]),
+            ..HostServices::default()
+        },
+        HostServices {
+            ambient_credentials: names(&["undeclared"]),
+            ..HostServices::default()
+        },
     ] {
         let temp = tempfile::tempdir().unwrap();
-        assert!(load(temp.path(), &invalid).is_err(), "{invalid}");
+        assert!(load(temp.path(), &invalid).is_err(), "{invalid:?}");
     }
 }
