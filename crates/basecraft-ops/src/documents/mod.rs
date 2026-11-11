@@ -22,6 +22,9 @@ mod tree;
 
 pub(crate) trait Document {
     fn kind(&self) -> crate::files::Kind;
+    fn save_refusal(&self) -> Option<&str> {
+        None
+    }
     /// Reject operations for another payload before durable tracking starts.
     fn accepts(&self, op: &Op) -> bool;
     /// Whether admission must retain the discovered companion hashes.
@@ -31,7 +34,6 @@ pub(crate) trait Document {
     fn opening_warning(&self) -> Option<&str> {
         None
     }
-
     fn rebase_replay_paths(&mut self, _from: &Path, _to: &Path) {}
     /// Detached proposal staging retains the same payload and writer metadata.
     /// Unsupported kinds cannot be mutated through the proposal route.
@@ -95,17 +97,7 @@ pub(crate) trait Document {
         None
     }
 
-    /// Whether saved hashes and their errors depend only on the complete payload.
-    /// Opt-in requires stable transitive serializer inputs between Slot mutable
-    /// accesses: no target, publication, filesystem, time or shared payload mutation.
-    /// Current opted-in Session constructors use owned backing or immutable indexed
-    /// FASTA backing. The public `Residues` trait and `Source::Mapped` alone do not
-    /// guarantee this invariant; future constructors must preserve it or opt out.
-    fn saved_hashes_are_content_only(&self) -> bool {
-        false
-    }
-
-    /// Hash the current writer output for this destination.
+    /// Preserve the existing replay writer, including historical target handling.
     fn saved_hashes(&self, target: &Path, publication: &WritePublication) -> Result<Vec<String>>;
     /// Kind-specific operation composition. Session owns timing, actor/group
     /// boundaries, pending history and stitching the existing inverse steps.

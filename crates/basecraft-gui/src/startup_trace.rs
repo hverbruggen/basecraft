@@ -1,8 +1,8 @@
-//! Opt-in Rust startup diagnostics, not rendering or document-readiness evidence.
+//! Opt-in startup lifecycle and first swapped frame diagnostics.
 //!
 //! Set `BASECRAFT_STARTUP_TRACE_TOKEN` to 1–64 ASCII letters, digits, `_` or `-`.
 //! Each event is attempted once; an output error disables the recorder. There are
-//! at most eight records, each under 512 bytes. No files or timers are created.
+//! at most nine records, each under 512 bytes. No files or timers are created.
 
 use serde::Serialize;
 use std::ffi::OsStr;
@@ -22,6 +22,7 @@ pub enum Event {
     EngineCreated,
     QmlRootCreated,
     QmlLoadReturned,
+    FirstFrame,
     ApplicationCreationFailed,
     EngineCreationFailed,
     QmlCreationFailed,
@@ -107,12 +108,15 @@ pub struct Trace {
 
 impl Trace {
     pub fn from_env(start: Instant) -> Self {
-        let token = std::env::var_os("BASECRAFT_STARTUP_TRACE_TOKEN");
-        let recorder = Recorder::new(token.as_deref(), std::process::id(), std::io::stderr());
+        let token = std::env::var_os("BASECRAFT_STARTUP_TRACE_TOKEN").or_else(|| {
+            std::env::args()
+                .any(|arg| arg == "--startup-trace")
+                .then(|| "startup".into())
+        });
+        let mut recorder = Recorder::new(token.as_deref(), std::process::id(), std::io::stderr());
+        recorder.record(Event::MainEntered, 0);
         let recorder = recorder.enabled().then(|| Arc::new(Mutex::new(recorder)));
-        let trace = Self { start, recorder };
-        trace.record_at(Event::MainEntered, 0);
-        trace
+        Self { start, recorder }
     }
 
     pub fn enabled(&self) -> bool {
@@ -120,16 +124,11 @@ impl Trace {
     }
 
     pub fn record(&self, event: Event) {
-        if self.enabled() {
-            let elapsed_ns = u64::try_from(self.start.elapsed().as_nanos()).unwrap_or(u64::MAX);
-            self.record_at(event, elapsed_ns);
-        }
-    }
-
-    fn record_at(&self, event: Event, elapsed_ns: u64) {
         if let Some(recorder) = &self.recorder {
-            // Diagnostics must never turn a poisoned lock into a startup failure.
+            // Read the clock under the lock so render-thread events cannot lose
+            // their first record to a later timestamp from the interface thread.
             if let Ok(mut recorder) = recorder.lock() {
+                let elapsed_ns = u64::try_from(self.start.elapsed().as_nanos()).unwrap_or(u64::MAX);
                 recorder.record(event, elapsed_ns);
             }
         }
@@ -137,10 +136,8 @@ impl Trace {
 }
 
 #[cfg(test)]
+#[path = "startup_trace/tests.rs"]
 mod tests;
 
-#[cfg(test)]
-mod frame;
-#[cfg(test)]
 #[path = "startup_frame_bridge.rs"]
-mod frame_bridge;
+pub mod frame_bridge;

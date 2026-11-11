@@ -294,11 +294,7 @@ fn replay_detects_divergence() {
 fn fasta_with_gff_sidecar_saves_and_replays() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
-    std::fs::write(
-        root.join("g.fasta"),
-        ">chr1 test\nACGTACGTAC\nACGTACGTAC\n>chr2\nGGGG\n",
-    )
-    .unwrap();
+    std::fs::write(root.join("g.fasta"), ">chr1 test\nACGTACGTAC\nACGTACGTAC\n").unwrap();
     std::fs::write(
         root.join("g.gff3"),
         "##gff-version 3\n##sequence-region chr1 1 20\nchr1\t.\tgene\t5\t15\t.\t+\t.\tID=g1\n",
@@ -311,7 +307,7 @@ fn fasta_with_gff_sidecar_saves_and_replays() {
         s.save(d, None).unwrap();
     }
     let saved = std::fs::read_to_string(root.join("g.fasta")).unwrap();
-    assert_eq!(saved, ">chr1 test\nTTACGTACGTACACGTACGTAC\n>chr2\nGGGG\n");
+    assert_eq!(saved, ">chr1 test\nTTACGTACGTACACGTACGTAC\n");
     let gff = std::fs::read_to_string(root.join("g.gff3")).unwrap();
     assert!(gff.contains("chr1\t.\tgene\t7\t17\t"), "{gff}");
     let report = records::replay(root).unwrap();

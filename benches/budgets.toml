@@ -1,10 +1,3 @@
-# Opt-in comparison limits from the M5 plan, not PRD qualification.
-# Default CI remains off pending provisioning review and supported-environment calibration.
-[comparison]
-benchmark_ratio = 1.30
-gross_ci_ratio = 2.0
-minimum_gate_samples = 5
-
 [scenarios.open-alignment]
 fixture = "32 rows x 4096 columns; rowNNN; ACGT rotated by row; .afa"
 measurement = "Session::open only, warm cache, recoverable session"
@@ -15,7 +8,7 @@ measurement = "Session::open only; warm cache; no first-paint claim"
 
 [scenarios.edit-alignment]
 fixture = "compact alignment; 1000 distinct row-0 single-residue replacements with N"
-measurement = "sum of 1000 Session::apply durations / 1000, including first-edit promotion"
+measurement = "sum of 1000 Session::apply durations / 1000, including first-edit retention and journal write"
 prd_context = "16 ms input-to-screen target requires separate GUI/frame measurement"
 
 [scenarios.undo-alignment]
@@ -52,3 +45,22 @@ branches = "positive integer 1+(start*17+count*13)%97 on every nonroot subtree"
 open = "warm-cache recoverable Session::open only"
 midpoint = "one Session::apply(TreeMidpointRoot), first-edit recovery/journal/undo state included"
 verification = "all tip identities, finite branches, topology, total length, undo hashes, redo, journal replay, unchanged source"
+
+# Generous headless regression limits, distinct from PRD first-paint targets.
+# Absolute limits; measurements never change the gate.
+[limits_ms]
+open-alignment = 100
+open-fasta-100mb = 1500
+open-fasta-1gb = 15000
+open-fasta-100mb-cold = 3000
+open-fasta-1gb-cold = 20000
+startup-offscreen = 1000
+edit-alignment = 16
+undo-alignment = 16
+save-alignment = 500
+frame = 16
+tree-open-50000 = 5000
+tree-midpoint-50000 = 5000
+
+[limits_bytes]
+idle-rss-offscreen = 268435456

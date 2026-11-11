@@ -70,9 +70,6 @@ fn document_writer_bytes_require_a_version_bump() {
         files::write_delimitation(&workspace, xml, &mut bytes).unwrap();
         golden("spart", if xml { "xml" } else { "text" }, &path, bytes);
     }
-    let mut bytes = Vec::new();
-    files::write_delimitation_sidecar(&workspace, "b3:fixture", &mut bytes).unwrap();
-    golden("delimitation-sidecar", "without-base", &path, bytes);
     #[cfg(unix)]
     {
         let mut bytes = Vec::new();
@@ -266,7 +263,7 @@ fn companion_record_types_round_trip_original_writer_bytes() {
     }
     check::<basecraft_protocol::companion_records::TreeSidecar>("tree-sidecar-tree-v1.bin");
     check::<basecraft_protocol::companion_records::DelimitationSidecar>(
-        "delimitation-sidecar-without-base-v1.bin",
+        "delimitation-sidecar-current-v1.bin",
     );
 }
 

@@ -13,8 +13,8 @@ use std::{
 
 use basecraft_ops::{DocId, Session, log, metadata, records, submission};
 use basecraft_protocol::delimitation::DelimitationEdit;
-use basecraft_protocol::ops::DocumentCounts;
 use basecraft_protocol::metadata::{ChangeSet, MetadataEdit, Row};
+use basecraft_protocol::ops::DocumentCounts;
 use basecraft_protocol::submission::{Decision, Publication, RowDecision, SubmissionEdit};
 use basecraft_protocol::{Actor, CladeAnnotation, Op};
 

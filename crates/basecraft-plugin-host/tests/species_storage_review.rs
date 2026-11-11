@@ -84,9 +84,10 @@ fn rereview_legacy_sidecar_break_and_remove_reach_combined_workspace() {
         std::fs::write(&source, original).unwrap();
         let work = files::load_delimitation(&source).unwrap();
         let mut bytes = Vec::new();
-        files::write_delimitation_sidecar(
+        files::write_delimitation_sidecar_at(
             &work,
             &basecraft_io::hash_file(&source).unwrap(),
+            &source,
             &mut bytes,
         )
         .unwrap();
@@ -434,9 +435,10 @@ fn combine_complete_export_includes_legacy_sidecar_evidence() {
         json!("Sidecar-only scientific context"),
     );
     let mut bytes = Vec::new();
-    files::write_delimitation_sidecar(
+    files::write_delimitation_sidecar_at(
         &legacy,
         &basecraft_io::hash_file(&source).unwrap(),
+        &source,
         &mut bytes,
     )
     .unwrap();
@@ -474,8 +476,13 @@ fn combine_discovers_legacy_provenance_and_guards_sidecar_changes() {
     .unwrap();
     let work = files::load_delimitation(&source).unwrap();
     let mut side = Vec::new();
-    files::write_delimitation_sidecar(&work, &basecraft_io::hash_file(&source).unwrap(), &mut side)
-        .unwrap();
+    files::write_delimitation_sidecar_at(
+        &work,
+        &basecraft_io::hash_file(&source).unwrap(),
+        &source,
+        &mut side,
+    )
+    .unwrap();
     let sidecar = files::tree_sidecar(&source);
     std::fs::write(&sidecar, &side).unwrap();
     let side_hash = basecraft_io::hash_bytes(&side);

@@ -272,7 +272,7 @@ fn relative_to(path: &Path, tree: &Path) -> Result<PathBuf> {
 }
 
 fn load_alignment(path: &Path) -> Result<basecraft_docs::AlignmentDoc> {
-    let file = std::sync::Arc::new(basecraft_io::cache::open_fasta(path)?);
+    let file = std::sync::Arc::new(basecraft_io::fasta::IndexedFasta::open(path)?);
     Ok(basecraft_docs::AlignmentDoc::from_fasta(
         "Linked input",
         &file,
@@ -280,7 +280,7 @@ fn load_alignment(path: &Path) -> Result<basecraft_docs::AlignmentDoc> {
 }
 
 fn names(path: &Path) -> Result<BTreeSet<String>> {
-    let alignment = basecraft_io::cache::open_fasta(path)?;
+    let alignment = basecraft_io::fasta::IndexedFasta::open(path)?;
     let mut names = BTreeSet::new();
     let mut width = None;
     for row in &alignment.index.records {

@@ -10,6 +10,9 @@ use crate::files::{self, Format, HashingWriter, Opened};
 use crate::session::{Inverse, normalise};
 
 impl Document for Opened {
+    fn save_refusal(&self) -> Option<&str> {
+        self.save_refusal
+    }
     fn accepts(&self, op: &Op) -> bool {
         matches!(
             op,
@@ -29,6 +32,7 @@ impl Document for Opened {
     }
     fn proposal_candidate(&self) -> Result<files::Loaded> {
         Ok(files::Loaded::Sequence(Opened {
+            save_refusal: self.save_refusal,
             doc: self.doc.clone(),
             format: self.format,
             fasta: self.fasta.clone(),
@@ -110,10 +114,6 @@ impl Document for Opened {
         }
         Ok(hashes)
     }
-    fn saved_hashes_are_content_only(&self) -> bool {
-        true
-    }
-
     fn saved_hashes(
         &self,
         _target: &Path,
@@ -369,10 +369,7 @@ mod tests {
     #[test]
     fn sequence_interface_preserves_writer_bytes_features_topology_and_fasta_records() {
         for (name, bytes) in [
-            (
-                "sequence.fasta",
-                b">first\nACGTACGT\n>second retained\nTTTT\n".to_vec(),
-            ),
+            ("sequence.fasta", b">first\nACGTACGT\n".to_vec()),
             (
                 "sequence.gb",
                 include_str!(

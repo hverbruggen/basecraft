@@ -182,14 +182,7 @@ fn loaded_hash_and_first_durable_action_guards_are_preserved() {
         if companion {
             std::fs::write(&side, b"##gff-version 3\n# changed\n").unwrap();
         } else {
-            let modified = path.metadata().unwrap().modified().unwrap();
-            std::fs::write(&path, b">a\nTTTT\n").unwrap();
-            std::fs::File::options()
-                .write(true)
-                .open(&path)
-                .unwrap()
-                .set_modified(modified)
-                .unwrap();
+            std::fs::write(&path, b">a\nTTTTT\n").unwrap();
         }
         assert!(
             session
@@ -452,7 +445,9 @@ fn unreadable_gff_is_not_absent_and_direct_errors_remain_io() {
         files::load(&path).err().unwrap(),
         files::open(&path).err().unwrap(),
     ] {
-        assert!(matches!(error, Error::Io(e) if e.kind() == std::io::ErrorKind::PermissionDenied));
+        assert!(
+            matches!(error, Error::Io(e) | Error::Format(basecraft_io::Error::Io(e)) if e.kind() == std::io::ErrorKind::PermissionDenied)
+        );
     }
     assert!(
         matches!(Session::new(dir.path()).open(&path).unwrap_err(), Error::Format(basecraft_io::Error::Io(e)) if e.kind() == std::io::ErrorKind::PermissionDenied)

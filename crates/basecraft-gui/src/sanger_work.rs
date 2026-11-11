@@ -514,7 +514,8 @@ pub(super) fn session_view(session: &SangerReview) -> Result<SangerReviewView, S
     let mut view = SangerReviewView::new(draft, traces)?;
     if let Some(placement) = session.placement()? {
         let indexed = Arc::new(
-            basecraft_io::cache::open_fasta(&placement.source_path).map_err(|e| e.to_string())?,
+            basecraft_io::fasta::IndexedFasta::open(&placement.source_path)
+                .map_err(|e| e.to_string())?,
         );
         let alignment =
             AlignmentDoc::from_fasta(placement.source_path.display().to_string(), &indexed);

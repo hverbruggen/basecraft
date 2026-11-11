@@ -23,11 +23,12 @@ pub(crate) fn run(mut controller: Pin<&mut qobject::TreeController>) {
     let sequence = folder.path().join("sequence.fa");
     std::fs::write(&path, "((A:1,B:2):3,(C:4,D:5):6);\n").unwrap();
     std::fs::write(&sequence, ">sequence\nACGT\n").unwrap();
-    assert!(
-        controller
-            .as_mut()
-            .open_file(&QString::from(path.to_str().unwrap()))
-    );
+    let candidate = crate::document_open::Candidate::acquire(
+        path.to_str().unwrap(),
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .unwrap();
+    controller.as_mut().install_fresh(candidate).unwrap();
     let original = controller.rust().doc.unwrap();
     let mut style = controller
         .rust()

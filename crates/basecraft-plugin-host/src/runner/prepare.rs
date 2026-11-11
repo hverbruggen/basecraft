@@ -354,13 +354,26 @@ impl PreparedOperation {
         let parameters =
             contract::normalize_parameters(&operation.descriptor, &supplied_parameters)?;
         operation.package.verify()?;
-        let mut frozen = freeze_inputs(&operation, query_preparation, &parameters, &mut inputs, captured)?;
+        let mut frozen = freeze_inputs(
+            &operation,
+            query_preparation,
+            &parameters,
+            &mut inputs,
+            captured,
+        )?;
         let AllocatedRun {
             run,
             ledger_inputs,
             primary_input_owner,
             evidence,
-        } = allocate_run(&operation, &request, &policy, &inputs, &mut frozen, captured)?;
+        } = allocate_run(
+            &operation,
+            &request,
+            &policy,
+            &inputs,
+            &mut frozen,
+            captured,
+        )?;
         let run_id = run.id().to_owned();
         let mut outputs = BTreeMap::new();
         for (name, binding) in &operation.descriptor.outputs {

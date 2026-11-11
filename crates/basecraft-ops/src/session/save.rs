@@ -106,6 +106,9 @@ impl Session {
         if !self.is_open(id) {
             return Err(invalid("save document is not open"));
         }
+        if let Some(message) = self.content(id)?.as_document().save_refusal() {
+            return Err(Error::Unsupported(message.into()));
+        }
         let mut warnings = Vec::new();
         let mut target_check = None;
         let new_sequence = self.docs[id.0].accepted_hashes.is_empty();
@@ -124,8 +127,8 @@ impl Session {
         let path = path.filter(|p| !self.is_own_file(id, p));
         let target = path.map_or_else(|| self.resolve(&self.docs[id.0].key), Path::to_path_buf);
         hooks.at(SaveSite::CleanHashes);
-        let clean = (history_only || (self.log.is_some() && path.is_none()))
-            && self.save_hashes(id)? == self.docs[id.0].saved_state_hashes;
+        let clean =
+            (history_only || (self.log.is_some() && path.is_none())) && self.docs[id.0].is_clean();
         if history_only && !clean {
             return Err(invalid("history publication requires a saved document"));
         }
@@ -198,9 +201,36 @@ impl Session {
         hooks.at(SaveSite::ExpectedHashes);
         let expected = self.save_hashes_at(id, &target)?;
         if self.log.is_some() {
+            let document = self.docs[id.0].content.as_document();
+            let mut paths = document.independently_saved_files(&target);
+            if paths.is_empty() {
+                paths.push(target.clone());
+                paths.extend(
+                    document
+                        .saved_companion(&target)
+                        .filter(|_| expected.len() > 1),
+                );
+            }
+            let hashes = paths
+                .iter()
+                .zip(&expected)
+                .map(|(path, hash)| (self.relative(path), hash.clone()))
+                .collect();
+            let baseline = self.entry(
+                id,
+                self.actor.clone(),
+                Op::Save {
+                    path: self.relative(&target),
+                },
+                OpResult {
+                    hashes,
+                    feature: None,
+                },
+            );
             hooks.at(SaveSite::PendingEncode);
             let intent = serde_json::to_vec_pretty(&serde_json::to_value(
                 basecraft_protocol::records::PendingSave {
+                    baseline,
                     schema_version: 1,
                     session: self.id.clone(),
                     target: target.clone(),
@@ -243,8 +273,9 @@ impl Session {
             self.save_inner(id, path, before.is_none(), hooks)
         };
         if outcome.is_ok() {
+            // A review is clean after any completed save, Save As included.
             if review {
-                self.docs[id.0].saved_state_hashes = self.save_hashes(id)?;
+                self.docs[id.0].saved_at = Some(self.docs[id.0].mark());
             }
             self.docs[id.0].saved_target = Some((
                 target.clone(),
@@ -253,9 +284,7 @@ impl Session {
             ));
             if target == self.resolve(&self.docs[id.0].key) {
                 hooks.boundary(SaveSite::SavedHashes, self)?;
-                if !review {
-                    self.docs[id.0].saved_state_hashes = self.save_hashes_at(id, &target)?;
-                }
+                self.docs[id.0].saved_at = Some(self.docs[id.0].mark());
                 hooks.executed(SaveMilestone::SavedHashes);
                 hooks.boundary(SaveSite::DiskStamp, self)?;
                 self.docs[id.0].disk_stamp = crate::input_evidence::stamp(&target)?;
@@ -443,7 +472,7 @@ impl Session {
         hooks: &mut impl SaveHooks,
     ) -> Result<()> {
         let key = self.relative(target);
-        let entry = self.entry(
+        let mut entry = self.entry(
             id,
             self.actor.clone(),
             Op::Save { path: key },
@@ -452,14 +481,42 @@ impl Session {
                 feature: None,
             },
         );
+        entry.source.as_mut().expect("save source").files = entry
+            .result
+            .hashes
+            .iter()
+            .map(|(path, hash)| {
+                Ok(basecraft_protocol::provenance::InputReference {
+                    path: path.clone(),
+                    stamp: crate::input_evidence::stamp(&self.resolve(path))?,
+                    hash: hash.clone(),
+                    extra: std::collections::BTreeMap::default(),
+                })
+            })
+            .collect::<Result<_>>()?;
         hooks.record(self.log.is_some());
         hooks.boundary(SaveSite::SaveRecord, self)?;
         self.write(&entry)?;
+        self.docs[id.0].recovery_boundary = Some(entry.id.clone());
+        self.docs[id.0].baseline = Some(entry.clone());
+        self.docs[id.0].baseline_logged = true;
+        self.docs[id.0].source_stamps = entry
+            .source
+            .as_ref()
+            .expect("save source")
+            .files
+            .iter()
+            .map(|file| (self.resolve(&file.path), Some(file.stamp.clone())))
+            .collect();
+        self.docs[id.0].recovery_changed = false;
         hooks.returned(SaveSite::SaveRecord);
         if target == self.resolve(&self.docs[id.0].key) {
             self.docs[id.0]
                 .accepted_hashes
                 .clone_from(&entry.result.hashes);
+            self.docs[id.0].disk_stamp = entry.source.as_ref().expect("save source").files[0]
+                .stamp
+                .clone();
             self.docs[id.0].absent_sidecars.clear();
             hooks.executed(SaveMilestone::AcceptedLog);
         }
@@ -511,22 +568,11 @@ impl Session {
     /// Hashes the files a save would write, without writing them.
     pub fn save_hashes(&self, id: DocId) -> Result<Vec<String>> {
         let slot = &self.docs[id.0];
-        if !slot.content.as_document().saved_hashes_are_content_only() {
-            return self.save_hashes_at(id, Path::new(&slot.key));
-        }
-        if let Some(hashes) = slot.current_saved_hashes.get() {
-            return Ok(hashes.clone());
-        }
-        let hashes = self.save_hashes_at(id, Path::new(&slot.key))?;
-        // Concurrent readers may compute the same vector; a losing set is ordinary.
-        let _ = slot.current_saved_hashes.set(hashes.clone());
-        Ok(hashes)
+        self.save_hashes_at(id, Path::new(&slot.key))
     }
 
     /// Replay a save using its actual exchange format, including Save As.
     pub fn save_hashes_at(&self, id: DocId, target: &Path) -> Result<Vec<String>> {
-        #[cfg(test)]
-        super::saved_fingerprint_tests::attempt();
         self.docs[id.0].content.as_document().saved_hashes(
             &self.resolve(&target.to_string_lossy()),
             &self.write_publication,

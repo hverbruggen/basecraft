@@ -211,8 +211,6 @@ pub fn verify(result: &Path) -> Result<Vec<String>> {
             if let Err(e) = crate::input_evidence::verified_source(&bundle, reference) {
                 issues.push(format!("{}: {e}", artifact.id));
             }
-        } else {
-            issues.push(format!("{}: input bytes unavailable", artifact.id));
         }
     }
     if publication.outputs.is_empty() {
@@ -342,8 +340,6 @@ pub(crate) fn verify_records(bundle: &Path, current: &Publication) -> Result<Vec
                 if let Err(e) = crate::input_evidence::verified_source(bundle, reference) {
                     issues.push(format!("{}: {e}", artifact.id));
                 }
-            } else if publication.inputs.iter().any(|a| a.id == artifact.id) {
-                issues.push(format!("{}: ancestor input bytes unavailable", artifact.id));
             }
         }
         let mut parents = std::collections::HashSet::new();
@@ -640,6 +636,7 @@ pub fn tool_run_entry(
         session: publication.session.clone(),
         actor,
         doc: doc.into(),
+        source: None,
         op: Op::ToolRun {
             plugin: plugin.into(),
             operation: operation.into(),

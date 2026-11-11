@@ -282,7 +282,7 @@ impl SangerReview {
         Self::decode(&bytes, path)
     }
 
-    fn decode(bytes: &[u8], path: &Path) -> Result<Self, String> {
+    pub(crate) fn decode(bytes: &[u8], path: &Path) -> Result<Self, String> {
         let value: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
         Self::decode_value(value, path)
     }

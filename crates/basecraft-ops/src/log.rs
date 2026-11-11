@@ -690,6 +690,7 @@ mod activity_tests {
             .tempdir_in(parent)
             .unwrap();
         let entry = |id: &str, metric: f64| LogEntry {
+            source: None,
             v: 1,
             id: id.into(),
             t: "2026-10-26T12:00:00Z".into(),

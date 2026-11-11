@@ -250,9 +250,6 @@ ApplicationWindow {
             preferencesError.open()
         }
     }
-    // Read the original QSettings store only for one-time import. No aliases
-    // or assignments write back into it.
-    Settings { id: legacyPreferences; category: "ui" }
     function persistPreference(key, value) {
         if (preferencesReady) preferences.update(key, JSON.stringify(value))
     }
@@ -279,10 +276,6 @@ ApplicationWindow {
     function loadPreferences() {
         preferencesReady = false
         if (!preferences.reload()) return
-        const legacy = {}
-        for (const key of ["showGc", "sidebarOpen", "orfMinCodons", "alignmentInsert", "localCpuThreads"])
-            legacy[key] = legacyPreferences.value(key, null)
-        if (!preferences.import_legacy(JSON.stringify(legacy))) return
         const prefs = JSON.parse(preferences.snapshot)
         showGc = prefs.ui.show_gc
         sidebarOpen = prefs.ui.sidebar_open
@@ -299,7 +292,7 @@ ApplicationWindow {
         return path.length ? shell.parent_folder_url(path) : shell.local_file_url(shell.project_dir)
     }
     function projectPickerFolder() {
-        const home = window.localPath(StandardPaths.writableLocation(StandardPaths.HomeLocation))
+        const home = shell.local_file_path(StandardPaths.writableLocation(StandardPaths.HomeLocation))
         return shell.local_file_url(preferences.project_picker_directory(home))
     }
     property var projectDialog: null
@@ -311,8 +304,6 @@ ApplicationWindow {
         if (projectDialog) projectDialog.open()
     }
 
-    function showActivity() { tasksDialog.open() }
-    function localPath(url) { return shell.local_file_path(url) }
 
     property bool focusOpenedDocument: false
 
@@ -338,9 +329,8 @@ ApplicationWindow {
     }
 
     function openTextRepresentation() {
-        if (!currentView) return
         const source = current
-        if (!source || typeof source.accessible_page !== "function") return
+        if (!currentView || !source || typeof source.accessible_page !== "function") return
         textRepresentation.source = source
         textRepresentation.open()
     }
@@ -389,16 +379,11 @@ ApplicationWindow {
         }
         documentOpens.revoke_focus()
         const kind = shell.file_kind(path)
-        // The specimen table is project data, edited on the Export tab.
-        if (kind === "metadata") {
+        // Project documents are edited on the Export tab.
+        if (kind === "metadata" || kind === "submission") {
             ribbonTabName = "Export"
-            specimenTable.open()
-            return
-        }
-        // Submissions are project documents edited on the Export tab.
-        if (kind === "submission") {
-            ribbonTabName = "Export"
-            window.openSubmission(path)
+            if (kind === "metadata") specimenTable.open()
+            else submissions.open(path)
             return
         }
         focusOpenedDocument = true
@@ -446,8 +431,8 @@ ApplicationWindow {
             delimitationRequest = null
     }
     function beginDelimitation(method) {
-        if (delimitationRequest || !current || current.busy || !(alignmentOpen || treeOpen || delimitationOpen)) return
-        if (method === "asap" && !alignmentOpen && !(delimitationOpen && current.linked_alignment.length)) return
+        if (delimitationRequest || !current || current.busy || !(alignmentOpen || treeOpen || delimitationOpen)
+                || (method === "asap" && !alignmentOpen && !(delimitationOpen && current.linked_alignment.length))) return
         delimitationSource = current
         delimitationDocument = window.documentAt(tabs.currentIndex)
         speciesDialog.engineProblems = method === "ptp" ? JSON.parse(shell.delimitation_engines()) : ({})
@@ -507,7 +492,7 @@ ApplicationWindow {
         nameFilters: ["Species hypotheses (*.spart *.spartxml *.spart-xml *.xml)"]
         currentFolder: window.activeFolder()
         onVisibleChanged: if (visible) currentFolder = window.activeFolder()
-        readonly property var paths: Array.from(selectedFiles, url => window.localPath(url))
+        readonly property var paths: Array.from(selectedFiles, url => shell.local_file_path(url))
         onAccepted: {
             if (selectedFiles.length < 2) { combineError.message = "Choose at least two species hypothesis files."; combineError.open(); return }
             const candidates = JSON.parse(combineController.combine_candidates(JSON.stringify(paths)))
@@ -535,7 +520,7 @@ ApplicationWindow {
         defaultSuffix: "spart"
         nameFilters: ["Species hypotheses (*.spart)"]
         onAccepted: {
-            const output = window.localPath(selectedFile)
+            const output = shell.local_file_path(selectedFile)
             if (combineController.combine_files(JSON.stringify(combinePicker.paths), output, combineChoice.selection)) window.openPath(output)
             else { combineError.message = combineController.message; combineError.open() }
         }
@@ -693,7 +678,7 @@ ApplicationWindow {
         tooltip: "Save the current file or trace review"
         defaultShortcut: "Ctrl+S"
         enabled: window.current !== null && (!window.traceOpen || window.current.review_mode)
-        onTriggered: window.traceOpen ? window.traceDocument.saveReview() : window.saveDocument(tabs.currentIndex, "", null)
+        onTriggered: window.traceOpen ? window.traceDocument.saveReview() : window.saveTarget(window.documentTarget(tabs.currentIndex), "", null)
     }
     AppCommand {
         id: saveAsCommand
@@ -842,7 +827,7 @@ ApplicationWindow {
     FolderDialog {
         id: reportFolder
         title: "Export the selected revision's report"
-        onAccepted: { provenance.export_report(window.frozenReport, window.localPath(selectedFolder)); provenanceDialog.open() }
+        onAccepted: { provenance.export_report(window.frozenReport, shell.local_file_path(selectedFolder)); provenanceDialog.open() }
     }
     FileDialog {
         id: authoredFile
@@ -850,7 +835,7 @@ ApplicationWindow {
         fileMode: FileDialog.SaveFile
         nameFilters: ["Markdown (*.md)"]
         onAccepted: {
-            if (provenance.save_authored(window.localPath(selectedFile), window.frozenDraft, window.frozenDraftRevision))
+            if (provenance.save_authored(shell.local_file_path(selectedFile), window.frozenDraft, window.frozenDraftRevision))
                 documentRecord.markDraftSaved(window.frozenDraftKey, window.frozenDraft)
         }
     }
@@ -950,7 +935,7 @@ ApplicationWindow {
         standardButtons: Dialog.Close
         property var sessions: []
         initialFocusItem: recoveryChoice
-        Label { text: "Recovery creates copies in a new directory. It preserves your originals and the recovery journal."; wrapMode: Text.Wrap; Layout.fillWidth: true }
+        Label { text: "Recovery creates copies in a new directory using the unchanged original or a retained recovery file. Originals and journals are preserved."; wrapMode: Text.Wrap; Layout.fillWidth: true }
         Label { visible: !recoveryPicker.sessions.length; text: provenance.message.startsWith("fail:") ? provenance.message : "No recovery sessions are available."; wrapMode: Text.Wrap; Layout.fillWidth: true }
         AppComboBox {
             id: recoveryChoice
@@ -974,7 +959,7 @@ ApplicationWindow {
         id: provenanceFolder
         title: window.provenanceExport === "methods" ? "Choose the folder for generated reports" : window.provenanceExport === "recover" ? "Choose the parent folder for recovered copies" : "Choose the parent folder for a new reproduction package"
         onAccepted: {
-            let destination = window.localPath(selectedFolder)
+            let destination = shell.local_file_path(selectedFolder)
             if (window.provenanceExport === "package") destination += "/" + window.fileName(window.provenanceSource) + ".reproduction"
             if (window.provenanceExport === "recover") destination += "/" + window.fileName(window.provenanceSource) + ".recovered"
             provenanceDialog.open()
@@ -1784,7 +1769,7 @@ ApplicationWindow {
                 const doc = JSON.parse(submissions.document || "{}")
                 defaults = {title: (doc.publication || {}).title || "", creators: doc.publication_authors_text || ""}
             }
-            zenodoDialog.show(Array.from(selectedFiles, url => window.localPath(url)), shell.project_dir, defaults)
+            zenodoDialog.show(Array.from(selectedFiles, url => shell.local_file_path(url)), shell.project_dir, defaults)
         }
     }
 
@@ -1845,7 +1830,7 @@ ApplicationWindow {
     }
     // GenBank marker submissions (Export tab). table2asn runs as a
     // registered operation on its own job runner, like BLAST.
-    SubmissionController { id: submissions }
+    SubmissionController { id: submissions; onOpened: success => { if (success) window.showSubmission() } }
     Connections {
         target: specimenMetadata
         function onTableChanged() { if (submissions.available) submissions.refresh_review() }
@@ -1865,7 +1850,6 @@ ApplicationWindow {
             return ""
         })
     }
-    function openSubmission(path) { if (submissions.open(path)) showSubmission() }
     function showSubmission() {
         submissions.refresh_review()
         submissionDialog.open()
@@ -1930,7 +1914,7 @@ ApplicationWindow {
         currentFolder: window.activeFolder()
         onVisibleChanged: if (visible) currentFolder = window.activeFolder()
         nameFilters: ["Submissions (*.submission.json)"]
-        onAccepted: window.openSubmission(window.localPath(selectedFile))
+        onAccepted: submissions.open(shell.local_file_path(selectedFile))
     }
     FileDialog {
         id: accessionTableDestination
@@ -1938,7 +1922,7 @@ ApplicationWindow {
         fileMode: FileDialog.SaveFile
         defaultSuffix: "tsv"
         nameFilters: ["Tab-separated table (*.tsv)"]
-        onAccepted: submissions.write_accession_table(window.localPath(selectedFile))
+        onAccepted: submissions.write_accession_table(shell.local_file_path(selectedFile))
     }
     MetadataReviewDialog {
         id: metadataReview
@@ -1951,7 +1935,7 @@ ApplicationWindow {
         currentFolder: window.activeFolder()
         onVisibleChanged: if (visible) currentFolder = window.activeFolder()
         nameFilters: ["Spreadsheets (*.ods *.xlsx *.xls *.csv *.tsv)", "All files (*)"]
-        onAccepted: window.beginMetadataImport("sheet", window.localPath(selectedFile))
+        onAccepted: window.beginMetadataImport("sheet", shell.local_file_path(selectedFile))
     }
     FileDialog {
         id: metadataTemplateDestination
@@ -1961,7 +1945,7 @@ ApplicationWindow {
         nameFilters: ["OpenDocument spreadsheet (*.ods)"]
         onAccepted: {
             if (!specimenMetadata.available) specimenMetadata.create()
-            specimenMetadata.write_template(window.metadataFasta, window.localPath(selectedFile))
+            specimenMetadata.write_template(window.metadataFasta, shell.local_file_path(selectedFile))
         }
     }
 
@@ -2095,16 +2079,14 @@ ApplicationWindow {
         currentFolder: window.activeFolder()
         onVisibleChanged: if (visible) currentFolder = window.activeFolder()
         nameFilters: ["Sequences, alignments, traces and trees (*.gb *.gbk *.genbank *.gbff *.fasta *.fa *.fna *.fas *.ffn *.faa *.afa *.ab1 *.abi *.json *.nwk *.newick *.tre *.tree *.trees *.treefile *.contree *.nex *.nexus *.nxs)", "All files (*)"]
-        onAccepted: window.openPath(window.localPath(selectedFile))
+        onAccepted: window.openPath(shell.local_file_path(selectedFile))
     }
 
     property var pendingEvidenceSave: null
-    function saveDocument(index, path, continuation) {
-        saveTarget(documentTarget(index), path, continuation)
-    }
     function saveTarget(owner, path, continuation) {
+        const reply = continuation || (() => {})
         const index = targetIndex(owner)
-        if (index < 0) { if (continuation) continuation(false); return }
+        if (index < 0) { reply(false); return }
         if (!path && owner.path.startsWith("untitled:")) {
             saveDialog.target = owner
             saveDialog.continuation = continuation
@@ -2117,20 +2099,23 @@ ApplicationWindow {
         if (conflict.error) { provenance.notification(target, conflict.error, "fail"); return }
         const perform = function() {
             const row = targetIndex(owner)
-            if (row < 0) { if (continuation) continuation(false); return }
-            let success
-            if (path) {
-                success = owner.controller.save_as(path)
-                if (success) {
-                    const savedRow = targetIndex(owner)
-                    if (savedRow < 0) { if (continuation) continuation(false); return }
+            if (row < 0) { reply(false); return }
+            const finish = function(success) {
+                const savedRow = targetIndex(owner)
+                if (success && path && savedRow >= 0) {
                     openFiles.setProperty(savedRow, "path", path)
                     documentOpens.path_changed(owner.token, path, owner.controller.file_path)
                     owner.path = path
                     Qt.callLater(window.refreshCurrent)
                 }
-            } else { owner.controller.save(); success = !owner.controller.dirty }
-            if (continuation) continuation(success)
+                reply(success && savedRow >= 0)
+            }
+            if (!path) { owner.controller.save(); finish(!owner.controller.dirty); return }
+            const success = owner.controller.save_as(path)
+            if (success && owner.controller.busy && owner.controller.opened) {
+                const completed = function(ok) { owner.controller.opened.disconnect(completed); finish(ok) }
+                owner.controller.opened.connect(completed)
+            } else finish(success)
         }
         if ((conflict.analyses || []).length) {
             pendingEvidenceSave = {owner: owner, target: target, perform: perform}
@@ -2226,7 +2211,7 @@ ApplicationWindow {
         onVisibleChanged: if (visible) currentFolder = window.activeFolder()
         onAccepted: {
             const owner = target
-            const path = window.localPath(selectedFile)
+            const path = shell.local_file_path(selectedFile)
             const next = continuation
             target = null
             continuation = null
@@ -2240,7 +2225,7 @@ ApplicationWindow {
             parentWindow: window
             title: "Open or create a project folder"
             onAccepted: {
-                window.selectProject(window.localPath(selectedFolder))
+                window.selectProject(shell.local_file_path(selectedFolder))
                 window.projectDialog = null
                 destroy()
             }
@@ -2784,7 +2769,7 @@ ApplicationWindow {
         nameFilters: ["Trees (*.nwk *.newick *.tre *.tree *.trees *.treefile *.contree *.nex *.nexus *.nxs)", "All files (*)"]
         onAccepted: {
             supportName.controller = window.current
-            supportName.path = window.localPath(selectedFile)
+            supportName.path = shell.local_file_path(selectedFile)
             supportName.metadata = JSON.parse(supportName.controller.support_import_json(supportName.path))
             supportName.open()
         }
@@ -2846,7 +2831,7 @@ ApplicationWindow {
                 editController.message = "The tree changed. Choose the linked alignment again."
                 return
             }
-            editController.link_alignment(window.localPath(selectedFile))
+            editController.link_alignment(shell.local_file_path(selectedFile))
         }
     }
 
@@ -2918,10 +2903,10 @@ ApplicationWindow {
         nameFilters: format === "png" ? ["PNG images (*.png)"] : ["SVG figures (*.svg)"]
         onAccepted: {
             if (!controller) return
-            if (alignment && format === "png") controller.export_figure_png_selection(window.localPath(selectedFile), scope, publication, rasterWidth, includeSelection)
-            else if (alignment) controller.export_figure_selection(window.localPath(selectedFile), scope, publication, includeSelection)
-            else if (format === "png") controller.export_figure_png(window.localPath(selectedFile), scope, publication, rasterWidth)
-            else controller.export_figure(window.localPath(selectedFile), scope, publication)
+            if (alignment && format === "png") controller.export_figure_png_selection(shell.local_file_path(selectedFile), scope, publication, rasterWidth, includeSelection)
+            else if (alignment) controller.export_figure_selection(shell.local_file_path(selectedFile), scope, publication, includeSelection)
+            else if (format === "png") controller.export_figure_png(shell.local_file_path(selectedFile), scope, publication, rasterWidth)
+            else controller.export_figure(shell.local_file_path(selectedFile), scope, publication)
         }
     }
 

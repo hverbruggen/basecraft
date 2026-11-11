@@ -61,6 +61,10 @@ mod submission_bridge;
 #[allow(unused_imports)] // harness=false omits the included module's #[test] bodies.
 mod tree_bridge;
 
+#[path = "../src/startup_trace.rs"]
+#[allow(dead_code, unused_imports)]
+mod startup_trace;
+
 use cxx_qt_lib::{QByteArray, QGuiApplication, QQmlApplicationEngine, QUrl};
 #[cfg(feature = "test-counters")]
 use std::path::Path;
@@ -188,9 +192,10 @@ fn linked_taxa_journey(mut app: std::pin::Pin<&mut cxx_qt_lib_extras::QApplicati
             "LINKED_MEMBERS",
             &serde_json::to_string(&group.members).unwrap(),
         );
-    basecraft_ops::files::write_delimitation_sidecar(
+    basecraft_ops::files::write_delimitation_sidecar_at(
         &work,
-        &basecraft_io::cache::content_hash(&workspace).unwrap(),
+        &basecraft_io::hash_file(&workspace).unwrap(),
+        &workspace,
         &mut std::fs::File::create(basecraft_ops::files::tree_sidecar(&workspace)).unwrap(),
     )
     .unwrap();
@@ -325,6 +330,59 @@ fn main() {
         );
         std::process::exit(1);
     }
+    if std::env::args().nth(1).as_deref() == Some("--startup-window") {
+        let trace = startup_trace::Trace::from_env(std::time::Instant::now());
+        let mut app = application::new(&["startup-test".into()], true);
+        let mut engine = QQmlApplicationEngine::new();
+        let captured = trace.clone();
+        engine
+            .pin_mut()
+            .on_object_created(move |_, object, _| {
+                captured.record(startup_trace::Event::QmlRootCreated);
+                // SAFETY: the engine owns the live object during this callback.
+                unsafe { startup_trace::frame_bridge::attach(object, captured.clone()) };
+            })
+            .release();
+        engine.pin_mut().load_data(&QByteArray::from(
+            "import QtQuick; Window { visible: true; width: 100; height: 100; Timer { interval: 250; running: true; onTriggered: Qt.quit() } }"
+        ), &QUrl::default());
+        trace.record(startup_trace::Event::QmlLoadReturned);
+        assert_eq!(app.as_mut().unwrap().exec(), 0);
+        return;
+    }
+    let startup = std::process::Command::new(std::env::current_exe().unwrap())
+        .arg("--startup-window")
+        .env("BASECRAFT_STARTUP_TRACE_TOKEN", "test")
+        .env("QT_QUICK_BACKEND", "software")
+        .output()
+        .unwrap();
+    assert!(
+        startup.status.success(),
+        "{}",
+        String::from_utf8_lossy(&startup.stderr)
+    );
+    let events: Vec<serde_json::Value> = String::from_utf8_lossy(&startup.stderr)
+        .lines()
+        .filter_map(|line| line.strip_prefix(startup_trace::PREFIX))
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    for event in [
+        "main_entered",
+        "qml_root_created",
+        "qml_load_returned",
+        "first_frame",
+    ] {
+        assert_eq!(
+            events.iter().filter(|row| row["event"] == event).count(),
+            1,
+            "missing/duplicate {event}: {events:?}"
+        );
+    }
+    assert!(
+        events
+            .windows(2)
+            .all(|pair| pair[0]["elapsed_ns"].as_u64() <= pair[1]["elapsed_ns"].as_u64())
+    );
     #[cfg(feature = "test-counters")]
     if std::env::args().nth(1).as_deref() == Some("--open-argv") {
         open_argv::run(Path::new(&std::env::args().nth(2).unwrap()));
@@ -839,23 +897,13 @@ fn main() {
                     .downcast_pin::<alignment_bridge::qobject::AlignmentController>(
                 ) {
                     alignment_bridge::refusal_tests::run(controller);
-                } else if let Some(controller) =
-                    object
-                        .as_mut()
-                        .downcast_pin::<delimitation_bridge::qobject::DelimitationController>()
-                {
-                    delimitation_bridge::inspection_tests::run(controller);
                 } else {
                     panic!("unexpected controller type");
                 }
                 count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             })
             .release();
-        for controller in [
-            "TreeController",
-            "AlignmentController",
-            "DelimitationController",
-        ] {
+        for controller in ["TreeController", "AlignmentController"] {
             engine.pin_mut().load_data(
                 &QByteArray::from(format!("import Basecraft; {controller} {{}}").as_str()),
                 &QUrl::default(),
@@ -863,7 +911,7 @@ fn main() {
         }
         assert_eq!(
             checked.load(std::sync::atomic::Ordering::Relaxed),
-            3,
+            2,
             "all real controller regressions ran"
         );
     }
@@ -1052,6 +1100,13 @@ fn main() {
     ] {
         std::fs::write(figure_folder.path().join(name), bytes).unwrap();
     }
+    basecraft_ops::metadata::create(figure_folder.path()).unwrap();
+    basecraft_ops::submission::create(
+        &mut basecraft_ops::Session::unlogged(figure_folder.path()),
+        &figure_folder.path().join("review.submission.json"),
+        &figure_folder.path().join("alignment.afa"),
+    )
+    .unwrap();
     for index in 0..5 {
         std::fs::write(
             figure_folder

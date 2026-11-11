@@ -117,7 +117,7 @@ Main {
                 current.redo()
                 check(current.dirty, "redo lost edit")
                 current.undo()
-                saveDocument(0, folder + "/saved.gb", success => {
+                saveTarget(documentTarget(0), folder + "/saved.gb", success => {
                     check(success, "Save As failed")
                     check(first.controller === original && !original.dirty, "Save As replaced controller")
                     openPath(folder + "/saved.gb")

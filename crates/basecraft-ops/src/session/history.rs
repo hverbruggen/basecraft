@@ -33,6 +33,27 @@ pub(crate) enum Inverse {
 impl Session {
     pub(super) fn entry(&self, doc: DocId, actor: Actor, op: Op, result: OpResult) -> LogEntry {
         LogEntry {
+            source: matches!(
+                &op,
+                Op::Open { .. } | Op::CreateSequence { .. } | Op::Save { .. }
+            )
+            .then(|| basecraft_protocol::ops::SourceRecord {
+                checkpoint: false,
+                links: std::collections::BTreeMap::new(),
+                feature_slots: self.docs[doc.0]
+                    .content
+                    .sequence()
+                    .map_or_else(Vec::new, |opened| opened.doc.feature_slots()),
+                node_ids: self.docs[doc.0]
+                    .content
+                    .tree()
+                    .map_or_else(Vec::new, |opened| opened.doc.preorder()),
+                root: self
+                    .root
+                    .canonicalize()
+                    .unwrap_or_else(|_| self.root.clone()),
+                files: Vec::new(),
+            }),
             v: LOG_VERSION,
             id: self.next_id(),
             t: basecraft_platform::now_rfc3339(),
@@ -57,11 +78,18 @@ impl Session {
     }
 
     pub(super) fn write(&mut self, entry: &LogEntry) -> Result<()> {
+        self.write_entries(std::slice::from_ref(entry))
+    }
+
+    pub(super) fn write_entries(&mut self, entries: &[LogEntry]) -> Result<()> {
+        let mut batch = self.pending_baselines.clone();
+        batch.extend_from_slice(entries);
         if let Some(log) = &mut self.log {
-            log.append(entry)?;
+            log.append_batch(&batch)?;
         }
+        self.pending_baselines.clear();
         if self.tracked {
-            self.events.push(entry.clone());
+            self.events.extend(batch);
         }
         Ok(())
     }
@@ -118,17 +146,20 @@ impl Session {
             });
         }
         self.flush()?;
-        // A refused edit restores identical content, so its saved hashes stay valid.
-        let cached = self.docs[doc.0].current_saved_hashes.get().cloned();
+        // A checkpoint describes the content an edit applies to, so it is taken
+        // first. Otherwise apply first, so a refused edit starts no tracking.
+        let slot = &self.docs[doc.0];
+        let checkpoints = self.tracked
+            && (self.source_changed(doc) || slot.baseline_logged && slot.baseline.is_some());
+        if checkpoints {
+            self.track(doc)?;
+        }
         let (inverse, feature) = self.docs[doc.0]
             .content_mut()
             .as_document_mut()
             .apply(&op)?;
-        if let Err(error) = self.track(doc) {
+        if !checkpoints && let Err(error) = self.track(doc) {
             restore_inverse(self.docs[doc.0].content_mut(), &inverse)?;
-            if let Some(hashes) = cached {
-                let _ = self.docs[doc.0].current_saved_hashes.set(hashes);
-            }
             return Err(error);
         }
         self.docs[doc.0].generation += 1;
@@ -327,7 +358,7 @@ impl Session {
             Op::Undo { of: of.clone() },
             OpResult::default(),
         );
-        if let Err(error) = self.write(&entry) {
+        if let Err(error) = self.write_undo(id, &entry, &of) {
             let inverse = self.reexecute(id, &applied)?;
             self.docs[id.0].generation -= 1;
             self.docs[id.0].undo.push(Applied { inverse, ..applied });
@@ -350,7 +381,7 @@ impl Session {
             Op::Redo { of: of.clone() },
             OpResult::default(),
         );
-        if let Err(error) = self.write(&entry) {
+        if let Err(error) = self.write_undo(id, &entry, &of) {
             restore_inverse(self.docs[id.0].content_mut(), &inverse)?;
             self.docs[id.0].generation -= 1;
             self.docs[id.0].redo.push(applied);
@@ -358,6 +389,30 @@ impl Session {
         }
         self.docs[id.0].undo.push(Applied { inverse, ..applied });
         Ok(of)
+    }
+
+    fn write_undo(&mut self, id: DocId, entry: &LogEntry, of: &str) -> Result<()> {
+        let changed = self.source_changed(id);
+        if self.log.is_some()
+            && (changed
+                || self.docs[id.0]
+                    .recovery_boundary
+                    .as_deref()
+                    .is_some_and(|boundary| of <= boundary))
+        {
+            if let Some(checkpoint) = self.recovery_checkpoint(id)? {
+                self.write_entries(&[entry.clone(), checkpoint.clone()])?;
+                self.docs[id.0].recovery_boundary = Some(checkpoint.id);
+            } else {
+                self.write(entry)?;
+            }
+            self.docs[id.0].baseline = None;
+            self.refresh_source_stamps(id);
+            self.docs[id.0].recovery_changed |= changed;
+        } else {
+            self.write(entry)?;
+        }
+        Ok(())
     }
 
     pub(super) fn reexecute(&mut self, id: DocId, applied: &Applied) -> Result<Inverse> {

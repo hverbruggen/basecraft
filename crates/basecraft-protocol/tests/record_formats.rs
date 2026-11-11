@@ -60,7 +60,6 @@ fn current_records_round_trip() {
             encode::<Vec<(String, PathBuf, String)>>,
             false,
         ),
-        ("recovery", encode::<RecoveryManifest>, true),
         ("pending-save", encode::<PendingSave>, true),
         ("store-registry", encode::<StoreRegistry>, true),
         ("store", encode::<StoreMarker>, true),

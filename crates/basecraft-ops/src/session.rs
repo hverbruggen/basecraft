@@ -15,7 +15,7 @@ use save_attempt_observation::{
 };
 
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use basecraft_docs::alignment::Undo as AlnUndo;
@@ -32,6 +32,7 @@ mod creation;
 mod extraction;
 mod history;
 mod open;
+use open::SavedMark;
 mod proposals;
 mod publish;
 #[cfg(test)]
@@ -40,7 +41,7 @@ mod save;
 pub(crate) mod save_authority;
 mod save_decision;
 #[cfg(test)]
-mod saved_fingerprint_tests;
+mod saved_mark_tests;
 mod tool_runs;
 pub use save_decision::{EvidenceAction, SaveCheck, SaveDecision, SaveOutcome, SaveWarning};
 pub mod support_import;
@@ -49,10 +50,6 @@ use crate::{Error, Result};
 /// Typing within this interval, at the end of the previous insertion,
 /// merges into one operation.
 const MERGE_WINDOW: Duration = Duration::from_secs(1);
-
-/// Files up to this size are copied into the project's object store when
-/// opened, so replay works after the original is overwritten.
-pub const OBJECT_STORE_LIMIT: u64 = 100 << 20;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct DocId(pub usize);
@@ -71,7 +68,6 @@ pub(crate) struct Applied {
 struct Slot {
     key: String,
     content: Loaded,
-    current_saved_hashes: OnceLock<Vec<String>>,
     generation: u64,
     save_authority: save_authority::PendingSaveAuthority,
     undo: Vec<Applied>,
@@ -79,21 +75,17 @@ struct Slot {
     baseline: Option<LogEntry>,
     baseline_logged: bool,
     accepted_hashes: Vec<(String, String)>,
-    saved_state_hashes: Vec<String>,
+    saved_at: Option<SavedMark>,
+    recovery_boundary: Option<String>,
+    source_stamps: Vec<(PathBuf, Option<basecraft_protocol::provenance::FileStamp>)>,
+    recovery_changed: bool,
+    /// The previous Save As target this session wrote, so a partial Save As can retry it.
     saved_target: Option<(PathBuf, basecraft_protocol::provenance::FileStamp, String)>,
     absent_sidecars: Vec<String>,
     origin: Option<basecraft_protocol::provenance::Publication>,
     origin_issue: Option<String>,
     origin_bundle: PathBuf,
     disk_stamp: basecraft_protocol::provenance::FileStamp,
-}
-
-impl Slot {
-    /// Invalidate before every live mutable borrow, including error rollback.
-    fn content_mut(&mut self) -> &mut Loaded {
-        self.current_saved_hashes.take();
-        &mut self.content
-    }
 }
 
 /// A merged typing burst whose log entry hasn't been written yet.
@@ -130,8 +122,8 @@ pub struct Session {
     write_publication: crate::documents::WritePublication,
     evidence_actions: Mutex<Vec<save_decision::EvidenceAction>>,
     replay_mode: ReplayMode,
-    memory_objects: Mutex<std::collections::HashMap<String, Vec<u8>>>,
     events: Vec<LogEntry>,
+    pending_baselines: Vec<LogEntry>,
     id: String,
     host: String,
     actor: Actor,
@@ -163,8 +155,8 @@ impl Session {
             write_publication: crate::documents::WritePublication::Immediate,
             evidence_actions: Mutex::new(Vec::new()),
             replay_mode: ReplayMode::Live,
-            memory_objects: Mutex::new(std::collections::HashMap::new()),
             events: Vec::new(),
+            pending_baselines: Vec::new(),
             root,
             id: ulid::Ulid::generate().to_string(),
             host,
@@ -494,9 +486,7 @@ impl Drop for Session {
         if flushed
             && self.storage_root != self.root
             && !self.storage_root.join("pending-save.json").exists()
-            && self.docs.iter().enumerate().all(|(i, slot)| {
-                self.save_hashes(DocId(i)).ok().as_ref() == Some(&slot.saved_state_hashes)
-            })
+            && self.docs.iter().all(Slot::is_clean)
         {
             let _ = std::fs::remove_dir_all(&self.storage_root);
         }

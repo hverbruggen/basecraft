@@ -119,10 +119,8 @@ fn reviews(project: &Path) -> (PathBuf, PathBuf) {
 
 /// The report the GUI shows for a saved review it opened.
 fn gui_report(path: &Path) -> Value {
-    serde_json::to_value(
-        basecraft_ops::records::DocumentRecord::saved_report(path).unwrap(),
-    )
-    .unwrap()
+    serde_json::to_value(basecraft_ops::records::DocumentRecord::saved_report(path).unwrap())
+        .unwrap()
 }
 
 struct Mcp {

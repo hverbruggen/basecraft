@@ -20,6 +20,9 @@ pub mod qt {
         type QCoreApplication;
         #[Self = "QCoreApplication"]
         fn instance() -> *mut QCoreApplication;
+        #[Self = "QCoreApplication"]
+        #[cfg(feature = "test-counters")]
+        fn quit();
         unsafe fn inherits(self: &QCoreApplication, class_name: *const c_char) -> bool;
     }
 }

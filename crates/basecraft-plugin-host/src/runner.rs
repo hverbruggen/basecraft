@@ -1,10 +1,10 @@
 //! Registered-operation preparation, execution and validated finalization: the
 //! one route every interface uses to run an analysis. Host workflows run their
 //! stages through registered child jobs with the same lifecycle as other runs.
+mod captures;
 mod execute;
 mod finalize;
 mod prepare;
-mod captures;
 
 use basecraft_ops::records::AlignmentLinkExt;
 use basecraft_platform::files::{identity, link_count};

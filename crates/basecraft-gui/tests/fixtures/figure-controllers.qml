@@ -2,17 +2,26 @@ property bool speciesDone: figures.completed && !trace.busy
 Item {
     id: figures
     property bool completed: false
+    property int opening: 6
+    function ready(success) {
+        if (!success) { console.error("Figure open failed"); Qt.exit(2); return }
+        opening--
+        if (!opening) runFigures()
+    }
     property string savedPreview: ""
     property string savedWorkspace: ""
     property string savedDisplay: ""
     property string folder: FIGURE_TEST_FOLDER
-    GenomeController { id: genome }
-    AlignmentController { id: alignment }
-    TreeController { id: tree }
-    DelimitationController { id: delimitation }
+    GenomeController { id: genome; onOpened: success => figures.ready(success) }
+    AlignmentController { id: alignment; onOpened: success => figures.ready(success) }
+    TreeController { id: tree; onOpened: success => figures.ready(success) }
+    DelimitationController { id: delimitation; onOpened: success => figures.ready(success) }
     SangerController { id: trace }
+    MetadataController { id: metadata; onOpened: success => figures.ready(success && available && !busy) }
+    SubmissionController { id: submission; onOpened: success => figures.ready(success && available && !busy) }
+    MetadataController { id: freshMetadata }
     Timer {
-        interval: 10; repeat: true; running: delimitation.busy || trace.busy
+        interval: 10; repeat: true; running: figures.opening === 0 && (delimitation.busy || trace.busy)
         onTriggered: {
             if (trace.busy) trace.poll_stage()
             delimitation.poll_job()
@@ -34,9 +43,17 @@ Item {
         check(alignment.open_file(folder + "/alignment.afa"), "Figure alignment open failed")
         check(tree.open_file(folder + "/tree.nwk"), "Figure tree open failed")
         check(delimitation.open_file(folder + "/hypotheses.spart"), "Figure delimitation open failed")
-        check(delimitation.attach_tree(folder + "/tree.nwk", false), "Figure display tree attach failed")
         check(trace.open_file(folder + "/trace.ab1"), "Figure trace open failed")
         trace.cancel_calls()
+        metadata.use_project(folder)
+        submission.use_project(folder)
+        check(submission.open(folder + "/review.submission.json"), "Submission open rejected")
+        freshMetadata.use_project(folder + "/new-project")
+        check(freshMetadata.create() && freshMetadata.available, "Empty metadata creation must be immediately usable")
+    }
+    function runFigures() {
+        function check(value, message) { if (!value) { console.error(message); Qt.exit(2) } }
+        check(delimitation.attach_tree(folder + "/tree.nwk", false), "Figure display tree attach failed")
         genome.resize(800, 500)
         alignment.resize(800, 500)
         tree.resize(800, 500)

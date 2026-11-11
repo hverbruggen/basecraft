@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use basecraft_io::cache::IndexedFasta;
+use basecraft_io::fasta::IndexedFasta;
 
 use crate::piece::{PieceTable, Residues};
 use crate::sequence::FastaResidues;

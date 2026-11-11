@@ -4,6 +4,7 @@ use crate::records::links::AlignmentLinkExt;
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
+use basecraft_protocol::export_records::{ProvenanceExportMap, ProvenanceExportMapping};
 use basecraft_protocol::provenance::{FileStamp, InputReference};
 use basecraft_protocol::records::StoreRegistry;
 use fs4::fs_std::FileExt;
@@ -396,24 +397,25 @@ impl std::fmt::Display for EvidenceConflict {
 }
 
 pub fn stamp(path: &Path) -> Result<FileStamp> {
-    let metadata = std::fs::metadata(path)?;
+    stamp_metadata(path, &std::fs::metadata(path)?)
+}
+
+pub(crate) fn stamp_metadata(_path: &Path, metadata: &std::fs::Metadata) -> Result<FileStamp> {
     if !metadata.is_file() {
-        return Err(invalid("analysis input must be an ordinary file"));
+        return Err(crate::Error::Unsupported("input is not a file".into()));
     }
     let time = metadata
         .modified()?
         .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|_| invalid("input timestamp is before Unix epoch"))?;
+        .map_err(|_| crate::Error::Unsupported("input timestamp is before Unix epoch".into()))?;
     #[cfg(unix)]
     let (device, inode) = {
         use std::os::unix::fs::MetadataExt;
         (Some(metadata.dev()), Some(metadata.ino()))
     };
     #[cfg(windows)]
-    let (device, inode) = {
-        let (device, inode) = basecraft_platform::files::identity(path)?;
-        (Some(device), Some(inode))
-    };
+    let (device, inode) = basecraft_platform::files::identity(_path)
+        .map(|(device, inode)| (Some(device), Some(inode)))?;
     Ok(FileStamp {
         size: metadata.len(),
         modified_seconds: time.as_secs(),
@@ -1068,7 +1070,6 @@ pub fn register(run: &ArtifactRun) -> Result<()> {
         all.push(store.into());
         let mut value = store_registry()?;
         value.stores = all;
-        // The legacy Value builder sorted nested extension keys as well.
         write_json(&registry()?, &serde_json::to_value(value)?)?;
     }
     Ok(())
@@ -2094,7 +2095,7 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
     {
         let link = crate::records::links::AlignmentLink::read(result)?;
         let input_path = link.checked_snapshot(result, &tree.doc)?;
-        let indexed = std::sync::Arc::new(basecraft_io::cache::open_fasta(&input_path)?);
+        let indexed = std::sync::Arc::new(basecraft_io::fasta::IndexedFasta::open(&input_path)?);
         let alignment = basecraft_docs::AlignmentDoc::from_fasta("Exported input", &indexed);
         let mut canonical = tempfile::Builder::new()
             .suffix(".afa")
@@ -2287,14 +2288,12 @@ fn export_history(
         basecraft_io::write_atomic(&target.join(&name), |w| w.write_all(&bytes))?;
         let old_id = publication.id.clone();
         publication.id = ulid::Ulid::generate().to_string();
-        mapping.push(
-            basecraft_protocol::export_records::ProvenanceExportMapping {
-                original_id: old_id.clone(),
-                original_hash: hash.clone(),
-                export_id: publication.id.clone(),
-                extra: BTreeMap::new(),
-            },
-        );
+        mapping.push(ProvenanceExportMapping {
+            original_id: old_id.clone(),
+            original_hash: hash.clone(),
+            export_id: publication.id.clone(),
+            extra: BTreeMap::new(),
+        });
         archives.push(ArtifactRevision {
             id: format!("{}:original-record", publication.id),
             logical_name: format!("original-record-{old_id}.json"),
@@ -2335,13 +2334,11 @@ fn export_history(
         hashes.insert(key.clone(), basecraft_io::hash_file(&path)?);
         rebased.insert(key, publication);
     }
-    let bytes = serde_json::to_vec_pretty(&serde_json::to_value(
-        basecraft_protocol::export_records::ProvenanceExportMap {
-            schema_version: 1,
-            records: mapping,
-            extra: BTreeMap::new(),
-        },
-    )?)?;
+    let bytes = serde_json::to_vec_pretty(&serde_json::to_value(ProvenanceExportMap {
+        schema_version: 1,
+        records: mapping,
+        extra: BTreeMap::new(),
+    })?)?;
     let hash = basecraft_io::hash_bytes(&bytes);
     let name = format!("artifacts/{}", hash.trim_start_matches("b3:"));
     basecraft_io::write_atomic(&target.join(&name), |w| w.write_all(&bytes))?;

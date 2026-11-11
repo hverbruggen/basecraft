@@ -1399,7 +1399,9 @@ mod tests {
         let original = std::fs::read(&trace).unwrap();
         std::fs::write(&trace, b"ABIFdifferent bytes").unwrap();
         assert!(ReviewSession::load(&path).unwrap().working_draft().is_err());
-        assert!(crate::records::provenance::package(&path, &tmp.path().join("bad-export")).is_err());
+        assert!(
+            crate::records::provenance::package(&path, &tmp.path().join("bad-export")).is_err()
+        );
         assert!(!tmp.path().join("bad-export").exists());
         std::fs::remove_file(&trace).unwrap();
         assert!(ReviewSession::load(&path).unwrap().working_draft().is_err());

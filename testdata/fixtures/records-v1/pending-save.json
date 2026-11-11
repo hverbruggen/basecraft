@@ -1,4 +1,49 @@
 {
+  "baseline": {
+    "actor": {
+      "client": "record-fixture",
+      "kind": "script"
+    },
+    "doc": "gene.fasta",
+    "host": "fixture-host",
+    "id": "01SYNTHETICOPEN000000000000",
+    "op": "doc.save",
+    "params": {
+      "path": "gene.fasta"
+    },
+    "result": {
+      "hashes": [
+        [
+          "gene.fasta",
+          "b3:8fe544b732f874558ea83bf7299d6c0ca00a548b93d10e49838ce798a1c6695e"
+        ],
+        [
+          "gene.gff3",
+          "b3:01dbd320bf53a1ba24b1a7650f3ac838a42269258c8fba1bd2a4bc7d427fefa2"
+        ]
+      ]
+    },
+    "session": "01SYNTHETICSESSION000000000",
+    "source": {
+      "checkpoint": false,
+      "feature_slots": [],
+      "files": [],
+      "links": {},
+      "node_ids": [],
+      "root": "project"
+    },
+    "state": {
+      "counts": {
+        "features": 0,
+        "kind": "sequence",
+        "residues": 4
+      },
+      "features": 0,
+      "len": 4
+    },
+    "t": "2026-01-01T00:00:00Z",
+    "v": 1
+  },
   "before_hash": "b3:43ee15c062467a4fa87c8f31101457b505f43cb5e18f1458f4eed7722162834c",
   "expected_hashes": [
     "b3:8fe544b732f874558ea83bf7299d6c0ca00a548b93d10e49838ce798a1c6695e",

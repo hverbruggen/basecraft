@@ -50,6 +50,7 @@ impl Session {
         let (name, residues) = Self::validate_new_sequence(name, text)?;
         self.flush()?;
         let content = Loaded::Sequence(Opened {
+            save_refusal: None,
             doc: SequenceDoc::new(
                 name.clone(),
                 Arc::new(residues.as_bytes().to_vec()),
@@ -82,7 +83,9 @@ impl Session {
             },
         );
         self.docs[id.0].baseline = Some(entry);
-        if let Err(error) = self.track(id) {
+        // Unlike an open, creation holds residues that exist nowhere else.
+        if let Err(error) = self.track(id).and_then(|()| self.write_entries(&[])) {
+            self.pending_baselines.retain(|entry| entry.doc != key);
             self.docs.pop();
             return Err(error);
         }
@@ -237,9 +240,11 @@ impl Slot {
             baseline: None,
             baseline_logged: false,
             accepted_hashes: vec![],
-            saved_state_hashes: vec![],
+            recovery_boundary: None,
+            saved_at: None,
+            source_stamps: Vec::new(),
+            recovery_changed: false,
             saved_target: None,
-            current_saved_hashes: std::sync::OnceLock::new(),
             absent_sidecars: vec![],
             origin: None,
             origin_issue: None,

@@ -284,18 +284,24 @@ fn repeated_combine_and_refused_save_preserve_retained_objects_and_recover() {
         workflow::combine_to(&mut session, &paths, &dir.path().join("refused.fa"), None).is_err()
     );
     session.flush().unwrap();
-    let object_dir = dir.path().join(".basecraft/objects");
+    // Checkpoints live in objects/, recovery links in originals/<entry>/.
     let snapshot = || {
-        std::fs::read_dir(&object_dir)
-            .unwrap()
-            .map(|entry| {
+        let mut found = std::collections::BTreeMap::new();
+        let mut pending = vec![
+            dir.path().join(".basecraft/objects"),
+            dir.path().join(".basecraft/originals"),
+        ];
+        while let Some(directory) = pending.pop() {
+            for entry in std::fs::read_dir(&directory).into_iter().flatten() {
                 let path = entry.unwrap().path();
-                (
-                    path.file_name().unwrap().to_owned(),
-                    std::fs::read(path).unwrap(),
-                )
-            })
-            .collect::<std::collections::BTreeMap<_, _>>()
+                if path.is_dir() {
+                    pending.push(path);
+                } else {
+                    found.insert(path.clone(), std::fs::read(path).unwrap());
+                }
+            }
+        }
+        found
     };
     let objects = snapshot();
     let replay = basecraft_ops::records::replay(dir.path()).unwrap();
@@ -350,9 +356,10 @@ fn hint_workspace(
     std::fs::write(&path, SPART).unwrap();
     let mut work = files::load_delimitation(&path).unwrap();
     change(&mut work);
-    files::write_delimitation_sidecar(
+    files::write_delimitation_sidecar_at(
         &work,
         &basecraft_io::hash_file(&path).unwrap(),
+        &path,
         &mut std::fs::File::create(files::tree_sidecar(&path)).unwrap(),
     )
     .unwrap();
