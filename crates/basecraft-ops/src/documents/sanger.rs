@@ -32,7 +32,9 @@ impl Document for SangerReview {
     }
     fn apply(&mut self, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {
         if let Op::SangerUpdate { review } = op {
-            let replacement = SangerReview::from_session_snapshot(review, self.storage_anchor())?;
+            let mut replacement =
+                SangerReview::from_session_snapshot(review, self.storage_anchor())?;
+            replacement.share_captures(self);
             return Ok((
                 Inverse::SangerUpdate(Box::new(std::mem::replace(self, replacement))),
                 None,

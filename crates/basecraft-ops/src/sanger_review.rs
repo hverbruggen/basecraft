@@ -101,6 +101,9 @@ pub struct SangerReview {
     evidence: storage::ReviewEvidence,
     anchor: PathBuf,
     accepted: Option<crate::save_guard::Revision>,
+    captures: std::sync::Arc<
+        std::sync::Mutex<std::collections::BTreeMap<PathBuf, crate::input_evidence::CapturedInput>>,
+    >,
 }
 
 impl SangerReview {
@@ -123,8 +126,7 @@ impl SangerReview {
             "settings": self.settings, "reference": self.reference, "mask": self.mask,
             "decisions": self.decisions, "manual": self.manual,
         });
-        // Other call sets of a multi-set review are part of its revision; a
-        // single-set (v1) report is unchanged.
+        // Every retained call set is part of the revision.
         let retained: Vec<_> = self
             .retained
             .iter()
@@ -160,8 +162,6 @@ impl SangerReview {
                     settings.start.saturating_add(1),
                     settings.end
                 ),
-                ReviewOp::Undo => "Undo review decision".into(),
-                ReviewOp::Redo => "Redo review decision".into(),
                 ReviewOp::Export { .. } => "Exported reviewed consensus".into(),
             };
             report.history.push(HistoryRow {
@@ -266,6 +266,7 @@ impl SangerReview {
             evidence: storage::ReviewEvidence::default(),
             anchor: std::path::absolute(draft_path).map_err(|e| e.to_string())?,
             accepted: None,
+            captures: std::sync::Arc::default(),
         })
     }
 
@@ -359,6 +360,7 @@ impl SangerReview {
             evidence,
             anchor: std::path::absolute(path).map_err(|e| e.to_string())?,
             accepted: None,
+            captures: std::sync::Arc::default(),
         };
         for event in stored.events {
             if let ReviewOp::Export { sha256, .. } = &event {
@@ -510,18 +512,14 @@ impl SangerReview {
     }
 
     pub fn apply(&mut self, op: ReviewOp) -> Result<(), String> {
-        match &op {
-            ReviewOp::Undo | ReviewOp::Redo => return Err("Use Session history".into()),
-            ReviewOp::Export { path, sha256 } => {
-                let actual = basecraft_io::sha256_file(path).map_err(|e| e.to_string())?;
-                if actual != *sha256 {
-                    return Err("Exported consensus changed since review".into());
-                }
+        if let ReviewOp::Export { path, sha256 } = &op {
+            let actual = basecraft_io::sha256_file(path).map_err(|e| e.to_string())?;
+            if actual != *sha256 {
+                return Err("Exported consensus changed since review".into());
             }
-            _ => {
-                let change = self.prepare_change(&op)?;
-                self.install_change(&change, true)?;
-            }
+        } else {
+            let change = self.prepare_change(&op)?;
+            self.install_change(&change, true)?;
         }
         self.events.push(op);
         Ok(())
@@ -594,18 +592,9 @@ pub fn instrument_review(path: &Path) -> Result<SangerReview, String> {
     use basecraft_docs::sanger::{
         DraftColumn, InputRead, Orientation, ReadSupport, SupportKind, TraceCalls,
     };
-    use std::io::Read;
-    let path = path.canonicalize().map_err(|e| e.to_string())?;
-    let mut bytes = Vec::new();
-    std::fs::File::open(&path)
-        .map_err(|e| e.to_string())?
-        .take(128 * 1024 * 1024 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
-    if bytes.len() > 128 * 1024 * 1024 {
-        return Err("AB1 exceeds 128 MiB".into());
-    }
-    let trace = basecraft_io::abif::parse(&bytes).map_err(|e| e.to_string())?;
+    let capture = crate::input_evidence::CapturedInput::open(path).map_err(|e| e.to_string())?;
+    let path = capture.path().to_path_buf();
+    let trace = basecraft_io::abif::parse(capture.bytes()).map_err(|e| e.to_string())?;
     let calls = trace.display_calls();
     let sequence = String::from_utf8(calls.bases.clone()).map_err(|e| e.to_string())?;
     let length = sequence.len();
@@ -613,7 +602,7 @@ pub fn instrument_review(path: &Path) -> Result<SangerReview, String> {
         status: "draft_requires_review".into(), engine: "ABI".into(),
         version_output: format!("ABIF instrument PBAS{}; no recalculation", calls.number),
         engine_sha256: String::new(), mode: "single".into(), signal_threshold: None,
-        inputs: vec![InputRead { read: 1, path: path.clone(), sha256: basecraft_io::sha256_bytes(&bytes),
+        inputs: vec![InputRead { read: 1, path: path.clone(), sha256: capture.sha256().into(),
             orientation: Orientation::Forward, calls: Some(TraceCalls { sequence: sequence.clone(), secondary_sequence: None,
                 positions: calls.positions.clone(), scores: calls.qualities.as_ref().map_or_else(
                     || vec![0; length], |scores| scores.iter().map(|&score| i32::from(score)).collect()) }) }],
@@ -624,7 +613,13 @@ pub fn instrument_review(path: &Path) -> Result<SangerReview, String> {
             conflict: false, review: true }).collect(),
         limitations: vec!["Instrument calls; missing qualities use zero for conservative triage. Review before use.".into()],
     };
-    SangerReview::from_draft(draft, &path)
+    let review = SangerReview::from_draft(draft, &path)?;
+    review
+        .captures
+        .lock()
+        .map_err(|e| e.to_string())?
+        .insert(path, capture);
+    Ok(review)
 }
 
 #[cfg(test)]

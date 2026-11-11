@@ -36,9 +36,6 @@ pub(crate) trait Document {
         None
     }
     /// Legacy replay projections live with the format that produced them.
-    fn legacy_hashes(&self, _target: &Path) -> Result<Option<Vec<String>>> {
-        Ok(None)
-    }
     fn rebase_replay_paths(&mut self, _from: &Path, _to: &Path) {}
     /// Detached proposal staging retains the same payload and writer metadata.
     /// Unsupported kinds cannot be mutated through the proposal route.
@@ -124,7 +121,7 @@ pub(crate) trait Document {
         false
     }
 
-    /// Preserve the existing replay writer, including historical target handling.
+    /// Hash the current writer output for this destination.
     fn saved_hashes(&self, target: &Path, publication: &WritePublication) -> Result<Vec<String>>;
     /// Kind-specific operation composition. Session owns timing, actor/group
     /// boundaries, pending history and stitching the existing inverse steps.

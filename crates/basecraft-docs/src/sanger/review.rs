@@ -161,7 +161,7 @@ impl ReviewState<'_> {
                     mask: None,
                 })
             }
-            ReviewOp::Undo | ReviewOp::Redo | ReviewOp::Export { .. } => {
+            ReviewOp::Export { .. } => {
                 Err("History and export are owned by the review session".into())
             }
         }

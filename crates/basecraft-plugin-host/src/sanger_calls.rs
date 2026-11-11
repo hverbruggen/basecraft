@@ -23,6 +23,7 @@ pub struct SangerCaller {
 }
 
 struct Identity {
+    capture: basecraft_ops::input_evidence::CapturedInput,
     source: PathBuf,
     sha256: String,
     query: CompletedResultQuery,
@@ -79,14 +80,16 @@ fn checked(verified: VerifiedOperationResult, identity: &Identity) -> Result<Cal
             != identity.query.effective_parameters["signal_threshold"].as_u64()
         || draft.minimum_overlap != 50
         || draft.minimum_identity.to_bits() != 0.8_f64.to_bits()
-        || basecraft_io::sha256_file(&identity.source).map_err(|e| e.to_string())?
-            != identity.sha256
     {
         return Err(
             "Source or executed caller identity changed; instrument review preserved".into(),
         );
     }
-    let trace = basecraft_io::abif::open(&identity.source).map_err(|e| e.to_string())?;
+    identity
+        .capture
+        .check_current()
+        .map_err(|e| e.to_string())?;
+    let trace = basecraft_io::abif::parse(identity.capture.bytes()).map_err(|e| e.to_string())?;
     if draft.inputs[0].calls.as_ref().is_none_or(|calls| {
         calls
             .positions
@@ -122,14 +125,26 @@ impl SangerCaller {
         sha256: &str,
         signal_threshold: u32,
     ) -> Result<Option<CalledDraft>, String> {
+        let capture = basecraft_ops::input_evidence::CapturedInput::open(source)
+            .map_err(|e| e.to_string())?;
+        if capture.sha256() != sha256 {
+            return Err("AB1 changed since opening; reopen it before calling".into());
+        }
+        self.start_captured(capture, signal_threshold)
+    }
+
+    pub fn start_captured(
+        &mut self,
+        capture: basecraft_ops::input_evidence::CapturedInput,
+        signal_threshold: u32,
+    ) -> Result<Option<CalledDraft>, String> {
         if !(1..=90).contains(&signal_threshold) {
             return Err("Signal cutoff must be between 1 and 90".into());
         }
         self.cancel()?;
-        let source = source.canonicalize().map_err(|e| e.to_string())?;
-        if basecraft_io::sha256_file(&source).map_err(|e| e.to_string())? != sha256 {
-            return Err("AB1 changed since opening; reopen it before calling".into());
-        }
+        capture.check_current().map_err(|e| e.to_string())?;
+        let source = capture.path().to_path_buf();
+        let sha256 = capture.sha256().to_owned();
         let registry = Registry::load(&RegistryConfig::discover().map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?;
         let operation = registry
@@ -147,10 +162,11 @@ impl SangerCaller {
         let caller = engine(interpreter)?;
         let parameters = json!({"engine_sha256":basecraft_io::sha256_file(&caller).map_err(|e| e.to_string())?,
             "minimum_overlap":50,"minimum_identity":0.8,"signal_threshold":signal_threshold});
-        let hash = basecraft_io::hash_file(&source).map_err(|e| e.to_string())?;
+        let hash = capture.hash().to_owned();
         let identity = Identity {
+            capture: capture.clone(),
             source: source.clone(),
-            sha256: sha256.into(),
+            sha256,
             query: CompletedResultQuery {
                 operation: OPERATION.into(),
                 pins: operation.pins(&registry.generation),
@@ -176,10 +192,21 @@ impl SangerCaller {
                 Err(error) => self.lookup_diagnostics.push(error),
             }
         }
-        let request: OperationRequest = serde_json::from_value(json!({"operation":OPERATION,
-            "inputs":{"reads":[{"kind":"file","path":source}]},"parameters":parameters,
-            "pins":identity.query.pins}))
-        .map_err(|e| e.to_string())?;
+        let request = OperationRequest {
+            operation: OPERATION.into(),
+            inputs: std::collections::BTreeMap::from([(
+                "reads".into(),
+                vec![basecraft_protocol::operation::InputReference::File {
+                    path: source.to_str().ok_or("AB1 path is not UTF-8")?.into(),
+                }],
+            )]),
+            parameters,
+            pins: Some(identity.query.pins.clone()),
+            destinations: std::collections::BTreeMap::new(),
+            request_key: None,
+            target: None,
+        };
+        self.jobs = std::mem::take(&mut self.jobs).with_captured_inputs(vec![capture]);
         let accepted = self
             .jobs
             .submit(
@@ -243,6 +270,7 @@ mod tests {
             descriptor_digest: "contract".into(),
         };
         let identity = Identity {
+            capture: basecraft_ops::input_evidence::CapturedInput::open(&source).unwrap(),
             source: source.clone(),
             sha256: basecraft_io::sha256_file(&source).unwrap(),
             query: CompletedResultQuery {

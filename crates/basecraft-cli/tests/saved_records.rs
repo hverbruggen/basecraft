@@ -542,7 +542,12 @@ fn sanger_edits_share_cli_mcp_history_and_undo() {
         &[
             "edit",
             path.to_str().unwrap(),
-            &serde_json::to_string(&operation).unwrap(),
+            &serde_json::to_string(&[
+                operation.clone(),
+                Op::Undo { of: String::new() },
+                Op::Redo { of: String::new() },
+            ])
+            .unwrap(),
         ],
     ));
     assert_eq!(

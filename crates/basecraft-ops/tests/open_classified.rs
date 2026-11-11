@@ -290,7 +290,10 @@ fn bound_tree_errors_never_fall_back_to_an_unbound_payload() {
     let run = ArtifactRun::create(&path, "bound-tree").unwrap();
     run.bind(&path).unwrap();
     // A valid adjacent sidecar cannot rescue a mismatched bound main file.
-    std::fs::write(files::tree_sidecar(&path), b"{\"schema_version\":0}").unwrap();
+    let tree = basecraft_docs::TreeDoc::from_newick("bound", "(a,b);").unwrap();
+    let mut sidecar = Vec::new();
+    files::write_tree_sidecar(&tree, &mut sidecar).unwrap();
+    std::fs::write(dir.path().join("bound.nwk.basecraft.json"), sidecar).unwrap();
     std::fs::write(&path, b"(other,tree);\n").unwrap();
     let mut session = Session::unlogged(dir.path());
     assert!(session.open_classified(&path).is_err());

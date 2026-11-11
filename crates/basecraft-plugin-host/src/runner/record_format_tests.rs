@@ -63,6 +63,7 @@ fn prepare(root: &Path, registry: &Registry, mode: &str) -> PreparedOperation {
         "record fixture".into(),
         None,
         registry,
+        &[],
     )
     .unwrap()
 }
@@ -382,6 +383,7 @@ fn original_prepared_run_writer() {
         "record fixture".into(),
         None,
         &registry,
+        &[],
     )
     .unwrap();
     capture(
@@ -422,6 +424,7 @@ fn publication_setup(
         "publication fixture".into(),
         None,
         &registry,
+        &[],
     )
     .unwrap();
     if visible {

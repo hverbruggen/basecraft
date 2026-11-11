@@ -119,7 +119,11 @@ impl Session {
             review.ensure_sources(&self.local_provenance_root.join(&key))?;
         }
         let snapshot = review.session_snapshot(&self.resolve(&key))?;
-        self.create_sanger_review_with_key(&key, &snapshot)
+        let id = self.create_sanger_review_with_key(&key, &snapshot)?;
+        if let Some(current) = self.docs[id.0].content_mut().sanger_review_mut() {
+            current.share_captures(&review);
+        }
+        Ok(id)
     }
 
     pub(crate) fn create_sanger_review_with_key(
@@ -188,6 +192,9 @@ impl Session {
                 review: Box::new(snapshot),
             },
         )?;
+        if let Some(current) = self.docs[id.0].content_mut().sanger_review_mut() {
+            current.share_captures(review);
+        }
         Ok(())
     }
 }

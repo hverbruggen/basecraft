@@ -2,7 +2,7 @@
 //! exclusively to the registry/JobManager; this module only adapts review state.
 use super::{Path, PathBuf, ReviewChoice, ReviewOp, SangerReview, SangerReviewView};
 use basecraft_docs::{AlignmentDoc, sanger::SangerDraft};
-use basecraft_io::abif::{self, Trace};
+use basecraft_io::abif;
 use basecraft_plugin_host::{
     jobs::JobManager,
     policy::SessionPolicy,
@@ -199,10 +199,19 @@ fn execute(
     previous: Option<SangerReview>,
     cancelled: &AtomicBool,
 ) -> Result<Completion, String> {
+    check(cancelled)?;
     let mut jobs = JobManager::default().with_task_cancellation();
     let mut payload = String::new();
     let (session, path) = match request {
         Request::Prepare(paths, threshold) => {
+            let captures = paths
+                .iter()
+                .map(|path| {
+                    basecraft_ops::input_evidence::CapturedInput::open(path)
+                        .map_err(|e| e.to_string())
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            jobs = jobs.with_captured_inputs(captures.clone());
             let first = paths.first().ok_or("Choose two or three AB1 reads")?;
             let root = first.parent().ok_or("AB1 has no parent directory")?;
             let inputs: Vec<_> = paths
@@ -219,6 +228,7 @@ fn execute(
             )?;
             let path = artifact(&outcome, "evidence.json")?;
             let mut session = SangerReview::from_draft(SangerDraft::read(&path)?, first)?;
+            session.use_captured_inputs(captures)?;
             let mut view = session_view(&session)?;
             evaluate(&mut session, &mut view)?;
             session.attach_operation_run(directory(&outcome)?)?;
@@ -237,7 +247,8 @@ fn execute(
                     let source = &draft.inputs[0];
                     let mut caller = basecraft_plugin_host::sanger_calls::SangerCaller::default()
                         .with_task_cancellation();
-                    let mut called = caller.start(&source.path, &source.sha256, threshold)?;
+                    let mut called =
+                        caller.start_captured(session.captured_inputs()?.remove(0), threshold)?;
                     while called.is_none() {
                         if cancelled.load(Ordering::Acquire) {
                             caller.cancel()?;
@@ -250,6 +261,7 @@ fn execute(
                     }
                     let called = called.ok_or("Caller returned no draft")?;
                     let mut alternate = SangerReview::from_draft(called.draft, &source.path)?;
+                    alternate.use_captured_inputs(session.captured_inputs()?)?;
                     alternate.attach_operation_run(&called.run)?;
                     session.retain_call_set(alternate)?;
                 }
@@ -504,29 +516,24 @@ impl ReviewDocument {
         self.session.sanger_review(self.id).ok()
     }
     pub fn apply(&mut self, edit: ReviewOp) -> Result<(), String> {
-        match edit {
-            ReviewOp::Undo => self.session.undo(self.id).map(|_| ()),
-            ReviewOp::Redo => self.session.redo(self.id).map(|_| ()),
-            edit => {
-                let call_set = self
-                    .session
-                    .sanger_review(self.id)
-                    .map_err(|e| e.to_string())?
-                    .draft_sha256
-                    .clone();
-                self.session
-                    .apply(
-                        self.id,
-                        basecraft_protocol::Op::SangerReview {
-                            call_set,
-                            edit: Box::new(edit),
-                        },
-                    )
-                    .map(|_| ())
-            }
-        }
-        .map_err(|e| e.to_string())
+        let call_set = self
+            .session
+            .sanger_review(self.id)
+            .map_err(|e| e.to_string())?
+            .draft_sha256
+            .clone();
+        self.session
+            .apply(
+                self.id,
+                basecraft_protocol::Op::SangerReview {
+                    call_set,
+                    edit: Box::new(edit),
+                },
+            )
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
+
     pub fn save(&mut self, path: &Path) -> Result<(), String> {
         self.session
             .save_new(self.id, Some(path))
@@ -568,29 +575,6 @@ impl ReviewDocument {
     }
 }
 
-fn verified_traces(draft: &SangerDraft) -> Result<Vec<Trace>, String> {
-    let mut traces = Vec::with_capacity(draft.inputs.len());
-    for read in &draft.inputs {
-        let actual = basecraft_io::sha256_file(&read.path).map_err(|e| e.to_string())?;
-        if !actual.eq_ignore_ascii_case(&read.sha256) {
-            return Err(format!(
-                "Source AB1 changed since draft: {}",
-                read.path.display()
-            ));
-        }
-        traces.push(abif::open(&read.path).map_err(|e| e.to_string())?);
-    }
-    Ok(traces)
-}
-
-fn review_view(draft: &SangerDraft) -> Result<SangerReviewView, String> {
-    // Opening saved evidence must never re-run a caller or create job files.
-    // Older drafts without coordinates need explicit regeneration; instrument
-    // calls cannot silently substitute for the recorded Tracy call mapping.
-    let traces = verified_traces(draft)?;
-    SangerReviewView::new(draft.clone(), traces)
-}
-
 pub(super) fn load_draft_review(path: &Path) -> Result<(SangerReviewView, SangerReview), String> {
     let mut session = SangerReview::new(path)?;
     // Opening evidence is inspection. Re-running Tracy to enrich older
@@ -630,7 +614,12 @@ pub(super) fn sync_review_view(review: &mut SangerReviewView, session: &SangerRe
 
 pub(super) fn session_view(session: &SangerReview) -> Result<SangerReviewView, String> {
     let draft = session.working_draft()?;
-    let mut view = review_view(&draft)?;
+    let traces = session
+        .captured_inputs()?
+        .iter()
+        .map(|capture| abif::parse(capture.bytes()).map_err(|e| e.to_string()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut view = SangerReviewView::new(draft, traces)?;
     if let Some(placement) = session.placement()? {
         let indexed = Arc::new(
             basecraft_io::cache::open_fasta(&placement.source_path).map_err(|e| e.to_string())?,

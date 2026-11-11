@@ -277,8 +277,14 @@ fn support_survives_private_history_and_recovery_publication() {
             Some(&ReviewChoice::Edit('A'))
         );
         if policy == ProvenancePolicy::LocalOnly {
-            let record = basecraft_ops::document_record::DocumentRecord::from_file(&target).unwrap();
-            assert!(record.events.iter().any(|event| matches!(event.op, Op::SangerReview { .. })));
+            let record =
+                basecraft_ops::document_record::DocumentRecord::from_file(&target).unwrap();
+            assert!(
+                record
+                    .events
+                    .iter()
+                    .any(|event| matches!(event.op, Op::SangerReview { .. }))
+            );
         }
         edit(&mut session, id, 'T');
         let output = replay::recover(session.recovery_root(), &folder.join("recovered")).unwrap();

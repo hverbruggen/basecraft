@@ -1422,6 +1422,7 @@ fn registered_target_preparation_preserves_permissions_and_session_identity() {
                 "test".into(),
                 session,
                 &registry,
+                &[],
             )
         };
     // No explicit target needs no session, even without document-write permission.
@@ -1487,5 +1488,42 @@ fn registered_target_preparation_preserves_permissions_and_session_identity() {
             .unwrap()
             .to_string();
         assert!(error.contains(message), "{error}");
+    }
+}
+
+#[test]
+#[cfg(feature = "test-counters")]
+fn captured_inputs_reach_the_registered_caller_without_rereading_originals() {
+    use basecraft_ops::input_evidence::CapturedInput;
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let paths = [root.join("a.txt"), root.join("b.txt")];
+    std::fs::write(&paths[0], b"abc\n").unwrap();
+    std::fs::write(&paths[1], b"xy\n").unwrap();
+    let registry = registry(root);
+    basecraft_io::counters::reset();
+    let captures = paths
+        .iter()
+        .map(|path| CapturedInput::open(path).unwrap())
+        .collect();
+    let mut jobs = JobManager::default().with_captured_inputs(captures);
+    let accepted = jobs
+        .submit(
+            &registry,
+            request("normal"),
+            SessionPolicy::new(root, true).unwrap(),
+            "captured inputs",
+        )
+        .unwrap();
+    let result = wait(&jobs, &accepted.run_id);
+    assert_eq!(result.state, RuntimeState::Completed, "{result:?}");
+    assert_eq!(result.data.as_ref().unwrap()["bytes"], 7);
+    let counts = basecraft_io::counters::snapshot();
+    for path in paths {
+        assert_eq!(
+            counts.reads[&path.canonicalize().unwrap()].full_reads,
+            1,
+            "{counts:?}"
+        );
     }
 }

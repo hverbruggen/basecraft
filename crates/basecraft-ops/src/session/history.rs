@@ -1,8 +1,8 @@
 //! Shared edit, grouping, undo, redo and journal ownership.
 use super::{
     Actor, AlnUndo, Applied, DocId, EditResult, Error, Feature, FeatureId, Instant, LOG_VERSION,
-    LogEntry, MERGE_WINDOW, Op, OpResult, Outcome, Pending, ReplayMode, Result, Session, TreeDoc,
-    invalid, mergeable, restore_inverse,
+    LogEntry, MERGE_WINDOW, Op, OpResult, Outcome, Pending, ReplayMode, Result, Session, invalid,
+    mergeable, restore_inverse,
 };
 
 pub(crate) enum Inverse {
@@ -22,8 +22,7 @@ pub(crate) enum Inverse {
         before: Option<Feature>,
     },
     Alignment(Vec<AlnUndo>),
-    /// The whole tree as it was: trees are small.
-    Tree(Box<TreeDoc>),
+    Tree(basecraft_docs::tree::TreeUndo),
     Delimitation(Box<basecraft_protocol::delimitation::DelimitationWorkspace>),
     /// The whole metadata as it was: one edit can touch every table.
     Metadata(Box<basecraft_protocol::metadata::ProjectMetadata>),

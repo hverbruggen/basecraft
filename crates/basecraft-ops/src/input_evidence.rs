@@ -1,4 +1,7 @@
 //! Referenced-input lifecycle. Only known stores are inspected, never filesystem trees.
+mod captured;
+pub use captured::CapturedInput;
+
 use crate::links::AlignmentLinkExt;
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
@@ -109,7 +112,24 @@ impl Mutation {
         dependencies: &[PathBuf],
         origin: &str,
     ) -> Result<ArtifactRun> {
-        reference_input_locked(anchor, source, hash, dependencies, origin)
+        reference_input_locked(anchor, source, hash, dependencies, origin, None)
+    }
+    pub fn reference_captured(
+        &self,
+        anchor: &Path,
+        capture: &CapturedInput,
+        dependencies: &[PathBuf],
+        origin: &str,
+    ) -> Result<ArtifactRun> {
+        capture.check_current()?;
+        reference_input_locked(
+            anchor,
+            capture.path(),
+            capture.hash(),
+            dependencies,
+            origin,
+            Some(capture.stamp()),
+        )
     }
 }
 
@@ -119,6 +139,7 @@ fn reference_input_locked(
     hash: &str,
     dependencies: &[PathBuf],
     origin: &str,
+    captured_stamp: Option<&FileStamp>,
 ) -> Result<ArtifactRun> {
     use basecraft_protocol::provenance::{
         ArtifactRevision, Completeness, InputReference, Publication,
@@ -126,12 +147,19 @@ fn reference_input_locked(
     let run =
         crate::analysis_store::ArtifactRun::create(anchor, &ulid::Ulid::generate().to_string())?;
     let source = source.canonicalize()?;
-    if basecraft_io::hash_file(&source)? != hash {
-        return Err(invalid("Input changed while registering its evidence"));
+    if captured_stamp.map_or_else(
+        || {
+            basecraft_io::hash_file(&source)
+                .map(|actual| actual != hash)
+                .map_err(crate::Error::from)
+        },
+        |before| stamp(&source).map(|now| &now != before),
+    )? {
+        return Err(crate::Error::ChangedOnDisk { path: source });
     }
     let reference = InputReference {
         path: crate::input_evidence::relative(run.directory(), &source)?,
-        stamp: crate::input_evidence::stamp(&source)?,
+        stamp: captured_stamp.cloned().map_or_else(|| stamp(&source), Ok)?,
         hash: hash.into(),
         extra: BTreeMap::new(),
     };
@@ -1798,6 +1826,18 @@ fn owning_ledger(bundle: &Path) -> Result<(PathBuf, SubmittedInput)> {
 
 /// Resolve evidence only on explicit verification/export/relink. No UI-event hashing.
 pub fn verified_source(bundle: &Path, reference: &InputReference) -> Result<PathBuf> {
+    let path = source_location(bundle, reference)?;
+    if basecraft_io::hash_file(&path)? != reference.hash
+        || std::fs::metadata(&path)?.len() != reference.stamp.size
+    {
+        return Err(invalid(
+            "referenced input changed; original evidence unavailable (timestamp alone is not identity)",
+        ));
+    }
+    Ok(path.canonicalize()?)
+}
+
+pub(crate) fn source_location(bundle: &Path, reference: &InputReference) -> Result<PathBuf> {
     let (mut location, mut input) = owning_ledger(bundle)?;
     if input.state == "broken" {
         return Err(invalid("evidence chain explicitly broken"));
@@ -1849,14 +1889,7 @@ pub fn verified_source(bundle: &Path, reference: &InputReference) -> Result<Path
     } else {
         location.join(&effective.path)
     };
-    if basecraft_io::hash_file(&path)? != reference.hash
-        || std::fs::metadata(&path)?.len() != reference.stamp.size
-    {
-        return Err(invalid(
-            "referenced input changed; original evidence unavailable (timestamp alone is not identity)",
-        ));
-    }
-    Ok(path.canonicalize()?)
+    Ok(path)
 }
 
 /// Honest repair: only a byte-verified original may replace a missing/changed reference.

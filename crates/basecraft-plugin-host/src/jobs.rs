@@ -63,6 +63,7 @@ struct Job {
 
 #[derive(Default)]
 pub struct JobManager {
+    captured_inputs: Vec<basecraft_ops::input_evidence::CapturedInput>,
     jobs: BTreeMap<String, Arc<Job>>,
     requests: BTreeMap<String, (String, String)>,
     skip_known_features: bool,
@@ -143,6 +144,15 @@ impl JobManager {
     /// input ancestry and logical analysis ownership are inherited before spawn.
     pub(crate) fn with_workflow_parent(mut self, parent: &PreparedOperation) -> Self {
         self.stage_parent = Some(parent.run.directory().into());
+        self
+    }
+
+    #[must_use]
+    pub fn with_captured_inputs(
+        mut self,
+        inputs: Vec<basecraft_ops::input_evidence::CapturedInput>,
+    ) -> Self {
+        self.captured_inputs = inputs;
         self
     }
 
@@ -472,6 +482,7 @@ impl JobManager {
             initiator.into(),
             session,
             registry,
+            &self.captured_inputs,
         )?;
         if let Some(parent) = &self.stage_parent {
             prepared.inherit_input_ancestry(parent)?;
@@ -1131,7 +1142,6 @@ pub fn ops_error_code(error: &basecraft_ops::Error) -> OperationErrorCode {
         Core::WrongKind { .. } => OperationErrorCode::WrongDocumentKind,
         Core::UnknownDocument { .. } => OperationErrorCode::UnknownDocument,
         Core::NotFound { .. } => OperationErrorCode::NotFound,
-        Core::Damaged { .. } => OperationErrorCode::Damaged,
         Core::Limit { .. } => OperationErrorCode::Limit,
         Core::Unsupported(_) | Core::UnknownFormat(_) => OperationErrorCode::Unsupported,
         Core::Busy(_) => OperationErrorCode::Busy,
@@ -1153,7 +1163,7 @@ pub fn ops_error_code(error: &basecraft_ops::Error) -> OperationErrorCode {
             std::io::ErrorKind::PermissionDenied => OperationErrorCode::PermissionDenied,
             _ => OperationErrorCode::ToolFailure,
         },
-        Core::Json(_) | Core::Format(_) => OperationErrorCode::Damaged,
+        Core::Damaged { .. } | Core::Json(_) | Core::Format(_) => OperationErrorCode::Damaged,
         Core::Empty(_) | Core::Invalid(_) | Core::NothingTo(_) => {
             OperationErrorCode::InvalidArguments
         }

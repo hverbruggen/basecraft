@@ -175,7 +175,6 @@ pub enum Op {
     TreeStyle {
         style: TreeStyle,
         /// Support sets removed on accepting Style; cancellation makes no edits.
-        #[serde(default)]
         remove_supports: Vec<String>,
     },
     /// A figure or other derived file written from a document, such as a

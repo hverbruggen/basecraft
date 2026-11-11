@@ -177,7 +177,8 @@ def main():
         selected = json.loads(review.read_text())["selected"]
         operation = {"op": "sanger.review", "params": {"call_set": selected,
                      "edit": {"op": "set", "columns": [0], "choice": {"choice": "edit", "base": "N"}}}}
-        subprocess.run([str(binary), "edit", str(review), json.dumps(operation)], env=env, check=True, timeout=45, capture_output=True)
+        edits = [operation, {"op": "history.undo", "params": {"of": ""}}, {"op": "history.redo", "params": {"of": ""}}]
+        subprocess.run([str(binary), "edit", str(review), json.dumps(edits)], env=env, check=True, timeout=45, capture_output=True)
         history, _ = cli("history", str(review), "--json")
         assert any("Sanger review " in row["summary"] for row in history["history"]), history
         client = Mcp(binary, project, env)

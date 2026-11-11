@@ -1,6 +1,8 @@
 //! Registered-operation preparation, execution and validated finalization: the
 //! one route every interface uses to run an analysis. Host workflows run their
 //! stages through registered child jobs with the same lifecycle as other runs.
+mod captures;
+
 use basecraft_ops::links::AlignmentLinkExt;
 use basecraft_platform::files::{identity, link_count};
 use basecraft_protocol::publication_records::{
@@ -568,6 +570,7 @@ impl PreparedOperation {
         initiator: String,
         mut session: Option<&mut basecraft_ops::Session>,
         registry: &crate::registry::Registry,
+        captured: &[basecraft_ops::input_evidence::CapturedInput],
     ) -> Result<Self> {
         policy.check(&operation)?;
         let policy = policy.capture_ambient_credential(&operation)?;
@@ -628,7 +631,12 @@ impl PreparedOperation {
                             .unwrap_or("input")
                     }
                 ));
-                let original_hash = file_tool::freeze_file(&source, &path)?;
+                let original_hash = captures::freeze(
+                    &source,
+                    &path,
+                    captured,
+                    (!accepted_hashes.contains_key(&source)).then_some(&mut input_record),
+                )?;
                 if name == "cache" && operation.package.manifest.id == "basecraft.distance" {
                     let issues = basecraft_ops::provenance::verify(&source)?;
                     if !issues.is_empty() {
@@ -686,19 +694,6 @@ impl PreparedOperation {
                         "identity-v1"
                     }
                 };
-                if !accepted_hashes.contains_key(&source)
-                    && let Ok(record) =
-                        basecraft_ops::document_record::DocumentRecord::from_file(&source)
-                {
-                    input_record.include_input(&record);
-                    if basecraft_io::hash_file(&source).map_err(basecraft_ops::Error::from)?
-                        != original_hash
-                    {
-                        return Err(Error::Protocol(
-                            "source changed while capturing its history".into(),
-                        ));
-                    }
-                }
                 let submitted_hash =
                     basecraft_io::hash_file(&path).map_err(basecraft_ops::Error::from)?;
                 sources.push((
@@ -777,11 +772,12 @@ impl PreparedOperation {
         let mut first_input = None;
         let mut evidence: BTreeMap<String, Vec<InvocationInputEvidence>> = BTreeMap::new();
         for (source, original_hash, submitted_hash, transformation, frozen) in sources {
-            let ledger = mutation.reference_input_with_dependencies(
+            let ledger = captures::register(
+                &mutation,
                 &anchor,
                 &source,
                 &original_hash,
-                &[],
+                captured,
                 &format!("Input for {}", operation.id),
             )?;
             let mut record = mutation.read_input(ledger.directory())?;
@@ -2543,6 +2539,7 @@ mod completed_result_tests {
             "ownership probe".into(),
             None,
             &registry,
+            &[],
         )
         .unwrap();
         let owner = prepared.context.input_evidence["a_first"][0]

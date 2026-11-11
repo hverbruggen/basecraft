@@ -121,10 +121,7 @@ impl SangerReview {
     ) -> crate::Result<crate::session::Inverse> {
         use crate::Error::Unsupported;
         // Live history belongs to Session.
-        if matches!(
-            op,
-            ReviewOp::Undo | ReviewOp::Redo | ReviewOp::Export { .. }
-        ) {
+        if matches!(op, ReviewOp::Export { .. }) {
             return Err(Unsupported(
                 "use the shared history or export operation".into(),
             ));

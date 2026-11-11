@@ -53,6 +53,7 @@ fn base(path: &Path) -> crate::Result<PathBuf> {
     }
 }
 
+// Placement contexts can be large alignments; only traces use owned captures.
 fn source(path: &Path, sha256: &str, anchor: &Path) -> crate::Result<Source> {
     let path = path.canonicalize()?;
     let hash = basecraft_io::hash_file(&path)?;
@@ -63,9 +64,8 @@ fn source(path: &Path, sha256: &str, anchor: &Path) -> crate::Result<Source> {
         &[],
         "Explicit Sanger input reference",
     )?;
-    // Check both identities around registration, never label a SHA-256 as BLAKE3.
     if !basecraft_io::sha256_file(&path)?.eq_ignore_ascii_case(sha256) {
-        return Err(invalid("Sanger input changed while registering evidence"));
+        return Err(crate::Error::ChangedOnDisk { path });
     }
     let reference = inputs::read_input(ledger.directory())?.source;
     Ok(Source {
@@ -77,45 +77,82 @@ fn source(path: &Path, sha256: &str, anchor: &Path) -> crate::Result<Source> {
     })
 }
 
+fn source_capture(capture: &inputs::CapturedInput, anchor: &Path) -> crate::Result<Source> {
+    let ledger = inputs::Mutation::begin()?.reference_captured(
+        anchor,
+        capture,
+        &[],
+        "Explicit Sanger input reference",
+    )?;
+    let reference = inputs::read_input(ledger.directory())?.source;
+    Ok(Source {
+        original: capture.path().into(),
+        path: capture.path().into(),
+        sha256: capture.sha256().into(),
+        ledger: Some(ledger.directory().into()),
+        reference,
+    })
+}
+
 pub(super) trait SourceAccess {
+    fn location(&self) -> crate::Result<PathBuf>;
+    fn capture(&self) -> crate::Result<inputs::CapturedInput>;
     fn checked(&self) -> crate::Result<PathBuf>;
 }
 
 impl SourceAccess for Source {
-    fn checked(&self) -> crate::Result<PathBuf> {
+    fn location(&self) -> crate::Result<PathBuf> {
         let path = match (&self.ledger, &self.reference) {
-            (Some(ledger), Some(reference)) => match inputs::verified_source(ledger, reference) {
-                Ok(path) => path,
-                // A moved working folder can retain the exact original bytes
-                // even when an application-state ledger still names the old location.
-                Err(error) => {
-                    if matches!(&error, crate::Error::Io(e) | crate::Error::Format(basecraft_io::Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound)
-                        && inputs::read_input(ledger)?.state == "referenced"
-                        && basecraft_io::sha256_file(&self.path)
-                            .is_ok_and(|hash| hash.eq_ignore_ascii_case(&self.sha256))
-                    {
-                        self.path.clone()
-                    } else {
-                        return Err(error);
-                    }
+            (Some(ledger), Some(reference)) => {
+                let path = inputs::source_location(ledger, reference)?;
+                if !path.try_exists()? && inputs::read_input(ledger)?.state == "referenced" {
+                    self.path.clone()
+                } else {
+                    path
                 }
-            },
+            }
             (None, None) => self.path.clone(),
-            _ => return Err(invalid("Incomplete Sanger input reference")),
+            _ => {
+                return Err(crate::Error::Damaged {
+                    path: self.path.clone(),
+                    detail: "Incomplete Sanger input reference".into(),
+                });
+            }
         };
-        if !basecraft_io::sha256_file(&path)?.eq_ignore_ascii_case(&self.sha256) {
-            return Err(invalid(format!(
-                "Sanger source missing or changed: {}",
-                self.original.display()
-            )));
+        Ok(path)
+    }
+    fn checked(&self) -> crate::Result<PathBuf> {
+        let path = self.location()?;
+        if !basecraft_io::sha256_file(&path)?.eq_ignore_ascii_case(&self.sha256)
+            || self
+                .reference
+                .as_ref()
+                .map(|r| basecraft_io::hash_file(&path).map(|hash| hash != r.hash))
+                .transpose()?
+                .unwrap_or(false)
+        {
+            return Err(crate::Error::ChangedOnDisk { path });
         }
         Ok(path)
+    }
+    fn capture(&self) -> crate::Result<inputs::CapturedInput> {
+        let path = self.location()?;
+        let capture = inputs::CapturedInput::open(&path)?;
+        if !capture.sha256().eq_ignore_ascii_case(&self.sha256)
+            || self.reference.as_ref().is_some_and(|r| {
+                r.hash != capture.hash() || r.stamp.size != capture.bytes().len() as u64
+            })
+        {
+            return Err(crate::Error::ChangedOnDisk { path });
+        }
+        Ok(capture)
     }
 }
 
 /// An explicit Sanger analysis reserves durable support before invoking a tool.
 /// Errors/cancellation never remove its directory or an original input.
 pub struct SangerRun {
+    captures: Vec<inputs::CapturedInput>,
     run: ArtifactRun,
     evidence: ReviewEvidence,
     operation: String,
@@ -222,13 +259,31 @@ impl SangerRun {
         paths: &[PathBuf],
         ancestors: &[PathBuf],
     ) -> crate::Result<Self> {
-        if paths.is_empty() || paths.len() > 4 {
-            return Err(invalid("Sanger requires one to four input files"));
+        if paths.is_empty() {
+            return Err(crate::Error::Unsupported(
+                "Sanger requires at least one input file".into(),
+            ));
+        }
+        if paths.len() > 4 {
+            return Err(crate::Error::Limit {
+                what: "Sanger input files".into(),
+                limit: 4,
+            });
         }
         let mut evidence = ReviewEvidence::default();
+        let mut captures = Vec::new();
         for path in paths {
-            let sha256 = basecraft_io::sha256_file(path)?;
-            evidence.sources.push(source(path, &sha256, anchor)?);
+            if path.extension().is_some_and(|ext| {
+                ext.eq_ignore_ascii_case("ab1") || ext.eq_ignore_ascii_case("abi")
+            }) {
+                let capture = inputs::CapturedInput::open(path)?;
+                evidence.sources.push(source_capture(&capture, anchor)?);
+                captures.push(capture);
+            } else {
+                evidence
+                    .sources
+                    .push(source(path, &basecraft_io::sha256_file(path)?, anchor)?);
+            }
         }
         let run = ArtifactRun::create(anchor, &ulid::Ulid::generate().to_string())?;
         let mut dependencies: Vec<_> = evidence
@@ -246,6 +301,7 @@ impl SangerRun {
         linked_input(&run, &dependencies, &payload)?;
         carry_authored(ancestors, &run)?;
         let result = Self {
+            captures,
             run,
             evidence,
             operation: operation.into(),
@@ -255,6 +311,10 @@ impl SangerRun {
         };
         result.status("running", None, None)?;
         Ok(result)
+    }
+
+    pub fn captured_inputs(&self) -> &[inputs::CapturedInput] {
+        &self.captures
     }
 
     pub fn parameters(&self, value: &serde_json::Value) -> crate::Result<()> {
@@ -328,7 +388,21 @@ impl SangerRun {
             artifacts.push(retained(&self.run, path, index + 1)?);
         }
         for source in &self.evidence.sources {
-            source.checked()?;
+            let location = source.location()?;
+            if let Some(capture) = self
+                .captures
+                .iter()
+                .find(|capture| capture.path() == source.path)
+            {
+                if location.canonicalize()? != capture.path() {
+                    return Err(crate::Error::ChangedOnDisk {
+                        path: source.path.clone(),
+                    });
+                }
+                capture.check_current()?;
+            } else {
+                source.checked()?;
+            }
         }
         crate::provenance::publish(
             self.directory(),
@@ -405,6 +479,7 @@ impl SangerReview {
             source.original.clone_from(&read.path);
         }
         self.evidence = evidence;
+        self.use_captured_inputs(run.captures.clone())?;
         self.anchor.clone_from(&run.anchor);
         Ok(())
     }
@@ -468,23 +543,85 @@ impl SangerReview {
         Ok(())
     }
 
+    pub(crate) fn share_captures(&mut self, previous: &Self) {
+        if let Some(old) = std::iter::once(previous)
+            .chain(&previous.retained)
+            .find(|old| old.draft_sha256 == self.draft_sha256)
+        {
+            self.captures = old.captures.clone();
+        }
+        for set in &mut self.retained {
+            set.share_captures(previous);
+        }
+    }
+
+    pub fn use_captured_inputs(
+        &mut self,
+        captures: Vec<inputs::CapturedInput>,
+    ) -> Result<(), String> {
+        if captures.len() != self.draft.inputs.len()
+            || self
+                .draft
+                .inputs
+                .iter()
+                .zip(&captures)
+                .any(|(read, c)| !read.sha256.eq_ignore_ascii_case(c.sha256()))
+        {
+            return Err("Captured traces differ from the caller's evidence".into());
+        }
+        self.captures = std::sync::Arc::new(std::sync::Mutex::new(
+            self.draft
+                .inputs
+                .iter()
+                .zip(captures)
+                .map(|(read, capture)| (read.path.clone(), capture))
+                .collect(),
+        ));
+        Ok(())
+    }
+
+    /// Immutable trace bytes shared by drawing and tool submission.
+    pub fn captured_inputs(&self) -> Result<Vec<inputs::CapturedInput>, String> {
+        let mut cache = self.captures.lock().map_err(|e| e.to_string())?;
+        let mut captures = Vec::new();
+        for read in &self.draft.inputs {
+            let source =
+                self.evidence.sources.iter().find(|s| {
+                    s.original == read.path && s.sha256.eq_ignore_ascii_case(&read.sha256)
+                });
+            let location = source
+                .map_or_else(|| Ok(read.path.clone()), SourceAccess::location)
+                .and_then(|path| Ok(path.canonicalize()?))
+                .map_err(|e: crate::Error| e.to_string())?;
+            if let Some(capture) = cache.get(&read.path).filter(|c| c.path() == location) {
+                capture.check_current().map_err(|e| e.to_string())?;
+                captures.push(capture.clone());
+                continue;
+            }
+            let capture = if let Some(source) = source {
+                source.capture()
+            } else {
+                inputs::CapturedInput::open(&read.path)
+            }
+            .map_err(|e| e.to_string())?;
+            if !capture.sha256().eq_ignore_ascii_case(&read.sha256) {
+                return Err(format!(
+                    "Source AB1 changed since draft: {}",
+                    read.path.display()
+                ));
+            }
+            cache.insert(read.path.clone(), capture.clone());
+            captures.push(capture);
+        }
+        Ok(captures)
+    }
+
     /// Resolve live/preserved/packaged paths into a working copy. Immutable draft
     /// JSON and its SHA-256 remain unchanged, including original path spellings.
     pub fn working_draft(&self) -> Result<SangerDraft, String> {
         let mut draft = self.draft.clone();
-        for read in &mut draft.inputs {
-            if let Some(source) =
-                self.evidence.sources.iter().find(|s| {
-                    s.original == read.path && s.sha256.eq_ignore_ascii_case(&read.sha256)
-                })
-            {
-                read.path = source.checked().map_err(|e| {
-                    format!(
-                        "Sanger original unavailable at {}: {e}",
-                        source.original.display()
-                    )
-                })?;
-            }
+        for (read, capture) in draft.inputs.iter_mut().zip(self.captured_inputs()?) {
+            read.path = capture.path().into();
         }
         Ok(draft)
     }
@@ -523,14 +660,15 @@ impl SangerReview {
         for set in &mut self.retained {
             set.ensure_sources(anchor)?;
         }
+        let captures = self.captured_inputs().unwrap_or_default();
         for input in &mut self.evidence.sources {
             if input.ledger.is_none()
-                && basecraft_io::sha256_file(&input.path)
-                    .is_ok_and(|h| h.eq_ignore_ascii_case(&input.sha256))
+                && let Some(capture) = captures
+                    .iter()
+                    .find(|c| c.sha256().eq_ignore_ascii_case(&input.sha256))
             {
-                let original = input.original.clone();
-                let mut registered = source(&input.path, &input.sha256, anchor)?;
-                registered.original = original;
+                let mut registered = source_capture(capture, anchor)?;
+                registered.original.clone_from(&input.original);
                 *input = registered;
             }
         }
@@ -945,7 +1083,7 @@ mod tests {
     }
 
     #[test]
-    fn save_move_and_undo_keep_exact_draft_and_reference_only_inputs() {
+    fn save_and_move_keep_exact_draft_and_reference_only_inputs() {
         let tmp = tempfile::tempdir().unwrap();
         let folder = tmp.path().join("work");
         let (mut review, trace) = draft(&folder);
@@ -1271,35 +1409,22 @@ mod tests {
     }
 
     #[test]
-    fn save_preserves_extension_metadata_and_refuses_source_aliases() {
+    fn unsupported_records_and_source_aliases_are_preserved() {
         let tmp = tempfile::tempdir().unwrap();
         let (mut review, trace) = draft(tmp.path());
-        let path = tmp.path().join("review.sanger-review.json");
+        let path = tmp.path().join("review.json");
         review.save(&path).unwrap();
         let mut extended: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        extended["future_envelope"] = serde_json::json!({"text":"keep user data"});
-        extended["evidence"]["future_support"] = serde_json::json!([1, 2]);
-        extended["evidence"]["sources"][0]["future_binding"] = "keep".into();
-        std::fs::write(&path, serde_json::to_vec(&extended).unwrap()).unwrap();
-        let mut loaded = SangerReview::load(&path).unwrap();
-        let saved = tmp.path().join("another.sanger-review.json");
-        loaded.save(&saved).unwrap();
-        let roundtrip: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&saved).unwrap()).unwrap();
-        assert_eq!(roundtrip["future_envelope"], extended["future_envelope"]);
-        assert_eq!(
-            roundtrip["evidence"]["future_support"],
-            extended["evidence"]["future_support"]
-        );
-        assert_eq!(
-            roundtrip["evidence"]["sources"][0]["future_binding"],
-            "keep"
-        );
+        extended["unknown_field"] = true.into();
+        let bytes = serde_json::to_vec(&extended).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(SangerReview::load(&path).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
         let alias = tmp.path().join("trace-alias.json");
         std::fs::hard_link(&trace, &alias).unwrap();
         let original = std::fs::read(&trace).unwrap();
-        assert!(loaded.save(&alias).is_err());
+        assert!(review.save(&alias).is_err());
         assert_eq!(std::fs::read(trace).unwrap(), original);
     }
 

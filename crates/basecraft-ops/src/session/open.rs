@@ -23,7 +23,7 @@ impl Session {
     pub(super) fn open_inner(
         &mut self,
         path: &Path,
-        verified_snapshot: bool,
+        _verified_snapshot: bool,
     ) -> Result<(DocId, files::Kind)> {
         self.flush()?;
         let disk_stamp = crate::input_evidence::stamp(path)?;
@@ -73,7 +73,7 @@ impl Session {
             let companion_hashes = hash_companions()?;
             #[cfg(test)]
             files::admission_tests::boundary("acquired");
-            let content = files::load_snapshot(path, source, format, verified_snapshot)?;
+            let content = files::load_snapshot(path, source)?;
             (content, accepted_hash, companion_hashes)
         };
         #[cfg(test)]

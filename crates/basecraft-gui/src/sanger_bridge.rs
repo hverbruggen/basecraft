@@ -1226,7 +1226,14 @@ impl qobject::SangerController {
         })
     }
 
-    fn review_history(mut self: std::pin::Pin<&mut Self>, op: ReviewOp) -> bool {
+    fn review_history(self: std::pin::Pin<&mut Self>, op: ReviewOp) -> bool {
+        self.review_change(|document| document.apply(op))
+    }
+
+    fn review_change(
+        mut self: std::pin::Pin<&mut Self>,
+        change: impl FnOnce(&mut work::ReviewDocument) -> Result<(), String>,
+    ) -> bool {
         if self.rust().stage.is_some() {
             return false;
         }
@@ -1242,7 +1249,7 @@ impl qobject::SangerController {
             .review_session
             .as_mut()
             .ok_or_else(|| "No Sanger review is open".to_string())
-            .and_then(|document| document.apply(op));
+            .and_then(change);
         if result.is_ok() {
             self.as_mut().set_dirty(true);
         }
@@ -1505,10 +1512,22 @@ impl qobject::SangerController {
     }
 
     pub fn review_undo(self: std::pin::Pin<&mut Self>) {
-        self.review_history(ReviewOp::Undo);
+        self.review_change(|document| {
+            document
+                .session
+                .undo(document.id)
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        });
     }
     pub fn review_redo(self: std::pin::Pin<&mut Self>) {
-        self.review_history(ReviewOp::Redo);
+        self.review_change(|document| {
+            document
+                .session
+                .redo(document.id)
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        });
     }
 
     pub fn review_accept_unflagged(mut self: std::pin::Pin<&mut Self>) {

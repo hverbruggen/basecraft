@@ -107,3 +107,45 @@ mod tests {
         assert_eq!(source.bytes()[threshold], b'A');
     }
 }
+
+/// Capture bounded input once, feeding both evidence digests from each read.
+pub fn read_fingerprinted(path: &Path, limit: u64) -> Result<(Vec<u8>, String, String)> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let mut file = File::open(path)?;
+    let size = file.metadata()?.len();
+    if size > limit {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "input exceeds capture limit",
+        )
+        .into());
+    }
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(usize::try_from(size).map_err(std::io::Error::other)?)
+        .map_err(std::io::Error::other)?;
+    let mut b3 = crate::Hasher::new();
+    let mut sha = Sha256::new();
+    let mut buffer = vec![0; 64 * 1024];
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        if bytes.len() as u64 + count as u64 > limit {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "input exceeds capture limit",
+            )
+            .into());
+        }
+        let chunk = &buffer[..count];
+        b3.update(chunk);
+        sha.update(chunk);
+        bytes.extend_from_slice(chunk);
+    }
+    #[cfg(feature = "test-counters")]
+    crate::counters::record_read(path, bytes.len() as u64);
+    Ok((bytes, b3.finish(), format!("{:x}", sha.finalize())))
+}

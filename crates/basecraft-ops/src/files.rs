@@ -152,6 +152,14 @@ impl Loaded {
         }
     }
 
+    pub(crate) fn sanger_review_mut(&mut self) -> Option<&mut crate::sanger_review::SangerReview> {
+        if let Self::SangerReview(payload) = self {
+            Some(payload)
+        } else {
+            None
+        }
+    }
+
     pub(crate) fn sequence(&self) -> Option<&Opened> {
         if let Self::Sequence(payload) = self {
             Some(payload)
@@ -229,23 +237,8 @@ impl Loaded {
 }
 
 /// The same admission route for live sources and verified replay snapshots.
-pub(crate) fn load_snapshot(
-    path: &Path,
-    source: Option<Source>,
-    format: Format,
-    verified: bool,
-) -> Result<Loaded> {
-    if let Some(source) = source {
-        if verified && format == Format::Tree {
-            load_tree_from(path, &source, true).map(Loaded::Tree)
-        } else {
-            load_from(path, source)
-        }
-    } else if verified && format == Format::Tree {
-        load_tree_from_verified_snapshot(path).map(Loaded::Tree)
-    } else {
-        load(path)
-    }
+pub(crate) fn load_snapshot(path: &Path, source: Option<Source>) -> Result<Loaded> {
+    source.map_or_else(|| load(path), |source| load_from(path, source))
 }
 
 /// Open a file as whatever it holds: see [`kind`].
@@ -277,7 +270,7 @@ pub fn load(path: &Path) -> Result<Loaded> {
 /// Other formats require their existing loaders and are rejected here.
 pub fn load_from(path: &Path, source: Source) -> Result<Loaded> {
     match Format::from_path(path)? {
-        Format::Tree => load_tree_from(path, &source, false).map(Loaded::Tree),
+        Format::Tree => load_tree_from(path, source).map(Loaded::Tree),
         Format::Fasta => load_fasta_from(path, source, None),
         Format::GenBank => open_from(path, source).map(Loaded::Sequence),
         _ => Err(crate::error::invalid(
@@ -398,53 +391,33 @@ pub fn tree_sidecar(path: &Path) -> PathBuf {
 /// What a tree's Newick can't hold.
 #[derive(Default, Serialize, Deserialize)]
 struct TreeSidecar {
-    #[serde(default)]
     schema_version: u32,
     /// Canonical topology, raw support and node ordering of the first tree.
-    #[serde(default)]
     tree_hash: String,
     /// Exact exchange bytes, including every forest component, when file-backed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     exchange_hash: Option<String>,
     /// Support set names and sources, in the order their values are joined
     /// in the Newick labels.
-    #[serde(default)]
     supports: Vec<SupportName>,
-    #[serde(default)]
     annotations: BTreeMap<u32, CladeAnnotation>,
-    #[serde(default)]
     style: TreeStyle,
 }
 
 #[derive(Serialize, Deserialize)]
 struct SupportName {
     name: String,
-    #[serde(default)]
     source: String,
-    #[serde(default)]
     kind: basecraft_protocol::SupportKind,
 }
 
 /// Read the first tree of a Newick or NEXUS file, with its sidecar.
 pub fn load_tree(path: &Path) -> Result<OpenedTree> {
-    load_tree_metadata(path, false)
+    load_tree_from(path, open_source(path, Format::Tree)?)
 }
 
-/// Replay has verified the journal's exact tree AND sidecar hashes before this
-/// call. This does not grant trust to an unbound live adjacent sidecar.
-pub(crate) fn load_tree_from_verified_snapshot(path: &Path) -> Result<OpenedTree> {
-    load_tree_metadata(path, true)
-}
-
-fn load_tree_metadata(path: &Path, verified_snapshot: bool) -> Result<OpenedTree> {
-    load_tree_from(path, &open_source(path, Format::Tree)?, verified_snapshot)
-}
-
-pub(crate) fn load_tree_from(
-    path: &Path,
-    source: &Source,
-    verified_snapshot: bool,
-) -> Result<OpenedTree> {
+pub(crate) fn load_tree_from(path: &Path, source: Source) -> Result<OpenedTree> {
+    let exchange_hash = basecraft_io::hash_bytes(source.bytes());
     let text = std::str::from_utf8(source.bytes())
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     let nexus = newick::is_nexus(text);
@@ -453,16 +426,15 @@ pub(crate) fn load_tree_from(
         .next()
         .ok_or_else(|| Error::Empty(path.to_path_buf()))?;
     let remaining = parsed_trees.collect();
+    drop(source);
     let name = path
         .file_name()
         .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
     let mut doc = TreeDoc::from_parsed(name, &parsed);
+    drop(parsed);
     let mut metadata_warning = None;
     // Errors in a hidden association must never select an adjacent legacy file.
-    let run = crate::analysis_store::ArtifactRun::for_result_with_hash(
-        path,
-        &basecraft_io::hash_bytes(source.bytes()),
-    )?;
+    let run = crate::analysis_store::ArtifactRun::for_result_with_hash(path, &exchange_hash)?;
     let bound = run.is_some();
     let sidecar = run.map_or_else(
         || tree_sidecar(path),
@@ -475,72 +447,39 @@ pub(crate) fn load_tree_from(
     );
     if sidecar.exists() {
         let side: TreeSidecar = serde_json::from_slice(&std::fs::read(&sidecar)?)?;
-        if side.schema_version == 0 && !verified_snapshot {
-            metadata_warning = Some(format!(
-                "Unverified legacy tree metadata at {} was left unapplied; the exchange tree is open and the original metadata bytes are preserved.",
-                sidecar.display()
+        if side.schema_version != 1 {
+            return Err(Error::Unsupported(
+                "Unsupported tree metadata version".into(),
             ));
-        } else if side.schema_version > 1 {
-            return Err(crate::error::invalid(
-                "Unsupported future tree metadata version; bytes were preserved",
-            ));
-        } else {
-            if side.schema_version == 1
-                && (side.tree_hash != basecraft_io::hash_bytes(doc.to_newick().as_bytes())
-                    || side
-                        .exchange_hash
-                        .as_ref()
-                        .is_some_and(|hash| *hash != basecraft_io::hash_bytes(text.as_bytes())))
-            {
-                return Err(crate::error::invalid(
-                    "Tree metadata describes different exchange contents; bytes were preserved and metadata was not applied",
-                ));
-            }
-            let kinds: Vec<_> = side
-                .supports
-                .iter()
-                .map(|s| (s.name.clone(), s.kind))
-                .collect();
-            let names: Vec<(String, String)> = side
-                .supports
-                .into_iter()
-                .map(|s| (s.name, s.source))
-                .collect();
-            doc.restore(&names, side.annotations, side.style);
-            for (name, kind) in kinds {
-                doc.set_support_kind(&name, kind);
-            }
+        }
+        if side.tree_hash != basecraft_io::hash_bytes(doc.to_newick().as_bytes())
+            || side
+                .exchange_hash
+                .as_ref()
+                .is_some_and(|hash| *hash != exchange_hash)
+        {
+            return Err(Error::Damaged {
+                path: sidecar,
+                detail: "Tree metadata describes different exchange contents".into(),
+            });
+        }
+        let kinds: Vec<_> = side
+            .supports
+            .iter()
+            .map(|s| (s.name.clone(), s.kind))
+            .collect();
+        let names: Vec<(String, String)> = side
+            .supports
+            .into_iter()
+            .map(|s| (s.name, s.source))
+            .collect();
+        doc.restore(&names, side.annotations, side.style);
+        for (name, kind) in kinds {
+            doc.set_support_kind(&name, kind);
         }
     }
     if bound && !sidecar.exists() {
         metadata_warning = Some("Bound tree metadata is unavailable; exchange values remain open with unknown support meaning and default presentation.".into());
-    }
-    // Legacy Basecraft distance runs carry explicit bootstrap metadata. Require
-    // an exact matching result, so stale adjacent reports cannot relabel imports.
-    let report_path = PathBuf::from(format!("{}.run.json", path.display()));
-    if let Ok(report) = std::fs::read(&report_path)
-        && let Ok(report) = serde_json::from_slice::<serde_json::Value>(&report)
-        && report["tool"] == "basecraft-distance"
-        && report["bootstrap"]["support_withheld"] == false
-        && report["bootstrap"]["completed"]
-            .as_u64()
-            .is_some_and(|n| n > 0)
-        && report["tree"]["trees"].as_array().is_some_and(|trees| {
-            trees.iter().any(|tree| {
-                tree.as_str()
-                    .and_then(|text| TreeDoc::from_newick("", text).ok())
-                    .is_some_and(|tree| tree.to_newick() == doc.to_newick())
-            })
-        })
-        && doc.supports().len() == 1
-        && doc.supports()[0].kind == basecraft_protocol::SupportKind::Unknown
-    {
-        let name = doc.supports()[0].name.clone();
-        if name == "Support" {
-            doc.rename_support(&name, "Bootstrap");
-        }
-        let name = doc.supports()[0].name.clone();
-        doc.set_support_kind(&name, basecraft_protocol::SupportKind::Bootstrap);
     }
     Ok(OpenedTree {
         doc,
@@ -577,19 +516,6 @@ pub fn write_tree(tree: &OpenedTree, w: &mut dyn Write) -> io::Result<()> {
     Ok(())
 }
 
-/// Historical serializer used only when verifying old journal save hashes.
-pub(crate) fn write_legacy_tree(tree: &OpenedTree, w: &mut dyn Write) -> io::Result<()> {
-    let newick = tree.doc.to_newick();
-    if tree.nexus {
-        writeln!(
-            w,
-            "#NEXUS\nbegin trees;\n\ttree tree1 = [&R] {newick}\nend;"
-        )
-    } else {
-        writeln!(w, "{newick}")
-    }
-}
-
 pub fn write_tree_sidecar(doc: &TreeDoc, w: &mut dyn Write) -> io::Result<()> {
     write_tree_metadata(doc, None, w)
 }
@@ -610,25 +536,6 @@ fn write_tree_metadata(
 ) -> io::Result<()> {
     let side = tree_metadata(doc, exchange_hash);
     serde_json::to_writer_pretty(&mut *w, &side)?;
-    writeln!(w)
-}
-
-pub(crate) fn write_legacy_tree_sidecar(doc: &TreeDoc, w: &mut dyn Write) -> io::Result<()> {
-    #[derive(Serialize)]
-    struct Legacy<'a> {
-        supports: &'a [SupportName],
-        annotations: &'a BTreeMap<u32, CladeAnnotation>,
-        style: &'a TreeStyle,
-    }
-    let side = tree_metadata(doc, None);
-    serde_json::to_writer_pretty(
-        &mut *w,
-        &Legacy {
-            supports: &side.supports,
-            annotations: &side.annotations,
-            style: &side.style,
-        },
-    )?;
     writeln!(w)
 }
 

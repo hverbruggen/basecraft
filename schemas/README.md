@@ -50,7 +50,7 @@ are described below; their readers and fresh-write behavior remain distinct.
 
 | Record / shape | Location | Writer | Reader | Version on disk | Current type / generated schema | Unknown fields |
 |---|---|---|---|---|---|---|
-| **DS01** `<tree>.basecraft.json`: exchange/tree hashes, supports, annotations, style | Beside tree / A hidden metadata | [files.rs](../crates/basecraft-ops/src/files.rs) `write_tree_sidecar`, `write_tree_sidecar_at`; plugin-host `file_tool::write_support_sidecar` | `files::load_tree` | `schema_version: 1`; missing/0 legacy accepted with restricted semantics; historical writer omits version | ops `TreeSidecar`; protocol support/style payloads; no complete schema | Outer unknown fields dropped; nested style `extra` kept; legacy backup retained before replacement |
+| **DS01** `<tree>.basecraft.json`: exchange/tree hashes, supports, annotations, style | Beside tree / A hidden metadata | [files.rs](../crates/basecraft-ops/src/files.rs) `write_tree_sidecar`, `write_tree_sidecar_at`; plugin-host `file_tool::write_support_sidecar` | `files::load_tree` | `schema_version: 1`; current version only; unversioned metadata rejected | ops `TreeSidecar`; protocol support/style payloads; no complete schema | Current metadata fields required; style extensions carry metadata-derived labels |
 | **DS02** `<species>.basecraft.json`: exchange hash, path base, workspace | Beside SPART / A | `files::write_delimitation_sidecar`, `write_delimitation_sidecar_at`; [delimitation.rs](../crates/basecraft-ops/src/delimitation.rs) artifact writer; session save | `files::load_delimitation` | `version: 1` (legacy relative form) / `2` (path base) | ops `DelimitationSidecar`; protocol `DelimitationWorkspace` / [delimitation-workspace.schema.json](delimitation-workspace.schema.json) covers payload only | Outer fields dropped; payload's own serde rules apply |
 | **DS03** `<tree>.alignment.json`, hidden origin/view link records | Beside tree / A | [links.rs](../crates/basecraft-ops/src/links.rs) `AlignmentLink::create`, `create_referenced`, association/clone/save helpers | `AlignmentLink` loading/verification; `PreparedLinks::prepare` | `schema: 1` snapshot / `2` referenced ledger | protocol `records::AlignmentLink` (ops re-export, behavior via `AlignmentLinkExt`); [alignment-link.schema.json](alignment-link.schema.json) | Top-level `extra` kept |
 | **DS04** Retained `*.alignment-recovery.json`: prior/intended origin/view bytes | Beside save target, uniquely retained | `PreparedLinks::publish` | manual repair / diagnostic inspection; no automatic recovery writer | `schema: 1` | protocol `link_records::AlignmentLinkRecovery`; [alignment-link-recovery.schema.json](alignment-link-recovery.schema.json) | Generated snapshot, not rewritten; no extension-preserving repair interface |
@@ -294,7 +294,7 @@ Recommended roles, **not a storage migration or retention decision**:
 | DS04–DS05 | Private repair candidates currently beside documents | Must accompany partial-save diagnosis; no permission to delete or move them |
 | DS07–DS08 | Public primary documents | TSV bytes and submission JSON remain separate formats |
 | DS12–DS13 | Retained analysis evidence plus private job index | Same Sanger status object is written in both places; the index location is private, the run copy is retained evidence |
-| DS14 | Private recovery working state | Review checkpoint is recoverable user work, not disposable cache |
+| DS14 | Retired | Recovery uses the common Session journal |
 | EX01–EX05, EX07–EX10, EX15–EX16 | Retained analysis invocation/result evidence | Descriptor/request/validation receipts are records once persisted; outcome is authoritative for lifecycle |
 | EX06, EX14 | Private task index / control state | Index is not the outcome; cancel presence is control, not provenance |
 | EX11–EX13 | Private publication/retry working-state candidates | Keep until publication/retry safety policy is decided; they currently live in retained runs |
@@ -421,7 +421,7 @@ rather than a fabricated common JSON golden.
 | DS04–DS05 | `links` partial-publication/recovery tests | No committed repair-snapshot/guard golden, including absent/file/symlink prior entry variants |
 | DS06–DS08 | Metadata/submission workflow, unknown-field and replay tests; `fixtures/metadata` and `fixtures/submission` contain import/source inputs | Import spreadsheets/alignments are not output manifest/TSV/submission goldens; nested rewrite preservation remains incomplete |
 | DS09–DS11 | Current single/multi review fixtures in sanger-review; protocol round trips and Session lifecycle/replay tests | Current envelope only; embedded draft hashes and scientific evidence remain exact |
-| DS12–DS14 | `SangerRun`, review checkpoint, history/job and recovery behavioral tests | No committed legacy request/status/recovery-manifest golden; do not conflate with EX02/EX03/EX06 |
+| DS12–DS13 | SangerRun, history/job and shared recovery behavioral tests | Run/index shapes are distinct from EX02/EX03/EX06; DS14 checkpoint reader and writer are removed |
 | EX01–EX02, EX05, EX07–EX10 | operation-contract/registered-jobs/runner tests use real writes and synthetic plugin fixtures | Protocol schemas and registry-plugin request data are not original-writer descriptor/request/outcome/validated/tuple/stages/query-plan goldens |
 | EX03–EX04, EX06 | `records-v1/execution-*.json`, nine `job-index-*.json`; host `runner/record_format_tests.rs` | Synthetic test workflow and index states, not nine actual transitions; fixture substitutions/oracle exceptions documented above |
 | EX11–EX14 | registered-jobs publication/retry/cancellation tests | No committed collection intent/export/member receipt golden; cancel is marker bytes |
@@ -649,12 +649,12 @@ and document-fingerprints.jsonl examples describe the extension.
 
 ### Saved Sanger review envelopes
 
-`sanger_records` owns the existing v1 saved review, v2 retained-call-set envelope,
-and nested v1 evidence/source/support data. Ops keeps all path rebasing, source
-verification, history and publication behavior. The extraction changes no field
-order, defaults, missing/null semantics or version: v1/evidence/source/support
-unknown fields remain preserved; the v2 envelope still rejects unknown fields.
-The writer still encodes through `serde_json::Value`; protocol tests compare the
-actual frozen v1/v2 writer bytes, and existing ops tests replay captured histories
-and compare checkpoints. These data-only declarations do not authorize source
-access, introduce an operation, or complete common Session integration.
+`sanger_records` owns the current version 3 single/multiple-call-set envelope.
+Nested evidence is typed and required. Earlier layouts, job-checkpoint adoption,
+legacy undo events and extension forwarding have been removed. Current writer
+fixtures live in `testdata/fixtures/sanger-review`.
+
+Session owns undo, typed journal operations, replay, recovery and guarded save.
+The payload stores forward scientific decisions and exact embedded draft bytes;
+normal edits retain deltas, while structural call-set updates retain snapshots.
+Opening starts an empty undo stack. GUI, CLI and MCP all apply edits through Session.
