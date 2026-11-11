@@ -1,6 +1,8 @@
 //! End to end: the ORF finder plugin in a real Python process.
 //! Skips when no Python with pyarrow and numpy is available.
 
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -51,6 +53,7 @@ fn record(dir: &Path) -> std::path::PathBuf {
 
 #[test]
 fn finds_orfs_and_maps_them_onto_a_newer_version() {
+    crate::isolated_profile::isolate!();
     let Some(mut p) = plugin() else { return };
     assert_eq!(p.info.operations, vec!["find_orfs", "noop", "selftest"]);
     eprintln!("plugin startup: {:?}", p.startup);
@@ -98,6 +101,7 @@ fn finds_orfs_and_maps_them_onto_a_newer_version() {
 
 #[test]
 fn call_overhead() {
+    crate::isolated_profile::isolate!();
     let Some(mut p) = plugin() else { return };
     let n = 2000;
     let t = Instant::now();

@@ -1,4 +1,6 @@
 //! Runtime grants are explicit, recipient-pinned and absent from durable evidence.
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_plugin_host::{
     jobs::JobManager,
     policy::SessionPolicy,
@@ -102,6 +104,7 @@ fn evidence(outcome: &OperationOutcome) -> String {
 }
 #[test]
 fn credential_scope_and_redaction() {
+    crate::isolated_profile::isolate!();
     // Spawn our own test child with fake ambient inputs; never mutate this
     // process's shared environment or require real user credentials.
     if std::env::var_os("BASECRAFT_CREDENTIAL_TEST_CHILD").is_none() {
@@ -202,6 +205,7 @@ fn credential_scope_and_redaction() {
 fn reserved_ipc_credential_is_rejected() {
     use basecraft_plugin_host::contract;
     use basecraft_protocol::operation::OperationContract;
+    crate::isolated_profile::isolate!();
 
     let temp = tempfile::tempdir().unwrap();
     let registry = fixture_registry(temp.path(), false, "Credential declaration");

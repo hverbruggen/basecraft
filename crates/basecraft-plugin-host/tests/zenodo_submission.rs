@@ -1,4 +1,6 @@
 //! Real registered runner + SDK adapter, with only HTTPS replaced by a fixture.
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_plugin_host::{
     jobs::JobManager,
     policy::SessionPolicy,
@@ -109,6 +111,7 @@ fn start(root: &Path, cancel: bool, explicit: bool) -> (JobManager, String, Path
 }
 #[test]
 fn zenodo_shared_runner_preserves_snapshots_and_never_records_token() {
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let (jobs, id, evidence) = start(temp.path(), false, true);
     let outcome = wait(&jobs, &id);
@@ -128,6 +131,7 @@ fn zenodo_shared_runner_preserves_snapshots_and_never_records_token() {
 }
 #[test]
 fn zenodo_cancel_retains_remote_identity_and_repair_does_not_resubmit() {
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let (jobs, id, evidence) = start(temp.path(), true, true);
     let deadline = Instant::now() + Duration::from_secs(60);
@@ -158,6 +162,7 @@ fn zenodo_cancel_retains_remote_identity_and_repair_does_not_resubmit() {
 
 #[test]
 fn zenodo_headless_ambient_provider_delivers_only_to_accepted_bundled_draft() {
+    crate::isolated_profile::isolate!();
     if std::env::var_os("BASECRAFT_ZENODO_TEST_CHILD").is_none() {
         let status = std::process::Command::new(std::env::current_exe().unwrap())
             .args([

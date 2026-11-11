@@ -1,5 +1,7 @@
 //! End to end: realign an alignment with the registered MAFFT operation and
 //! record the run. Skips when the plugin's Python or MAFFT isn't available.
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 mod common;
 
 use std::fmt::Write as _;
@@ -26,6 +28,7 @@ fn mafft_available() -> bool {
 
 #[test]
 fn realigns_with_mafft_and_logs_the_run() {
+    crate::isolated_profile::isolate!();
     if !mafft_available() {
         return;
     }

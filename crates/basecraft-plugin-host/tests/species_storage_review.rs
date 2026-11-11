@@ -548,6 +548,7 @@ fn combine_discovers_legacy_provenance_and_guards_sidecar_changes() {
 fn species_partial_save_retains_recoverable_edits_and_retries() {
     use basecraft_protocol::{Op, delimitation::DelimitationEdit};
     use std::os::unix::fs::PermissionsExt;
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let canonical = root.path().join("species.spart");
     std::fs::write(
@@ -584,15 +585,15 @@ fn species_partial_save_retains_recoverable_edits_and_retries() {
     let sidecar = files::tree_sidecar(&canonical);
     let directory = sidecar.parent().unwrap();
     let permissions = std::fs::metadata(directory).unwrap().permissions();
+    let before = std::fs::read(&canonical).unwrap();
     std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o555)).unwrap();
     let result = session.save(doc, None);
     std::fs::set_permissions(directory, permissions).unwrap();
+    // Every file is staged before any is replaced: an unwritable sidecar
+    // folder fails the save with the workspace and its edits unchanged.
     let error = result.unwrap_err().to_string();
-    assert!(
-        error.contains("data saved") && error.contains("incomplete"),
-        "{error}"
-    );
-    assert!(session.recovery_root().join("pending-save.json").is_file());
+    assert!(error.contains("Permission denied"), "{error}");
+    assert_eq!(std::fs::read(&canonical).unwrap(), before);
     let recovered = root.path().join("recovered");
     basecraft_ops::replay::recover(session.recovery_root(), &recovered).unwrap();
     let work = files::load_delimitation(&recovered.join("species.spart")).unwrap();

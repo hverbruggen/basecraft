@@ -1,4 +1,6 @@
 //! Registered distance operations: outputs, provenance, history and replay.
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_ops::links::AlignmentLinkExt;
 mod common;
 
@@ -28,6 +30,7 @@ fn tree_request(
 
 #[test]
 fn distance_outputs_are_logged_and_replay() {
+    crate::isolated_profile::isolate!();
     if !engine() {
         return;
     }
@@ -74,6 +77,7 @@ fn distance_outputs_are_logged_and_replay() {
 
 #[test]
 fn forest_members_share_one_alignment_snapshot() {
+    crate::isolated_profile::isolate!();
     if !engine() {
         return;
     }
@@ -120,6 +124,7 @@ fn forest_members_share_one_alignment_snapshot() {
 
 #[test]
 fn bootstrap_provenance_success_and_withheld_support_replay() {
+    crate::isolated_profile::isolate!();
     if !engine() {
         return;
     }
@@ -193,6 +198,7 @@ fn bootstrap_provenance_success_and_withheld_support_replay() {
 
 #[test]
 fn reference_tree_save_as_and_complete_export_retain_alignment_and_support() {
+    crate::isolated_profile::isolate!();
     if !engine() {
         return;
     }
@@ -245,6 +251,7 @@ fn reference_tree_save_as_and_complete_export_retain_alignment_and_support() {
 
 #[test]
 fn registered_cache_reuses_distances_across_consumers_and_refuses_mismatch() {
+    crate::isolated_profile::isolate!();
     if !engine() {
         return;
     }
@@ -330,6 +337,7 @@ fn registered_cache_reuses_distances_across_consumers_and_refuses_mismatch() {
 
 #[test]
 fn bootstrap_destination_publishes_working_copy_and_repairs_late_collision() {
+    crate::isolated_profile::isolate!();
     if !engine() {
         return;
     }

@@ -5,6 +5,8 @@
 //! test run. With `BASECRAFT_TEST_TABLE2ASN` set to a real table2asn, the
 //! fixture packages are also validated by it; `BASECRAFT_TEST_EVIDENCE`
 //! names a folder to copy the packages and reports to.
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -206,6 +208,7 @@ fn its_edits() -> Vec<SubmissionEdit> {
 
 #[test]
 fn registered_validation_maps_reports_and_reports_a_missing_tool_as_unavailable() {
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("project");
     std::fs::create_dir(&root).unwrap();
@@ -253,6 +256,7 @@ fn registered_validation_maps_reports_and_reports_a_missing_tool_as_unavailable(
 /// Real table2asn on the fixture packages, when one is configured.
 #[test]
 fn real_table2asn_on_fixture_packages() {
+    crate::isolated_profile::isolate!();
     let Some(tool) = std::env::var_os("BASECRAFT_TEST_TABLE2ASN") else {
         eprintln!("BASECRAFT_TEST_TABLE2ASN is not set; skipping the real table2asn run");
         return;

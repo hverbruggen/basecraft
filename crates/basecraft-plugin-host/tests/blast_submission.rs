@@ -1,4 +1,6 @@
 //! Public runner boundary tests. A pinned bundled mock replaces HTTP entirely.
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_plugin_host::{
     jobs::JobManager,
     policy::SessionPolicy,
@@ -97,6 +99,7 @@ fn start(root: &Path, mode: &str, destination: bool) -> (JobManager, String, Pat
 
 #[test]
 fn blast_accepted_then_cancel_is_partial_repair_never_executes_again() {
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let (jobs, id, evidence) = start(temp.path(), "cancel", false);
     wait_marker(&evidence.join("progress"));
@@ -118,6 +121,7 @@ fn blast_accepted_then_cancel_is_partial_repair_never_executes_again() {
 }
 #[test]
 fn blast_local_publication_failure_retains_rid_and_repairs_without_execution() {
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let (jobs, id, evidence) = start(temp.path(), "cancel", true);
     wait_marker(&evidence.join("progress"));
@@ -132,6 +136,7 @@ fn blast_local_publication_failure_retains_rid_and_repairs_without_execution() {
 }
 #[test]
 fn blast_crash_after_receipt_recovers_while_malformed_identity_does_not() {
+    crate::isolated_profile::isolate!();
     for mode in ["crash", "malformed", "bad_identity"] {
         let temp = tempfile::tempdir().unwrap();
         let (jobs, id, evidence) = start(temp.path(), mode, false);
@@ -154,6 +159,7 @@ fn blast_crash_after_receipt_recovers_while_malformed_identity_does_not() {
 }
 #[test]
 fn blast_oversize_rejected_before_spawn_and_changed_approval_rejected() {
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
     let registry = registry(root);
@@ -191,6 +197,7 @@ fn blast_oversize_rejected_before_spawn_and_changed_approval_rejected() {
 }
 #[test]
 fn blast_shutdown_retains_accepted_receipt_and_joins_bounded_worker() {
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let (jobs, _id, evidence) = start(temp.path(), "cancel", false);
     wait_marker(&evidence.join("progress"));

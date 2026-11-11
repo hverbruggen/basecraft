@@ -1,6 +1,8 @@
 //! IQ-TREE support semantics survive both registered publication forms: a
 //! whole-collection export and a single exported tree file. A process-local
 //! fake executable supplies known Newick bytes without an ML run.
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -127,6 +129,7 @@ fn run_cases(root: &Path) {
 
 #[test]
 fn known_support_survives_both_publication_forms() {
+    crate::isolated_profile::isolate!();
     if std::env::var_os("BASECRAFT_IQTREE_SUPPORT_CHILD").is_some() {
         run_cases(Path::new(
             &std::env::var("BASECRAFT_IQTREE_SUPPORT_ROOT").unwrap(),

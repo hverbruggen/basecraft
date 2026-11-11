@@ -1,6 +1,8 @@
 //! Filesystem and public Python SDK boundary acceptance for registered runs,
 //! without numerical mocks masquerading as scientific validation. Real
 //! scientific tools have separate tests.
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 mod common;
 
 use basecraft_ops::{
@@ -26,6 +28,7 @@ fn files(root: &Path) -> Vec<std::path::PathBuf> {
 
 #[test]
 fn synthetic_large_clean_source_has_metadata_only_evidence_and_relocates() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let folder = dir.path().join("working");
     std::fs::create_dir(&folder).unwrap();
@@ -94,6 +97,7 @@ fn synthetic_large_clean_source_has_metadata_only_evidence_and_relocates() {
 
 #[test]
 fn common_save_route_preserves_actual_original_and_dirty_submitted_input() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("input.fasta");
     std::fs::write(&source, ">a\nAAAA\n>b\nAAAT\n").unwrap();
@@ -168,6 +172,7 @@ fn common_save_route_preserves_actual_original_and_dirty_submitted_input() {
 
 #[test]
 fn downstream_evidence_follows_preservation_and_complete_export_keeps_dependency_closure() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source.afa");
     std::fs::write(&source, ">a\nAAAA\n>b\nAAAT\n").unwrap();
@@ -205,6 +210,7 @@ fn downstream_evidence_follows_preservation_and_complete_export_keeps_dependency
 
 #[test]
 fn save_as_descendants_receive_each_explicit_evidence_decision() {
+    crate::isolated_profile::isolate!();
     for policy in [
         SavePolicy::PreserveCopy,
         SavePolicy::RemoveAnalysis,
@@ -259,6 +265,7 @@ fn save_as_descendants_receive_each_explicit_evidence_decision() {
 
 #[test]
 fn complete_export_remaps_history_and_retains_original_records_without_store() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source.afa");
     std::fs::write(&source, ">a\nAAAA\n>b\nAAAT\n").unwrap();
@@ -335,6 +342,7 @@ fn complete_export_remaps_history_and_retains_original_records_without_store() {
 
 #[test]
 fn one_save_decision_covers_every_backing_reference_without_merging_analyses() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source.afa");
     let old = b">a\nAAAA\n>b\nAAAT\n";

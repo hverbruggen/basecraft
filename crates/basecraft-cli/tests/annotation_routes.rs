@@ -1,6 +1,8 @@
 //! The same annotation through every route that applies sequence proposals
 //! (GUI job runner, CLI `plugin`, MCP operation tool)
 //! leaves the same invocation evidence in the saved record.
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -157,6 +159,7 @@ impl Mcp {
 
 #[test]
 fn every_annotation_route_keeps_the_same_invocation_evidence() {
+    crate::isolated_profile::isolate!();
     if !python_ready() {
         return;
     }
@@ -275,6 +278,7 @@ fn every_annotation_route_keeps_the_same_invocation_evidence() {
 /// or opening/mutating the document, with an actionable migration explanation.
 #[test]
 fn schema_one_plugin_call_is_rejected_without_execution_or_mutation() {
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let profile = temp.path().join("profile");
     let package = temp.path().join("legacy");

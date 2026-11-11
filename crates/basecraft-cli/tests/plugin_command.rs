@@ -1,5 +1,7 @@
 //! `basecraft plugin` resolves registered sequence operations: same registry
 //! state, descriptor validation and job runner as `operations run`.
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -24,6 +26,7 @@ fn failure(output: &Output) -> String {
 
 #[test]
 fn plugin_command_runs_registered_sequence_operations() {
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let profile = temp.path().join("profile");
     let package = temp.path().join("package");
@@ -168,6 +171,7 @@ fn plugin_command_runs_registered_sequence_operations() {
 /// the same decision the application asks the user for.
 #[test]
 fn plugin_save_honours_the_input_conflict_decision() {
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let profile = temp.path().join("profile");
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures");

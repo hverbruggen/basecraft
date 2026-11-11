@@ -1,4 +1,6 @@
 //! A destination `role/member` exports one validated collection member as a file.
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_ops::links::AlignmentLinkExt;
 use std::process::Command;
 
@@ -6,6 +8,7 @@ use serde_json::{Value, json};
 
 #[test]
 fn member_destinations_export_one_file_and_never_replace() {
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let profile = temp.path().join("profile");
     let project = temp.path().join("project");

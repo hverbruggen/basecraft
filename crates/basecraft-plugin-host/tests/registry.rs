@@ -1,3 +1,5 @@
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use std::path::Path;
 
 use basecraft_plugin_host::{
@@ -21,6 +23,7 @@ fn fixture() -> std::path::PathBuf {
 
 #[test]
 fn discovery_is_passive_and_installation_defaults_to_enabled() {
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let config = config(temp.path());
     assert!(Registry::load(&config).unwrap().operations.is_empty());
@@ -59,6 +62,7 @@ fn discovery_is_passive_and_installation_defaults_to_enabled() {
 
 #[test]
 fn updates_refresh_without_mutating_pins_and_preserve_unknown_settings() {
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let config = config(temp.path());
     let id = registry::install(&config, &fixture()).unwrap();
@@ -99,6 +103,7 @@ fn updates_refresh_without_mutating_pins_and_preserve_unknown_settings() {
 
 #[test]
 fn editable_changes_duplicates_and_reserved_namespace_are_diagnostic() {
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let config = config(temp.path());
     let source = temp.path().join("editable");
@@ -139,6 +144,7 @@ fn editable_changes_duplicates_and_reserved_namespace_are_diagnostic() {
 
 #[test]
 fn disabled_and_read_only_sessions_fail_before_bindings_or_spawn() {
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let config = config(temp.path());
     let id = registry::install(&config, &fixture()).unwrap();
@@ -163,6 +169,7 @@ fn disabled_and_read_only_sessions_fail_before_bindings_or_spawn() {
 #[test]
 fn one_binding_resolver_checks_arrays_traversal_links_and_collisions() {
     use std::os::unix::fs::symlink;
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let config = config(temp.path());
     registry::install(&config, &fixture()).unwrap();
@@ -188,6 +195,7 @@ fn one_binding_resolver_checks_arrays_traversal_links_and_collisions() {
 
 #[test]
 fn schema_one_stays_legacy_and_schema_two_contract_path_cannot_escape() {
+    crate::isolated_profile::isolate!();
     let legacy =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/legacy-plugin");
     assert!(
