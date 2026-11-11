@@ -43,7 +43,6 @@ fn inspection_and_naming_are_read_only_and_keep_stable_order() {
         &work,
         &hash,
         &paths[0],
-        &path,
         &mut std::fs::File::create(files::tree_sidecar(&paths[0])).unwrap(),
     )
     .unwrap();

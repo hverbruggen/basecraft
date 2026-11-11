@@ -278,3 +278,10 @@ pub struct IndexedAnalysisStore {
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
+
+/// Sources a pending ledger change can introduce. None means coverage is unknown.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct IndexChange {
+    pub store: PathBuf,
+    pub sources: Option<std::collections::BTreeSet<PathBuf>>,
+}

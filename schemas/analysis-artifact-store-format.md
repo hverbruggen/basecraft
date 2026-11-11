@@ -116,7 +116,9 @@ The current private index consists of a checksummed source catalogue,
 path below `analysis-inputs`. The source shard lists the connected stores that may
 own or depend on that input. Registration updates these records explicitly; there
 is no older-writer reconciliation or compatibility gate. A durable dirty marker
-makes an interrupted update incomplete until registration succeeds. Index damage
+records new direct-source paths so unrelated saves can continue. Pending dependency
+changes have unknown coverage until registration succeeds. The ledger directory is
+synced before the updated index can clear its marker. Index damage
 never authorizes an unchecked save.
 
 Lookup stats live indexed source paths to detect external replacement and new

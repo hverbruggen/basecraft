@@ -143,6 +143,103 @@ fn changed_source_refused_before_mutation_and_before_save() {
     assert_eq!(std::fs::read_to_string(&file).unwrap(), ">gene\nTTTT\n");
 }
 
+#[test]
+fn ordinary_history_is_fingerprints_only_in_each_layout() {
+    crate::isolated_profile::isolate!();
+    for project in [false, true] {
+        for detached in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            if project {
+                std::fs::create_dir(dir.path().join(".basecraft")).unwrap();
+                std::fs::write(dir.path().join(".basecraft/project.toml"), b"").unwrap();
+            }
+            let file = dir.path().join("gene.fasta");
+            std::fs::write(&file, b">gene\nACGT\n").unwrap();
+            let original = basecraft_io::hash_file(&file).unwrap();
+            let mut session = if detached {
+                Session::detached(dir.path())
+            } else {
+                Session::new(dir.path())
+            };
+            let doc = session.open(&file).unwrap();
+            session.apply(doc, edit()).unwrap();
+            session.save(doc, None).unwrap();
+            let bundle = if project {
+                dir.path()
+                    .join(".basecraft/provenance")
+                    .join(basecraft_io::hash_bytes(b"gene.fasta").trim_start_matches("b3:"))
+            } else {
+                provenance::companion(&file)
+            };
+            let record: basecraft_protocol::provenance::Publication =
+                serde_json::from_slice(&std::fs::read(bundle.join("manifest.json")).unwrap())
+                    .unwrap();
+            assert!(record.inputs.is_empty());
+            assert!(
+                record
+                    .outputs
+                    .iter()
+                    .all(|output| output.retained.is_none())
+            );
+            assert!(record.events.iter().any(|event| {
+                event
+                    .result
+                    .hashes
+                    .iter()
+                    .any(|(_, hash)| hash == &original)
+            }));
+            assert_eq!(
+                std::fs::read_dir(bundle.join("artifacts")).unwrap().count(),
+                0
+            );
+        }
+    }
+}
+
+#[test]
+fn analysis_history_reuses_the_run_owned_input() {
+    crate::isolated_profile::isolate!();
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("input.fasta");
+    let output = dir.path().join("result.fasta");
+    let bytes = b">gene\nACGT\n";
+    std::fs::write(&source, bytes).unwrap();
+    std::fs::write(&output, bytes).unwrap();
+    let run = basecraft_ops::analysis_store::ArtifactRun::create(&output, "analysis").unwrap();
+    basecraft_ops::input_evidence::Mutation::begin()
+        .unwrap()
+        .link_generated_input(&run, &[], bytes, "identity-v1", "result.fasta")
+        .unwrap();
+    std::fs::write(run.artifact("submitted.fasta").unwrap(), bytes).unwrap();
+    run.bind(&output).unwrap();
+    let mut session = Session::detached(dir.path());
+    let doc = session.open(&source).unwrap();
+    let inputs = vec![("input.fasta".into(), basecraft_io::hash_bytes(bytes))];
+    session
+        .log_tool_run(
+            doc,
+            basecraft_protocol::Actor::External,
+            ("example", "copy"),
+            serde_json::json!({}),
+            &inputs,
+            std::slice::from_ref(&output),
+        )
+        .unwrap();
+    session.publish_analysis(doc, &output, &inputs).unwrap();
+    let record = provenance::inspect(&output).unwrap();
+    assert_eq!(
+        record.inputs[0].retained.as_deref(),
+        Some("submitted.fasta")
+    );
+    assert_eq!(
+        std::fs::read_dir(run.directory().join("artifacts"))
+            .unwrap()
+            .count(),
+        0
+    );
+    assert!(provenance::verify(&output).unwrap().is_empty());
+}
+
 // Full retained bytes belong to analysis inputs, never ordinary edit history.
 fn record_analysis(session: &mut Session, doc: basecraft_ops::DocId, file: &Path) {
     let hash = session

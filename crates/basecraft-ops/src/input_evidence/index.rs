@@ -4,7 +4,9 @@ use super::{
     ArtifactRun, BTreeMap, PROPOSAL_TARGET, Path, PathBuf, Result, lexical, read_input, registry,
     registry_lock, stamp, validate_input,
 };
-use basecraft_protocol::records::{AnalysisInputIndex, IndexFile, IndexedAnalysisStore};
+use basecraft_protocol::records::{
+    AnalysisInputIndex, IndexChange, IndexFile, IndexedAnalysisStore,
+};
 use std::collections::BTreeSet;
 
 fn location() -> Result<PathBuf> {
@@ -170,7 +172,7 @@ fn snapshot(store: &Path) -> Result<IndexedAnalysisStore> {
 
 /// Input writes publish a durable dirty marker before touching their ledger.
 /// A failed update stays incomplete, including lookups for newly added sources.
-pub(super) fn changing(path: &Path) -> Result<Option<PathBuf>> {
+pub(super) fn changing(path: &Path, sources: Option<BTreeSet<PathBuf>>) -> Result<Option<PathBuf>> {
     let Some(run) = path.parent() else {
         return Ok(None);
     };
@@ -186,7 +188,22 @@ pub(super) fn changing(path: &Path) -> Result<Option<PathBuf>> {
     else {
         return Ok(None);
     };
-    write(&shard("dirty", store)?, &store)?;
+    let marker = shard("dirty", store)?;
+    let sources = match read::<IndexChange>(&marker) {
+        Ok(previous) => previous.sources.zip(sources).map(|(mut old, new)| {
+            old.extend(new);
+            old
+        }),
+        Err(crate::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => sources,
+        Err(_) => None,
+    };
+    write(
+        &marker,
+        &IndexChange {
+            store: store.into(),
+            sources,
+        },
+    )?;
     Ok(Some(store.into()))
 }
 
@@ -196,7 +213,16 @@ pub(super) fn register(store: &Path) -> Result<()> {
         Err(error @ crate::Error::Busy(_)) => return Err(error),
         Err(_) => {
             let _guard = registry_lock()?;
-            write(&shard("dirty", store)?, &store)?;
+            let marker = shard("dirty", store)?;
+            if !marker.try_exists()? {
+                write(
+                    &marker,
+                    &IndexChange {
+                        store: store.into(),
+                        sources: None,
+                    },
+                )?;
+            }
             return Ok(());
         }
     };
@@ -289,19 +315,38 @@ pub(super) fn select(
     let index = load()?;
     let mut selected = BTreeSet::new();
     let mut relocated = BTreeSet::new();
+    let target = lexical(target);
+    let target_stamp = stamp(&target).ok();
+    let matches = |source: &Path| {
+        source == target
+            || match (stamp(source), &target_stamp) {
+                (Ok(a), Some(b)) => {
+                    a.device.is_some() && a.device == b.device && a.inode == b.inode
+                }
+                (Ok(_), None) => false,
+                (Err(_), _) => true,
+            }
+    };
     let dirty = registry()?.with_file_name("analysis-inputs/dirty");
     let dirty_result = (|| -> Result<()> {
         if dirty.try_exists()? {
             for entry in std::fs::read_dir(&dirty)? {
                 let path = entry?.path();
+                let change: IndexChange = read(&path)?;
+                if change
+                    .sources
+                    .as_ref()
+                    .is_some_and(|sources| !sources.iter().any(|p| matches(p)))
+                {
+                    continue;
+                }
                 inspection.record(&path)?;
-                let store: PathBuf = read(&path)?;
                 inspection.issue(
                     super::InspectionCode::RegistryUnavailable,
                     &path,
                     "analysis index update is incomplete",
                 );
-                selected.insert(store);
+                selected.insert(change.store);
             }
         }
         Ok(())
@@ -324,18 +369,8 @@ pub(super) fn select(
         }
     }
     selected.retain(|path| !relocated.contains(path));
-    let target_stamp = stamp(target).ok();
     for source in &index.sources {
-        let matches = lexical(source) == lexical(target)
-            || source.canonicalize().ok().as_deref() == Some(target)
-            || match (stamp(source), &target_stamp) {
-                (Ok(a), Some(b)) => {
-                    a.device.is_some() && a.device == b.device && a.inode == b.inode
-                }
-                (Ok(_), None) => false,
-                (Err(_), _) => true,
-            };
-        if matches {
+        if matches(source) {
             let path = shard("sources", source)?;
             match read::<Vec<PathBuf>>(&path) {
                 Ok(stores) => {
@@ -352,6 +387,70 @@ pub(super) fn select(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn unrelated_save_during_pending_index_update() {
+        crate::isolated_profile::isolate!();
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source.fasta");
+        let other = root.path().join("other.fasta");
+        let introduced = root.path().join("introduced.fasta");
+        for path in [&source, &other, &introduced] {
+            std::fs::write(path, b">a\nACGT\n").unwrap();
+        }
+        let run = super::super::reference_input_with_dependencies(
+            &root.path().join("result.txt"),
+            &source,
+            &basecraft_io::hash_file(&source).unwrap(),
+            &[],
+            "pending update",
+        )
+        .unwrap();
+        let locks = super::super::lock().unwrap();
+        locks.record(run.directory()).unwrap();
+        super::changing(
+            &run.directory().join("input.json"),
+            Some([introduced.clone()].into()),
+        )
+        .unwrap();
+        std::thread::spawn(move || {
+            let mut session = crate::Session::new(other.parent().unwrap());
+            let doc = session.open(&other).unwrap();
+            session
+                .apply(
+                    doc,
+                    basecraft_protocol::Op::SeqReplace {
+                        start: 0,
+                        end: 1,
+                        residues: "T".into(),
+                    },
+                )
+                .unwrap();
+            session.save(doc, None).unwrap();
+            assert_eq!(std::fs::read(&other).unwrap(), b">a\nTCGT\n");
+            // Both the old index and the newly introduced source stay protected.
+            for path in [source, introduced] {
+                let doc = session.open(&path).unwrap();
+                session
+                    .apply(
+                        doc,
+                        basecraft_protocol::Op::SeqReplace {
+                            start: 0,
+                            end: 1,
+                            residues: "T".into(),
+                        },
+                    )
+                    .unwrap();
+                assert!(matches!(
+                    session.save(doc, None),
+                    Err(crate::Error::Busy(_))
+                ));
+                assert_eq!(std::fs::read(path).unwrap(), b">a\nACGT\n");
+            }
+        })
+        .join()
+        .unwrap();
+    }
 
     #[test]
     fn independent_save_overlaps_but_new_reference_and_alias_wait() {

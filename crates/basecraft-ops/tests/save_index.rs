@@ -148,6 +148,55 @@ fn current_writer_updates_source_index() {
 }
 
 #[test]
+fn failed_dependency_update_cannot_hide_a_later_relinked_source() {
+    let Some(root) =
+        isolated_profile::enter("failed_dependency_update_cannot_hide_a_later_relinked_source")
+    else {
+        return;
+    };
+    let a = root.join("a.fasta");
+    let b = root.join("b.fasta");
+    std::fs::write(&a, b">a\nACGT\n").unwrap();
+    std::fs::write(&b, b">b\nTTTT\n").unwrap();
+    let owner = reference(&root.join("owner"), &a);
+    let dependent = reference(&root.join("dependent"), &a);
+    let sibling = ArtifactRun::create(&root.join("dependent/result.txt"), "broken").unwrap();
+    std::fs::write(sibling.directory().join("input.json"), b"damaged").unwrap();
+    let mut input = evidence::read_input(dependent.directory()).unwrap();
+    input.extra.insert(
+        "upstream".into(),
+        serde_json::json!([{
+            "bundle": evidence::relative(dependent.directory(), owner.directory()).unwrap()
+        }]),
+    );
+    evidence::Mutation::begin()
+        .unwrap()
+        .write_input(dependent.directory(), &input)
+        .unwrap();
+    let mut input = evidence::read_input(owner.directory()).unwrap();
+    let source = input.source.as_mut().unwrap();
+    source.path = evidence::relative(owner.directory(), &b).unwrap();
+    source.hash = basecraft_io::hash_file(&b).unwrap();
+    source.stamp = evidence::stamp(&b).unwrap();
+    evidence::Mutation::begin()
+        .unwrap()
+        .write_input(owner.directory(), &input)
+        .unwrap();
+    let check = evidence::check(&b).unwrap();
+    assert!(
+        !check.is_complete(),
+        "unpublished ancestry must remain uncertain"
+    );
+    assert!(
+        check
+            .conflict
+            .analyses
+            .iter()
+            .any(|analysis| analysis.run == owner.directory())
+    );
+}
+
+#[test]
 fn corrupt_cache_cannot_hide_a_reference() {
     let Some(root) = isolated_profile::enter("corrupt_cache_cannot_hide_a_reference") else {
         return;
@@ -172,7 +221,7 @@ fn two_hundred_stores_fifty_runs_open_no_unrelated_ledgers() {
         return;
     };
     if std::env::var_os("BASECRAFT_INDEX_COLD").is_some() {
-        measure_save(&root, "cold", "G");
+        measure_save(&root, "cold", "G", false);
         return;
     }
     for store in 0..200 {
@@ -222,7 +271,17 @@ fn two_hundred_stores_fifty_runs_open_no_unrelated_ledgers() {
         counts.reads.values().map(|r| r.full_reads).sum::<u64>(),
         counts.reads.values().map(|r| r.bytes).sum::<u64>()
     );
-    measure_save(&root, "warm", "T");
+    measure_save(&root, "warm", "T", false);
+    for (label, residue) in [("repeat-1", "G"), ("repeat-2", "T"), ("repeat-3", "G")] {
+        measure_save(&root, label, residue, false);
+    }
+    for (label, residue) in [
+        ("interactive-1", "T"),
+        ("interactive-2", "G"),
+        ("interactive-3", "T"),
+    ] {
+        measure_save(&root, label, residue, true);
+    }
     // Minimal metadata-only work, with paths already decoded in memory.
     let cache = basecraft_platform::paths::AppPaths::discover()
         .unwrap()
@@ -259,8 +318,14 @@ fn two_hundred_stores_fifty_runs_open_no_unrelated_ledgers() {
 }
 
 #[cfg(feature = "test-counters")]
-fn measure_save(root: &Path, label: &str, residue: &str) {
-    let mut session = basecraft_ops::Session::new(root);
+fn measure_save(root: &Path, label: &str, residue: &str, interactive: bool) {
+    // Interactive sessions journal each edit immediately; Session::new batches
+    // typing until save. Measure both without moving work out of the timed call.
+    let mut session = if interactive {
+        basecraft_ops::Session::recoverable(root).unwrap()
+    } else {
+        basecraft_ops::Session::new(root)
+    };
     let doc = session.open(&root.join("unrelated.fasta")).unwrap();
     session
         .apply(
@@ -277,6 +342,7 @@ fn measure_save(root: &Path, label: &str, residue: &str) {
     session.save(doc, None).unwrap();
     let counts = basecraft_io::counters::snapshot();
     assert!(counts.store_inspections.is_empty());
+    assert!(counts.reads.values().map(|r| r.bytes).sum::<u64>() < 100_000);
     assert!(counts.reads.keys().all(|p| {
         !p.strip_prefix(root)
             .ok()

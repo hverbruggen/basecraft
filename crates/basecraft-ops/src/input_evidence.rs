@@ -233,8 +233,8 @@ pub struct AffectedAnalysis {
     pub source_hash: String,
     pub can_preserve: bool,
     pub direct: bool,
-    /// Complete backing decisions for this logical analysis. Empty for legacy
-    /// single-ledger records. Each child retains its own hash/direct guard.
+    /// Backing decisions for a logical analysis; empty for a direct ledger.
+    /// Each child retains its own hash/direct guard.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub backing_analyses: Vec<AffectedAnalysis>,
 }
@@ -494,16 +494,21 @@ pub fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
     if path.file_name().is_some_and(|name| name == "input.json") {
         let locks = lock()?;
         let guard = registry_lock()?;
+        let mut sources = Some(std::collections::BTreeSet::new());
         if let Ok(input) = serde_json::from_slice::<SubmittedInput>(&bytes) {
             locks.input(
                 path.parent().unwrap(),
                 &input,
                 &mut std::collections::BTreeSet::new(),
+                &mut sources,
             )?;
+        } else {
+            sources = None;
         }
-        let store = index::changing(path)?;
+        let store = index::changing(path, sources)?;
         drop(guard);
         basecraft_io::write_atomic(path, |w| w.write_all(&bytes))?;
+        basecraft_platform::files::sync_directory(path.parent().unwrap())?;
         if let Some(store) = store {
             // A damaged sibling must not prevent an explicitly acknowledged
             // evidence decision. The durable dirty marker keeps coverage unknown.
@@ -578,6 +583,7 @@ impl Locks {
         directory: &Path,
         input: &SubmittedInput,
         seen: &mut std::collections::BTreeSet<PathBuf>,
+        sources: &mut Option<std::collections::BTreeSet<PathBuf>>,
     ) -> Result<()> {
         self.record(directory)?;
         if !seen.insert(directory.into()) {
@@ -596,20 +602,28 @@ impl Locks {
                 .map(Path::to_path_buf),
         )?;
         if let Some(source) = &input.source {
-            self.source(&lexical(&directory.join(&source.path)))?;
+            let path = lexical(&directory.join(&source.path));
+            self.source(&path)?;
+            if let Some(sources) = sources {
+                sources.insert(path);
+            }
         }
         let mut dependencies = Vec::new();
         for field in ["origin_run", "analysis_run"] {
-            if let Some(path) = input.extra.get(field).and_then(serde_json::Value::as_str) {
-                dependencies.push(path);
+            if let Some(value) = input.extra.get(field) {
+                *sources = None;
+                dependencies.extend(value.as_str());
             }
         }
-        if let Some(upstream) = input
-            .extra
-            .get("upstream")
-            .and_then(serde_json::Value::as_array)
-        {
-            dependencies.extend(upstream.iter().filter_map(|p| p["bundle"].as_str()));
+        if let Some(upstream) = input.extra.get("upstream") {
+            // Unpublished or malformed dependency edges can acquire new sources.
+            // Only direct references have stable pending coverage.
+            if !upstream.as_array().is_some_and(Vec::is_empty) {
+                *sources = None;
+            }
+            if let Some(upstream) = upstream.as_array() {
+                dependencies.extend(upstream.iter().filter_map(|p| p["bundle"].as_str()));
+            }
         }
         for relative in dependencies {
             let path = lexical(&directory.join(relative));
@@ -619,9 +633,9 @@ impl Locks {
                     .map(Path::to_path_buf),
             )?;
             match read_input(&path) {
-                Ok(input) => self.input(&path, &input, seen)?,
+                Ok(input) => self.input(&path, &input, seen, sources)?,
                 Err(error @ crate::Error::Busy(_)) => return Err(error),
-                Err(_) => {}
+                Err(_) => *sources = None,
             }
         }
         Ok(())
@@ -1179,8 +1193,8 @@ fn inspect_in(
             break;
         }
     }
-    // Only explicit ownership or the runner's declared upstream ledgers may
-    // collapse records. Equal names/hashes alone never merge distinct analyses.
+    // Only explicit ownership collapses records into one analysis. Equal
+    // names/hashes alone never merge distinct analyses.
     let mut owners = BTreeMap::new();
     for (run, input) in &known_runs {
         if let Some(owner) = input
@@ -1197,24 +1211,6 @@ fn inspect_in(
                     &owner,
                     "analysis owner is unavailable in inspected inventory",
                 );
-            }
-        } else if run.join("runtime.json").is_file()
-            && let Some(parents) = input
-                .extra
-                .get("upstream")
-                .and_then(serde_json::Value::as_array)
-        {
-            // Compatibility with registered runs written before analysis_run.
-            // A reference-only ledger is dedicated to the declaring operation.
-            for parent in parents {
-                if let Some(path) = parent["bundle"].as_str() {
-                    let ledger = lexical(&run.join(path));
-                    if known_runs.iter().any(|(path, _)| lexical(path) == ledger)
-                        && !ledger.join("runtime.json").exists()
-                    {
-                        owners.entry(ledger).or_insert_with(|| run.clone());
-                    }
-                }
             }
         }
     }
@@ -1529,8 +1525,14 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
                         ulid::Ulid::generate()
                     ));
                     let catalogue = registry_lock()?;
-                    index::changing(&affected.run.join("input.json"))?;
+                    index::changing(
+                        &affected.run.join("input.json"),
+                        Some(std::collections::BTreeSet::new()),
+                    )?;
                     std::fs::rename(&affected.run, destination)?;
+                    basecraft_platform::files::sync_directory(affected.run.parent().unwrap())?;
+                    basecraft_platform::files::sync_directory(&trash)?;
+                    basecraft_platform::files::sync_directory(store)?;
                     drop(catalogue);
                     index::register(store)?;
                 }
@@ -1925,8 +1927,8 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
             });
         }
     }
-    // Complete tree exports deliberately materialize the legacy exchange
-    // association, so extraction still works with the original store absent.
+    // Complete tree exports materialize their exchange association, so
+    // extraction still works with the original store absent.
     if let Ok(tree) = crate::files::load_tree(result)
         && crate::links::metadata_present(&crate::links::sidecar(result))?
     {
