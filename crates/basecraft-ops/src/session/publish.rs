@@ -96,12 +96,12 @@ impl Session {
             || self.docs[id.0].origin_bundle.clone(),
             |(path, _)| path.clone(),
         );
-        let previous_bundle = if bundle.join("manifest.json").exists() {
+        let mut previous_bundle = if bundle.join("manifest.json").exists() {
             &bundle
         } else {
             &source_bundle
         };
-        let previous = if snapshot.is_some() {
+        let mut previous = if snapshot.is_some() {
             snapshot
                 .and_then(|r| r.origins.first())
                 .map(|(_, p)| p.clone())
@@ -116,6 +116,26 @@ impl Session {
         } else {
             None
         };
+        // A newly allocated output-support record is not the accepted document
+        // history. Prefer the opened origin when the writer has just bound one.
+        if snapshot.is_none()
+            && previous_bundle != &source_bundle
+            && previous
+                .as_ref()
+                .is_some_and(|p| p.events.is_empty() && p.effective_edits.is_empty())
+            && source_bundle.join("manifest.json").is_file()
+        {
+            previous_bundle = &source_bundle;
+            let publication: Publication = serde_json::from_slice(
+                &crate::provenance::read_record(&source_bundle.join("manifest.json"))?,
+            )?;
+            if publication.schema_version != 1 {
+                return Err(crate::Error::Unsupported(
+                    "unsupported parent provenance version".into(),
+                ));
+            }
+            previous = Some(publication);
+        }
         let baseline_hash = self
             .events
             .iter()
@@ -283,6 +303,22 @@ impl Session {
                         .unwrap_or_default()
                         .to_string_lossy()
                         .into_owned(),
+                )?);
+            }
+        }
+        for event in self
+            .events
+            .iter()
+            .filter(|event| event.doc == self.docs[id.0].key)
+        {
+            if let Op::CreateSangerReview { review } | Op::SangerUpdate { review } = &event.op {
+                let source =
+                    objects_dir(&self.storage_root).join(review.hash.trim_start_matches("b3:"));
+                inputs.push(retain(
+                    &source,
+                    &review.hash,
+                    format!("{}:review", event.id),
+                    "Sanger analysis record".into(),
                 )?);
             }
         }
@@ -509,7 +545,7 @@ impl Session {
             .iter()
             .rev()
             .find(|event| {
-                event.doc == self.doc_key(id)
+                self.doc_key(id).is_ok_and(|key| event.doc == key)
                     && matches!(&event.op,
                 Op::ToolRun { params, .. } if params["run_id"].as_str() == Some(run.id()))
             })

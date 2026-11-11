@@ -213,7 +213,7 @@ fn equivalent_edits_features_merges_groups_and_branching() {
     check(&s, id, 1);
     s.apply(id, replace("A")).unwrap();
     check(&s, id, 1);
-    assert!(!s.can_redo(id));
+    assert!(!s.can_redo(id).unwrap());
 }
 
 #[test]
@@ -228,7 +228,7 @@ fn live_journal_rollback_and_staged_proposals() {
     let baseline = check(&s, id, 0);
     s.log.as_mut().unwrap().faults.sync = true;
     assert!(s.apply(id, replace("T")).is_err());
-    assert_eq!(s.generation(id), 0);
+    assert_eq!(s.generation(id).unwrap(), 0);
     assert_eq!(check(&s, id, 1), baseline);
     let feature = Feature {
         kind: "gene".into(),
@@ -241,23 +241,23 @@ fn live_journal_rollback_and_staged_proposals() {
         .feature
         .unwrap();
     let edited = check(&s, id, 1);
-    let generation = s.generation(id);
+    let generation = s.generation(id).unwrap();
     s.log.as_mut().unwrap().faults.sync = true;
     assert!(s.undo(id).is_err());
-    assert_eq!(s.generation(id), generation);
+    assert_eq!(s.generation(id).unwrap(), generation);
     assert_eq!(check(&s, id, 1), edited);
     assert!(s.doc(id).unwrap().feature(fid).is_some());
     s.undo(id).unwrap();
     assert_eq!(check(&s, id, 1), baseline);
-    let generation = s.generation(id);
+    let generation = s.generation(id).unwrap();
     s.log.as_mut().unwrap().faults.sync = true;
     assert!(s.redo(id).is_err());
-    assert_eq!(s.generation(id), generation);
+    assert_eq!(s.generation(id).unwrap(), generation);
     assert_eq!(check(&s, id, 1), baseline);
     let actor = Actor::Agent {
         model: "fingerprint-test".into(),
     };
-    let revision = s.revision(id);
+    let revision = s.revision(id).unwrap();
     assert!(
         s.apply_sequence_proposals(
             id,
@@ -543,100 +543,5 @@ fn drop_keeps_flush_pending_dirty_and_error_gates() {
         }
         count(usize::from(mode == 5), || drop(s));
         assert_eq!(recovery.exists(), mode != 1);
-    }
-}
-
-#[test]
-fn opted_in_save_milestones_do_not_infer_acceptance() {
-    use super::save_attempt_observation::{Observer, Site, tests::observer};
-    let Some(root) = crate::isolated_profile::enter(
-        "session::saved_fingerprint_tests::opted_in_save_milestones_do_not_infer_acceptance",
-    ) else {
-        return;
-    };
-    for case in 2..8 {
-        let dir = root.join(case.to_string());
-        let path = fixture(&dir, "source.fa", b">a\nACGT\n");
-        let mut s = Session::recoverable(&dir).unwrap();
-        let id = s.open(&path).unwrap();
-        let baseline = oracle(&s, id);
-        s.apply(id, replace("T")).unwrap();
-        let changed = check(&s, id, 1);
-        if case == 7 {
-            s.write_publication = crate::documents::WritePublication::Recovery {
-                stage: dir.clone(),
-                destination: dir.join("recovered"),
-                stores: Mutex::new(vec![]),
-            };
-        }
-        let hooks = observer(case);
-        let result = count(if case <= 4 { 1 } else { 2 }, || {
-            s.save_observed(
-                id,
-                None,
-                crate::input_evidence::SavePolicy::Cancel,
-                true,
-                false,
-                None,
-                hooks,
-            )
-        });
-        if case == 7 {
-            assert!(
-                result
-                    .result
-                    .as_ref()
-                    .unwrap()
-                    .recovery_observation
-                    .as_ref()
-                    .unwrap()
-                    .is_err()
-            );
-        } else {
-            assert!(result.result.is_err(), "case {case}");
-        }
-        assert_eq!(
-            s.docs[id.0].saved_state_hashes,
-            if (5..=7).contains(&case) {
-                changed.clone()
-            } else {
-                baseline
-            }
-        );
-        assert_eq!(check(&s, id, 0), changed);
-        assert_eq!(result.facts.saved_hashes, (5..=7).contains(&case));
-        assert_eq!(result.facts.disk_stamp, (6..=7).contains(&case));
-        assert_eq!(result.facts.pending_removed, case == 7);
-        let recovery = s.recovery_root().to_owned();
-        assert_eq!(recovery.join("pending-save.json").exists(), case < 7);
-        drop(s);
-        assert_eq!(recovery.exists(), case != 7);
-    }
-    for export in [false, true] {
-        let dir = root.join(format!("serializer-failure-{export}"));
-        let (mut s, id, _) = sequence(&dir);
-        invalid_format(&mut s, id, files::Format::Metadata);
-        let target = dir.join("export.fa");
-        let attempt = count(1, || {
-            s.save_observed(
-                id,
-                export.then_some(target.as_path()),
-                crate::input_evidence::SavePolicy::Cancel,
-                true,
-                false,
-                None,
-                Observer::default(),
-            )
-        });
-        assert!(attempt.result.is_err());
-        assert_eq!(
-            attempt.facts.failure,
-            Some(if export {
-                Site::ExpectedHashes
-            } else {
-                Site::CleanHashes
-            })
-        );
-        assert!(s.docs[id.0].current_saved_hashes.get().is_none());
     }
 }

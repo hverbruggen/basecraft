@@ -51,7 +51,7 @@ fn persistent_changes_refuse_admission_at_both_boundaries() {
                 }
                 let mut session = Session::new(dir.path());
                 let (first, _) = session.open_classified(&path).unwrap();
-                let before = session.state(first);
+                let before = session.state(first).unwrap();
                 let target = if mutation.starts_with("main-") {
                     path.clone()
                 } else {
@@ -104,7 +104,7 @@ fn persistent_changes_refuse_admission_at_both_boundaries() {
                     "{stage} {name} {mutation}"
                 );
                 drop(reset);
-                assert_eq!(session.state(first), before);
+                assert_eq!(session.state(first).unwrap(), before);
                 assert!(!dir.path().join(".basecraft").exists());
                 if path.is_dir() {
                     std::fs::remove_dir(&path).unwrap();

@@ -1,7 +1,9 @@
-//! The common lifecycle contract for the six existing Session kinds.
+//! The common lifecycle contract for the seven Session kinds.
 //! Keep semantic assertions as well as fingerprints: equal counts do not imply
-//! equal documents. Sanger review is not a Session kind yet.
-use basecraft_protocol::ops::DocumentCounts;
+//! equal documents.
+#[path = "support/sanger_fixture.rs"]
+mod sanger_fixture;
+
 use std::{
     collections::BTreeMap,
     fmt::Debug,
@@ -11,6 +13,7 @@ use std::{
 
 use basecraft_ops::{DocId, Session, log, metadata, replay, submission};
 use basecraft_protocol::delimitation::DelimitationEdit;
+use basecraft_protocol::ops::DocumentCounts;
 use basecraft_protocol::metadata::{ChangeSet, MetadataEdit, Row};
 use basecraft_protocol::submission::{Decision, Publication, RowDecision, SubmissionEdit};
 use basecraft_protocol::{Actor, CladeAnnotation, Op};
@@ -63,11 +66,11 @@ fn scenario<T: Debug + PartialEq>(
     };
     let mut session = Session::new(dir.path());
     session.set_actor(actor.clone());
-    let doc = session.open(&path).unwrap();
+    let (doc, kind) = session.open_classified(&path).unwrap();
     let (ops, expected) = plan(&session, doc);
     assert_eq!(snapshot(&session, doc), expected[0]);
-    assert!(!session.can_undo(doc));
-    assert!(!session.can_redo(doc));
+    assert!(!session.can_undo(doc).unwrap());
+    assert!(!session.can_redo(doc).unwrap());
     let first = session.apply(doc, ops[0].clone()).unwrap();
     session.flush().unwrap(); // Distinct undo steps even for mergeable typing.
     assert_eq!(snapshot(&session, doc), expected[1]);
@@ -77,17 +80,17 @@ fn scenario<T: Debug + PartialEq>(
     assert_eq!(snapshot(&session, doc), expected[2]);
     assert_ne!(expected[1], expected[2]);
     assert_ne!(first.entry_id, second.entry_id);
-    assert!(session.can_undo(doc));
-    assert!(!session.can_redo(doc));
+    assert!(session.can_undo(doc).unwrap());
+    assert!(!session.can_redo(doc).unwrap());
     assert_eq!(session.undo(doc).unwrap(), second.entry_id);
     assert_eq!(snapshot(&session, doc), expected[1]);
-    assert!(session.can_undo(doc));
-    assert!(session.can_redo(doc));
+    assert!(session.can_undo(doc).unwrap());
+    assert!(session.can_redo(doc).unwrap());
     assert_eq!(session.redo(doc).unwrap(), second.entry_id);
     assert_eq!(snapshot(&session, doc), expected[2]);
-    assert!(!session.can_redo(doc));
-    assert_checked_access(&session, doc, name);
-    let fingerprint = session.state(doc);
+    assert!(!session.can_redo(doc).unwrap());
+    assert_checked_access(&session, doc, kind);
+    let fingerprint = session.state(doc).unwrap();
     session.save(doc, None).unwrap();
     session.flush().unwrap();
     assert_eq!(snapshot(&session, doc), expected[2]);
@@ -123,7 +126,7 @@ fn scenario<T: Debug + PartialEq>(
     let mut reopened = Session::unlogged(dir.path());
     let copy = reopened.open(&path).unwrap();
     assert_eq!(snapshot(&reopened, copy), expected[2]);
-    assert_eq!(reopened.state(copy), fingerprint);
+    assert_eq!(reopened.state(copy).unwrap(), fingerprint);
     let report = replay::replay(dir.path()).unwrap();
     assert!(report.ok(), "{:#?}", report.problems);
     assert_eq!(report.sessions, 1);
@@ -437,7 +440,7 @@ fn submission() {
 // Exercise every public kind getter against each populated kind, plus missing
 // IDs. These reads must preserve unsaved edits, history, identity and all
 // project/recovery bytes, including the existing journal.
-fn assert_checked_access(session: &Session, doc: DocId, name: &str) {
+fn assert_checked_access(session: &Session, doc: DocId, actual_kind: basecraft_ops::files::Kind) {
     use basecraft_ops::{Error, files::Kind};
     fn files(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
         let mut out = BTreeMap::new();
@@ -452,12 +455,20 @@ fn assert_checked_access(session: &Session, doc: DocId, name: &str) {
         out
     }
     let before_files = files(session.root());
-    let before_state = session.state(doc);
-    let before_revision = session.revision(doc);
-    let before_key = session.doc_key(doc).to_owned();
-    let before_undo = (session.can_undo(doc), session.can_redo(doc));
+    let before_state = session.state(doc).unwrap();
+    let before_revision = session.revision(doc).unwrap();
+    let before_key = session.doc_key(doc).unwrap().to_owned();
+    let before_undo = (
+        session.can_undo(doc).unwrap(),
+        session.can_redo(doc).unwrap(),
+    );
     for id in [doc, DocId(usize::MAX), DocId(doc.0 + 1)] {
         let checks = [
+            (
+                Kind::SangerReview,
+                "sanger_review",
+                session.sanger_review(id).map(|_| ()),
+            ),
             (Kind::Sequence, "sequence", session.doc(id).map(|_| ())),
             (
                 Kind::Sequence,
@@ -492,12 +503,12 @@ fn assert_checked_access(session: &Session, doc: DocId, name: &str) {
                 session.submission(id).map(|_| ()),
             ),
         ];
-        for (kind, expected, result) in checks {
+        for (kind, _expected, result) in checks {
             if id != doc {
                 let error = result.unwrap_err();
                 assert_eq!(error.code(), "unknown_document");
                 assert!(matches!(error, Error::UnknownDocument { id: actual } if actual == id));
-            } else if name == expected {
+            } else if actual_kind == kind {
                 result.unwrap();
             } else {
                 let error = result.unwrap_err();
@@ -507,19 +518,34 @@ fn assert_checked_access(session: &Session, doc: DocId, name: &str) {
                 );
             }
         }
-        assert_eq!(session.is_alignment(id), id == doc && name == "alignment");
-        assert_eq!(session.is_tree(id), id == doc && name == "tree");
+        assert_eq!(
+            session.is_alignment(id),
+            id == doc && actual_kind == Kind::Alignment
+        );
+        assert_eq!(session.is_tree(id), id == doc && actual_kind == Kind::Tree);
         assert_eq!(
             session.is_delimitation(id),
-            id == doc && name == "delimitation"
+            id == doc && actual_kind == Kind::Delimitation
         );
-        assert_eq!(session.is_metadata(id), id == doc && name == "metadata");
-        assert_eq!(session.is_submission(id), id == doc && name == "submission");
+        assert_eq!(
+            session.is_metadata(id),
+            id == doc && actual_kind == Kind::Metadata
+        );
+        assert_eq!(
+            session.is_submission(id),
+            id == doc && actual_kind == Kind::Submission
+        );
     }
-    assert_eq!(session.state(doc), before_state);
-    assert_eq!(session.revision(doc), before_revision);
-    assert_eq!(session.doc_key(doc), before_key);
-    assert_eq!((session.can_undo(doc), session.can_redo(doc)), before_undo);
+    assert_eq!(session.state(doc).unwrap(), before_state);
+    assert_eq!(session.revision(doc).unwrap(), before_revision);
+    assert_eq!(session.doc_key(doc).unwrap(), before_key);
+    assert_eq!(
+        (
+            session.can_undo(doc).unwrap(),
+            session.can_redo(doc).unwrap()
+        ),
+        before_undo
+    );
     assert_eq!(files(session.root()), before_files);
 }
 
@@ -566,12 +592,85 @@ fn wrong_kind_extraction_does_not_begin_tracking_or_publish_output() {
             .unwrap_err();
         assert_eq!(error.code(), code);
         assert!(!output.exists());
-        assert!(!session.can_undo(doc));
-        assert_eq!(session.revision(doc), 0);
+        assert!(!session.can_undo(doc).unwrap());
+        assert_eq!(session.revision(doc).unwrap(), 0);
         assert_eq!(
             serde_json::to_value(log::read_all(dir.path()).unwrap()).unwrap(),
             before
         );
     }
     assert_eq!(std::fs::read(tree).unwrap(), b"(A:1,B:1);");
+}
+
+#[test]
+fn sanger_review() {
+    sanger_scenario("sanger_review", "single.json");
+}
+
+#[test]
+fn sanger_review_multiple_call_sets() {
+    sanger_scenario("sanger_review_multiple_call_sets", "multi.json");
+}
+
+fn sanger_scenario(name: &str, filename: &str) {
+    use basecraft_protocol::sanger::{ReviewChoice, ReviewOp};
+    let snapshot = |session: &Session, id| -> serde_json::Value {
+        serde_json::from_str(
+            &session
+                .sanger_review(id)
+                .unwrap()
+                .document_report(false)
+                .unwrap()
+                .raw,
+        )
+        .unwrap()
+    };
+    scenario(
+        name,
+        |root| sanger_fixture::copy_to(root, filename),
+        snapshot,
+        |session, id| {
+            let original = snapshot(session, id);
+            let mut first = original.clone();
+            first["decisions"][0] = serde_json::to_value(ReviewChoice::Edit('N')).unwrap();
+            first["manual"][0] = true.into();
+            first["events"].as_array_mut().unwrap().push(
+                serde_json::to_value(ReviewOp::Set {
+                    columns: vec![0],
+                    choice: ReviewChoice::Edit('N'),
+                })
+                .unwrap(),
+            );
+            let mut second = first.clone();
+            second["decisions"][1] = serde_json::to_value(ReviewChoice::Edit('N')).unwrap();
+            second["manual"][1] = true.into();
+            second["events"].as_array_mut().unwrap().push(
+                serde_json::to_value(ReviewOp::Set {
+                    columns: vec![1],
+                    choice: ReviewChoice::Edit('N'),
+                })
+                .unwrap(),
+            );
+            let call_set = session.sanger_review(id).unwrap().draft_sha256.clone();
+            (
+                [
+                    Op::SangerReview {
+                        call_set: call_set.clone(),
+                        edit: Box::new(ReviewOp::Set {
+                            columns: vec![0],
+                            choice: ReviewChoice::Edit('N'),
+                        }),
+                    },
+                    Op::SangerReview {
+                        call_set,
+                        edit: Box::new(ReviewOp::Set {
+                            columns: vec![1],
+                            choice: ReviewChoice::Edit('N'),
+                        }),
+                    },
+                ],
+                [original, first, second],
+            )
+        },
+    );
 }

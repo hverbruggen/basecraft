@@ -300,8 +300,8 @@ impl qobject::MetadataController {
         Some((
             session.id().into(),
             doc,
-            session.generation(doc),
-            session.revision(doc),
+            session.generation(doc).unwrap(),
+            session.revision(doc).unwrap(),
         ))
     }
 
@@ -323,8 +323,8 @@ impl qobject::MetadataController {
                     crate::bridge::checked_document!(sync self, session.metadata_notices(doc)),
                 ),
                 true,
-                session.can_undo(doc),
-                session.can_redo(doc),
+                session.can_undo(doc).unwrap_or(false),
+                session.can_redo(doc).unwrap_or(false),
             ),
             _ => (table_json(None, &[]), false, false, false),
         };

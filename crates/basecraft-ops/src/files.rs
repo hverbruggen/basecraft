@@ -12,6 +12,7 @@ use crate::{Error, Result};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
+    SangerReview,
     GenBank,
     Delimitation,
     /// The project's specimen metadata: a manifest with TSV tables beside
@@ -35,6 +36,11 @@ impl Format {
         if crate::submission::is_submission(path) {
             return Ok(Format::Submission);
         }
+        if crate::sanger_review::evidence_kind(path)
+            == Some(crate::sanger_review::EvidenceKind::Review)
+        {
+            return Ok(Format::SangerReview);
+        }
         let ext = path
             .extension()
             .and_then(|e| e.to_str())
@@ -54,6 +60,7 @@ impl Format {
 /// What a file opens as.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
+    SangerReview,
     Sequence,
     Delimitation,
     Metadata,
@@ -71,6 +78,15 @@ pub enum Kind {
 /// The standalone probe streams the entire file without constructing an index.
 pub fn kind(path: &Path) -> Result<Kind> {
     match Format::from_path(path)? {
+        Format::SangerReview => {
+            crate::sanger_review::SangerReview::load(path).map_err(|detail| {
+                crate::Error::Damaged {
+                    path: path.into(),
+                    detail,
+                }
+            })?;
+            return Ok(Kind::SangerReview);
+        }
         Format::Delimitation => return Ok(Kind::Delimitation),
         Format::Metadata => return Ok(Kind::Metadata),
         Format::Submission => return Ok(Kind::Submission),
@@ -119,6 +135,7 @@ pub struct OpenedTree {
 }
 
 pub enum Loaded {
+    SangerReview(Box<crate::sanger_review::SangerReview>),
     Sequence(Opened),
     Delimitation(basecraft_protocol::delimitation::DelimitationWorkspace),
     Metadata(crate::metadata::OpenedMetadata),
@@ -128,6 +145,22 @@ pub enum Loaded {
 }
 
 impl Loaded {
+    pub(crate) fn sanger_review(&self) -> Option<&crate::sanger_review::SangerReview> {
+        if let Self::SangerReview(payload) = self {
+            Some(payload)
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn sanger_review_mut(&mut self) -> Option<&mut crate::sanger_review::SangerReview> {
+        if let Self::SangerReview(payload) = self {
+            Some(payload)
+        } else {
+            None
+        }
+    }
+
     pub(crate) fn sequence(&self) -> Option<&Opened> {
         if let Self::Sequence(payload) = self {
             Some(payload)
@@ -181,6 +214,7 @@ impl Loaded {
     /// Borrow the shared behavior of the existing document payloads.
     pub(crate) fn as_document(&self) -> &dyn crate::documents::Document {
         match self {
+            Self::SangerReview(review) => review.as_ref(),
             Self::Submission(sub) => sub,
             Self::Metadata(opened) => opened,
             Self::Alignment(opened) => opened,
@@ -192,6 +226,7 @@ impl Loaded {
 
     pub(crate) fn as_document_mut(&mut self) -> &mut dyn crate::documents::Document {
         match self {
+            Self::SangerReview(review) => review.as_mut(),
             Self::Submission(sub) => sub,
             Self::Metadata(opened) => opened,
             Self::Alignment(opened) => opened,
@@ -203,28 +238,21 @@ impl Loaded {
 }
 
 /// The same admission route for live sources and verified replay snapshots.
-pub(crate) fn load_snapshot(
-    path: &Path,
-    source: Option<Source>,
-    format: Format,
-    verified: bool,
-) -> Result<Loaded> {
-    if let Some(source) = source {
-        if verified && format == Format::Tree {
-            load_tree_from(path, &source, true).map(Loaded::Tree)
-        } else {
-            load_from(path, source)
-        }
-    } else if verified && format == Format::Tree {
-        load_tree_from_verified_snapshot(path).map(Loaded::Tree)
-    } else {
-        load(path)
-    }
+pub(crate) fn load_snapshot(path: &Path, source: Option<Source>) -> Result<Loaded> {
+    source.map_or_else(|| load(path), |source| load_from(path, source))
 }
 
 /// Open a file as whatever it holds: see [`kind`].
 pub fn load(path: &Path) -> Result<Loaded> {
     let format = Format::from_path(path)?;
+    if format == Format::SangerReview {
+        return crate::sanger_review::SangerReview::load(path)
+            .map(|review| Loaded::SangerReview(Box::new(review)))
+            .map_err(|detail| crate::Error::Damaged {
+                path: path.into(),
+                detail,
+            });
+    }
     if format == Format::Metadata {
         return crate::metadata::load(path).map(Loaded::Metadata);
     }
@@ -243,7 +271,7 @@ pub fn load(path: &Path) -> Result<Loaded> {
 /// Other formats require their existing loaders and are rejected here.
 pub fn load_from(path: &Path, source: Source) -> Result<Loaded> {
     match Format::from_path(path)? {
-        Format::Tree => load_tree_from(path, &source, false).map(Loaded::Tree),
+        Format::Tree => load_tree_from(path, source).map(Loaded::Tree),
         Format::Fasta => load_fasta_from(path, source, None),
         Format::GenBank => open_from(path, source).map(Loaded::Sequence),
         _ => Err(crate::error::invalid(
@@ -365,24 +393,11 @@ use basecraft_protocol::companion_records::{DelimitationSidecar, SupportName, Tr
 
 /// Read the first tree of a Newick or NEXUS file, with its sidecar.
 pub fn load_tree(path: &Path) -> Result<OpenedTree> {
-    load_tree_metadata(path, false)
+    load_tree_from(path, open_source(path, Format::Tree)?)
 }
 
-/// Replay has verified the journal's exact tree AND sidecar hashes before this
-/// call. This does not grant trust to an unbound live adjacent sidecar.
-pub(crate) fn load_tree_from_verified_snapshot(path: &Path) -> Result<OpenedTree> {
-    load_tree_metadata(path, true)
-}
-
-fn load_tree_metadata(path: &Path, verified_snapshot: bool) -> Result<OpenedTree> {
-    load_tree_from(path, &open_source(path, Format::Tree)?, verified_snapshot)
-}
-
-pub(crate) fn load_tree_from(
-    path: &Path,
-    source: &Source,
-    verified_snapshot: bool,
-) -> Result<OpenedTree> {
+pub(crate) fn load_tree_from(path: &Path, source: Source) -> Result<OpenedTree> {
+    let exchange_hash = basecraft_io::hash_bytes(source.bytes());
     let text = std::str::from_utf8(source.bytes())
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     let nexus = newick::is_nexus(text);
@@ -391,48 +406,43 @@ pub(crate) fn load_tree_from(
         .next()
         .ok_or_else(|| Error::Empty(path.to_path_buf()))?;
     let remaining = parsed_trees.collect();
+    drop(source);
     let name = path
         .file_name()
         .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
     let mut doc = TreeDoc::from_parsed(name, &parsed);
+    drop(parsed);
     let mut metadata_warning = None;
-    // Errors in a hidden association must never select an adjacent legacy file.
-    let run = crate::analysis_store::ArtifactRun::for_result_with_hash(
-        path,
-        &basecraft_io::hash_bytes(source.bytes()),
-    )?;
-    let bound = run.is_some();
-    let sidecar = run.map_or_else(
-        || tree_sidecar(path),
-        |run| {
-            run.join(format!(
-                "{}.basecraft.json",
-                path.file_name().unwrap_or_default().to_string_lossy()
-            ))
-        },
-    );
-    if sidecar.exists() {
-        let side: TreeSidecar = serde_json::from_slice(&std::fs::read(&sidecar)?)?;
-        if side.schema_version == 0 && !verified_snapshot {
-            metadata_warning = Some(format!(
-                "Unverified legacy tree metadata at {} was left unapplied; the exchange tree is open and the original metadata bytes are preserved.",
-                sidecar.display()
-            ));
-        } else if side.schema_version > 1 {
-            return Err(crate::error::invalid(
-                "Unsupported future tree metadata version; bytes were preserved",
-            ));
-        } else {
-            if side.schema_version == 1
-                && (side.tree_hash != basecraft_io::hash_bytes(doc.to_newick().as_bytes())
-                    || side
-                        .exchange_hash
-                        .as_ref()
-                        .is_some_and(|hash| *hash != basecraft_io::hash_bytes(text.as_bytes())))
-            {
-                return Err(crate::error::invalid(
-                    "Tree metadata describes different exchange contents; bytes were preserved and metadata was not applied",
+    let metadata = (|| -> Result<()> {
+        // Errors in a hidden association must never select an adjacent legacy file.
+        let run = crate::analysis_store::ArtifactRun::for_result_with_hash(path, &exchange_hash)?;
+        let bound = run.is_some();
+        let sidecar = run.map_or_else(
+            || tree_sidecar(path),
+            |run| {
+                run.join(format!(
+                    "{}.basecraft.json",
+                    path.file_name().unwrap_or_default().to_string_lossy()
+                ))
+            },
+        );
+        if sidecar.exists() {
+            let side: TreeSidecar = serde_json::from_slice(&std::fs::read(&sidecar)?)?;
+            if side.schema_version != 1 {
+                return Err(Error::Unsupported(
+                    "Unsupported tree metadata version".into(),
                 ));
+            }
+            if side.tree_hash != basecraft_io::hash_bytes(doc.to_newick().as_bytes())
+                || side
+                    .exchange_hash
+                    .as_ref()
+                    .is_some_and(|hash| *hash != exchange_hash)
+            {
+                return Err(Error::Damaged {
+                    path: sidecar,
+                    detail: "Tree metadata describes different exchange contents".into(),
+                });
             }
             let kinds: Vec<_> = side
                 .supports
@@ -449,36 +459,13 @@ pub(crate) fn load_tree_from(
                 doc.set_support_kind(&name, kind);
             }
         }
-    }
-    if bound && !sidecar.exists() {
-        metadata_warning = Some("Bound tree metadata is unavailable; exchange values remain open with unknown support meaning and default presentation.".into());
-    }
-    // Legacy Basecraft distance runs carry explicit bootstrap metadata. Require
-    // an exact matching result, so stale adjacent reports cannot relabel imports.
-    let report_path = PathBuf::from(format!("{}.run.json", path.display()));
-    if let Ok(report) = std::fs::read(&report_path)
-        && let Ok(report) = serde_json::from_slice::<serde_json::Value>(&report)
-        && report["tool"] == "basecraft-distance"
-        && report["bootstrap"]["support_withheld"] == false
-        && report["bootstrap"]["completed"]
-            .as_u64()
-            .is_some_and(|n| n > 0)
-        && report["tree"]["trees"].as_array().is_some_and(|trees| {
-            trees.iter().any(|tree| {
-                tree.as_str()
-                    .and_then(|text| TreeDoc::from_newick("", text).ok())
-                    .is_some_and(|tree| tree.to_newick() == doc.to_newick())
-            })
-        })
-        && doc.supports().len() == 1
-        && doc.supports()[0].kind == basecraft_protocol::SupportKind::Unknown
-    {
-        let name = doc.supports()[0].name.clone();
-        if name == "Support" {
-            doc.rename_support(&name, "Bootstrap");
+        if bound && !sidecar.exists() {
+            metadata_warning = Some("Bound tree metadata is unavailable; exchange values remain open with unknown support meaning and default presentation.".into());
         }
-        let name = doc.supports()[0].name.clone();
-        doc.set_support_kind(&name, basecraft_protocol::SupportKind::Bootstrap);
+        Ok(())
+    })();
+    if let Err(error) = metadata {
+        metadata_warning = Some(format!("Tree metadata was ignored: {error}"));
     }
     Ok(OpenedTree {
         doc,
@@ -588,6 +575,7 @@ pub fn open(path: &Path) -> Result<Opened> {
 pub fn open_from(path: &Path, source: Source) -> Result<Opened> {
     let format = Format::from_path(path)?;
     match format {
+        Format::SangerReview => Err(crate::error::invalid("this is a Sanger review")),
         Format::Delimitation => Err(crate::error::invalid("this is a delimitation workspace")),
         Format::Metadata => Err(crate::error::invalid(
             "this is the project's specimen metadata",
@@ -652,6 +640,9 @@ pub fn write_main(opened: &Opened, w: &mut dyn Write) -> io::Result<()> {
     let doc = &opened.doc;
     match opened.format {
         Format::GenBank => genbank::write(w, &doc.to_genbank()),
+        Format::SangerReview => Err(io::Error::other(
+            "a sequence cannot be written as a Sanger review",
+        )),
         Format::Delimitation => Err(io::Error::other("this is a delimitation workspace")),
         Format::Metadata => Err(io::Error::other("a sequence can't be written as metadata")),
         Format::Submission => Err(io::Error::other(

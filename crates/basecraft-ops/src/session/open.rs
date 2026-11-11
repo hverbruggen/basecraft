@@ -2,7 +2,7 @@
 #[cfg(test)]
 use super::retention_tests;
 use super::{DocId, Op, OpResult, Path, PathBuf, Result, Slot, files, invalid, objects_dir};
-use super::{OBJECT_STORE_LIMIT, Session, save_authority};
+use super::{OBJECT_STORE_LIMIT, Session};
 
 impl Session {
     pub fn open(&mut self, path: &Path) -> Result<DocId> {
@@ -13,28 +13,16 @@ impl Session {
     /// Unlike a separate [`files::kind`] probe, this does not reread the main
     /// file to classify it. Existing companion validation still applies.
     pub fn open_classified(&mut self, path: &Path) -> Result<(DocId, files::Kind)> {
-        self.open_inner(path, false)
+        self.open_inner(path)
     }
 
-    pub(crate) fn open_replay_snapshot(&mut self, path: &Path) -> Result<DocId> {
-        self.open_inner(path, true).map(|(id, _)| id)
-    }
-
-    pub(super) fn open_inner(
-        &mut self,
-        path: &Path,
-        verified_snapshot: bool,
-    ) -> Result<(DocId, files::Kind)> {
-        if crate::sanger_review::evidence_kind(path).is_some() {
-            return Err(invalid(
-                "Saved Sanger reviews and drafts are edited only in the Basecraft application; read a saved Sanger review's history, methods and provenance with the history, methods and provenance commands",
-            ));
-        }
+    pub(super) fn open_inner(&mut self, path: &Path) -> Result<(DocId, files::Kind)> {
         self.flush()?;
         let disk_stamp = crate::input_evidence::stamp(path)?;
         let format = files::Format::from_path(path)?;
         // Files read with the main one: a sidecar, or a metadata manifest's tables.
         let companions = match format {
+            files::Format::SangerReview => Vec::new(),
             files::Format::Metadata => crate::metadata::files(path).split_off(1),
             files::Format::Tree | files::Format::Delimitation => vec![files::tree_sidecar(path)],
             files::Format::GenBank | files::Format::Fasta => vec![files::gff_sidecar(path)],
@@ -54,7 +42,11 @@ impl Session {
                 .iter()
                 .map(|c| {
                     if c.exists() {
-                        basecraft_io::hash_file(c).map(Some).map_err(Into::into)
+                        match basecraft_io::hash_file(c) {
+                            Ok(hash) => Ok(Some(hash)),
+                            Err(_) if format == files::Format::Tree => Ok(None),
+                            Err(error) => Err(error.into()),
+                        }
                     } else {
                         Ok(None)
                     }
@@ -77,7 +69,7 @@ impl Session {
             let companion_hashes = hash_companions()?;
             #[cfg(test)]
             files::admission_tests::boundary("acquired");
-            let content = files::load_snapshot(path, source, format, verified_snapshot)?;
+            let content = files::load_snapshot(path, source)?;
             (content, accepted_hash, companion_hashes)
         };
         #[cfg(test)]
@@ -113,24 +105,17 @@ impl Session {
             );
         }
         let kind = content.kind();
-        self.docs.push(Slot {
-            key: key.clone(),
+        let mut slot = Slot::new(
+            key.clone(),
             content,
-            current_saved_hashes: std::sync::OnceLock::new(),
-            generation: 0,
-            save_authority: save_authority::PendingSaveAuthority::default(),
-            undo: Vec::new(),
-            redo: Vec::new(),
-            baseline: None,
-            baseline_logged: false,
-            accepted_hashes: hashes.clone(),
-            saved_state_hashes: Vec::new(),
-            absent_sidecars,
-            origin,
-            origin_issue,
-            origin_bundle: crate::provenance::bundle_for_result(path),
+            crate::provenance::bundle_for_result(path),
             disk_stamp,
-        });
+        );
+        slot.accepted_hashes.clone_from(&hashes);
+        slot.absent_sidecars = absent_sidecars;
+        slot.origin = origin;
+        slot.origin_issue = origin_issue;
+        self.docs.push(slot);
         let id = DocId(self.docs.len() - 1);
         self.docs[id.0].saved_state_hashes = self.save_hashes(id)?;
         let entry = self.entry(
@@ -282,6 +267,13 @@ impl Session {
             .ok_or_else(|| invalid("unknown document"))?;
         if self.save_hashes(id)? != slot.saved_state_hashes {
             return Ok(None);
+        }
+        if let Some((path, stamp, hash)) = &slot.saved_target {
+            let current = crate::input_evidence::stamp(path)?;
+            if current != *stamp {
+                return Err(crate::Error::ChangedOnDisk { path: path.clone() });
+            }
+            return Ok(Some((path.clone(), current, hash.clone())));
         }
         let path = self.resolve(&slot.key).canonicalize()?;
         let current = crate::input_evidence::stamp(&path)?;

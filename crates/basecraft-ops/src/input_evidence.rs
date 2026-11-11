@@ -1,4 +1,5 @@
 //! Referenced-input lifecycle. Only known stores are inspected, never filesystem trees.
+
 use crate::links::AlignmentLinkExt;
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
@@ -90,7 +91,14 @@ impl Mutation {
         transformation: &str,
         result_label: &str,
     ) -> Result<()> {
-        link_generated_input_locked(run, dependencies, payload, transformation, result_label)
+        link_generated_input_locked(
+            run,
+            dependencies,
+            payload,
+            transformation,
+            result_label,
+            register,
+        )
     }
 
     /// Recheck the caller's frozen original hash under the held evidence lock.
@@ -102,16 +110,17 @@ impl Mutation {
         dependencies: &[PathBuf],
         origin: &str,
     ) -> Result<ArtifactRun> {
-        reference_input_locked(anchor, source, hash, dependencies, origin)
+        reference_input_locked(anchor, source, hash, dependencies, origin, None)
     }
 }
 
-fn reference_input_locked(
+pub(crate) fn reference_input_locked(
     anchor: &Path,
     source: &Path,
     hash: &str,
     dependencies: &[PathBuf],
     origin: &str,
+    captured_stamp: Option<&FileStamp>,
 ) -> Result<ArtifactRun> {
     use basecraft_protocol::provenance::{
         ArtifactRevision, Completeness, InputReference, Publication,
@@ -119,12 +128,19 @@ fn reference_input_locked(
     let run =
         crate::analysis_store::ArtifactRun::create(anchor, &ulid::Ulid::generate().to_string())?;
     let source = source.canonicalize()?;
-    if basecraft_io::hash_file(&source)? != hash {
-        return Err(invalid("Input changed while registering its evidence"));
+    if captured_stamp.map_or_else(
+        || {
+            basecraft_io::hash_file(&source)
+                .map(|actual| actual != hash)
+                .map_err(crate::Error::from)
+        },
+        |before| stamp(&source).map(|now| &now != before),
+    )? {
+        return Err(crate::Error::ChangedOnDisk { path: source });
     }
     let reference = InputReference {
         path: crate::input_evidence::relative(run.directory(), &source)?,
-        stamp: crate::input_evidence::stamp(&source)?,
+        stamp: captured_stamp.cloned().map_or_else(|| stamp(&source), Ok)?,
         hash: hash.into(),
         extra: BTreeMap::new(),
     };
@@ -1718,6 +1734,18 @@ fn owning_ledger(bundle: &Path) -> Result<(PathBuf, SubmittedInput)> {
 
 /// Resolve evidence only on explicit verification/export/relink. No UI-event hashing.
 pub fn verified_source(bundle: &Path, reference: &InputReference) -> Result<PathBuf> {
+    let path = source_location(bundle, reference)?;
+    if basecraft_io::hash_file(&path)? != reference.hash
+        || std::fs::metadata(&path)?.len() != reference.stamp.size
+    {
+        return Err(invalid(
+            "referenced input changed; original evidence unavailable (timestamp alone is not identity)",
+        ));
+    }
+    Ok(path.canonicalize()?)
+}
+
+pub(crate) fn source_location(bundle: &Path, reference: &InputReference) -> Result<PathBuf> {
     let (mut location, mut input) = owning_ledger(bundle)?;
     if input.state == basecraft_protocol::input_records::EvidenceState::Broken {
         return Err(invalid("evidence chain explicitly broken"));
@@ -1769,14 +1797,7 @@ pub fn verified_source(bundle: &Path, reference: &InputReference) -> Result<Path
     } else {
         location.join(&effective.path)
     };
-    if basecraft_io::hash_file(&path)? != reference.hash
-        || std::fs::metadata(&path)?.len() != reference.stamp.size
-    {
-        return Err(invalid(
-            "referenced input changed; original evidence unavailable (timestamp alone is not identity)",
-        ));
-    }
-    Ok(path.canonicalize()?)
+    Ok(path)
 }
 
 /// Honest repair: only a byte-verified original may replace a missing/changed reference.
@@ -2047,6 +2068,8 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
         if original == result {
             publication.outputs[0].hash = hash;
             publication.outputs[0].size = size;
+            // Relocation changes the visible review, not its retained original artifact.
+            publication.outputs[0].retained = None;
         } else {
             publication.outputs.push(ArtifactRevision {
                 id: format!("{}:sanger-review", publication.id),
@@ -2124,10 +2147,15 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
     if authored.is_file() {
         copy(&authored, &target_bundle.join("reports/methods.md"))?;
     }
-    if !crate::provenance::verify(&copied)?.is_empty() {
-        return Err(invalid(
-            "export verification failed; original source and records preserved",
-        ));
+    let issues = crate::provenance::verify(&copied)?;
+    if !issues.is_empty() {
+        return Err(crate::Error::Damaged {
+            path: copied.clone(),
+            detail: format!(
+                "export verification failed: {}; original source and records preserved",
+                issues.join("; ")
+            ),
+        });
     }
     if destination.exists() {
         return Err(invalid("package destination appeared during export"));
@@ -2447,6 +2475,7 @@ pub(crate) fn link_generated_input_locked(
     payload: &[u8],
     transformation: &str,
     result_label: &str,
+    register: impl FnOnce(&ArtifactRun) -> Result<()>,
 ) -> Result<()> {
     let mut upstream = Vec::new();
     for dependency in dependencies {
@@ -2485,7 +2514,7 @@ pub(crate) fn link_generated_input_locked(
             extra: BTreeMap::new(),
         })?,
     )?;
-    crate::input_evidence::register(run)
+    register(run)
 }
 
 #[cfg(test)]

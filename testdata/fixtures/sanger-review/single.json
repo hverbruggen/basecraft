@@ -1,0 +1,37 @@
+{
+  "selected": "e8d18fc4b04d09b83060c7e441c262badbbe86a049f749e1b53fea66f73d8fe8",
+  "sets": [
+    {
+      "draft_json": "{\n  \"aligned_columns\": 4,\n  \"columns\": [\n    {\n      \"column\": 1,\n      \"conflict\": false,\n      \"consensus\": \"A\",\n      \"review\": true,\n      \"support\": [\n        {\n          \"base\": \"A\",\n          \"kind\": \"call\",\n          \"read\": 1\n        }\n      ]\n    },\n    {\n      \"column\": 2,\n      \"conflict\": false,\n      \"consensus\": \"C\",\n      \"review\": true,\n      \"support\": [\n        {\n          \"base\": \"C\",\n          \"kind\": \"call\",\n          \"read\": 1\n        }\n      ]\n    },\n    {\n      \"column\": 3,\n      \"conflict\": false,\n      \"consensus\": \"G\",\n      \"review\": true,\n      \"support\": [\n        {\n          \"base\": \"G\",\n          \"kind\": \"call\",\n          \"read\": 1\n        }\n      ]\n    },\n    {\n      \"column\": 4,\n      \"conflict\": false,\n      \"consensus\": \"T\",\n      \"review\": true,\n      \"support\": [\n        {\n          \"base\": \"T\",\n          \"kind\": \"call\",\n          \"read\": 1\n        }\n      ]\n    }\n  ],\n  \"conflict_columns\": 0,\n  \"consensus\": \"ACGT\",\n  \"consensus_length\": 4,\n  \"engine\": \"Tracy\",\n  \"engine_sha256\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\n  \"inputs\": [\n    {\n      \"orientation\": \"forward\",\n      \"path\": \"trace.ab1\",\n      \"read\": 1,\n      \"sha256\": \"245fb10f874da417017b6d7d0434ed887f7021ce0641d6ef5f533a8ff0c6bf3a\"\n    }\n  ],\n  \"minimum_identity\": 0.8,\n  \"minimum_overlap\": 1,\n  \"mode\": \"basecall\",\n  \"overlaps\": [],\n  \"status\": \"draft_requires_review\",\n  \"version_output\": \"synthetic caller 0\"\n}\n",
+      "draft_path": "draft-b.json",
+      "draft_sha256": "e8d18fc4b04d09b83060c7e441c262badbbe86a049f749e1b53fea66f73d8fe8",
+      "events": [
+        {
+          "choice": {
+            "base": "G",
+            "choice": "edit"
+          },
+          "columns": [
+            0
+          ],
+          "op": "set"
+        }
+      ],
+      "evidence": {
+        "placement": null,
+        "runs": [],
+        "schema_version": 1,
+        "sources": [
+          {
+            "ledger": null,
+            "original": "trace.ab1",
+            "path": "trace.ab1",
+            "reference": null,
+            "sha256": "245fb10f874da417017b6d7d0434ed887f7021ce0641d6ef5f533a8ff0c6bf3a"
+          }
+        ]
+      }
+    }
+  ],
+  "version": 3
+}

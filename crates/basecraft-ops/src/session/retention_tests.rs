@@ -460,8 +460,8 @@ fn proposals_export_save_and_empty_creation_use_the_shared_promotion() {
                 0 => session
                     .apply_sequence_proposals(
                         id,
-                        session.generation(id),
-                        session.revision(id),
+                        session.generation(id).unwrap(),
+                        session.revision(id).unwrap(),
                         &[edit()],
                         &session.actor.clone(),
                     )

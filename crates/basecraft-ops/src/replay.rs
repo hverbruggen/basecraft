@@ -60,6 +60,22 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
                 .problems
                 .push(format!("{} {} {}: {msg}", e.id, e.op.name(), e.doc));
         };
+        if let Op::CreateSangerReview { review } = &e.op {
+            docs.remove(e.doc.as_str());
+            if !safe_key(&e.doc) {
+                problem("unsafe document identity".into());
+                continue;
+            }
+            match session.create_sanger_review_with_key(&e.doc, &review_record_at(root, review)) {
+                Ok(id) if session.state(id)?.matches_recorded(&e.state) => {
+                    session.restore_replay_paths(id, work.path(), &source_root);
+                    docs.insert(&e.doc, id);
+                }
+                Ok(_) => problem("created review state differs".into()),
+                Err(error) => problem(error.to_string()),
+            }
+            continue;
+        }
         if let Op::CreateSequence { name, residues } = &e.op {
             docs.remove(e.doc.as_str());
             if !safe_key(&e.doc) {
@@ -67,7 +83,7 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
                 continue;
             }
             match session.create_sequence_with_key(&e.doc, name, residues) {
-                Ok(id) if session.state(id).matches_recorded(&e.state) => {
+                Ok(id) if session.state(id)?.matches_recorded(&e.state) => {
                     docs.insert(&e.doc, id);
                 }
                 Ok(_) => problem("created sequence state differs".into()),
@@ -83,7 +99,7 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
                 continue;
             }
             match materialise(root, work.path(), &e.result.hashes) {
-                Ok(()) => match session.open_replay_snapshot(&work.path().join(path)) {
+                Ok(()) => match session.open(&work.path().join(path)) {
                     Ok(id) => {
                         session.restore_replay_paths(id, work.path(), &source_root);
                         docs.insert(&e.doc, id);
@@ -143,20 +159,22 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
                     Err(err) => problem(err.to_string()),
                 }
             }
-            op => match session.apply_as(doc, op.clone(), e.actor.clone()) {
-                Ok(out) => {
-                    ids.insert(out.entry_id, e.id.clone());
-                    if out.feature.map(|f| f.0) != e.result.feature {
-                        problem(format!(
-                            "feature id {:?}, expected {:?}",
-                            out.feature, e.result.feature
-                        ));
+            op => {
+                match session.apply_as(doc, sanger_record_at(root, op.clone()), e.actor.clone()) {
+                    Ok(out) => {
+                        ids.insert(out.entry_id, e.id.clone());
+                        if out.feature.map(|f| f.0) != e.result.feature {
+                            problem(format!(
+                                "feature id {:?}, expected {:?}",
+                                out.feature, e.result.feature
+                            ));
+                        }
                     }
+                    Err(err) => problem(err.to_string()),
                 }
-                Err(err) => problem(err.to_string()),
-            },
+            }
         }
-        let state = session.state(doc);
+        let state = session.state(doc)?;
         if !state.matches_recorded(&e.state) {
             report.problems.push(format!(
                 "{} {}: state {state:?}, expected {:?}",
@@ -373,12 +391,30 @@ fn recover_entries(
     let source_root = recorded_source_root(root)?;
     let mut documents = std::collections::BTreeMap::<String, DocId>::new();
     for entry in entries {
+        if let Op::CreateSangerReview { review } = &entry.op {
+            if !safe_key(&entry.doc) {
+                return Err(Error::Unsupported(
+                    "unsafe recovery document identity".into(),
+                ));
+            }
+            let doc = session
+                .create_sanger_review_with_key(&entry.doc, &review_record_at(root, review))?;
+            if !session.state(doc)?.matches_recorded(&entry.state) {
+                return Err(Error::Damaged {
+                    path: root.into(),
+                    detail: "created review state differs".into(),
+                });
+            }
+            session.restore_replay_paths(doc, staging.path(), &source_root);
+            documents.insert(entry.doc.clone(), doc);
+            continue;
+        }
         if let Op::CreateSequence { name, residues } = &entry.op {
             if !safe_key(&entry.doc) {
                 return Err(crate::error::invalid("unsafe recovery document identity"));
             }
             let doc = session.create_sequence_with_key(&entry.doc, name, residues)?;
-            if !session.state(doc).matches_recorded(&entry.state) {
+            if !session.state(doc)?.matches_recorded(&entry.state) {
                 return Err(crate::Error::Damaged {
                     path: root.join("events.jsonl"),
                     detail: "created sequence state differs".into(),
@@ -416,10 +452,10 @@ fn recover_entries(
                 session.redo_single(doc)?;
             }
             operation => {
-                session.apply_as(doc, operation, entry.actor)?;
+                session.apply_as(doc, sanger_record_at(root, operation), entry.actor)?;
             }
         }
-        if !session.state(doc).matches_recorded(&entry.state) {
+        if !session.state(doc)?.matches_recorded(&entry.state) {
             return Err(crate::Error::Damaged {
                 path: root.join("events.jsonl"),
                 detail: format!("recovery state differs at {}", entry.id),
@@ -1403,8 +1439,6 @@ enum AdvanceSite {
     FirstArtifacts,
     Observation,
     FinalArtifacts,
-    #[cfg(test)]
-    Discard,
 }
 trait AdvanceHooks {
     fn at(&mut self, _: AdvanceSite) {}
@@ -1430,5 +1464,18 @@ trait AdvanceHooks {
 }
 struct RecoveryAdvance;
 impl AdvanceHooks for RecoveryAdvance {}
-#[cfg(test)]
-mod attempt_boundary_tests;
+fn review_record_at(
+    root: &Path,
+    record: &basecraft_protocol::sanger_records::ReviewRecord,
+) -> basecraft_protocol::sanger_records::ReviewRecord {
+    basecraft_protocol::sanger_records::ReviewRecord {
+        path: objects_dir(root).join(record.hash.trim_start_matches("b3:")),
+        hash: record.hash.clone(),
+    }
+}
+fn sanger_record_at(root: &Path, mut op: Op) -> Op {
+    if let Op::SangerUpdate { review } = &mut op {
+        *review = review_record_at(root, review);
+    }
+    op
+}

@@ -175,7 +175,6 @@ pub enum Op {
     TreeStyle {
         style: TreeStyle,
         /// Support sets removed on accepting Style; cancellation makes no edits.
-        #[serde(default)]
         remove_supports: Vec<String>,
     },
     /// A figure or other derived file written from a document, such as a
@@ -208,6 +207,25 @@ pub enum Op {
     #[serde(rename = "submission.edit")]
     SubmissionEdit {
         edit: Box<crate::submission::SubmissionEdit>,
+    },
+    /// Initial review referencing an immutable record of drafts and biological events.
+    #[serde(rename = "doc.create_sanger_review")]
+    CreateSangerReview {
+        review: crate::sanger_records::ReviewRecord,
+    },
+    /// An explicit analysis continuation. Selection and decisions have their own operations.
+    #[serde(rename = "sanger.update")]
+    SangerUpdate {
+        review: crate::sanger_records::ReviewRecord,
+    },
+    /// Select a retained call set without copying its evidence.
+    #[serde(rename = "sanger.select")]
+    SangerSelect { call_set: String },
+    /// A decision addressed to an immutable Sanger call-set digest.
+    #[serde(rename = "sanger.review")]
+    SangerReview {
+        call_set: String,
+        edit: Box<crate::sanger::ReviewOp>,
     },
     /// A terminal job record, including failures and cancellation.
     #[serde(rename = "job.finished")]
@@ -260,6 +278,10 @@ impl Op {
             Op::DelimitationEdit { .. } => "delimitation.edit",
             Op::MetadataEdit { .. } => "metadata.edit",
             Op::SubmissionEdit { .. } => "submission.edit",
+            Op::SangerReview { .. } => "sanger.review",
+            Op::CreateSangerReview { .. } => "doc.create_sanger_review",
+            Op::SangerUpdate { .. } => "sanger.update",
+            Op::SangerSelect { .. } => "sanger.select",
             Op::JobFinished { .. } => "job.finished",
             Op::Undo { .. } => "history.undo",
             Op::Redo { .. } => "history.redo",
@@ -320,6 +342,11 @@ pub struct DocState {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DocumentCounts {
+    SangerReview {
+        columns: u64,
+        unresolved: u64,
+        call_sets: u64,
+    },
     Sequence {
         residues: u64,
         features: u64,
@@ -352,6 +379,11 @@ impl DocState {
     /// Construct a complete document fingerprint.
     pub fn from_counts(counts: DocumentCounts) -> Self {
         let (len, features, rows) = match &counts {
+            DocumentCounts::SangerReview {
+                columns,
+                unresolved,
+                call_sets,
+            } => (*columns, *unresolved, Some(*call_sets)),
             DocumentCounts::Sequence { residues, features } => (*residues, *features, None),
             DocumentCounts::Alignment { columns, rows } => (*columns, 0, Some(*rows)),
             DocumentCounts::Tree { tips, annotations } => (*tips, *annotations, None),

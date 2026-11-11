@@ -23,6 +23,13 @@ struct Cli {
     command: Command,
 }
 
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum EditOperations {
+    One(Box<basecraft_protocol::Op>),
+    Many(Vec<basecraft_protocol::Op>),
+}
+
 #[derive(Subcommand)]
 enum Command {
     /// Inspect and combine saved species hypotheses through the shared workflow.
@@ -66,7 +73,7 @@ enum Command {
     },
     /// Print the validated shared preferences as JSON without creating files.
     Preferences,
-    /// Reconstruct an unsaved session, or a Sanger review recovery checkpoint
+    /// Reconstruct an unsaved session
     /// with all its call sets, into a new directory; never overwrites inputs.
     Recover {
         session: PathBuf,
@@ -103,7 +110,11 @@ enum Command {
         output: Option<PathBuf>,
     },
     /// Apply a typed JSON operation to a document and save it.
-    Edit { file: PathBuf, operation: String },
+    Edit {
+        file: PathBuf,
+        /// One JSON operation, or an array applied in one session before saving.
+        operation: String,
+    },
     /// The project's specimen metadata: roster, identifications, record
     /// links and collection columns; imports and the .ods template.
     Metadata {
@@ -274,18 +285,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             output,
             verified_prefix,
         } => {
-            if basecraft_ops::sanger_review::evidence_kind(&session)
-                == Some(basecraft_ops::sanger_review::EvidenceKind::Review)
-            {
-                if verified_prefix {
-                    return Err(
-                        "--verified-prefix applies to session journals, not Sanger reviews".into(),
-                    );
-                }
-                let restored = basecraft_ops::sanger_review::recover(&session, &output)?;
-                println!("{}", restored.display());
-                return Ok(());
-            }
             let restored = if verified_prefix {
                 let (restored, problem) =
                     basecraft_ops::replay::recover_verified_prefix(&session, &output)?;
@@ -354,7 +353,20 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let root = file.parent().unwrap_or(std::path::Path::new("."));
             let mut session = script_session(root)?;
             let doc = session.open(&file)?;
-            session.apply(doc, serde_json::from_str(&operation)?)?;
+            let operations = match serde_json::from_str::<EditOperations>(&operation)? {
+                EditOperations::One(op) => vec![*op],
+                EditOperations::Many(ops) => ops,
+            };
+            for operation in operations {
+                if matches!(
+                    operation,
+                    basecraft_protocol::Op::Undo { .. } | basecraft_protocol::Op::Redo { .. }
+                ) {
+                    session.apply_history(doc, &operation)?;
+                } else {
+                    session.apply(doc, operation)?;
+                }
+            }
             save_options.save(&mut session, doc, None, false)?;
         }
         Command::ImportSupport { tree, source, name } => {

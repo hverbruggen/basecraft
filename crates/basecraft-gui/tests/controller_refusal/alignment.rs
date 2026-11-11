@@ -6,9 +6,9 @@ fn state(controller: &qobject::AlignmentController, original: DocId) -> serde_js
     let session = r.session.as_ref().unwrap();
     json!({
         "doc": r.doc.map(|id| id.0), "path": r.file_path.to_string(),
-        "session": session.id(), "key": session.doc_key(original),
-        "revision": session.revision(original),
-        "undo": session.can_undo(original), "redo": session.can_redo(original),
+        "session": session.id(), "key": session.doc_key(original).unwrap(),
+        "revision": session.revision(original).unwrap(),
+        "undo": session.can_undo(original).unwrap(), "redo": session.can_redo(original).unwrap(),
         "record": session.document_record(original).unwrap(),
         "view": format!("{:?}", r.view),
         "find": crate::find_bridge::status(&r.find, 0.0),
@@ -44,6 +44,7 @@ pub(crate) fn run(mut controller: Pin<&mut qobject::AlignmentController>) {
             .as_ref()
             .unwrap()
             .can_undo(original)
+            .unwrap()
     );
     let plugin = QString::from("iqtree");
     let form = QString::from("tree");

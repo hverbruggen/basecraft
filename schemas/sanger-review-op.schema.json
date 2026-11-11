@@ -115,30 +115,6 @@
       "properties": {
         "op": {
           "type": "string",
-          "const": "undo"
-        }
-      },
-      "required": [
-        "op"
-      ]
-    },
-    {
-      "type": "object",
-      "properties": {
-        "op": {
-          "type": "string",
-          "const": "redo"
-        }
-      },
-      "required": [
-        "op"
-      ]
-    },
-    {
-      "type": "object",
-      "properties": {
-        "op": {
-          "type": "string",
           "const": "export"
         },
         "path": {

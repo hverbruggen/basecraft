@@ -19,30 +19,74 @@ pub enum Source {
 
 impl Source {
     pub fn open(path: &Path) -> Result<Self> {
-        // User-owned files may be truncated by another process. Never map them:
-        // a read-only mmap can still raise SIGBUS and cannot yield a Rust error.
-        // Fallible reservation also reports oversized inputs instead of aborting.
+        Self::read(path, u64::MAX, false, false).map(|(bytes, _, _)| Self::Owned(bytes))
+    }
+    /// Read and hash the exact owned bytes returned to the parser.
+    pub fn open_hashed(path: &Path) -> Result<(Self, String)> {
+        let (bytes, hash, _) = Self::read(path, u64::MAX, true, false)?;
+        Ok((Self::Owned(bytes), hash.expect("requested BLAKE3")))
+    }
+    /// Bounded capture with both digests computed in the same read pass.
+    pub fn open_hashed_with_sha256(path: &Path, limit: u64) -> Result<(Vec<u8>, String, String)> {
+        let (bytes, hash, sha) = Self::read(path, limit, true, true)?;
+        Ok((
+            bytes,
+            hash.expect("requested BLAKE3"),
+            sha.expect("requested SHA-256"),
+        ))
+    }
+    fn read(
+        path: &Path,
+        limit: u64,
+        hashes: bool,
+        sha256: bool,
+    ) -> Result<(Vec<u8>, Option<String>, Option<String>)> {
+        use sha2::{Digest, Sha256};
         use std::io::Read;
         let mut file = File::open(path)?;
-        let len = usize::try_from(file.metadata()?.len())
-            .map_err(|_| std::io::Error::other("input is too large for this platform"))?;
+        let size = file.metadata()?.len();
+        if size > limit {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "input exceeds capture limit",
+            )
+            .into());
+        }
         let mut bytes = Vec::new();
         bytes
-            .try_reserve_exact(len)
-            .map_err(|e| std::io::Error::other(format!("cannot allocate input buffer: {e}")))?;
-        file.read_to_end(&mut bytes)?;
+            .try_reserve_exact(usize::try_from(size).map_err(std::io::Error::other)?)
+            .map_err(std::io::Error::other)?;
+        let mut b3 = hashes.then(crate::Hasher::new);
+        let mut sha = sha256.then(Sha256::new);
+        let mut buffer = vec![0; 64 * 1024];
+        loop {
+            let count = file.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            if bytes.len() as u64 + count as u64 > limit {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "input exceeds capture limit",
+                )
+                .into());
+            }
+            let chunk = &buffer[..count];
+            if let Some(b3) = &mut b3 {
+                b3.update(chunk);
+            }
+            if let Some(sha) = &mut sha {
+                sha.update(chunk);
+            }
+            bytes.extend_from_slice(chunk);
+        }
         #[cfg(feature = "test-counters")]
         crate::counters::record_read(path, bytes.len() as u64);
-        Ok(Source::Owned(bytes))
-    }
-
-    /// Read once and hash the exact owned bytes returned to the caller.
-    pub fn open_hashed(path: &Path) -> Result<(Self, String)> {
-        let source = Self::open(path)?;
-        let mut hasher = crate::Hasher::new();
-        hasher.update(source.bytes());
-        let hash = hasher.finish();
-        Ok((source, hash))
+        Ok((
+            bytes,
+            b3.map(|hasher| hasher.finish()),
+            sha.map(|sha| format!("{:x}", sha.finalize())),
+        ))
     }
 
     pub fn from_vec(bytes: Vec<u8>) -> Self {

@@ -1155,7 +1155,7 @@ pub fn export(
         note: DISCLAIMER.into(),
         status: summary.status.clone(),
         submission: PackageDocument {
-            document: session.doc_key(doc).into(),
+            document: session.doc_key(doc)?.into(),
             hash: basecraft_io::hash_bytes(&encode(&sub)?),
         },
         source: sub.source.clone(),

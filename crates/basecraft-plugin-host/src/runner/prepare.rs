@@ -3,7 +3,7 @@ use super::{
     Arc, ArtifactRevision, ArtifactRun, BTreeMap, DocumentTarget, Error, ExecutionFamily,
     InputReference, InputView, InvocationContext, InvocationInputEvidence, OperationRequest, Path,
     PathBuf, PreparedOperation, RegisteredOperation, Result, SequenceTarget, SessionPolicy, Value,
-    contract, file_tool, input_evidence, sources_from_upstream,
+    captures, contract, input_evidence, sources_from_upstream,
 };
 use basecraft_protocol::operation::QueryPreparation;
 
@@ -106,7 +106,7 @@ fn prepare_inputs(
                         .map_err(|_| Error::Protocol("invalid session document ID".into()))?,
                 );
                 let checked = session.checked_sequence(id)?;
-                if session.generation(id) != *generation || checked.version() != *revision {
+                if session.generation(id)? != *generation || checked.version() != *revision {
                     return Err(Error::Protocol(
                         "stale_revision: snapshot target changed".into(),
                     ));
@@ -131,9 +131,9 @@ fn prepare_inputs(
         sequence = Some(SequenceTarget {
             doc,
             session: session.id().into(),
-            generation: session.generation(doc),
+            generation: session.generation(doc)?,
             revision: checked.version(),
-            snapshot: crate::Snapshot::of(session.doc_key(doc), checked)?,
+            snapshot: crate::Snapshot::of(session.doc_key(doc)?, checked)?,
             dependencies: session
                 .document_record(doc)?
                 .origin_bundles()
@@ -158,8 +158,8 @@ fn prepare_inputs(
                             .map_err(|_| Error::Protocol("invalid session document ID".into()))?,
                     );
                     if !session.is_open(id)
-                        || session.generation(id) != binding.generation
-                        || session.revision(id) != binding.revision
+                        || session.generation(id)? != binding.generation
+                        || session.revision(id)? != binding.revision
                     {
                         return Err(Error::Protocol(
                             "stale_revision: input document changed".into(),
@@ -174,7 +174,7 @@ fn prepare_inputs(
                     input_record.include_input(&session.document_record(id)?);
                     let saved = session.saved_source(id)?;
                     if document.is_none() {
-                        let key = session.doc_key(id);
+                        let key = session.doc_key(id)?;
                         document = Some(DocumentTarget {
                             doc: id,
                             session: session.id().into(),
@@ -190,7 +190,7 @@ fn prepare_inputs(
                                 String::new(),
                             ),
                             saved: saved.as_ref().map(|(path, _, _)| path.clone()),
-                            path: session.root().join(session.doc_key(id)),
+                            path: session.root().join(session.doc_key(id)?),
                             receives_results: false,
                             save: false,
                         });
@@ -271,8 +271,8 @@ fn prepare_target(
                             .map_err(|_| Error::Protocol("invalid session document ID".into()))?,
                     );
                     if !session.is_open(id)
-                        || session.generation(id) != *generation
-                        || session.revision(id) != *revision
+                        || session.generation(id)? != *generation
+                        || session.revision(id)? != *revision
                     {
                         return Err(Error::Protocol(
                             "stale_revision: target document changed".into(),
@@ -310,6 +310,7 @@ impl PreparedOperation {
         initiator: String,
         mut session: Option<&mut basecraft_ops::Session>,
         registry: &crate::registry::Registry,
+        captured: &[basecraft_ops::sanger_review::CapturedInput],
     ) -> Result<Self> {
         policy.check(&operation)?;
         let policy = policy.capture_ambient_credential(&operation)?;
@@ -353,13 +354,13 @@ impl PreparedOperation {
         let parameters =
             contract::normalize_parameters(&operation.descriptor, &supplied_parameters)?;
         operation.package.verify()?;
-        let mut frozen = freeze_inputs(&operation, query_preparation, &parameters, &mut inputs)?;
+        let mut frozen = freeze_inputs(&operation, query_preparation, &parameters, &mut inputs, captured)?;
         let AllocatedRun {
             run,
             ledger_inputs,
             primary_input_owner,
             evidence,
-        } = allocate_run(&operation, &request, &policy, &inputs, &mut frozen)?;
+        } = allocate_run(&operation, &request, &policy, &inputs, &mut frozen, captured)?;
         let run_id = run.id().to_owned();
         let mut outputs = BTreeMap::new();
         for (name, binding) in &operation.descriptor.outputs {
@@ -447,6 +448,7 @@ fn freeze_inputs(
     query_preparation: Option<QueryPreparation>,
     parameters: &Value,
     inputs: &mut PreparationInputs,
+    captured: &[basecraft_ops::sanger_review::CapturedInput],
 ) -> Result<FrozenInputs> {
     let PreparationInputs {
         document,
@@ -480,7 +482,12 @@ fn freeze_inputs(
                         .unwrap_or("input")
                 }
             ));
-            let original_hash = file_tool::freeze_file(&source, &path)?;
+            let original_hash = captures::freeze(
+                &source,
+                &path,
+                captured,
+                (!accepted_hashes.contains_key(&source)).then_some(&mut *input_record),
+            )?;
             if operation
                 .descriptor
                 .host
@@ -543,17 +550,6 @@ fn freeze_inputs(
                     "identity-v1"
                 }
             };
-            if !accepted_hashes.contains_key(&source)
-                && let Ok(record) =
-                    basecraft_ops::document_record::DocumentRecord::from_file(&source)
-            {
-                input_record.include_input(&record);
-                if basecraft_io::hash_file(&source)? != original_hash {
-                    return Err(Error::Protocol(
-                        "source changed while capturing its history".into(),
-                    ));
-                }
-            }
             let submitted_hash = basecraft_io::hash_file(&path)?;
             sources.push((
                 source,
@@ -608,6 +604,7 @@ fn allocate_run(
     policy: &SessionPolicy,
     inputs: &PreparationInputs,
     frozen: &mut FrozenInputs,
+    captured: &[basecraft_ops::sanger_review::CapturedInput],
 ) -> Result<AllocatedRun> {
     let sequence = &inputs.sequence;
     let generated = &inputs.generated;
@@ -654,11 +651,12 @@ fn allocate_run(
     let mut first_input = None;
     let mut evidence: BTreeMap<String, Vec<InvocationInputEvidence>> = BTreeMap::new();
     for (source, original_hash, submitted_hash, transformation, frozen) in sources.drain(..) {
-        let ledger = mutation.reference_input_with_dependencies(
+        let ledger = captures::register(
+            &mutation,
             &anchor,
             &source,
             &original_hash,
-            &[],
+            captured,
             &format!("Input for {}", operation.id),
         )?;
         let mut record = mutation.read_input(ledger.directory())?;

@@ -6,12 +6,29 @@ use basecraft_docs::tree::TreeDoc;
 use basecraft_protocol::{DocState, Op};
 
 use super::Document;
+use crate::Error;
 use crate::Result;
-use crate::error::invalid;
 use crate::files::{self, Format, HashingWriter, OpenedTree};
 use crate::session::Inverse;
 
 impl Document for OpenedTree {
+    fn accepts(&self, op: &Op) -> bool {
+        matches!(
+            op,
+            Op::TreeReroot { .. }
+                | Op::TreeMidpointRoot {}
+                | Op::TreeMinimumVarianceRoot {}
+                | Op::TreeRootPosition { .. }
+                | Op::TreeRotate { .. }
+                | Op::TreeLadderize { .. }
+                | Op::TreeRenameTip { .. }
+                | Op::TreeAnnotate { .. }
+                | Op::TreeAddSupport { .. }
+                | Op::TreeRemoveSupport { .. }
+                | Op::TreeStyle { .. }
+        )
+    }
+
     fn kind(&self) -> crate::files::Kind {
         crate::files::Kind::Tree
     }
@@ -34,48 +51,15 @@ impl Document for OpenedTree {
         })
     }
 
-    fn prepare_edit(
-        &self,
-        op: &Op,
-        _root: &Path,
-        _live: bool,
-    ) -> Result<Option<super::PreparedEdit>> {
-        if matches!(
-            op,
-            Op::TreeMidpointRoot {} | Op::TreeMinimumVarianceRoot {} | Op::TreeStyle { .. }
-        ) {
-            let mut candidate = self.doc.clone();
-            execute_tree(&mut candidate, op)?;
-            Ok(Some(super::PreparedEdit::Tree(Box::new(candidate))))
-        } else {
-            Ok(None)
-        }
-    }
-
-    fn apply_prepared(
-        &mut self,
-        op: &Op,
-        prepared: Option<super::PreparedEdit>,
-    ) -> Result<(Inverse, Option<FeatureId>)> {
-        if let Some(super::PreparedEdit::Tree(candidate)) = prepared {
-            Ok((
-                Inverse::Tree(Box::new(std::mem::replace(&mut self.doc, *candidate))),
-                None,
-            ))
-        } else {
-            self.apply(op)
-        }
-    }
-
     fn apply(&mut self, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {
         execute_tree(&mut self.doc, op).map(|before| (Inverse::Tree(before), None))
     }
 
     fn revert(&mut self, inverse: &Inverse) -> Result<()> {
         let Inverse::Tree(before) = inverse else {
-            return Err(invalid("undo of the wrong kind of edit"));
+            return Err(Error::Unsupported("undo of the wrong kind of edit".into()));
         };
-        self.doc = (**before).clone();
+        self.doc.undo_edit(before);
         Ok(())
     }
 
@@ -86,7 +70,9 @@ impl Document for OpenedTree {
         format: Format,
     ) -> Result<Option<crate::links::PreparedLinks>> {
         if format != Format::Tree {
-            return Err(invalid("a tree can only be saved as a tree file"));
+            return Err(Error::Unsupported(
+                "a tree can only be saved as a tree file".into(),
+            ));
         }
         if crate::links::document_entry(original)? == crate::links::document_entry(target)? {
             Ok(None)
@@ -107,35 +93,12 @@ impl Document for OpenedTree {
         _publication: &super::WritePublication,
     ) -> Result<Vec<(PathBuf, String)>> {
         if format != Format::Tree {
-            return Err(invalid("a tree can only be saved as a tree file"));
+            return Err(Error::Unsupported(
+                "a tree can only be saved as a tree file".into(),
+            ));
         }
         let mut hashes = Vec::new();
         let sidecar = files::tree_sidecar(target);
-        if sidecar.is_file() {
-            let bytes = std::fs::read(&sidecar)?;
-            let metadata: serde_json::Value = serde_json::from_slice(&bytes)?;
-            if metadata.get("schema_version").is_none() || metadata["schema_version"] == 0 {
-                let backup = sidecar.with_file_name(format!(
-                    "{}.unverified-{}",
-                    sidecar.file_name().unwrap_or_default().to_string_lossy(),
-                    basecraft_io::hash_bytes(&bytes).trim_start_matches("b3:")
-                ));
-                if backup.try_exists()? {
-                    if std::fs::read(&backup)? != bytes {
-                        return Err(invalid(
-                            "legacy metadata backup differs; original was not replaced",
-                        ));
-                    }
-                } else {
-                    let mut staged = tempfile::NamedTempFile::new_in(
-                        sidecar.parent().unwrap_or(Path::new(".")),
-                    )?;
-                    std::io::Write::write_all(&mut staged, &bytes)?;
-                    staged.as_file().sync_all()?;
-                    staged.persist_noclobber(&backup).map_err(|e| e.error)?;
-                }
-            }
-        }
         for (path, sidecar_file) in [(target, false), (sidecar.as_path(), true)] {
             let mut hash = String::new();
             basecraft_io::write_atomic(path, |w| {
@@ -152,11 +115,11 @@ impl Document for OpenedTree {
                 hash = hw.hash();
                 Ok(())
             }).map_err(|error| if sidecar_file {
-                invalid(format!("tree data saved; metadata incomplete: {error}. Keep the open document or temporary recovery and retry saving"))
+                Error::Damaged { path: target.into(), detail: format!("tree data saved; metadata incomplete: {error}. Keep the open document or temporary recovery and retry saving") }
             } else { error.into() })?;
             hashes.push((path.to_path_buf(), hash));
         }
-        crate::analysis_store::ArtifactRun::refresh_binding(target).map_err(|error| invalid(format!("tree and metadata saved; binding publication incomplete: {error}. Keep the open document and retry saving")))?;
+        crate::analysis_store::ArtifactRun::refresh_binding(target).map_err(|error| Error::Damaged { path: target.into(), detail: format!("tree and metadata saved; binding publication incomplete: {error}. Keep the open document and retry saving") })?;
         Ok(hashes)
     }
 
@@ -177,58 +140,9 @@ impl Document for OpenedTree {
     }
 }
 
-// Preserve the existing whole-tree snapshot inverse in this migration. Edit-sized
-// inverses remain separate architecture debt; this extraction changes no mutation.
-pub(crate) fn execute_tree(doc: &mut TreeDoc, op: &Op) -> Result<Box<TreeDoc>> {
-    let before = Box::new(doc.clone());
-    let edit = match op {
-        Op::TreeReroot { clade } => doc.reroot(clade),
-        Op::TreeMidpointRoot {} => doc.midpoint_root(),
-        Op::TreeMinimumVarianceRoot {} => doc.minimum_variance_root(),
-        Op::TreeRootPosition { clade, fraction } => doc.set_root_position(clade, *fraction),
-        Op::TreeRotate { clade } => doc.rotate(clade),
-        Op::TreeLadderize { small_first } => {
-            doc.ladderize(*small_first);
-            Ok(())
-        }
-        Op::TreeRenameTip { from, to } => doc.rename_tip(from, to),
-        Op::TreeAnnotate { id, annotation } => doc.annotate(*id, annotation.clone()),
-        Op::TreeAddSupport {
-            name,
-            source,
-            values,
-            kind,
-        } => doc
-            .add_support(name, source, values)
-            .map(|()| doc.set_support_kind(name, *kind)),
-        Op::TreeRemoveSupport { name } => doc.remove_support(name),
-        Op::TreeStyle {
-            style,
-            remove_supports,
-        } => {
-            if style
-                .support_decimals
-                .values()
-                .any(|&decimals| decimals > 10)
-            {
-                return Err(invalid("support decimal places must be between 0 and 10"));
-            }
-            let mut candidate = doc.clone();
-            candidate.set_style(style.clone());
-            remove_supports
-                .iter()
-                .try_for_each(|name| candidate.remove_support(name))
-                .map(|()| *doc = candidate)
-        }
-        _ => {
-            return Err(invalid(format!(
-                "{} needs a sequence or an alignment",
-                op.name()
-            )));
-        }
-    };
-    edit.map_err(|e| invalid(e.0))?;
-    Ok(before)
+pub(crate) fn execute_tree(doc: &mut TreeDoc, op: &Op) -> Result<basecraft_docs::tree::TreeUndo> {
+    doc.apply_edit(op)
+        .map_err(|error| Error::Unsupported(error.0))
 }
 
 #[cfg(test)]

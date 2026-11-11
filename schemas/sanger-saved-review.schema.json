@@ -19,27 +19,16 @@
       }
     },
     "evidence": {
-      "$ref": "#/$defs/ReviewEvidence",
-      "default": {
-        "placement": null,
-        "runs": [],
-        "schema_version": 1,
-        "sources": []
-      }
-    },
-    "version": {
-      "type": "integer",
-      "format": "uint32",
-      "minimum": 0
+      "$ref": "#/$defs/ReviewEvidence"
     }
   },
-  "additionalProperties": true,
+  "additionalProperties": false,
   "required": [
-    "version",
     "draft_path",
     "draft_sha256",
     "draft_json",
-    "events"
+    "events",
+    "evidence"
   ],
   "$defs": {
     "FileStamp": {
@@ -240,7 +229,6 @@
         },
         "runs": {
           "type": "array",
-          "default": [],
           "items": {
             "type": "string"
           }
@@ -252,15 +240,16 @@
         },
         "sources": {
           "type": "array",
-          "default": [],
           "items": {
             "$ref": "#/$defs/ReviewSource"
           }
         }
       },
-      "additionalProperties": true,
+      "additionalProperties": false,
       "required": [
-        "schema_version"
+        "schema_version",
+        "runs",
+        "sources"
       ]
     },
     "ReviewOp": {
@@ -371,30 +360,6 @@
           "required": [
             "op",
             "settings"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "op": {
-              "type": "string",
-              "const": "undo"
-            }
-          },
-          "required": [
-            "op"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "op": {
-              "type": "string",
-              "const": "redo"
-            }
-          },
-          "required": [
-            "op"
           ]
         },
         {
@@ -532,7 +497,7 @@
           "type": "string"
         }
       },
-      "additionalProperties": true,
+      "additionalProperties": false,
       "required": [
         "original",
         "sha256",
@@ -549,7 +514,7 @@
           "type": "string"
         }
       },
-      "additionalProperties": true,
+      "additionalProperties": false,
       "required": [
         "path",
         "hash"

@@ -509,8 +509,8 @@ fn captured_companion_refusals_preserve_baseline_undo_and_journal() {
             );
             assert_eq!(session.doc(id).unwrap().read(0, 4), b"ACGT");
             assert_eq!(session.doc(id).unwrap().features().count(), 1);
-            assert!(!session.can_undo(id));
-            assert!(!session.can_redo(id));
+            assert!(!session.can_undo(id).unwrap());
+            assert!(!session.can_redo(id).unwrap());
             assert_eq!(
                 serde_json::to_value(session.document_record(id).unwrap()).unwrap(),
                 serde_json::to_value(before).unwrap()

@@ -22,7 +22,7 @@ fn same_path_replacement_cannot_reuse_tree_metadata() {
     session.save(doc, None).unwrap();
     std::fs::write(&path, "((c,b)10,a);\n").unwrap();
     assert!(
-        files::load_tree(&path).is_err(),
+        files::load_tree(&path).unwrap().metadata_warning.is_some(),
         "stale metadata was accepted"
     );
 }
@@ -55,44 +55,21 @@ fn paths(root: &std::path::Path) -> basecraft_platform::paths::AppPaths {
 }
 
 #[test]
-fn legacy_metadata_opens_with_warning_and_survives_explicit_save() {
+fn unversioned_tree_metadata_is_ignored_without_changing_files() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("tree.nwk");
-    std::fs::write(&path, "((a,b)90,c);\n").unwrap();
-    let side = files::tree_sidecar(&path);
-    // Use the complete default style serializer to keep this a real old format.
-    let mut value = serde_json::to_value(basecraft_protocol::TreeStyle::default()).unwrap();
-    let style = value.take();
-    let bytes = serde_json::to_vec(&serde_json::json!({"supports":[{"name":"Do not apply","source":"old"}],"annotations":{},"style":style})).unwrap();
-    std::fs::write(&side, &bytes).unwrap();
-    let opened = files::load_tree(&path).unwrap();
-    assert!(opened.metadata_warning.is_some());
-    assert_eq!(opened.doc.supports()[0].name, "Support");
-    assert_eq!(std::fs::read(&side).unwrap(), bytes);
-    let mut session = Session::new(dir.path());
-    let doc = session.open(&path).unwrap();
+    std::fs::write(&path, "(a,b);").unwrap();
+    let sidecar = basecraft_ops::files::tree_sidecar(&path);
+    let bytes = br#"{"supports":[],"annotations":{},"style":{}}"#;
+    std::fs::write(&sidecar, bytes).unwrap();
     assert!(
-        session
-            .document_record(doc)
+        basecraft_ops::files::load_tree(&path)
             .unwrap()
-            .report()
-            .unwrap()
-            .warnings
-            .iter()
-            .any(|w| w.contains("Unverified legacy"))
+            .metadata_warning
+            .is_some()
     );
-    session
-        .apply(doc, Op::TreeLadderize { small_first: true })
-        .unwrap();
-    session.save(doc, None).unwrap();
-    assert!(
-        std::fs::read_dir(dir.path()).unwrap().flatten().any(|e| e
-            .file_name()
-            .to_string_lossy()
-            .contains("unverified-")
-            && std::fs::read(e.path()).ok().as_deref() == Some(bytes.as_slice()))
-    );
-    assert!(files::load_tree(&path).unwrap().metadata_warning.is_none());
+    assert_eq!(std::fs::read(sidecar).unwrap(), bytes);
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "(a,b);");
 }
 
 #[test]
@@ -132,7 +109,7 @@ fn hidden_binding_errors_never_fall_back_to_adjacent_metadata() {
     let mut future: serde_json::Value = serde_json::from_slice(&metadata).unwrap();
     future["schema_version"] = serde_json::json!(99);
     std::fs::write(&sidecar, serde_json::to_vec(&future).unwrap()).unwrap();
-    assert!(files::load_tree(&path).is_err());
+    assert!(files::load_tree(&path).unwrap().metadata_warning.is_some());
     std::fs::write(&sidecar, &metadata).unwrap();
     let binding = std::fs::read_dir(dir.path().join(".basecraft/analyses-v1/bindings"))
         .unwrap()
@@ -143,12 +120,12 @@ fn hidden_binding_errors_never_fall_back_to_adjacent_metadata() {
     let original = std::fs::read(&binding).unwrap();
     for broken in [b"{".as_slice(), br#"{"schema_version":42}"#.as_slice()] {
         std::fs::write(&binding, broken).unwrap();
-        assert!(files::load_tree(&path).is_err());
+        assert!(files::load_tree(&path).unwrap().metadata_warning.is_some());
     }
     std::fs::write(&binding, original).unwrap();
     // The first tree still matches: the full forest binding must detect this.
     std::fs::write(&path, "((a,b)90,c);\n(x,y,z);\n").unwrap();
-    assert!(files::load_tree(&path).is_err());
+    assert!(files::load_tree(&path).unwrap().metadata_warning.is_some());
     assert!(
         ArtifactRun::for_result(&path).unwrap().is_some(),
         "writer lookup must remain available"
@@ -268,8 +245,8 @@ fn annotate(session: &mut Session, doc: basecraft_ops::DocId, label: &str, start
     let ids = session
         .apply_sequence_proposals(
             doc,
-            session.generation(doc),
-            session.revision(doc),
+            session.generation(doc).unwrap(),
+            session.revision(doc).unwrap(),
             &ops,
             &actor,
         )
@@ -533,7 +510,12 @@ fn interrupted_tree_metadata_save_is_explicit_and_never_reuses_old_semantics() {
     let error = session.save(doc, Some(&target)).unwrap_err().to_string();
     assert!(error.contains("metadata incomplete"), "{error}");
     assert!(target.is_file());
-    assert!(files::load_tree(&target).is_err());
+    assert!(
+        files::load_tree(&target)
+            .unwrap()
+            .metadata_warning
+            .is_some()
+    );
     assert_eq!(
         std::fs::read_to_string(&original).unwrap(),
         "((a,b)90,c);\n"

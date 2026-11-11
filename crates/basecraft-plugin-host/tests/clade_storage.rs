@@ -41,7 +41,7 @@ fn unsaved_clade_tree_with_referenced_alignment_retains_both_inputs_and_selectio
     let request: OperationRequest = serde_json::from_value(json!({
         "operation":"basecraft.clade-alignment/extract@1",
         "inputs":{"alignment":[{"kind":"file","path":"source.afa"}],
-            "selection_tree":[{"kind":"document","doc":doc.0.to_string(),"generation":session.generation(doc),"revision":session.revision(doc)}]},
+            "selection_tree":[{"kind":"document","doc":doc.0.to_string(),"generation":session.generation(doc).unwrap(),"revision":session.revision(doc).unwrap()}]},
         "parameters":{"taxa":["a","b"]},
         "destinations":{"artifacts/clade.afa":"selected.afa"}
     })).unwrap();

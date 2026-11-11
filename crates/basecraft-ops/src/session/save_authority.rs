@@ -66,23 +66,7 @@ impl SaveCheck {
     /// Builds an observation from the caller's complete guarded context, without
     /// publishing a receipt. Only the live owner can publish authority for it.
     pub(crate) fn from_scope(scope: SaveScope) -> Result<Self> {
-        Self::from_scope_with_participant(scope, None)
-    }
-
-    /// Bind private participant state without changing ordinary Session diagnostics.
-    pub(crate) fn from_scope_with_participant(
-        scope: SaveScope,
-        participant: Option<(&str, &str)>,
-    ) -> Result<Self> {
-        let mut scope_revision = scope.revision()?;
-        if let Some((domain, digest)) = participant {
-            scope_revision = basecraft_io::hash_bytes(&serde_json::to_vec(&(
-                "basecraft-save-participant-v1",
-                scope_revision,
-                domain,
-                digest,
-            ))?);
-        }
+        let scope_revision = scope.revision()?;
         Ok(Self {
             token: String::new(),
             scope,
@@ -228,15 +212,6 @@ pub(crate) struct PendingSaveAuthority {
 }
 
 impl PendingSaveAuthority {
-    /// Discard consent without changing document state or performing IO.
-    pub(crate) fn invalidate(&self) -> Result<()> {
-        self.pending
-            .lock()
-            .map_err(|_| invalid("save check state is unavailable"))?
-            .take();
-        Ok(())
-    }
-
     pub(crate) fn publish(&self, mut check: SaveCheck) -> Result<SaveCheck> {
         check.token = ulid::Ulid::generate().to_string();
         *self
@@ -382,115 +357,4 @@ pub struct EvidenceAction {
     pub conflict: crate::input_evidence::EvidenceConflict,
     pub policy: SavePolicy,
     pub completed: bool,
-}
-
-#[cfg(test)]
-mod participant_tests {
-    use super::*;
-
-    #[test]
-    fn participant_binding_preserves_session_shape_and_rejects_changed_state() {
-        let name = "session::save_authority::participant_tests::participant_binding_preserves_session_shape_and_rejects_changed_state";
-        let Some(root) = crate::isolated_profile::enter(name) else {
-            return;
-        };
-        let path = root.join("sequence.fasta");
-        std::fs::write(&path, ">x\nACGT\n").unwrap();
-        let mut session = crate::Session::new(&root);
-        let id = session.open(&path).unwrap();
-        let original = session.check_save(id, None).unwrap();
-        let plain = SaveCheck::from_scope(original.scope.clone()).unwrap();
-        let none = SaveCheck::from_scope_with_participant(original.scope.clone(), None).unwrap();
-        assert_eq!(plain.scope_revision, original.scope.revision().unwrap());
-        assert_eq!(plain.scope_revision, none.scope_revision);
-        assert_eq!(
-            serde_json::to_vec(&plain).unwrap(),
-            serde_json::to_vec(&none).unwrap()
-        );
-        let a = SaveCheck::from_scope_with_participant(
-            original.scope.clone(),
-            Some(("sanger", "state-a")),
-        )
-        .unwrap();
-        let b = SaveCheck::from_scope_with_participant(
-            original.scope.clone(),
-            Some(("sanger", "state-b")),
-        )
-        .unwrap();
-        let other = SaveCheck::from_scope_with_participant(
-            original.scope.clone(),
-            Some(("other", "state-a")),
-        )
-        .unwrap();
-        assert_ne!(a.scope_revision, plain.scope_revision);
-        assert_ne!(a.scope_revision, b.scope_revision);
-        assert_ne!(a.scope_revision, other.scope_revision);
-        assert_eq!(
-            serde_json::to_vec(&plain).unwrap(),
-            serde_json::to_vec(&a).unwrap()
-        );
-        let owner = PendingSaveAuthority::default();
-        let d = owner
-            .publish(a.clone())
-            .unwrap()
-            .decide(SavePolicy::Cancel, true);
-        let spent = owner.consume(&d).unwrap();
-        assert!(matches!(
-            owner.validate_decision(&b, &d, spent),
-            Err(crate::Error::SaveDecisionStale(_))
-        ));
-        assert!(!owner.consume(&d).unwrap());
-        let d = owner
-            .publish(a.clone())
-            .unwrap()
-            .decide(SavePolicy::Cancel, true);
-        assert!(
-            owner
-                .validate_decision(&a, &d, owner.consume(&d).unwrap())
-                .is_ok()
-        );
-        let d = owner.publish(a).unwrap().decide(SavePolicy::Cancel, true);
-        owner.invalidate().unwrap();
-        assert!(!owner.consume(&d).unwrap());
-    }
-
-    #[test]
-    fn real_sanger_checks_bind_direct_public_changes_without_publishing_biology() {
-        let name = "session::save_authority::participant_tests::real_sanger_checks_bind_direct_public_changes_without_publishing_biology";
-        let Some(root) = crate::isolated_profile::enter(name) else {
-            return;
-        };
-        let input = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../testdata/fixtures/compact/sanger-review/forward.ab1");
-        let mut review = crate::sanger_review::instrument_review(&input).unwrap();
-        let target = root.join("new.json");
-        let before = review.check_save(&target).unwrap();
-        let repeated = review.check_save(&target).unwrap();
-        assert!(before.same_scope(&repeated));
-        review.settings.strong_score += 1;
-        let after = review.check_save(&target).unwrap();
-        assert!(!before.same_scope(&after));
-        // Only private participant binding changed: no biology enters diagnostics.
-        assert_eq!(
-            serde_json::to_vec(&before.scope).unwrap(),
-            serde_json::to_vec(&after.scope).unwrap()
-        );
-        review.settings.strong_score -= 1;
-        assert!(before.same_scope(&review.check_save(&target).unwrap()));
-        // Direct mutate-and-restore chronology is deliberately not claimed.
-        review.mask.start += 1;
-        assert!(!before.same_scope(&review.check_save(&target).unwrap()));
-        assert!(!target.exists());
-    }
-
-    #[test]
-    fn poisoned_invalidation_cannot_leave_usable_consent() {
-        let owner = PendingSaveAuthority::default();
-        let _ = std::panic::catch_unwind(|| {
-            let _guard = owner.pending.lock().unwrap();
-            panic!("test-only poison");
-        });
-        assert!(owner.invalidate().is_err());
-        assert!(owner.decide("token", SavePolicy::Cancel, true).is_err());
-    }
 }

@@ -1093,7 +1093,6 @@
             "remove_supports": {
               "description": "Support sets removed on accepting Style; cancellation makes no edits.",
               "type": "array",
-              "default": [],
               "items": {
                 "type": "string"
               }
@@ -1103,7 +1102,8 @@
             }
           },
           "required": [
-            "style"
+            "style",
+            "remove_supports"
           ]
         }
       },
@@ -1253,6 +1253,110 @@
             }
           },
           "required": [
+            "edit"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
+      "description": "Initial review referencing an immutable record of drafts and biological events.",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "doc.create_sanger_review"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "review": {
+              "$ref": "#/$defs/ReviewRecord"
+            }
+          },
+          "required": [
+            "review"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
+      "description": "An explicit analysis continuation. Selection and decisions have their own operations.",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "sanger.update"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "review": {
+              "$ref": "#/$defs/ReviewRecord"
+            }
+          },
+          "required": [
+            "review"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
+      "description": "Select a retained call set without copying its evidence.",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "sanger.select"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "call_set": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_set"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
+      "description": "A decision addressed to an immutable Sanger call-set digest.",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "sanger.review"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "call_set": {
+              "type": "string"
+            },
+            "edit": {
+              "$ref": "#/$defs/ReviewOp"
+            }
+          },
+          "required": [
+            "call_set",
             "edit"
           ]
         }
@@ -2393,6 +2497,36 @@
         {
           "type": "object",
           "properties": {
+            "call_sets": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "columns": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "kind": {
+              "type": "string",
+              "const": "sanger_review"
+            },
+            "unresolved": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "kind",
+            "columns",
+            "unresolved",
+            "call_sets"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
             "features": {
               "type": "integer",
               "format": "uint64",
@@ -3361,6 +3495,50 @@
         }
       ]
     },
+    "MaskSettings": {
+      "type": "object",
+      "properties": {
+        "end": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "error_percent": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "evidence": {
+          "type": "string"
+        },
+        "forward": {
+          "type": "string"
+        },
+        "minimum_overlap": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "reverse": {
+          "type": "string"
+        },
+        "start": {
+          "description": "Zero-based inclusive start, exclusive end in consensus columns.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "start",
+        "end",
+        "forward",
+        "reverse",
+        "minimum_overlap",
+        "error_percent",
+        "evidence"
+      ]
+    },
     "MatchMode": {
       "type": "string",
       "enum": [
@@ -3745,6 +3923,315 @@
         "document",
         "record"
       ]
+    },
+    "ReviewChoice": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "choice": {
+              "type": "string",
+              "const": "pending"
+            }
+          },
+          "required": [
+            "choice"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "choice": {
+              "type": "string",
+              "const": "accept"
+            }
+          },
+          "required": [
+            "choice"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "base": {
+              "type": "string",
+              "maxLength": 1,
+              "minLength": 1
+            },
+            "choice": {
+              "type": "string",
+              "const": "auto"
+            }
+          },
+          "required": [
+            "choice",
+            "base"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "choice": {
+              "type": "string",
+              "const": "reject"
+            }
+          },
+          "required": [
+            "choice"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "base": {
+              "type": "string",
+              "maxLength": 1,
+              "minLength": 1
+            },
+            "choice": {
+              "type": "string",
+              "const": "edit"
+            }
+          },
+          "required": [
+            "choice",
+            "base"
+          ]
+        }
+      ]
+    },
+    "ReviewOp": {
+      "oneOf": [
+        {
+          "description": "Conservative initial triage; retained in the replay log, outside undo history.",
+          "type": "object",
+          "properties": {
+            "columns": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "format": "uint",
+                "minimum": 0
+              }
+            },
+            "op": {
+              "type": "string",
+              "const": "auto_accept"
+            }
+          },
+          "required": [
+            "op",
+            "columns"
+          ]
+        },
+        {
+          "description": "Re-evaluate automatic calls while preserving all explicit manual decisions.\nThe rule version and frozen reference counts make this portable and auditable.",
+          "type": "object",
+          "properties": {
+            "calls": {
+              "type": "array",
+              "items": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 1,
+                "minLength": 1
+              }
+            },
+            "op": {
+              "type": "string",
+              "const": "evaluate"
+            },
+            "reference": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ReviewReference"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "settings": {
+              "$ref": "#/$defs/ReviewSettings"
+            },
+            "version": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "op",
+            "version",
+            "settings",
+            "calls"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "choice": {
+              "$ref": "#/$defs/ReviewChoice"
+            },
+            "columns": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "format": "uint",
+                "minimum": 0
+              }
+            },
+            "op": {
+              "type": "string",
+              "const": "set"
+            }
+          },
+          "required": [
+            "op",
+            "columns",
+            "choice"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "mask"
+            },
+            "settings": {
+              "$ref": "#/$defs/MaskSettings"
+            }
+          },
+          "required": [
+            "op",
+            "settings"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "export"
+            },
+            "path": {
+              "type": "string"
+            },
+            "sha256": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "path",
+            "sha256"
+          ]
+        }
+      ]
+    },
+    "ReviewRecord": {
+      "description": "Immutable analysis data stored separately from edit-sized journal entries.",
+      "type": "object",
+      "properties": {
+        "hash": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "hash"
+      ]
+    },
+    "ReviewReference": {
+      "description": "Frozen whole-alignment counts used by a recorded triage operation.",
+      "type": "object",
+      "properties": {
+        "counts": {
+          "type": "array",
+          "items": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "maxItems": 4,
+            "minItems": 4
+          }
+        },
+        "source_path": {
+          "type": "string"
+        },
+        "source_sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_path",
+        "source_sha256",
+        "counts"
+      ]
+    },
+    "ReviewSettings": {
+      "description": "Versioned, explicit rules for automatic review triage, not error probabilities.",
+      "type": "object",
+      "properties": {
+        "allow_weak_disagreement": {
+          "type": "boolean",
+          "default": true
+        },
+        "ambiguity_percent": {
+          "description": "A secondary peak at or above this percentage is ambiguous.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 35,
+          "minimum": 0
+        },
+        "check_reference": {
+          "type": "boolean",
+          "default": true
+        },
+        "paired_score": {
+          "type": "integer",
+          "format": "int32",
+          "default": 20
+        },
+        "reference_min_rows": {
+          "type": "integer",
+          "format": "uint32",
+          "default": 1,
+          "minimum": 0
+        },
+        "reference_percent": {
+          "description": "Zero means any observed canonical occurrence; denominator is A/C/G/T rows.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 0,
+          "minimum": 0
+        },
+        "strong_score": {
+          "type": "integer",
+          "format": "int32",
+          "default": 30
+        },
+        "weak_support_percent": {
+          "description": "Minimum candidate / strongest peak ratio in a non-confident opposing read.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 80,
+          "minimum": 0
+        }
+      }
     },
     "RowDecision": {
       "description": "What to do with a row.",

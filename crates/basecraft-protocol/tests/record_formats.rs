@@ -41,7 +41,6 @@ fn current_records_round_trip() {
         ("sanger-saved-call-sets", encode::<SavedCallSets>, true),
         ("sanger-request", encode::<SangerRequest>, true),
         ("sanger-execution", encode::<SangerJobRecord>, true),
-        ("sanger-recovery", encode::<SangerJobRecord>, true),
         ("journal-entry", encode::<JournalEntry>, true),
         ("activity-input-run", encode::<ActivityInputRun>, true),
         (

@@ -125,17 +125,6 @@ fn sanger_invocation_original_records() {
         assert_eq!(value["operation"], "fixture");
     }
     run.failed("fixture failure").unwrap();
-    let mut review = basecraft_ops::sanger_review::instrument_review(&source).unwrap();
-    review.start_recovery().unwrap();
-    let path = review
-        .recovery_path()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("manifest.json");
-    if std::env::var_os("BASECRAFT_CAPTURE_ADDITIONAL_RECORDS").is_some() {
-        golden("sanger-recovery.json", &std::fs::read(path).unwrap());
-    }
 }
 
 #[test]

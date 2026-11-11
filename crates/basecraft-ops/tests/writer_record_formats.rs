@@ -280,6 +280,7 @@ fn writer_versions(path: &Path) -> std::collections::BTreeMap<String, u32> {
         Ok(Format::Delimitation) => &[("spart", 1), ("delimitation-sidecar", 1)],
         Ok(Format::Metadata) => &[("metadata-manifest", 1), ("metadata-tsv", 1)],
         Ok(Format::Submission) => &[("submission", 1)],
+        Ok(Format::SangerReview) => &[("sanger-review", 3)],
         Err(_) => &[],
     };
     formats

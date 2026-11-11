@@ -1,24 +1,20 @@
-//! Existing saved Sanger review envelopes and embedded evidence.
-//! Data only; single and multi-call-set envelopes are both emitted by current writers.
+//! Current saved Sanger review envelope and embedded evidence.
 use crate::{provenance::InputReference, sanger::ReviewOp};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::PathBuf};
 
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SavedReview {
-    pub version: u32,
     pub draft_path: PathBuf,
     pub draft_sha256: String,
     pub draft_json: String,
     pub events: Vec<ReviewOp>,
-    #[serde(default)]
     pub evidence: ReviewEvidence,
-    #[serde(flatten)]
-    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SavedCallSets {
     pub version: u32,
@@ -26,14 +22,11 @@ pub struct SavedCallSets {
     pub sets: Vec<SavedReview>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ReviewEvidence {
     pub schema_version: u32,
-    #[serde(flatten)]
-    pub extra: BTreeMap<String, serde_json::Value>,
-    #[serde(default)]
     pub runs: Vec<PathBuf>,
-    #[serde(default)]
     pub sources: Vec<ReviewSource>,
     pub placement: Option<ReviewSupport>,
 }
@@ -42,7 +35,6 @@ impl Default for ReviewEvidence {
     fn default() -> Self {
         Self {
             schema_version: 1,
-            extra: BTreeMap::new(),
             runs: vec![],
             sources: vec![],
             placement: None,
@@ -50,10 +42,9 @@ impl Default for ReviewEvidence {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ReviewSource {
-    #[serde(flatten)]
-    pub extra: BTreeMap<String, serde_json::Value>,
     // Identity in the immutable draft/placement, never rebased.
     pub original: PathBuf,
     pub sha256: String,
@@ -63,10 +54,9 @@ pub struct ReviewSource {
     pub reference: Option<InputReference>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ReviewSupport {
-    #[serde(flatten)]
-    pub extra: BTreeMap<String, serde_json::Value>,
     pub path: PathBuf,
     pub hash: String,
 }
@@ -214,4 +204,32 @@ pub struct SangerPlacement {
     pub aligned_probe: String,
     pub insertions: usize,
     pub parameters: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn current_envelopes_round_trip() {
+        for bytes in [
+            include_str!("../../../testdata/fixtures/sanger-review/single.json"),
+            include_str!("../../../testdata/fixtures/sanger-review/multi.json"),
+        ] {
+            let record: SavedCallSets = serde_json::from_str(bytes).unwrap();
+            assert_eq!(record.version, 3);
+            assert_eq!(
+                serde_json::to_value(record).unwrap(),
+                serde_json::from_str::<serde_json::Value>(bytes).unwrap()
+            );
+        }
+    }
+}
+
+/// Immutable analysis data stored separately from edit-sized journal entries.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewRecord {
+    pub path: PathBuf,
+    pub hash: String,
 }

@@ -1,15 +1,15 @@
 //! Sanger continuations run outside Qt. Scientific execution and receipts belong
 //! exclusively to the registry/JobManager; this module only adapts review state.
-use super::{
-    Arc, Path, PathBuf, ReviewOp, SangerDraft, SangerReviewSession, SangerReviewView, session_view,
-};
-use basecraft_docs::sanger::SangerDraftExt;
+use super::{Path, PathBuf, ReviewChoice, ReviewOp, SangerReview, SangerReviewView};
+use basecraft_docs::{AlignmentDoc, sanger::{SangerDraft, SangerDraftExt}};
+use basecraft_io::abif;
 use basecraft_plugin_host::{
     jobs::JobManager,
     policy::SessionPolicy,
     registry::{Registry, RegistryConfig},
 };
 use basecraft_protocol::operation::{OperationOutcome, RuntimeState};
+use std::sync::Arc;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     mpsc,
@@ -77,7 +77,7 @@ impl Request {
     }
 }
 pub(super) struct Completion {
-    pub session: SangerReviewSession,
+    pub session: SangerReview,
     pub view: SangerReviewView,
     pub path: PathBuf,
     pub payload: String,
@@ -159,22 +159,28 @@ fn directory(outcome: &OperationOutcome) -> Result<&Path, String> {
         .map(Path::new)
         .ok_or_else(|| "Operation receipt has no evidence directory".into())
 }
-fn evaluate(session: &mut SangerReviewSession, view: &mut SangerReviewView) -> Result<(), String> {
+fn edit_analysis(review: &mut SangerReview, edit: ReviewOp) -> Result<(), String> {
+    let mut owner = ReviewDocument::new(review.clone())?;
+    owner.apply(edit)?;
+    *review = owner.review().ok_or("No review is open")?.clone();
+    Ok(())
+}
+fn evaluate(session: &mut SangerReview, view: &mut SangerReviewView) -> Result<(), String> {
     view.review_settings = session.settings.clone();
-    session.apply(ReviewOp::Evaluate {
-        version: 2,
-        settings: session.settings.clone(),
-        calls: (0..view.draft.columns.len())
-            .map(|i| view.assessment(i).call)
-            .collect(),
-        reference: view.frozen_reference(),
-    })
+    edit_analysis(
+        session,
+        ReviewOp::Evaluate {
+            version: 2,
+            settings: session.settings.clone(),
+            calls: (0..view.draft.columns.len())
+                .map(|i| view.assessment(i).call)
+                .collect(),
+            reference: view.frozen_reference(),
+        },
+    )
 }
 
-pub(super) fn start(
-    request: Request,
-    session: Option<SangerReviewSession>,
-) -> Result<Stage, String> {
+pub(super) fn start(request: Request, session: Option<SangerReview>) -> Result<Stage, String> {
     let name = request.name();
     let cancelled = Arc::new(AtomicBool::new(false));
     let flag = cancelled.clone();
@@ -199,13 +205,22 @@ pub(super) fn start(
 }
 fn execute(
     request: Request,
-    previous: Option<SangerReviewSession>,
+    previous: Option<SangerReview>,
     cancelled: &AtomicBool,
 ) -> Result<Completion, String> {
+    check(cancelled)?;
     let mut jobs = JobManager::default().with_task_cancellation();
     let mut payload = String::new();
-    let (mut session, path) = match request {
+    let (session, path) = match request {
         Request::Prepare(paths, threshold) => {
+            let captures = paths
+                .iter()
+                .map(|path| {
+                    basecraft_ops::sanger_review::CapturedInput::open(path)
+                        .map_err(|e| e.to_string())
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            jobs = jobs.with_captured_inputs(captures.clone());
             let first = paths.first().ok_or("Choose two or three AB1 reads")?;
             let root = first.parent().ok_or("AB1 has no parent directory")?;
             let inputs: Vec<_> = paths
@@ -221,7 +236,8 @@ fn execute(
                 cancelled,
             )?;
             let path = artifact(&outcome, "evidence.json")?;
-            let mut session = SangerReviewSession::from_draft(SangerDraft::read(&path)?, first)?;
+            let mut session = SangerReview::from_draft(SangerDraft::read(&path)?, first)?;
+            session.use_captured_inputs(captures)?;
             let mut view = session_view(&session)?;
             evaluate(&mut session, &mut view)?;
             session.attach_operation_run(directory(&outcome)?)?;
@@ -240,7 +256,8 @@ fn execute(
                     let source = &draft.inputs[0];
                     let mut caller = basecraft_plugin_host::sanger_calls::SangerCaller::default()
                         .with_task_cancellation();
-                    let mut called = caller.start(&source.path, &source.sha256, threshold)?;
+                    let mut called =
+                        caller.start_captured(session.captured_inputs()?.remove(0), threshold)?;
                     while called.is_none() {
                         if cancelled.load(Ordering::Acquire) {
                             caller.cancel()?;
@@ -252,8 +269,8 @@ fn execute(
                         }
                     }
                     let called = called.ok_or("Caller returned no draft")?;
-                    let mut alternate =
-                        SangerReviewSession::from_draft(called.draft, &source.path)?;
+                    let mut alternate = SangerReview::from_draft(called.draft, &source.path)?;
+                    alternate.use_captured_inputs(session.captured_inputs()?)?;
                     alternate.attach_operation_run(&called.run)?;
                     session.retain_call_set(alternate)?;
                 }
@@ -278,7 +295,7 @@ fn execute(
                         }
                         let mut draft = session.working_draft()?.reverse_complemented();
                         draft.limitations.push(format!("Draft reverse-complemented for alignment context; source draft SHA-256 {}",session.draft_sha256));
-                        let mut oriented = SangerReviewSession::from_draft(draft, &path)?;
+                        let mut oriented = SangerReview::from_draft(draft, &path)?;
                         oriented.inherit_review_ancestry(&session);
                         oriented.settings = session.settings.clone();
                         oriented.attach_operation_run(directory(&outcome)?)?;
@@ -313,7 +330,7 @@ fn execute(
                         let mut settings = session.mask.clone();
                         settings.start = start;
                         settings.end = end;
-                        session.apply(ReviewOp::Mask { settings })?;
+                        edit_analysis(&mut session, ReviewOp::Mask { settings })?;
                     }
                 }
                 Request::Primers(mut parameters) => {
@@ -344,7 +361,6 @@ fn execute(
     };
     check(cancelled)?;
     let view = session_view(&session)?;
-    session.start_recovery()?;
     check(cancelled)?;
     Ok(Completion {
         session,
@@ -422,7 +438,7 @@ mod tests {
         // A replacement source between stages must not change the request.
         std::fs::write(&reference, ">replacement\nAAAA\n").unwrap();
         assert_eq!(basecraft_io::hash_file(&frozen).unwrap(), original_hash);
-        let mut placed = execute(
+        let placed = execute(
             Request::Place(frozen.clone()),
             Some(oriented.session),
             &flag,
@@ -437,8 +453,11 @@ mod tests {
             std::fs::remove_file(source).unwrap();
         }
         let saved = temp.path().join("saved-review.json");
-        placed.session.save(&saved).unwrap();
-        let reopened = SangerReviewSession::load(&saved).unwrap();
+        ReviewDocument::new(placed.session.clone())
+            .unwrap()
+            .save(&saved)
+            .unwrap();
+        let reopened = SangerReview::load(&saved).unwrap();
         let view = session_view(&reopened).unwrap();
         assert_eq!(view.draft.consensus, placed.view.draft.consensus);
         assert_eq!(reopened.unresolved(), placed.session.unresolved());
@@ -452,4 +471,154 @@ mod tests {
             placed.session.draft.columns.len()
         );
     }
+}
+
+/// The editor owns a regular Session and its checked document handle.
+/// This adapter holds no history, checkpoint or save implementation.
+pub(super) struct ReviewDocument {
+    pub session: basecraft_ops::Session,
+    pub id: basecraft_ops::DocId,
+}
+impl ReviewDocument {
+    pub fn new(review: SangerReview) -> Result<Self, String> {
+        let root = review
+            .storage_anchor()
+            .parent()
+            .ok_or("Review has no parent")?;
+        let mut session = basecraft_ops::Session::recoverable(root).map_err(|e| e.to_string())?;
+        let id = session
+            .create_sanger_review(&review)
+            .map_err(|e| e.to_string())?;
+        Ok(Self { session, id })
+    }
+    pub fn open(path: &Path) -> Result<Self, String> {
+        let mut session =
+            basecraft_ops::Session::recoverable(path.parent().ok_or("Review has no parent")?)
+                .map_err(|e| e.to_string())?;
+        let id = session.open(path).map_err(|e| e.to_string())?;
+        session.sanger_review(id).map_err(|e| e.to_string())?;
+        Ok(Self { session, id })
+    }
+    pub fn report(&self, _dirty: bool) -> Result<basecraft_ops::document_record::Report, String> {
+        self.review()
+            .ok_or("No review is open")?
+            .report_with_history(
+                &self
+                    .session
+                    .document_record(self.id)
+                    .map_err(|e| e.to_string())?,
+            )
+    }
+    pub fn review(&self) -> Option<&SangerReview> {
+        self.session.sanger_review(self.id).ok()
+    }
+    pub fn apply(&mut self, edit: ReviewOp) -> Result<(), String> {
+        let call_set = self
+            .session
+            .sanger_review(self.id)
+            .map_err(|e| e.to_string())?
+            .draft_sha256
+            .clone();
+        self.session
+            .apply(
+                self.id,
+                basecraft_protocol::Op::SangerReview {
+                    call_set,
+                    edit: Box::new(edit),
+                },
+            )
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn save(&mut self, path: &Path) -> Result<(), String> {
+        self.session
+            .save_new(self.id, Some(path))
+            .map_err(|e| e.to_string())
+    }
+    pub fn update(&mut self, review: &SangerReview) -> Result<(), String> {
+        self.session
+            .update_sanger_review(self.id, review)
+            .map_err(|e| e.to_string())
+    }
+    pub fn select_call_set(&mut self, id: &str) -> Result<(), String> {
+        self.session
+            .apply(
+                self.id,
+                basecraft_protocol::Op::SangerSelect {
+                    call_set: id.into(),
+                },
+            )
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+    pub fn export_consensus(&mut self, path: &Path, label: &str) -> Result<(), String> {
+        self.session
+            .export_sanger_consensus(self.id, path, label)
+            .map_err(|e| e.to_string())
+    }
+    pub fn addition_evidence(&mut self) -> Result<String, String> {
+        self.review()
+            .ok_or("No review is open")?
+            .addition_evidence()
+    }
+}
+
+pub(super) fn load_draft_review(path: &Path) -> Result<(SangerReviewView, SangerReview), String> {
+    let mut session = SangerReview::new(path)?;
+    // Opening evidence is inspection. Re-running Tracy to enrich older
+    // evidence must be an explicit analysis, never a passive-open write.
+    let mut view = session_view(&session)?;
+    let calls = (0..view.draft.columns.len())
+        .map(|i| view.assessment(i).call)
+        .collect();
+    edit_analysis(
+        &mut session,
+        ReviewOp::Evaluate {
+            version: 2,
+            settings: view.review_settings.clone(),
+            calls,
+            reference: None,
+        },
+    )?;
+    if let Some(i) = (0..view.draft.columns.len()).find(|&i| view.requires_review(i)) {
+        view.select_column(i);
+    }
+    Ok((view, session))
+}
+
+pub(super) fn sync_review_view(review: &mut SangerReviewView, session: &SangerReview) {
+    review.review_settings = session.settings.clone();
+    review.reference_evidence = session.reference.clone();
+    for i in 0..review.consensus.len() {
+        review.consensus[i] = match session.decision(i) {
+            Some(ReviewChoice::Edit(base) | ReviewChoice::Auto(base)) => *base as u8,
+            _ => review.draft.columns[i].consensus as u8,
+        };
+        review.masked[i] = session.masked(i);
+        review.unresolved[i] = !session.masked(i)
+            && matches!(
+                session.decision(i),
+                Some(ReviewChoice::Pending | ReviewChoice::Reject)
+            );
+    }
+}
+
+pub(super) fn session_view(session: &SangerReview) -> Result<SangerReviewView, String> {
+    let draft = session.working_draft()?;
+    let traces = session
+        .captured_inputs()?
+        .iter()
+        .map(|capture| abif::parse(capture.bytes()).map_err(|e| e.to_string()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut view = SangerReviewView::new(draft, traces)?;
+    if let Some(placement) = session.placement()? {
+        let indexed = Arc::new(
+            basecraft_io::cache::open_fasta(&placement.source_path).map_err(|e| e.to_string())?,
+        );
+        let alignment =
+            AlignmentDoc::from_fasta(placement.source_path.display().to_string(), &indexed);
+        view.attach_alignment(placement, alignment)?;
+    }
+    Ok(view)
 }
