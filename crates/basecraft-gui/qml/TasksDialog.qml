@@ -17,7 +17,8 @@ AppDialog {
         return Object.keys(job.outputs || {})[0] || ""
     }
     function activeStatus(status) { return ["queued", "running", "cancelling", "finalizing"].includes(status) }
-    property var jobData: ({jobs: []})
+    // Re-read while open whenever a listed job changes or the checkbox flips.
+    property var jobData: visible && service ? ((jobs ? jobs.revision : 0), JSON.parse(service.jobs(previousRuns.checked))) : ({jobs: []})
     readonly property var notices: service && service.notifications.length ? JSON.parse(service.notifications) : []
     signal openDocument(string path)
     signal copyText(string text)
@@ -29,12 +30,8 @@ AppDialog {
         const errors = lines.filter(line => /^[A-Za-z_.]*(Error|Exception)\b/.test(line))
         return errors.length ? errors[errors.length - 1] : lines.length ? lines[0] : ""
     }
-    function refreshJobs() { if (service) jobData = JSON.parse(service.jobs(previousRuns.checked)) }
-    onOpened: refreshJobs()
-    readonly property int jobsRevision: jobs ? jobs.revision : 0
-    onJobsRevisionChanged: if (visible) refreshJobs()
     contentItem: ColumnLayout {
-        AppCheckBox { id: previousRuns; text: "Include retained runs from earlier sessions"; onToggled: dialog.refreshJobs() }
+        AppCheckBox { id: previousRuns; text: "Include retained runs from earlier sessions" }
         Label { text: dialog.jobData.error || (dialog.jobData.warnings || []).join("\n"); Layout.fillWidth: true; wrapMode: Text.Wrap; visible: text.length > 0 }
         EmptyView {
             Layout.fillWidth: true

@@ -59,7 +59,6 @@ TestCase {
         verify(clear)
         mouseClick(clear)
         compare(dialog.notices.length, 0)
-        dialog.refreshJobs()
         compare(service.retained, before)
         compare(dialog.jobData.jobs[0].primary_output, "/tree.nwk")
         dialog.close()
