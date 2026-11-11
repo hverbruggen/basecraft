@@ -1906,6 +1906,19 @@
           "default": 30,
           "maximum": 255,
           "minimum": 0
+        },
+        "rooting": {
+          "description": "Whether the tree was rooted when the label was made. Unless it was, a\nclade is one side of a branch, so its complement is the same group.",
+          "$ref": "#/$defs/Rooting",
+          "default": "unknown"
+        },
+        "tips": {
+          "description": "Every tip the clade held when the label was made. The tree fills this\nin; a reroot that changes the set leaves the label on another group.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
         }
       },
       "required": [
@@ -4262,6 +4275,15 @@
           "minimum": 0
         }
       }
+    },
+    "Rooting": {
+      "description": "Whether a tree's root is a real root or only where the file put it.",
+      "type": "string",
+      "enum": [
+        "unknown",
+        "rooted",
+        "unrooted"
+      ]
     },
     "RowDecision": {
       "description": "What to do with a row.",

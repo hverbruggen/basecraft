@@ -114,7 +114,15 @@ impl TreeDoc {
                 name,
                 references,
             } => {
-                self.nodes[*node].name.clone_from(name);
+                let current = std::mem::replace(&mut self.nodes[*node].name, name.clone());
+                for a in self.annotations.values_mut() {
+                    if a.tips.remove(&current) {
+                        a.tips.insert(name.clone());
+                    }
+                }
+                if let Some(label) = self.style.tip_labels.remove(&current) {
+                    self.style.tip_labels.insert(name.clone(), label);
+                }
                 for &(id, index) in references {
                     self.annotations.get_mut(&id).unwrap().clade[index].clone_from(name);
                 }

@@ -50,6 +50,93 @@ pub fn publish_workspace(
     run.bind(target)
 }
 
+/// Which specimens of a new workspace were linked to the project roster.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RosterLinks {
+    pub linked: usize,
+    /// Workspace specimens whose source record has no specimen link.
+    pub unlinked: Vec<String>,
+    /// Why nothing could be linked, such as damaged project metadata.
+    pub problem: Option<String>,
+}
+
+/// Link each specimen of a workspace being made to its roster specimen,
+/// through the project metadata's link for the record it came from. Names
+/// are never matched. Workspace ids stay as the SPART file has them. A source
+/// inside `run` is the run's retained input and stands for the document it
+/// was taken from.
+pub fn link_roster(
+    project: &Path,
+    run: &crate::records::analysis_store::ArtifactRun,
+    work: &mut basecraft_protocol::delimitation::DelimitationWorkspace,
+) -> RosterLinks {
+    let mut reader = Session::unlogged(project);
+    let found = (|| -> Result<Option<(BTreeMap<String, String>, _)>> {
+        let Some(meta) = crate::metadata::open(&mut reader, false)? else {
+            return Ok(None);
+        };
+        let by_record: BTreeMap<(&str, &str), &str> = reader
+            .metadata(meta)?
+            .links
+            .iter()
+            .map(|l| {
+                (
+                    (l.document.as_str(), l.record.as_str()),
+                    l.specimen.as_str(),
+                )
+            })
+            .collect();
+        let original = crate::records::read_input(run.directory())
+            .ok()
+            .and_then(|input| input.source)
+            .map(|source| source.path);
+        let links = work
+            .specimens
+            .iter()
+            .filter_map(|s| {
+                s.sources.iter().find_map(|(path, record)| {
+                    let path = match &original {
+                        Some(original) if Path::new(path).starts_with(run.directory()) => original,
+                        _ => path,
+                    };
+                    let key = crate::metadata::document_key(project, Path::new(path)).ok()?;
+                    let roster = by_record.get(&(key.as_str(), record.as_str()))?;
+                    Some((s.id.clone(), (*roster).to_owned()))
+                })
+            })
+            .collect();
+        Ok(Some((
+            links,
+            crate::metadata::consumer_source(&reader, meta).ok(),
+        )))
+    })();
+    let mut result = RosterLinks::default();
+    match found {
+        Ok(Some((links, owner))) if !links.is_empty() => {
+            let edit = DelimitationEdit::SetRosterLinks {
+                links: links.clone(),
+                metadata: owner,
+            };
+            match basecraft_docs::delimitation::apply(work, &edit) {
+                Ok(()) => result.linked = links.len(),
+                Err(error) => result.problem = Some(error.0),
+            }
+        }
+        Ok(_) => {}
+        Err(error) => result.problem = Some(error.to_string()),
+    }
+    result.unlinked = work
+        .specimens
+        .iter()
+        .filter(|s| {
+            !s.attributes
+                .contains_key(basecraft_docs::delimitation::ROSTER_ID)
+        })
+        .map(|s| s.id.clone())
+        .collect();
+    result
+}
+
 /// Publish a run's species workspace as a new SPART file at `target`, which
 /// may lie anywhere in the project; never replaces an existing file.
 pub fn publish_workspace_to(

@@ -10,7 +10,7 @@ mod edit;
 mod rooting;
 pub use edit::TreeUndo;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use basecraft_io::newick::{self, ParsedTree};
 use basecraft_protocol::{CladeAnnotation, CladeRef, SupportKind, TreeStyle};
@@ -426,6 +426,43 @@ impl TreeDoc {
         }
     }
 
+    /// The names of every tip in the clade a reference names.
+    pub fn clade_tips(&self, clade: &[String]) -> Result<BTreeSet<String>, EditError> {
+        let mut tips = BTreeSet::new();
+        let mut stack = vec![self.resolve(clade)?];
+        while let Some(i) = stack.pop() {
+            if self.nodes[i].is_tip() {
+                tips.insert(self.nodes[i].name.clone());
+            }
+            stack.extend(&self.nodes[i].children);
+        }
+        Ok(tips)
+    }
+
+    /// Labels whose tip pair now names a different group of tips than the
+    /// one they were made for, as after a reroot. Labels kept in older
+    /// companions without a tip set are never reported.
+    pub fn displaced_annotations(&self) -> Vec<u32> {
+        let all: BTreeSet<String> = self
+            .nodes
+            .iter()
+            .filter(|n| n.is_tip())
+            .map(|n| n.name.clone())
+            .collect();
+        self.annotations
+            .iter()
+            .filter(|(_, a)| !a.tips.is_empty())
+            .filter(|(_, a)| {
+                self.clade_tips(&a.clade).map_or(true, |now| {
+                    now != a.tips
+                        && (a.rooting == basecraft_protocol::facts::Rooting::Rooted
+                            || all.difference(&now).cloned().collect::<BTreeSet<_>>() != a.tips)
+                })
+            })
+            .map(|(&id, _)| id)
+            .collect()
+    }
+
     /// How to name `node` in an operation.
     pub fn clade_ref(&self, node: usize) -> CladeRef {
         if self.nodes[node].is_tip() {
@@ -531,6 +568,12 @@ impl TreeDoc {
                     *t = to.to_string();
                 }
             }
+            if a.tips.remove(from) {
+                a.tips.insert(to.to_string());
+            }
+        }
+        if let Some(label) = self.style.tip_labels.remove(from) {
+            self.style.tip_labels.insert(to.to_string(), label);
         }
         self.edited();
         Ok(())
@@ -542,10 +585,20 @@ impl TreeDoc {
         annotation: Option<CladeAnnotation>,
     ) -> Result<(), EditError> {
         match annotation {
-            Some(a) => {
-                self.resolve(&a.clade)?;
+            Some(mut a) => {
+                let tips = self.clade_tips(&a.clade)?;
                 if !a.colour.starts_with('#') || !matches!(a.colour.len(), 7 | 9) {
                     return err(format!("{:?} isn't a #rrggbb colour", a.colour));
+                }
+                // A new label, or one given without its tips, is made for the
+                // group it marks now. An edited label keeps its group.
+                if a.tips.is_empty() {
+                    a.tips = tips;
+                    a.rooting = match self.rooted {
+                        Some(true) => basecraft_protocol::facts::Rooting::Rooted,
+                        Some(false) => basecraft_protocol::facts::Rooting::Unrooted,
+                        None => basecraft_protocol::facts::Rooting::Unknown,
+                    };
                 }
                 self.annotations.insert(id, a);
             }

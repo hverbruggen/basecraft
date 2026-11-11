@@ -264,8 +264,8 @@ fn companion_record_types_round_trip_original_writer_bytes() {
         }
         assert_eq!(encoded, original);
     }
-    crate::isolated_profile::isolate!();
     use basecraft_protocol::companion_records::Companion;
+    crate::isolated_profile::isolate!();
     check::<Companion>("companion-tree-v1.bin");
     check::<Companion>("companion-delimitation-v1.bin");
 }

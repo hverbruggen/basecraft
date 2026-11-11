@@ -665,7 +665,8 @@ impl PreparedOperation {
         if value["workspace"].is_null() {
             return Err(Error::Protocol("result holds no species workspace".into()));
         }
-        let work = serde_json::from_value(value["workspace"].clone())?;
+        let mut work = serde_json::from_value(value["workspace"].clone())?;
+        basecraft_ops::delimitation::link_roster(&self.policy.root, &self.run, &mut work);
         let target = self.policy.path(destination, true)?;
         basecraft_ops::delimitation::publish_workspace_to(&target, &work, &self.run)?;
         Ok(target)

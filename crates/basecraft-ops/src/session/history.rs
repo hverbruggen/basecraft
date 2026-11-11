@@ -395,7 +395,23 @@ impl Session {
         while group.is_some() && self.docs[id.0].undo.last().and_then(|a| a.group) == group {
             last = self.undo_one(id)?;
         }
+        // A group can span documents, as a rename and its links do.
+        for other in self.group_members(group, |slot| slot.undo.last()) {
+            while self.docs[other].undo.last().and_then(|a| a.group) == group {
+                self.undo_one(DocId(other))?;
+            }
+        }
         Ok(last)
+    }
+
+    fn group_members(
+        &self,
+        group: Option<u64>,
+        top: impl Fn(&super::Slot) -> Option<&Applied>,
+    ) -> Vec<usize> {
+        (0..self.docs.len())
+            .filter(|&i| group.is_some() && top(&self.docs[i]).and_then(|a| a.group) == group)
+            .collect()
     }
 
     /// Redo the last undone step (one operation, or a whole group).
@@ -405,6 +421,11 @@ impl Session {
         let mut last = self.redo_one(id)?;
         while group.is_some() && self.docs[id.0].redo.last().and_then(|a| a.group) == group {
             last = self.redo_one(id)?;
+        }
+        for other in self.group_members(group, |slot| slot.redo.last()) {
+            while self.docs[other].redo.last().and_then(|a| a.group) == group {
+                self.redo_one(DocId(other))?;
+            }
         }
         Ok(last)
     }
