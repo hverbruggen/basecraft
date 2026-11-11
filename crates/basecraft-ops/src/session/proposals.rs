@@ -162,7 +162,6 @@ impl Session {
                 group: Some(group),
             })
             .collect();
-        self.flush()?;
         self.track(doc)?;
         self.events.reserve(entries.len());
         self.docs[doc.0].undo.reserve(applied.len());
@@ -391,60 +390,6 @@ mod tests {
                 .apply_sequence_proposals(doc, 0, 0, &[], &Actor::External)
                 .is_err()
         );
-    }
-
-    #[test]
-    fn pending_typing_survives_a_flush_failure_before_proposal_commit() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("sequence.fa");
-        std::fs::write(&path, ">a\nACGT\n").unwrap();
-        let mut session = Session::new(dir.path());
-        let doc = session.open(&path).unwrap();
-        session
-            .apply(
-                doc,
-                Op::SeqReplace {
-                    start: 4,
-                    end: 4,
-                    residues: "A".into(),
-                },
-            )
-            .unwrap();
-        assert!(session.pending.is_some());
-        let generation = session.generation(doc).unwrap();
-        let revision = session.revision(doc).unwrap();
-        let journal = journal_bytes(dir.path());
-        let op = Op::SeqReplace {
-            start: 0,
-            end: 1,
-            residues: "T".into(),
-        };
-        session.log.as_mut().unwrap().faults.after_bytes = Some(127);
-        assert!(
-            session
-                .apply_sequence_proposals(
-                    doc,
-                    generation,
-                    revision,
-                    std::slice::from_ref(&op),
-                    &Actor::External
-                )
-                .is_err()
-        );
-        assert!(session.pending.is_some());
-        assert_eq!(session.doc(doc).unwrap().read(0, 5), b"ACGTA");
-        assert_eq!(session.generation(doc).unwrap(), generation);
-        assert_eq!(journal_bytes(dir.path()), journal);
-        session
-            .apply_sequence_proposals(doc, generation, revision, &[op], &Actor::External)
-            .unwrap();
-        assert!(session.pending.is_none());
-        assert_eq!(session.doc(doc).unwrap().read(0, 5), b"TCGTA");
-        session.undo(doc).unwrap();
-        assert_eq!(session.doc(doc).unwrap().read(0, 5), b"ACGTA");
-        session.undo(doc).unwrap();
-        assert_eq!(session.doc(doc).unwrap().read(0, 4), b"ACGT");
-        assert!(crate::records::replay::replay(dir.path()).unwrap().ok());
     }
 
     #[test]

@@ -194,7 +194,6 @@ impl Session {
         self.doc(id)?;
         let _reserved = self.derived_target(path)?;
         self.track(id)?;
-        self.flush()?;
         let doc = &self.sequence_of(id)?.doc;
         if start >= end || end > doc.len() {
             return Err(invalid(format!(
@@ -247,7 +246,6 @@ impl Session {
     ) -> Result<()> {
         let _reserved = self.derived_target(path)?;
         self.track(id)?;
-        self.flush()?;
         let mut hash = String::new();
         basecraft_io::write_atomic(path, |w| {
             let mut hw = HashingWriter::new(w);

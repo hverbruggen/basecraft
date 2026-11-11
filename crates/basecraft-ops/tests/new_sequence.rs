@@ -57,7 +57,6 @@ fn new_sequence_validates_before_creating_and_replays_unsaved_edits() {
             .strand(),
         Strand::Reverse
     );
-    session.flush().unwrap();
     let recovery = session.recovery_root().to_owned();
     assert_eq!(
         records::replay(&recovery).unwrap().problems,

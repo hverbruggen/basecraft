@@ -2,11 +2,12 @@
 //! and the log.
 //!
 //! Every change goes through [`Session::apply`], [`Session::undo`] or
-//! [`Session::redo`], so the log is complete. Consecutive single-place
-//! insertions by the same actor within a second merge into one operation,
-//! like an editor's undo grouping, so a burst of typing is one log entry.
-//! Alignment edits merge the same way: typing over residues along a row,
-//! gaps inserted one after another, a block slid step by step.
+//! [`Session::redo`], so the log is complete. Every edit is journaled at
+//! once. Consecutive single-place insertions by the same actor within a
+//! second share one undo step, like an editor's undo grouping. Alignment
+//! edits group the same way: typing over residues along a row, gaps inserted
+//! one after another, a block slid step by step. A cursor jump, another
+//! command, another document, undo or redo ends the burst.
 
 pub(crate) mod save_attempt_observation;
 use save_attempt_observation::{
@@ -47,14 +48,14 @@ pub use save_decision::{EvidenceAction, SaveCheck, SaveDecision, SaveOutcome, Sa
 pub mod support_import;
 use crate::{Error, Result};
 
-/// Typing within this interval, at the end of the previous insertion,
-/// merges into one operation.
-const MERGE_WINDOW: Duration = Duration::from_secs(1);
+/// Typing within this interval, continuing the previous insertion, joins its
+/// undo step. Each keystroke is still journaled on its own.
+const TYPING_WINDOW: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct DocId(pub usize);
 
-pub(crate) use history::Inverse;
+pub(crate) use history::{Inverse, MetadataUndo, SubmissionUndo, WorkspaceUndo};
 
 pub(crate) struct Applied {
     pub(crate) entry_id: String,
@@ -88,10 +89,13 @@ struct Slot {
     disk_stamp: basecraft_protocol::provenance::FileStamp,
 }
 
-/// A merged typing burst whose log entry hasn't been written yet.
-struct Pending {
+/// The typing burst the next keystroke may join: its document, actor, last
+/// edit and undo group.
+struct Typing {
     doc: DocId,
-    entry: LogEntry,
+    actor: Actor,
+    op: Op,
+    group: u64,
     last: Instant,
 }
 
@@ -129,11 +133,8 @@ pub struct Session {
     actor: Actor,
     log: Option<LogWriter>,
     docs: Vec<Slot>,
-    pending: Option<Pending>,
+    typing: Option<Typing>,
     store_objects: bool,
-    /// Merge typing bursts. Off for replay, where each logged entry must
-    /// stay one operation.
-    merge: bool,
     /// The open undo group, if any, and the next group number.
     group: Option<u64>,
     next_group: u64,
@@ -165,9 +166,8 @@ impl Session {
             },
             log,
             docs: Vec::new(),
-            pending: None,
+            typing: None,
             store_objects: true,
-            merge: true,
             group: None,
             next_group: 1,
             ids: Mutex::new(ulid::Generator::new()),
@@ -198,9 +198,6 @@ impl Session {
             .recovery
             .then(|| LogWriter::new(&session.storage_root, &session.id));
         session.store_objects = preferences.files.recovery;
-        // Each accepted edit must already be recoverable. Deferred typing-burst
-        // serialization is retained only for explicitly constructed legacy sessions.
-        session.merge = false;
         Ok(session)
     }
 
@@ -213,7 +210,6 @@ impl Session {
         let mut s = Self::new(root);
         s.log = None;
         s.store_objects = false;
-        s.merge = false;
         s.tracked = false;
         s
     }
@@ -232,7 +228,6 @@ impl Session {
         let mut s = Self::new(root);
         s.log = None;
         s.store_objects = false;
-        s.merge = false;
         s
     }
 
@@ -482,9 +477,7 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        let flushed = self.flush().is_ok();
-        if flushed
-            && self.storage_root != self.root
+        if self.storage_root != self.root
             && !self.storage_root.join("pending-save.json").exists()
             && self.docs.iter().all(Slot::is_clean)
         {
@@ -597,8 +590,8 @@ fn restore_inverse(content: &mut Loaded, inverse: &Inverse) -> Result<()> {
     content.as_document_mut().revert(inverse)
 }
 
-/// Edits whose log entries can grow into a burst.
-fn mergeable(op: &Op) -> bool {
+/// Edits that can join a typing burst.
+fn typing(op: &Op) -> bool {
     match op {
         Op::SeqReplace {
             start,

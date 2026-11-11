@@ -48,10 +48,10 @@ impl Document for DelimitationWorkspace {
         execute_delimitation(self, op)
     }
     fn revert(&mut self, inverse: &Inverse) -> Result<()> {
-        let Inverse::Delimitation(before) = inverse else {
+        let Inverse::Delimitation(undo) = inverse else {
             return Err(invalid("undo of the wrong kind of edit"));
         };
-        *self = (**before).clone();
+        undo.undo(self);
         Ok(())
     }
     fn saved_companion(&self, target: &Path) -> Option<PathBuf> {
@@ -156,11 +156,10 @@ pub(crate) fn execute_delimitation(
     let Op::DelimitationEdit { edit } = op else {
         return Err(invalid("this needs a delimitation edit"));
     };
-    // Retain the existing inverse policy for these small hypothesis workspaces,
-    // which hold assignments/settings rather than sequence residues.
-    let before = Box::new(work.clone());
+    let before = work.clone();
     basecraft_docs::delimitation::apply(work, edit).map_err(|e| invalid(e.0))?;
-    Ok((Inverse::Delimitation(before), None))
+    let undo = crate::session::WorkspaceUndo::between(before, work);
+    Ok((Inverse::Delimitation(Box::new(undo)), None))
 }
 
 #[cfg(test)]
@@ -180,8 +179,10 @@ mod tests {
         assert!(doc.apply(&Op::TreeMidpointRoot {}).is_err());
         assert!(doc.revert(&Inverse::Alignment(Vec::new())).is_err());
         assert!(
-            doc.revert(&Inverse::Delimitation(Box::new(initial.clone())))
-                .is_ok()
+            doc.revert(&Inverse::Delimitation(Box::new(
+                crate::session::WorkspaceUndo::between(initial.clone(), &initial)
+            )))
+            .is_ok()
         );
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("wrong.fasta");

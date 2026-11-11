@@ -1,8 +1,8 @@
 //! Shared edit, grouping, undo, redo and journal ownership.
 use super::{
     Actor, AlnUndo, Applied, DocId, EditResult, Error, Feature, FeatureId, Instant, LOG_VERSION,
-    LogEntry, MERGE_WINDOW, Op, OpResult, Outcome, Pending, ReplayMode, Result, Session, invalid,
-    mergeable, restore_inverse,
+    LogEntry, Op, OpResult, Outcome, ReplayMode, Result, Session, TYPING_WINDOW, Typing, invalid,
+    restore_inverse, typing,
 };
 
 pub(crate) enum Inverse {
@@ -24,10 +24,171 @@ pub(crate) enum Inverse {
     },
     Alignment(Vec<AlnUndo>),
     Tree(basecraft_docs::tree::TreeUndo),
-    Delimitation(Box<basecraft_protocol::delimitation::DelimitationWorkspace>),
-    /// The whole metadata as it was: one edit can touch every table.
-    Metadata(Box<basecraft_protocol::metadata::ProjectMetadata>),
-    Submission(Box<basecraft_protocol::submission::Submission>),
+    Delimitation(Box<WorkspaceUndo>),
+    Metadata(Box<MetadataUndo>),
+    Submission(Box<SubmissionUndo>),
+}
+
+/// The changed window of a list: the entries it held before, and how many
+/// entries now stand in their place. Unchanged ends are not retained.
+pub(crate) struct Splice<T> {
+    start: usize,
+    len: usize,
+    before: Vec<T>,
+}
+
+impl<T: PartialEq + Clone> Splice<T> {
+    fn between(mut before: Vec<T>, after: &[T]) -> Self {
+        let start = before.iter().zip(after).take_while(|(a, b)| a == b).count();
+        let end = before[start..]
+            .iter()
+            .rev()
+            .zip(after[start..].iter().rev())
+            .take_while(|(a, b)| a == b)
+            .count();
+        before.truncate(before.len() - end);
+        Self {
+            start,
+            len: after.len() - start - end,
+            before: before.split_off(start),
+        }
+    }
+
+    fn undo(&self, list: &mut Vec<T>) {
+        list.splice(
+            self.start..self.start + self.len,
+            self.before.iter().cloned(),
+        );
+    }
+}
+
+/// Undo for a species workspace: its small settings whole, its specimen and
+/// hypothesis lists only where the edit changed them.
+pub(crate) struct WorkspaceUndo {
+    rest: basecraft_protocol::delimitation::DelimitationWorkspace,
+    specimens: Splice<basecraft_protocol::delimitation::Specimen>,
+    hypotheses: Splice<basecraft_protocol::delimitation::Hypothesis>,
+}
+
+impl WorkspaceUndo {
+    pub(crate) fn between(
+        mut rest: basecraft_protocol::delimitation::DelimitationWorkspace,
+        after: &basecraft_protocol::delimitation::DelimitationWorkspace,
+    ) -> Self {
+        let specimens = Splice::between(std::mem::take(&mut rest.specimens), &after.specimens);
+        let hypotheses = Splice::between(std::mem::take(&mut rest.hypotheses), &after.hypotheses);
+        Self {
+            rest,
+            specimens,
+            hypotheses,
+        }
+    }
+
+    pub(crate) fn undo(&self, work: &mut basecraft_protocol::delimitation::DelimitationWorkspace) {
+        let mut specimens = std::mem::take(&mut work.specimens);
+        let mut hypotheses = std::mem::take(&mut work.hypotheses);
+        self.specimens.undo(&mut specimens);
+        self.hypotheses.undo(&mut hypotheses);
+        *work = basecraft_protocol::delimitation::DelimitationWorkspace {
+            specimens,
+            hypotheses,
+            ..self.rest.clone()
+        };
+    }
+}
+
+/// Undo for project metadata: settings and columns whole, the roster rows
+/// and record lists only where the edit changed them.
+pub(crate) struct MetadataUndo {
+    rest: basecraft_protocol::metadata::ProjectMetadata,
+    rows: Splice<basecraft_protocol::metadata::Row>,
+    taxa: Splice<basecraft_protocol::metadata::Taxon>,
+    identifications: Splice<basecraft_protocol::metadata::Identification>,
+    links: Splice<basecraft_protocol::metadata::RecordLink>,
+    partitions: Splice<basecraft_protocol::delimitation::Hypothesis>,
+}
+
+impl MetadataUndo {
+    pub(crate) fn between(
+        mut rest: basecraft_protocol::metadata::ProjectMetadata,
+        after: &basecraft_protocol::metadata::ProjectMetadata,
+    ) -> Self {
+        use std::mem::take;
+        Self {
+            rows: Splice::between(take(&mut rest.specimens.rows), &after.specimens.rows),
+            taxa: Splice::between(take(&mut rest.taxa), &after.taxa),
+            identifications: Splice::between(
+                take(&mut rest.identifications),
+                &after.identifications,
+            ),
+            links: Splice::between(take(&mut rest.links), &after.links),
+            partitions: Splice::between(take(&mut rest.partitions), &after.partitions),
+            rest,
+        }
+    }
+
+    pub(crate) fn undo(&self, metadata: &mut basecraft_protocol::metadata::ProjectMetadata) {
+        use std::mem::take;
+        let mut current = take(metadata);
+        self.rows.undo(&mut current.specimens.rows);
+        self.taxa.undo(&mut current.taxa);
+        self.identifications.undo(&mut current.identifications);
+        self.links.undo(&mut current.links);
+        self.partitions.undo(&mut current.partitions);
+        *metadata = basecraft_protocol::metadata::ProjectMetadata {
+            specimens: basecraft_protocol::metadata::Table {
+                rows: current.specimens.rows,
+                ..self.rest.specimens.clone()
+            },
+            taxa: current.taxa,
+            identifications: current.identifications,
+            links: current.links,
+            partitions: current.partitions,
+            ..self.rest.clone()
+        };
+    }
+}
+
+/// Undo for a submission: its settings whole, its per-record lists only
+/// where the edit changed them.
+pub(crate) struct SubmissionUndo {
+    rest: basecraft_protocol::submission::Submission,
+    rows: Splice<basecraft_protocol::submission::RowDecision>,
+    exported: Splice<basecraft_protocol::submission::ExportMapping>,
+    frames: Splice<basecraft_protocol::submission::FrameChoice>,
+    accessions: Splice<basecraft_protocol::submission::AccessionEntry>,
+}
+
+impl SubmissionUndo {
+    pub(crate) fn between(
+        mut rest: basecraft_protocol::submission::Submission,
+        after: &basecraft_protocol::submission::Submission,
+    ) -> Self {
+        use std::mem::take;
+        Self {
+            rows: Splice::between(take(&mut rest.rows), &after.rows),
+            exported: Splice::between(take(&mut rest.exported), &after.exported),
+            frames: Splice::between(take(&mut rest.frames), &after.frames),
+            accessions: Splice::between(take(&mut rest.accessions), &after.accessions),
+            rest,
+        }
+    }
+
+    pub(crate) fn undo(&self, submission: &mut basecraft_protocol::submission::Submission) {
+        use std::mem::take;
+        let mut current = take(submission);
+        self.rows.undo(&mut current.rows);
+        self.exported.undo(&mut current.exported);
+        self.frames.undo(&mut current.frames);
+        self.accessions.undo(&mut current.accessions);
+        *submission = basecraft_protocol::submission::Submission {
+            rows: current.rows,
+            exported: current.exported,
+            frames: current.frames,
+            accessions: current.accessions,
+            ..self.rest.clone()
+        };
+    }
 }
 
 impl Session {
@@ -94,17 +255,6 @@ impl Session {
         Ok(())
     }
 
-    /// Write out a pending typing burst.
-    pub fn flush(&mut self) -> Result<()> {
-        if let Some(p) = self.pending.take()
-            && let Err(error) = self.write(&p.entry)
-        {
-            self.pending = Some(p);
-            return Err(error);
-        }
-        Ok(())
-    }
-
     /// Apply an edit as the session's default actor.
     pub fn apply(&mut self, doc: DocId, op: Op) -> Result<Outcome> {
         let actor = self.actor.clone();
@@ -133,19 +283,31 @@ impl Session {
             *review =
                 self.retain_review_record(&crate::sanger_review::read_journal_record(review)?)?;
         }
-        if self.merge && self.try_merge(doc, &op, &actor)? {
-            self.docs[doc.0].generation += 1;
-            let id = self
-                .pending
-                .as_ref()
-                .map(|p| p.entry.id.clone())
-                .unwrap_or_default();
-            return Ok(Outcome {
-                entry_id: id,
-                feature: None,
-            });
-        }
-        self.flush()?;
+        let typing = typing(&op) && self.group.is_none();
+        let burst = self
+            .typing
+            .as_ref()
+            .filter(|burst| {
+                typing
+                    && burst.doc == doc
+                    && burst.actor == actor
+                    && burst.last.elapsed() < TYPING_WINDOW
+                    && self.docs[doc.0].undo.last().and_then(|a| a.group) == Some(burst.group)
+                    && self.docs[doc.0]
+                        .content
+                        .as_document()
+                        .merge(&burst.op, &op)
+                        .is_some()
+            })
+            .map(|burst| burst.group);
+        let group = match (burst, typing) {
+            (Some(group), _) => Some(group),
+            (None, true) => {
+                self.next_group += 1;
+                Some(self.next_group - 1)
+            }
+            (None, false) => self.group,
+        };
         // A checkpoint describes the content an edit applies to, so it is taken
         // first. Otherwise apply first, so a refused edit starts no tracking.
         let slot = &self.docs[doc.0];
@@ -169,90 +331,27 @@ impl Session {
         };
         let entry = self.entry(doc, actor, op.clone(), result);
         let entry_id = entry.id.clone();
-        let mergeable = mergeable(&op);
-        if !(self.merge && mergeable)
-            && let Err(error) = self.write(&entry)
-        {
+        if let Err(error) = self.write(&entry) {
             restore_inverse(self.docs[doc.0].content_mut(), &inverse)?;
             self.docs[doc.0].generation -= 1;
             return Err(error);
         }
+        self.typing = typing.then(|| Typing {
+            doc,
+            actor: entry.actor.clone(),
+            op: op.clone(),
+            group: group.unwrap_or_default(),
+            last: Instant::now(),
+        });
         let slot = &mut self.docs[doc.0];
         slot.redo.clear();
         slot.undo.push(Applied {
             entry_id: entry_id.clone(),
             op,
             inverse,
-            group: self.group,
+            group,
         });
-        if mergeable && self.merge {
-            self.pending = Some(Pending {
-                doc,
-                entry,
-                last: Instant::now(),
-            });
-        }
         Ok(Outcome { entry_id, feature })
-    }
-
-    /// Merge an insertion into the pending burst if it continues it.
-    pub(super) fn try_merge(&mut self, doc: DocId, op: &Op, actor: &Actor) -> Result<bool> {
-        let Some(p) = &self.pending else {
-            return Ok(false);
-        };
-        if p.doc != doc || p.entry.actor != *actor || p.last.elapsed() >= MERGE_WINDOW {
-            return Ok(false);
-        }
-        let Some(merged) = self.docs[doc.0]
-            .content
-            .as_document()
-            .merge(&p.entry.op, op)
-        else {
-            return Ok(false);
-        };
-        let (inverse, _) = self.execute(doc, op)?;
-        let state = self.state(doc)?;
-        let slot = &mut self.docs[doc.0];
-        slot.redo.clear();
-        let top = slot
-            .undo
-            .last_mut()
-            .ok_or_else(|| invalid("pending burst without undo entry"))?;
-        match (&mut top.inverse, inverse) {
-            (Inverse::Alignment(first), Inverse::Alignment(steps)) => first.extend(steps),
-            (
-                Inverse::Residues {
-                    inserted,
-                    result: first,
-                },
-                Inverse::Residues {
-                    inserted: added,
-                    result,
-                },
-            ) => {
-                *inserted += added;
-                // Keep the pre-burst state of each feature; add features the
-                // burst touched later.
-                for (id, f) in result.before {
-                    if !first.before.iter().any(|(i, _)| *i == id) {
-                        first.before.push((id, f));
-                    }
-                }
-            }
-            _ => return Err(invalid("merged edit has incompatible undo")),
-        }
-        top.op = merged.clone();
-        if let Some(p) = &mut self.pending {
-            p.entry.op = merged;
-            p.entry.state = state;
-            p.last = Instant::now();
-        }
-        Ok(true)
-    }
-
-    /// Carry out an edit on the document; returns its inverse.
-    pub(super) fn execute(&mut self, id: DocId, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {
-        self.docs[id.0].content_mut().as_document_mut().apply(op)
     }
 
     /// Undo the last operation on a document; returns the undone entry's id.
@@ -344,7 +443,7 @@ impl Session {
 
     pub(super) fn undo_one(&mut self, id: DocId) -> Result<String> {
         self.track(id)?;
-        self.flush()?;
+        self.typing = None;
         let applied = self.docs[id.0].undo.pop().ok_or(Error::NothingTo("undo"))?;
         self.docs[id.0]
             .content_mut()
@@ -370,7 +469,7 @@ impl Session {
 
     pub(super) fn redo_one(&mut self, id: DocId) -> Result<String> {
         self.track(id)?;
-        self.flush()?;
+        self.typing = None;
         let applied = self.docs[id.0].redo.pop().ok_or(Error::NothingTo("redo"))?;
         let inverse = self.reexecute(id, &applied)?;
         self.docs[id.0].generation += 1;
@@ -420,5 +519,30 @@ impl Session {
             .content_mut()
             .as_document_mut()
             .reapply(&applied.op, &applied.inverse)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Splice;
+
+    #[test]
+    fn splice_keeps_only_the_changed_window_and_restores_it() {
+        let before: Vec<u32> = (0..100).collect();
+        let cases: Vec<Vec<u32>> = vec![
+            before.clone(),
+            [&before[..40], &[999], &before[40..]].concat(),
+            [&before[..40], &before[41..]].concat(),
+            [&before[..40], &[7], &before[41..]].concat(),
+            before[..60].to_vec(),
+            vec![],
+        ];
+        for (after, kept) in cases.into_iter().zip([0, 0, 1, 1, 40, 100]) {
+            let splice = Splice::between(before.clone(), &after);
+            assert_eq!(splice.before.len(), kept);
+            let mut restored = after;
+            splice.undo(&mut restored);
+            assert_eq!(restored, before);
+        }
     }
 }

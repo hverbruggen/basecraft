@@ -215,7 +215,6 @@ fn publication_worker() {
                 },
             )
             .unwrap();
-        session.flush().unwrap();
         if mode != "save-first" {
             let paths = basecraft_platform::paths::AppPaths::discover().unwrap();
             let file = std::fs::OpenOptions::new()
@@ -440,7 +439,6 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
                 },
             )
             .unwrap();
-        session.flush().unwrap();
         let save_first = mode == "retain-break" || mode == "retain-remove";
         if !save_first {
             let paths = basecraft_platform::paths::AppPaths::discover().unwrap();

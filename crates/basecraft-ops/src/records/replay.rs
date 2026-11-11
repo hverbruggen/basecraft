@@ -1173,7 +1173,6 @@ mod tests {
                 },
             )
             .unwrap();
-        session.flush().unwrap();
         let entries = log::read_all(root.path()).unwrap();
         let baseline = entries
             .iter()

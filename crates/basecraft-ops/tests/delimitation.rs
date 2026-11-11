@@ -617,7 +617,6 @@ fn application_state_replay_handles_hidden_baseline_and_missing_original_folder(
         )
         .unwrap();
     let recovery = edited.recovery_root().to_path_buf();
-    edited.flush().unwrap();
     std::fs::rename(&root, parent.path().join("unavailable")).unwrap();
     let report = records::replay(&recovery).unwrap();
     assert!(report.ok(), "{:?}", report.problems);

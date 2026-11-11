@@ -84,7 +84,6 @@ fn setup(root: &Path) -> (Session, DocId, std::path::PathBuf) {
 }
 
 fn assert_recovery(session: &mut Session, root: &Path) {
-    session.flush().unwrap();
     let before =
         serde_json::to_value(basecraft_ops::log::read_all(session.recovery_root()).unwrap())
             .unwrap();

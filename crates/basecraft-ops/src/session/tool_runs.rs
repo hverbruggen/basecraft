@@ -17,7 +17,6 @@ impl Session {
         outputs: &[PathBuf],
     ) -> Result<()> {
         self.track(id)?;
-        self.flush()?;
         let mut hashes = inputs.to_vec();
         let mut keys = Vec::new();
         for path in outputs {
@@ -128,7 +127,6 @@ impl Session {
         outputs: &[PathBuf],
     ) -> Result<()> {
         self.reference_baseline(id)?;
-        self.flush()?;
         let mut hashes = inputs.to_vec();
         let mut keys = Vec::new();
         for path in outputs {
@@ -161,7 +159,6 @@ impl Session {
         report: basecraft_protocol::records::JobRecord,
     ) -> Result<()> {
         self.track(id)?;
-        self.flush()?;
         let entry = self.entry(
             id,
             self.actor.clone(),
@@ -178,7 +175,6 @@ impl Session {
         report: basecraft_protocol::records::JobRecord,
     ) -> Result<()> {
         self.reference_baseline(id)?;
-        self.flush()?;
         let entry = self.entry(
             id,
             self.actor.clone(),

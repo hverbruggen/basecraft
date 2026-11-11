@@ -183,9 +183,6 @@ pub mod qobject {
         /// Reload the Omarchy theme if it changed.
         #[qinvokable]
         fn check_theme(self: Pin<&mut GenomeController>);
-        /// Write a pending typing burst to the log.
-        #[qinvokable]
-        fn flush(self: Pin<&mut GenomeController>);
         #[qinvokable]
         fn memory_report(self: &GenomeController) -> QString;
         /// `path` relative to the open project folder, or to the file's own
@@ -1581,12 +1578,6 @@ impl qobject::GenomeController {
             self.as_mut().set_ok_color(QString::from(&update.ok));
             self.as_mut().set_error_color(QString::from(&update.error));
             self.refresh();
-        }
-    }
-
-    pub fn flush(mut self: Pin<&mut Self>) {
-        if let Some(s) = &mut self.as_mut().rust_mut().session {
-            let _ = s.flush();
         }
     }
 

@@ -54,7 +54,6 @@ fn new_review_updates_undo_replay_and_recover() {
     );
     session.redo(id).unwrap();
     edit(&mut session, id, 'A');
-    session.flush().unwrap();
     let report = records::replay(&root).unwrap();
     assert!(report.ok(), "{:?}", report.problems);
     let recovered = records::recover(&root, &root.join("recovered")).unwrap();
@@ -328,7 +327,6 @@ fn selections_are_small_and_undo_restores_every_saved_byte() {
             )
             .unwrap();
     }
-    session.flush().unwrap();
     let log = basecraft_ops::log::read_all(&root).unwrap();
     assert!(serde_json::to_vec(&log[entries..]).unwrap().len() < 200 * 1024);
     for _ in 0..200 {

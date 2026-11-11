@@ -41,18 +41,17 @@ impl Document for OpenedMetadata {
                 op.name()
             )));
         };
-        // Retain the existing snapshot inverse. Edit-sized metadata inverses
-        // remain separate debt; this migration does not change snapshot policy.
-        let before = Box::new(self.metadata.clone());
+        let before = self.metadata.clone();
         basecraft_docs::metadata::apply(&mut self.metadata, edit).map_err(|e| invalid(e.0))?;
-        Ok((Inverse::Metadata(before), None))
+        let undo = crate::session::MetadataUndo::between(before, &self.metadata);
+        Ok((Inverse::Metadata(Box::new(undo)), None))
     }
 
     fn revert(&mut self, inverse: &Inverse) -> Result<()> {
-        let Inverse::Metadata(before) = inverse else {
+        let Inverse::Metadata(undo) = inverse else {
             return Err(invalid("undo of the wrong kind of edit"));
         };
-        self.metadata = (**before).clone();
+        undo.undo(&mut self.metadata);
         Ok(())
     }
 
