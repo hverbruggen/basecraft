@@ -2,11 +2,22 @@
 //! from the files: a file inside the folder belongs to it, any other file is
 //! a loose file.
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Clones share one use count, so whoever holds the chosen project can tell
+/// whether an open session or a running job still works in it.
+#[derive(Clone, Debug)]
 pub struct Project {
     root: PathBuf,
+    uses: Arc<()>,
 }
+
+impl PartialEq for Project {
+    fn eq(&self, other: &Self) -> bool {
+        self.root == other.root
+    }
+}
+impl Eq for Project {}
 
 impl Project {
     /// The folder the user chose. It must exist.
@@ -15,11 +26,20 @@ impl Project {
         if !root.is_dir() {
             return Err(crate::error::invalid("a project must be a folder"));
         }
-        Ok(Self { root })
+        Ok(Self {
+            root,
+            uses: Arc::default(),
+        })
     }
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Whether another clone of this project is alive, such as the project
+    /// of an open session.
+    pub fn in_use(&self) -> bool {
+        Arc::strong_count(&self.uses) > 1
     }
 
     /// Whether `path` lies inside the project. A missing file counts by its

@@ -33,12 +33,7 @@ pub mod qobject {
         #[qinvokable]
         fn track(self: Pin<&mut DocumentOpens>, path: &QString) -> QString;
         #[qinvokable]
-        fn request(
-            self: Pin<&mut DocumentOpens>,
-            path: &QString,
-            context: &QString,
-            review: bool,
-        ) -> QString;
+        fn request(self: Pin<&mut DocumentOpens>, path: &QString, review: bool) -> QString;
         #[qinvokable]
         fn start(self: Pin<&mut DocumentOpens>, token: &QString);
         #[qinvokable]
@@ -214,12 +209,7 @@ impl qobject::DocumentOpens {
             })
             .map_or_else(QString::default, |(id, _)| QString::from(id.to_string()))
     }
-    fn request(
-        mut self: Pin<&mut Self>,
-        path: &QString,
-        context: &QString,
-        review: bool,
-    ) -> QString {
+    fn request(mut self: Pin<&mut Self>, path: &QString, review: bool) -> QString {
         let undelivered: Vec<_> = self
             .rust()
             .opens
@@ -235,7 +225,7 @@ impl qobject::DocumentOpens {
             .as_mut()
             .rust_mut()
             .opens
-            .begin(path.to_string(), context.to_string(), review)
+            .begin(path.to_string(), review)
         {
             Ok((id, _)) => QString::from(id.to_string()),
             Err(_) => QString::default(),

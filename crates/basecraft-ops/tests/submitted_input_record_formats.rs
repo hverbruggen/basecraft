@@ -16,6 +16,7 @@ fn submitted_input_ancestry_and_source_identity() {
         &hash,
         &[],
         "source",
+        None,
     )
     .unwrap();
     let generated = ArtifactRun::create(&root.path().join("derived"), "generated").unwrap();

@@ -511,8 +511,17 @@ impl qobject::SubmissionController {
         self.as_mut().rust_mut().open_epoch += 1;
         let epoch = self.rust().open_epoch;
         let thread = self.qt_thread();
-        let root = (!self.rust().project_dir.is_empty()).then(|| self.rust().project());
-        let started = crate::document_open::start(path.to_string(), root, move |result| {
+        let Ok(project) = (!self.rust().project_dir.is_empty())
+            .then(|| basecraft_ops::project::Project::new(self.rust().project()))
+            .transpose()
+        else {
+            self.as_mut().set_busy(false);
+            self.as_mut()
+                .report("error", "The chosen project folder is missing");
+            self.opened(false);
+            return false;
+        };
+        let started = crate::document_open::start(path.to_string(), project, move |result| {
             let _ = thread.queue(move |mut this| {
                 if this.rust().open_epoch != epoch {
                     return;

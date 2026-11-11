@@ -22,8 +22,16 @@ pub fn reference_input_with_dependencies(
     hash: &str,
     dependencies: &[PathBuf],
     origin: &str,
+    project: Option<&crate::project::Project>,
 ) -> Result<ArtifactRun> {
-    Mutation::begin()?.reference_input_with_dependencies(anchor, source, hash, dependencies, origin)
+    Mutation::begin()?.reference_input_with_dependencies(
+        anchor,
+        source,
+        hash,
+        dependencies,
+        origin,
+        project,
+    )
 }
 
 /// One cooperating evidence mutation boundary. Keep this value alive through
@@ -82,8 +90,9 @@ impl Mutation {
         hash: &str,
         dependencies: &[PathBuf],
         origin: &str,
+        project: Option<&crate::project::Project>,
     ) -> Result<ArtifactRun> {
-        reference_input_locked(anchor, source, hash, dependencies, origin, None)
+        reference_input_locked(anchor, source, hash, dependencies, origin, None, project)
     }
 }
 
@@ -94,6 +103,7 @@ pub(crate) fn reference_input_locked(
     dependencies: &[PathBuf],
     origin: &str,
     captured_stamp: Option<&FileStamp>,
+    project: Option<&crate::project::Project>,
 ) -> Result<ArtifactRun> {
     use basecraft_protocol::provenance::{
         ArtifactRevision, Completeness, InputReference, Publication,
@@ -134,7 +144,8 @@ pub(crate) fn reference_input_locked(
         origin_run: None,
         extra: BTreeMap::new(),
     };
-    let source_bundle = crate::records::provenance::bundle_for_result(&source, None);
+    // A referenced source inside the project keeps its history there.
+    let source_bundle = crate::records::provenance::bundle_for_result(&source, project);
     let mut upstream = Vec::new();
     for dependency in dependencies.iter().chain(std::iter::once(&source_bundle)) {
         let manifest = dependency.join("manifest.json");

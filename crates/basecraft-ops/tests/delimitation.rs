@@ -447,7 +447,7 @@ fn hidden_workspace_moves_with_its_folder_and_passive_open_writes_nothing() {
     let doc = session.open(&path).unwrap();
     assert!(!root.join(".basecraft").exists());
     let hash = basecraft_io::hash_file(&tree).unwrap();
-    let run = basecraft_ops::delimitation::reference_input(&path, &tree, &hash).unwrap();
+    let run = basecraft_ops::delimitation::reference_input(&path, &tree, &hash, None).unwrap();
     // The generic writer extraction must retain species reference-only semantics
     // and its established publication origin; no automatic source snapshot.
     let input = basecraft_ops::records::read_input(run.directory()).unwrap();
@@ -550,7 +550,7 @@ fn referenced_display_preserve_copy_is_idempotent_and_never_uses_changed_bytes()
     let original = "((a:1,b:1):1,(c:1,d:1):1);\n";
     std::fs::write(&tree, original).unwrap();
     let hash = basecraft_io::hash_file(&tree).unwrap();
-    let run = basecraft_ops::delimitation::reference_input(&path, &tree, &hash).unwrap();
+    let run = basecraft_ops::delimitation::reference_input(&path, &tree, &hash, None).unwrap();
     let mut work = basecraft_io::spart::parse_text(SPART).unwrap();
     basecraft_docs::delimitation::apply(
         &mut work,

@@ -69,6 +69,7 @@ fn source(path: &Path, sha256: &str, anchor: &Path) -> crate::Result<Source> {
         &hash,
         &[],
         "Explicit Sanger input reference",
+        None,
     )?;
     if !basecraft_io::sha256_file(&path)?.eq_ignore_ascii_case(sha256) {
         return Err(crate::Error::ChangedOnDisk { path });
@@ -92,6 +93,7 @@ fn source_capture(
         capture,
         &[],
         "Explicit Sanger input reference",
+        None,
     )?;
     let reference = inputs::read_input(ledger.directory())?.source;
     Ok(Source {
@@ -1071,10 +1073,7 @@ pub fn record_addition(
         return Err(invalid(issues.join("; ")));
     }
     let hash = session.snapshot_file(&evidence.review)?;
-    session.log_referenced_tool_run(doc,basecraft_protocol::Actor::Plugin {id:"basecraft.sanger-review".into(),version:"1".into()},
-        ("basecraft.sanger-review","reviewed_consensus_input"),
-        serde_json::json!({"sanger_input":{"schema_version":1,"id":evidence.id,"hash":evidence.hash},"review_hash":evidence.review_hash,"sequence_hash":evidence.sequence_hash}),
-        &[(evidence.review.to_string_lossy().into_owned(),hash)],&[])
+    session.record_tool_run(doc, basecraft_protocol::Actor::Plugin {id:"basecraft.sanger-review".into(),version:"1".into()}, crate::session::ToolRunRecord { referenced: true, ..crate::session::ToolRunRecord::new(("basecraft.sanger-review","reviewed_consensus_input"), serde_json::json!({"sanger_input":{"schema_version":1,"id":evidence.id,"hash":evidence.hash},"review_hash":evidence.review_hash,"sequence_hash":evidence.sequence_hash}), &[(evidence.review.to_string_lossy().into_owned(),hash)], &[]) })
 }
 
 impl SangerReview {

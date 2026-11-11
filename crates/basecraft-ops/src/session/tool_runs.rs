@@ -5,27 +5,65 @@ use super::{PathBuf, invalid};
 
 /// What one tool run records. Every route (GUI, CLI, Python, MCP, plugins,
 /// imports) reaches the document's log through `Session::record_tool_run`.
-pub(crate) struct ToolRunRecord<'a> {
-    pub(crate) activity: (&'a str, &'a str),
-    pub(crate) params: serde_json::Value,
+pub struct ToolRunRecord<'a> {
+    pub activity: (&'a str, &'a str),
+    pub params: serde_json::Value,
     /// Inputs with the hashes of exactly what the tool was given.
-    pub(crate) inputs: &'a [(String, String)],
+    pub inputs: &'a [(String, String)],
     /// Outputs, hashed here.
-    pub(crate) outputs: &'a [PathBuf],
-    pub(crate) input_run: Option<basecraft_protocol::records::ActivityInputRun>,
-    pub(crate) contributions: Option<basecraft_protocol::records::ActivityContributions>,
+    pub outputs: &'a [PathBuf],
+    /// The run that already retains the exact input, if the caller made one.
+    pub input_run: Option<basecraft_protocol::records::ActivityInputRun>,
+    /// The edits this run made in the document, for proposals and imports.
+    /// Runs that edit nothing never take ownership of later edits.
+    pub edits: Option<&'a [String]>,
     /// A run on a referenced source need not promote it to an edit journal.
-    pub(crate) referenced: bool,
+    pub referenced: bool,
+}
+
+impl<'a> ToolRunRecord<'a> {
+    /// A run that read `inputs` and wrote `outputs`, such as an aligner.
+    pub fn new(
+        activity: (&'a str, &'a str),
+        params: serde_json::Value,
+        inputs: &'a [(String, String)],
+        outputs: &'a [PathBuf],
+    ) -> Self {
+        Self {
+            activity,
+            params,
+            inputs,
+            outputs,
+            input_run: None,
+            edits: None,
+            referenced: false,
+        }
+    }
 }
 
 impl Session {
     /// The one way a tool run reaches the log: one typed `tool.run` entry.
-    pub(crate) fn record_tool_run(
+    pub fn record_tool_run(
         &mut self,
         id: DocId,
         actor: Actor,
         record: ToolRunRecord<'_>,
     ) -> Result<()> {
+        let mut input_run = record.input_run;
+        let contributions = match record.edits {
+            Some(edits) => {
+                self.check_owned_edits(id, &actor, edits)?;
+                if input_run.is_none() {
+                    input_run = self.retain_input(id, record.inputs, edits)?;
+                }
+                Some(basecraft_protocol::records::ActivityContributions {
+                    schema_version: 1,
+                    edits: edits.to_vec(),
+                    extra: std::collections::BTreeMap::new(),
+                })
+            }
+            None => None,
+        };
         if record.referenced {
             self.reference_baseline(id)?;
         } else {
@@ -48,8 +86,8 @@ impl Session {
                 params: record.params,
                 inputs: record.inputs.iter().map(|(k, _)| k.clone()).collect(),
                 outputs: keys,
-                input_run: record.input_run,
-                contributions: record.contributions,
+                input_run,
+                contributions,
             },
             OpResult {
                 hashes,
@@ -59,89 +97,14 @@ impl Session {
         self.write(&entry)
     }
 
-    /// Log a plugin run that read and wrote files, such as an aligner. The run
-    /// changes no open document.
-    pub fn log_tool_run(
-        &mut self,
-        id: DocId,
-        actor: Actor,
-        activity: (&str, &str),
-        params: serde_json::Value,
-        inputs: &[(String, String)],
-        outputs: &[PathBuf],
-    ) -> Result<()> {
-        self.record_tool_run(
-            id,
-            actor,
-            ToolRunRecord {
-                activity,
-                params,
-                inputs,
-                outputs,
-                input_run: None,
-                contributions: None,
-                referenced: false,
-            },
-        )
-    }
-
-    pub fn log_referenced_tool_run(
-        &mut self,
-        id: DocId,
-        actor: Actor,
-        activity: (&str, &str),
-        params: serde_json::Value,
-        inputs: &[(String, String)],
-        outputs: &[PathBuf],
-    ) -> Result<()> {
-        self.record_tool_run(
-            id,
-            actor,
-            ToolRunRecord {
-                activity,
-                params,
-                inputs,
-                outputs,
-                input_run: None,
-                contributions: None,
-                referenced: true,
-            },
-        )
-    }
-
-    /// Record explicit ownership of proposal/import edits. Generic no-output
-    /// activities never acquire ownership merely by following an edit.
-    pub fn log_contributing_tool_run(
-        &mut self,
-        id: DocId,
-        actor: Actor,
-        activity: (&str, &str),
-        params: serde_json::Value,
-        inputs: &[(String, String)],
-        edits: &[String],
-    ) -> Result<()> {
-        self.record_contributions(id, actor, activity, params, inputs, edits, None)
-    }
-
-    /// As `log_contributing_tool_run`, with the run that already retains the
-    /// exact input, if the caller made one.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn record_contributions(
-        &mut self,
-        id: DocId,
-        actor: Actor,
-        activity: (&str, &str),
-        params: serde_json::Value,
-        inputs: &[(String, String)],
-        edits: &[String],
-        mut input_run: Option<basecraft_protocol::records::ActivityInputRun>,
-    ) -> Result<()> {
+    /// A run may claim only edits this actor made in this document.
+    fn check_owned_edits(&self, id: DocId, actor: &Actor, edits: &[String]) -> Result<()> {
         for edit in edits {
             if self.tracked
                 && !self.events.iter().any(|e| {
                     e.id == *edit
                         && e.doc == self.docs[id.0].key
-                        && e.actor == actor
+                        && e.actor == *actor
                         && matches!(
                             e.op,
                             Op::FeatureAdd { .. }
@@ -156,41 +119,34 @@ impl Session {
                 ));
             }
         }
-        // Retain the exact submitted input once, in its own run, unless the
-        // caller already did.
-        if self.tracked
-            && !edits.is_empty()
-            && input_run.is_none()
-            && self.provenance_policy != basecraft_platform::settings::ProvenancePolicy::None
-            && let Some((source, hash)) = inputs.first()
+        Ok(())
+    }
+
+    /// Retain the exact submitted input of an editing run once, in its own run.
+    fn retain_input(
+        &self,
+        id: DocId,
+        inputs: &[(String, String)],
+        edits: &[String],
+    ) -> Result<Option<basecraft_protocol::records::ActivityInputRun>> {
+        let Some((source, hash)) = inputs.first() else {
+            return Ok(None);
+        };
+        if !self.tracked
+            || edits.is_empty()
+            || self.provenance_policy == basecraft_platform::settings::ProvenancePolicy::None
         {
-            let source = self.resolve(source);
-            let ledger = crate::records::input_evidence::reference_input_with_dependencies(
-                &self.resolve(self.doc_key(id)?),
-                &source,
-                hash,
-                &[],
-                "Retained annotation input snapshot",
-            )?;
-            input_run = Some(input_run_of(&ledger)?);
+            return Ok(None);
         }
-        self.record_tool_run(
-            id,
-            actor,
-            ToolRunRecord {
-                activity,
-                params,
-                inputs,
-                outputs: &[],
-                input_run,
-                contributions: Some(basecraft_protocol::records::ActivityContributions {
-                    schema_version: 1,
-                    edits: edits.to_vec(),
-                    extra: std::collections::BTreeMap::new(),
-                }),
-                referenced: false,
-            },
-        )
+        let ledger = crate::records::input_evidence::reference_input_with_dependencies(
+            &self.resolve(self.doc_key(id)?),
+            &self.resolve(source),
+            hash,
+            &[],
+            "Retained annotation input snapshot",
+            self.project.as_ref(),
+        )?;
+        Ok(Some(input_run_of(&ledger)?))
     }
 
     /// Retain failure and cancellation diagnostics without creating a hypothesis.

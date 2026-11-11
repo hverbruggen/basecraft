@@ -623,16 +623,18 @@ fn analysis_uses_submission_record_even_after_source_undo() {
     session.undo(doc).unwrap();
     let inputs = vec![("gene.fasta".into(), hash)];
     session
-        .log_tool_run(
+        .record_tool_run(
             doc,
             basecraft_protocol::Actor::Tool {
                 tool: "Example".into(),
                 version: "1".into(),
             },
-            ("example", "copy"),
-            serde_json::json!({}),
-            &inputs,
-            std::slice::from_ref(&output),
+            basecraft_ops::session::ToolRunRecord::new(
+                ("example", "copy"),
+                serde_json::json!({}),
+                &inputs,
+                std::slice::from_ref(&output),
+            ),
         )
         .unwrap();
     session
@@ -675,13 +677,15 @@ fn two_input_records_preserve_distinct_origins_and_export_frozen_evidence() {
     let hash = session.snapshot_bytes(bytes).unwrap();
     let inputs = vec![("combined input".into(), hash)];
     session
-        .log_tool_run(
+        .record_tool_run(
             doc,
             basecraft_protocol::Actor::External,
-            ("example", "combine"),
-            serde_json::json!({}),
-            &inputs,
-            std::slice::from_ref(&output),
+            basecraft_ops::session::ToolRunRecord::new(
+                ("example", "combine"),
+                serde_json::json!({}),
+                &inputs,
+                std::slice::from_ref(&output),
+            ),
         )
         .unwrap();
     session
@@ -767,7 +771,7 @@ fn methods_use_frozen_plugin_metadata_and_reject_unmatched_contribution() {
     let snapshot = session.document_record(doc).unwrap();
     let input_hash = session.snapshot_file(&file).unwrap();
     let inputs = vec![("gene.fasta".into(), input_hash)];
-    session.log_tool_run(doc, basecraft_protocol::Actor::Tool { tool:"RecordedTool".into(),version:"1.2".into() }, ("example", "analyze"), serde_json::json!({"_execution":{"methods_template":"example.v1","methods":{"description":"Sequences were processed","citations":["A recorded citation"]},"resolved_parameters":{"seed":42}}}), &inputs, std::slice::from_ref(&output)).unwrap();
+    session.record_tool_run(doc, basecraft_protocol::Actor::Tool { tool:"RecordedTool".into(),version:"1.2".into() }, basecraft_ops::session::ToolRunRecord::new(("example", "analyze"), serde_json::json!({"_execution":{"methods_template":"example.v1","methods":{"description":"Sequences were processed","citations":["A recorded citation"]},"resolved_parameters":{"seed":42}}}), &inputs, std::slice::from_ref(&output))).unwrap();
     session
         .publish_analysis_snapshot(doc, &output, &inputs, &snapshot)
         .unwrap();

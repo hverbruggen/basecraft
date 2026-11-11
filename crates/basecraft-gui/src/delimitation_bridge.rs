@@ -683,6 +683,7 @@ impl qobject::DelimitationController {
                             )),
                             &retained,
                             &hash,
+                            session.project(),
                         )
                     };
                     let run = match evidence {

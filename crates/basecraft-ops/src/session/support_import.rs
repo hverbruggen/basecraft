@@ -96,6 +96,7 @@ impl Session {
                 &hash,
                 &[],
                 &format!("Support values imported into {}", self.doc_key(id)?),
+                self.project.as_ref(),
             )?;
             input_run = Some(super::tool_runs::input_run_of(&ledger)?);
         }
@@ -122,14 +123,14 @@ impl Session {
             }
             return Err(error);
         }
-        self.record_contributions(
+        self.record_tool_run(
             id,
             self.actor.clone(),
-            ACTIVITY,
-            params,
-            &[(key, hash)],
-            &edit_ids,
-            input_run,
+            crate::session::ToolRunRecord {
+                edits: Some(&edit_ids[..]),
+                input_run,
+                ..crate::session::ToolRunRecord::new(ACTIVITY, params, &[(key, hash)], &[])
+            },
         )?;
         Ok(SupportImport { added, matched })
     }

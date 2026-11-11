@@ -378,6 +378,7 @@ impl PreparedOperation {
             &inputs,
             &mut frozen,
             captured,
+            project.as_ref(),
         )?;
         let run_id = run.id().to_owned();
         let mut outputs = BTreeMap::new();
@@ -625,6 +626,7 @@ fn allocate_run(
     inputs: &PreparationInputs,
     frozen: &mut FrozenInputs,
     captured: &[basecraft_ops::sanger_review::CapturedInput],
+    project: Option<&basecraft_ops::project::Project>,
 ) -> Result<AllocatedRun> {
     let sequence = &inputs.sequence;
     let generated = &inputs.generated;
@@ -678,6 +680,7 @@ fn allocate_run(
             &original_hash,
             captured,
             &format!("Input for {}", operation.id),
+            project,
         )?;
         let mut record = mutation.read_input(ledger.directory())?;
         record.analysis_run = Some(records::relative(ledger.directory(), run.directory())?);

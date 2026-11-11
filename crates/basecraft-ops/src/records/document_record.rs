@@ -39,12 +39,7 @@ pub fn read_origin(
     }
     let bundle = crate::records::provenance::bundle_for_result(path, project);
     if !bundle.join("manifest.json").exists() {
-        let note = project.is_none().then(|| {
-            "No history beside this file. If it belongs to a project, choose that project \
-             (CLI and MCP: --project)."
-                .to_string()
-        });
-        return (None, note);
+        return (None, None);
     }
     match crate::records::provenance::inspect(path, project) {
         Ok(p) if !hashes.is_empty() && hashes.iter().all(|(_, hash)| p.outputs.iter().any(|a| &a.hash == hash)) => (Some(p), None),

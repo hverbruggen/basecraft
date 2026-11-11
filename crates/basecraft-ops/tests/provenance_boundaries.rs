@@ -259,13 +259,18 @@ fn annotate(session: &mut Session, doc: basecraft_ops::DocId, label: &str, start
         )
         .unwrap();
     session
-        .log_contributing_tool_run(
+        .record_tool_run(
             doc,
             actor,
-            (label, "annotate"),
-            serde_json::json!({"effective":{"threshold":7}}),
-            &[],
-            &ids,
+            basecraft_ops::session::ToolRunRecord {
+                edits: Some(&ids[..]),
+                ..basecraft_ops::session::ToolRunRecord::new(
+                    (label, "annotate"),
+                    serde_json::json!({"effective":{"threshold":7}}),
+                    &[],
+                    &[],
+                )
+            },
         )
         .unwrap();
 }
@@ -343,15 +348,17 @@ fn generic_no_output_activity_does_not_own_unrelated_manual_edits() {
     session.apply(doc, annotation(0)).unwrap();
     session.end_group();
     session
-        .log_tool_run(
+        .record_tool_run(
             doc,
             basecraft_protocol::Actor::Human {
                 user: basecraft_platform::username(),
             },
-            ("unrelated-plugin", "inspect"),
-            serde_json::json!({}),
-            &[],
-            &[],
+            basecraft_ops::session::ToolRunRecord::new(
+                ("unrelated-plugin", "inspect"),
+                serde_json::json!({}),
+                &[],
+                &[],
+            ),
         )
         .unwrap();
     assert!(

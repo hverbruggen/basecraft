@@ -316,13 +316,17 @@ impl qobject::AppProvenance {
 
     fn bundle_path(mut self: Pin<&mut Self>, result: &QString) -> QString {
         let path = std::path::PathBuf::from(result.to_string());
-        let project = crate::chosen_project::chosen().ok().flatten();
-        match basecraft_ops::records::inspect(&path, project.as_ref()) {
-            Ok(_) => QString::from(
-                basecraft_ops::records::bundle_for_result(&path, project.as_ref())
-                    .to_string_lossy()
-                    .as_ref(),
-            ),
+        let found = crate::chosen_project::chosen()
+            .map_err(basecraft_ops::Error::Invalid)
+            .and_then(|project| {
+                basecraft_ops::records::inspect(&path, project.as_ref())?;
+                Ok(basecraft_ops::records::bundle_for_result(
+                    &path,
+                    project.as_ref(),
+                ))
+            });
+        match found {
+            Ok(bundle) => QString::from(bundle.to_string_lossy().as_ref()),
             Err(error) => {
                 self.as_mut().set_text(QString::default());
                 self.set_message(QString::from(format!("fail: {error}").as_str()));

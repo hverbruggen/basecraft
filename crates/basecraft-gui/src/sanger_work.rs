@@ -36,12 +36,14 @@ pub(super) fn retain_reference(anchor: &Path, source: &Path) -> Result<PathBuf, 
             }
         }
         let hash = basecraft_io::hash_file(source)?;
+        let project = crate::chosen_project::chosen().map_err(basecraft_ops::Error::Invalid)?;
         let run = basecraft_ops::records::reference_input_with_dependencies(
             anchor,
             source,
             &hash,
             &[],
             "GUI Sanger reference",
+            project.as_ref(),
         )?;
         basecraft_ops::records::preserve_input(run.directory())?;
         let input = basecraft_ops::records::read_input(run.directory())?;

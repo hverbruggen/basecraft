@@ -616,6 +616,7 @@ fn main() {
                 &basecraft_io::hash_file(&chosen).unwrap(),
                 &[],
                 "consent regression",
+                None,
             )
             .unwrap();
             assert!(

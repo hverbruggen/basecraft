@@ -64,7 +64,7 @@ pub fn run(command: DelimitationCommand) -> Result<()> {
                 selection.map(|s| serde_json::from_str(&s)).transpose()?;
             // Existing inputs and selection aliases are resolved together by
             // the shared workflow. Output/project handling stays unchanged.
-            let mut session = crate::script_session(absolute(project)?)?;
+            let mut session = crate::project_session(&absolute(project)?)?;
             delimitation::combine_to(&mut session, &paths, &output, keep.as_ref())?;
             serde_json::json!({"output": output})
         }

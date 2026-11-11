@@ -912,6 +912,7 @@ mod moved_and_failed_recovery_tests {
                 &basecraft_io::hash_file(&path).unwrap(),
                 &[],
                 "test downstream review",
+                None,
             )
             .unwrap();
             review

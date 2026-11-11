@@ -57,7 +57,13 @@ fn instrument_rendering_and_submission_share_one_trace_capture() {
     capture.write(&frozen).unwrap();
     Mutation::begin()
         .unwrap()
-        .reference_captured(&root.join("analysis"), &capture, &[], "fixture caller")
+        .reference_captured(
+            &root.join("analysis"),
+            &capture,
+            &[],
+            "fixture caller",
+            None,
+        )
         .unwrap();
     one_read(&path);
     assert_eq!(std::fs::read(&frozen).unwrap(), capture.bytes());

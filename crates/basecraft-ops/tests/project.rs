@@ -104,3 +104,35 @@ fn local_only_history_of_a_project_file_is_found() {
     assert!(!publication.events.is_empty());
     assert!(records::verify(&file, Some(&project)).unwrap().is_empty());
 }
+
+#[test]
+fn a_referenced_input_inside_the_project_keeps_its_history_link() {
+    crate::isolated_profile::isolate!();
+    let root = tempfile::tempdir().unwrap();
+    let chosen = root.path().join("project");
+    std::fs::create_dir(&chosen).unwrap();
+    let first = chosen.join("first.fasta");
+    std::fs::write(&first, b">a\nACGT\n").unwrap();
+    let project = Project::new(&chosen).unwrap();
+    let mut session = Session::new(&chosen).in_project(Some(project.clone()));
+    edit_and_save(&mut session, &first);
+    let bundle = project.provenance_bundle(&first).unwrap();
+    let hash = basecraft_io::hash_file(&first).unwrap();
+
+    let run = records::reference_input_with_dependencies(
+        &chosen.join("second.fasta"),
+        &first,
+        &hash,
+        &[],
+        "second analysis",
+        Some(&project),
+    )
+    .unwrap();
+    let upstream = records::read_input(run.directory()).unwrap().upstream;
+    assert_eq!(upstream.len(), 1, "{upstream:?}");
+    assert_eq!(
+        upstream[0].bundle.file_name(),
+        bundle.file_name(),
+        "the second run links the first run's history"
+    );
+}

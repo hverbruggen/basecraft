@@ -15,12 +15,12 @@ use std::{
 /// All editor entry points use the same acquisition worker and queued completion.
 pub(crate) fn start(
     path: String,
-    root: Option<PathBuf>,
+    project: Option<basecraft_ops::project::Project>,
     completed: impl FnOnce(Result<Candidate, OpenError>) + Send + 'static,
 ) -> Result<(), OpenError> {
     crate::document_jobs::background_initialized(
         "document-open",
-        move || Candidate::acquire_in(&path, root, &AtomicBool::new(false)),
+        move || Candidate::acquire_in(&path, project, &AtomicBool::new(false)),
         || OpenError::Interrupted,
         completed,
     )
@@ -125,12 +125,14 @@ pub(crate) struct Candidate {
     pub reads: basecraft_io::counters::Counters,
 }
 impl Candidate {
+    /// Open in the window's chosen project.
     pub fn acquire(path: &str, cancelled: &AtomicBool) -> Result<Self, OpenError> {
-        Self::acquire_in(path, None, cancelled)
+        let project = crate::chosen_project::chosen().map_err(basecraft_ops::Error::Invalid)?;
+        Self::acquire_in(path, project, cancelled)
     }
     fn acquire_in(
         path: &str,
-        root: Option<PathBuf>,
+        project: Option<basecraft_ops::project::Project>,
         cancelled: &AtomicBool,
     ) -> Result<Self, OpenError> {
         if cancelled.load(Ordering::Acquire) {
@@ -140,7 +142,6 @@ impl Candidate {
         basecraft_io::counters::reset();
         let path = PathBuf::from(path);
         // The project is the folder the user chose; opening never changes it.
-        let project = root.map(basecraft_ops::project::Project::new).transpose()?;
         let root = project.as_ref().map_or_else(
             || crate::bridge::file_folder(&path),
             |project| project.root().to_path_buf(),
@@ -241,8 +242,6 @@ pub(crate) enum Phase {
 }
 pub(crate) struct Request {
     pub path: String,
-    #[allow(dead_code)] // Captured context is never written back on completion.
-    pub context: String,
     pub controller: usize,
     pub installed_path: String,
     pub focus: u64,
@@ -276,12 +275,7 @@ impl Opens {
             }
         }
     }
-    pub fn begin(
-        &mut self,
-        path: String,
-        context: String,
-        review: bool,
-    ) -> Result<(u64, bool), OpenError> {
+    pub fn begin(&mut self, path: String, review: bool) -> Result<(u64, bool), OpenError> {
         if self.stopped {
             return Err(OpenError::Cancelled);
         }
@@ -305,7 +299,6 @@ impl Opens {
             self.next,
             Request {
                 path,
-                context,
                 controller: 0,
                 installed_path: String::new(),
                 focus: self.focus,
@@ -326,7 +319,6 @@ impl Opens {
             self.next,
             Request {
                 path,
-                context: String::new(),
                 controller: 0,
                 installed_path: String::new(),
                 focus: 0,
@@ -377,23 +369,13 @@ mod tests {
     #[test]
     fn duplicate_paths_order_focus_and_retirement() {
         let mut opens = Opens::default();
-        let (a, new) = opens
-            .begin("A.fa".into(), "project A".into(), false)
-            .unwrap();
+        let (a, new) = opens.begin("A.fa".into(), false).unwrap();
         assert!(new);
         let cancel_a = opens.requests[&a].cancelled.clone();
-        let (b, _) = opens
-            .begin("B.gb".into(), "project B".into(), false)
-            .unwrap();
+        let (b, _) = opens.begin("B.gb".into(), false).unwrap();
         assert!(!opens.wants_focus(a));
         assert!(opens.wants_focus(b));
-        assert_eq!(
-            opens
-                .begin("A.fa".into(), "different project".into(), true)
-                .unwrap(),
-            (a, false)
-        );
-        assert_eq!(opens.requests[&a].context, "project A");
+        assert_eq!(opens.begin("A.fa".into(), true).unwrap(), (a, false));
         assert!(opens.requests[&a].review);
         assert_eq!(
             opens.requests.keys().copied().collect::<Vec<_>>(),
@@ -403,9 +385,7 @@ mod tests {
         assert!(!opens.wants_focus(a));
         opens.retire(a);
         assert!(cancel_a.load(Ordering::Acquire));
-        let (reopened, _) = opens
-            .begin("A.fa".into(), "project A".into(), false)
-            .unwrap();
+        let (reopened, _) = opens.begin("A.fa".into(), false).unwrap();
         assert!(reopened > b);
         assert!(!opens.requests.contains_key(&a));
         let cancel_reopened = opens.requests[&reopened].cancelled.clone();
@@ -413,7 +393,7 @@ mod tests {
         assert!(cancel_reopened.load(Ordering::Acquire));
         assert!(opens.requests.is_empty());
         assert!(matches!(
-            opens.begin("A.fa".into(), String::new(), false),
+            opens.begin("A.fa".into(), false),
             Err(OpenError::Cancelled)
         ));
     }
@@ -421,12 +401,12 @@ mod tests {
     #[test]
     fn aliases_are_distinct_and_tokens_never_wrap() {
         let mut opens = Opens::default();
-        let (a, _) = opens.begin("A.fa".into(), String::new(), false).unwrap();
-        let (alias, _) = opens.begin("./A.fa".into(), String::new(), false).unwrap();
+        let (a, _) = opens.begin("A.fa".into(), false).unwrap();
+        let (alias, _) = opens.begin("./A.fa".into(), false).unwrap();
         assert_ne!(a, alias);
         opens.next = u64::MAX;
         assert!(matches!(
-            opens.begin("C.fa".into(), String::new(), false),
+            opens.begin("C.fa".into(), false),
             Err(OpenError::Exhausted)
         ));
         assert_eq!(opens.requests.len(), 2);

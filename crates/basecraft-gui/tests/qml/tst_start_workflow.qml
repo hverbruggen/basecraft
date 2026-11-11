@@ -44,7 +44,7 @@ Item {
                     property alias page: documentRecord.page
                     property alias methods: methodsCommand
                     property alias provenanceBusy: provenance.busy
-                    QtObject { id: shell; property string project_dir: "/previous" }
+                    QtObject { id: shell; property string project_dir: "/previous"; function choose_project(path) { project_dir = path; return "" } }
                     QtObject { id: provenance; property bool busy: false }
                     QtObject {
                         id: preferences

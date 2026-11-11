@@ -110,7 +110,6 @@ pub mod qobject {
             self: Pin<&mut GenomeController>,
             name: &QString,
             text: &QString,
-            root: &QString,
         ) -> QString;
         #[qinvokable]
         fn local_file_url(self: &GenomeController, path: &QString) -> QUrl;
@@ -140,7 +139,7 @@ pub mod qobject {
         /// The user chose a project folder (empty for none). The only place
         /// the window's project changes.
         #[qinvokable]
-        fn choose_project(self: Pin<&mut GenomeController>, path: &QString);
+        fn choose_project(self: Pin<&mut GenomeController>, path: &QString) -> QString;
         #[qinvokable]
         fn resize(self: Pin<&mut GenomeController>, width: f64, height: f64);
         #[qinvokable]
@@ -984,12 +983,7 @@ impl qobject::GenomeController {
     }
 
     /// Create in the ordinary recoverable session, without a source-file surrogate.
-    pub fn create_sequence(
-        mut self: Pin<&mut Self>,
-        name: &QString,
-        text: &QString,
-        _root: &QString,
-    ) -> QString {
+    pub fn create_sequence(mut self: Pin<&mut Self>, name: &QString, text: &QString) -> QString {
         if self.rust().session.is_some() || self.rust().busy {
             return QString::from("This controller already owns a document");
         }
@@ -1086,7 +1080,6 @@ impl qobject::GenomeController {
             doc,
             path,
             title_file,
-            root,
             ..
         } = candidate;
         let sequence = session.doc(doc)?;
@@ -1103,17 +1096,21 @@ impl qobject::GenomeController {
         self.as_mut().sync_mode();
         self.as_mut()
             .set_file_path(QString::from(path.to_string_lossy().as_ref()));
-        self.as_mut()
-            .set_project_dir(QString::from(root.to_string_lossy().as_ref()));
         self.as_mut().set_dirty(false);
         self.as_mut().notify("");
         self.refresh();
         Ok(())
     }
 
-    pub fn choose_project(self: Pin<&mut Self>, path: &QString) {
-        crate::chosen_project::choose(&path.to_string());
-        self.set_project_dir(path.clone());
+    /// Returns an error when documents of the current project are still open.
+    pub fn choose_project(self: Pin<&mut Self>, path: &QString) -> QString {
+        match crate::chosen_project::choose(&path.to_string()) {
+            Ok(()) => {
+                self.set_project_dir(path.clone());
+                QString::default()
+            }
+            Err(error) => QString::from(error.as_str()),
+        }
     }
 
     #[allow(clippy::cast_possible_truncation)]

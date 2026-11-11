@@ -230,20 +230,13 @@ fn main() -> ExitCode {
 /// script client, not by a person or an assistant.
 pub(crate) fn script_session(
     root: impl Into<PathBuf>,
+    project: Option<&basecraft_ops::project::Project>,
 ) -> Result<basecraft_ops::Session, basecraft_ops::Error> {
-    let mut session = basecraft_ops::Session::recoverable(root)?.in_project(chosen_project());
+    let mut session = basecraft_ops::Session::recoverable(root)?.in_project(project.cloned());
     session.set_actor(basecraft_protocol::Actor::Script {
         client: "CLI".into(),
     });
     Ok(session)
-}
-
-static PROJECT: std::sync::OnceLock<Option<basecraft_ops::project::Project>> =
-    std::sync::OnceLock::new();
-
-/// The project given with `--project`, or none.
-pub(crate) fn chosen_project() -> Option<basecraft_ops::project::Project> {
-    PROJECT.get().cloned().flatten()
 }
 
 /// A CLI session for a command whose folder argument is the project.
@@ -272,7 +265,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         .as_deref()
         .map(basecraft_ops::project::Project::new)
         .transpose()?;
-    let _ = PROJECT.set(project);
     let save_options = cli.save_options;
     match cli.command {
         Command::Delimitation { action } => delimitation::run(action)?,
@@ -281,10 +273,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Command::Metadata { action } => metadata::run(action, save_options)?,
         Command::Submission { action } => submission::run(action, save_options)?,
         Command::History { file, json } => {
-            let report = basecraft_ops::records::DocumentRecord::saved_report(
-                &file,
-                chosen_project().as_ref(),
-            )?;
+            let report =
+                basecraft_ops::records::DocumentRecord::saved_report(&file, project.as_ref())?;
             println!(
                 "{}",
                 if json {
@@ -295,10 +285,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         Command::Methods { file, json, output } => {
-            let report = basecraft_ops::records::DocumentRecord::saved_report(
-                &file,
-                chosen_project().as_ref(),
-            )?;
+            let report =
+                basecraft_ops::records::DocumentRecord::saved_report(&file, project.as_ref())?;
             if let Some(output) = output {
                 report.export(&output)?;
             }
@@ -342,24 +330,23 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     "{}",
                     serde_json::to_string_pretty(&basecraft_ops::records::inspect(
                         &result,
-                        chosen_project().as_ref()
+                        project.as_ref()
                     )?)?
                 );
             }
             ProvenanceCommand::Verify { result } => {
-                let issues = basecraft_ops::records::verify(&result, chosen_project().as_ref())?;
+                let issues = basecraft_ops::records::verify(&result, project.as_ref())?;
                 if !issues.is_empty() {
                     return Err(issues.join("\n").into());
                 }
                 println!("done: recorded hashes verified; replay verification is a separate check");
             }
             ProvenanceCommand::Methods { result, output } => {
-                let publication =
-                    basecraft_ops::records::inspect(&result, chosen_project().as_ref())?;
+                let publication = basecraft_ops::records::inspect(&result, project.as_ref())?;
                 basecraft_ops::records::write_reports(&output, &publication)?;
             }
             ProvenanceCommand::Package { result, output } => {
-                basecraft_ops::records::package(&result, &output, chosen_project().as_ref())?;
+                basecraft_ops::records::package(&result, &output, project.as_ref())?;
             }
         },
         Command::NewSequence {
@@ -368,7 +355,10 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             output,
         } => {
             let output = std::path::absolute(output)?;
-            let mut session = script_session(output.parent().ok_or("Missing output folder")?)?;
+            let mut session = script_session(
+                output.parent().ok_or("Missing output folder")?,
+                project.as_ref(),
+            )?;
             let doc = session.create_sequence(&name, &sequence)?;
             save_options.save(&mut session, doc, Some(&output), true)?;
             println!("Created {}", output.display());
@@ -381,7 +371,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         } => mcp::serve(&project, allow_writes, client_kind, &model_id)?,
         Command::SaveCheck { file, output } => {
             let file = file.canonicalize()?;
-            let mut session = script_session(file.parent().ok_or("File has no parent")?)?;
+            let mut session =
+                script_session(file.parent().ok_or("File has no parent")?, project.as_ref())?;
             let doc = session.open(&file)?;
             let output = output.map(std::path::absolute).transpose()?;
             println!(
@@ -392,7 +383,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Command::Edit { file, operation } => {
             let file = file.canonicalize()?;
             let root = file.parent().unwrap_or(std::path::Path::new("."));
-            let mut session = script_session(root)?;
+            let mut session = script_session(root, project.as_ref())?;
             let doc = session.open(&file)?;
             let operations = match serde_json::from_str::<EditOperations>(&operation)? {
                 EditOperations::One(op) => vec![*op],
@@ -412,7 +403,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
         Command::ImportSupport { tree, source, name } => {
             let tree = tree.canonicalize()?;
-            let mut session = script_session(tree.parent().ok_or("File has no parent")?)?;
+            let mut session =
+                script_session(tree.parent().ok_or("File has no parent")?, project.as_ref())?;
             let doc = session.open(&tree)?;
             let imported = session.import_support(doc, &source, &name)?;
             if imported.added.is_empty() {
@@ -443,7 +435,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 .canonicalize()?
                 .join(output.file_name().ok_or("Output filename missing")?);
             let segments: Vec<(u64, u64)> = serde_json::from_str(&segments)?;
-            let mut session = script_session(file.parent().ok_or("File has no parent")?)?;
+            let mut session =
+                script_session(file.parent().ok_or("File has no parent")?, project.as_ref())?;
             let doc = session.open(&file)?;
             session.extract(doc, (start, end), &segments, reverse, &output)?;
             println!(
@@ -497,6 +490,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             &params,
             save.then_some(input_conflict),
             save_options,
+            project.as_ref(),
         )?,
         Command::Schemas { dir } => {
             std::fs::create_dir_all(&dir)?;
@@ -906,6 +900,7 @@ fn run_plugin(
     params: &[String],
     save: Option<basecraft_ops::records::SavePolicy>,
     mut save_options: save::Options,
+    project: Option<&basecraft_ops::project::Project>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(policy) = save {
         use basecraft_ops::records::SavePolicy;
@@ -936,6 +931,7 @@ fn run_plugin(
         operation,
         map,
         save.is_some().then_some(save_options),
+        project,
     )
 }
 
@@ -947,6 +943,7 @@ fn run_registered_plugin(
     operation: &str,
     parameters: serde_json::Map<String, serde_json::Value>,
     save: Option<save::Options>,
+    project: Option<&basecraft_ops::project::Project>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use basecraft_plugin_host::registry::{Registry, RegistryConfig};
     use basecraft_protocol::operation::{ExecutionFamily, InputReference, OperationRequest};
@@ -988,7 +985,7 @@ fn run_registered_plugin(
         target: None,
     };
     let policy = basecraft_plugin_host::policy::SessionPolicy::new(root, true)?;
-    let mut session = script_session(root)?;
+    let mut session = script_session(root, project)?;
     basecraft_platform::interrupt::install()?;
     let (outcome, target) =
         operations::run_foreground(&registry, &request, policy, "CLI", &mut session)?;

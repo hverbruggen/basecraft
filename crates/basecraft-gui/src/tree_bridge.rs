@@ -780,18 +780,20 @@ impl qobject::TreeController {
                 session.tree(doc)?,
                 &source,
             )?;
-            session.log_tool_run(
+            session.record_tool_run(
                 doc,
                 basecraft_protocol::Actor::Human {
                     user: basecraft_platform::username(),
                 },
-                ("basecraft.links", "associate"),
-                json!({"alignment":source,"inferred":false}),
-                &[(
-                    source.to_string_lossy().into_owned(),
-                    basecraft_io::hash_file(&source)?,
-                )],
-                &outputs,
+                basecraft_ops::session::ToolRunRecord::new(
+                    ("basecraft.links", "associate"),
+                    json!({"alignment":source,"inferred":false}),
+                    &[(
+                        source.to_string_lossy().into_owned(),
+                        basecraft_io::hash_file(&source)?,
+                    )],
+                    &outputs,
+                ),
             )?;
             Ok(())
         })();
