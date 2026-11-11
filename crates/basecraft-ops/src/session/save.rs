@@ -118,7 +118,7 @@ impl Session {
         let target = path.map_or_else(|| self.resolve(&self.docs[id.0].key), Path::to_path_buf);
         hooks.at(SaveSite::CleanHashes);
         let clean = (history_only || (self.log.is_some() && path.is_none()))
-            && self.save_hashes(id)? == self.docs[id.0].saved_state_hashes;
+            && self.docs[id.0].is_clean();
         if history_only && !clean {
             return Err(invalid("history publication requires a saved document"));
         }
@@ -231,7 +231,7 @@ impl Session {
         if outcome.is_ok() {
             if target == self.resolve(&self.docs[id.0].key) {
                 hooks.boundary(SaveSite::SavedHashes, self)?;
-                self.docs[id.0].saved_state_hashes = self.save_hashes_at(id, &target)?;
+                self.docs[id.0].saved_at = Some(self.docs[id.0].mark());
                 hooks.executed(SaveMilestone::SavedHashes);
                 hooks.boundary(SaveSite::DiskStamp, self)?;
                 self.docs[id.0].disk_stamp = crate::input_evidence::stamp(&target)?;
@@ -473,22 +473,11 @@ impl Session {
     /// Hashes the files a save would write, without writing them.
     pub fn save_hashes(&self, id: DocId) -> Result<Vec<String>> {
         let slot = &self.docs[id.0];
-        if !slot.content.as_document().saved_hashes_are_content_only() {
-            return self.save_hashes_at(id, Path::new(&slot.key));
-        }
-        if let Some(hashes) = slot.current_saved_hashes.get() {
-            return Ok(hashes.clone());
-        }
-        let hashes = self.save_hashes_at(id, Path::new(&slot.key))?;
-        // Concurrent readers may compute the same vector; a losing set is ordinary.
-        let _ = slot.current_saved_hashes.set(hashes.clone());
-        Ok(hashes)
+        self.save_hashes_at(id, Path::new(&slot.key))
     }
 
     /// Replay a save using its actual exchange format, including Save As.
     pub fn save_hashes_at(&self, id: DocId, target: &Path) -> Result<Vec<String>> {
-        #[cfg(test)]
-        super::saved_fingerprint_tests::attempt();
         self.docs[id.0].content.as_document().saved_hashes(
             &self.resolve(&target.to_string_lossy()),
             &self.write_publication,

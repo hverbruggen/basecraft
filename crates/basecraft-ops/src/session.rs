@@ -15,7 +15,7 @@ use save_attempt_observation::{
 };
 
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use basecraft_docs::alignment::Undo as AlnUndo;
@@ -40,7 +40,7 @@ mod save;
 pub(crate) mod save_authority;
 mod save_decision;
 #[cfg(test)]
-mod saved_fingerprint_tests;
+mod saved_mark_tests;
 mod tool_runs;
 pub use save_decision::{EvidenceAction, SaveCheck, SaveDecision, SaveOutcome, SaveWarning};
 pub mod support_import;
@@ -87,7 +87,6 @@ struct Applied {
 struct Slot {
     key: String,
     content: Loaded,
-    current_saved_hashes: OnceLock<Vec<String>>,
     generation: u64,
     save_authority: save_authority::PendingSaveAuthority,
     undo: Vec<Applied>,
@@ -95,7 +94,7 @@ struct Slot {
     baseline: Option<LogEntry>,
     baseline_logged: bool,
     accepted_hashes: Vec<(String, String)>,
-    saved_state_hashes: Vec<String>,
+    saved_at: Option<SavedMark>,
     absent_sidecars: Vec<String>,
     origin: Option<basecraft_protocol::provenance::Publication>,
     origin_issue: Option<String>,
@@ -103,10 +102,19 @@ struct Slot {
     disk_stamp: basecraft_protocol::provenance::FileStamp,
 }
 
+#[derive(Clone, PartialEq, Eq)]
+struct SavedMark(Option<String>);
+
 impl Slot {
-    /// Invalidate before every live mutable borrow, including error rollback.
+    fn mark(&self) -> SavedMark {
+        SavedMark(self.undo.last().map(|entry| entry.entry_id.clone()))
+    }
+
+    fn is_clean(&self) -> bool {
+        self.saved_at.as_ref() == Some(&self.mark())
+    }
+
     fn content_mut(&mut self) -> &mut Loaded {
-        self.current_saved_hashes.take();
         &mut self.content
     }
 }
@@ -508,9 +516,7 @@ impl Drop for Session {
         if flushed
             && self.storage_root != self.root
             && !self.storage_root.join("pending-save.json").exists()
-            && self.docs.iter().enumerate().all(|(i, slot)| {
-                self.save_hashes(DocId(i)).ok().as_ref() == Some(&slot.saved_state_hashes)
-            })
+            && self.docs.iter().all(Slot::is_clean)
         {
             let _ = std::fs::remove_dir_all(&self.storage_root);
         }

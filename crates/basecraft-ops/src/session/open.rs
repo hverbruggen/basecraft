@@ -116,7 +116,6 @@ impl Session {
         self.docs.push(Slot {
             key: key.clone(),
             content,
-            current_saved_hashes: std::sync::OnceLock::new(),
             generation: 0,
             save_authority: save_authority::PendingSaveAuthority::default(),
             undo: Vec::new(),
@@ -124,7 +123,7 @@ impl Session {
             baseline: None,
             baseline_logged: false,
             accepted_hashes: hashes.clone(),
-            saved_state_hashes: Vec::new(),
+            saved_at: Some(super::SavedMark(None)),
             absent_sidecars,
             origin,
             origin_issue,
@@ -132,7 +131,6 @@ impl Session {
             disk_stamp,
         });
         let id = DocId(self.docs.len() - 1);
-        self.docs[id.0].saved_state_hashes = self.save_hashes(id)?;
         let entry = self.entry(
             id,
             self.actor.clone(),
@@ -231,7 +229,7 @@ impl Session {
         }
         record.document.clone_from(&slot.key);
         record.revision = format!("{}:{}:{}", self.id, id.0, slot.generation);
-        record.unsaved = self.save_hashes(id)? != slot.saved_state_hashes;
+        record.unsaved = !slot.is_clean();
         if let Some(issue) = &slot.origin_issue {
             record.warnings.push(issue.clone());
         }
@@ -280,7 +278,7 @@ impl Session {
             .docs
             .get(id.0)
             .ok_or_else(|| invalid("unknown document"))?;
-        if self.save_hashes(id)? != slot.saved_state_hashes {
+        if !slot.is_clean() {
             return Ok(None);
         }
         let path = self.resolve(&slot.key).canonicalize()?;
