@@ -7,7 +7,8 @@ pub(super) struct SavedMark(pub(super) Option<String>);
 
 impl Slot {
     pub(super) fn mark(&self) -> super::SavedMark {
-        super::SavedMark(self.undo.last().map(|entry| entry.entry_id.clone()))
+        let last = self.undo.last().map(|entry| &entry.entry_id);
+        super::SavedMark(last.or(self.settled.last().map(|edit| &edit.id)).cloned())
     }
 
     pub(super) fn is_clean(&self) -> bool {
@@ -371,7 +372,6 @@ impl Session {
         &self,
         id: DocId,
     ) -> Result<crate::records::document_record::DocumentRecord> {
-        use basecraft_protocol::provenance::EditActivity;
         let slot = self
             .docs
             .get(id.0)
@@ -401,19 +401,14 @@ impl Session {
         }
         record
             .events
-            .extend(self.events.iter().filter(|e| e.doc == slot.key).cloned());
+            .extend(self.events.matching(|e| e.doc == slot.key)?);
         record.events.extend(
             self.pending_baselines
                 .iter()
                 .filter(|e| e.doc == slot.key)
                 .cloned(),
         );
-        record
-            .effective
-            .extend(slot.undo.iter().map(|a| EditActivity {
-                id: a.entry_id.clone(),
-                operation: a.op.clone(),
-            }));
+        record.effective.extend(slot.effective()?);
         record.deduplicate();
         crate::records::contributions::project(&record.data.events, &mut record.data.effective);
         Ok(record)

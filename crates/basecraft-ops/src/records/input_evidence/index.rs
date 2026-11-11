@@ -186,9 +186,9 @@ pub(super) fn is_private(store: &Path) -> bool {
         return false;
     };
     let store = store.canonicalize().unwrap_or_else(|_| lexical(store));
-    [paths.state, paths.cache].iter().any(|root| {
-        store.starts_with(root.canonicalize().unwrap_or_else(|_| lexical(root)))
-    })
+    [paths.state, paths.cache]
+        .iter()
+        .any(|root| store.starts_with(root.canonicalize().unwrap_or_else(|_| lexical(root))))
 }
 
 pub(super) fn changing(path: &Path, sources: Option<BTreeSet<PathBuf>>) -> Result<Option<PathBuf>> {

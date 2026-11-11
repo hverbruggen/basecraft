@@ -163,7 +163,6 @@ impl Session {
             })
             .collect();
         self.track(doc)?;
-        self.events.reserve(entries.len());
         self.docs[doc.0].undo.reserve(applied.len());
         self.write_entries(&entries)?;
         // All fallible preparation precedes the durable batch. Installing the
@@ -173,6 +172,7 @@ impl Session {
         slot.generation = next_generation;
         slot.redo.clear();
         slot.undo.extend(applied);
+        slot.settle();
         self.next_group = next_group;
         Ok(ids)
     }
@@ -223,7 +223,7 @@ mod tests {
         let generation = session.generation(doc).unwrap();
         let revision = session.revision(doc).unwrap();
         let journal = crate::log::read_all(dir.path()).unwrap();
-        let events = session.events.clone();
+        let events = session.events.matching(|_| true).unwrap();
         assert!(
             apply(
                 &mut session,
@@ -263,7 +263,7 @@ mod tests {
         assert_eq!(session.delimitation(doc).unwrap(), &before);
         assert_eq!(session.generation(doc).unwrap(), generation);
         assert!(session.can_redo(doc).unwrap());
-        assert_eq!(session.events, events);
+        assert_eq!(session.events.matching(|_| true).unwrap(), events);
         assert_eq!(crate::log::read_all(dir.path()).unwrap(), journal);
         assert_eq!(apply(&mut session, doc, &[]).unwrap(), Vec::<String>::new());
         assert!(session.can_redo(doc).unwrap());
@@ -280,10 +280,10 @@ mod tests {
             .unwrap();
         session.apply(doc, remove("partition-3")).unwrap();
         let after_edit = session.delimitation(doc).unwrap().clone();
-        let events = session.events.clone();
+        let events = session.events.matching(|_| true).unwrap();
         assert!(session.commit_proposals(batch).is_err());
         assert_eq!(session.delimitation(doc).unwrap(), &after_edit);
-        assert_eq!(session.events, events);
+        assert_eq!(session.events.matching(|_| true).unwrap(), events);
         assert_eq!(session.generation(doc).unwrap(), 1);
     }
 
@@ -314,7 +314,7 @@ mod tests {
             session.track(doc).unwrap();
             let before = session.delimitation(doc).unwrap().clone();
             let journal = journal_bytes(dir.path());
-            let events = session.events.clone();
+            let events = session.events.matching(|_| true).unwrap();
             let group = session.next_group;
             let faults = &mut session.log.as_mut().unwrap().faults;
             if sync_failure {
@@ -327,7 +327,7 @@ mod tests {
             assert_eq!(session.delimitation(doc).unwrap(), &before);
             assert_eq!(session.generation(doc).unwrap(), 0);
             assert!(!session.can_undo(doc).unwrap());
-            assert_eq!(session.events, events);
+            assert_eq!(session.events.matching(|_| true).unwrap(), events);
             assert_eq!(session.next_group, group);
             assert_eq!(journal_bytes(dir.path()), journal);
             let ids = apply(&mut session, doc, &ops).unwrap();

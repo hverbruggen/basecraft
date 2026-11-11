@@ -351,6 +351,7 @@ impl Session {
             inverse,
             group,
         });
+        slot.settle();
         Ok(Outcome { entry_id, feature })
     }
 
