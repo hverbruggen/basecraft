@@ -1,0 +1,318 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TreeSidecar",
+  "description": "What a tree's Newick can't hold.",
+  "type": "object",
+  "properties": {
+    "annotations": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {},
+      "patternProperties": {
+        "^\\d+$": {
+          "$ref": "#/$defs/CladeAnnotation"
+        }
+      }
+    },
+    "exchange_hash": {
+      "description": "Exact exchange bytes, including every forest component, when file-backed.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "schema_version": {
+      "type": "integer",
+      "format": "uint32",
+      "default": 0,
+      "minimum": 0
+    },
+    "style": {
+      "$ref": "#/$defs/TreeStyle",
+      "default": {
+        "branch_width": 1,
+        "scale_bar": true,
+        "support_decimals": {},
+        "support_font": 10,
+        "support_fraction": {},
+        "support_legend": true,
+        "support_min": 0,
+        "support_minimums": {},
+        "support_placement": "natural",
+        "support_proportions": {},
+        "support_shown": [],
+        "symbols": null,
+        "tip_font": 13,
+        "vertical_bar_labels": true
+      }
+    },
+    "supports": {
+      "description": "Support set names and sources, in the order their values are joined\nin the Newick labels.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/SupportName"
+      }
+    },
+    "tree_hash": {
+      "description": "Canonical topology, raw support and node ordering of the first tree.",
+      "type": "string",
+      "default": ""
+    }
+  },
+  "$defs": {
+    "CladeAnnotation": {
+      "description": "A highlighted clade: a name on its stem branch, a bar along its tips, a\nfield of colour behind it, or any mix of these.",
+      "type": "object",
+      "properties": {
+        "bar": {
+          "description": "Draw a bar along the clade's tips, labelled beside it.",
+          "type": "boolean",
+          "default": false
+        },
+        "bar_width": {
+          "description": "Bar thickness in pixels.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 3,
+          "minimum": 0
+        },
+        "clade": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "colour": {
+          "description": "`#rrggbb`, for the bar and the field.",
+          "type": "string",
+          "default": "#808080"
+        },
+        "field": {
+          "description": "Fill the area the clade covers.",
+          "type": "boolean",
+          "default": false
+        },
+        "label": {
+          "type": "string",
+          "default": ""
+        },
+        "on_branch": {
+          "description": "Write the label on the clade's stem branch.",
+          "type": "boolean",
+          "default": false
+        },
+        "opacity_left": {
+          "description": "The field's opacity at its left and right edges, in percent. Two\ndifferent values make a gradient.",
+          "type": "integer",
+          "format": "uint8",
+          "default": 30,
+          "maximum": 255,
+          "minimum": 0
+        },
+        "opacity_right": {
+          "type": "integer",
+          "format": "uint8",
+          "default": 30,
+          "maximum": 255,
+          "minimum": 0
+        }
+      },
+      "required": [
+        "clade"
+      ]
+    },
+    "SupportKind": {
+      "description": "Scientific support semantics supplied by a producer, never guessed from its name.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "unknown",
+            "bootstrap",
+            "probability"
+          ]
+        },
+        {
+          "description": "Percentage support from a method other than ordinary bootstrap.",
+          "type": "string",
+          "const": "percentage"
+        }
+      ]
+    },
+    "SupportName": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/SupportKind",
+          "default": "unknown"
+        },
+        "name": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string",
+          "default": ""
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "SupportPlacement": {
+      "description": "Where support values sit relative to their branch.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "above",
+            "below"
+          ]
+        },
+        {
+          "description": "Above branches that go up from their parent, below those that go\ndown.",
+          "type": "string",
+          "const": "natural"
+        }
+      ]
+    },
+    "SupportSymbols": {
+      "description": "Support shown as filled circles at nodes: dark at or above `high`\npercent, grey at or above `low`, white below, as in many published\ntrees. Proportions count as percentages, as for `support_min`.",
+      "type": "object",
+      "properties": {
+        "high": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "low": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "set": {
+          "description": "The support set the circles show.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "set",
+        "high",
+        "low"
+      ]
+    },
+    "TreeStyle": {
+      "description": "How a tree is drawn. Sizes are pixels at 100 % zoom.",
+      "type": "object",
+      "properties": {
+        "branch_width": {
+          "type": "integer",
+          "format": "uint32",
+          "default": 1,
+          "minimum": 0
+        },
+        "scale_bar": {
+          "type": "boolean",
+          "default": true
+        },
+        "support_decimals": {
+          "description": "Decimal places per set; missing entries use the support semantics. Maximum 10.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0
+          },
+          "default": {}
+        },
+        "support_font": {
+          "type": "integer",
+          "format": "uint32",
+          "default": 10,
+          "minimum": 0
+        },
+        "support_fraction": {
+          "description": "Display conversion only: true renders fractions, false percentages.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "default": {}
+        },
+        "support_legend": {
+          "description": "Show an ordered legend when more than one support set is displayed.",
+          "type": "boolean",
+          "default": true
+        },
+        "support_min": {
+          "description": "Hide support values below this percentage. Known producer metadata sets\nthe scale; ambiguous imported sets with all finite values in 0–1 use\nproportions. Legacy `support_proportions` overrides only Unknown imports. 0 shows all.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 0,
+          "minimum": 0
+        },
+        "support_minimums": {
+          "description": "Per-set thresholds in percent, falling back to `support_min`.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "default": {}
+        },
+        "support_placement": {
+          "$ref": "#/$defs/SupportPlacement",
+          "default": "natural"
+        },
+        "support_proportions": {
+          "description": "Legacy source-unit interpretation for Unknown imports only (true means 0–1).",
+          "type": "object",
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "default": {}
+        },
+        "support_shown": {
+          "description": "Support sets shown at nodes, in order, joined with \"/\". Empty shows\nevery set.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "symbols": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SupportSymbols"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "tip_font": {
+          "type": "integer",
+          "format": "uint32",
+          "default": 13,
+          "minimum": 0
+        },
+        "tip_labels": {
+          "description": "Display-only labels keyed by original tip identity.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "vertical_bar_labels": {
+          "description": "Write clade labels beside bars top to bottom, rather than across.",
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

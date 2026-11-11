@@ -1,9 +1,12 @@
 //! Original-literal byte oracles, executed before writer substitution.
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_ops::analysis_store::ArtifactRun;
 use serde_json::json;
 
 #[test]
 fn result_binding_writer_bytes_and_selective_reader() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let output = root.path().join("result.txt");
     let run = ArtifactRun::create(&output, "binding-probe").unwrap();
@@ -75,13 +78,14 @@ fn result_binding_writer_bytes_and_selective_reader() {
 
 #[test]
 fn poison_presence_refuses_both_recovery_routes_without_parsing() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let destination = root.path().join("recovered");
     for bytes in [b"".as_slice(), b"{broken", b"{\"schema_version\":999}"] {
         std::fs::write(root.path().join("recovery-integrity-error.json"), bytes).unwrap();
         for error in [
-            basecraft_ops::replay::recover(root.path(), &destination).unwrap_err(),
-            basecraft_ops::replay::recover_verified_prefix(root.path(), &destination).unwrap_err(),
+            basecraft_ops::records::recover(root.path(), &destination).unwrap_err(),
+            basecraft_ops::records::recover_verified_prefix(root.path(), &destination).unwrap_err(),
         ] {
             assert!(
                 error
@@ -100,6 +104,7 @@ fn poison_presence_refuses_both_recovery_routes_without_parsing() {
 #[test]
 fn integrity_and_binding_examples_round_trip_with_unknown_fields() {
     use basecraft_protocol::records::{RecoveryIntegrityError, ResultBinding};
+    crate::isolated_profile::isolate!();
     fn check<T: serde::de::DeserializeOwned + serde::Serialize>(name: &str, newline: bool) {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../testdata/fixtures/records-v1")

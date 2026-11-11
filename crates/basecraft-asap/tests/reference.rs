@@ -1,6 +1,7 @@
 //! Native ASAP against the reference command-line program (fixture README).
 #![cfg(all(target_os = "linux", target_env = "gnu"))]
 use basecraft_asap as asap;
+use basecraft_distance::DistanceMatrixExt;
 use std::path::Path;
 
 const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../testdata/fixtures/asap");

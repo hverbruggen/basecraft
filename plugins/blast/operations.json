@@ -58,7 +58,8 @@
           }
         },
         "required": [
-          "alphabet"
+          "alphabet",
+          "contact_email"
         ]
       },
       "result": {
@@ -161,6 +162,13 @@
       "effects": {
         "document_write": false,
         "artifact_write": true
+      },
+      "host": {
+        "lifecycle": "external_submission",
+        "query_preparation": "blast",
+        "parameter_environment": {
+          "contact_email": "BASECRAFT_BLAST_CONTACT_EMAIL"
+        }
       }
     },
     {
@@ -274,6 +282,10 @@
       "effects": {
         "document_write": false,
         "artifact_write": false
+      },
+      "host": {
+        "lifecycle": "retained_receipt",
+        "retained_query_transformation": "blast-query-preparation-v1"
       }
     }
   ]

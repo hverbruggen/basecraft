@@ -1,10 +1,10 @@
-#![cfg(unix)]
 //! Independent correction review: recovery evidence must be usable, not merely present.
-#[path = "support/isolated_profile.rs"]
+#![cfg(unix)]
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
 mod isolated_profile;
-use basecraft_ops::links::AlignmentLinkExt;
+use basecraft_ops::records::AlignmentLinkExt;
 
-use basecraft_ops::{Session, files, links, links::AlignmentLink};
+use basecraft_ops::{Session, files, records, records::AlignmentLink};
 use serde_json::Value;
 use std::path::Path;
 
@@ -46,7 +46,7 @@ fn guarded_partial_save_supports_retry_and_manual_intended_recovery() {
                 .unwrap();
             let old_bytes = std::fs::read(&old_snapshot).unwrap();
             let mut referents = Vec::new();
-            for metadata in [links::sidecar(&output), links::view_sidecar(&output)] {
+            for metadata in [records::sidecar(&output), records::view_sidecar(&output)] {
                 let referent = metadata.with_extension("previous.json");
                 std::fs::rename(&metadata, &referent).unwrap();
                 std::os::unix::fs::symlink(referent.file_name().unwrap(), &metadata).unwrap();
@@ -89,8 +89,8 @@ fn guarded_partial_save_supports_retry_and_manual_intended_recovery() {
                 files::write_tree_sidecar(session.tree(doc).unwrap(), &mut bytes).unwrap();
                 std::fs::write(&presentation, bytes).unwrap();
                 for (key, path) in [
-                    ("intended_origin", links::sidecar(&output)),
-                    ("intended_view", links::view_sidecar(&output)),
+                    ("intended_origin", records::sidecar(&output)),
+                    ("intended_view", records::view_sidecar(&output)),
                 ] {
                     if recovery[key].is_null() {
                         std::fs::remove_file(path).unwrap();
@@ -102,15 +102,15 @@ fn guarded_partial_save_supports_retry_and_manual_intended_recovery() {
             } else {
                 session.save(doc, Some(&output)).unwrap();
                 session.flush().unwrap();
-                let replay = basecraft_ops::replay::replay(root).unwrap();
+                let replay = basecraft_ops::records::replay(root).unwrap();
                 assert!(replay.ok(), "{:?}", replay.problems);
             }
             let reopened = files::load_tree(&output).unwrap().doc;
             assert_eq!(reopened.to_newick(), session.tree(doc).unwrap().to_newick());
             assert_eq!(std::fs::read(&old_snapshot).unwrap(), old_bytes);
             if mode == 0 {
-                assert!(!links::metadata_present(&links::sidecar(&output)).unwrap());
-                assert!(!links::metadata_present(&links::view_sidecar(&output)).unwrap());
+                assert!(!records::metadata_present(&records::sidecar(&output)).unwrap());
+                assert!(!records::metadata_present(&records::view_sidecar(&output)).unwrap());
             } else {
                 let link = AlignmentLink::read_view(&output).unwrap();
                 assert_eq!(link.source, if mode == 2 { view } else { source });

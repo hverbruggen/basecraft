@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Array_of_Query",
+  "type": "array",
+  "items": {
+    "$ref": "#/$defs/Query"
+  },
+  "$defs": {
+    "Query": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "sequence": {
+          "type": "string"
+        },
+        "source": {
+          "default": null
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "sequence"
+      ]
+    }
+  }
+}

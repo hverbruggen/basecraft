@@ -111,7 +111,7 @@ fn blast_accepted_then_cancel_is_partial_repair_never_executes_again() {
     assert_eq!(repaired.state, RuntimeState::Completed, "{repaired:?}");
     assert_eq!(repaired.data, result.data);
     assert_eq!(
-        basecraft_ops::provenance::verify(Path::new(&repaired.artifacts[0].path)).unwrap(),
+        basecraft_ops::records::verify(Path::new(&repaired.artifacts[0].path)).unwrap(),
         Vec::<String>::new()
     );
     assert_eq!(

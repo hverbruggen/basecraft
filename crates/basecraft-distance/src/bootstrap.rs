@@ -1,8 +1,10 @@
 //! Exact ordinary site bootstrap. No pair-pattern cache or candidate-tree approximation.
-use crate::{Alignment, DistanceMatrix, Method, Packed, Result, TreeResult, optimized, pool};
+use crate::{
+    Alignment, DistanceMatrix, DistanceMatrixExt, Method, Packed, Result, TreeResult, optimized,
+    pool,
+};
 use basecraft_io::newick::{ParsedTree, parse_newick};
 use rayon::prelude::*;
-use serde::Serialize;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Write as _,
@@ -25,34 +27,8 @@ pub struct BootstrapOptions {
     /// Stream successful replicates to a new NEXUS file; never replace an existing file.
     pub replicate_trees: Option<PathBuf>,
 }
-#[derive(Debug, Serialize)]
-pub struct ReplicateCollection {
-    pub path: PathBuf,
-    pub format: &'static str,
-    pub status: &'static str,
-    pub trees: usize,
-}
-#[derive(Debug, Serialize)]
-pub struct BootstrapReport {
-    pub seed: u64,
-    pub requested: usize,
-    pub completed: usize,
-    pub attempted: usize,
-    pub method: Method,
-    pub support_kind: &'static str,
-    pub support_scale: &'static str,
-    pub support_withheld: bool,
-    pub cancelled: bool,
-    pub failures: Vec<String>,
-    pub failed_replicates: usize,
-    pub distance_s: f64,
-    pub tree_s: f64,
-    pub total_s: f64,
-    pub algorithm: &'static str,
-    pub rng: &'static str,
-    /// Set only after atomic publication. Progress never advertises scratch files.
-    pub replicate_trees: Option<ReplicateCollection>,
-}
+pub use basecraft_protocol::distance_records::ReplicateCollection;
+pub type BootstrapReport = basecraft_protocol::distance_records::BootstrapReport<Method>;
 #[derive(Debug)]
 pub struct BootstrapResult {
     pub tree: Option<TreeResult>,
@@ -156,8 +132,8 @@ impl CollectionWriter {
         temporary.persist_noclobber(&path)?;
         Ok(ReplicateCollection {
             path,
-            format: "nexus",
-            status,
+            format: "nexus".into(),
+            status: status.into(),
             trees: report.completed,
         })
     }
@@ -410,8 +386,9 @@ pub fn bootstrap(
             "rooted clades"
         } else {
             "unrooted splits"
-        },
-        support_scale: "percent",
+        }
+        .into(),
+        support_scale: "percent".into(),
         support_withheld: true,
         cancelled: false,
         failures: vec![],
@@ -423,8 +400,9 @@ pub fn bootstrap(
             "exact site multiplicities; packed bitplane counts"
         } else {
             "exact site multiplicities; explicit packed resampling"
-        },
-        rng: "splitmix64-rejection-v1",
+        }
+        .into(),
+        rng: "splitmix64-rejection-v1".into(),
         replicate_trees: None,
     };
     let mut collection = options

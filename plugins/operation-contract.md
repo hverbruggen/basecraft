@@ -515,3 +515,26 @@ is preserved. Granted values are redacted from host-captured stdout/stderr and
 RPC replies before execution evidence/error/result persistence. This boundary is
 not an OS sandbox: an explicitly credentialed trusted plugin can use the granted
 secret and must not write it to its own artifacts or transmit it elsewhere.
+
+### Host services
+
+An optional `host` object declares services independently of package identity:
+`species_workspace`, `bootstrap_exports`, `verify_inputs`, `tree_support`,
+`workflow_operations`, `ambient_credentials`, and `caller`. A tree support rule
+names its support kind and optionally a parameter equality or positive-integer
+condition. Alignment workflows bind `prepare`, `fit`, and (when needed) `tree`
+to complete registered operation ids. Third-party packages may declare the same
+services. Ambient credentials are populated only for bundled packages; installed
+packages still need explicit grants bound to their accepted package and contract.
+
+`host.lifecycle` selects bundled remote-service behavior (`external_submission`,
+`retained_receipt`, or `remote_draft`). It governs cooperative cancellation,
+contact spacing and receipt verification; omission keeps ordinary process
+cancellation. Installed packages cannot grant themselves these bundled services.
+
+Bundled host services may declare `query_preparation` (currently `blast`), a
+`retained_query_transformation` for receipt verification, and
+`parameter_environment` mappings from declared parameters to environment settings.
+Only bundled packages receive ambient parameter values, and explicit request
+parameters take precedence. Required parameters remain required in the operation
+schema. Receipt lifecycles do not implicitly select a query transform.

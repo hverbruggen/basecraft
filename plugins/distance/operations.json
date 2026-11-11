@@ -135,6 +135,22 @@
           }
         },
         "allocation": "artifacts"
+      },
+      "host": {
+        "verify_inputs": [
+          "cache"
+        ],
+        "bootstrap_exports": true,
+        "tree_support": [
+          {
+            "name": "Bootstrap",
+            "kind": "bootstrap",
+            "when": {
+              "test": "positive",
+              "parameter": "bootstrap"
+            }
+          }
+        ]
       }
     },
     {
@@ -221,6 +237,12 @@
           }
         },
         "allocation": "artifacts"
+      },
+      "host": {
+        "verify_inputs": [
+          "cache"
+        ],
+        "bootstrap_exports": true
       }
     },
     {
@@ -320,6 +342,12 @@
           }
         },
         "allocation": "artifacts"
+      },
+      "host": {
+        "verify_inputs": [
+          "cache"
+        ],
+        "bootstrap_exports": true
       }
     }
   ]

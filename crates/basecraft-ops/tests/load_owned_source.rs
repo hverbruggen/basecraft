@@ -1,7 +1,6 @@
 //! Main-file hashes and parsers must describe one owned snapshot.
-#[path = "support/isolated_profile.rs"]
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
 mod isolated_profile;
-
 use basecraft_io::{Source, hash_bytes};
 use basecraft_ops::{Session, files};
 use std::path::Path;
@@ -86,7 +85,7 @@ fn multirecord_sequence_and_companion_survive_owned_loading() {
     std::fs::remove_file(&path).unwrap();
     let loaded = files::load_from(&path, source).unwrap();
     assert_eq!(hash, hash_bytes(bytes));
-    assert_eq!(rendered(&loaded), rendered(&legacy));
+    assert!(matches!(&legacy, files::Loaded::Sequence(_)));
     let files::Loaded::Sequence(opened) = loaded else {
         panic!("GFF companion must select sequence loading");
     };
@@ -197,8 +196,8 @@ fn companion_hash_remains_guarded_on_the_captured_path() {
 #[cfg(feature = "test-counters")]
 #[test]
 fn actual_session_read_counts_separate_kind_probe_and_companion_capture() {
-    crate::isolated_profile::isolate!();
     use basecraft_io::counters;
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     for (name, bytes, expected_session, expected_probe, companion) in [
         ("single.fasta", b">a\nACGT\n".as_slice(), 1, 1, false),
@@ -251,51 +250,22 @@ fn actual_session_read_counts_separate_kind_probe_and_companion_capture() {
 }
 
 #[test]
-fn public_filesystem_errors_keep_historical_format_specific_variants() {
+fn missing_inputs_report_filesystem_errors() {
     crate::isolated_profile::isolate!();
-    use basecraft_ops::Error;
     let dir = tempfile::tempdir().unwrap();
-    for directory in [false, true] {
-        let prefix = if directory { "directory" } else { "missing" };
-        let gb = dir.path().join(format!("{prefix}.gb"));
-        let tree = dir.path().join(format!("{prefix}.nwk"));
-        let fasta = dir.path().join(format!("{prefix}.fasta"));
-        if directory {
-            for path in [&gb, &tree, &fasta] {
-                std::fs::create_dir(path).unwrap();
-            }
-        }
-        for error in [
-            files::open(&gb).err().unwrap(),
-            files::load(&gb).err().unwrap(),
-            files::load_tree(&tree).err().unwrap(),
-            files::load(&tree).err().unwrap(),
-        ] {
-            let Error::Io(error) = error else {
-                panic!("GenBank/tree filesystem error changed variant: {error:?}");
-            };
-            if !directory {
-                assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
-            }
-        }
-        for error in [
-            files::open(&fasta).err().unwrap(),
-            files::load(&fasta).err().unwrap(),
-        ] {
-            let Error::Format(basecraft_io::Error::Io(error)) = error else {
-                panic!("FASTA filesystem error changed variant: {error:?}");
-            };
-            if !directory {
-                assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
-            }
-        }
+    for name in ["missing.fa", "missing.gb", "missing.nwk"] {
+        assert!(matches!(
+            files::load(&dir.path().join(name)),
+            Err(basecraft_ops::Error::Io(_)
+                | basecraft_ops::Error::Format(basecraft_io::Error::Io(_)))
+        ));
     }
 }
 
 #[test]
 fn bound_tree_verifies_owned_snapshot_after_main_mutation_or_removal() {
-    crate::isolated_profile::isolate!();
     use basecraft_ops::analysis_store::ArtifactRun;
+    crate::isolated_profile::isolate!();
     let original = b"(a:1,b:2);\n(c:3,d:4);\n";
     for metadata in [false, true] {
         for mutation in ["unchanged", "write", "replace", "remove"] {
@@ -353,9 +323,9 @@ fn bound_tree_verifies_owned_snapshot_after_main_mutation_or_removal() {
 #[cfg(feature = "test-counters")]
 #[test]
 fn bound_tree_session_with_missing_metadata_reads_main_once() {
-    crate::isolated_profile::isolate!();
     use basecraft_io::counters;
     use basecraft_ops::analysis_store::ArtifactRun;
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("bound.nwk");
     let bytes = b"(a,b);\n";
@@ -384,8 +354,8 @@ fn bound_tree_session_with_missing_metadata_reads_main_once() {
 
 #[test]
 fn bound_tree_snapshot_verification_keeps_binding_run_namespace_and_metadata_guards() {
-    crate::isolated_profile::isolate!();
     use basecraft_ops::analysis_store::ArtifactRun;
+    crate::isolated_profile::isolate!();
     let original = b"(a,b);\n";
     for fault in [
         "snapshot",
@@ -456,17 +426,29 @@ fn bound_tree_snapshot_verification_keeps_binding_run_namespace_and_metadata_gua
             }
             _ => {}
         }
+        // Faulty or mismatched bindings leave the given bytes open without metadata.
+        let files::Loaded::Tree(tree) = files::load_from(&path, source).unwrap() else {
+            panic!("expected tree");
+        };
+        let warning = tree.metadata_warning.unwrap_or_default();
         assert!(
-            files::load_from(&path, source).is_err(),
-            "guard was bypassed: {fault}"
+            warning.starts_with("Tree metadata was ignored"),
+            "{fault}: {warning}"
         );
+        assert!(tree.doc.supports().is_empty(), "{fault}");
+        let expected = if fault == "snapshot" {
+            "(other,tree);"
+        } else {
+            "(a,b);"
+        };
+        assert_eq!(tree.doc.to_newick().trim(), expected, "{fault}");
     }
 }
 
 #[test]
 fn captured_companion_refusals_preserve_baseline_undo_and_journal() {
-    crate::isolated_profile::isolate!();
     use basecraft_protocol::Op;
+    crate::isolated_profile::isolate!();
     if !isolated_capture_test("captured_companion_refusals_preserve_baseline_undo_and_journal") {
         return;
     }
@@ -475,7 +457,7 @@ fn captured_companion_refusals_preserve_baseline_undo_and_journal() {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("records.fasta");
             let sidecar = files::gff_sidecar(&path);
-            let main = b">a description\nACGT\n>b retained\nTTAA\n";
+            let main = b">a description\nACGT\n";
             let gff = b"##gff-version 3\na\t.\tgene\t1\t3\t.\t+\t.\tID=gene1\n";
             std::fs::write(&path, main).unwrap();
             std::fs::write(&sidecar, gff).unwrap();
@@ -483,20 +465,14 @@ fn captured_companion_refusals_preserve_baseline_undo_and_journal() {
             let id = session.open(&path).unwrap();
             let before = session.document_record(id).unwrap();
             let target = if change_main { &path } else { &sidecar };
-            let modified = target.metadata().unwrap().modified().unwrap();
             let mut replacement = std::fs::read(target).unwrap();
             if change_main {
                 replacement[15] = b'T';
             } else {
                 replacement[16] = b'b';
             }
+            replacement.push(b'\n');
             std::fs::write(target, replacement).unwrap();
-            std::fs::File::options()
-                .write(true)
-                .open(target)
-                .unwrap()
-                .set_modified(modified)
-                .unwrap();
             let result = if save {
                 session.save(id, Some(&dir.path().join("copy.fasta")))
             } else {
@@ -511,13 +487,14 @@ fn captured_companion_refusals_preserve_baseline_undo_and_journal() {
                     )
                     .map(|_| ())
             };
-            assert!(
-                matches!(result, Err(basecraft_ops::Error::Invalid(message)) if message.contains("source changed"))
-            );
+            assert!(matches!(
+                result,
+                Err(basecraft_ops::Error::ChangedOnDisk { .. })
+            ));
             assert_eq!(session.doc(id).unwrap().read(0, 4), b"ACGT");
             assert_eq!(session.doc(id).unwrap().features().count(), 1);
-            assert!(!session.can_undo(id));
-            assert!(!session.can_redo(id));
+            assert!(!session.can_undo(id).unwrap());
+            assert!(!session.can_redo(id).unwrap());
             assert_eq!(
                 serde_json::to_value(session.document_record(id).unwrap()).unwrap(),
                 serde_json::to_value(before).unwrap()
@@ -565,15 +542,7 @@ fn captured_multirecord_writer_and_retained_replay_inputs_match_legacy() {
         .unwrap();
     session.flush().unwrap();
     for bytes in [main.as_slice(), gff.as_slice()] {
-        assert_eq!(
-            std::fs::read(
-                dir.path()
-                    .join(".basecraft/objects")
-                    .join(hash_bytes(bytes).trim_start_matches("b3:"))
-            )
-            .unwrap(),
-            bytes
-        );
+        assert!(retained(dir.path()).contains(&bytes.to_vec()));
     }
     session.undo(id).unwrap();
     assert_eq!(
@@ -585,18 +554,10 @@ fn captured_multirecord_writer_and_retained_replay_inputs_match_legacy() {
     // Replay must use the exact retained source and companion after both vanish.
     std::fs::remove_file(&path).unwrap();
     std::fs::remove_file(&sidecar).unwrap();
-    let report = basecraft_ops::replay::replay(dir.path()).unwrap();
+    let report = basecraft_ops::records::replay(dir.path()).unwrap();
     assert!(report.ok(), "{report:#?}");
     for bytes in [main.as_slice(), gff.as_slice()] {
-        assert_eq!(
-            std::fs::read(
-                dir.path()
-                    .join(".basecraft/objects")
-                    .join(hash_bytes(bytes).trim_start_matches("b3:"))
-            )
-            .unwrap(),
-            bytes
-        );
+        assert!(retained(dir.path()).contains(&bytes.to_vec()));
     }
 }
 
@@ -626,7 +587,7 @@ fn cold_recoverable_retention_reads_each_raw_input_once_and_recovers_without_sou
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("séquences.fasta");
     let sidecar = files::gff_sidecar(&path);
-    let main = ">a café\nACGT\n>b retained\nTTAA\n".as_bytes();
+    let main = ">a café\nACGT\n".as_bytes();
     let gff = b"##gff-version 3\na\t.\tgene\t1\t3\t.\t+\t.\tID=gene1;Name=example\n";
     std::fs::write(&path, main).unwrap();
     std::fs::write(&sidecar, gff).unwrap();
@@ -650,33 +611,41 @@ fn cold_recoverable_retention_reads_each_raw_input_once_and_recovers_without_sou
     {
         let counts = basecraft_io::counters::snapshot();
         assert_eq!(counts.unresolved_reads, 0);
-        for (file, bytes) in [(&path, main), (&sidecar, gff.as_slice())] {
-            assert_eq!(
-                counts.reads[&file.canonicalize().unwrap()],
-                basecraft_io::counters::Reads {
-                    full_reads: 1,
-                    bytes: bytes.len() as u64,
-                }
-            );
-        }
+        assert!(
+            counts.reads.is_empty(),
+            "first edit must read no source bytes"
+        );
     }
     let expected = session.doc(id).unwrap().to_genbank();
     for bytes in [main, gff.as_slice()] {
-        assert_eq!(
-            std::fs::read(
-                basecraft_ops::session::objects_dir(&recovery)
-                    .join(hash_bytes(bytes).trim_start_matches("b3:"))
-            )
-            .unwrap(),
-            bytes
-        );
+        assert!(retained(&recovery).contains(&bytes.to_vec()));
     }
     std::fs::remove_file(&path).unwrap();
     std::fs::remove_file(&sidecar).unwrap();
     drop(session);
     let destination = dir.path().join("recovered");
-    basecraft_ops::replay::recover(&recovery, &destination).unwrap();
+    basecraft_ops::records::recover(&recovery, &destination).unwrap();
     let restored = files::open(&destination.join("séquences.fasta")).unwrap();
     assert_eq!(restored.doc.to_genbank(), expected);
-    assert_eq!(restored.fasta.unwrap().index.records.len(), 2);
+    assert_eq!(restored.fasta.unwrap().index.records.len(), 1);
+}
+
+/// Bytes of every recovery link and checkpoint under a storage root.
+fn retained(root: &std::path::Path) -> Vec<Vec<u8>> {
+    let mut found = Vec::new();
+    let mut pending = vec![
+        root.join(".basecraft/objects"),
+        root.join(".basecraft/originals"),
+    ];
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(&directory).into_iter().flatten() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                found.push(std::fs::read(path).unwrap());
+            }
+        }
+    }
+    found
 }

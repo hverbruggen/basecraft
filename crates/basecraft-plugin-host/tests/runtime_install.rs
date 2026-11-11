@@ -89,6 +89,7 @@ fn runtime_is_frozen_updates_preserve_disabled_and_failed_solve_preserves_active
         "runtime update test".into(),
         None,
         &first,
+        &[],
     )
     .unwrap();
     registry::set_enabled(&config, &id, false).unwrap();

@@ -49,6 +49,9 @@ impl Session {
                     submitted_size: reference.stamp.size,
                     transformation: "identity-v1".into(),
                     state: "referenced".into(),
+                    analysis_run: None,
+                    proposal_target: None,
+                    upstream: Vec::new(),
                     extra: BTreeMap::default(),
                 },
                 ArtifactRevision {
@@ -81,11 +84,14 @@ impl Session {
                     submitted_size: bytes.len() as u64,
                     transformation: "identity-v1".into(),
                     state: "generated".into(),
+                    analysis_run: None,
+                    proposal_target: None,
+                    upstream: Vec::new(),
                     extra: BTreeMap::default(),
                 },
                 ArtifactRevision {
                     id: format!("{}:source", activity.id),
-                    logical_name: self.doc_key(id).into(),
+                    logical_name: self.doc_key(id)?.into(),
                     hash,
                     size: bytes.len() as u64,
                     retained: Some("submitted.fasta".into()),
@@ -96,14 +102,20 @@ impl Session {
         let mut input = input;
         let mut upstream = Vec::new();
         for dependency in snapshot.origin_bundles() {
-            let bytes = crate::provenance::read_record(&dependency.join("manifest.json"))?;
+            let bytes = crate::records::provenance::read_record(&dependency.join("manifest.json"))?;
             let parent: Publication = serde_json::from_slice(&bytes)?;
-            upstream.push(serde_json::json!({"bundle":crate::input_evidence::relative(&bundle.canonicalize()?, &dependency.canonicalize()?)?,"id":parent.id,"hash":basecraft_io::hash_bytes(&bytes)}));
+            upstream.push(basecraft_protocol::input_records::UpstreamLink {
+                bundle: (crate::input_evidence::relative(
+                    &bundle.canonicalize()?,
+                    &dependency.canonicalize()?,
+                )?)
+                .into(),
+                id: parent.id.clone(),
+                hash: basecraft_io::hash_bytes(&bytes),
+            });
         }
-        input
-            .extra
-            .insert("upstream".into(), serde_json::json!(upstream));
-        input.extra.insert("extraction".into(), serde_json::json!({"schema_version":1,"source_revision":snapshot.revision,"selection":activity.op,"coordinates":"zero-based-half-open; segments in biological order; reverse-complement after splicing"}));
+        input.upstream = upstream;
+        input.extra.insert("extraction".into(), serde_json::to_value(basecraft_protocol::records::ExtractionRecord { schema_version: 1, source_revision: snapshot.revision.clone(), selection: activity.op.clone(), coordinates: "zero-based-half-open; segments in biological order; reverse-complement after splicing".into(), extra: BTreeMap::new() })?);
         crate::input_evidence::write_json(&bundle.join("input.json"), &input)?;
         if let Some(run) = &run {
             crate::input_evidence::write_json(
@@ -155,7 +167,7 @@ impl Session {
             },
             report_template_version: 2,
         };
-        crate::provenance::publish(&bundle, &publication)?;
+        crate::records::provenance::publish(&bundle, &publication)?;
         if let Some(run) = &run {
             run.bind(path)?;
         }

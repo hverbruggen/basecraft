@@ -7,7 +7,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use basecraft_ops::{Session, provenance};
+use basecraft_ops::{Session, records};
 use basecraft_plugin_host::{
     jobs::JobManager,
     policy::SessionPolicy,
@@ -58,7 +58,7 @@ fn cli(profile: &Path) -> Command {
 }
 
 fn tool_run(file: &Path, plugin: &str) -> LogEntry {
-    let publication = provenance::inspect(file).unwrap();
+    let publication = records::inspect(file).unwrap();
     let mut runs: Vec<_> = publication
         .events
         .into_iter()
@@ -184,7 +184,7 @@ fn every_annotation_route_keeps_the_same_invocation_evidence() {
     let request = serde_json::from_value(json!({
         "operation": "basecraft.orf-finder/find_orfs@1",
         "inputs": {"sequence": [{"kind": "document", "doc": doc.0.to_string(),
-            "generation": session.generation(doc),
+            "generation": session.generation(doc).unwrap(),
             "revision": session.checked_sequence(doc).unwrap().version()}]},
         "parameters": {"min_codons": 100}}))
     .unwrap();
@@ -266,7 +266,7 @@ fn every_annotation_route_keeps_the_same_invocation_evidence() {
         assert_eq!(features(file), features(&gui), "{}", file.display());
         assert_eq!(features(file).len(), 1);
         assert_eq!(
-            provenance::verify(file).unwrap(),
+            records::verify(file).unwrap(),
             Vec::<String>::new(),
             "{}",
             file.display()
@@ -318,5 +318,5 @@ fn schema_one_plugin_call_is_rejected_without_execution_or_mutation() {
     );
     assert_eq!(std::fs::read(&file).unwrap(), original);
     assert!(!file.parent().unwrap().join(".basecraft").exists());
-    assert!(!provenance::companion(&file).exists());
+    assert!(!records::companion(&file).exists());
 }

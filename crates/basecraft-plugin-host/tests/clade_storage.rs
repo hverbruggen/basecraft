@@ -2,7 +2,7 @@
 //! as the GUI and headless registered operation routes.
 #[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
 mod isolated_profile;
-use basecraft_ops::{Session, provenance};
+use basecraft_ops::{Session, records};
 use basecraft_plugin_host::{
     jobs::JobManager,
     policy::SessionPolicy,
@@ -44,7 +44,7 @@ fn unsaved_clade_tree_with_referenced_alignment_retains_both_inputs_and_selectio
     let request: OperationRequest = serde_json::from_value(json!({
         "operation":"basecraft.clade-alignment/extract@1",
         "inputs":{"alignment":[{"kind":"file","path":"source.afa"}],
-            "selection_tree":[{"kind":"document","doc":doc.0.to_string(),"generation":session.generation(doc),"revision":session.revision(doc)}]},
+            "selection_tree":[{"kind":"document","doc":doc.0.to_string(),"generation":session.generation(doc).unwrap(),"revision":session.revision(doc).unwrap()}]},
         "parameters":{"taxa":["a","b"]},
         "destinations":{"artifacts/clade.afa":"selected.afa"}
     })).unwrap();
@@ -78,7 +78,7 @@ fn unsaved_clade_tree_with_referenced_alignment_retains_both_inputs_and_selectio
         std::fs::read_to_string(&result).unwrap(),
         ">a\nAC-G\n>b\nAT-G\n"
     );
-    let publication = provenance::inspect(&result).unwrap();
+    let publication = records::inspect(&result).unwrap();
     assert!(
         publication
             .inputs
@@ -97,12 +97,12 @@ fn unsaved_clade_tree_with_referenced_alignment_retains_both_inputs_and_selectio
             .any(|e| matches!(e.op, Op::TreeRenameTip { .. }))
     );
     assert!(publication.events.iter().any(|e| matches!(&e.op, Op::ToolRun { params, .. } if params.pointer("/effective/taxa") == Some(&json!(["a","b"])))));
-    assert_eq!(provenance::verify(&result).unwrap(), Vec::<String>::new());
+    assert_eq!(records::verify(&result).unwrap(), Vec::<String>::new());
     let package = root.join("package");
-    provenance::package(&result, &package).unwrap();
+    records::package(&result, &package).unwrap();
     std::fs::remove_file(&alignment).unwrap();
     assert_eq!(
-        provenance::verify(&package.join("selected.afa")).unwrap(),
+        records::verify(&package.join("selected.afa")).unwrap(),
         Vec::<String>::new()
     );
 }

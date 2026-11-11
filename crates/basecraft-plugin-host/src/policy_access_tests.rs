@@ -1,6 +1,5 @@
 use super::*;
 
-
 fn denied_as(result: basecraft_ops::access::Result<PathBuf>, expected: Denial) {
     assert!(
         matches!(result.expect_err("expected denial"), AccessError::Denied(reason) if reason == expected)

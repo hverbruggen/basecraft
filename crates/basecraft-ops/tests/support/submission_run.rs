@@ -1,5 +1,5 @@
 //! Retained registered-run fixture, without invoking external tools.
-use basecraft_ops::{analysis_store::ArtifactRun, input_evidence, provenance};
+use basecraft_ops::{analysis_store::ArtifactRun, input_evidence, records};
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -30,7 +30,7 @@ pub fn retain(root: &Path, request: &Value, outcome: &mut Value) {
         evidence.insert(role.into(), json!([{"original_path":source,"source_hash":hash,"submitted_hash":hash,"transformation":"identity-v1","run_directory":ledger.directory()}]));
     }
     let mut first = first.unwrap();
-    first.extra.insert("upstream".into(), json!(upstream));
+    first.upstream = serde_json::from_value(json!(upstream)).unwrap();
     input_evidence::write_json(&run.artifact("input.json").unwrap(), &first).unwrap();
     let mut artifacts = vec![];
     let mut outputs = vec![];
@@ -52,7 +52,7 @@ pub fn retain(root: &Path, request: &Value, outcome: &mut Value) {
     input_evidence::write_json(&run.artifact("request.json").unwrap(), request).unwrap();
     input_evidence::write_json(&run.artifact("runtime.json").unwrap(), outcome).unwrap();
     let publication = serde_json::from_value(json!({"schema_version":1,"id":run.id(),"session":"test","parents":[],"parent_hashes":{},"created":"2026-10-28T00:00:00Z","origin":"test","inputs":inputs,"outputs":outputs,"events":[],"effective_edits":[],"completeness":{"ancestry_known":false,"input_bytes_available":true,"execution_specification_available":true,"replay_verified":false},"report_template_version":2})).unwrap();
-    provenance::publish_operation(run.directory(), &publication).unwrap();
+    records::publish(run.directory(), &publication).unwrap();
     for artifact in artifacts {
         run.bind(Path::new(artifact["path"].as_str().unwrap()))
             .unwrap();

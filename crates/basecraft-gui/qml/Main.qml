@@ -261,10 +261,6 @@ ApplicationWindow {
     function loadPreferences() {
         preferencesReady = false
         if (!preferences.reload()) return
-        applyPreferences()
-    }
-    function applyPreferences() {
-        preferencesReady = false
         const prefs = JSON.parse(preferences.snapshot)
         showGc = prefs.ui.show_gc
         sidebarOpen = prefs.ui.sidebar_open
@@ -318,9 +314,8 @@ ApplicationWindow {
     }
 
     function openTextRepresentation() {
-        if (!currentView) return
         const source = current
-        if (!source || typeof source.accessible_page !== "function") return
+        if (!currentView || !source || typeof source.accessible_page !== "function") return
         textRepresentation.source = source
         textRepresentation.open()
     }
@@ -369,16 +364,11 @@ ApplicationWindow {
         }
         documentOpens.revoke_focus()
         const kind = shell.file_kind(path)
-        // The specimen table is project data, edited on the Export tab.
-        if (kind === "metadata") {
+        // Project documents are edited on the Export tab.
+        if (kind === "metadata" || kind === "submission") {
             ribbonTabName = "Export"
-            specimenTable.open()
-            return
-        }
-        // Submissions are project documents edited on the Export tab.
-        if (kind === "submission") {
-            ribbonTabName = "Export"
-            window.openSubmission(path)
+            if (kind === "metadata") specimenTable.open()
+            else submissions.open(path)
             return
         }
         focusOpenedDocument = true
@@ -426,8 +416,8 @@ ApplicationWindow {
             delimitationRequest = null
     }
     function beginDelimitation(method) {
-        if (delimitationRequest || !current || current.busy || !(alignmentOpen || treeOpen || delimitationOpen)) return
-        if (method === "asap" && !alignmentOpen && !(delimitationOpen && current.linked_alignment.length)) return
+        if (delimitationRequest || !current || current.busy || !(alignmentOpen || treeOpen || delimitationOpen)
+                || (method === "asap" && !alignmentOpen && !(delimitationOpen && current.linked_alignment.length))) return
         delimitationSource = current
         delimitationDocument = window.documentAt(tabs.currentIndex)
         speciesDialog.engineProblems = method === "ptp" ? JSON.parse(shell.delimitation_engines()) : ({})
@@ -929,7 +919,7 @@ ApplicationWindow {
         standardButtons: Dialog.Close
         property var sessions: []
         initialFocusItem: recoveryChoice
-        Label { text: "Recovery creates copies in a new directory. It preserves your originals and the recovery journal."; wrapMode: Text.Wrap; Layout.fillWidth: true }
+        Label { text: "Recovery creates copies in a new directory using the unchanged original or a retained recovery file. Originals and journals are preserved."; wrapMode: Text.Wrap; Layout.fillWidth: true }
         Label { visible: !recoveryPicker.sessions.length; text: provenance.message.startsWith("fail:") ? provenance.message : "No recovery sessions are available."; wrapMode: Text.Wrap; Layout.fillWidth: true }
         AppComboBox {
             id: recoveryChoice
@@ -1825,7 +1815,7 @@ ApplicationWindow {
     }
     // GenBank marker submissions (Export tab). table2asn runs as a
     // registered operation on its own job runner, like BLAST.
-    SubmissionController { id: submissions }
+    SubmissionController { id: submissions; onOpened: success => { if (success) window.showSubmission() } }
     AutoSaveEvidence { controller: submissions; fileUrls: shell; evidenceService: provenance }
     Connections {
         target: specimenMetadata
@@ -1846,7 +1836,6 @@ ApplicationWindow {
             return ""
         })
     }
-    function openSubmission(path) { if (submissions.open(path)) showSubmission() }
     function showSubmission() {
         submissions.refresh_review()
         submissionDialog.open()
@@ -1910,7 +1899,7 @@ ApplicationWindow {
         title: "Open a GenBank submission"
         onVisibleChanged: if (visible) currentFolder = window.activeFolder()
         nameFilters: ["Submissions (*.submission.json)"]
-        onAccepted: window.openSubmission(shell.local_file_path(selectedFile))
+        onAccepted: submissions.open(shell.local_file_path(selectedFile))
     }
     FileDialog {
         id: accessionTableDestination

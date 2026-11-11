@@ -74,6 +74,14 @@
           }
         },
         "allocation": "artifacts"
+      },
+      "host": {
+        "tree_support": [
+          {
+            "name": "SH-like local support",
+            "kind": "probability"
+          }
+        ]
       }
     }
   ]

@@ -32,6 +32,7 @@ pub mod qobject {
         #[qproperty(QString, review_stage)]
         #[qproperty(bool, reviewing)]
         #[qproperty(bool, available)]
+        #[qproperty(bool, busy)]
         #[qproperty(QString, document)]
         #[qproperty(QString, review)]
         #[qproperty(QString, package)]
@@ -63,6 +64,8 @@ pub mod qobject {
         ) -> bool;
         #[qinvokable]
         fn open(self: Pin<&mut SubmissionController>, path: &QString) -> bool;
+        #[qsignal]
+        fn opened(self: Pin<&mut SubmissionController>, success: bool);
         #[qinvokable]
         fn edit(self: Pin<&mut SubmissionController>, edit: &QString) -> bool;
         #[qinvokable]
@@ -122,6 +125,8 @@ pub struct SubmissionRust {
     project_dir: QString,
     path: QString,
     available: bool,
+    busy: bool,
+    open_epoch: u64,
     review_stage: QString,
     reviewing: bool,
     review_active: bool,
@@ -239,7 +244,9 @@ impl SubmissionRust {
 
     fn package_path(&self) -> Option<PathBuf> {
         let (session, doc) = (self.session.as_ref()?, self.doc?);
-        Some(package_dir(&session.root().join(session.doc_key(doc))))
+        Some(package_dir(
+            &session.root().join(session.doc_key(doc).ok()?),
+        ))
     }
 }
 
@@ -255,8 +262,8 @@ impl qobject::SubmissionController {
         Some((
             session.id().into(),
             doc,
-            session.generation(doc),
-            session.revision(doc),
+            session.generation(doc).unwrap(),
+            session.revision(doc).unwrap(),
         ))
     }
 
@@ -266,6 +273,12 @@ impl qobject::SubmissionController {
     }
 
     fn refresh(mut self: Pin<&mut Self>) {
+        if let Some(warning) =
+            crate::document_open::recovery_notice(self.rust().session.as_ref(), self.rust().doc)
+        {
+            self.as_mut().set_message_kind(QString::from("error"));
+            self.as_mut().set_message(warning);
+        }
         let access_thread = self.qt_thread();
         if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
             crate::bridge::checked_document!(sync self, session.submission(doc));
@@ -287,9 +300,9 @@ impl qobject::SubmissionController {
                         .publication
                         .authors,
                 ),
-                session.doc_key(doc).to_string(),
-                session.can_undo(doc),
-                session.can_redo(doc),
+                crate::bridge::checked_document!(access_thread, session.doc_key(doc)).to_string(),
+                session.can_undo(doc).unwrap_or(false),
+                session.can_redo(doc).unwrap_or(false),
             )),
             _ => None,
         };
@@ -427,6 +440,8 @@ impl qobject::SubmissionController {
     }
 
     pub fn use_project(mut self: Pin<&mut Self>, path: &QString) {
+        self.as_mut().rust_mut().open_epoch += 1;
+        self.as_mut().set_busy(false);
         if *path == self.rust().project_dir {
             return;
         }
@@ -481,30 +496,49 @@ impl qobject::SubmissionController {
     }
 
     pub fn open(mut self: Pin<&mut Self>, path: &QString) -> bool {
-        let result = self.as_mut().session().and_then(|()| {
-            let mut rust = self.as_mut().rust_mut();
-            let session = rust.session.as_mut().ok_or("no session")?;
-            let doc = session
-                .open(Path::new(&path.to_string()))
-                .map_err(|e| e.to_string())?;
-            if session.is_submission(doc) {
-                Ok(doc)
-            } else {
-                Err("This is not a submission document".into())
-            }
-        });
-        match result {
-            Ok(doc) => {
-                self.as_mut().rust_mut().doc = Some(doc);
-                self.as_mut().report("", "");
-                self.refresh();
-                true
-            }
-            Err(error) => {
-                self.report("error", &error);
-                false
-            }
+        if self.rust().busy {
+            self.report(
+                "error",
+                "Wait for the running operation before replacing this document",
+            );
+            return false;
         }
+        self.as_mut().set_busy(true);
+        self.as_mut().rust_mut().open_epoch += 1;
+        let epoch = self.rust().open_epoch;
+        let thread = self.qt_thread();
+        let root = (!self.rust().project_dir.is_empty()).then(|| self.rust().project());
+        let started = crate::document_open::start(path.to_string(), root, move |result| {
+            let _ = thread.queue(move |mut this| {
+                if this.rust().open_epoch != epoch {
+                    return;
+                }
+                let result = result.and_then(|candidate| {
+                    candidate.check(basecraft_ops::files::Kind::Submission)?;
+                    let mut state = this.as_mut().rust_mut();
+                    state.session = Some(candidate.session);
+                    state.doc = Some(candidate.doc);
+                    Ok(())
+                });
+                let ok = result.is_ok();
+                match result {
+                    Ok(()) => {
+                        this.as_mut().report("", "");
+                        this.as_mut().refresh();
+                    }
+                    Err(error) => this.as_mut().report("error", &error.to_string()),
+                }
+                this.as_mut().set_busy(false);
+                this.opened(ok);
+            });
+        });
+        if let Err(error) = started {
+            self.as_mut().set_busy(false);
+            self.as_mut().report("error", &error.to_string());
+            self.opened(false);
+            return false;
+        }
+        true
     }
 
     /// Apply edits as one undo step and save.

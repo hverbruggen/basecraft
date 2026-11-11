@@ -155,34 +155,36 @@ mod tests {
     use super::*;
     #[test]
     fn budgets_cap_workers_preserve_smaller_choices_and_resolve_auto() {
-        let input = json!({"threads":64,"tree_threads":2})
-            .as_object()
-            .unwrap()
-            .clone();
-        let p = parameters("basecraft.distance", input, 4);
-        assert_eq!(p["threads"], 4);
-        assert_eq!(p["tree_threads"], 2);
-        let p = parameters(
-            "basecraft.distance",
-            json!({"threads":0}).as_object().unwrap().clone(),
-            3,
-        );
-        assert_eq!(p["threads"], 3);
-        assert_eq!(p["tree_threads"], 3);
-        assert_eq!(parameters("basecraft.mafft", Map::new(), 1)["threads"], 1);
-        assert_eq!(
-            parameters("basecraft.delimitation", Map::new(), 4)["workers"],
-            4
-        );
-        assert!(parameters("other.plugin", Map::new(), 4).is_empty());
-        assert_eq!(
-            parameters(
-                "basecraft.iqtree",
-                json!({"threads":-1}).as_object().unwrap().clone(),
-                4
-            )["threads"],
-            -1
-        );
+        let contract: basecraft_protocol::operation::OperationContract =
+            serde_json::from_str(include_str!("../../../plugins/distance/operations.json"))
+                .unwrap();
+        let descriptor = &contract.operations[0];
+        for (input, budget, expected) in [
+            (
+                json!({"threads":64,"tree_threads":2}),
+                4,
+                json!({"threads":4,"tree_threads":2}),
+            ),
+            (
+                json!({"threads":0}),
+                3,
+                json!({"threads":3,"tree_threads":3}),
+            ),
+            (
+                json!({"threads":-1}),
+                4,
+                json!({"threads":-1,"tree_threads":4}),
+            ),
+        ] {
+            assert_eq!(
+                Value::Object(parameters_for(
+                    descriptor,
+                    input.as_object().unwrap().clone(),
+                    budget
+                )),
+                expected
+            );
+        }
     }
 }
 

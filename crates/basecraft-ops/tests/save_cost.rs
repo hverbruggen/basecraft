@@ -87,7 +87,7 @@ fn save_streams_small_and_large_documents_once() {
                 "{kind}: {} extra heap bytes",
                 heap.incremental_peak_bytes
             );
-            let bundle = basecraft_ops::provenance::companion(&path);
+            let bundle = basecraft_ops::records::companion(&path);
             assert_eq!(
                 std::fs::read_dir(bundle.join("artifacts")).unwrap().count(),
                 0

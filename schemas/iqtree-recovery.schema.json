@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "IqtreeRecovery",
+  "type": "object",
+  "properties": {
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/IqtreeRecoveryArtifact"
+      }
+    },
+    "version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "version",
+    "artifacts"
+  ],
+  "$defs": {
+    "IqtreeRecoveryArtifact": {
+      "type": "object",
+      "properties": {
+        "destination": {
+          "type": "string"
+        },
+        "previous": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "staged": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "destination"
+      ]
+    }
+  }
+}

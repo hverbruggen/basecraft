@@ -59,30 +59,16 @@ impl SaveScope {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct TargetRevision {
     pub(super) hash: String,
-    stamp: crate::save_guard::ChangeStamp,
+    /// Size, modification time and identity. Change time is left out: our own
+    /// recovery hard links change it, and the hash already binds the content.
+    stamp: basecraft_protocol::provenance::FileStamp,
 }
 
 impl SaveCheck {
     /// Builds an observation from the caller's complete guarded context, without
     /// publishing a receipt. Only the live owner can publish authority for it.
     pub(crate) fn from_scope(scope: SaveScope) -> Result<Self> {
-        Self::from_scope_with_participant(scope, None)
-    }
-
-    /// Bind private participant state without changing ordinary Session diagnostics.
-    pub(crate) fn from_scope_with_participant(
-        scope: SaveScope,
-        participant: Option<(&str, &str)>,
-    ) -> Result<Self> {
-        let mut scope_revision = scope.revision()?;
-        if let Some((domain, digest)) = participant {
-            scope_revision = basecraft_io::hash_bytes(&serde_json::to_vec(&(
-                "basecraft-save-participant-v1",
-                scope_revision,
-                domain,
-                digest,
-            ))?);
-        }
+        let scope_revision = scope.revision()?;
         Ok(Self {
             token: String::new(),
             scope,
@@ -185,7 +171,7 @@ impl SaveCheck {
 
     pub(super) fn target_is_current(&self, target: &Path) -> Result<bool> {
         let same = crate::save_guard::target_path(target)? == self.scope.target
-            && crate::save_guard::change_stamp(target)?
+            && crate::save_guard::change_stamp(target)?.map(|stamp| stamp.0)
                 == self.scope.target_revision.as_ref().map(|r| r.stamp.clone());
         #[cfg(not(unix))]
         let same = same && target_revision(target)? == self.scope.target_revision;
@@ -232,15 +218,6 @@ pub(crate) struct PendingSaveAuthority {
 }
 
 impl PendingSaveAuthority {
-    /// Discard consent without changing document state or performing IO.
-    pub(crate) fn invalidate(&self) -> Result<()> {
-        self.pending
-            .lock()
-            .map_err(|_| invalid("save check state is unavailable"))?
-            .take();
-        Ok(())
-    }
-
     pub(crate) fn publish(&self, mut check: SaveCheck) -> Result<SaveCheck> {
         check.token = ulid::Ulid::generate().to_string();
         *self
@@ -382,7 +359,10 @@ pub(crate) fn target_revision(target: &Path) -> Result<Option<TargetRevision>> {
                     path: target.into(),
                 });
             }
-            Some(TargetRevision { hash, stamp })
+            Some(TargetRevision {
+                hash,
+                stamp: stamp.0,
+            })
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => return Err(error.into()),
@@ -396,49 +376,4 @@ pub struct EvidenceAction {
     pub conflict: crate::input_evidence::EvidenceConflict,
     pub policy: SavePolicy,
     pub completed: bool,
-}
-
-#[cfg(test)]
-mod participant_tests {
-    use super::*;
-
-    #[test]
-    fn real_sanger_checks_bind_direct_public_changes_without_publishing_biology() {
-        let name = "session::save_authority::participant_tests::real_sanger_checks_bind_direct_public_changes_without_publishing_biology";
-        let Some(root) = crate::isolated_profile::enter(name) else {
-            return;
-        };
-        let input = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../testdata/fixtures/compact/sanger-review/forward.ab1");
-        let mut review = crate::sanger_review::instrument_review(&input).unwrap();
-        let target = root.join("new.json");
-        let before = review.check_save(&target).unwrap();
-        let repeated = review.check_save(&target).unwrap();
-        assert!(before.same_scope(&repeated));
-        review.settings.strong_score += 1;
-        let after = review.check_save(&target).unwrap();
-        assert!(!before.same_scope(&after));
-        // Only private participant binding changed: no biology enters diagnostics.
-        assert_eq!(
-            serde_json::to_vec(&before.scope).unwrap(),
-            serde_json::to_vec(&after.scope).unwrap()
-        );
-        review.settings.strong_score -= 1;
-        assert!(before.same_scope(&review.check_save(&target).unwrap()));
-        // Direct mutate-and-restore chronology is deliberately not claimed.
-        review.mask.start += 1;
-        assert!(!before.same_scope(&review.check_save(&target).unwrap()));
-        assert!(!target.exists());
-    }
-
-    #[test]
-    fn poisoned_invalidation_cannot_leave_usable_consent() {
-        let owner = PendingSaveAuthority::default();
-        let _ = std::panic::catch_unwind(|| {
-            let _guard = owner.pending.lock().unwrap();
-            panic!("test-only poison");
-        });
-        assert!(owner.invalidate().is_err());
-        assert!(owner.decide("token", SavePolicy::Cancel, true).is_err());
-    }
 }

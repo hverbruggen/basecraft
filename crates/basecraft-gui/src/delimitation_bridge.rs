@@ -50,6 +50,8 @@ pub mod qobject {
         fn record_revision(self: &DelimitationController) -> QString;
         #[qinvokable]
         fn open_file(self: Pin<&mut DelimitationController>, path: &QString) -> bool;
+        #[qsignal]
+        fn opened(self: Pin<&mut DelimitationController>, success: bool);
         #[qinvokable]
         fn combine_files(
             self: Pin<&mut DelimitationController>,
@@ -129,16 +131,6 @@ pub mod qobject {
         #[qinvokable]
         fn save(self: Pin<&mut DelimitationController>);
         #[qinvokable]
-        fn check_save(self: &DelimitationController, path: &QString) -> QString;
-        #[qinvokable]
-        fn save_confirmed(
-            self: Pin<&mut DelimitationController>,
-            path: &QString,
-            token: &QString,
-            policy: &QString,
-            acknowledge: bool,
-        ) -> bool;
-        #[qinvokable]
         fn save_as(self: Pin<&mut DelimitationController>, path: &QString) -> bool;
         #[qinvokable]
         fn export_svg(self: Pin<&mut DelimitationController>, path: &QString);
@@ -166,6 +158,8 @@ pub mod qobject {
         fn cancel_job(self: Pin<&mut DelimitationController>);
         #[qinvokable]
         fn poll_job(self: Pin<&mut DelimitationController>);
+        #[qinvokable]
+        fn analysis_running(self: &DelimitationController) -> bool;
         #[qinvokable]
         fn flush(self: Pin<&mut DelimitationController>);
         #[qinvokable]
@@ -236,7 +230,6 @@ pub struct DelimitationRust {
     // Modification time of the theme file last applied; empty before the first read.
     theme_stamp: crate::bridge::ThemeStamp,
     session: Option<Session>,
-    save_state: crate::editor_save::SaveState,
     doc: Option<DocId>,
     selection: Selection,
     display_tree: Option<TreeDoc>,
@@ -274,7 +267,6 @@ impl Default for DelimitationRust {
             palette: delimitation::palette(&basecraft_viewmodel::Theme::default()),
             theme_stamp: crate::bridge::ThemeStamp::default(),
             session: None,
-            save_state: Default::default(),
             doc: None,
             selection: Selection::default(),
             display_tree: None,
@@ -356,6 +348,12 @@ impl qobject::DelimitationController {
         self.set_message(QString::from(&summary));
     }
     fn refresh(mut self: Pin<&mut Self>) {
+        if let Some(warning) =
+            crate::document_open::recovery_notice(self.rust().session.as_ref(), self.rust().doc)
+        {
+            self.as_mut().set_message_kind(QString::from("error"));
+            self.as_mut().set_message(warning);
+        }
         let access_thread = self.qt_thread();
         if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
             crate::bridge::checked_document!(sync self, session.delimitation(doc));
@@ -442,65 +440,82 @@ impl qobject::DelimitationController {
         }
         result
     }
-    #[allow(clippy::many_single_char_names)]
     pub fn open_file(mut self: Pin<&mut Self>, path: &QString) -> bool {
-        let access_thread = self.qt_thread();
-        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
-            crate::bridge::checked_document!(sync self, session.delimitation(doc));
-        }
         if self.rust().busy {
             self.fail("Wait for the running operation before replacing this document");
             return false;
         }
-        let p = PathBuf::from(path.to_string());
-        let result = (|| -> basecraft_ops::Result<_> {
-            let mut s = Session::recoverable(crate::bridge::project_root(&p))?;
-            let d = s.open(&p)?;
-            if !s.is_delimitation(d) {
-                return Err(basecraft_ops::Error::Invalid(
-                    "This file is not a species workspace".into(),
-                ));
+        self.as_mut().set_busy(true);
+        crate::document_open::open_file(self, path, |mut this, result| {
+            let result = result.and_then(|candidate| this.as_mut().install_opened(candidate));
+            this.as_mut().set_busy(false);
+            let ok = result.is_ok();
+            if let Err(error) = result {
+                this.as_mut().fail(&error.to_string());
             }
-            let linked = basecraft_ops::delimitation::linked_alignment(&s, d)?.map(str::to_owned);
-            Ok((s, d, linked))
-        })();
-        match result {
-            Ok((s, d, linked)) => {
-                let w = crate::bridge::checked_document!(access_thread, s.delimitation(d));
-                let display = w.view.display_tree.clone();
-                self.as_mut()
-                    .set_linked_alignment(QString::from(linked.unwrap_or_default()));
-                // Edit a hypothesis that can be edited, if there is one.
-                let active = w
-                    .hypotheses
-                    .iter()
-                    .find(|h| {
-                        !matches!(
-                            h.origin,
-                            HypothesisOrigin::Imported | HypothesisOrigin::Inferred
-                        )
-                    })
-                    .or_else(|| w.hypotheses.first())
-                    .map(|h| h.id.clone())
-                    .unwrap_or_default();
-                {
-                    let mut r = self.as_mut().rust_mut();
-                    r.session = Some(s);
-                    r.doc = Some(d);
+            this.opened(ok);
+        })
+    }
+
+    fn install_opened(
+        mut self: Pin<&mut Self>,
+        candidate: crate::document_open::Candidate,
+    ) -> Result<(), crate::document_open::OpenError> {
+        candidate.check(basecraft_ops::files::Kind::Delimitation)?;
+        let linked =
+            basecraft_ops::delimitation::linked_alignment(&candidate.session, candidate.doc)?
+                .map(str::to_owned);
+        let (s, d) = (candidate.session, candidate.doc);
+        let w = s.delimitation(d)?;
+        let display = candidate.display_tree;
+        self.as_mut()
+            .set_linked_alignment(QString::from(linked.unwrap_or_default()));
+        // Edit a hypothesis that can be edited, if there is one.
+        let active = w
+            .hypotheses
+            .iter()
+            .find(|h| {
+                !matches!(
+                    h.origin,
+                    HypothesisOrigin::Imported | HypothesisOrigin::Inferred
+                )
+            })
+            .or_else(|| w.hypotheses.first())
+            .map(|h| h.id.clone())
+            .unwrap_or_default();
+        {
+            let mut r = self.as_mut().rust_mut();
+            r.session = Some(s);
+            r.doc = Some(d);
+        }
+        self.as_mut()
+            .set_file_path(QString::from(candidate.path.to_string_lossy().as_ref()));
+        self.as_mut().set_active_hypothesis(QString::from(&active));
+        self.as_mut().refresh();
+        self.as_mut().rust_mut().display_tree = None;
+        self.as_mut().rust_mut().time_tree = None;
+        self.as_mut().set_display_path(QString::default());
+        self.as_mut().set_can_cut(false);
+        if let Some(display) = display {
+            match display {
+                Ok(display) => {
+                    self.as_mut().rust_mut().display_tree = Some(display.tree.clone());
+                    if let Some(time) = display.time {
+                        self.as_mut().set_root_height(time.root_height);
+                        self.as_mut().set_can_cut(true);
+                        self.as_mut().rust_mut().time_tree =
+                            Some((display.tree, time, display.hash));
+                    }
+                    self.as_mut()
+                        .set_display_path(QString::from(display.path.to_string_lossy().as_ref()));
                 }
-                self.as_mut().set_file_path(path.clone());
-                self.as_mut().set_active_hypothesis(QString::from(&active));
-                self.as_mut().refresh();
-                if let Some(display) = display {
-                    self.as_mut().attach_tree(&QString::from(&display), false);
-                }
-                true
-            }
-            Err(e) => {
-                self.fail(&e.to_string());
-                false
+                Err(error) => self.as_mut().fail(&format!("Cannot attach tree: {error}")),
             }
         }
+        let revision = self.rust().display_revision + 1;
+        self.as_mut().set_display_revision(revision);
+        self.as_mut().update_bar_columns();
+        Ok(())
     }
     /// A free `<common root>.combinedNN.spart` beside the last file.
     pub fn combine_name(&self, paths: &QString) -> QString {
@@ -666,7 +681,10 @@ impl qobject::DelimitationController {
                             return false;
                         };
                         basecraft_ops::delimitation::reference_input(
-                            &session.root().join(session.doc_key(doc)),
+                            &session.root().join(crate::bridge::checked_document!(
+                                access_thread,
+                                session.doc_key(doc)
+                            )),
                             &retained,
                             &hash,
                         )
@@ -1415,19 +1433,13 @@ impl qobject::DelimitationController {
             // Saving to the opened path is an ordinary save, so a workspace
             // opened through a symbolic link updates its file, not the link.
             let target = (path != &r.file_path).then(|| PathBuf::from(path.to_string()));
-            r.session.as_mut().zip(r.doc).map(|(s, d)| {
-                crate::editor_save::save(
-                    s,
-                    d,
-                    target.as_deref(),
-                    r.save_state.decision.take(),
-                    &mut r.save_state.unchecked,
-                )
-            })
+            r.session
+                .as_mut()
+                .zip(r.doc)
+                .map(|(s, d)| s.save(d, target.as_deref()))
         };
         match result {
             Some(Ok(())) => {
-                self.as_mut().rust_mut().save_state.succeeded = true;
                 if path != &self.rust().file_path {
                     let adopted = (|| -> basecraft_ops::Result<_> {
                         let target = PathBuf::from(path.to_string());
@@ -1658,7 +1670,9 @@ impl qobject::DelimitationController {
                 return Err("Unknown analysis".into());
             }
             let display_job = method.starts_with("display_");
-            let workspace_path = session.root().join(session.doc_key(doc));
+            let workspace_path = session
+                .root()
+                .join(session.doc_key(doc).map_err(|e| e.to_string())?);
             let output = workspace_path
                 .parent()
                 .unwrap_or(session.root())
@@ -1805,8 +1819,11 @@ impl qobject::DelimitationController {
                 Value::Object(params),
                 exports,
                 output,
-                session.generation(doc),
-                (session.id().to_owned(), session.doc_key(doc).to_owned()),
+                session.generation(doc).map_err(|e| e.to_string())?,
+                (
+                    session.id().to_owned(),
+                    session.doc_key(doc).map_err(|e| e.to_string())?.to_owned(),
+                ),
             ))
         })();
         let (operation, role, analysis_input, params, exports, output, generation, identity) =
@@ -1908,10 +1925,12 @@ impl qobject::DelimitationController {
                 .as_mut()
                 .zip(state.doc)
                 .ok_or("Workspace closed")?;
-            if session.id() != analysis.identity.0 || session.doc_key(doc) != analysis.identity.1 {
+            if session.id() != analysis.identity.0
+                || session.doc_key(doc).map_err(|e| e.to_string())? != analysis.identity.1
+            {
                 return Err("Analysis completed for its original workspace; its result remains available for review".into());
             }
-            if session.generation(doc)
+            if session.generation(doc).map_err(|e| e.to_string())?
                 != analysis
                     .job
                     .finalized_generation()
@@ -2041,7 +2060,10 @@ impl qobject::DelimitationController {
             {
                 return false;
             }
-            session.root().join(session.doc_key(doc))
+            session.root().join(crate::bridge::checked_document!(
+                access_thread,
+                session.doc_key(doc)
+            ))
         };
         let generated = path
             .file_name()
@@ -2060,6 +2082,10 @@ impl qobject::DelimitationController {
             analysis.job.cancel();
         }
     }
+    pub fn analysis_running(&self) -> bool {
+        self.rust().analysis.is_some()
+    }
+
     pub fn poll_job(mut self: Pin<&mut Self>) {
         let progress = self.rust().analysis.as_ref().and_then(|analysis| {
             let path = analysis.job.progress_file()?;
@@ -2171,7 +2197,9 @@ pub(crate) fn create_workspace_in_session(
     doc: DocId,
     method: &str,
 ) -> Result<String, String> {
-    let source_path = session.root().join(session.doc_key(doc));
+    let source_path = session
+        .root()
+        .join(session.doc_key(doc).map_err(|e| e.to_string())?);
     let output = workspace_path(&source_path, method);
     let operation = bundled(
         "delimitation",
@@ -2364,7 +2392,7 @@ mod naming_tests {
                 );
             }
             for result in [&first, &second] {
-                let publication = basecraft_ops::provenance::inspect(result).unwrap();
+                let publication = basecraft_ops::records::inspect(result).unwrap();
                 assert!(
                     publication
                         .inputs
@@ -2378,19 +2406,19 @@ mod naming_tests {
                         .any(|edit| edit.operation.name() == operation)
                 );
                 assert_eq!(
-                    basecraft_ops::provenance::verify(result).unwrap(),
+                    basecraft_ops::records::verify(result).unwrap(),
                     Vec::<String>::new()
                 );
             }
             // A supplied tree can itself have ancestry (including IQ-TREE's
             // inference). Save As must carry its contributing publication.
-            let parent = basecraft_ops::provenance::inspect(&first).unwrap();
+            let parent = basecraft_ops::records::inspect(&first).unwrap();
             let mut session = rooting_session(dir.path());
             let descendant = root_tree_copy(&mut session, &first, method).unwrap();
-            let publication = basecraft_ops::provenance::inspect(&descendant).unwrap();
+            let publication = basecraft_ops::records::inspect(&descendant).unwrap();
             assert!(publication.parents.contains(&parent.id));
             assert_eq!(
-                basecraft_ops::provenance::verify(&descendant).unwrap(),
+                basecraft_ops::records::verify(&descendant).unwrap(),
                 Vec::<String>::new()
             );
         }
@@ -2492,115 +2520,3 @@ mod naming_tests {
         }
     }
 }
-
-#[cfg(test)]
-#[allow(dead_code)] // Called by the real application_bootstrap controller harness.
-pub(crate) mod inspection_tests {
-    use super::*;
-
-    fn state(controller: &qobject::DelimitationController, original: DocId) -> Value {
-        let r = controller.rust();
-        let session = r.session.as_ref().unwrap();
-        json!({
-            "doc": r.doc.map(|d| d.0), "session": session.id(),
-            "key": session.doc_key(original), "revision": session.revision(original),
-            "record": session.document_record(original).unwrap(),
-            "undo": session.can_undo(original), "redo": session.can_redo(original),
-            "workspace": r.workspace_json.to_string(), "path": r.file_path.to_string(),
-            "linked": r.linked_alignment.to_string(), "active": r.active_hypothesis.to_string(),
-            "selection": r.selection.specimens, "origin": r.selection.origin,
-            "selection_json": r.selection_json.to_string(), "preview": r.preview,
-            "display": r.display_path.to_string(), "tree_edits": r.tree_edits.to_string(),
-            "find": crate::find_bridge::status(&r.find, 0.0),
-            "find_revision": r.find.revision(), "find_status_revision": r.find_status_revision,
-            "find_pending": r.find.busy(), "busy": r.busy, "dirty": r.dirty,
-            "analysis_pending": r.analysis.is_some(),
-        })
-    }
-
-    pub(crate) fn run(mut controller: Pin<&mut qobject::DelimitationController>) {
-        let folder = tempfile::tempdir().unwrap();
-        let path = folder.path().join("linked.spart");
-        let plain = folder.path().join("plain.spart");
-        let source = include_str!("../../../testdata/fixtures/delimitation/manual.spart");
-        for path in [&path, &plain] {
-            std::fs::write(path, source).unwrap();
-        }
-        let mut work = basecraft_ops::files::load_delimitation(&path).unwrap();
-        work.exchange_fields.insert(
-            "basecraft_alignment_snapshot".into(),
-            "Missing/Original.FA".into(),
-        );
-        basecraft_ops::files::write_delimitation_sidecar_at(
-            &work,
-            &basecraft_io::hash_file(&path).unwrap(),
-            &path,
-            &mut std::fs::File::create(basecraft_ops::files::tree_sidecar(&path)).unwrap(),
-        )
-        .unwrap();
-        let linked = QString::from(path.to_str().unwrap());
-        let plain = QString::from(plain.to_str().unwrap());
-        assert!(controller.as_mut().open_file(&linked));
-        assert_eq!(
-            controller.rust().linked_alignment.to_string(),
-            "Missing/Original.FA"
-        );
-        assert!(controller.as_mut().open_file(&plain));
-        assert!(controller.rust().linked_alignment.is_empty());
-        assert!(controller.as_mut().open_file(&linked));
-        let original = controller.rust().doc.unwrap();
-        let mut view = work.view;
-        view.visible.reverse();
-        controller
-            .as_mut()
-            .edit(DelimitationEdit::SetView { view })
-            .unwrap();
-        controller
-            .as_mut()
-            .rust_mut()
-            .selection
-            .specimens
-            .insert("a".into());
-        controller
-            .as_mut()
-            .rust_mut()
-            .find
-            .set_query("a".into(), false);
-        let wrong_path = folder.path().join("wrong.fa");
-        std::fs::write(&wrong_path, ">a\nACGT\n").unwrap();
-        let wrong = controller
-            .as_mut()
-            .rust_mut()
-            .session
-            .as_mut()
-            .unwrap()
-            .open(&wrong_path)
-            .unwrap();
-        for invalid in [wrong, DocId(usize::MAX)] {
-            controller.as_mut().rust_mut().doc = Some(invalid);
-            let before = state(&controller, original);
-            assert!(!controller.as_mut().open_file(&plain));
-            assert_eq!(state(&controller, original), before);
-        }
-        controller.as_mut().rust_mut().doc = Some(original);
-        for busy in [false, true] {
-            controller.as_mut().rust_mut().busy = busy;
-            let before = state(&controller, original);
-            assert!(
-                !controller
-                    .as_mut()
-                    .open_file(&QString::from(wrong_path.to_str().unwrap()))
-            );
-            assert_eq!(state(&controller, original), before);
-            assert!(!controller.as_mut().open_file(&QString::from(
-                folder.path().join("missing.spart").to_str().unwrap()
-            )));
-            assert_eq!(state(&controller, original), before);
-        }
-        controller.as_mut().rust_mut().busy = false;
-        assert_eq!(std::fs::read_to_string(path).unwrap(), source);
-        println!("Delimitation real-controller linked hint/reopen/refusal passed");
-    }
-}
-
-crate::editor_save::confirmed_save!(qobject::DelimitationController);

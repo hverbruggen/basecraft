@@ -181,7 +181,7 @@ FocusScope {
         implicitHeight: Math.max(32, implicitContentHeight + topPadding + bottomPadding)
         implicitWidth: Math.max(50, buttonMetrics.advanceWidth(text) + leftPadding + rightPadding)
     }
-    Timer { interval: 250; running: ctl.busy; repeat: true; onTriggered: ctl.poll_job() }
+    Timer { interval: 250; running: ctl.busy && ctl.analysis_running(); repeat: true; onTriggered: ctl.poll_job() }
     signal openFile(string path)
     DelimitationController { id: ctl }
     // Ordering, flips and style are the tree editor's own edits, kept with

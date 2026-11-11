@@ -1,8 +1,7 @@
 //! Canonical identity boundaries: explicit links, projection, display-only labels.
-#[path = "support/isolated_profile.rs"]
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
 mod isolated_profile;
-
-use basecraft_ops::{Session, metadata, replay};
+use basecraft_ops::{Session, metadata, records};
 use basecraft_protocol::{
     Op,
     delimitation::{DelimitationWorkspace, Group, Hypothesis, HypothesisOrigin, Specimen},
@@ -194,7 +193,7 @@ fn explicit_roster_links_partitions_undo_replay_and_moved_project() {
         s.undo(m).unwrap();
         s.save(m, None).unwrap();
     }
-    let replayed = replay::replay(&root).unwrap();
+    let replayed = records::replay(&root).unwrap();
     assert!(replayed.problems.is_empty(), "{:?}", replayed.problems);
     let moved = dir.path().join("moved");
     std::fs::rename(&root, &moved).unwrap();

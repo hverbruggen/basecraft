@@ -60,7 +60,10 @@ pub(crate) fn lock(target: &Path) -> Result<crate::input_evidence::Locks> {
 
 /// Test helper: another thread holds `target` until the value is dropped.
 #[cfg(test)]
-pub(crate) struct HeldElsewhere(Option<std::sync::mpsc::Sender<()>>, Option<std::thread::JoinHandle<()>>);
+pub(crate) struct HeldElsewhere(
+    Option<std::sync::mpsc::Sender<()>>,
+    Option<std::thread::JoinHandle<()>>,
+);
 
 #[cfg(test)]
 pub(crate) fn hold_elsewhere(target: &Path) -> HeldElsewhere {
@@ -93,64 +96,32 @@ pub(crate) fn check_hash(path: &Path, expected: &str) -> Result<()> {
     Ok(())
 }
 
-/// Transient authority for replacing one accepted review destination.
-#[derive(Clone)]
-pub(crate) struct Revision {
-    path: PathBuf,
-    hash: String,
-    stamp: basecraft_protocol::provenance::FileStamp,
-}
-
-impl Revision {
-    /// Borrow accepted state for a private participant binding; no replacement grant.
-    pub(crate) fn snapshot(&self) -> (&Path, &str, &basecraft_protocol::provenance::FileStamp) {
-        (&self.path, &self.hash, &self.stamp)
-    }
-
-    pub(crate) fn accepted(path: &Path, bytes: &[u8]) -> Result<Self> {
-        let revision = Self {
-            path: target_path(path)?,
-            hash: basecraft_io::hash_bytes(bytes),
-            stamp: crate::input_evidence::stamp(path)?,
-        };
-        check_hash(path, &revision.hash)?;
-        Ok(revision)
-    }
-
-    pub(crate) fn check(expected: Option<&Self>, target: &Path) -> Result<bool> {
-        // Replacing a link atomically would split its identity and support binding.
-        if let Ok(metadata) = std::fs::symlink_metadata(target) {
-            if metadata.file_type().is_symlink() {
-                return Err(invalid(
-                    "save target is a symbolic link; choose a direct new destination",
-                ));
-            }
-            if basecraft_platform::files::link_count(target)? > 1 {
-                return Err(invalid(
-                    "save target has hard links; choose a new destination",
-                ));
-            }
-        }
-        let target = target_path(target)?;
-        if let Some(expected) = expected.filter(|e| e.path == target) {
-            check_hash(&target, &expected.hash).map_err(|error| {
-                invalid(format!(
-                    "save target changed or is unavailable: {error}; choose a new path or reopen it"
-                ))
-            })?;
-            if crate::input_evidence::stamp(&target)? != expected.stamp {
-                return Err(invalid(
-                    "save target was replaced or modified; save to a new path or reopen it",
-                ));
-            }
-            return Ok(true);
-        } else if target.try_exists()? {
+/// Refuse aliases and existing files at a new review destination.
+pub(crate) fn reject_link_target(target: &Path) -> Result<()> {
+    // Replacing a link atomically would split its identity and support binding.
+    if let Ok(metadata) = std::fs::symlink_metadata(target) {
+        if metadata.file_type().is_symlink() {
             return Err(invalid(
-                "Save As target already exists; choose a new path or reopen it",
+                "save target is a symbolic link; choose a direct new destination",
             ));
         }
-        Ok(false)
+        if basecraft_platform::files::link_count(target)? > 1 {
+            return Err(invalid(
+                "save target has hard links; choose a new destination",
+            ));
+        }
     }
+    Ok(())
+}
+
+pub(crate) fn check_new_target(target: &Path) -> Result<()> {
+    reject_link_target(target)?;
+    if target_path(target)?.try_exists()? {
+        return Err(invalid(
+            "Save As target already exists; choose a new path or reopen it",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -164,9 +135,8 @@ mod tests {
         let source = directory.path().join("source");
         let alias = directory.path().join("alias");
         std::fs::write(&source, b"preserve").unwrap();
-        let revision = super::Revision::accepted(&source, b"preserve").unwrap();
         std::fs::hard_link(&source, &alias).unwrap();
-        let error = super::Revision::check(Some(&revision), &source).unwrap_err();
+        let error = super::check_new_target(&source).unwrap_err();
         assert!(error.to_string().contains("hard links"));
         assert_eq!(std::fs::read(&alias).unwrap(), b"preserve");
     }
@@ -200,7 +170,7 @@ mod tests {
         assert!(matches!(error, crate::Error::Busy(_)), "{error}");
         assert!(!dir.path().join("figure.svg").exists());
         assert_eq!(std::fs::read_to_string(&file).unwrap(), ">gene\nACGT\n");
-        assert!(session.can_undo(doc));
+        assert!(session.can_undo(doc).unwrap());
         drop((held, figure));
         session.save(doc, None).unwrap();
         assert!(std::fs::read_to_string(&file).unwrap().contains("ATGT"));

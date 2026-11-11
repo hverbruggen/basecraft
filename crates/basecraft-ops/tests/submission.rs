@@ -1,8 +1,7 @@
 //! GenBank marker submissions: the document, review, package, validation
 //! records, accessions, undo and replay.
-#[path = "support/isolated_profile.rs"]
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
 mod isolated_profile;
-
 #[path = "support/submission_run.rs"]
 mod submission_run;
 use std::path::{Path, PathBuf};
@@ -10,7 +9,7 @@ use std::path::{Path, PathBuf};
 use basecraft_docs::submission::Severity;
 use basecraft_ops::metadata::{self, ImportOptions, SheetImport};
 use basecraft_ops::submission::{self, Review};
-use basecraft_ops::{DocId, Session, replay};
+use basecraft_ops::{DocId, Session, records};
 use basecraft_platform::settings::Submitter;
 use basecraft_protocol::submission::{
     Author, BatchSettings, Decision, EndPolicy, FrameChoice, ItsComponent, Marker, MolType,
@@ -220,7 +219,7 @@ fn coding_review_frames_undo_save_reload_and_replay() {
     assert!(s.is_submission(doc));
     assert_eq!(s.submission(doc).unwrap().frames.len(), 2);
     assert_eq!(s.submission(doc).unwrap().batch.genetic_code, 11);
-    let report = replay::replay(root).unwrap();
+    let report = records::replay(root).unwrap();
     assert!(report.ok(), "{:#?}", report.problems);
 }
 
@@ -302,6 +301,12 @@ fn package_is_deterministic_and_validation_is_tied_to_its_inputs() {
     .map(|n| bytes(n))
     .collect();
     assert_eq!(before, after);
+    if let Some(capture) = std::env::var_os("BASECRAFT_CAPTURE_SUBMISSION_RECORDS") {
+        let capture = Path::new(&capture);
+        std::fs::create_dir_all(capture).unwrap();
+        std::fs::write(capture.join("submission-package.json"), &before[0]).unwrap();
+    }
+
     let fsa = String::from_utf8(bytes("genbank/submission.fsa")).unwrap();
     assert!(
         fsa.starts_with(">HV101_rbcL [mol_type=genomic DNA] [location=chloroplast] [gcode=11]\n"),
@@ -360,6 +365,17 @@ fn package_is_deterministic_and_validation_is_tied_to_its_inputs() {
     submission_run::retain(root, &request, &mut outcome);
     let summary = submission::record_validation(root, &package, &outcome).unwrap();
     assert_eq!(summary.status, "errors");
+    if let Some(capture) = std::env::var_os("BASECRAFT_CAPTURE_SUBMISSION_RECORDS") {
+        std::fs::write(
+            Path::new(&capture).join("submission-validation.json"),
+            std::fs::read(
+                submission::validation_dir(&package, &summary.input_hash).join("summary.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    }
+
     assert_eq!((summary.errors, summary.warnings), (1, 1));
     let stop = &summary.issues[0];
     assert_eq!(stop.record.as_deref(), Some("HV103_rbcL"));
@@ -424,6 +440,7 @@ fn accessions_import_and_table() {
     project(root);
     let mut s = Session::new(root);
     let doc = rbcl(&mut s);
+    submission::export(&mut s, doc, &root.join("package"), &submitter()).unwrap();
     let text =
         "Sequence ID\tAccession\nHV101_rbcL\tPX123456\nHV102_rbcL PX123457.1\nunknown PX123458\n";
     let plan = submission::plan_accessions(&s, doc, text, &submitter()).unwrap();
@@ -676,7 +693,7 @@ fn selection_confirmation_blocks_export_and_survives_undo_reload_and_replay() {
             .unwrap()
             .selection_confirmed
     );
-    let replay = replay::replay(root).unwrap();
+    let replay = records::replay(root).unwrap();
     assert!(replay.ok(), "{:#?}", replay.problems);
     std::fs::write(
         root.join("a.afa"),
@@ -708,8 +725,8 @@ fn selection_confirmation_blocks_export_and_survives_undo_reload_and_replay() {
 
 #[test]
 fn stored_accession_changes_invalidate_confirmation_but_preserve_explicit_choices() {
-    crate::isolated_profile::isolate!();
     use basecraft_protocol::metadata::{Cell, CellChange, ChangeSet};
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     project(root);
@@ -867,7 +884,7 @@ fn inclusion_preview_is_atomic_stale_safe_undoable_and_replayable() {
         .is_err()
     );
     session.save(doc, None).unwrap();
-    assert!(replay::replay(root.path()).unwrap().ok());
+    assert!(records::replay(root.path()).unwrap().ok());
     let plan = submission::plan_inclusion(&session, doc, &inclusion_rule()).unwrap();
     std::fs::write(&fasta, ">changed\nACGT\n").unwrap();
     assert!(
@@ -882,7 +899,7 @@ fn inclusion_preview_is_atomic_stale_safe_undoable_and_replayable() {
     );
     assert_eq!(session.submission(doc).unwrap(), &after);
     assert!(
-        replay::replay(root.path()).unwrap().ok(),
+        records::replay(root.path()).unwrap().ok(),
         "Historical replay must not read changed source"
     );
 }
@@ -1087,7 +1104,7 @@ fn distinct_details_export_undo_replay_and_save_failure_keep_memory_recoverable(
     assert!(session.submission(doc).unwrap().publication_differs);
     // Export adds its own typed mapping, so undoing details must retain that mapping.
     assert_eq!(session.submission(doc).unwrap().rows, before.rows);
-    assert!(replay::replay(root.path()).unwrap().ok());
+    assert!(records::replay(root.path()).unwrap().ok());
 }
 
 #[test]
@@ -1128,26 +1145,7 @@ fn inclusion_presets_reuse_the_open_metadata_owner_and_preserve_pending_edits() 
         "pending-specimen"
     );
     assert_eq!(session.metadata(doc).unwrap().import.inclusion_rules, []);
-    assert!(replay::replay(root.path()).unwrap().ok());
-}
-
-#[test]
-fn published_legacy_submission_histories_keep_exact_save_hashes() {
-    crate::isolated_profile::isolate!();
-    let root = tempfile::tempdir().unwrap();
-    let fixture = fixtures().join("legacy-history");
-    let log = root.path().join(".basecraft/log/legacy");
-    let objects = root.path().join(".basecraft/objects");
-    std::fs::create_dir_all(&log).unwrap();
-    std::fs::create_dir_all(&objects).unwrap();
-    std::fs::copy(fixture.join("events.jsonl"), log.join("2026-11.jsonl")).unwrap();
-    for entry in std::fs::read_dir(fixture.join("objects")).unwrap() {
-        let entry = entry.unwrap();
-        std::fs::copy(entry.path(), objects.join(entry.file_name())).unwrap();
-    }
-    let report = replay::replay(root.path()).unwrap();
-    assert_eq!((report.sessions, report.entries), (2, 6));
-    assert!(report.ok(), "{:#?}", report.problems);
+    assert!(records::replay(root.path()).unwrap().ok());
 }
 
 #[test]
@@ -1208,7 +1206,7 @@ fn parsed_full_middle_names_and_initials_reach_distinct_export_citations() {
     assert!(paper.contains("initials \"A.M.R.\""));
     assert!(!paper.contains("middle "));
     assert!(!text.contains("A.M.a.r.i.e."));
-    let replayed = replay::replay(root.path()).unwrap();
+    let replayed = records::replay(root.path()).unwrap();
     assert!(replayed.ok(), "{:?}", replayed.problems);
 }
 
@@ -1232,7 +1230,7 @@ fn rejected_edit_and_wrong_save_format_preserve_submission_undo_redo() {
     .unwrap();
     let edited = session.submission(doc).unwrap().clone();
     assert_ne!(edited, before);
-    let revision = session.revision(doc);
+    let revision = session.revision(doc).unwrap();
     let hashes = session.save_hashes(doc).unwrap();
 
     assert!(
@@ -1247,7 +1245,7 @@ fn rejected_edit_and_wrong_save_format_preserve_submission_undo_redo() {
             .is_err()
     );
     assert_eq!(session.submission(doc).unwrap(), &edited);
-    assert_eq!(session.revision(doc), revision);
+    assert_eq!(session.revision(doc).unwrap(), revision);
     assert_eq!(session.save_hashes(doc).unwrap(), hashes);
 
     changed.title = "invalid\npublication".into();
@@ -1262,7 +1260,7 @@ fn rejected_edit_and_wrong_save_format_preserve_submission_undo_redo() {
         .is_err()
     );
     assert_eq!(session.submission(doc).unwrap(), &edited);
-    assert_eq!(session.revision(doc), revision);
+    assert_eq!(session.revision(doc).unwrap(), revision);
 
     let wrong_target = root.path().join("wrong.fasta");
     assert!(session.save(doc, Some(&wrong_target)).is_err());
@@ -1273,5 +1271,5 @@ fn rejected_edit_and_wrong_save_format_preserve_submission_undo_redo() {
     session.redo(doc).unwrap();
     assert_eq!(session.submission(doc).unwrap(), &edited);
     session.save(doc, None).unwrap();
-    assert!(replay::replay(root.path()).unwrap().ok());
+    assert!(records::replay(root.path()).unwrap().ok());
 }

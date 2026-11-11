@@ -6,7 +6,9 @@
 //! branch, so rerooting moves them along the reversed path. Clades are
 //! named by tips (see [`CladeRef`]), which survive restructuring.
 
+mod edit;
 mod rooting;
+pub use edit::TreeUndo;
 
 use std::collections::BTreeMap;
 
@@ -166,6 +168,39 @@ pub struct TreeDoc {
 }
 
 impl TreeDoc {
+    /// Restore arena identities after parsing the checkpoint's preorder stream.
+    pub fn restore_node_ids(&mut self, ids: &[usize]) -> Result<(), EditError> {
+        let mut order = ids.to_vec();
+        order.sort_unstable();
+        if order != (0..self.nodes.len()).collect::<Vec<_>>() {
+            return err("Recovery tree node identities differ");
+        }
+        let mut nodes: Vec<_> = std::mem::take(&mut self.nodes)
+            .into_iter()
+            .map(Some)
+            .collect();
+        for (old, &id) in ids.iter().enumerate() {
+            order[id] = old;
+        }
+        self.nodes = order
+            .iter()
+            .map(|&old| {
+                let mut node = nodes[old].take().expect("validated permutation");
+                node.parent = node.parent.map(|parent| ids[parent]);
+                for child in &mut node.children {
+                    *child = ids[*child];
+                }
+                node
+            })
+            .collect();
+        for support in &mut self.supports {
+            let mut values = std::mem::take(&mut support.values);
+            support.values = order.iter().map(|&old| values[old].take()).collect();
+        }
+        self.root = ids[self.root];
+        Ok(())
+    }
+
     /// A tree as read from a file. Numeric internal labels become support
     /// sets: one per `/`-separated part, as IQ-TREE writes SH-aLRT and
     /// bootstrap together. `prob=` comments (`MrBayes`) become a set of
@@ -877,16 +912,23 @@ impl TreeDoc {
     /// The tree as Newick. Internal nodes carry their support values joined
     /// with `/`, in set order, or their name.
     pub fn to_newick(&self) -> String {
-        let mut out = String::new();
+        let mut out = Vec::new();
+        self.write_newick(&mut out)
+            .expect("writing to a byte buffer cannot fail");
+        String::from_utf8(out).expect("Newick output is UTF-8")
+    }
+
+    /// Stream the same Newick bytes without allocating a complete saved form.
+    pub fn write_newick(&self, out: &mut dyn std::io::Write) -> std::io::Result<()> {
         // Iterative events also handle very deep trees after rerooting.
         let mut stack = vec![(self.root, false, false)];
         while let Some((i, close, comma)) = stack.pop() {
             if comma {
-                out.push(',');
+                out.write_all(b",")?;
             }
             let node = &self.nodes[i];
             if !close && !node.is_tip() {
-                out.push('(');
+                out.write_all(b"(")?;
                 stack.push((i, true, false));
                 for (k, &child) in node.children.iter().enumerate().rev() {
                     stack.push((child, false, k > 0));
@@ -894,25 +936,25 @@ impl TreeDoc {
                 continue;
             }
             if close {
-                out.push(')');
+                out.write_all(b")")?;
             }
             let support = self.support_text(i);
             if node.is_tip() || support.is_empty() {
                 if !node.name.is_empty() {
-                    out.push_str(&newick::quote_name(&node.name));
+                    out.write_all(newick::quote_name(&node.name).as_bytes())?;
                 }
             } else {
-                out.push_str(&support);
+                out.write_all(support.as_bytes())?;
             }
             if i != self.root
                 && let Some(length) = node.length
             {
-                out.push(':');
-                out.push_str(&newick::format_length(length));
+                out.write_all(b":")?;
+                out.write_all(newick::format_length(length).as_bytes())?;
             }
         }
-        out.push(';');
-        out
+        out.write_all(b";")?;
+        Ok(())
     }
 
     /// Every set's value at `node`, joined with `/`; empty if none has one.

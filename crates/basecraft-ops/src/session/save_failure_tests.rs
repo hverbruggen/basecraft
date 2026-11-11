@@ -33,7 +33,7 @@ fn failed_intent_keeps_original_and_edits_for_retry() {
     fs::create_dir(&pending).unwrap();
     assert!(session.save(id, None).is_err());
     assert_eq!(fs::read(&target).unwrap(), b">source\nACGT\n");
-    assert!(session.can_undo(id));
+    assert!(session.can_undo(id).unwrap());
     fs::remove_dir(pending).unwrap();
     session.save(id, None).unwrap();
     assert!(fs::read_to_string(target).unwrap().contains("TCGT"));
@@ -47,12 +47,12 @@ fn failed_provenance_keeps_recovery_and_retry_accepts_written_data() {
         return;
     };
     let (mut session, id, target) = fixture(&root);
-    let bundle = crate::provenance::companion(&target);
+    let bundle = crate::records::provenance::companion(&target);
     fs::write(&bundle, b"blocked").unwrap();
     assert!(session.save(id, None).is_err());
     assert!(fs::read_to_string(&target).unwrap().contains("TCGT"));
     assert!(session.recovery_root().join("pending-save.json").is_file());
-    assert!(session.can_undo(id));
+    assert!(session.can_undo(id).unwrap());
     fs::remove_file(bundle).unwrap();
     session.save(id, None).unwrap();
     assert!(!session.recovery_root().join("pending-save.json").exists());
@@ -69,7 +69,7 @@ fn crash_before_and_after_replacement_recovers_the_edits() {
         let (mut session, id, target) = fixture(&folder);
         let recovery = session.recovery_root().to_path_buf();
         let obstruction = if after {
-            crate::provenance::companion(&target)
+            crate::records::provenance::companion(&target)
         } else {
             recovery.join("pending-save.json")
         };
@@ -93,7 +93,8 @@ fn crash_before_and_after_replacement_recovers_the_edits() {
             fs::remove_dir(obstruction).unwrap();
         }
         drop(session);
-        let restored = crate::replay::recover(&recovery, &folder.join("restored")).unwrap();
+        let restored =
+            crate::records::replay::recover(&recovery, &folder.join("restored")).unwrap();
         assert_eq!(fs::read(&restored[0]).unwrap(), b">source\nTCGT\n");
     }
 }
@@ -119,11 +120,17 @@ fn new_destination_and_history_preserve_existing_bytes() {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum WriteStep {
+    Replace,
     Journal,
     RemoveIntent,
     RecoveryCheck,
 }
 thread_local! { static FAILURE: std::cell::Cell<Option<WriteStep>> = const { std::cell::Cell::new(None) }; }
+
+/// Make the next save on this thread fail at `step`.
+pub(super) fn inject(step: WriteStep) {
+    FAILURE.with(|failure| failure.set(Some(step)));
+}
 
 // One test-only failure seam, with no observations, callbacks or alternate writer.
 pub(super) fn fail_write(step: WriteStep) -> Result<()> {
@@ -152,7 +159,7 @@ fn late_write_failures_retain_recovery_and_retry() {
         assert!(session.save(id, None).is_err());
         assert!(fs::read_to_string(&target).unwrap().contains("TCGT"));
         assert!(session.recovery_root().join("pending-save.json").is_file());
-        assert!(session.can_undo(id));
+        assert!(session.can_undo(id).unwrap());
         session.save(id, None).unwrap();
         assert!(!session.recovery_root().join("pending-save.json").exists());
         assert!(fs::read_to_string(target).unwrap().contains("TCGT"));
@@ -165,7 +172,7 @@ fn failed_save_journal_keeps_previous_history_and_recovers_written_data() {
     let root = tempfile::tempdir().unwrap();
     let (mut session, id, target) = fixture(root.path());
     session.save(id, None).unwrap();
-    let bundle = crate::provenance::companion(&target);
+    let bundle = crate::records::provenance::companion(&target);
     let manifest = fs::read(bundle.join("manifest.json")).unwrap();
     let records = fs::read_dir(bundle.join("records")).unwrap().count();
     session
@@ -189,7 +196,8 @@ fn failed_save_journal_keeps_previous_history_and_recovers_written_data() {
     assert!(recovery.join("pending-save.json").is_file());
     assert_eq!(fs::read(&target).unwrap(), b">source\nTAGT\n");
     drop(session);
-    let restored = crate::replay::recover(&recovery, &root.path().join("restored")).unwrap();
+    let restored =
+        crate::records::replay::recover(&recovery, &root.path().join("restored")).unwrap();
     assert_eq!(fs::read(&restored[0]).unwrap(), b">source\nTAGT\n");
 }
 
@@ -201,10 +209,10 @@ fn recovery_inspection_failure_retries_without_replacing_written_data() {
         return;
     };
     let (session, _, original) = fixture(&root);
-    let mut recovery = crate::replay::prepare_recovery(
+    let mut recovery = crate::records::replay::prepare_recovery(
         session.recovery_root(),
         &root.join("recovered"),
-        crate::replay::RecoveryMode::Strict,
+        crate::records::replay::RecoveryMode::Strict,
     )
     .unwrap();
     let path = recovery.check(0).unwrap().target().to_owned();

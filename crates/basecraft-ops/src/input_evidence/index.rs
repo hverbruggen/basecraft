@@ -1,8 +1,8 @@
 //! Analysis input index. Writers record, per input path and per file identity,
 //! the stores that can refer to it; a save reads only the shards for its target.
 use super::{
-    ArtifactRun, BTreeMap, PROPOSAL_TARGET, Path, PathBuf, Result, lexical, read_input, registry,
-    registry_lock, stamp, validate_input,
+    ArtifactRun, BTreeMap, Path, PathBuf, Result, lexical, read_input, registry, registry_lock,
+    stamp, validate_input,
 };
 use basecraft_protocol::records::{
     AnalysisInputIndex, IndexChange, IndexFile, IndexedAnalysisStore,
@@ -20,7 +20,7 @@ fn shard(kind: &str, path: &Path) -> Result<PathBuf> {
         .join(key.trim_start_matches("b3:")))
 }
 fn read<T: serde::de::DeserializeOwned + serde::Serialize>(path: &Path) -> Result<T> {
-    let bytes = crate::provenance::read_record(path)?;
+    let bytes = crate::records::provenance::read_record(path)?;
     let record: IndexFile<T> =
         serde_json::from_slice(&bytes).map_err(|e| crate::Error::Damaged {
             path: path.into(),
@@ -110,35 +110,27 @@ fn snapshot(store: &Path) -> Result<IndexedAnalysisStore> {
         if !path.try_exists()? {
             continue;
         }
-        let bytes = crate::provenance::read_record_with_budget(&path, &mut budget)?;
+        let bytes = crate::records::provenance::read_record_with_budget(&path, &mut budget)?;
         let input = validate_input(&run, &bytes)?;
-        if input.state == "referenced"
-            && input.extra.get(PROPOSAL_TARGET) != Some(&serde_json::Value::Bool(true))
+        if input.state == basecraft_protocol::input_records::EvidenceState::Referenced
+            && input.proposal_target != Some(true)
             && let Some(source) = &input.source
         {
             index.sources.push(lexical(&run.join(&source.path)));
         }
-        for field in ["analysis_run", "origin_run"] {
-            if let Some(value) = input.extra.get(field) {
-                let path = value.as_str().ok_or_else(|| crate::Error::Damaged {
-                    path: run.clone(),
-                    detail: format!("invalid {field}"),
-                })?;
-                index.dependencies.push(lexical(&run.join(path)));
-            }
+        if let Some(owner) = &input.analysis_run {
+            index.dependencies.push(lexical(&run.join(owner)));
         }
-        if let Some(parents) = input.extra.get("upstream") {
-            let parents = parents.as_array().ok_or_else(|| crate::Error::Damaged {
+        if let Some(value) = input.extra.get("origin_run") {
+            let path = value.as_str().ok_or_else(|| crate::Error::Damaged {
                 path: run.clone(),
-                detail: "invalid upstream inventory".into(),
+                detail: "invalid origin_run".into(),
             })?;
-            for parent in parents {
-                let path = parent["bundle"]
-                    .as_str()
-                    .ok_or_else(|| crate::Error::Damaged {
-                        path: run.clone(),
-                        detail: "ancestor location is missing".into(),
-                    })?;
+            index.dependencies.push(lexical(&run.join(path)));
+        }
+        {
+            for parent in &input.upstream {
+                let path = &parent.bundle;
                 // Resolve current ownership while publishing the index.
                 let mut path = lexical(&run.join(path));
                 let mut seen = BTreeSet::new();
@@ -296,7 +288,9 @@ fn publish(store: &Path, entry: &IndexedAnalysisStore) -> Result<()> {
     let mut files: BTreeMap<PathBuf, BTreeSet<PathBuf>> = BTreeMap::new();
     for (source, stores) in &sources {
         if let Ok(canonical) = source.canonicalize() {
-            keys.entry(canonical).or_default().extend(stores.iter().cloned());
+            keys.entry(canonical)
+                .or_default()
+                .extend(stores.iter().cloned());
         }
         if let Some(key) = file_key(source) {
             files.entry(key).or_default().insert(source.clone());

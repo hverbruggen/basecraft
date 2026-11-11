@@ -1,11 +1,11 @@
 //! Independent combined-storage lifecycle regression probes, on registered runs.
 // Preserve the independently reviewed assertions verbatim.
 #![allow(clippy::assert_is_empty)]
+mod common;
 #[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
 mod isolated_profile;
-mod common;
 
-use basecraft_ops::{Session, analysis_store::ArtifactRun, input_evidence, provenance};
+use basecraft_ops::{Session, analysis_store::ArtifactRun, input_evidence, records};
 use basecraft_plugin_host::registry::Registry;
 use basecraft_protocol::Op;
 use std::path::{Path, PathBuf};
@@ -28,7 +28,7 @@ fn setup() -> (tempfile::TempDir, Session, Registry, PathBuf, PathBuf) {
 fn save_as(session: &mut Session, first: &Path, copied: &Path) {
     let doc = session.open(first).unwrap();
     session.save(doc, Some(copied)).unwrap();
-    assert!(provenance::verify(copied).unwrap().is_empty());
+    assert!(records::verify(copied).unwrap().is_empty());
 }
 
 #[test]
@@ -55,9 +55,9 @@ fn relinking_saved_copy_repairs_the_effective_reference() {
     save_as(&mut session, &first, &copied);
     let recovered = dir.path().join("recovered.afa");
     std::fs::rename(&source, &recovered).unwrap();
-    let bundle = provenance::bundle_for_result(&copied);
+    let bundle = records::bundle_for_result(&copied);
     input_evidence::relink(&bundle, &recovered).unwrap();
-    let issues = provenance::verify(&copied).unwrap();
+    let issues = records::verify(&copied).unwrap();
     assert!(
         issues.is_empty(),
         "successful relink must repair the effective evidence: {issues:?}"
@@ -71,9 +71,9 @@ fn complete_export_of_saved_copy_is_independent() {
     let copied = dir.path().join("copy.afa");
     save_as(&mut session, &first, &copied);
     let package = dir.path().join("portable");
-    provenance::package(&copied, &package).expect("Save As result must support complete export");
+    records::package(&copied, &package).expect("Save As result must support complete export");
     std::fs::remove_file(&source).unwrap();
-    let issues = provenance::verify(&package.join("copy.afa")).unwrap();
+    let issues = records::verify(&package.join("copy.afa")).unwrap();
     assert!(
         issues.is_empty(),
         "complete export still depends on original files: {issues:?}"
@@ -97,12 +97,12 @@ fn complete_export_after_in_place_edit_keeps_history() {
         )
         .unwrap();
     session.save(doc, None).unwrap();
-    assert!(provenance::verify(&first).unwrap().is_empty());
+    assert!(records::verify(&first).unwrap().is_empty());
     let package = dir.path().join("portable");
-    provenance::package(&first, &package)
+    records::package(&first, &package)
         .expect("edited analysis result must support complete export");
     std::fs::remove_file(&source).unwrap();
-    let issues = provenance::verify(&package.join("first.afa")).unwrap();
+    let issues = records::verify(&package.join("first.afa")).unwrap();
     assert!(
         issues.is_empty(),
         "complete export lost evidence: {issues:?}"

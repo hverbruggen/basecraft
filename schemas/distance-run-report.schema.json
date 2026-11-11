@@ -1,0 +1,289 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DistanceRunReport",
+  "type": "object",
+  "properties": {
+    "bootstrap": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/BootstrapReport"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "cache_reused": {
+      "type": "boolean"
+    },
+    "columns": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "distance_s": {
+      "type": "number",
+      "format": "double"
+    },
+    "distance_threads": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "error": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "gap_policy": {
+      "type": "string"
+    },
+    "input_hash": {
+      "type": "string"
+    },
+    "method": {
+      "$ref": "#/$defs/DistanceMethod"
+    },
+    "min_overlap": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "model": {
+      "$ref": "#/$defs/DistanceModel"
+    },
+    "output_status": {
+      "$ref": "#/$defs/OutputStatus"
+    },
+    "saturated_pairs": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "sequences": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "short_overlap_pairs": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "tool": {
+      "type": "string"
+    },
+    "total_s": {
+      "type": "number",
+      "format": "double"
+    },
+    "tree": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TreeResult"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "tree_threads": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "version": {
+      "type": "string"
+    },
+    "zero_overlap_pairs": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "tool",
+    "version",
+    "output_status"
+  ],
+  "$defs": {
+    "BootstrapReport": {
+      "type": "object",
+      "properties": {
+        "algorithm": {
+          "type": "string"
+        },
+        "attempted": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "cancelled": {
+          "type": "boolean"
+        },
+        "completed": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "distance_s": {
+          "type": "number",
+          "format": "double"
+        },
+        "failed_replicates": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "failures": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "method": {
+          "$ref": "#/$defs/DistanceMethod"
+        },
+        "replicate_trees": {
+          "description": "Set only after atomic publication. Progress never advertises scratch files.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReplicateCollection"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requested": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "rng": {
+          "type": "string"
+        },
+        "seed": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "support_kind": {
+          "type": "string"
+        },
+        "support_scale": {
+          "type": "string"
+        },
+        "support_withheld": {
+          "type": "boolean"
+        },
+        "total_s": {
+          "type": "number",
+          "format": "double"
+        },
+        "tree_s": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "seed",
+        "requested",
+        "completed",
+        "attempted",
+        "method",
+        "support_kind",
+        "support_scale",
+        "support_withheld",
+        "cancelled",
+        "failures",
+        "failed_replicates",
+        "distance_s",
+        "tree_s",
+        "total_s",
+        "algorithm",
+        "rng"
+      ]
+    },
+    "DistanceMethod": {
+      "type": "string",
+      "enum": [
+        "upgma",
+        "sorted",
+        "fourpoint",
+        "njstar",
+        "mvrstar"
+      ]
+    },
+    "DistanceModel": {
+      "type": "string",
+      "enum": [
+        "p",
+        "jc69",
+        "k2p"
+      ]
+    },
+    "OutputStatus": {
+      "type": "string",
+      "enum": [
+        "written",
+        "failed"
+      ]
+    },
+    "ReplicateCollection": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "trees": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "path",
+        "format",
+        "status",
+        "trees"
+      ]
+    },
+    "TreeResult": {
+      "type": "object",
+      "properties": {
+        "components": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "details": {
+          "type": "array",
+          "items": true
+        },
+        "trees": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "unresolved": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "trees",
+        "components",
+        "unresolved",
+        "details"
+      ]
+    }
+  }
+}

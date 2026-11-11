@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "job": {
+    "id": "fixture",
+    "generation": 0,
+    "status": "completed",
+    "method": "haplotypes",
+    "inputs": {
+      "/tmp/basecraft-records-t44jtoth/haplotypes-result.json.input.fixture.afa": "b3:d46466422896c685557c4478c66e0232d168cb135802a094d930869244e21770"
+    },
+    "outputs": {
+      "/tmp/basecraft-records-t44jtoth/haplotypes-result.json.haplotypes.json": "b3:3159ada52d362de9ff0faef02a0d0d26fd14e5ae0783432ba3e093d98b9c7d61",
+      "/tmp/basecraft-records-t44jtoth/haplotypes-result.json.unique.fasta": "b3:28af9ebcc108d97016927c2564d4b68f3aa59db0b42fda63da525cbd29542c11"
+    },
+    "diagnostics": [],
+    "elapsed_seconds": 0.010350303
+  },
+  "workspace": null,
+  "metrics": {
+    "haplotypes": {
+      "input_hash": "b3:044bfe297ca767c681493a66776dcd062fdeee9cd9dd1e49693e5390129274ab",
+      "members": {
+        "a": [
+          "a"
+        ],
+        "b": [
+          "b"
+        ],
+        "c": [
+          "c",
+          "d"
+        ]
+      },
+      "original_count": 4,
+      "policy": "aligned-dna-case-u-to-t-literal-gap-ambiguity-v1",
+      "unique": [
+        [
+          "a",
+          "ACGTACGTACGTACGTACGT"
+        ],
+        [
+          "b",
+          "ACGTACGTACGTACGTACGA"
+        ],
+        [
+          "c",
+          "ACGTACGTACGTACGTACGG"
+        ]
+      ]
+    }
+  },
+  "request": {
+    "version": 1,
+    "job_id": "fixture",
+    "generation": 0,
+    "method": "haplotypes",
+    "input": "/tmp/basecraft-records-t44jtoth/haplotypes-result.json.input.fixture.afa",
+    "input_hash": "b3:d46466422896c685557c4478c66e0232d168cb135802a094d930869244e21770",
+    "output": "/tmp/basecraft-records-t44jtoth/.delimitation-job-fixture/result.json",
+    "rooted": false,
+    "tree_index": 0,
+    "seed": 1,
+    "workers": 1,
+    "parameters": {
+      "original_source": "/tmp/basecraft-records-t44jtoth/input.afa"
+    },
+    "progress": "/tmp/basecraft-records-t44jtoth/progress.json",
+    "cancel_file": null
+  }
+}

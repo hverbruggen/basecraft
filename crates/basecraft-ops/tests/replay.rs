@@ -4,7 +4,7 @@ mod isolated_profile;
 
 use std::path::Path;
 
-use basecraft_ops::{Session, replay};
+use basecraft_ops::{Session, records};
 use basecraft_protocol::{Feature, Location, Op, Qualifier, Strand};
 
 const GB: &str = "LOCUS       TEST                     120 bp    DNA     circular SYN 10-OCT-2026
@@ -105,7 +105,7 @@ fn recorded_session_replays_exactly() {
     assert_eq!(inserts, 1, "typing burst should be one entry");
 
     // The original was overwritten by the save; replay uses the stored copy.
-    let report = replay::replay(root).unwrap();
+    let report = records::replay(root).unwrap();
     assert!(report.ok(), "{:#?}", report.problems);
     assert_eq!(report.sessions, 1);
     assert_eq!(report.entries, entries.len());
@@ -246,7 +246,7 @@ fn grouped_operations_undo_together_and_replay() {
         s.redo(d).unwrap();
         assert_eq!(s.doc(d).unwrap().feature_count(), before + 3);
     }
-    let report = replay::replay(root).unwrap();
+    let report = records::replay(root).unwrap();
     assert!(report.ok(), "{:#?}", report.problems);
 }
 
@@ -274,24 +274,26 @@ fn replay_detects_divergence() {
         .unwrap()
         .path();
     let text = std::fs::read_to_string(&file).unwrap();
-    // Exercise semantic divergence in a legacy unframed log. Framed-log
-    // corruption is rejected earlier by checksum tests.
+    // Recompute integrity to exercise semantic divergence independently of corruption.
     let tampered = text
         .lines()
         .map(|line| {
             let mut value: serde_json::Value = serde_json::from_str(line).unwrap();
             value.as_object_mut().unwrap().remove("_checksum");
-            value.as_object_mut().unwrap().remove("_sequence");
+            let sequence = value.as_object_mut().unwrap().remove("_sequence").unwrap();
             if value["params"]["start"] == 25 && value["params"]["end"] == 35 {
                 value["params"]["end"] = serde_json::json!(36);
             }
+            let checksum = basecraft_io::hash_bytes(&serde_json::to_vec(&value).unwrap());
+            value["_checksum"] = serde_json::json!(checksum);
+            value["_sequence"] = sequence;
             serde_json::to_string(&value).unwrap() + "\n"
         })
         .collect::<String>();
     assert_ne!(text, tampered);
     std::fs::write(&file, tampered).unwrap();
 
-    let report = replay::replay(root).unwrap();
+    let report = records::replay(root).unwrap();
     assert!(!report.ok());
 }
 
@@ -300,11 +302,7 @@ fn fasta_with_gff_sidecar_saves_and_replays() {
     crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
-    std::fs::write(
-        root.join("g.fasta"),
-        ">chr1 test\nACGTACGTAC\nACGTACGTAC\n>chr2\nGGGG\n",
-    )
-    .unwrap();
+    std::fs::write(root.join("g.fasta"), ">chr1 test\nACGTACGTAC\nACGTACGTAC\n").unwrap();
     std::fs::write(
         root.join("g.gff3"),
         "##gff-version 3\n##sequence-region chr1 1 20\nchr1\t.\tgene\t5\t15\t.\t+\t.\tID=g1\n",
@@ -317,10 +315,10 @@ fn fasta_with_gff_sidecar_saves_and_replays() {
         s.save(d, None).unwrap();
     }
     let saved = std::fs::read_to_string(root.join("g.fasta")).unwrap();
-    assert_eq!(saved, ">chr1 test\nTTACGTACGTACACGTACGTAC\n>chr2\nGGGG\n");
+    assert_eq!(saved, ">chr1 test\nTTACGTACGTACACGTACGTAC\n");
     let gff = std::fs::read_to_string(root.join("g.gff3")).unwrap();
     assert!(gff.contains("chr1\t.\tgene\t7\t17\t"), "{gff}");
-    let report = replay::replay(root).unwrap();
+    let report = records::replay(root).unwrap();
     assert!(report.ok(), "{:#?}", report.problems);
 }
 
@@ -495,7 +493,7 @@ fn alignment_session_replays_exactly() {
     let saved = std::fs::read_to_string(root.join("x.aln.fasta")).unwrap();
     assert!(saved.starts_with(">dee\n"), "{saved}");
     assert!(saved.contains(">a first row\n"), "{saved}");
-    let report = replay::replay(root).unwrap();
+    let report = records::replay(root).unwrap();
     assert!(report.ok(), "{:#?}", report.problems);
     assert_eq!(report.entries, entries.len());
 }
@@ -659,7 +657,7 @@ fn tree_session_replays_exactly() {
     );
     let entries = basecraft_ops::log::read_all(root).unwrap();
     assert!(entries.iter().any(|e| e.op.name() == "doc.export"));
-    let report = replay::replay(root).unwrap();
+    let report = records::replay(root).unwrap();
     assert!(report.ok(), "{:#?}", report.problems);
 }
 
@@ -714,7 +712,7 @@ fn sequence_addition_expands_reference_and_replays_with_undo() {
         assert_eq!(session.alignment(doc).unwrap().read(3, 0, 6), b"AA----");
         session.save(doc, None).unwrap();
     }
-    let report = replay::replay(root).unwrap();
+    let report = records::replay(root).unwrap();
     assert!(report.ok(), "{:#?}", report.problems);
 }
 
@@ -767,7 +765,7 @@ fn automatic_root_operations_undo_redo_save_reload_and_replay() {
         assert_eq!(reloaded.supports(), saved.supports());
         let entries = basecraft_ops::log::read_all(root).unwrap();
         assert!(entries.iter().any(|e| e.op.name() == op.name()));
-        let report = replay::replay(root).unwrap();
+        let report = records::replay(root).unwrap();
         assert!(report.ok(), "{:#?}", report.problems);
     }
 }
@@ -786,7 +784,7 @@ fn automatic_root_error_keeps_document_and_history() {
     for op in [Op::TreeMidpointRoot {}, Op::TreeMinimumVarianceRoot {}] {
         assert!(session.apply(doc, op).is_err());
         assert_eq!(session.tree(doc).unwrap().to_newick(), before);
-        assert!(!session.can_undo(doc));
+        assert!(!session.can_undo(doc).unwrap());
         session.flush().unwrap();
         assert_eq!(
             basecraft_ops::log::read_all(dir.path()).unwrap().len(),
@@ -803,7 +801,7 @@ fn strict_sequence_proposals_stage_invalid_batches_and_replay_one_undo_group() {
     std::fs::write(&path, ">sequence\nACGTACGT\n").unwrap();
     let mut session = Session::new(temp.path());
     let doc = session.open(&path).unwrap();
-    let generation = session.generation(doc);
+    let generation = session.generation(doc).unwrap();
     let revision = session.doc(doc).unwrap().version();
     let actor = basecraft_protocol::Actor::Plugin {
         id: "org.example.annotation".into(),
@@ -822,8 +820,8 @@ fn strict_sequence_proposals_stage_invalid_batches_and_replay_one_undo_group() {
             .is_err()
     );
     assert_eq!(session.doc(doc).unwrap().read(0, 8), before);
-    assert_eq!(session.generation(doc), generation);
-    assert!(!session.can_undo(doc));
+    assert_eq!(session.generation(doc).unwrap(), generation);
+    assert!(!session.can_undo(doc).unwrap());
     assert!(
         session
             .apply_sequence_proposals(doc, generation + 1, revision, &[replace(0, 1, "T")], &actor)
@@ -836,7 +834,7 @@ fn strict_sequence_proposals_stage_invalid_batches_and_replay_one_undo_group() {
                 generation,
                 revision,
                 &[Op::Save {
-                    path: "unsafe.fa".into()
+                    path: "unsafe.fa".into(),
                 }],
                 &actor
             )
@@ -859,7 +857,7 @@ fn strict_sequence_proposals_stage_invalid_batches_and_replay_one_undo_group() {
     session.redo(doc).unwrap();
     assert_eq!(session.doc(doc).unwrap().read(0, 8), b"TCGTACGT");
     session.flush().unwrap();
-    assert!(replay::replay(temp.path()).unwrap().ok());
+    assert!(records::replay(temp.path()).unwrap().ok());
     assert_eq!(std::fs::read(&path).unwrap(), b">sequence\nACGTACGT\n");
 }
 
@@ -895,7 +893,7 @@ fn script_actor_edits_read_back_replay_and_show_as_script() {
     };
     assert_eq!(actor_of(0), script);
     assert_eq!(actor_of(4), agent);
-    let report = replay::replay(root).unwrap();
+    let report = records::replay(root).unwrap();
     assert!(report.ok(), "{:#?}", report.problems);
     assert_eq!(report.entries, entries.len());
 
@@ -983,6 +981,6 @@ fn submission_edits_undo_save_and_replay() {
         s.redo(doc).unwrap();
         s.save(doc, None).unwrap();
     }
-    let report = replay::replay(root).unwrap();
+    let report = records::replay(root).unwrap();
     assert!(report.ok(), "{:#?}", report.problems);
 }

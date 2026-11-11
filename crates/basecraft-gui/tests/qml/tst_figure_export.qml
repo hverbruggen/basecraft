@@ -51,7 +51,11 @@ Item {
                     property alias publication: svgPublication.checked
                     function activeFolder() { return "file:///" }
                     function localPath(url) { return url.toString().replace("file://", "") }
-                    QtObject { id: shell; function local_file_url(path) { return "file://" + path } }
+                    QtObject {
+                        id: shell
+                        function local_file_url(path) { return "file://" + path }
+                        function local_file_path(url) { return url.toString().replace("file://", "") }
+                    }
                     ${host.block("function exportSvg(")}
                     ${host.block("    AppContentDialog {\n        id: svgOptions")}
                     ${picker}

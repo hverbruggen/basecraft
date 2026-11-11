@@ -1,7 +1,7 @@
 //! Document and analysis provenance publication.
 use super::Session;
 use super::{
-    Actor, DocId, LogEntry, Op, Path, Result, copy_ancestry, files, invalid,
+    Actor, DocId, Error, LogEntry, Op, Path, Result, copy_ancestry, files, invalid,
     portable_analysis_activity,
 };
 use super::{PathBuf, objects_dir, redact_operation_paths};
@@ -28,9 +28,7 @@ impl Session {
             .cloned()
             .ok_or_else(|| invalid("analysis has no recorded activity"))?;
         activity.result.hashes.retain(|pair| !inputs.contains(pair));
-        self.prepare_save_history(id, target, &activity, inputs, None)?
-            .publish()?;
-        Ok(())
+        self.publish_save(id, target, &activity, inputs, None)
     }
 
     /// Publish against the evidence frozen when the job was submitted.
@@ -39,7 +37,7 @@ impl Session {
         id: DocId,
         target: &Path,
         inputs: &[(String, String)],
-        snapshot: &crate::document_record::DocumentRecord,
+        snapshot: &crate::records::document_record::DocumentRecord,
     ) -> Result<()> {
         if !self.tracked
             || self.provenance_policy == basecraft_platform::settings::ProvenancePolicy::None
@@ -58,19 +56,17 @@ impl Session {
             .cloned()
             .ok_or_else(|| invalid("analysis has no recorded activity"))?;
         activity.result.hashes.retain(|pair| !inputs.contains(pair));
-        self.prepare_save_history(id, target, &activity, inputs, Some(snapshot))?
-            .publish()?;
-        Ok(())
+        self.publish_save(id, target, &activity, inputs, Some(snapshot))
     }
 
-    pub(super) fn prepare_save_history(
+    pub(super) fn publish_save(
         &self,
         id: DocId,
         target: &Path,
         save: &LogEntry,
         analysis_inputs: &[(String, String)],
-        snapshot: Option<&crate::document_record::DocumentRecord>,
-    ) -> Result<crate::documents::PreparedWrite> {
+        snapshot: Option<&crate::records::document_record::DocumentRecord>,
+    ) -> Result<()> {
         use basecraft_protocol::provenance::{
             ArtifactRevision, Completeness, EditActivity, Publication,
         };
@@ -84,7 +80,7 @@ impl Session {
                             .trim_start_matches("b3:"),
                     )
                 } else {
-                    crate::provenance::companion(target)
+                    crate::records::provenance::companion(target)
                 }
             }
             basecraft_platform::settings::ProvenancePolicy::LocalOnly => {
@@ -93,27 +89,25 @@ impl Session {
                         .trim_start_matches("b3:"),
                 )
             }
-            basecraft_platform::settings::ProvenancePolicy::None => {
-                return Ok(crate::documents::PreparedWrite::default());
-            }
+            basecraft_platform::settings::ProvenancePolicy::None => return Ok(()),
         };
         std::fs::create_dir_all(bundle.join("artifacts"))?;
         let source_bundle = snapshot.and_then(|r| r.origins.first()).map_or_else(
             || self.docs[id.0].origin_bundle.clone(),
             |(path, _)| path.clone(),
         );
-        let previous_bundle = if bundle.join("manifest.json").exists() {
+        let mut previous_bundle = if bundle.join("manifest.json").exists() {
             &bundle
         } else {
             &source_bundle
         };
-        let previous = if snapshot.is_some() {
+        let mut previous = if snapshot.is_some() {
             snapshot
                 .and_then(|r| r.origins.first())
                 .map(|(_, p)| p.clone())
         } else if previous_bundle.join("manifest.json").is_file() {
             let publication: Publication = serde_json::from_slice(
-                &crate::provenance::read_record(&previous_bundle.join("manifest.json"))?,
+                &crate::records::provenance::read_record(&previous_bundle.join("manifest.json"))?,
             )?;
             if publication.schema_version != 1 {
                 return Err(invalid("unsupported parent provenance version"));
@@ -122,6 +116,26 @@ impl Session {
         } else {
             None
         };
+        // A newly allocated output-support record is not the accepted document
+        // history. Prefer the opened origin when the writer has just bound one.
+        if snapshot.is_none()
+            && previous_bundle != &source_bundle
+            && previous
+                .as_ref()
+                .is_some_and(|p| p.events.is_empty() && p.effective_edits.is_empty())
+            && source_bundle.join("manifest.json").is_file()
+        {
+            previous_bundle = &source_bundle;
+            let publication: Publication = serde_json::from_slice(
+                &crate::records::provenance::read_record(&source_bundle.join("manifest.json"))?,
+            )?;
+            if publication.schema_version != 1 {
+                return Err(crate::Error::Unsupported(
+                    "unsupported parent provenance version".into(),
+                ));
+            }
+            previous = Some(publication);
+        }
         let baseline_hash = self
             .events
             .iter()
@@ -153,8 +167,9 @@ impl Session {
                 // in the new bundle; clean source references remain references.
                 for entry in std::fs::read_dir(previous_bundle.join("records"))? {
                     let entry = entry?;
-                    let record: Publication =
-                        serde_json::from_slice(&crate::provenance::read_record(&entry.path())?)?;
+                    let record: Publication = serde_json::from_slice(
+                        &crate::records::provenance::read_record(&entry.path())?,
+                    )?;
                     for output in record.outputs {
                         let Some(name) = output.retained else {
                             continue;
@@ -194,28 +209,17 @@ impl Session {
             && previous_bundle.join("input.json").is_file()
         {
             let mut input = crate::input_evidence::read_input(previous_bundle)?;
-            let mut upstream = input
-                .extra
-                .get("upstream")
-                .and_then(serde_json::Value::as_array)
-                .cloned()
-                .unwrap_or_default();
+            let mut upstream = input.upstream.clone();
             for reference in &mut upstream {
-                let path = reference["bundle"]
-                    .as_str()
-                    .ok_or_else(|| invalid("ancestor location missing"))?;
-                reference["bundle"] = serde_json::json!(crate::input_evidence::relative(
+                reference.bundle = crate::input_evidence::relative(
                     &bundle.canonicalize()?,
-                    &previous_bundle.join(path).canonicalize()?
-                )?);
+                    &previous_bundle.join(&reference.bundle).canonicalize()?,
+                )?
+                .into();
             }
             if bundle.join("input.json").is_file() {
                 let current = crate::input_evidence::read_input(&bundle)?;
-                if let Some(dependencies) = current
-                    .extra
-                    .get("upstream")
-                    .and_then(serde_json::Value::as_array)
-                {
+                if let Some(dependencies) = Some(&current.upstream) {
                     for dependency in dependencies {
                         if !upstream.contains(dependency) {
                             upstream.push(dependency.clone());
@@ -224,9 +228,7 @@ impl Session {
                 }
             }
             if !upstream.is_empty() {
-                input
-                    .extra
-                    .insert("upstream".into(), serde_json::json!(upstream));
+                input.upstream = upstream;
             }
             if input.source.is_some() {
                 input.extra.insert(
@@ -249,73 +251,75 @@ impl Session {
         }
         let retain =
             |path: &Path, hash: &str, revision: String, name: String| -> Result<ArtifactRevision> {
+                let bytes = std::fs::read(path)?;
+                #[cfg(feature = "test-counters")]
+                basecraft_io::counters::record_read(path, bytes.len() as u64);
+                if basecraft_io::hash_bytes(&bytes) != hash {
+                    return Err(Error::ChangedOnDisk {
+                        path: path.to_path_buf(),
+                    });
+                }
                 let relative = format!("artifacts/{}", hash.trim_start_matches("b3:"));
                 let dest = bundle.join(&relative);
-                let size = std::fs::metadata(path)?.len();
                 if !dest.exists() {
-                    basecraft_io::write_atomic(&dest, |w| {
-                        let mut writer = files::HashingWriter::new(w);
-                        let copied = std::io::copy(&mut std::fs::File::open(path)?, &mut writer)?;
-                        #[cfg(feature = "test-counters")]
-                        basecraft_io::counters::record_read(path, copied);
-                        if writer.hash() != hash || copied != size {
-                            return Err(std::io::Error::other(
-                                "analysis input changed during retention",
-                            ));
-                        }
-                        Ok(())
-                    })?;
+                    basecraft_io::write_atomic(&dest, |w| w.write_all(&bytes))?;
                 } else if basecraft_io::hash_file(&dest)? != hash {
-                    return Err(invalid("retained artifact is corrupt"));
+                    return Err(Error::Damaged {
+                        path: dest,
+                        detail: "retained artifact hash differs".into(),
+                    });
                 }
                 Ok(ArtifactRevision {
                     id: revision,
                     logical_name: name,
                     hash: hash.into(),
-                    size,
+                    size: bytes.len() as u64,
                     retained: Some(relative),
                     reference: None,
                 })
             };
         let mut inputs = Vec::new();
-        for (key, hash) in analysis_inputs {
-            // Analysis runs already own their submitted bytes. A history record
-            // points at that retained input instead of making another copy.
-            let retained = crate::input_evidence::read_input(&bundle)
-                .ok()
-                .and_then(|input| {
-                    if input.submitted_hash == *hash && bundle.join("submitted.fasta").is_file() {
-                        Some("submitted.fasta")
-                    } else if input
-                        .source
-                        .as_ref()
-                        .is_some_and(|source| source.hash == *hash)
-                        && bundle.join("preserved-input").is_file()
-                    {
-                        Some("preserved-input")
-                    } else {
-                        None
-                    }
-                });
-            if let Some(retained) = retained {
-                let path = bundle.join(retained);
-                if basecraft_io::hash_file(&path)? != *hash {
-                    return Err(crate::Error::ChangedOnDisk { path });
-                }
+        for event in self.events.iter().filter(|e| {
+            snapshot.is_none_or(|r| r.document == self.docs[id.0].key)
+                && e.doc == self.docs[id.0].key
+                && matches!(e.op, Op::Open { .. })
+        }) {
+            for (key, hash) in &event.result.hashes {
                 inputs.push(ArtifactRevision {
-                    id: format!("{}:submitted:{}", save.id, inputs.len()),
+                    id: format!("{}:input:{}", event.id, inputs.len()),
                     logical_name: Path::new(key)
                         .file_name()
                         .unwrap_or_default()
                         .to_string_lossy()
                         .into_owned(),
                     hash: hash.clone(),
-                    size: std::fs::metadata(path)?.len(),
-                    retained: Some(retained.into()),
+                    size: event
+                        .source
+                        .as_ref()
+                        .and_then(|source| source.files.iter().find(|file| file.path == *key))
+                        .map_or(0, |file| file.stamp.size),
+                    retained: None,
                     reference: None,
                 });
-                continue;
             }
+        }
+        for event in self
+            .events
+            .iter()
+            .filter(|event| event.doc == self.docs[id.0].key)
+        {
+            if let Op::CreateSangerReview { review } | Op::SangerUpdate { review } = &event.op {
+                let source =
+                    objects_dir(&self.storage_root).join(review.hash.trim_start_matches("b3:"));
+                inputs.push(retain(
+                    &source,
+                    &review.hash,
+                    format!("{}:review", event.id),
+                    "Sanger analysis record".into(),
+                )?);
+            }
+        }
+        for (key, hash) in analysis_inputs {
             let mut source = objects_dir(&self.storage_root).join(hash.trim_start_matches("b3:"));
             if !source.is_file() {
                 source = self.resolve(key);
@@ -333,27 +337,28 @@ impl Session {
         }
         let mut outputs = Vec::new();
         for (key, hash) in &save.result.hashes {
-            let logical_name =
-                if let Some(run) = crate::analysis_store::ArtifactRun::for_result(target)? {
-                    crate::input_evidence::relative(
-                        run.ancestors()
-                            .nth(4)
-                            .ok_or_else(|| invalid("invalid hidden publication path"))?,
-                        &self.resolve(key).canonicalize()?,
-                    )?
-                } else {
-                    Path::new(key)
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into_owned()
-                };
-            let path = self.resolve(key);
+            let logical_name = if crate::analysis_store::ArtifactRun::for_result(target)?.is_some()
+            {
+                crate::input_evidence::relative(
+                    &target.parent().unwrap_or(Path::new(".")).canonicalize()?,
+                    &self.resolve(key).canonicalize()?,
+                )?
+            } else {
+                Path::new(key)
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned()
+            };
             outputs.push(ArtifactRevision {
                 id: format!("{}:output:{}", save.id, outputs.len()),
                 logical_name,
                 hash: hash.clone(),
-                size: std::fs::metadata(&path)?.len(),
+                size: save
+                    .source
+                    .as_ref()
+                    .and_then(|source| source.files.iter().find(|file| file.path == *key))
+                    .map_or(0, |file| file.stamp.size),
                 retained: None,
                 reference: None,
             });
@@ -366,9 +371,6 @@ impl Session {
             .filter(|e| e.doc == self.docs[id.0].key)
             .cloned()
             .collect();
-        if !events.iter().any(|event| event.id == save.id) {
-            events.push(save.clone());
-        }
         for event in &mut events {
             event.doc = target
                 .file_name()
@@ -381,8 +383,19 @@ impl Session {
                     user: "redacted".into(),
                 };
             }
+            if let Some(source) = &mut event.source {
+                source.root = PathBuf::from(".");
+                source.links.clear();
+                for file in &mut source.files {
+                    file.path = Path::new(&file.path)
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned();
+                }
+            }
             match &mut event.op {
-                Op::Open { path } | Op::Save { path } => path.clone_from(&event.doc),
+                Op::Open { path } | Op::Save { path, .. } => path.clone_from(&event.doc),
                 _ => {}
             }
             redact_operation_paths(&mut event.op);
@@ -499,7 +512,8 @@ impl Session {
             let path = bundle.join("records").join(format!("{parent}.json"));
             parent_hashes.insert(parent.clone(), basecraft_io::hash_file(&path)?);
         }
-        crate::contributions::project(&events, &mut effective_edits);
+        crate::records::contributions::project(&events, &mut effective_edits);
+        let input_bytes_available = inputs.iter().all(|input| input.retained.is_some());
         let publication = Publication {
             schema_version: 1,
             id: save.id.clone(),
@@ -514,13 +528,13 @@ impl Session {
             effective_edits,
             completeness: Completeness {
                 ancestry_known: false,
-                input_bytes_available: !analysis_inputs.is_empty(),
+                input_bytes_available,
                 execution_specification_available: false,
                 replay_verified: false,
             },
             report_template_version: 2,
         };
-        crate::provenance::prepare_publication(&bundle, &publication)
+        crate::records::provenance::publish(&bundle, &publication)
     }
 
     /// Add a captured input revision and its recorded producing activity to an
@@ -528,7 +542,7 @@ impl Session {
     pub fn complete_operation_publication(
         &self,
         id: DocId,
-        snapshot: &crate::document_record::DocumentRecord,
+        snapshot: &crate::records::document_record::DocumentRecord,
         run: &crate::analysis_store::ArtifactRun,
     ) -> Result<()> {
         let activity = self
@@ -536,7 +550,7 @@ impl Session {
             .iter()
             .rev()
             .find(|event| {
-                event.doc == self.doc_key(id)
+                self.doc_key(id).is_ok_and(|key| event.doc == key)
                     && matches!(&event.op,
                 Op::ToolRun { params, .. } if params["run_id"].as_str() == Some(run.id()))
             })
@@ -552,26 +566,27 @@ impl Session {
         id: DocId,
         target: &Path,
         outputs: &[PathBuf],
-        snapshot: &crate::document_record::DocumentRecord,
+        snapshot: &crate::records::document_record::DocumentRecord,
         run: &crate::analysis_store::ArtifactRun,
     ) -> Result<()> {
         use basecraft_protocol::provenance::{ArtifactRevision, Completeness, Publication};
         let mut input = crate::input_evidence::read_input(run.directory())?;
-        let mut upstream = input
-            .extra
-            .get("upstream")
-            .and_then(serde_json::Value::as_array)
-            .cloned()
-            .unwrap_or_default();
+        let mut upstream = input.upstream.clone();
         for (bundle, origin) in &snapshot.origins {
             let mut bytes = serde_json::to_vec_pretty(origin)?;
             bytes.push(b'\n');
-            upstream.push(serde_json::json!({"bundle":crate::input_evidence::relative(run.directory(), &bundle.canonicalize()?)?,"id":origin.id,"hash":basecraft_io::hash_bytes(&bytes)}));
+            upstream.push(basecraft_protocol::input_records::UpstreamLink {
+                bundle: (crate::input_evidence::relative(
+                    run.directory(),
+                    &bundle.canonicalize()?,
+                )?)
+                .into(),
+                id: origin.id.clone(),
+                hash: basecraft_io::hash_bytes(&bytes),
+            });
         }
         if !upstream.is_empty() {
-            input
-                .extra
-                .insert("upstream".into(), serde_json::json!(upstream));
+            input.upstream = upstream;
             crate::input_evidence::write_json(&run.directory().join("input.json"), &input)?;
         }
         let activity = self
@@ -673,14 +688,15 @@ impl Session {
         }
         let (events, effective) = portable_analysis_activity(snapshot, &activity);
         let publication = Publication {
-            schema_version: 1, id: activity.id, session: self.id.clone(), parents: Vec::new(), parent_hashes: std::collections::BTreeMap::new(),
+            schema_version: 1,
+            id: activity.id, session: self.id.clone(), parents: Vec::new(), parent_hashes: std::collections::BTreeMap::new(),
             created: activity.t, origin: "Referenced source; submitted transformation recorded in input.json. Declared immutable upstream records are referenced without copying input bytes. Earlier history before import remains unknown.".into(),
             inputs, outputs: artifacts, events, effective_edits: effective,
-            completeness: Completeness { ancestry_known: false, input_bytes_available: input.state != "broken", execution_specification_available: false, replay_verified: false }, report_template_version: 2,
+            completeness: Completeness { ancestry_known: false, input_bytes_available: input.state != basecraft_protocol::input_records::EvidenceState::Broken, execution_specification_available: false, replay_verified: false }, report_template_version: 2,
         };
         match self.provenance_policy {
             basecraft_platform::settings::ProvenancePolicy::Portable => {
-                crate::provenance::publish(run.directory(), &publication)?;
+                crate::records::provenance::publish(run.directory(), &publication)?;
             }
             basecraft_platform::settings::ProvenancePolicy::LocalOnly => {
                 let bundle = self.local_provenance_root.join(
@@ -718,7 +734,7 @@ impl Session {
                         })?;
                     }
                 }
-                crate::provenance::publish(&bundle, &publication)?;
+                crate::records::provenance::publish(&bundle, &publication)?;
             }
             basecraft_platform::settings::ProvenancePolicy::None => {}
         }

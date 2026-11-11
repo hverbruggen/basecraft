@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DistanceMatrix",
+  "description": "Triangular observed distances, in row order: (1,0), (2,0), (2,1), ... .\nJSON null denotes a missing value. This cache is never changed by tree inference.",
+  "type": "object",
+  "properties": {
+    "columns": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "distances": {
+      "type": "array",
+      "items": {
+        "type": [
+          "number",
+          "null"
+        ],
+        "format": "double"
+      }
+    },
+    "gap_policy": {
+      "type": "string"
+    },
+    "input_hash": {
+      "type": "string"
+    },
+    "min_overlap": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "model": {
+      "$ref": "#/$defs/DistanceModel"
+    },
+    "names": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "schema": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "shared_sites": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0
+      }
+    },
+    "variances": {
+      "type": "array",
+      "items": {
+        "type": [
+          "number",
+          "null"
+        ],
+        "format": "double"
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "input_hash",
+    "names",
+    "columns",
+    "model",
+    "min_overlap",
+    "gap_policy",
+    "distances",
+    "shared_sites",
+    "variances"
+  ],
+  "$defs": {
+    "DistanceModel": {
+      "type": "string",
+      "enum": [
+        "p",
+        "jc69",
+        "k2p"
+      ]
+    }
+  }
+}

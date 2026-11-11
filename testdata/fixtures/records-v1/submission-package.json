@@ -1,0 +1,70 @@
+{
+  "batch": {
+    "ends": "auto",
+    "genetic_code": 11,
+    "marker": {
+      "gene": "rbcL",
+      "kind": "coding",
+      "product": "ribulose-1,5-bisphosphate carboxylase/oxygenase large subunit"
+    },
+    "mol_type": "genomic_dna",
+    "organelle": "chloroplast"
+  },
+  "destination": "genbank",
+  "export": {
+    "trim_terminal_unknown": true
+  },
+  "files": {
+    "README.txt": "b3:a6da0fa634ae809e523c4709b0b986edb32cab8bb7bb78a899a57da3be96a108",
+    "coordinate-map.tsv": "b3:138b097844429b3803c51a31f4185ac06f32a80f9017b86ceb10bbd76f22298d",
+    "genbank/submission.fsa": "b3:0b023d948ae1cb109cc541fb9694c96fd6a17d5d9779a3402f33ae6255179835",
+    "genbank/submission.sbt": "b3:cb53bfca1bbed33e5666f9d912324a9869782324894d5de28d6de7d52d27a702",
+    "genbank/submission.src": "b3:488c0846eb03ea60561fb7c8c37e3c56cd41d1f36e2d92089388f87c729d83a1",
+    "genbank/submission.tbl": "b3:edb188d563e500b38e40c516834436769ce6db68607ae39df07e0ccc38f6df01",
+    "records.tsv": "b3:580d13e1e39b8f1bf6a6a41b88ffa0f78232706a514a858a0a07020b19e787d9",
+    "specimens.tsv": "b3:d9ccb74db39cc12dba74128f2978d78ad10e8215be66085c70d4f44aa12a5030",
+    "validation/local-issues.tsv": "b3:775a1e8913ba0b5ad6db0c0585c8c29e2637062b11a758bbffde5ed8d3404f79"
+  },
+  "input_hash": "b3:b35cf3c4fd04349bc367a91565cc7e63fd4c6ce48bc4df4215e69a3d0dec1dee",
+  "issues": {
+    "blocking": 3,
+    "review": 6
+  },
+  "metadata_manifest_hash": "b3:7bf30fb5b86176e1726522002d7a00ce0cb281a6d0ab60986d76be42852e5fd4",
+  "note": "Local preparation and validation only. A clean table2asn report shows that these files pass that tool's checks in this version; it is not acceptance by GenBank, whose curators review every submission.",
+  "records": [
+    {
+      "export_id": "HV101_rbcL",
+      "record": "HV101_rbcL",
+      "row": 1,
+      "specimen": "HV101"
+    },
+    {
+      "export_id": "HV102_rbcL",
+      "record": "HV102_rbcL",
+      "row": 2,
+      "specimen": "HV102"
+    },
+    {
+      "export_id": "HV103_rbcL",
+      "record": "HV103_rbcL",
+      "row": 3,
+      "specimen": "HV103"
+    }
+  ],
+  "schema": "basecraft.genbank-submission-package",
+  "source": {
+    "document": "rbcL.afa",
+    "hash": "b3:9ece6f45e499bf626e4bc15fb7e82e06ad0f18d56346cf871bf6d862555978f6"
+  },
+  "status": "draft",
+  "submission": {
+    "document": "submissions/rbcL.submission.json",
+    "hash": "b3:83b1ecd064baf9a2ba08c536abf4cf9034543b8db394e1df62d10e49dd97f1c8"
+  },
+  "tools": {
+    "table2asn": null
+  },
+  "validation": null,
+  "version": 1
+}

@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Report",
+  "type": "object",
+  "properties": {
+    "citations": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    },
+    "document": {
+      "type": "string"
+    },
+    "history": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/HistoryRow"
+      }
+    },
+    "history_text": {
+      "type": "string"
+    },
+    "methods": {
+      "type": "string"
+    },
+    "paragraphs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/MethodsParagraph"
+      }
+    },
+    "raw": {
+      "type": "string"
+    },
+    "revision": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "template_version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "unsaved": {
+      "type": "boolean"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "template_version",
+    "document",
+    "revision",
+    "unsaved",
+    "warnings",
+    "history",
+    "paragraphs",
+    "methods",
+    "history_text",
+    "raw"
+  ],
+  "$defs": {
+    "HistoryRow": {
+      "type": "object",
+      "properties": {
+        "contributing": {
+          "type": "boolean"
+        },
+        "details": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "time": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "time",
+        "summary",
+        "status",
+        "contributing",
+        "details"
+      ]
+    },
+    "MethodsParagraph": {
+      "type": "object",
+      "properties": {
+        "activity_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "parameters": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "activity_ids",
+        "text",
+        "parameters"
+      ]
+    }
+  }
+}

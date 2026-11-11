@@ -2,7 +2,13 @@ import QtQuick
 import Basecraft
 Main {
     id: test
-    visible: false
+    visible: true
+    property int paintsWhileOpening: 0
+    property bool waitingForOpen: true
+    onFrameSwapped: { if (waitingForOpen) paintsWhileOpening += 1 }
+    Rectangle { width: 8; height: 8; color: "red"; opacity: 0.5
+        NumberAnimation on opacity { from: 0.1; to: 0.9; duration: 100; loops: Animation.Infinite }
+    }
     property string folder: OPEN_TEST_FOLDER
     property var transitions: []
     Connections {

@@ -175,7 +175,6 @@ pub enum Op {
     TreeStyle {
         style: TreeStyle,
         /// Support sets removed on accepting Style; cancellation makes no edits.
-        #[serde(default)]
         remove_supports: Vec<String>,
     },
     /// A figure or other derived file written from a document, such as a
@@ -208,6 +207,25 @@ pub enum Op {
     #[serde(rename = "submission.edit")]
     SubmissionEdit {
         edit: Box<crate::submission::SubmissionEdit>,
+    },
+    /// Initial review referencing an immutable record of drafts and biological events.
+    #[serde(rename = "doc.create_sanger_review")]
+    CreateSangerReview {
+        review: crate::sanger_records::ReviewRecord,
+    },
+    /// An explicit analysis continuation. Selection and decisions have their own operations.
+    #[serde(rename = "sanger.update")]
+    SangerUpdate {
+        review: crate::sanger_records::ReviewRecord,
+    },
+    /// Select a retained call set without copying its evidence.
+    #[serde(rename = "sanger.select")]
+    SangerSelect { call_set: String },
+    /// A decision addressed to an immutable Sanger call-set digest.
+    #[serde(rename = "sanger.review")]
+    SangerReview {
+        call_set: String,
+        edit: Box<crate::sanger::ReviewOp>,
     },
     /// A terminal job record, including failures and cancellation.
     #[serde(rename = "job.finished")]
@@ -260,6 +278,10 @@ impl Op {
             Op::DelimitationEdit { .. } => "delimitation.edit",
             Op::MetadataEdit { .. } => "metadata.edit",
             Op::SubmissionEdit { .. } => "submission.edit",
+            Op::SangerReview { .. } => "sanger.review",
+            Op::CreateSangerReview { .. } => "doc.create_sanger_review",
+            Op::SangerUpdate { .. } => "sanger.update",
+            Op::SangerSelect { .. } => "sanger.select",
             Op::JobFinished { .. } => "job.finished",
             Op::Undo { .. } => "history.undo",
             Op::Redo { .. } => "history.redo",
@@ -320,6 +342,11 @@ pub struct DocState {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DocumentCounts {
+    SangerReview {
+        columns: u64,
+        unresolved: u64,
+        call_sets: u64,
+    },
     Sequence {
         residues: u64,
         features: u64,
@@ -349,9 +376,14 @@ pub enum DocumentCounts {
 }
 
 impl DocState {
-    /// Write named counts alongside their unchanged legacy projection.
+    /// Construct a complete document fingerprint.
     pub fn from_counts(counts: DocumentCounts) -> Self {
         let (len, features, rows) = match &counts {
+            DocumentCounts::SangerReview {
+                columns,
+                unresolved,
+                call_sets,
+            } => (*columns, *unresolved, Some(*call_sets)),
             DocumentCounts::Sequence { residues, features } => (*residues, *features, None),
             DocumentCounts::Alignment { columns, rows } => (*columns, 0, Some(*rows)),
             DocumentCounts::Tree { tips, annotations } => (*tips, *annotations, None),
@@ -378,17 +410,9 @@ impl DocState {
         }
     }
 
-    /// Compare a current fingerprint to a recorded one. Old entries require
-    /// all their original counts; new entries additionally require the named
-    /// counts and kind. This is deliberately not a relaxed `PartialEq`.
+    /// Replay requires all counts and the document kind to agree.
     pub fn matches_recorded(&self, recorded: &Self) -> bool {
-        self.len == recorded.len
-            && self.features == recorded.features
-            && self.rows == recorded.rows
-            && recorded
-                .counts
-                .as_ref()
-                .is_none_or(|counts| self.counts.as_ref() == Some(counts))
+        self == recorded
     }
 }
 
@@ -402,9 +426,22 @@ pub struct OpResult {
     pub feature: Option<u32>,
 }
 
+/// Original files described by an open journal record.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SourceRecord {
+    pub links: std::collections::BTreeMap<String, std::path::PathBuf>,
+    pub checkpoint: bool,
+    pub feature_slots: Vec<bool>,
+    pub node_ids: Vec<usize>,
+    pub root: std::path::PathBuf,
+    pub files: Vec<crate::provenance::InputReference>,
+}
+
 /// One line of the operation log.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct LogEntry {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<SourceRecord>,
     pub v: u32,
     /// ULID: unique, and sorts by time.
     pub id: String,
@@ -436,34 +473,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn named_fingerprints_preserve_legacy_bytes_and_counts() {
+    fn named_fingerprints_round_trip_and_detect_changes() {
         let fixtures =
             include_str!("../../../testdata/fixtures/records-v1/document-fingerprints.jsonl");
-        let lines: Vec<_> = fixtures.lines().collect();
-        assert_eq!(lines.len(), 12);
-        for pair in lines.chunks_exact(2) {
-            let old: DocState = serde_json::from_str(pair[0]).unwrap();
-            let current: DocState = serde_json::from_str(pair[1]).unwrap();
-            assert_eq!(serde_json::to_string(&old).unwrap(), pair[0]);
-            assert_eq!(serde_json::to_string(&current).unwrap(), pair[1]);
-            assert!(old.counts.is_none());
-            assert!(current.counts.is_some());
+        for line in fixtures.lines() {
+            let current: DocState = serde_json::from_str(line).unwrap();
+            assert_eq!(serde_json::to_string(&current).unwrap(), line);
             assert_eq!(
                 DocState::from_counts(current.counts.clone().unwrap()),
                 current
             );
-            assert!(current.matches_recorded(&old));
-            assert!(current.matches_recorded(&current));
-            assert!(!old.matches_recorded(&current));
-            assert_ne!(current, old);
-            let mut wrong = old.clone();
+            let mut wrong = current.clone();
             wrong.len += 1;
             assert!(!current.matches_recorded(&wrong));
-            wrong = old.clone();
-            wrong.features += 1;
-            assert!(!current.matches_recorded(&wrong));
-            wrong = old;
-            wrong.rows = Some(wrong.rows.unwrap_or(0) + 1);
+            wrong = current.clone();
+            wrong.counts = None;
             assert!(!current.matches_recorded(&wrong));
         }
         let sequence = DocState::from_counts(DocumentCounts::Sequence {
@@ -485,6 +509,7 @@ mod tests {
     #[test]
     fn entry_json_shape_and_roundtrip() {
         let e = LogEntry {
+            source: None,
             v: LOG_VERSION,
             id: "01JB9Q".into(),
             t: "2026-10-10T09:14:03.512Z".into(),

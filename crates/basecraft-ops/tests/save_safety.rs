@@ -4,7 +4,8 @@
 #[path = "support/isolated_profile.rs"]
 mod isolated_profile;
 
-use basecraft_ops::{Session, delimitation, log, replay};
+use basecraft_ops::records::ReportExt;
+use basecraft_ops::{Session, delimitation, log, records};
 use basecraft_protocol::{
     Op,
     delimitation::{ColumnStyle, DelimitationEdit, TreeDrawingEdit},
@@ -67,7 +68,7 @@ fn save_as_alias_of_own_file_keeps_stale_source_protection() {
             "{alias:?} replaced an external edit"
         );
     }
-    assert!(session.can_undo(doc));
+    assert!(session.can_undo(doc).unwrap());
 
     // Unchanged on disk: the alias save is an ordinary save of the document.
     let other = dir.path().join("other.fasta");
@@ -181,7 +182,7 @@ fn read_only_folder_refuses_save_and_keeps_original_and_edits() {
     assert_eq!(std::fs::read_to_string(&file).unwrap(), ">gene\nACGT\n");
     assert_eq!(listing(&data), before);
     assert!(session.document_record(doc).unwrap().unsaved);
-    assert!(session.can_undo(doc));
+    assert!(session.can_undo(doc).unwrap());
     session.save(doc, None).unwrap();
     assert!(std::fs::read_to_string(&file).unwrap().contains("ATGT"));
 }
@@ -259,7 +260,7 @@ fn full_disk_journal_append_rolls_back_and_keeps_a_recoverable_prefix() {
     let doc = session.open(&file).unwrap();
     session.apply(doc, replace(1, "T")).unwrap();
     let filler = fill(&full);
-    let generation = session.generation(doc);
+    let generation = session.generation(doc).unwrap();
     // A long insertion needs more journal space than is left.
     let long = "A".repeat(256 << 10);
     let error = session.apply(
@@ -272,7 +273,11 @@ fn full_disk_journal_append_rolls_back_and_keeps_a_recoverable_prefix() {
     );
     eprintln!("full-disk journal error: {error:?}");
     assert!(error.is_err());
-    assert_eq!(session.generation(doc), generation, "edit not rolled back");
+    assert_eq!(
+        session.generation(doc).unwrap(),
+        generation,
+        "edit not rolled back"
+    );
     assert_eq!(session.doc(doc).unwrap().len(), 4);
     let root = session.recovery_root().to_path_buf();
     assert!(!root.join("recovery-integrity-error.json").exists());
@@ -280,7 +285,7 @@ fn full_disk_journal_append_rolls_back_and_keeps_a_recoverable_prefix() {
     assert!(prefix.problem.is_none(), "{:?}", prefix.problem);
     std::fs::remove_file(filler).unwrap();
     let recovered = dir.path().join("recovered");
-    let outputs = replay::recover(&root, &recovered).unwrap();
+    let outputs = records::recover(&root, &recovered).unwrap();
     assert!(
         std::fs::read_to_string(&outputs[0])
             .unwrap()
@@ -319,12 +324,12 @@ fn damaged_journal_recovery_names_the_salvage_and_never_skips_events() {
     torn.extend_from_slice(b"{\"v\":1,\"id\":\"incomplete");
     std::fs::write(&journal, &torn).unwrap();
     let strict = dir.path().join("strict");
-    let error = replay::recover(&root, &strict).unwrap_err().to_string();
+    let error = records::recover(&root, &strict).unwrap_err().to_string();
     assert!(error.contains("--verified-prefix"), "{error}");
     assert!(error.contains("3 verified journal events"), "{error}");
     assert!(!strict.exists());
     let salvaged = dir.path().join("salvaged");
-    let (outputs, problem) = replay::recover_verified_prefix(&root, &salvaged).unwrap();
+    let (outputs, problem) = records::recover_verified_prefix(&root, &salvaged).unwrap();
     assert!(problem.unwrap().contains("torn"));
     assert!(
         std::fs::read_to_string(&outputs[0])
@@ -340,7 +345,7 @@ fn damaged_journal_recovery_names_the_salvage_and_never_skips_events() {
     lines[1] = &damaged;
     std::fs::write(&journal, format!("{}\n", lines.join("\n"))).unwrap();
     let partial = dir.path().join("partial");
-    let (outputs, problem) = replay::recover_verified_prefix(&root, &partial).unwrap();
+    let (outputs, problem) = records::recover_verified_prefix(&root, &partial).unwrap();
     assert!(problem.unwrap().contains("checksum"));
     assert!(
         outputs.is_empty()
@@ -396,7 +401,7 @@ fn analysis_result_hypotheses_and_columns_undo_as_one_step() {
     assert_eq!(session.delimitation(doc).unwrap(), &added);
     session.save(doc, None).unwrap();
     drop(session);
-    assert!(replay::replay(dir.path()).unwrap().ok());
+    assert!(records::replay(dir.path()).unwrap().ok());
 }
 
 #[test]
@@ -446,7 +451,7 @@ fn species_view_columns_and_tree_flips_survive_save_reopen_undo_and_replay() {
     let copy = reopened.open(&path).unwrap();
     assert_eq!(reopened.delimitation(copy).unwrap().view, initial);
     drop(session);
-    let report = replay::replay(dir.path()).unwrap();
+    let report = records::replay(dir.path()).unwrap();
     assert!(report.ok(), "{:?}", report.problems);
 }
 
@@ -512,7 +517,7 @@ fn interrupted_result_group_resumes_after_journal_failure_as_one_undo_step() {
     };
     let group = session.begin_group();
     session.apply(doc, op(&edits[0])).unwrap();
-    let revision = session.revision(doc);
+    let revision = session.revision(doc).unwrap();
     // Force journal rotation, then make its parent unavailable for the second
     // attachment. This is a real append failure after the first edit committed.
     let host = listing(&log::log_dir(dir.path())).remove(0);
@@ -532,7 +537,7 @@ fn interrupted_result_group_resumes_after_journal_failure_as_one_undo_step() {
     std::fs::write(&host, b"fault").unwrap();
     assert!(session.apply(doc, op(&edits[1])).is_err());
     session.end_group();
-    assert_eq!(session.revision(doc), revision);
+    assert_eq!(session.revision(doc).unwrap(), revision);
     std::fs::remove_file(&host).unwrap();
     std::fs::rename(&backup, &host).unwrap();
     std::fs::OpenOptions::new()
@@ -554,6 +559,6 @@ fn interrupted_result_group_resumes_after_journal_failure_as_one_undo_step() {
     session.redo(doc).unwrap();
     assert_eq!(session.delimitation(doc).unwrap(), &completed);
     drop(session);
-    let replay = replay::replay(dir.path()).unwrap();
+    let replay = records::replay(dir.path()).unwrap();
     assert!(replay.ok(), "{:?}", replay.problems);
 }

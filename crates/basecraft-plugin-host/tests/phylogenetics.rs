@@ -1,7 +1,7 @@
 //! Real local/pixi tool runs through the same registered route as the GUI.
 #[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
 mod isolated_profile;
-use basecraft_ops::links::AlignmentLinkExt;
+use basecraft_ops::records::AlignmentLinkExt;
 mod common;
 
 use basecraft_ops::Session;
@@ -58,7 +58,7 @@ fn trimal_and_iqtree_preserve_identifiers_and_provenance() {
     let tree_doc = session.open(&tree).unwrap();
     assert!(session.tree(tree_doc).unwrap().find_tip("a:one").is_some());
     // The unsaved edit is what IQ-TREE saw, and the tree links to exactly that.
-    let link = basecraft_ops::links::AlignmentLink::read(&tree).unwrap();
+    let link = basecraft_ops::records::AlignmentLink::read(&tree).unwrap();
     assert!(link.inferred);
     assert_eq!(
         link.alignment_version,
@@ -79,5 +79,5 @@ fn trimal_and_iqtree_preserve_identifiers_and_provenance() {
     );
     assert_eq!(common::tool_runs(&session, doc).len(), 2);
     session.flush().unwrap();
-    assert!(basecraft_ops::replay::replay(root).unwrap().ok());
+    assert!(basecraft_ops::records::replay(root).unwrap().ok());
 }

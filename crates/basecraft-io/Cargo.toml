@@ -1,6 +1,6 @@
 [package]
 name = "basecraft-io"
-description = "Format readers and writers, indexes, memory mapping"
+description = "Format readers and writers, indexes, immutable file sources"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -22,11 +22,10 @@ basecraft-protocol.workspace = true
 blake3.workspace = true
 sha2.workspace = true
 memchr.workspace = true
-memmap2.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
 
-# This crate may use unsafe code (mmap, signal handling), so it can't
+# Test-only allocator accounting uses unsafe code, so this crate cannot
 # inherit the workspace lints, which deny it. Keep this list in sync.
 [lints.rust]
 unsafe_code = "allow"

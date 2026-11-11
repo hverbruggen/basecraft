@@ -1,8 +1,23 @@
 //! Document loading, baseline tracking and retained originals.
-#[cfg(test)]
-use super::retention_tests;
+use super::Session;
 use super::{DocId, Op, OpResult, Path, PathBuf, Result, Slot, files, invalid, objects_dir};
-use super::{OBJECT_STORE_LIMIT, Session, save_authority};
+
+#[derive(Clone, PartialEq, Eq)]
+pub(super) struct SavedMark(pub(super) Option<String>);
+
+impl Slot {
+    pub(super) fn mark(&self) -> super::SavedMark {
+        super::SavedMark(self.undo.last().map(|entry| entry.entry_id.clone()))
+    }
+
+    pub(super) fn is_clean(&self) -> bool {
+        self.saved_at.as_ref() == Some(&self.mark())
+    }
+
+    pub(super) fn content_mut(&mut self) -> &mut files::Loaded {
+        &mut self.content
+    }
+}
 
 impl Session {
     pub fn open(&mut self, path: &Path) -> Result<DocId> {
@@ -13,99 +28,31 @@ impl Session {
     /// Unlike a separate [`files::kind`] probe, this does not reread the main
     /// file to classify it. Existing companion validation still applies.
     pub fn open_classified(&mut self, path: &Path) -> Result<(DocId, files::Kind)> {
-        self.open_inner(path, false)
+        self.open_inner(path)
     }
 
-    pub(crate) fn open_replay_snapshot(&mut self, path: &Path) -> Result<DocId> {
-        self.open_inner(path, true).map(|(id, _)| id)
-    }
-
-    pub(super) fn open_inner(
-        &mut self,
-        path: &Path,
-        verified_snapshot: bool,
-    ) -> Result<(DocId, files::Kind)> {
-        if crate::sanger_review::evidence_kind(path).is_some() {
-            return Err(invalid(
-                "Saved Sanger reviews and drafts are edited only in the Basecraft application; read a saved Sanger review's history, methods and provenance with the history, methods and provenance commands",
-            ));
-        }
+    pub(super) fn open_inner(&mut self, path: &Path) -> Result<(DocId, files::Kind)> {
         self.flush()?;
-        let disk_stamp = crate::input_evidence::stamp(path)?;
         let format = files::Format::from_path(path)?;
-        // Files read with the main one: a sidecar, or a metadata manifest's tables.
-        let companions = match format {
-            files::Format::Metadata => crate::metadata::files(path).split_off(1),
-            files::Format::Tree | files::Format::Delimitation => vec![files::tree_sidecar(path)],
-            files::Format::GenBank | files::Format::Fasta => vec![files::gff_sidecar(path)],
-            files::Format::Submission => crate::documents::submission_companions(path),
-        };
-        // A captured loader couples parser bytes and hashes, but companions
-        // still require final content checks before admission.
         let captured = files::capture_load(path, format)?;
-        let owned_main = captured.is_none()
-            && matches!(
-                format,
-                files::Format::Fasta | files::Format::GenBank | files::Format::Tree
-            )
-            && !companions.iter().any(|c| c.exists());
-        let hash_companions = || -> Result<Vec<Option<String>>> {
-            companions
-                .iter()
-                .map(|c| {
-                    if c.exists() {
-                        basecraft_io::hash_file(c).map(Some).map_err(Into::into)
-                    } else {
-                        Ok(None)
-                    }
-                })
-                .collect()
-        };
-        let (content, accepted_hash, companion_hashes) = if let Some(captured) = captured {
-            (
-                captured.content,
-                captured.main_hash,
-                captured.companion_hashes,
-            )
-        } else {
-            let (source, accepted_hash) = if owned_main {
-                let (source, hash) = basecraft_io::Source::open_hashed(path)?;
-                (Some(source), hash)
-            } else {
-                (None, basecraft_io::hash_file(path)?)
-            };
-            let companion_hashes = hash_companions()?;
-            #[cfg(test)]
-            files::admission_tests::boundary("acquired");
-            let content = files::load_snapshot(path, source, format, verified_snapshot)?;
-            (content, accepted_hash, companion_hashes)
-        };
-        #[cfg(test)]
-        files::admission_tests::boundary("parsed");
-        if (!owned_main && basecraft_io::hash_file(path)? != accepted_hash)
-            || hash_companions()? != companion_hashes
-            || crate::input_evidence::stamp(path)? != disk_stamp
-        {
-            return Err(invalid(
-                "source or sidecar changed while opening; retry with stable files",
-            ));
-        }
+        let content = captured.content;
         let key = self.relative(path);
-        let mut hashes = vec![(key.clone(), accepted_hash)];
-        let absent_sidecars = companions
+        let retain_companions = content.as_document().retains_companions();
+        let hashes: Vec<_> = captured
+            .files
             .iter()
-            .zip(&companion_hashes)
-            .filter(|(_, hash)| hash.is_none())
-            .map(|(c, _)| self.relative(c))
+            .enumerate()
+            .filter(|(i, _)| *i == 0 || retain_companions)
+            .map(|(_, (path, hash))| (self.relative(path), hash.clone()))
             .collect();
-        if content.as_document().retains_companions() {
-            for (companion, hash) in companions.iter().zip(companion_hashes) {
-                if let Some(hash) = hash {
-                    hashes.push((self.relative(companion), hash));
-                }
-            }
-        }
-        let (origin, mut origin_issue) = crate::document_record::read_origin(path, &hashes);
+        let absent_sidecars = captured
+            .stamps
+            .iter()
+            .filter(|(_, stamp)| stamp.is_none())
+            .map(|(path, _)| self.relative(path))
+            .collect();
+        let (origin, mut origin_issue) =
+            crate::records::document_record::read_origin(path, &hashes);
         if let Some(warning) = content.as_document().opening_warning() {
             origin_issue = Some(
                 origin_issue
@@ -113,28 +60,39 @@ impl Session {
             );
         }
         let kind = content.kind();
-        self.docs.push(Slot {
-            key: key.clone(),
+        let source_files = captured
+            .files
+            .iter()
+            .map(|(path, hash)| {
+                Ok(basecraft_protocol::provenance::InputReference {
+                    path: self.relative(path),
+                    stamp: captured
+                        .stamps
+                        .iter()
+                        .find(|(file, _)| file == path)
+                        .and_then(|(_, stamp)| stamp.clone())
+                        .expect("captured file stamp"),
+                    hash: hash.clone(),
+                    extra: std::collections::BTreeMap::new(),
+                })
+            })
+            .collect::<Result<_>>()?;
+        let disk_stamp = captured.stamps[0].1.clone().expect("main file stamp");
+        let mut slot = Slot::new(
+            key.clone(),
             content,
-            current_saved_hashes: std::sync::OnceLock::new(),
-            generation: 0,
-            save_authority: save_authority::PendingSaveAuthority::default(),
-            undo: Vec::new(),
-            redo: Vec::new(),
-            baseline: None,
-            baseline_logged: false,
-            accepted_hashes: hashes.clone(),
-            saved_state_hashes: Vec::new(),
-            saved_edit: None,
-            absent_sidecars,
-            origin,
-            origin_issue,
-            origin_bundle: crate::provenance::bundle_for_result(path),
+            crate::records::provenance::bundle_for_result(path),
             disk_stamp,
-        });
+        );
+        slot.accepted_hashes.clone_from(&hashes);
+        slot.absent_sidecars = absent_sidecars;
+        slot.origin = origin;
+        slot.origin_issue = origin_issue;
+        slot.saved_at = Some(super::SavedMark(None));
+        slot.source_stamps = captured.stamps;
+        self.docs.push(slot);
         let id = DocId(self.docs.len() - 1);
-        self.docs[id.0].saved_state_hashes = self.save_hashes(id)?;
-        let entry = self.entry(
+        let mut entry = self.entry(
             id,
             self.actor.clone(),
             Op::Open { path: key },
@@ -143,60 +101,264 @@ impl Session {
                 feature: None,
             },
         );
+        entry.source.as_mut().expect("open source").files = source_files;
         self.docs[id.0].baseline = Some(entry);
         Ok((id, kind))
     }
 
-    /// Promote a read-only load before its first durable action. Validate and
-    /// retain the accepted originals before any edit or replacement can occur.
+    /// First edit retains an inode when possible. Later edits check only stamps;
+    /// a changed original requires a snapshot of the live document before editing.
     pub(super) fn track(&mut self, id: DocId) -> Result<()> {
-        let Some(entry) = self
+        if !self.tracked {
+            return Ok(());
+        }
+        let slot = self
             .docs
             .get(id.0)
-            .ok_or_else(|| invalid("unknown document"))?
-            .baseline
-            .clone()
-        else {
+            .ok_or(crate::Error::UnknownDocument { id })?;
+        if self.source_changed(id) {
+            if slot
+                .baseline
+                .as_ref()
+                .is_some_and(|entry| matches!(entry.op, Op::Open { .. }))
+                && !slot.baseline_logged
+            {
+                return Err(crate::Error::ChangedOnDisk {
+                    path: self.resolve(&slot.key),
+                });
+            }
+            if self.log.is_some() {
+                self.flush()?;
+                if let Some(entry) = self.recovery_checkpoint(id)? {
+                    self.docs[id.0].recovery_boundary = Some(entry.id.clone());
+                    self.pending_baselines.push(entry);
+                }
+                self.refresh_source_stamps(id);
+                self.docs[id.0].recovery_changed = true;
+                self.docs[id.0].baseline = None;
+            }
             return Ok(());
-        };
-        if self.tracked {
-            for (key, hash) in &entry.result.hashes {
-                let source = self.resolve(key);
-                if self.store_objects {
-                    self.store_object(&source, hash)?;
-                } else {
-                    if basecraft_io::hash_file(&source)? != *hash {
-                        return Err(invalid(
-                            "source changed since opening; reopen it before editing",
-                        ));
+        }
+        if let Some(mut entry) = self.docs[id.0].baseline.clone() {
+            let files = entry
+                .source
+                .as_ref()
+                .map(|source| source.files.clone())
+                .unwrap_or_default();
+            let review = self.docs[id.0].content.kind() == files::Kind::SangerReview;
+            if self.store_objects && !files.is_empty() {
+                let originals = self.storage_root.join(".basecraft/originals");
+                recovery_directory(&originals)?;
+                let stage = tempfile::tempdir_in(&originals)?;
+                let directory = originals.join(&entry.id);
+                for (index, reference) in files.iter().enumerate() {
+                    let original = self.resolve(&reference.path);
+                    if crate::input_evidence::stamp(&original)? != reference.stamp {
+                        return Err(crate::Error::ChangedOnDisk { path: original });
                     }
-                    self.snapshot_file(&source)?;
+                    let link = stage.path().join(index.to_string());
+                    // Reviews (at most 64 MiB) are copied: their save refuses aliased targets.
+                    let retained = if review {
+                        std::fs::copy(&original, &link).map(|_| ())
+                    } else {
+                        std::fs::hard_link(&original, &link)
+                    };
+                    match retained {
+                        Ok(()) => {
+                            let same = if review {
+                                basecraft_io::hash_file(&link)? == reference.hash
+                            } else {
+                                crate::input_evidence::stamp(&link)? == reference.stamp
+                            };
+                            if !same || crate::input_evidence::stamp(&original)? != reference.stamp
+                            {
+                                std::fs::remove_file(&link)?;
+                                return Err(crate::Error::ChangedOnDisk { path: original });
+                            }
+                            entry
+                                .source
+                                .as_mut()
+                                .expect("baseline source")
+                                .links
+                                .insert(
+                                    reference.path.clone(),
+                                    directory
+                                        .join(index.to_string())
+                                        .strip_prefix(&self.storage_root)
+                                        .expect("recovery link")
+                                        .to_path_buf(),
+                                );
+                        }
+                        Err(error)
+                            if matches!(
+                                error.kind(),
+                                std::io::ErrorKind::CrossesDevices
+                                    | std::io::ErrorKind::Unsupported
+                                    | std::io::ErrorKind::PermissionDenied
+                            ) => {}
+                        Err(error) => return Err(error.into()),
+                    }
+                }
+                if entry
+                    .source
+                    .as_ref()
+                    .is_some_and(|source| !source.links.is_empty())
+                {
+                    basecraft_platform::files::sync_directory(stage.path())?;
+                    std::fs::rename(stage.path(), &directory)?;
+                    basecraft_platform::files::sync_directory(&originals)?;
                 }
             }
+            if self.docs[id.0].baseline_logged {
+                // The baseline is already durable. Record its newly retained source
+                // as a checkpoint, without pretending another save occurred.
+                if entry
+                    .source
+                    .as_ref()
+                    .is_some_and(|source| !source.links.is_empty())
+                {
+                    let (Op::Open { path } | Op::Save { path }) = &entry.op else {
+                        unreachable!("logged baseline")
+                    };
+                    let mut retained = self.entry(
+                        id,
+                        self.actor.clone(),
+                        Op::Open { path: path.clone() },
+                        entry.result.clone(),
+                    );
+                    retained.source = entry.source;
+                    retained
+                        .source
+                        .as_mut()
+                        .expect("baseline source")
+                        .checkpoint = true;
+                    self.pending_baselines.push(retained);
+                }
+            } else {
+                self.pending_baselines.push(entry);
+            }
+            self.docs[id.0].baseline = None;
         }
-        if self.log.is_some() {
-            let baseline = serde_json::to_value(&entry)?;
-            let manifest = serde_json::to_vec_pretty(&serde_json::to_value(
-                basecraft_protocol::records::RecoveryManifest {
-                    schema_version: 1,
-                    session: self.id.clone(),
-                    source_root: self.root.clone(),
-                    status: basecraft_protocol::records::RecoveryStatus::Unsaved,
-                    baseline,
-                    object_policy_limit: OBJECT_STORE_LIMIT,
-                    extra: std::collections::BTreeMap::new(),
-                },
-            )?)?;
-            std::fs::create_dir_all(&self.storage_root)?;
-            basecraft_io::write_atomic(&self.storage_root.join("recovery.json"), |w| {
-                w.write_all(&manifest)
-            })?;
-        }
-        if !self.docs[id.0].baseline_logged {
-            self.write(&entry)?;
-        }
-        self.docs[id.0].baseline = None;
         Ok(())
+    }
+
+    pub(super) fn source_changed(&self, id: DocId) -> bool {
+        self.docs[id.0]
+            .source_stamps
+            .iter()
+            .any(|(path, before)| *before != crate::input_evidence::stamp(path).ok())
+    }
+
+    pub(super) fn refresh_source_stamps(&mut self, id: DocId) {
+        for (path, stamp) in &mut self.docs[id.0].source_stamps {
+            *stamp = crate::input_evidence::stamp(path).ok();
+        }
+    }
+
+    /// An exceptional checkpoint: external modification or undo across a save.
+    /// Write each saved form once, then move it into the content-addressed store.
+    pub(super) fn recovery_checkpoint(
+        &self,
+        id: DocId,
+    ) -> Result<Option<basecraft_protocol::LogEntry>> {
+        if self.docs[id.0]
+            .content
+            .as_document()
+            .save_refusal()
+            .is_some()
+        {
+            return Ok(None);
+        }
+        let directory = objects_dir(&self.storage_root);
+        recovery_directory(&directory)?;
+        let stage = tempfile::tempdir_in(&directory)?;
+        let key = &self.docs[id.0].key;
+        let local =
+            crate::records::replay::scratch_key(key).map_err(|detail| crate::Error::Damaged {
+                path: self.storage_root.clone(),
+                detail,
+            })?;
+        let target = stage.path().join(&local);
+        let original = self.resolve(key);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let publication = crate::documents::WritePublication::Recovery {
+            stage: target.parent().expect("checkpoint parent").to_path_buf(),
+            destination: original.parent().expect("source parent").to_path_buf(),
+            stores: std::sync::Mutex::default(),
+        };
+        // A review's format is recognised from content, which the target lacks yet.
+        let format = if self.docs[id.0].content.kind() == files::Kind::SangerReview {
+            files::Format::SangerReview
+        } else {
+            files::Format::from_path(&target)?
+        };
+        let written = self.docs[id.0].content.as_document().write(
+            &target,
+            format,
+            &self.storage_root,
+            &publication,
+        )?;
+        let mut hashes = Vec::new();
+        for (path, hash) in written {
+            let name = path.strip_prefix(stage.path()).map_err(|_| {
+                crate::Error::Unsupported("Recovery writer escaped its staging folder".into())
+            })?;
+            let name = if Path::new(key).is_absolute() {
+                original.parent().expect("source parent").join(
+                    path.strip_prefix(target.parent().expect("checkpoint parent"))
+                        .map_err(|_| {
+                            crate::Error::Unsupported(
+                                "Recovery writer escaped its document folder".into(),
+                            )
+                        })?,
+                )
+            } else {
+                name.to_path_buf()
+            };
+            hashes.push((name.to_string_lossy().into_owned(), hash.clone()));
+            std::fs::rename(&path, directory.join(hash.trim_start_matches("b3:")))?;
+        }
+        let mut entry = self.entry(
+            id,
+            self.actor.clone(),
+            Op::Open { path: key.clone() },
+            OpResult {
+                hashes,
+                feature: None,
+            },
+        );
+        entry.source.as_mut().expect("checkpoint source").checkpoint = true;
+        basecraft_platform::files::sync_directory(&directory)?;
+        Ok(Some(entry))
+    }
+
+    pub(crate) fn restore_recovery_ids(
+        &mut self,
+        id: DocId,
+        source: &basecraft_protocol::ops::SourceRecord,
+    ) -> Result<()> {
+        let result = match self.docs[id.0].content_mut() {
+            files::Loaded::Sequence(opened) => {
+                opened.doc.restore_feature_slots(&source.feature_slots)
+            }
+            files::Loaded::Tree(opened) => opened.doc.restore_node_ids(&source.node_ids),
+            _ => Ok(()),
+        };
+        result.map_err(|error| crate::Error::Damaged {
+            path: self.root.clone(),
+            detail: error.to_string(),
+        })
+    }
+
+    pub fn recovery_warning(&self, id: DocId) -> Option<&str> {
+        let slot = self.docs.get(id.0)?;
+        slot.recovery_changed.then_some(if slot.content.as_document().save_refusal().is_some() {
+            "The original changed on disk. Your edits remain in the journal, but recovery requires the unchanged original; this multi-record file cannot be saved yet."
+        } else {
+            "The original changed on disk. Your current edits have been preserved in recovery; save them to a new file."
+        })
     }
 
     /// Cheap change token for readers; saves and job outcomes also invalidate a report.
@@ -215,15 +377,18 @@ impl Session {
     }
 
     /// Read-only evidence for this session's exact current revision, including pending edits.
-    pub fn document_record(&self, id: DocId) -> Result<crate::document_record::DocumentRecord> {
+    pub fn document_record(
+        &self,
+        id: DocId,
+    ) -> Result<crate::records::document_record::DocumentRecord> {
         use basecraft_protocol::provenance::EditActivity;
         let slot = self
             .docs
             .get(id.0)
             .ok_or_else(|| invalid("unknown document"))?;
         let mut record = slot.origin.as_ref().map_or_else(
-            || crate::document_record::DocumentRecord::empty(&slot.key),
-            crate::document_record::DocumentRecord::from_publication,
+            || crate::records::document_record::DocumentRecord::empty(&slot.key),
+            crate::records::document_record::DocumentRecord::from_publication,
         );
         if let Some(origin) = &slot.origin {
             record
@@ -232,7 +397,10 @@ impl Session {
         }
         record.document.clone_from(&slot.key);
         record.revision = format!("{}:{}:{}", self.id, id.0, slot.generation);
-        record.unsaved = self.save_hashes(id)? != slot.saved_state_hashes;
+        record.unsaved = !slot.is_clean();
+        if let Some(warning) = self.recovery_warning(id) {
+            record.warnings.push(warning.into());
+        }
         if let Some(issue) = &slot.origin_issue {
             record.warnings.push(issue.clone());
         }
@@ -244,6 +412,12 @@ impl Session {
         record
             .events
             .extend(self.events.iter().filter(|e| e.doc == slot.key).cloned());
+        record.events.extend(
+            self.pending_baselines
+                .iter()
+                .filter(|e| e.doc == slot.key)
+                .cloned(),
+        );
         if let Some(pending) = &self.pending
             && pending.doc == id
         {
@@ -256,7 +430,7 @@ impl Session {
                 operation: a.op.clone(),
             }));
         record.deduplicate();
-        crate::contributions::project(&record.events, &mut record.effective);
+        crate::records::contributions::project(&record.data.events, &mut record.data.effective);
         Ok(record)
     }
 
@@ -281,8 +455,15 @@ impl Session {
             .docs
             .get(id.0)
             .ok_or_else(|| invalid("unknown document"))?;
-        if self.save_hashes(id)? != slot.saved_state_hashes {
+        if !slot.is_clean() {
             return Ok(None);
+        }
+        if let Some((path, stamp, hash)) = &slot.saved_target {
+            let current = crate::input_evidence::stamp(path)?;
+            if current != *stamp {
+                return Err(crate::Error::ChangedOnDisk { path: path.clone() });
+            }
+            return Ok(Some((path.clone(), current, hash.clone())));
         }
         let path = self.resolve(&slot.key).canonicalize()?;
         let current = crate::input_evidence::stamp(&path)?;
@@ -332,19 +513,7 @@ impl Session {
     /// Hash and retain the exact immutable buffer consumed by an analysis.
     pub fn snapshot_bytes(&self, bytes: &[u8]) -> Result<String> {
         let hash = basecraft_io::hash_bytes(bytes);
-        if self.tracked && bytes.len() as u64 > OBJECT_STORE_LIMIT {
-            return Err(invalid(format!(
-                "exact input retention exceeds the {OBJECT_STORE_LIMIT}-byte policy limit"
-            )));
-        }
-        if self.tracked && !self.store_objects {
-            self.memory_objects
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .entry(hash.clone())
-                .or_insert_with(|| bytes.to_vec());
-        }
-        if self.store_objects && bytes.len() as u64 <= OBJECT_STORE_LIMIT {
+        if self.store_objects {
             let dest = objects_dir(&self.storage_root).join(hash.trim_start_matches("b3:"));
             if !dest.exists() {
                 std::fs::create_dir_all(objects_dir(&self.storage_root))?;
@@ -353,58 +522,16 @@ impl Session {
         }
         Ok(hash)
     }
+}
 
-    pub(super) fn store_object(&self, path: &Path, hash: &str) -> Result<()> {
-        let dest = objects_dir(&self.storage_root).join(hash.trim_start_matches("b3:"));
-        // These probes select an acquisition strategy, never establish identity.
-        // Keep streaming verification (and its errors) for known/oversize inputs.
-        let capture =
-            !dest.exists() && std::fs::metadata(path).is_ok_and(|m| m.len() <= OBJECT_STORE_LIMIT);
-        #[cfg(test)]
-        retention_tests::boundary(retention_tests::Stage::BeforeRead, path);
-        let (captured, current_hash) = if capture {
-            let (source, current_hash) = basecraft_io::Source::open_hashed(path)?;
-            (Some(source), current_hash)
-        } else {
-            (None, basecraft_io::hash_file(path)?)
-        };
-        if current_hash != hash {
-            return Err(invalid(
-                "source changed since opening; reopen it before editing",
-            ));
+/// Publish newly created directory entries before a synced journal can name them.
+fn recovery_directory(path: &Path) -> std::io::Result<()> {
+    let missing: Vec<_> = path.ancestors().take_while(|dir| !dir.exists()).collect();
+    std::fs::create_dir_all(path)?;
+    for directory in missing.into_iter().rev() {
+        if let Some(parent) = directory.parent() {
+            basecraft_platform::files::sync_directory(parent)?;
         }
-        #[cfg(test)]
-        retention_tests::boundary(retention_tests::Stage::AfterRead, path);
-        let size = std::fs::metadata(path)?.len();
-        if size > OBJECT_STORE_LIMIT {
-            return Err(invalid(format!(
-                "original input is {size} bytes; exact recovery retention currently supports at most {OBJECT_STORE_LIMIT} bytes"
-            )));
-        }
-        if let Some(source) = &captured {
-            let size = source.bytes().len() as u64;
-            if size > OBJECT_STORE_LIMIT {
-                return Err(invalid(format!(
-                    "original input is {size} bytes; exact recovery retention currently supports at most {OBJECT_STORE_LIMIT} bytes"
-                )));
-            }
-        }
-        if !dest.exists() {
-            std::fs::create_dir_all(objects_dir(&self.storage_root))?;
-            let fallback;
-            let bytes = if let Some(source) = &captured {
-                source.bytes()
-            } else {
-                fallback = std::fs::read(path)?;
-                #[cfg(feature = "test-counters")]
-                basecraft_io::counters::record_read(path, fallback.len() as u64);
-                if basecraft_io::hash_bytes(&fallback) != hash {
-                    return Err(invalid("source changed while retaining its snapshot"));
-                }
-                &fallback
-            };
-            basecraft_io::write_atomic(&dest, |w| w.write_all(bytes))?;
-        }
-        Ok(())
     }
+    Ok(())
 }

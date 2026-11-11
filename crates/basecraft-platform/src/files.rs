@@ -1,7 +1,6 @@
 //! Ordinary read-only evidence files, without blocking on Unix special files.
 use std::{fs::File, io, path::Path};
 
-
 /// An observed filesystem object, not a permanent or globally unique ID.
 /// IDs may be reused after deletion. All Windows identifier bits are retained.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]

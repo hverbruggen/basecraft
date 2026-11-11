@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DelimitationProgress",
+  "type": "object",
+  "properties": {
+    "completed": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "generation": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "job_id": {
+      "type": "string"
+    },
+    "phase": {
+      "type": "string"
+    },
+    "stage_job_id": {
+      "type": "string"
+    },
+    "total": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "completed",
+    "generation",
+    "job_id",
+    "phase",
+    "stage_job_id",
+    "total"
+  ]
+}

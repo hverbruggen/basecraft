@@ -71,7 +71,7 @@ pub fn fixture_package(root: &Path, source: &str, operation: &str, script: &str)
 /// A request input naming `doc` at its current generation and revision.
 pub fn document(session: &Session, doc: DocId) -> Value {
     json!([{"kind":"document","doc":doc.0.to_string(),
-        "generation":session.generation(doc),"revision":session.revision(doc)}])
+        "generation":session.generation(doc).unwrap(),"revision":session.revision(doc).unwrap()}])
 }
 
 /// A request input naming a project file.
@@ -206,7 +206,8 @@ pub fn tool_runs(session: &Session, doc: DocId) -> Vec<Value> {
         .document_record(doc)
         .unwrap()
         .events
-        .into_iter()
+        .iter()
+        .cloned()
         .filter_map(|event| match event.op {
             basecraft_protocol::Op::ToolRun { params, .. } => Some(params),
             _ => None,
@@ -220,8 +221,9 @@ pub fn tool_run_events(session: &Session, doc: DocId) -> Vec<basecraft_protocol:
         .document_record(doc)
         .unwrap()
         .events
-        .into_iter()
-        .filter(|event| matches!(event.op, basecraft_protocol::Op::ToolRun { .. }))
+        .iter()
+        .filter(|&event| matches!(event.op, basecraft_protocol::Op::ToolRun { .. }))
+        .cloned()
         .collect()
 }
 
@@ -303,7 +305,7 @@ pub fn align_document(
     });
     assert_completed(&outcome);
     assert_eq!(
-        basecraft_ops::provenance::verify(output).unwrap(),
+        basecraft_ops::records::verify(output).unwrap(),
         Vec::<String>::new()
     );
     outcome

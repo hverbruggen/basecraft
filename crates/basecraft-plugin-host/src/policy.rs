@@ -146,27 +146,34 @@ impl SessionPolicy {
         Ok(self)
     }
 
-    /// Compatibility provider for the bundled Zenodo operation, not an arbitrary
-    /// package claiming its ID or declaring the same environment variable.
+    /// Bundled descriptors may request ambient credentials; installed packages
+    /// require explicit grants bound to their accepted code and descriptor.
     pub(crate) fn capture_ambient_credential(
-        self,
+        mut self,
         operation: &RegisteredOperation,
     ) -> Result<Self> {
-        if operation.package.origin == crate::registry::Origin::Bundled
-            && operation.id == "basecraft.zenodo/draft@1"
-            && operation
+        if operation.package.origin == crate::registry::Origin::Bundled {
+            for name in operation
                 .descriptor
-                .credentials
-                .get("zenodo_access")
-                .is_some_and(|name| name == "BASECRAFT_ZENODO_TOKEN")
-            && !self
-                .credential_grants
-                .iter()
-                .any(|grant| grant.matches(operation, "zenodo_access"))
-            && let Ok(value) = std::env::var("BASECRAFT_ZENODO_TOKEN")
-            && !value.is_empty()
-        {
-            return self.with_runtime_credential(operation, "zenodo_access", value);
+                .host
+                .as_ref()
+                .into_iter()
+                .flat_map(|host| &host.ambient_credentials)
+            {
+                if self
+                    .credential_grants
+                    .iter()
+                    .any(|grant| grant.matches(operation, name))
+                {
+                    continue;
+                }
+                if let Some(environment) = operation.descriptor.credentials.get(name)
+                    && let Ok(value) = std::env::var(environment)
+                    && !value.is_empty()
+                {
+                    self = self.with_runtime_credential(operation, name, value)?;
+                }
+            }
         }
         Ok(self)
     }
@@ -285,8 +292,7 @@ impl SessionPolicy {
         Ok((path, relative))
     }
 
-    // Explicit legacy observation backend. Keep its probe order, original IO,
-    // missing-leaf rules and create-parent canonical check for existing callers.
+    // Validate every ancestor before granting access to a resource.
     fn resolve_resource_with(
         &self,
         supplied: &Path,
@@ -333,7 +339,7 @@ impl SessionPolicy {
             || links(&path),
         )?;
         if action.creates() {
-            // Legacy output containment check. Strict observations never call it.
+            // Recheck output containment before accepting a missing leaf.
             let parent = path
                 .parent()
                 .ok_or(AccessError::Denied(Denial::InvalidPath))?
@@ -466,10 +472,11 @@ pub const WORKSPACE_DESTINATION: &str = "workspace";
 
 pub fn is_workspace_destination(operation: &RegisteredOperation, key: &str) -> bool {
     key == WORKSPACE_DESTINATION
-        && matches!(
-            operation.package.manifest.id.as_str(),
-            "basecraft.delimitation" | "basecraft.host"
-        )
+        && operation
+            .descriptor
+            .host
+            .as_ref()
+            .is_some_and(|host| host.species_workspace)
 }
 
 impl CredentialGrant {
@@ -495,8 +502,7 @@ fn resource_directory(symbolic: bool, directory: bool) -> basecraft_ops::access:
     }
 }
 
-// Shared action/type/no-overwrite decisions. The backend supplies only observed
-// kind and deferred link count; the strict backend's count is retained metadata.
+// Shared action/type/no-overwrite decisions.
 fn resource_leaf(
     action: ResourceAction,
     kind: Option<(bool, bool)>,
@@ -527,7 +533,6 @@ fn resource_leaf(
     }
     Ok(())
 }
-
 
 impl Access for SessionPolicy {
     fn boundary(&self) -> Option<&Path> {

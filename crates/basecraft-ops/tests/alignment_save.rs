@@ -260,7 +260,7 @@ fn alignment_interface_rejections_normalization_and_hashes() {
     let mut session = Session::new(dir.path());
     let doc = session.open(&source).unwrap();
     let original_hashes = session.save_hashes(doc).unwrap();
-    let original_revision = session.revision(doc);
+    let original_revision = session.revision(doc).unwrap();
     for op in [
         Op::SeqReplace {
             start: 0,
@@ -286,13 +286,17 @@ fn alignment_interface_rejections_normalization_and_hashes() {
             residue: "AC".into(),
         },
     ] {
-        assert!(matches!(
-            session.apply(doc, op),
-            Err(basecraft_ops::Error::Invalid(_))
-        ));
-        assert_eq!(session.revision(doc), original_revision);
+        // Operations of another document kind are unsupported, not invalid.
+        let wrong_kind = matches!(op, Op::SeqReplace { .. });
+        let result = session.apply(doc, op);
+        assert!(
+            matches!(result, Err(basecraft_ops::Error::Unsupported(_))) == wrong_kind
+                && matches!(result, Err(basecraft_ops::Error::Invalid(_))) != wrong_kind,
+            "{result:?}"
+        );
+        assert_eq!(session.revision(doc).unwrap(), original_revision);
         assert_eq!(session.save_hashes(doc).unwrap(), original_hashes);
-        assert!(!session.can_undo(doc));
+        assert!(!session.can_undo(doc).unwrap());
     }
     session
         .apply(
@@ -309,14 +313,14 @@ fn alignment_interface_rejections_normalization_and_hashes() {
     let expected = RAGGED.replace("A.-", "T.-");
     let hashes = vec![basecraft_io::hash_bytes(expected.as_bytes())];
     assert_eq!(session.save_hashes(doc).unwrap(), hashes);
-    let revision = session.revision(doc);
+    let revision = session.revision(doc).unwrap();
     let wrong = dir.path().join("wrong.gb");
     assert!(matches!(
         session.save(doc, Some(&wrong)),
         Err(basecraft_ops::Error::Invalid(_))
     ));
     assert!(!wrong.exists());
-    assert_eq!(session.revision(doc), revision);
+    assert_eq!(session.revision(doc).unwrap(), revision);
     // Historical saved hashes ignore the target even when writing rejects it.
     assert_eq!(session.save_hashes_at(doc, &wrong).unwrap(), hashes);
     session.undo(doc).unwrap();
@@ -325,7 +329,7 @@ fn alignment_interface_rejections_normalization_and_hashes() {
     session.save(doc, None).unwrap();
     assert_eq!(std::fs::read(&source).unwrap(), expected.as_bytes());
     drop(session);
-    let report = basecraft_ops::replay::replay(dir.path()).unwrap();
+    let report = basecraft_ops::records::replay(dir.path()).unwrap();
     assert!(report.ok(), "{:?}", report.problems);
 }
 
@@ -374,7 +378,7 @@ fn alignment_bursts_respect_actor_group_and_nonadjacent_boundaries() {
         session.undo(doc).unwrap();
         assert_eq!(session.alignment(doc).unwrap().read(0, 0, 8), expected);
     }
-    assert!(!session.can_undo(doc));
+    assert!(!session.can_undo(doc).unwrap());
     for _ in 0..5 {
         session.redo(doc).unwrap();
     }
@@ -389,6 +393,6 @@ fn alignment_bursts_respect_actor_group_and_nonadjacent_boundaries() {
     assert_eq!(edits.len(), 5);
     assert_eq!(edits[0].actor, first);
     assert_eq!(edits[1].actor, second);
-    let report = basecraft_ops::replay::replay(dir.path()).unwrap();
+    let report = basecraft_ops::records::replay(dir.path()).unwrap();
     assert!(report.ok(), "{:?}", report.problems);
 }

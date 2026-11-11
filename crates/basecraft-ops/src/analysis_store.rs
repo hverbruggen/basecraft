@@ -329,7 +329,7 @@ impl ArtifactRun {
                     return Err(invalid("unsafe result binding"));
                 }
                 let value: serde_json::Value =
-                    serde_json::from_slice(&crate::provenance::read_record(&binding)?)?;
+                    serde_json::from_slice(&crate::records::provenance::read_record(&binding)?)?;
                 if value["schema_version"] != 1 || value["result"].as_str() != relative.to_str() {
                     return Err(invalid("unsupported or mismatched result binding"));
                 }
@@ -473,10 +473,14 @@ pub(crate) fn retained_source(root: &Path, hash: &str) -> Result<Option<PathBuf>
             continue;
         }
         let input = crate::input_evidence::read_input(&run)?;
-        if input.state == "preserved" && input.source.as_ref().is_some_and(|r| r.hash == hash) {
+        if input.state == basecraft_protocol::input_records::EvidenceState::Preserved
+            && input.source.as_ref().is_some_and(|r| r.hash == hash)
+        {
             return Ok(Some(run.join("preserved-input")));
         }
-        if input.state == "generated" && input.submitted_hash == hash {
+        if input.state == basecraft_protocol::input_records::EvidenceState::Generated
+            && input.submitted_hash == hash
+        {
             return Ok(Some(run.join("submitted.fasta")));
         }
     }
@@ -517,6 +521,9 @@ pub(crate) fn publish_delimitation(
             submitted_size: std::fs::metadata(target)?.len(),
             transformation: "identity-v1".into(),
             state: "generated".into(),
+            analysis_run: None,
+            proposal_target: None,
+            upstream: Vec::new(),
             extra: std::collections::BTreeMap::new(),
         };
         basecraft_io::write_atomic(&run.artifact("submitted.fasta")?, |w| {
@@ -543,29 +550,27 @@ pub(crate) fn publish_delimitation(
     }
     if let Some(run) = crate::analysis_store::ArtifactRun::for_result(target)? {
         let mut input = crate::input_evidence::read_input(&run)?;
-        let mut upstream = input
-            .extra
-            .get("upstream")
-            .and_then(serde_json::Value::as_array)
-            .cloned()
-            .unwrap_or_default();
+        let mut upstream = input.upstream.clone();
         for dependency in crate::delimitation::dependencies(work)? {
             let dependency = dependency.canonicalize()?;
             if dependency == run {
                 continue;
             }
-            let bytes = crate::provenance::read_record(&dependency.join("manifest.json"))?;
+            let bytes = crate::records::provenance::read_record(&dependency.join("manifest.json"))?;
             let publication: basecraft_protocol::provenance::Publication =
                 serde_json::from_slice(&bytes)?;
-            let reference = serde_json::json!({"bundle":crate::input_evidence::relative(&placement.logical(&run)?, &dependency)?,"id":publication.id,"hash":basecraft_io::hash_bytes(&bytes)});
+            let reference = basecraft_protocol::input_records::UpstreamLink {
+                bundle: (crate::input_evidence::relative(&placement.logical(&run)?, &dependency)?)
+                    .into(),
+                id: publication.id.clone(),
+                hash: basecraft_io::hash_bytes(&bytes),
+            };
             if !upstream.contains(&reference) {
                 upstream.push(reference);
             }
         }
         if !upstream.is_empty() {
-            input
-                .extra
-                .insert("upstream".into(), serde_json::json!(upstream));
+            input.upstream = upstream;
         }
         crate::input_evidence::write_json(&run.join("input.json"), &input)?;
     }

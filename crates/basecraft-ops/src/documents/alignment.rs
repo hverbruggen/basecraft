@@ -11,6 +11,29 @@ use crate::files::{self, Format, HashingWriter, OpenedAlignment};
 use crate::session::{Inverse, normalise};
 
 impl Document for OpenedAlignment {
+    fn retains_companions(&self) -> bool {
+        self.save_refusal.is_some()
+    }
+    fn save_refusal(&self) -> Option<&str> {
+        self.save_refusal
+    }
+    fn accepts(&self, op: &Op) -> bool {
+        matches!(
+            op,
+            Op::AlnReplace { .. }
+                | Op::AlnInsert { .. }
+                | Op::AlnFill { .. }
+                | Op::AlnInsertGaps { .. }
+                | Op::AlnDelete { .. }
+                | Op::AlnShift { .. }
+                | Op::AlnRemoveGapColumns {}
+                | Op::AlnMoveRows { .. }
+                | Op::AlnRenameRow { .. }
+                | Op::AlnRemoveRows { .. }
+                | Op::AlnAddSequences { .. }
+        )
+    }
+
     fn kind(&self) -> crate::files::Kind {
         crate::files::Kind::Alignment
     }
@@ -51,10 +74,6 @@ impl Document for OpenedAlignment {
         let mut prepared = super::PreparedWrite::default();
         prepared.push(target, |w| files::write_alignment(&self.doc, w))?;
         Ok(prepared)
-    }
-
-    fn saved_hashes_are_content_only(&self) -> bool {
-        true
     }
 
     fn saved_hashes(

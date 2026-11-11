@@ -1,7 +1,12 @@
 //! Registered-operation preparation, execution and validated finalization: the
 //! one route every interface uses to run an analysis. Host workflows run their
 //! stages through registered child jobs with the same lifecycle as other runs.
-use basecraft_ops::links::AlignmentLinkExt;
+mod captures;
+mod execute;
+mod finalize;
+mod prepare;
+
+use basecraft_ops::records::AlignmentLinkExt;
 use basecraft_platform::files::{identity, link_count};
 use basecraft_protocol::publication_records::{
     CollectionExportIntent, CollectionIntent, MemberExportReceipt,
@@ -24,7 +29,7 @@ use basecraft_protocol::{
         PublishedArtifact,
     },
     plugin::InvokeResult,
-    provenance::{ArtifactRevision, Completeness, Publication},
+    provenance::{ArtifactRevision, Publication},
     records::{
         ExternalExecution, HostWorkflowExecution, JobIndexPlugin, JobIndexSource, LocalJobIndex,
     },
@@ -99,7 +104,7 @@ pub fn verify_completed_result(
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
         return Err(Error::Protocol("unsafe completed run directory".into()));
     }
-    let execution: Value = serde_json::from_slice(&basecraft_ops::provenance::read_record(
+    let execution: Value = serde_json::from_slice(&basecraft_ops::records::read_record(
         &directory.join("execution.json"),
     )?)?;
     if execution["schema"] != 1
@@ -136,25 +141,25 @@ pub fn verify_completed_result(
         return Err(Error::Protocol("completed receipt has no artifacts".into()));
     }
     let first = Path::new(&outcome.artifacts[0].path);
-    let bundle = basecraft_ops::provenance::bundle_for_result(first);
+    let bundle = basecraft_ops::records::bundle_for_result(first);
     if bundle.canonicalize()? != directory.canonicalize()? {
         return Err(Error::Protocol(
             "retained artifact is bound to a different run".into(),
         ));
     }
-    let issues = basecraft_ops::provenance::verify(first)?;
+    let issues = basecraft_ops::records::verify(first)?;
     if !issues.is_empty() {
         return Err(Error::Protocol(format!(
             "completed publication is not reusable: {}",
             issues.join("; ")
         )));
     }
-    let publication = basecraft_ops::provenance::inspect(first)?;
+    let publication = basecraft_ops::records::inspect(first)?;
     for artifact in &outcome.artifacts {
         let path = Path::new(&artifact.path);
         if !path.canonicalize()?.starts_with(directory.canonicalize()?)
             || path.symlink_metadata()?.file_type().is_symlink()
-            || basecraft_io::hash_file(path).map_err(basecraft_ops::Error::from)? != artifact.digest
+            || basecraft_io::hash_file(path)? != artifact.digest
             || !publication
                 .outputs
                 .iter()
@@ -191,14 +196,13 @@ pub fn lookup_completed_result(
             continue;
         } // Input ledgers and legacy domain runs have no runtime receipt.
         let candidate = (|| -> Result<Option<VerifiedOperationResult>> {
-            let value: Value =
-                serde_json::from_slice(&basecraft_ops::provenance::read_record(&receipt)?)?;
-            if value["schema"] != 1 {
+            let outcome: OperationOutcome =
+                serde_json::from_slice(&basecraft_ops::records::read_record(&receipt)?)?;
+            if outcome.schema != 1 {
                 return Err(Error::Protocol(
                     "unsupported operation receipt version".into(),
                 ));
             }
-            let outcome: OperationOutcome = serde_json::from_value(value)?;
             if !query.matches(&outcome)
                 || outcome.state != basecraft_protocol::operation::RuntimeState::Completed
             {
@@ -241,7 +245,7 @@ pub struct DocumentTarget {
     pub session: String,
     pub generation: u64,
     pub revision: u64,
-    pub record: basecraft_ops::document_record::DocumentRecord,
+    pub record: basecraft_ops::records::DocumentRecord,
     /// History key and submitted hash of the document's input.
     pub input: (String, String),
     /// The saved file the run read, or `None` for an unsaved snapshot.
@@ -257,291 +261,12 @@ pub struct DocumentTarget {
 }
 
 /// An unsaved document's current contents, submitted as a generated input.
-struct GeneratedInput {
-    position: usize,
-    bytes: Vec<u8>,
-    transformation: &'static str,
-    extension: &'static str,
-    dependencies: Vec<PathBuf>,
-}
-
-/// The input view of a session document's current revision.
-fn document_view(
-    session: &basecraft_ops::Session,
-    doc: basecraft_ops::DocId,
-    view: InputView,
-) -> Result<(Vec<u8>, &'static str, &'static str)> {
-    let mut bytes = Vec::new();
-    match view {
-        InputView::AlignedFasta if session.is_alignment(doc) => {
-            session
-                .alignment(doc)?
-                .validate_aligned_input()
-                .map_err(|error| Error::Protocol(error.to_string()))?;
-            basecraft_ops::files::write_alignment(session.alignment(doc)?, &mut bytes)?;
-            Ok((bytes, "canonical-fasta-v1", "afa"))
-        }
-        InputView::UngappedFasta if session.is_alignment(doc) => {
-            basecraft_ops::files::write_ungapped(session.alignment(doc)?, &mut bytes)?;
-            Ok((bytes, "ungapped-fasta-v1", "afa"))
-        }
-        InputView::Newick if session.is_tree(doc) => Ok((
-            session.tree(doc)?.to_newick_with_rooting().into_bytes(),
-            "canonical-newick-v1",
-            "nwk",
-        )),
-        _ => Err(Error::Protocol(
-            "unsupported_input: document kind does not match the input view".into(),
-        )),
-    }
-}
-
-/// Resolved session inputs, before target binding, freezing or run allocation.
-struct PreparationInputs {
-    sequence: Option<SequenceTarget>,
-    document: Option<DocumentTarget>,
-    input_record: basecraft_ops::document_record::DocumentRecord,
-    generated: BTreeMap<String, Vec<GeneratedInput>>,
-    accepted_hashes: BTreeMap<PathBuf, String>,
-    bindings: crate::policy::ResolvedBindings,
-}
-
-/// Validate input bindings against the owning session's current revisions and
-/// capture generated views. The caller keeps the session and all later stages.
-fn prepare_inputs(
-    operation: &RegisteredOperation,
-    request: &OperationRequest,
-    policy: &SessionPolicy,
-    session: &mut Option<&mut basecraft_ops::Session>,
-) -> Result<PreparationInputs> {
-    let mut sequence = None;
-    let mut document = None;
-    let mut input_record = basecraft_ops::document_record::DocumentRecord::empty("Inputs");
-    let mut generated: BTreeMap<String, Vec<GeneratedInput>> = BTreeMap::new();
-    let mut accepted_hashes: BTreeMap<PathBuf, String> = BTreeMap::new();
-    let bindings = if operation.descriptor.family == ExecutionFamily::SequenceProposal {
-        let session = session.as_deref_mut().ok_or_else(|| {
-            Error::Protocol(
-                "sequence operation requires an owning headless/document session".into(),
-            )
-        })?;
-        let name = operation
-            .descriptor
-            .inputs
-            .keys()
-            .next()
-            .ok_or_else(|| Error::Protocol("missing snapshot binding".into()))?;
-        if request.inputs.len() != 1
-            || request
-                .inputs
-                .get(name)
-                .is_none_or(|values| values.len() != 1)
-        {
-            return Err(Error::Protocol(
-                "sequence operation requires exactly its named snapshot input".into(),
-            ));
-        }
-        let (doc, bindings) = match &request.inputs[name][0] {
-            InputReference::File { path } => {
-                let bindings = policy.resolve(operation, request)?;
-                (session.open(&policy.path(path, false)?)?, bindings)
-            }
-            InputReference::Document {
-                doc,
-                generation,
-                revision,
-            } => {
-                let id = basecraft_ops::DocId(
-                    doc.parse()
-                        .map_err(|_| Error::Protocol("invalid session document ID".into()))?,
-                );
-                let checked = session.checked_sequence(id)?;
-                if session.generation(id) != *generation || checked.version() != *revision {
-                    return Err(Error::Protocol(
-                        "stale_revision: snapshot target changed".into(),
-                    ));
-                }
-                for (role, path) in &request.destinations {
-                    if !operation.descriptor.outputs.contains_key(role) {
-                        return Err(Error::Protocol("unknown destination role".into()));
-                    }
-                    policy.path(path, true)?;
-                }
-                (
-                    id,
-                    crate::policy::ResolvedBindings {
-                        inputs: BTreeMap::new(),
-                        documents: BTreeMap::new(),
-                        destinations: BTreeMap::new(),
-                    },
-                )
-            }
-        };
-        let checked = session.checked_sequence(doc)?;
-        sequence = Some(SequenceTarget {
-            doc,
-            session: session.id().into(),
-            generation: session.generation(doc),
-            revision: checked.version(),
-            snapshot: crate::Snapshot::of(session.doc_key(doc), checked)?,
-            dependencies: session
-                .document_record(doc)?
-                .origin_bundles()
-                .map(Path::to_path_buf)
-                .collect(),
-        });
-        bindings
-    } else {
-        let mut bindings = policy.resolve(operation, request)?;
-        let documents = std::mem::take(&mut bindings.documents);
-        if !documents.is_empty() {
-            let session = session.as_deref().ok_or_else(|| {
-                Error::Protocol("document inputs require an owning session".into())
-            })?;
-            for (name, bound) in documents {
-                let view = operation.descriptor.inputs[&name].view;
-                for (position, binding) in bound {
-                    let id = basecraft_ops::DocId(
-                        binding
-                            .doc
-                            .parse()
-                            .map_err(|_| Error::Protocol("invalid session document ID".into()))?,
-                    );
-                    if !session.is_open(id)
-                        || session.generation(id) != binding.generation
-                        || session.revision(id) != binding.revision
-                    {
-                        return Err(Error::Protocol(
-                            "stale_revision: input document changed".into(),
-                        ));
-                    }
-                    if view == InputView::AlignedFasta && session.is_alignment(id) {
-                        session
-                            .alignment(id)?
-                            .validate_aligned_input()
-                            .map_err(|error| Error::Protocol(error.to_string()))?;
-                    }
-                    input_record.include_input(&session.document_record(id)?);
-                    let saved = session.saved_source(id)?;
-                    if document.is_none() {
-                        let key = session.doc_key(id);
-                        document = Some(DocumentTarget {
-                            doc: id,
-                            session: session.id().into(),
-                            generation: binding.generation,
-                            revision: binding.revision,
-                            record: session.document_record(id)?,
-                            input: (
-                                if view == InputView::UngappedFasta {
-                                    format!("{key} (ungapped)")
-                                } else {
-                                    key.into()
-                                },
-                                String::new(),
-                            ),
-                            saved: saved.as_ref().map(|(path, _, _)| path.clone()),
-                            path: session.root().join(session.doc_key(id)),
-                            receives_results: false,
-                            save: false,
-                        });
-                    }
-                    // A clean document is its saved file; unsaved edits are
-                    // submitted as a generated snapshot of the current revision.
-                    if let Some((path, _, hash)) = saved {
-                        let files = bindings.inputs.entry(name.clone()).or_default();
-                        files.insert(position.min(files.len()), path.clone());
-                        accepted_hashes.insert(path, hash);
-                    } else {
-                        let (bytes, transformation, extension) = document_view(session, id, view)?;
-                        generated
-                            .entry(name.clone())
-                            .or_default()
-                            .push(GeneratedInput {
-                                position,
-                                bytes,
-                                transformation,
-                                extension,
-                                dependencies: session
-                                    .document_record(id)?
-                                    .origin_bundles()
-                                    .map(Path::to_path_buf)
-                                    .collect(),
-                            });
-                    }
-                }
-            }
-            let generated_count: usize = generated.values().map(Vec::len).sum();
-            if generated_count > 1 {
-                return Err(Error::Protocol(
-                    "unsupported_input: save the document before combining it with other inputs"
-                        .into(),
-                ));
-            }
-        }
-        bindings
-    };
-    Ok(PreparationInputs {
-        sequence,
-        document,
-        input_record,
-        generated,
-        accepted_hashes,
-        bindings,
-    })
-}
-
-/// Resolve the explicit target in its owning session before freezing inputs.
-fn prepare_target(
-    request: &OperationRequest,
-    policy: &SessionPolicy,
-    session: &mut Option<&mut basecraft_ops::Session>,
-) -> Result<Option<(basecraft_ops::DocId, bool)>> {
-    let target = match &request.target {
-        None => None,
-        Some(reference) => {
-            let session = session.as_deref_mut().ok_or_else(|| {
-                Error::Protocol("a target document needs an owning session".into())
-            })?;
-            Some(match reference {
-                InputReference::File { path } => {
-                    if !policy.document_write {
-                        return Err(Error::Protocol(
-                            "permission_denied: saving a target document needs writes".into(),
-                        ));
-                    }
-                    (session.open(&policy.path(path, false)?)?, true)
-                }
-                InputReference::Document {
-                    doc,
-                    generation,
-                    revision,
-                } => {
-                    let id = basecraft_ops::DocId(
-                        doc.parse()
-                            .map_err(|_| Error::Protocol("invalid session document ID".into()))?,
-                    );
-                    if !session.is_open(id)
-                        || session.generation(id) != *generation
-                        || session.revision(id) != *revision
-                    {
-                        return Err(Error::Protocol(
-                            "stale_revision: target document changed".into(),
-                        ));
-                    }
-                    (id, false)
-                }
-            })
-        }
-    };
-    Ok(target)
-}
-
 pub struct PreparedOperation {
     pub(crate) lifecycle: crate::lifecycle::Lifecycle,
     pub(crate) input_diagnostics: Vec<String>,
     pub sequence: Option<SequenceTarget>,
     pub document: Option<DocumentTarget>,
-    pub(crate) input_record: basecraft_ops::document_record::DocumentRecord,
+    pub(crate) input_record: basecraft_ops::records::DocumentRecord,
     pub operation: RegisteredOperation,
     pub run: ArtifactRun,
     pub request: OperationRequest,
@@ -559,480 +284,6 @@ pub struct PreparedOperation {
 }
 
 impl PreparedOperation {
-    /// Validations precede durable records. Only an accepted execution allocates
-    /// storage; list/describe/denied calls never arrive here.
-    pub fn prepare(
-        operation: RegisteredOperation,
-        request: OperationRequest,
-        policy: SessionPolicy,
-        initiator: String,
-        mut session: Option<&mut basecraft_ops::Session>,
-        registry: &crate::registry::Registry,
-    ) -> Result<Self> {
-        policy.check(&operation)?;
-        let policy = policy.capture_ambient_credential(&operation)?;
-        let lifecycle = crate::lifecycle::Lifecycle::for_operation(&operation)?;
-        let workflow_registry = if operation.descriptor.host_workflow.is_some() {
-            registry.resolve("basecraft.delimitation/haplotypes@1", None)?;
-            if operation.descriptor.host_workflow.as_deref() != Some("asap_alignment") {
-                registry.resolve("basecraft.distance/tree@1", None)?;
-            }
-            Some(Arc::new(registry.clone()))
-        } else {
-            None
-        };
-        let PreparationInputs {
-            sequence,
-            mut document,
-            mut input_record,
-            generated,
-            accepted_hashes,
-            bindings,
-        } = prepare_inputs(&operation, &request, &policy, &mut session)?;
-        let target = prepare_target(&request, &policy, &mut session)?;
-        let input_diagnostics = lifecycle.verify_retained(&bindings.inputs)?;
-        let mut supplied_parameters = request.parameters.clone();
-        if lifecycle.external() && supplied_parameters.get("contact_email").is_none() {
-            let contact = std::env::var("BASECRAFT_BLAST_CONTACT_EMAIL").map_err(|_| {
-                Error::Protocol(
-                    "Configure BASECRAFT_BLAST_CONTACT_EMAIL or supply contact_email for NCBI"
-                        .into(),
-                )
-            })?;
-            supplied_parameters["contact_email"] = json!(contact);
-        }
-        let parameters =
-            contract::normalize_parameters(&operation.descriptor, &supplied_parameters)?;
-        operation.package.verify()?;
-        let scratch = tempfile::Builder::new()
-            .prefix("basecraft-operation-")
-            .tempdir()?;
-        let mut frozen_inputs = BTreeMap::new();
-        let mut sources = Vec::new();
-        let mut submission_queries = Vec::new();
-        for (name, paths) in bindings.inputs {
-            let binding = &operation.descriptor.inputs[&name];
-            let mut values = Vec::new();
-            for (index, source) in paths.into_iter().enumerate() {
-                let path = scratch.path().join(format!(
-                    "{name}-{index}.{}",
-                    if matches!(
-                        binding.view,
-                        InputView::AlignedFasta | InputView::UngappedFasta
-                    ) {
-                        "afa"
-                    } else {
-                        source
-                            .extension()
-                            .and_then(|e| e.to_str())
-                            .unwrap_or("input")
-                    }
-                ));
-                let original_hash = file_tool::freeze_file(&source, &path)?;
-                if name == "cache" && operation.package.manifest.id == "basecraft.distance" {
-                    let issues = basecraft_ops::provenance::verify(&source)?;
-                    if !issues.is_empty() {
-                        return Err(Error::Protocol(format!(
-                            "distance cache evidence is not reusable: {}",
-                            issues.join("; ")
-                        )));
-                    }
-                }
-
-                if accepted_hashes
-                    .get(&source)
-                    .is_some_and(|accepted| accepted != &original_hash)
-                {
-                    return Err(Error::Protocol(
-                        "source changed since opening; reopen it before analysis".into(),
-                    ));
-                }
-                if lifecycle.external() {
-                    submission_queries.extend(basecraft_ops::blast::from_file_named(
-                        &path,
-                        &source.display().to_string(),
-                    )?);
-                }
-                let transformation = match binding.view {
-                    // A sequence file is frozen unchanged; its sealed snapshot
-                    // is a separate generated input recorded below.
-                    InputView::Bytes | InputView::SequenceSnapshot => "identity-v1",
-                    InputView::AlignedFasta | InputView::UngappedFasta => {
-                        let basecraft_ops::files::Loaded::Alignment(alignment) =
-                            basecraft_ops::files::load(&path)?
-                        else {
-                            return Err(Error::Protocol("input view requires an alignment".into()));
-                        };
-                        let mut output = Vec::new();
-                        if binding.view == InputView::AlignedFasta {
-                            alignment
-                                .doc
-                                .validate_aligned_input()
-                                .map_err(|error| Error::Protocol(error.to_string()))?;
-                            basecraft_ops::files::write_alignment(&alignment.doc, &mut output)?;
-                        } else {
-                            basecraft_ops::files::write_ungapped(&alignment.doc, &mut output)?;
-                        }
-                        std::fs::write(&path, output)?;
-                        if binding.view == InputView::AlignedFasta {
-                            "canonical-fasta-v1"
-                        } else {
-                            "ungapped-fasta-v1"
-                        }
-                    }
-                    InputView::Newick => {
-                        // Validate the declared tree without substituting a fit/preparation workflow.
-                        basecraft_ops::files::load_tree(&path)?;
-                        "identity-v1"
-                    }
-                };
-                if !accepted_hashes.contains_key(&source)
-                    && let Ok(record) =
-                        basecraft_ops::document_record::DocumentRecord::from_file(&source)
-                {
-                    input_record.include_input(&record);
-                    if basecraft_io::hash_file(&source).map_err(basecraft_ops::Error::from)?
-                        != original_hash
-                    {
-                        return Err(Error::Protocol(
-                            "source changed while capturing its history".into(),
-                        ));
-                    }
-                }
-                let submitted_hash =
-                    basecraft_io::hash_file(&path).map_err(basecraft_ops::Error::from)?;
-                sources.push((
-                    source,
-                    original_hash,
-                    submitted_hash,
-                    transformation,
-                    path.clone(),
-                ));
-                values.push(path.display().to_string());
-            }
-            for input in generated.get(&name).into_iter().flatten() {
-                let path = scratch
-                    .path()
-                    .join(format!("{name}-document.{}", input.extension));
-                std::fs::write(&path, &input.bytes)?;
-                values.insert(input.position.min(values.len()), path.display().to_string());
-            }
-            frozen_inputs.insert(name.clone(), values);
-        }
-        if let Some(target) = &mut document {
-            target.input.1 = match &target.saved {
-                Some(saved) => sources
-                    .iter()
-                    .find(|(source, ..)| source == saved)
-                    .map(|(_, _, submitted, ..)| submitted.clone()),
-                None => generated
-                    .values()
-                    .flatten()
-                    .next()
-                    .map(|input| basecraft_io::hash_bytes(&input.bytes)),
-            }
-            .ok_or_else(|| Error::Protocol("document input was not submitted".into()))?;
-        }
-        let submission_plan = if lifecycle.external() {
-            let plan = basecraft_ops::blast::prepare(&submission_queries, &parameters)?;
-            basecraft_ops::blast::authorize(&plan, &parameters)?;
-            Some(plan)
-        } else {
-            None
-        };
-        let run_id = ulid::Ulid::generate().to_string();
-        // Runs and their input ledgers are named by the first exported file,
-        // so a save conflict says what depends on the input.
-        let exported_name = request
-            .destinations
-            .values()
-            .find_map(|destination| Path::new(destination).file_name())
-            .map(|name| name.to_string_lossy().into_owned());
-        let anchor = policy
-            .root
-            .join(exported_name.as_deref().unwrap_or("operation"));
-        let anchor = if policy.artifact_write {
-            anchor
-        } else {
-            let paths = basecraft_platform::paths::AppPaths::discover()
-                .map_err(|error| Error::Protocol(error.to_string()))?;
-            let directory = paths.state.join("operation-jobs").join(&run_id);
-            std::fs::create_dir_all(&directory)?;
-            directory.join("operation")
-        };
-        // Freeze/serialize before locking. Publication rechecks each exact original
-        // hash and keeps ownership, exemptions and primary links under one guard.
-        let sequence_payload = sequence
-            .as_ref()
-            .map(|target| target.snapshot.payload())
-            .transpose()?;
-        let submission_payload = submission_plan
-            .as_ref()
-            .map(serde_json::to_vec)
-            .transpose()?;
-        let mutation = input_evidence::Mutation::begin()?;
-        let run = ArtifactRun::create(&anchor, &run_id)?;
-        let mut ledger_inputs = Vec::new();
-        let mut upstream = Vec::new();
-        let mut first_input = None;
-        let mut evidence: BTreeMap<String, Vec<InvocationInputEvidence>> = BTreeMap::new();
-        for (source, original_hash, submitted_hash, transformation, frozen) in sources {
-            let ledger = mutation.reference_input_with_dependencies(
-                &anchor,
-                &source,
-                &original_hash,
-                &[],
-                &format!("Input for {}", operation.id),
-            )?;
-            let mut record = mutation.read_input(ledger.directory())?;
-            record.extra.insert(
-                "analysis_run".into(),
-                json!(input_evidence::relative(
-                    ledger.directory(),
-                    run.directory()
-                )?),
-            );
-            record.submitted_hash = submitted_hash;
-            record.submitted_size = std::fs::metadata(&frozen)?.len();
-            record.transformation = transformation.into();
-            if sequence.is_some() {
-                // The run reads this file and proposes edits to the same
-                // document; saving them must not count as replacing an
-                // analysis input.
-                record
-                    .extra
-                    .insert(input_evidence::PROPOSAL_TARGET.into(), json!(true));
-            }
-            mutation.write_input(ledger.directory(), &record)?;
-            if let Some(role) = frozen_inputs
-                .iter()
-                .find(|(_, paths)| paths.contains(&frozen.display().to_string()))
-                .map(|(role, _)| role.clone())
-            {
-                evidence
-                    .entry(role)
-                    .or_default()
-                    .push(InvocationInputEvidence {
-                        original_path: Some(source.display().to_string()),
-                        source_hash: Some(original_hash.clone()),
-                        submitted_hash: record.submitted_hash.clone(),
-                        transformation: record.transformation.clone(),
-                        run_directory: ledger.directory().display().to_string(),
-                    });
-            }
-            let manifest = ledger.artifact("manifest.json")?;
-            upstream.push(json!({"bundle":input_evidence::relative(run.directory(),ledger.directory())?,"id":ledger.id(),"hash":basecraft_io::hash_file(&manifest).map_err(basecraft_ops::Error::from)?}));
-            let mut reference = record
-                .source
-                .clone()
-                .ok_or_else(|| Error::Protocol("missing source reference".into()))?;
-            reference.path = input_evidence::relative(run.directory(), &source)?;
-            ledger_inputs.push(ArtifactRevision {
-                id: format!("{}:source", ledger.id()),
-                logical_name: source
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into_owned(),
-                hash: original_hash,
-                size: reference.stamp.size,
-                retained: None,
-                reference: Some(reference.clone()),
-            });
-            if first_input.is_none() {
-                record.source = Some(reference);
-                first_input = Some((record, ledger.directory().to_path_buf()));
-            }
-        }
-        // Reuse a normal primary ledger and its established upstream links. Each
-        // contributing original also owns its own normal reference ledger.
-        let primary_input_owner = first_input.as_ref().map(|(_, owner)| owner.clone());
-        if let Some((mut input, _)) = first_input {
-            input.extra.insert("upstream".into(), json!(upstream));
-            mutation.write_input(run.directory(), &input)?;
-            // The save guard names a registered run by its run.json and treats a
-            // missing one as damage, as for every other registered run. A run
-            // without exports is named by its operation.
-            let result = exported_name
-                .clone()
-                .unwrap_or_else(|| operation.id.clone());
-            input_evidence::write_json(
-                &run.artifact("run.json")?,
-                &serde_json::to_value(basecraft_protocol::records::AnalysisRun {
-                    schema_version: 1,
-                    id: run.id().into(),
-                    result: Some(result),
-                    status: basecraft_protocol::records::AnalysisRunStatus::Prepared,
-                    outputs: None,
-                    extra: BTreeMap::new(),
-                })?,
-            )?;
-            mutation.register(&run)?;
-        }
-        for (name, inputs) in &generated {
-            for input in inputs {
-                let mut dependencies = sources_from_upstream(run.directory())?;
-                dependencies.extend(input.dependencies.iter().cloned());
-                mutation.link_generated_input(
-                    &run,
-                    &dependencies,
-                    &input.bytes,
-                    input.transformation,
-                    "Document snapshot",
-                )?;
-                // The store's format-neutral name for retained generated bytes,
-                // which links, workspaces, Save As and replay look up.
-                let retained = "submitted.fasta".to_owned();
-                basecraft_io::write_atomic(&run.artifact(&retained)?, |w| {
-                    std::io::Write::write_all(w, &input.bytes)
-                })
-                .map_err(basecraft_ops::Error::from)?;
-                let submitted_hash = basecraft_io::hash_bytes(&input.bytes);
-                evidence
-                    .entry(name.clone())
-                    .or_default()
-                    .push(InvocationInputEvidence {
-                        original_path: None,
-                        source_hash: None,
-                        submitted_hash: submitted_hash.clone(),
-                        transformation: input.transformation.into(),
-                        run_directory: run.directory().display().to_string(),
-                    });
-                ledger_inputs.push(ArtifactRevision {
-                    id: format!("{}:document", run.id()),
-                    logical_name: retained.clone(),
-                    hash: submitted_hash,
-                    size: input.bytes.len() as u64,
-                    retained: Some(retained),
-                    reference: None,
-                });
-            }
-        }
-        if let Some(target) = &sequence {
-            let payload = sequence_payload
-                .as_deref()
-                .ok_or_else(|| Error::Protocol("missing sequence snapshot".into()))?;
-            let mut dependencies = sources_from_upstream(run.directory())?;
-            dependencies.extend(target.dependencies.iter().cloned());
-            mutation.link_generated_input(
-                &run,
-                &dependencies,
-                payload,
-                "sequence-arrow-buffers-v1",
-                "Sequence operation snapshot",
-            )?;
-            let name = "snapshot.arrow-pair";
-            basecraft_io::write_atomic(&run.artifact(name)?, |w| {
-                std::io::Write::write_all(w, payload)
-            })
-            .map_err(basecraft_ops::Error::from)?;
-            ledger_inputs.push(ArtifactRevision {
-                id: format!("{}:snapshot", run.id()),
-                logical_name: name.into(),
-                hash: basecraft_io::hash_bytes(payload),
-                size: payload.len() as u64,
-                retained: Some(name.into()),
-                reference: None,
-            });
-        }
-        if let Some(payload) = &submission_payload {
-            let path = run.artifact("query-preparation.json")?;
-            basecraft_io::write_atomic(&path, |w| std::io::Write::write_all(w, payload))
-                .map_err(basecraft_ops::Error::from)?;
-            let dependencies = sources_from_upstream(run.directory())?;
-            mutation.link_generated_input(
-                &run,
-                &dependencies,
-                payload,
-                "blast-query-preparation-v1",
-                "Frozen BLAST submission",
-            )?;
-            ledger_inputs.push(ArtifactRevision {
-                id: format!("{}:queries", run.id()),
-                logical_name: "query-preparation.json".into(),
-                hash: basecraft_io::hash_bytes(payload),
-                size: payload.len() as u64,
-                retained: Some("query-preparation.json".into()),
-                reference: None,
-            });
-            frozen_inputs.insert("queries".into(), vec![path.display().to_string()]);
-        }
-        drop(mutation);
-        let mut outputs = BTreeMap::new();
-        for (name, binding) in &operation.descriptor.outputs {
-            let path = if operation.descriptor.host_workflow.is_some() {
-                run.artifact("workflow")?
-            } else {
-                run.staging(name)?
-            };
-            if binding.collection {
-                std::fs::create_dir(&path)?;
-            }
-            outputs.insert(name.clone(), path.display().to_string());
-        }
-        let context = InvocationContext {
-            schema: 1,
-            operation: operation.id.clone(),
-            run_id,
-            inputs: frozen_inputs,
-            outputs,
-            cpu_threads: crate::compute::effective_allocation()?,
-            cancel_file: run.artifact("cancel")?.display().to_string(),
-            progress_file: run.artifact("progress")?.display().to_string(),
-            input_evidence: evidence,
-            legacy_parameters: BTreeMap::new(),
-        };
-        input_evidence::write_json(&run.artifact("descriptor.json")?, &operation.descriptor)?;
-        input_evidence::write_json(&run.artifact("request.json")?, &request)?;
-        let mut prepared = Self {
-            lifecycle,
-            input_diagnostics,
-            input_record,
-            sequence,
-            document,
-            operation,
-            run,
-            request,
-            granted_parameters: std::sync::Mutex::new(parameters.clone()),
-            parameters,
-            context,
-            policy,
-            ledger_inputs,
-            primary_input_owner,
-            initiator,
-            started: basecraft_platform::now_rfc3339(),
-            workflow_registry,
-            _scratch: scratch,
-        };
-        if let Some((target, save)) = target {
-            let session = session.as_deref().ok_or_else(|| {
-                Error::Protocol("a target document needs an owning session".into())
-            })?;
-            prepared.bind_target(session, target, save)?;
-        }
-        if prepared.operation.package.manifest.id == "basecraft.distance"
-            && prepared.parameters["bootstrap_destination"] == "working"
-            && prepared.parameters["bootstrap"].as_u64().unwrap_or(0) > 0
-        {
-            for suffix in [".nex", ".partial.nex"] {
-                let member = format!("bootstrap-{}{suffix}", prepared.run.id());
-                prepared
-                    .policy
-                    .path(&prepared.bootstrap_destination(Path::new(&member)), true)?;
-            }
-        }
-        if prepared
-            .operation
-            .descriptor
-            .inputs
-            .values()
-            .any(|binding| binding.retain)
-        {
-            prepared.retain_inputs()?;
-        }
-        Ok(prepared)
-    }
-
     /// Keep path-bearing results independent of temporary execution inputs.
     /// Use the existing input ledgers and preserve-copy policy for ancestry;
     /// submitted (possibly transformed) bytes remain in the normal run store.
@@ -1089,7 +340,7 @@ impl PreparedOperation {
                         Path::new(&owner.run_directory)
                     )?),
                 );
-                input.state = "preserved".into();
+                input.state = basecraft_protocol::input_records::EvidenceState::Preserved;
                 mutation.write_input(self.run.directory(), &input)?;
             }
         }
@@ -1133,23 +384,21 @@ impl PreparedOperation {
         );
         for directory in ledgers {
             let mut input = mutation.read_input(&directory)?;
-            input.extra.insert(
-                "analysis_run".into(),
-                json!(input_evidence::relative(&directory, parent)?),
-            );
-            let upstream = input
-                .extra
-                .entry("upstream".into())
-                .or_insert_with(|| json!([]))
-                .as_array_mut()
-                .ok_or_else(|| Error::Protocol("invalid stage ancestry".into()))?;
+            input.analysis_run = Some(input_evidence::relative(&directory, parent)?);
+            let upstream = &mut input.upstream;
             for dependency in &dependencies {
-                let bytes =
-                    basecraft_ops::provenance::read_record(&dependency.join("manifest.json"))?;
+                let bytes = basecraft_ops::records::read_record(&dependency.join("manifest.json"))?;
                 let publication: Publication = serde_json::from_slice(&bytes)?;
-                if !upstream.iter().any(|entry| entry["id"] == publication.id) {
-                    upstream.push(json!({"bundle":input_evidence::relative(&directory, &dependency.canonicalize()?)?,
-                        "id":publication.id,"hash":basecraft_io::hash_bytes(&bytes)}));
+                if !upstream.iter().any(|entry| entry.id == publication.id) {
+                    upstream.push(basecraft_protocol::input_records::UpstreamLink {
+                        bundle: (input_evidence::relative(
+                            &directory,
+                            &dependency.canonicalize()?,
+                        )?)
+                        .into(),
+                        id: publication.id.clone(),
+                        hash: basecraft_io::hash_bytes(&bytes),
+                    });
                 }
             }
             mutation.write_input(&directory, &input)?;
@@ -1172,23 +421,20 @@ impl PreparedOperation {
     /// for ordinary inputs. Stage publications remain separate immutable origins.
     pub(crate) fn publication_input_record(
         &self,
-    ) -> Result<basecraft_ops::document_record::DocumentRecord> {
+    ) -> Result<basecraft_ops::records::DocumentRecord> {
         let mut record = self.input_record.clone();
         let stages = self.run.artifact("stages.json")?;
         if stages.is_file() {
             let outcomes: Vec<OperationOutcome> =
-                serde_json::from_slice(&basecraft_ops::provenance::read_record(&stages)?)?;
+                serde_json::from_slice(&basecraft_ops::records::read_record(&stages)?)?;
             for stage in outcomes {
                 if stage.state != basecraft_protocol::operation::RuntimeState::Completed {
                     continue;
                 }
                 if let Some(artifact) = stage.artifacts.first() {
-                    let publication =
-                        basecraft_ops::provenance::inspect(Path::new(&artifact.path))?;
+                    let publication = basecraft_ops::records::inspect(Path::new(&artifact.path))?;
                     record.include_input(
-                        &basecraft_ops::document_record::DocumentRecord::from_publication(
-                            &publication,
-                        ),
+                        &basecraft_ops::records::DocumentRecord::from_publication(&publication),
                     );
                 }
             }
@@ -1196,195 +442,6 @@ impl PreparedOperation {
         Ok(record)
     }
 
-    pub fn execute(&self, cancelled: Arc<AtomicBool>) -> Result<InvokeResult> {
-        if self.operation.descriptor.host_workflow.is_some() {
-            return self.execute_workflow(&cancelled);
-        }
-        let permit = crate::compute::reserve_cpu(
-            self.context.cpu_threads,
-            Some(Path::new(&self.context.cancel_file)),
-        )?;
-        if cancelled.load(Ordering::Acquire) {
-            return Err(Error::Protocol("cancelled before spawn".into()));
-        }
-        self.operation.package.verify()?;
-        let contact = self.lifecycle.reserve(&cancelled)?;
-        let mut process = PluginProcess::spawn_with_credentials(
-            &self.operation.package.manifest,
-            self.operation
-                .package
-                .interpreter
-                .as_deref()
-                .ok_or_else(|| Error::Protocol("plugin runtime is unavailable".into()))?,
-            permit.threads(),
-            &self.policy.credentials_for(&self.operation),
-        )?;
-        self.lifecycle.configure(&mut process, cancelled);
-        let mut context = self.context.clone();
-        context.cpu_threads = permit.threads();
-        let effective = Value::Object(crate::compute::parameters_for(
-            &self.operation.descriptor,
-            self.parameters
-                .as_object()
-                .cloned()
-                .ok_or_else(|| Error::Protocol("parameters are not an object".into()))?,
-            permit.threads(),
-        ));
-        contract::BoundedSchema::compile(&self.operation.descriptor.parameters)?
-            .validate(&effective)?;
-        *self
-            .granted_parameters
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = effective.clone();
-        let mut result = process.invoke_context(
-            &self.operation.descriptor.implementation,
-            effective.clone(),
-            context.clone(),
-            self.sequence.as_ref().map(|target| &target.snapshot),
-        );
-        let teardown = process.finish();
-        let contact_evidence = contact
-            .as_ref()
-            .map_or(Ok(()), crate::lifecycle::ContactPermit::complete);
-        if (self.lifecycle.external() || self.lifecycle.remote_draft()) && result.is_err() {
-            let receipt = Path::new(&self.context.outputs["receipt"]);
-            if receipt.is_file() {
-                result = (|| -> Result<InvokeResult> {
-                    let metadata = receipt.symlink_metadata()?;
-                    if !metadata.is_file()
-                        || metadata.file_type().is_symlink()
-                        || link_count(receipt)? != 1
-                    {
-                        return Err(Error::Protocol(
-                            "unsafe retained receipt; submission status unknown".into(),
-                        ));
-                    }
-                    let data =
-                        serde_json::from_slice(&basecraft_ops::provenance::read_record(receipt)?)?;
-                    Ok(InvokeResult {
-                        data: Some(Box::new(data)),
-                        artifacts: vec![PluginArtifact {
-                            role: "receipt".into(),
-                            path: ".".into(),
-                        }],
-                        ..InvokeResult::default()
-                    })
-                })();
-            } else {
-                result = Err(Error::Protocol(format!(
-                    "submission status unknown: {}; no validated receipt; do not resubmit automatically",
-                    result.unwrap_err()
-                )));
-            }
-        }
-        let (stdout, stderr) = process.captured_output();
-        let evidence = input_evidence::write_json(
-            &self.run.artifact("execution.json")?,
-            &serde_json::to_value(ExternalExecution {
-                schema: 1,
-                operation: self.operation.id.clone(),
-                package_version: self.operation.package.manifest.version.clone(),
-                package_digest: self.operation.package.digest.clone(),
-                descriptor_digest: self.operation.descriptor_digest.clone(),
-                runtime: self
-                    .operation
-                    .package
-                    .manifest
-                    .managed_runtime
-                    .as_ref()
-                    .map(serde_json::to_value)
-                    .transpose()?,
-                interpreter: self.operation.package.interpreter.clone(),
-                initiator: self.initiator.clone(),
-                executor: self.operation.package.manifest.id.clone(),
-                process_instance: basecraft_platform::process_instance().into(),
-                context: serde_json::to_value(&context)?,
-                requested_parameters: self.request.parameters.clone(),
-                effective_parameters: effective,
-                stdout,
-                stderr,
-                tool: result
-                    .as_ref()
-                    .ok()
-                    .and_then(|r| r.tool.as_ref())
-                    .map(serde_json::to_value)
-                    .transpose()?,
-                execution: result
-                    .as_ref()
-                    .ok()
-                    .and_then(|r| r.execution.as_ref())
-                    .map(serde_json::to_value)
-                    .transpose()?,
-                extra: BTreeMap::new(),
-            })?,
-        );
-        match result {
-            Ok(mut result) => {
-                if self.lifecycle.external() {
-                    let diagnostics: Vec<_> = [
-                        teardown.err(),
-                        evidence.err().map(Error::from),
-                        contact_evidence.err(),
-                    ]
-                    .into_iter()
-                    .flatten()
-                    .map(|e| e.to_string())
-                    .collect();
-                    if !diagnostics.is_empty() {
-                        result.message = Some(format!(
-                            "Local execution evidence incomplete: {}",
-                            diagnostics.join("; ")
-                        ));
-                    }
-                } else {
-                    teardown?;
-                    evidence?;
-                }
-                Ok(result)
-            }
-            Err(error) => {
-                let error = if self.lifecycle.external() {
-                    Error::Protocol(format!(
-                        "Submission status unknown unless retained receipt proves acceptance: {error}. Do not automatically resubmit"
-                    ))
-                } else {
-                    error
-                };
-                match evidence {
-                    Ok(()) => Err(error),
-                    Err(evidence) => Err(Error::Protocol(format!(
-                        "{error}; execution evidence write failed: {evidence}"
-                    ))),
-                }
-            }
-        }
-    }
-
-    /// Validate the returned identity separately from fallible artifact writes,
-    /// so an accepted external side effect remains available in a partial outcome.
-    pub(crate) fn submission_identity(&self, result: &InvokeResult) -> Result<()> {
-        if !self.lifecycle.external() {
-            return Ok(());
-        }
-        contract::BoundedSchema::compile(&self.operation.descriptor.result)?
-            .validate(result.data.as_deref().unwrap_or(&Value::Null))?;
-        let plan: Value = serde_json::from_slice(&basecraft_ops::provenance::read_record(
-            &self.run.artifact("query-preparation.json")?,
-        )?)?;
-        let receipt = Path::new(&self.context.outputs["receipt"]);
-        if let Ok(metadata) = receipt.symlink_metadata()
-            && (!metadata.is_file()
-                || metadata.file_type().is_symlink()
-                || link_count(receipt)? != 1)
-        {
-            return Err(Error::Protocol(
-                "unsafe allocated receipt; submission status unknown".into(),
-            ));
-        }
-        self.lifecycle.validate_identity(result, &plan)
-    }
-
-    /// Validate every member before crossing the publication boundary.
     pub fn validate_result(&self, result: &InvokeResult) -> Result<Vec<(String, PathBuf, String)>> {
         contract::BoundedSchema::compile(&self.operation.descriptor.result)?
             .validate(result.data.as_deref().unwrap_or(&Value::Null))?;
@@ -1459,16 +516,14 @@ impl PreparedOperation {
                 ));
             }
             *counts.entry(artifact.role.clone()).or_default() += 1;
-            let hash = basecraft_io::hash_file(&path).map_err(basecraft_ops::Error::from)?;
+            let hash = basecraft_io::hash_file(&path)?;
             validated.push((artifact.role.clone(), path, hash));
         }
         // Add the producer's support semantics before sealing the collection so
         // retained results, explicit exports, verification and repair agree.
-        if let Some((name, kind)) = file_tool::producer_support(
-            &self.operation.package.manifest.id,
-            &self.operation.descriptor.implementation,
-            &self.parameters,
-        ) {
+        if let Some((name, kind)) =
+            file_tool::producer_support(&self.operation.descriptor, &self.parameters)
+        {
             let trees: Vec<_> = validated
                 .iter()
                 .filter(|(role, path, _)| {
@@ -1495,8 +550,7 @@ impl PreparedOperation {
                         return Err(Error::Protocol("duplicate support sidecar".into()));
                     }
                     *counts.entry("artifacts".into()).or_default() += 1;
-                    let hash =
-                        basecraft_io::hash_file(&sidecar).map_err(basecraft_ops::Error::from)?;
+                    let hash = basecraft_io::hash_file(&sidecar)?;
                     // Bound tree reads use the run-root sidecar; the collection
                     // member carries the same initial metadata when exported.
                     let hidden = self.run.artifact(
@@ -1509,8 +563,7 @@ impl PreparedOperation {
                         let mut input = std::fs::File::open(&sidecar)?;
                         std::io::copy(&mut input, writer)?;
                         Ok(())
-                    })
-                    .map_err(basecraft_ops::Error::from)?;
+                    })?;
                     validated.push(("artifacts".into(), sidecar, hash));
                 }
             }
@@ -1532,7 +585,7 @@ impl PreparedOperation {
             return Err(Error::Protocol("undeclared extra staged outputs".into()));
         }
         if self.lifecycle.external() {
-            let plan: Value = serde_json::from_slice(&basecraft_ops::provenance::read_record(
+            let plan: Value = serde_json::from_slice(&basecraft_ops::records::read_record(
                 &self.run.artifact("query-preparation.json")?,
             )?)?;
             self.lifecycle.validate_receipt(
@@ -1548,496 +601,6 @@ impl PreparedOperation {
 
     /// Record a receipt after each write; later failure remains partial and all
     /// pending/retained bytes remain available for explicit repair, never retry execution.
-    pub fn finalize(
-        &self,
-        result: &InvokeResult,
-        validated: &[(String, PathBuf, String)],
-        outcome: &mut OperationOutcome,
-        repair: bool,
-    ) -> Result<()> {
-        if self.lifecycle.external() && !self.run.artifact("execution.json")?.is_file() {
-            return Err(Error::Protocol("execution evidence unavailable; retain RID and receipt; publication-only repair cannot invent missing execution evidence".into()));
-        }
-        let mut collections = BTreeMap::new();
-        // Visible copies are publication outputs too, so verifying one checks
-        // its bytes; they come first, as the run's primary results.
-        let mut exports = Vec::new();
-        for (role, binding) in &self.operation.descriptor.outputs {
-            if !binding.collection {
-                continue;
-            }
-            let members: Vec<_> = validated
-                .iter()
-                .filter(|(member, _, _)| member == role)
-                .collect();
-            if members.is_empty() {
-                continue;
-            }
-            let staging = PathBuf::from(&self.context.outputs[role]);
-            let retained = if self.operation.descriptor.host_workflow.is_some() {
-                staging.clone()
-            } else {
-                self.run.artifact(role)?
-            };
-            let intent = self
-                .run
-                .artifact(&format!("collection-{role}-intent.json"))?;
-            let mut expected = BTreeMap::new();
-            for (_, path, hash) in &members {
-                let relative = path.strip_prefix(&staging).map_err(|_| {
-                    Error::Protocol("collection member lies outside allocation".into())
-                })?;
-                expected.insert(relative.to_path_buf(), (*hash).clone());
-            }
-            if retained == staging {
-                verify_collection(&retained, &expected)?;
-            } else if retained.exists() {
-                if !repair || !intent.is_file() {
-                    return Err(Error::Protocol(
-                        "output_conflict: retained collection already exists".into(),
-                    ));
-                }
-                verify_collection(&retained, &expected)?;
-            } else {
-                verify_collection(&staging, &expected)?;
-                input_evidence::write_json(
-                    &intent,
-                    &serde_json::to_value(CollectionIntent {
-                        schema: 1,
-                        members: expected.clone(),
-                    })?,
-                )?;
-                for path in expected.keys() {
-                    basecraft_platform::files::sync_file(&staging.join(path))?;
-                }
-                self.run.publish_collection(role)?;
-            }
-            for (relative, hash) in &expected {
-                let path = retained.join(relative).display().to_string();
-                if !outcome
-                    .artifacts
-                    .iter()
-                    .any(|a| a.path == path && &a.digest == hash)
-                {
-                    outcome.artifacts.push(PublishedArtifact {
-                        role: role.clone(),
-                        path,
-                        digest: hash.clone(),
-                    });
-                }
-            }
-            self.persist(outcome)?;
-            if let Some(destination) = self.request.destinations.get(role) {
-                let destination_path = self.policy.root.join(destination);
-                let intent = self
-                    .run
-                    .artifact(&format!("collection-{role}-export.json"))?;
-                if destination_path.exists() {
-                    if !repair || !intent.is_file() {
-                        return Err(Error::Protocol(
-                            "output_conflict: collection destination exists".into(),
-                        ));
-                    }
-                    verify_collection(&destination_path, &expected)?;
-                } else {
-                    let destination = self.policy.path(destination, true)?;
-                    input_evidence::write_json(
-                        &intent,
-                        &serde_json::to_value(CollectionExportIntent {
-                            schema: 1,
-                            destination: destination.clone(),
-                            members: expected.clone(),
-                        })?,
-                    )?;
-                    export_collection(&retained, &destination, &expected)?;
-                }
-                for (relative, hash) in &expected {
-                    let path = destination_path.join(relative).display().to_string();
-                    if !outcome
-                        .artifacts
-                        .iter()
-                        .any(|a| a.path == path && &a.digest == hash)
-                    {
-                        outcome.artifacts.push(PublishedArtifact {
-                            role: role.clone(),
-                            path,
-                            digest: hash.clone(),
-                        });
-                    }
-                }
-                self.persist(outcome)?;
-            }
-            for (key, destination) in &self.request.destinations {
-                let Some((member_role, Some(member))) =
-                    crate::policy::destination_role(&self.operation, key)
-                else {
-                    continue;
-                };
-                if member_role != role {
-                    continue;
-                }
-                let hash = expected.get(member).ok_or_else(|| {
-                    Error::Protocol(format!(
-                        "invalid_arguments: {role} has no member {}",
-                        member.display()
-                    ))
-                })?;
-                self.publish_member(role, &retained.join(member), hash, destination, outcome)?;
-                exports.push((destination.clone(), retained.join(member), hash.clone()));
-                // Component trees of a forest travel with their primary tree.
-                if member == Path::new("tree.nwk") {
-                    let stem = Path::new(destination)
-                        .file_stem()
-                        .map_or_else(String::new, |stem| stem.to_string_lossy().into_owned());
-                    for index in 1.. {
-                        let component = PathBuf::from(format!("tree.component-{index}.nwk"));
-                        let Some(hash) = expected.get(&component) else {
-                            break;
-                        };
-                        let target = Path::new(destination)
-                            .with_file_name(format!("{stem}.component-{index}.nwk"))
-                            .display()
-                            .to_string();
-                        self.publish_member(
-                            role,
-                            &retained.join(&component),
-                            hash,
-                            &target,
-                            outcome,
-                        )?;
-                        exports.push((target, retained.join(&component), hash.clone()));
-                    }
-                }
-            }
-            if role == "artifacts"
-                && self.operation.package.manifest.id == "basecraft.distance"
-                && self.parameters["bootstrap_destination"] == "working"
-            {
-                for (member, hash) in &expected {
-                    let name = member.to_string_lossy();
-                    if name.starts_with(&format!("bootstrap-{}", self.run.id()))
-                        && name.ends_with(".nex")
-                    {
-                        let destination = self.bootstrap_destination(member);
-                        self.publish_member(
-                            role,
-                            &retained.join(member),
-                            hash,
-                            &destination,
-                            outcome,
-                        )?;
-                        exports.push((destination, retained.join(member), hash.clone()));
-                    }
-                }
-            }
-            collections.insert(role.clone(), retained);
-        }
-        let mut publication_outputs = Vec::new();
-        for (index, (role, path, digest)) in validated.iter().enumerate() {
-            let name = role.clone();
-            if let Some(retained) = collections.get(role) {
-                let relative = path
-                    .strip_prefix(Path::new(&self.context.outputs[role]))
-                    .map_err(|_| Error::Protocol("collection member escapes allocation".into()))?;
-                let retained = retained.join(relative);
-                publication_outputs.push(ArtifactRevision {
-                    id: format!("{}:output-{index}", self.run.id()),
-                    logical_name: input_evidence::relative(&self.policy.root, &retained)?,
-                    hash: digest.clone(),
-                    size: std::fs::metadata(&retained)?.len(),
-                    retained: Some(input_evidence::relative(self.run.directory(), &retained)?),
-                    reference: None,
-                });
-                continue;
-            }
-            let retained = self.run.artifact(&name)?;
-            if outcome
-                .artifacts
-                .iter()
-                .any(|a| a.path == retained.display().to_string() && &a.digest == digest)
-            {
-                if basecraft_io::hash_file(&retained).map_err(basecraft_ops::Error::from)?
-                    != *digest
-                {
-                    return Err(Error::Protocol(
-                        "retained artifact changed; repair refused".into(),
-                    ));
-                }
-            } else {
-                if basecraft_io::hash_file(path).map_err(basecraft_ops::Error::from)? != *digest {
-                    return Err(Error::Protocol("validated staging artifact changed".into()));
-                }
-                let staging = self.run.staging(&name)?;
-                if &staging != path {
-                    std::fs::rename(path, &staging)?;
-                }
-                file_tool::publish_artifact(&self.run, &name, ArtifactDestination::Metadata)?;
-                outcome.artifacts.push(PublishedArtifact {
-                    role: role.clone(),
-                    path: retained.display().to_string(),
-                    digest: digest.clone(),
-                });
-                self.persist(outcome)?;
-            }
-            if let Some(destination) = self.request.destinations.get(role) {
-                let expected = self.policy.root.join(destination);
-                if outcome
-                    .artifacts
-                    .iter()
-                    .any(|a| a.path == expected.display().to_string() && &a.digest == digest)
-                {
-                    if basecraft_io::hash_file(&expected).map_err(basecraft_ops::Error::from)?
-                        != *digest
-                    {
-                        return Err(Error::Protocol(
-                            "published destination changed; repair refused".into(),
-                        ));
-                    }
-                } else {
-                    let destination = self.policy.path(destination, true)?;
-                    self.run.publish_secondary(&name, &destination)?;
-                    outcome.artifacts.push(PublishedArtifact {
-                        role: role.clone(),
-                        path: destination.display().to_string(),
-                        digest: digest.clone(),
-                    });
-                    self.persist(outcome)?;
-                }
-            }
-            publication_outputs.push(ArtifactRevision {
-                id: format!("{}:output-{index}", self.run.id()),
-                logical_name: input_evidence::relative(
-                    self.run
-                        .directory()
-                        .parent()
-                        .and_then(Path::parent)
-                        .and_then(Path::parent)
-                        .and_then(Path::parent)
-                        .ok_or_else(|| Error::Protocol("invalid run location".into()))?,
-                    &retained,
-                )?,
-                hash: digest.clone(),
-                size: std::fs::metadata(&retained)?.len(),
-                retained: Some(input_evidence::relative(self.run.directory(), &retained)?),
-                reference: None,
-            });
-        }
-        if let Some(destination) = self
-            .request
-            .destinations
-            .get(crate::policy::WORKSPACE_DESTINATION)
-            .filter(|_| {
-                crate::policy::is_workspace_destination(
-                    &self.operation,
-                    crate::policy::WORKSPACE_DESTINATION,
-                )
-            })
-        {
-            let path = self.policy.root.join(destination);
-            if let Some(artifact) = outcome
-                .artifacts
-                .iter()
-                .find(|artifact| artifact.path == path.display().to_string())
-            {
-                if basecraft_io::hash_file(&path).map_err(basecraft_ops::Error::from)?
-                    != artifact.digest
-                {
-                    return Err(Error::Protocol(
-                        "published workspace changed; repair refused".into(),
-                    ));
-                }
-            } else {
-                let published = self.publish_workspace(destination)?;
-                outcome.artifacts.push(PublishedArtifact {
-                    role: crate::policy::WORKSPACE_DESTINATION.into(),
-                    path: published.display().to_string(),
-                    digest: basecraft_io::hash_file(&published)
-                        .map_err(basecraft_ops::Error::from)?,
-                });
-                self.persist(outcome)?;
-            }
-            let artifact = outcome
-                .artifacts
-                .iter()
-                .find(|artifact| artifact.path == path.display().to_string())
-                .ok_or_else(|| Error::Protocol("missing workspace publication receipt".into()))?;
-            let name = path
-                .file_name()
-                .ok_or_else(|| Error::Protocol("workspace has no name".into()))?;
-            exports.push((
-                destination.clone(),
-                self.run.artifact(&name.to_string_lossy())?,
-                artifact.digest.clone(),
-            ));
-        }
-        let mut exported = Vec::new();
-        for (destination, retained, hash) in &exports {
-            let path = self.policy.root.join(destination);
-            exported.push(ArtifactRevision {
-                id: format!("{}:export-{}", self.run.id(), exported.len()),
-                logical_name: input_evidence::relative(&self.policy.root, &path)?,
-                hash: hash.clone(),
-                size: std::fs::metadata(&path)?.len(),
-                retained: Some(input_evidence::relative(self.run.directory(), retained)?),
-                reference: None,
-            });
-            // An exported tree's support semantics and alignment link travel
-            // with it, so a complete export keeps them.
-            if path
-                .extension()
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("nwk"))
-            {
-                for companion in [
-                    basecraft_ops::files::tree_sidecar(&path),
-                    basecraft_ops::links::sidecar(&path),
-                ] {
-                    if companion.is_file() && companion.starts_with(self.run.directory()) {
-                        exported.push(ArtifactRevision {
-                            id: format!("{}:export-{}", self.run.id(), exported.len()),
-                            logical_name: input_evidence::relative(&self.policy.root, &companion)?,
-                            hash: basecraft_io::hash_file(&companion)
-                                .map_err(basecraft_ops::Error::from)?,
-                            size: std::fs::metadata(&companion)?.len(),
-                            retained: Some(input_evidence::relative(
-                                self.run.directory(),
-                                &companion,
-                            )?),
-                            reference: None,
-                        });
-                    }
-                }
-            }
-        }
-        publication_outputs.splice(0..0, exported);
-        outcome.data = result.data.as_deref().cloned();
-        let previous = std::fs::read(self.run.directory().join("manifest.json"))
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<Publication>(&bytes).ok());
-        let publication = Publication {
-            schema_version: 1,
-            id: self.run.id().into(),
-            session: basecraft_platform::process_instance().into(),
-            parents: vec![],
-            parent_hashes: BTreeMap::new(),
-            created: basecraft_platform::now_rfc3339(),
-            origin: format!(
-                "{} executed by {}; initiated by {}",
-                self.operation.id, self.operation.package.manifest.id, self.initiator
-            ),
-            inputs: self.ledger_inputs.clone(),
-            outputs: publication_outputs,
-            events: previous
-                .as_ref()
-                .map_or_else(Vec::new, |p| p.events.clone()),
-            effective_edits: previous
-                .as_ref()
-                .map_or_else(Vec::new, |p| p.effective_edits.clone()),
-            completeness: Completeness {
-                ancestry_known: false,
-                input_bytes_available: true,
-                execution_specification_available: true,
-                replay_verified: false,
-            },
-            report_template_version: 2,
-        };
-        basecraft_ops::provenance::publish_operation(self.run.directory(), &publication)?;
-        if self.document.is_none() && self.sequence.is_none() {
-            let (actor, params) = self.tool_activity(outcome)?;
-            let activity = basecraft_protocol::LogEntry {
-                v: basecraft_protocol::ops::LOG_VERSION,
-                id: self.run.id().into(),
-                t: self.started.clone(),
-                host: String::new(),
-                session: publication.session.clone(),
-                actor,
-                doc: self.operation.id.clone(),
-                op: basecraft_protocol::Op::ToolRun {
-                    plugin: self.operation.package.manifest.id.clone(),
-                    operation: self.operation.descriptor.implementation.clone(),
-                    params,
-                    inputs: self
-                        .ledger_inputs
-                        .iter()
-                        .map(|input| input.logical_name.clone())
-                        .collect(),
-                    outputs: publication
-                        .outputs
-                        .iter()
-                        .map(|output| output.logical_name.clone())
-                        .collect(),
-                },
-                result: basecraft_protocol::OpResult {
-                    hashes: self
-                        .ledger_inputs
-                        .iter()
-                        .chain(&publication.outputs)
-                        .map(|artifact| (artifact.logical_name.clone(), artifact.hash.clone()))
-                        .collect(),
-                    feature: None,
-                },
-                state: basecraft_protocol::DocState {
-                    counts: None,
-                    len: 0,
-                    features: 0,
-                    rows: None,
-                },
-            };
-            self.publication_input_record()?
-                .publish_operation_activity(&self.run, &activity)?;
-        }
-        for artifact in &outcome.artifacts {
-            self.run.bind(Path::new(&artifact.path))?;
-        }
-        Ok(())
-    }
-    /// Export one member of a published collection to a new file in the
-    /// project, recording it in the outcome. Idempotent for a recorded export.
-    fn publish_member(
-        &self,
-        role: &str,
-        retained: &Path,
-        hash: &str,
-        destination: &str,
-        outcome: &mut OperationOutcome,
-    ) -> Result<()> {
-        let destination_path = self.policy.root.join(destination);
-        let path = destination_path.display().to_string();
-        let intent = self.run.artifact(&format!(
-            "member-{}-export.json",
-            basecraft_io::hash_bytes(destination_path.as_os_str().as_encoded_bytes())
-                .trim_start_matches("b3:")
-        ))?;
-        if outcome
-            .artifacts
-            .iter()
-            .any(|a| a.path == path && a.digest == hash)
-        {
-            verify_member_receipt(&destination_path, hash, &intent)?;
-        } else {
-            if destination_path.exists() {
-                verify_member_receipt(&destination_path, hash, &intent)?;
-            } else {
-                let destination = self.policy.path(destination, true)?;
-                export_member(retained, &destination, hash, &intent)?;
-            }
-            outcome.artifacts.push(PublishedArtifact {
-                role: role.into(),
-                path,
-                digest: hash.into(),
-            });
-            self.persist(outcome)?;
-        }
-        if destination_path
-            .extension()
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("nwk"))
-        {
-            self.finalise_exported_tree(&destination_path)?;
-        }
-        Ok(())
-    }
-
-    /// Record this run in `doc`'s history although `doc` is not one of its
-    /// inputs, as for a species workspace analysing a file it references.
     fn bind_target(
         &mut self,
         session: &basecraft_ops::Session,
@@ -2063,12 +626,12 @@ impl PreparedOperation {
             .original_path
             .clone()
             .unwrap_or_else(|| "generated input".into());
-        let path = session.root().join(session.doc_key(doc));
+        let path = session.root().join(session.doc_key(doc)?);
         self.document = Some(DocumentTarget {
             doc,
             session: session.id().into(),
-            generation: session.generation(doc),
-            revision: session.revision(doc),
+            generation: session.generation(doc)?,
+            revision: session.revision(doc)?,
             record: session.document_record(doc)?,
             input: (key, evidence.submitted_hash.clone()),
             saved: session.saved_source(doc)?.map(|(path, _, _)| path),
@@ -2082,10 +645,9 @@ impl PreparedOperation {
     /// Publish the species workspace in a validated run's result as a new
     /// SPART file in the project.
     fn publish_workspace(&self, destination: &str) -> Result<PathBuf> {
-        let validated: Vec<(String, PathBuf, String)> =
-            serde_json::from_slice(&basecraft_ops::provenance::read_record(
-                &self.run.artifact("validated-artifacts.json")?,
-            )?)?;
+        let validated: Vec<(String, PathBuf, String)> = serde_json::from_slice(
+            &basecraft_ops::records::read_record(&self.run.artifact("validated-artifacts.json")?)?,
+        )?;
         let name = self.species_result_name();
         let (role, staged, hash) = validated
             .iter()
@@ -2105,7 +667,7 @@ impl PreparedOperation {
                     .map_err(|_| Error::Protocol("result escapes allocation".into()))?,
             )
         };
-        if basecraft_io::hash_file(&retained).map_err(basecraft_ops::Error::from)? != *hash {
+        if basecraft_io::hash_file(&retained)? != *hash {
             return Err(Error::Protocol("retained species result changed".into()));
         }
         let value: Value = serde_json::from_slice(&std::fs::read(&retained)?)?;
@@ -2140,11 +702,9 @@ impl PreparedOperation {
     /// producer support semantics and the link to the alignment it came from.
     fn finalise_exported_tree(&self, tree: &Path) -> Result<()> {
         self.run.bind(tree)?;
-        if let Some((name, kind)) = file_tool::producer_support(
-            &self.operation.package.manifest.id,
-            &self.operation.descriptor.implementation,
-            &self.parameters,
-        ) {
+        if let Some((name, kind)) =
+            file_tool::producer_support(&self.operation.descriptor, &self.parameters)
+        {
             file_tool::write_support_sidecar(tree, name, kind)?;
         }
         let Some(frozen) = self
@@ -2174,7 +734,7 @@ impl PreparedOperation {
                 0,
             ),
         };
-        basecraft_ops::links::AlignmentLink::create_referenced(
+        basecraft_ops::records::AlignmentLink::create_referenced(
             tree,
             &source,
             Path::new(frozen),
@@ -2189,34 +749,14 @@ impl PreparedOperation {
         outcome: &OperationOutcome,
     ) -> Result<(basecraft_protocol::Actor, Value)> {
         let manifest = &self.operation.package.manifest;
-        // The external program and its process evidence, when the plugin reported
-        // them, name the software in history and methods text.
-        let execution: serde_json::Value = std::fs::read(self.run.artifact("execution.json")?)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default();
-        let tool = serde_json::from_value::<basecraft_protocol::plugin::ToolInfo>(
-            execution["tool"].clone(),
-        )
-        .ok();
-        let actor = tool.as_ref().map_or_else(
-            || basecraft_protocol::Actor::Plugin {
-                id: manifest.id.clone(),
-                version: manifest.version.clone(),
-            },
-            |tool| basecraft_protocol::Actor::Tool {
-                tool: tool.name.clone(),
-                version: tool.version.clone(),
-            },
-        );
         let mut params = json!({"requested":self.request.parameters,"effective":outcome.effective_parameters,
         "operation":self.operation.id,"pins":outcome.pins,"initiator":self.initiator,"run_id":outcome.run_id});
-        if !execution["execution"].is_null() {
-            params["_execution"] = execution["execution"].clone();
-        }
-        if !execution["tool"].is_null() {
-            params["_observed_tool"] = execution["tool"].clone();
-        }
+        let plugin = basecraft_protocol::Actor::Plugin {
+            id: manifest.id.clone(),
+            version: manifest.version.clone(),
+        };
+        let execution = self.run.artifact("execution.json")?;
+        let actor = basecraft_ops::records::tool_actor(&execution, plugin, &mut params);
         Ok((actor, params))
     }
 
@@ -2269,19 +809,14 @@ impl PreparedOperation {
             plugin: JobIndexPlugin {
                 id: self.operation.package.manifest.id.clone(),
                 version: self.operation.package.manifest.version.clone(),
-                extra: BTreeMap::new(),
             },
             operation: self.operation.id.clone(),
             effective_parameters: outcome.effective_parameters.clone(),
             initiator: self.initiator.clone(),
-            source: JobIndexSource {
-                path: source,
-                extra: BTreeMap::new(),
-            },
+            source: JobIndexSource { path: source },
             outputs,
             diagnostics: outcome.errors.first().map(|error| error.message.clone()),
             runtime_record: runtime.into(),
-            extra: BTreeMap::new(),
         })?;
         input_evidence::write_json(&directory.join("manifest.json"), &index)?;
         Ok(())
@@ -2321,12 +856,9 @@ fn sources_from_upstream(directory: &Path) -> Result<Vec<PathBuf>> {
     }
     let record = input_evidence::read_input(directory)?;
     Ok(record
-        .extra
-        .get("upstream")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|value| value["bundle"].as_str().map(|path| directory.join(path)))
+        .upstream
+        .iter()
+        .map(|value| directory.join(&value.bundle))
         .collect())
 }
 
@@ -2344,9 +876,7 @@ fn verify_collection(root: &Path, expected: &BTreeMap<PathBuf, String>) -> Resul
     }
     for (relative, hash) in expected {
         let path = root.join(relative);
-        if link_count(&path)? != 1
-            || basecraft_io::hash_file(&path).map_err(basecraft_ops::Error::from)? != *hash
-        {
+        if link_count(&path)? != 1 || basecraft_io::hash_file(&path)? != *hash {
             return Err(Error::Protocol(
                 "collection bytes changed after validation".into(),
             ));
@@ -2357,7 +887,7 @@ fn verify_collection(root: &Path, expected: &BTreeMap<PathBuf, String>) -> Resul
 /// A pre-rename inode receipt proves which file this run created. Matching
 /// bytes alone never authorize adopting somebody else's existing file.
 fn verify_member_receipt(destination: &Path, hash: &str, intent: &Path) -> Result<()> {
-    let receipt: Value = serde_json::from_slice(&basecraft_ops::provenance::read_record(intent)?)?;
+    let receipt: Value = serde_json::from_slice(&basecraft_ops::records::read_record(intent)?)?;
     let metadata = std::fs::symlink_metadata(destination)?;
     if !metadata.is_file()
         || metadata.file_type().is_symlink()
@@ -2368,7 +898,7 @@ fn verify_member_receipt(destination: &Path, hash: &str, intent: &Path) -> Resul
         || receipt["device"].as_u64() != Some(identity(destination)?.0)
         || receipt["inode"].as_u64() != Some(identity(destination)?.1)
         || receipt["size"].as_u64() != Some(metadata.len())
-        || basecraft_io::hash_file(destination).map_err(basecraft_ops::Error::from)? != hash
+        || basecraft_io::hash_file(destination)? != hash
     {
         return Err(Error::Protocol(
             "output_conflict: member ownership or bytes changed; repair refused".into(),
@@ -2386,7 +916,7 @@ fn export_member(source: &Path, destination: &Path, hash: &str, intent: &Path) -
         .prefix(".basecraft-export-")
         .tempfile_in(parent)?;
     std::fs::copy(source, pending.path())?;
-    if basecraft_io::hash_file(pending.path()).map_err(basecraft_ops::Error::from)? != hash {
+    if basecraft_io::hash_file(pending.path())? != hash {
         return Err(Error::Protocol("member changed during export".into()));
     }
     pending.as_file().sync_all()?;
@@ -2402,8 +932,6 @@ fn export_member(source: &Path, destination: &Path, hash: &str, intent: &Path) -
             size: metadata.len(),
         })?,
     )?;
-    #[cfg(test)]
-    record_format_tests::member_promotion_hook(pending.path(), destination, intent);
     basecraft_platform::atomic::rename_noreplace(pending.path(), destination).map_err(|error| {
         if error.kind() == std::io::ErrorKind::AlreadyExists {
             Error::Protocol("output_conflict: destination exists".into())
@@ -2432,7 +960,7 @@ fn export_collection(
             std::fs::create_dir_all(parent)?;
         }
         std::fs::copy(source.join(relative), &target)?;
-        if basecraft_io::hash_file(&target).map_err(basecraft_ops::Error::from)? != *hash {
+        if basecraft_io::hash_file(&target)? != *hash {
             return Err(Error::Protocol("collection changed during export".into()));
         }
         basecraft_platform::files::sync_file(&target)?;
@@ -2440,186 +968,6 @@ fn export_collection(
     basecraft_platform::atomic::rename_noreplace(pending.path(), destination)?;
     basecraft_platform::files::sync_directory(parent)?;
     Ok(())
-}
-
-impl PreparedOperation {
-    fn execute_workflow(&self, cancelled: &AtomicBool) -> Result<InvokeResult> {
-        if self.operation.package.manifest.id != "basecraft.host" {
-            return Err(Error::Protocol(
-                "host workflows require the reserved application package".into(),
-            ));
-        }
-        if cancelled.load(Ordering::Acquire) {
-            return Err(Error::Protocol("cancelled before workflow".into()));
-        }
-        let registry = self.workflow_registry.as_ref().ok_or_else(|| {
-            Error::Protocol("host workflow is missing accepted stage registry".into())
-        })?;
-        let effective = Value::Object(crate::compute::parameters_for(
-            &self.operation.descriptor,
-            self.parameters
-                .as_object()
-                .cloned()
-                .ok_or_else(|| Error::Protocol("workflow parameters must be an object".into()))?,
-            self.context.cpu_threads,
-        ));
-        *self
-            .granted_parameters
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = effective.clone();
-        let method = self
-            .operation
-            .descriptor
-            .host_workflow
-            .as_deref()
-            .ok_or_else(|| Error::Protocol("missing host workflow".into()))?;
-        let mut workflow = crate::delimitation_pipeline::AlignmentWorkflow {
-            registry,
-            parent: self,
-            cancelled,
-            stages: vec![],
-        };
-        let execution = workflow.run(method, effective);
-        input_evidence::write_json(
-            &self.run.artifact("execution.json")?,
-            &serde_json::to_value(HostWorkflowExecution {
-                schema: 1,
-                workflow: method.into(),
-                initiator: self.initiator.clone(),
-                executor: "basecraft.host".into(),
-                requested_parameters: self.request.parameters.clone(),
-                effective_parameters: self.effective_parameters(),
-                package_digest: self.operation.package.digest.clone(),
-                descriptor_digest: self.operation.descriptor_digest.clone(),
-                process_instance: basecraft_platform::process_instance().into(),
-                extra: BTreeMap::new(),
-            })?,
-        )?;
-        execution
-    }
-}
-
-#[cfg(test)]
-mod completed_result_tests {
-    use super::*;
-    #[test]
-    fn retained_primary_owner_survives_reversed_evidence_binding_order() {
-        use crate::registry::{Registry, RegistryConfig};
-        let temp = tempfile::tempdir().unwrap();
-        let fixture =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/registry-plugin");
-        let package = temp.path().join("package");
-        std::fs::create_dir(&package).unwrap();
-        for name in ["plugin.toml", "plugin.py", "operations.json"] {
-            std::fs::copy(fixture.join(name), package.join(name)).unwrap();
-        }
-        let path = package.join("operations.json");
-        let mut contract: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        let binding = json!({"view":"bytes", "media_type":"application/octet-stream",
-            "min":1, "max":1, "retain":true});
-        contract["operations"][0]["inputs"] = json!({"a_first":binding, "sources":binding});
-        std::fs::write(path, serde_json::to_vec(&contract).unwrap()).unwrap();
-        let config = RegistryConfig {
-            bundled: temp.path().join("no-bundle"),
-            packages: temp.path().join("plugins"),
-            index: temp.path().join("index.json"),
-        };
-        crate::registry::install(&config, &package).unwrap();
-        let registry = Registry::load(&config).unwrap();
-        std::fs::write(temp.path().join("z.txt"), b"equal originals").unwrap();
-        std::fs::write(temp.path().join("a.txt"), b"equal originals").unwrap();
-        let request: OperationRequest = serde_json::from_value(json!({
-            "operation":"org.example.registry-fixture/count@1",
-            "inputs":{"a_first":[{"kind":"file","path":"z.txt"}],
-                "sources":[{"kind":"file","path":"a.txt"}]},
-            "destinations":{"report":"report.json"}, "parameters":{}
-        }))
-        .unwrap();
-        let operation = registry.resolve(&request.operation, None).unwrap().clone();
-        let mut prepared = PreparedOperation::prepare(
-            operation,
-            request,
-            SessionPolicy::new(temp.path(), true).unwrap(),
-            "ownership probe".into(),
-            None,
-            &registry,
-        )
-        .unwrap();
-        let owner = prepared.context.input_evidence["a_first"][0]
-            .run_directory
-            .clone();
-        let mut first = prepared.context.input_evidence.remove("a_first").unwrap();
-        let mut other = prepared.context.input_evidence.remove("sources").unwrap();
-        assert_ne!(first[0].original_path, other[0].original_path);
-        assert_eq!(first[0].source_hash, other[0].source_hash);
-        // Preparation naturally uses the same BTreeMap order as evidence. This
-        // synthetic permutation exercises delegation independent of that order
-        // on a real registered prepared operation, without a production hook.
-        std::mem::swap(&mut first, &mut other);
-        prepared
-            .context
-            .input_evidence
-            .insert("a_first".into(), first);
-        prepared
-            .context
-            .input_evidence
-            .insert("sources".into(), other);
-        prepared.retain_inputs().unwrap();
-        let primary = input_evidence::read_input(prepared.run.directory()).unwrap();
-        let origin = primary.extra["origin_run"].as_str().unwrap();
-        assert_eq!(
-            prepared
-                .run
-                .directory()
-                .join(origin)
-                .canonicalize()
-                .unwrap(),
-            Path::new(&owner).canonicalize().unwrap(),
-            "binding iteration must not replace the original primary owner"
-        );
-        assert_eq!(
-            std::fs::read(Path::new(&owner).join("preserved-input")).unwrap(),
-            b"equal originals"
-        );
-    }
-
-    #[test]
-    fn lookup_reports_corrupt_future_and_incomplete_inventory_without_creating_a_store() {
-        let tmp = tempfile::tempdir().unwrap();
-        let anchor = tmp.path().join("operation");
-        let query = CompletedResultQuery {
-            operation: "test.operation/run@1".into(),
-            pins: basecraft_protocol::operation::OperationPins {
-                generation: "g".into(),
-                package_digest: "p".into(),
-                descriptor_digest: "d".into(),
-            },
-            effective_parameters: json!({}),
-            inputs: std::collections::BTreeMap::default(),
-        };
-        assert!(lookup_completed_result(&anchor, &query).result.is_none());
-        assert!(!tmp.path().join(".basecraft").exists());
-        let run = ArtifactRun::create(&anchor, "corrupt").unwrap();
-        input_evidence::write_json(
-            &run.artifact("runtime.json").unwrap(),
-            &json!({"schema":99}),
-        )
-        .unwrap();
-        let result = lookup_completed_result(&anchor, &query);
-        assert!(result.result.is_none());
-        assert_eq!(result.diagnostics.len(), 1);
-        std::fs::write(run.artifact("runtime.json").unwrap(), b"broken JSON").unwrap();
-        assert_eq!(
-            lookup_completed_result(&anchor, &query).diagnostics.len(),
-            1
-        );
-        assert!(
-            ArtifactRun::runs_for_anchor(&anchor, 0)
-                .unwrap_err()
-                .to_string()
-                .contains("incomplete")
-        );
-    }
 }
 
 #[cfg(test)]

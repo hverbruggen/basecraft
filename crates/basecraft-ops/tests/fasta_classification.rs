@@ -1,6 +1,8 @@
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use std::path::Path;
 
-use basecraft_io::{cache, fasta};
+use basecraft_io::fasta;
 use basecraft_ops::files::{self, Kind, LONGEST_ALIGNMENT_ROW};
 
 #[cfg(feature = "test-heap")]
@@ -9,7 +11,7 @@ static ALLOCATOR: basecraft_io::heap::Allocator = basecraft_io::heap::Allocator;
 
 // The pre-streaming decision, kept independent of the production summary.
 fn indexed_kind(path: &Path) -> basecraft_ops::Result<Kind> {
-    let file = cache::open_fasta(path)?;
+    let file = fasta::IndexedFasta::open(path)?;
     let named = path
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("afa"))
@@ -43,6 +45,7 @@ fn compare(path: &Path) {
 
 #[test]
 fn all_fasta_fixtures_agree_with_index() {
+    crate::isolated_profile::isolate!();
     fn visit(dir: &Path, count: &mut usize) {
         for entry in std::fs::read_dir(dir).unwrap() {
             let path = entry.unwrap().path();
@@ -65,6 +68,7 @@ fn all_fasta_fixtures_agree_with_index() {
 
 #[test]
 fn generated_classification_and_errors() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let mut cases = vec![
         (Vec::new(), Some(Kind::Sequence)),
@@ -153,6 +157,7 @@ fn generated_classification_and_errors() {
 
 #[test]
 fn summary_facts_match_index() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("rows.fa");
     let data = b">a\nAA\nA\nAAA\n>b\nT\n>empty";
@@ -184,6 +189,7 @@ fn summary_facts_match_index() {
 #[test]
 fn bounded_classifier_heap() {
     use std::io::Write;
+    crate::isolated_profile::isolate!();
 
     // Instrumentation is process-wide: isolate from the other test threads.
     if std::env::var_os("BASECRAFT_CLASSIFIER_HEAP_CHILD").is_none() {

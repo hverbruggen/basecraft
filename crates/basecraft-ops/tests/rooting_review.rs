@@ -1,4 +1,6 @@
 //! Independent REV-0003 probes against the automatic-rooting public API.
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_docs::TreeDoc;
 use basecraft_ops::{DocId, Session, files};
 use basecraft_protocol::Op;
@@ -9,6 +11,7 @@ fn methods() -> [Op; 2] {
 
 #[test]
 fn supported_basal_branch_survives_automatic_root_save_reload() {
+    crate::isolated_profile::isolate!();
     let mut failures = Vec::new();
     for op in methods() {
         let dir = tempfile::tempdir().unwrap();
@@ -20,7 +23,7 @@ fn supported_basal_branch_survives_automatic_root_save_reload() {
         if session.apply(id, op.clone()).is_err() {
             // Explicit nonmutating refusal is preferable to metadata loss.
             assert_eq!(session.tree(id).unwrap().to_newick(), before);
-            assert!(!session.can_undo(id));
+            assert!(!session.can_undo(id).unwrap());
             continue;
         }
         let rooted = session.tree(id).unwrap().clone();
@@ -47,6 +50,7 @@ fn supported_basal_branch_survives_automatic_root_save_reload() {
 
 #[test]
 fn automatic_root_invalid_document_returns_error_without_panic() {
+    crate::isolated_profile::isolate!();
     let mut failures = Vec::new();
     for op in methods() {
         let dir = tempfile::tempdir().unwrap();
@@ -78,6 +82,7 @@ fn automatic_root_invalid_document_returns_error_without_panic() {
 
 #[test]
 fn refusal_in_recoverable_session_creates_no_tracking_or_history() {
+    crate::isolated_profile::isolate!();
     for text in [
         "(A,B:1);",
         "(A:0,B:0);",
@@ -104,8 +109,8 @@ fn refusal_in_recoverable_session_creates_no_tracking_or_history() {
             session.flush().unwrap();
             assert_eq!(session.tree(id).unwrap().to_newick(), before);
             assert_eq!(session.record_revision(id).unwrap(), revision);
-            assert!(!session.can_undo(id));
-            assert!(!session.can_redo(id));
+            assert!(!session.can_undo(id).unwrap());
+            assert!(!session.can_redo(id).unwrap());
             assert!(!session.recovery_root().exists());
             assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
             assert!(!files::tree_sidecar(&path).exists());
@@ -201,6 +206,7 @@ fn random_tree(seed: u64) -> TreeDoc {
 #[allow(clippy::cast_precision_loss)]
 #[test]
 fn diverse_topologies_match_integer_variance_and_diameter_oracles() {
+    crate::isolated_profile::isolate!();
     for seed in 1..=100 {
         let original = random_tree(seed);
         let tips = original.tips_in_order();
@@ -272,6 +278,7 @@ fn diverse_topologies_match_integer_variance_and_diameter_oracles() {
 
 #[test]
 fn iterative_newick_writer_preserves_names_unary_nodes_and_missing_supports() {
+    crate::isolated_profile::isolate!();
     for text in [
         "(('A B':1,'C,D':2)'inner name':3,E:4)named;",
         "((A:1)unary:2,B:3,C:4);",

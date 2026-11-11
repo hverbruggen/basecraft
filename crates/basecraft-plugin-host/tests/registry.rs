@@ -61,7 +61,7 @@ fn discovery_is_passive_and_installation_defaults_to_enabled() {
 }
 
 #[test]
-fn updates_refresh_without_mutating_pins_and_preserve_unknown_settings() {
+fn updates_refresh_without_mutating_pins() {
     crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let config = config(temp.path());
@@ -70,10 +70,6 @@ fn updates_refresh_without_mutating_pins_and_preserve_unknown_settings() {
     let name = "org.example.registry-fixture/count@1";
     let old = first.resolve(name, None).unwrap();
     let pins = old.pins(&first.generation);
-    let index = std::fs::read_to_string(&config.index).unwrap();
-    let mut index: serde_json::Value = serde_json::from_str(&index).unwrap();
-    index["future"] = json!({"keep":true});
-    std::fs::write(&config.index, serde_json::to_vec(&index).unwrap()).unwrap();
     registry::set_enabled(&config, &id, false).unwrap();
     let source = temp.path().join("updated");
     std::fs::create_dir(&source).unwrap();
@@ -96,9 +92,6 @@ fn updates_refresh_without_mutating_pins_and_preserve_unknown_settings() {
         old.package.manifest.dir,
         updated.operations[name].package.manifest.dir
     );
-    let index: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(config.index).unwrap()).unwrap();
-    assert_eq!(index["future"]["keep"], true);
 }
 
 #[test]

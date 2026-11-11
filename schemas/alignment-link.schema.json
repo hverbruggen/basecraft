@@ -9,6 +9,12 @@
       "format": "uint64",
       "minimum": 0
     },
+    "analysis_run": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "inferred": {
       "description": "False for an explicitly associated imported tree: matching names is not inference provenance.",
       "type": "boolean"

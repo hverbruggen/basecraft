@@ -8,6 +8,10 @@ use super::Document;
 use crate::{Result, error::invalid, files, session::Inverse};
 
 impl Document for DelimitationWorkspace {
+    fn accepts(&self, op: &Op) -> bool {
+        matches!(op, Op::DelimitationEdit { .. })
+    }
+
     fn kind(&self) -> crate::files::Kind {
         crate::files::Kind::Delimitation
     }
@@ -18,6 +22,7 @@ impl Document for DelimitationWorkspace {
     fn rebase_replay_paths(&mut self, from: &Path, to: &Path) {
         files::rebase_delimitation_paths(self, from, to);
     }
+
     fn proposal_candidate(&self) -> Result<files::Loaded> {
         Ok(files::Loaded::Delimitation(self.clone()))
     }
@@ -245,7 +250,10 @@ mod tests {
             let input = crate::input_evidence::read_input(&run).unwrap();
             assert_eq!(input.submitted_hash, hash);
             assert_eq!(input.submitted_size, main.len() as u64);
-            assert_eq!(input.state, "generated");
+            assert_eq!(
+                input.state,
+                basecraft_protocol::input_records::EvidenceState::Generated
+            );
             // Match the pre-extraction sorted JSON record bytes, including the
             // newline added by write_json. Golden typed-record tests also apply.
             let record = serde_json::json!({"schema_version":1,

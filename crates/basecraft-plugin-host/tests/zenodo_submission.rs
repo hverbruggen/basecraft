@@ -20,7 +20,7 @@ import zenodo_impl as z
 
 def transport(method, url, token, context, **kwargs):
     if token != 'synthetic-runtime-secret': raise ValueError('runtime token missing')
-    meta = z.metadata(PARAMETERS).unwrap()
+    meta = z.metadata(PARAMETERS)
     if method == 'POST':
         if PARAMETERS['title'] == 'cancel':
             Path(context['progress_file']).write_text('remote accepted')

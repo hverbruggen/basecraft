@@ -30,7 +30,6 @@
       "type": "string"
     }
   },
-  "additionalProperties": true,
   "required": [
     "schema",
     "workflow",

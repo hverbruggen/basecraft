@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MafftAddition",
+  "type": "object",
+  "properties": {
+    "insertions": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "parameters": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "reference": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "reversed": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "rows": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "maxItems": 2,
+        "minItems": 2,
+        "prefixItems": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      }
+    }
+  },
+  "required": [
+    "rows",
+    "reference",
+    "insertions",
+    "reversed",
+    "parameters"
+  ]
+}

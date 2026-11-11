@@ -7,6 +7,7 @@ mod operations;
 mod save;
 mod submission;
 
+use basecraft_ops::records::ReportExt;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
@@ -20,6 +21,13 @@ struct Cli {
     save_options: save::Options,
     #[command(subcommand)]
     command: Command,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum EditOperations {
+    One(Box<basecraft_protocol::Op>),
+    Many(Vec<basecraft_protocol::Op>),
 }
 
 #[derive(Subcommand)]
@@ -65,7 +73,7 @@ enum Command {
     },
     /// Print the validated shared preferences as JSON without creating files.
     Preferences,
-    /// Reconstruct an unsaved session, or a Sanger review recovery checkpoint
+    /// Reconstruct an unsaved session
     /// with all its call sets, into a new directory; never overwrites inputs.
     Recover {
         session: PathBuf,
@@ -102,7 +110,11 @@ enum Command {
         output: Option<PathBuf>,
     },
     /// Apply a typed JSON operation to a document and save it.
-    Edit { file: PathBuf, operation: String },
+    Edit {
+        file: PathBuf,
+        /// One JSON operation, or an array applied in one session before saving.
+        operation: String,
+    },
     /// The project's specimen metadata: roster, identifications, record
     /// links and collection columns; imports and the .ods template.
     Metadata {
@@ -238,7 +250,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Command::Metadata { action } => metadata::run(action, save_options)?,
         Command::Submission { action } => submission::run(action, save_options)?,
         Command::History { file, json } => {
-            let report = basecraft_ops::document_record::DocumentRecord::saved_report(&file)?;
+            let report = basecraft_ops::records::DocumentRecord::saved_report(&file)?;
             println!(
                 "{}",
                 if json {
@@ -249,7 +261,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         Command::Methods { file, json, output } => {
-            let report = basecraft_ops::document_record::DocumentRecord::saved_report(&file)?;
+            let report = basecraft_ops::records::DocumentRecord::saved_report(&file)?;
             if let Some(output) = output {
                 report.export(&output)?;
             }
@@ -273,27 +285,15 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             output,
             verified_prefix,
         } => {
-            if basecraft_ops::sanger_review::evidence_kind(&session)
-                == Some(basecraft_ops::sanger_review::EvidenceKind::Review)
-            {
-                if verified_prefix {
-                    return Err(
-                        "--verified-prefix applies to session journals, not Sanger reviews".into(),
-                    );
-                }
-                let restored = basecraft_ops::sanger_review::recover(&session, &output)?;
-                println!("{}", restored.display());
-                return Ok(());
-            }
             let restored = if verified_prefix {
                 let (restored, problem) =
-                    basecraft_ops::replay::recover_verified_prefix(&session, &output)?;
+                    basecraft_ops::records::recover_verified_prefix(&session, &output)?;
                 if let Some(problem) = problem {
                     eprintln!("Recovered the verified edits before damage: {problem}");
                 }
                 restored
             } else {
-                basecraft_ops::replay::recover(&session, &output)?
+                basecraft_ops::records::recover(&session, &output)?
             };
             for restored in restored {
                 println!("{}", restored.display());
@@ -303,22 +303,22 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             ProvenanceCommand::Inspect { result } => {
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&basecraft_ops::provenance::inspect(&result)?)?
+                    serde_json::to_string_pretty(&basecraft_ops::records::inspect(&result)?)?
                 );
             }
             ProvenanceCommand::Verify { result } => {
-                let issues = basecraft_ops::provenance::verify(&result)?;
+                let issues = basecraft_ops::records::verify(&result)?;
                 if !issues.is_empty() {
                     return Err(issues.join("\n").into());
                 }
                 println!("done: recorded hashes verified; replay verification is a separate check");
             }
             ProvenanceCommand::Methods { result, output } => {
-                let publication = basecraft_ops::provenance::inspect(&result)?;
-                basecraft_ops::provenance::write_reports(&output, &publication)?;
+                let publication = basecraft_ops::records::inspect(&result)?;
+                basecraft_ops::records::write_reports(&output, &publication)?;
             }
             ProvenanceCommand::Package { result, output } => {
-                basecraft_ops::provenance::package(&result, &output)?;
+                basecraft_ops::records::package(&result, &output)?;
             }
         },
         Command::NewSequence {
@@ -353,7 +353,20 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let root = file.parent().unwrap_or(std::path::Path::new("."));
             let mut session = script_session(root)?;
             let doc = session.open(&file)?;
-            session.apply(doc, serde_json::from_str(&operation)?)?;
+            let operations = match serde_json::from_str::<EditOperations>(&operation)? {
+                EditOperations::One(op) => vec![*op],
+                EditOperations::Many(ops) => ops,
+            };
+            for operation in operations {
+                if matches!(
+                    operation,
+                    basecraft_protocol::Op::Undo { .. } | basecraft_protocol::Op::Redo { .. }
+                ) {
+                    session.apply_history(doc, &operation)?;
+                } else {
+                    session.apply(doc, operation)?;
+                }
+            }
             save_options.save(&mut session, doc, None, false)?;
         }
         Command::ImportSupport { tree, source, name } => {
@@ -399,7 +412,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
         Command::Index { file } => {
             let t = Instant::now();
-            let f = basecraft_io::cache::open_fasta(&file)?;
+            let f = basecraft_io::fasta::IndexedFasta::open(&file)?;
             let elapsed = t.elapsed();
             let residues: u64 = f.index.records.iter().map(|r| r.len).sum();
             let ragged = f
@@ -409,18 +422,13 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 .filter(|r| matches!(r.layout, basecraft_io::fasta::Layout::Ragged(_)))
                 .count();
             println!(
-                "{} records, {residues} residues, {ragged} ragged, {} in {:.1} ms",
+                "{} records, {residues} residues, {ragged} ragged, index built in {:.1} ms",
                 f.index.records.len(),
-                if f.cached {
-                    "index from cache"
-                } else {
-                    "index built"
-                },
                 elapsed.as_secs_f64() * 1e3
             );
         }
         Command::Replay { project } => {
-            let report = basecraft_ops::replay::replay(&project)?;
+            let report = basecraft_ops::records::replay(&project)?;
             for p in &report.problems {
                 println!("problem: {p}");
             }
@@ -540,6 +548,172 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                         Vec<basecraft_protocol::report_records::ReportSourceMapEntry>
                     ),
                 ),
+                (
+                    "metadata-manifest",
+                    schemars::schema_for!(basecraft_protocol::metadata_records::MetadataManifest),
+                ),
+                (
+                    "query-preparation",
+                    schemars::schema_for!(basecraft_protocol::query_records::QueryPlan),
+                ),
+                (
+                    "document-record",
+                    schemars::schema_for!(basecraft_protocol::report_records::DocumentRecord),
+                ),
+                (
+                    "document-report",
+                    schemars::schema_for!(basecraft_protocol::report_records::Report),
+                ),
+                (
+                    "validated-artifacts",
+                    schemars::schema_for!(Vec<(String, std::path::PathBuf, String)>),
+                ),
+                (
+                    "workflow-stages",
+                    schemars::schema_for!(Vec<basecraft_protocol::operation::OperationOutcome>),
+                ),
+                (
+                    "submission-package",
+                    schemars::schema_for!(
+                        basecraft_protocol::submission_records::SubmissionPackage
+                    ),
+                ),
+                (
+                    "submission-validation",
+                    schemars::schema_for!(
+                        basecraft_protocol::submission_records::ValidationSummary
+                    ),
+                ),
+                (
+                    "operation-failure",
+                    schemars::schema_for!(basecraft_protocol::operation::OperationFailure),
+                ),
+                (
+                    "activity-input-run",
+                    schemars::schema_for!(basecraft_protocol::records::ActivityInputRun),
+                ),
+                (
+                    "activity-contributions",
+                    schemars::schema_for!(basecraft_protocol::records::ActivityContributions),
+                ),
+                (
+                    "extraction-record",
+                    schemars::schema_for!(basecraft_protocol::records::ExtractionRecord),
+                ),
+                (
+                    "journal-entry",
+                    schemars::schema_for!(basecraft_protocol::records::JournalEntry),
+                ),
+                (
+                    "workflow-failure",
+                    schemars::schema_for!(basecraft_protocol::records::WorkflowFailure),
+                ),
+                (
+                    "tree-sidecar",
+                    schemars::schema_for!(basecraft_protocol::companion_records::TreeSidecar),
+                ),
+                (
+                    "delimitation-sidecar",
+                    schemars::schema_for!(
+                        basecraft_protocol::companion_records::DelimitationSidecar
+                    ),
+                ),
+                (
+                    "sequence-arrow-pair",
+                    schemars::schema_for!(basecraft_protocol::plugin::ArrowPair),
+                ),
+                (
+                    "sanderson-report",
+                    schemars::schema_for!(basecraft_protocol::sanderson_records::SandersonReport),
+                ),
+                (
+                    "query-source",
+                    schemars::schema_for!(Vec<basecraft_protocol::query_records::Query>),
+                ),
+                (
+                    "haplotypes",
+                    schemars::schema_for!(basecraft_protocol::producer_records::Haplotypes),
+                ),
+                (
+                    "delimitation-progress",
+                    schemars::schema_for!(
+                        basecraft_protocol::producer_records::DelimitationProgress
+                    ),
+                ),
+                (
+                    "delimitation-report",
+                    schemars::schema_for!(basecraft_protocol::producer_records::DelimitationReport),
+                ),
+                (
+                    "mptp-failure",
+                    schemars::schema_for!(basecraft_protocol::producer_records::MptpFailure),
+                ),
+                (
+                    "blast-receipt",
+                    schemars::schema_for!(basecraft_protocol::producer_records::BlastReceipt),
+                ),
+                (
+                    "distance-matrix",
+                    schemars::schema_for!(basecraft_protocol::distance_records::DistanceMatrix),
+                ),
+                (
+                    "identified-distance-matrix",
+                    schemars::schema_for!(basecraft_protocol::distance_records::IdentifiedMatrix),
+                ),
+                (
+                    "distance-cache-header",
+                    schemars::schema_for!(basecraft_protocol::distance_records::CacheHeader),
+                ),
+                (
+                    "distance-bootstrap",
+                    schemars::schema_for!(basecraft_protocol::distance_records::BootstrapReport),
+                ),
+                (
+                    "distance-run-report",
+                    schemars::schema_for!(basecraft_protocol::distance_records::DistanceRunReport),
+                ),
+                (
+                    "distance-group-report",
+                    schemars::schema_for!(
+                        basecraft_protocol::distance_records::DistanceGroupReport
+                    ),
+                ),
+                (
+                    "mafft-addition",
+                    schemars::schema_for!(basecraft_protocol::producer_records::MafftAddition),
+                ),
+                (
+                    "primer-report",
+                    schemars::schema_for!(basecraft_protocol::producer_records::PrimerReport),
+                ),
+                (
+                    "zenodo-selection",
+                    schemars::schema_for!(basecraft_protocol::producer_records::ZenodoSelection),
+                ),
+                (
+                    "zenodo-receipt",
+                    schemars::schema_for!(basecraft_protocol::producer_records::ZenodoReceipt),
+                ),
+                (
+                    "iqtree-recovery",
+                    schemars::schema_for!(basecraft_protocol::producer_records::IqtreeRecovery),
+                ),
+                (
+                    "sanger-draft",
+                    schemars::schema_for!(basecraft_protocol::sanger_records::SangerDraft),
+                ),
+                (
+                    "sanger-placement",
+                    schemars::schema_for!(basecraft_protocol::sanger_records::SangerPlacement),
+                ),
+                (
+                    "sanger-request",
+                    schemars::schema_for!(basecraft_protocol::sanger_records::SangerRequest),
+                ),
+                (
+                    "sanger-job-record",
+                    schemars::schema_for!(basecraft_protocol::sanger_records::SangerJobRecord),
+                ),
                 ("report-citations", schemars::schema_for!(Vec<String>)),
                 (
                     "submitted-input",
@@ -600,10 +774,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     schemars::schema_for!(basecraft_protocol::records::StoreRegistry),
                 ),
                 (
-                    "recovery-manifest",
-                    schemars::schema_for!(basecraft_protocol::records::RecoveryManifest),
-                ),
-                (
                     "pending-save",
                     schemars::schema_for!(basecraft_protocol::records::PendingSave),
                 ),
@@ -660,10 +830,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     schemars::schema_for!(basecraft_protocol::submission::SubmissionEdit),
                 ),
                 (
-                    "log-entry",
-                    schemars::schema_for!(basecraft_protocol::LogEntry),
-                ),
-                (
                     "feature",
                     schemars::schema_for!(basecraft_protocol::Feature),
                 ),
@@ -680,7 +846,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             start,
             end,
         } => {
-            let f = basecraft_io::cache::open_fasta(&file)?;
+            let f = basecraft_io::fasta::IndexedFasta::open(&file)?;
             let r = f
                 .index
                 .get(&record)

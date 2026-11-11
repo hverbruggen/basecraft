@@ -1,0 +1,15 @@
+{
+  "artifact_run": "/work/tmp/.tmp6prljk/.basecraft/analyses-v1/runs/01M74NQQM5QPQTCKNCYH6TW8FX",
+  "diagnostics": null,
+  "id": "01M74NQQM5QPQTCKNCYH6TW8FX",
+  "operation": "fixture",
+  "outputs": {},
+  "owner_instance": "45:2026-11-11T06:46:43.595Z",
+  "primary_output": null,
+  "schema_version": 1,
+  "source": {
+    "path": "/work/tmp/.tmp6prljk/source.ab1"
+  },
+  "started": "2026-11-11T06:46:43.595Z",
+  "status": "running"
+}

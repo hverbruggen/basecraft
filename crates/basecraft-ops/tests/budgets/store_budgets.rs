@@ -114,7 +114,13 @@ fn incomplete_decision_and_recheck() {
     std::fs::create_dir(root.join("corrupt")).unwrap();
     let run = ArtifactRun::create(&root.join("corrupt/result.txt"), "reserved").unwrap();
     input_evidence::register(&run).unwrap();
-    let corrupt = run.directory().parent().unwrap().parent().unwrap().to_path_buf();
+    let corrupt = run
+        .directory()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
     std::fs::write(corrupt.join("store.json"), b"damaged").unwrap();
     input_evidence::register(&run).unwrap();
     let stores = [corrupt];

@@ -6,6 +6,7 @@
 //! ```
 //! Writes `exact.tsv`, `nodes.tsv`, `subsets.tsv`, `res.cvs` and `timing.json`.
 use basecraft_asap as asap;
+use basecraft_distance::DistanceMatrixExt;
 use clap::Parser;
 use std::{fmt::Write as _, path::PathBuf, time::Instant};
 

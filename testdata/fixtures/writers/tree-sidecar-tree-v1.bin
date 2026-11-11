@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "tree_hash": "b3:1eaf68cbb597e7175c19a6a8f88a01e8613c20cba12eb2d67fa5729e5232aff3",
+  "exchange_hash": "b3:3f4570097435da892841a5ba8cc668a6513a6458a437d28efb86628f9e79b4bb",
+  "supports": [],
+  "annotations": {},
+  "style": {
+    "support_placement": "natural",
+    "support_shown": [],
+    "support_min": 0,
+    "support_minimums": {},
+    "support_fraction": {},
+    "support_legend": true,
+    "support_decimals": {},
+    "support_proportions": {},
+    "symbols": null,
+    "tip_font": 13,
+    "support_font": 10,
+    "branch_width": 1,
+    "vertical_bar_labels": true,
+    "scale_bar": true
+  }
+}

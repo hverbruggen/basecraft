@@ -38,7 +38,7 @@ fn predicts_genes_with_the_mitochondrial_code() {
     let dir = tempfile::tempdir().unwrap();
     let mut session = Session::unlogged(dir.path());
     let doc = session.open(&fixture()).unwrap();
-    let snap = Snapshot::of(session.doc_key(doc), session.doc(doc).unwrap()).unwrap();
+    let snap = Snapshot::of(session.doc_key(doc).unwrap(), session.doc(doc).unwrap()).unwrap();
 
     let result = p
         .invoke(
@@ -95,7 +95,7 @@ fn short_sequences_need_code_4_or_11() {
     std::fs::write(&short, format!(">short\n{}\n", &seq[..15_000])).unwrap();
     let mut session = Session::unlogged(dir.path());
     let doc = session.open(&short).unwrap();
-    let snap = Snapshot::of(session.doc_key(doc), session.doc(doc).unwrap()).unwrap();
+    let snap = Snapshot::of(session.doc_key(doc).unwrap(), session.doc(doc).unwrap()).unwrap();
 
     let err = p
         .invoke(

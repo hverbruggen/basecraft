@@ -1,7 +1,7 @@
 //! A destination `role/member` exports one validated collection member as a file.
 #[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
 mod isolated_profile;
-use basecraft_ops::links::AlignmentLinkExt;
+use basecraft_ops::records::AlignmentLinkExt;
 use std::process::Command;
 
 use serde_json::{Value, json};
@@ -75,7 +75,7 @@ fn member_destinations_export_one_file_and_never_replace() {
             .all(|a| a["digest"] == digest)
     );
     // The exported tree is linked to its alignment and bound to the run.
-    let link = basecraft_ops::links::AlignmentLink::read(&exported).unwrap();
+    let link = basecraft_ops::records::AlignmentLink::read(&exported).unwrap();
     assert_eq!(
         link.source.canonicalize().unwrap(),
         project.join("input.afa").canonicalize().unwrap()

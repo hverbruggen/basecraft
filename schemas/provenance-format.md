@@ -94,3 +94,25 @@ versions or citations from the network or a currently installed plugin.
 Retained job manifests additionally include `owner_instance` and the submitted
 `source_record`. Process identity identifies current jobs, not scientific authorship.
 Portable publications remain v1; report generation v2 does not rewrite old records.
+
+## Large-file recovery references
+
+Recovery manifests may include `references`, keyed by the original BLAKE3 hash.
+Each value uses the existing `InputReference` record (path relative to the recovery
+folder, file stamp, and hash). This optional field is omitted for small inputs;
+older manifests and operation logs remain readable without migration.
+
+Files above the 100 MiB copy threshold can be edited. Their bytes are not copied
+at open or first edit. Crash recovery requires the referenced original to retain
+its recorded contents; a missing or changed original is reported without
+publishing partial recovered output. Before Save replaces a referenced original,
+Basecraft retains its inode under `.basecraft/recovery-references/<session>/`
+beside the source, then atomically updates the manifest. This is a hard link, not
+a byte copy, and keeps pre-save undo and replay possible. The link is retained as
+provenance evidence; there is no automatic retention expiry. Filesystems that
+cannot create hard links report the failure before the original is replaced.
+
+Small originals and companion files keep their exact private recovery copies.
+These copies and the recovery manifest are prepared while opening, before the
+editor becomes ready. First-edit promotion uses renames, then the Open baseline
+and edit are appended as one durable journal batch.

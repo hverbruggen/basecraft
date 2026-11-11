@@ -74,6 +74,9 @@
           }
         },
         "allocation": null
+      },
+      "host": {
+        "caller": "single_trace"
       }
     },
     {

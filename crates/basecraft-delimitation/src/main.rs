@@ -1,4 +1,5 @@
 //! Standalone native preparation engine; plugins use this versioned request.
+use basecraft_distance::DistanceMatrixExt;
 use basecraft_protocol::delimitation::{
     DelimitationRequest, DelimitationResult, JobRecord, JobStatus,
 };
@@ -92,7 +93,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         basecraft_io::write_atomic(&sidecar, |w| {
             serde_json::to_writer_pretty(
                 w,
-                &serde_json::json!({"version":1,"exchange_hash":spart_hash,"workspace":workspace}),
+                &basecraft_protocol::companion_records::DelimitationSidecar {
+                    version: 1,
+                    exchange_hash: spart_hash.clone(),
+                    path_base: None,
+                    workspace: workspace.clone(),
+                },
             )?;
             Ok(())
         })?;
@@ -977,7 +983,19 @@ fn progress(
         basecraft_io::write_atomic(Path::new(path), |w| {
             serde_json::to_writer(
                 w,
-                &serde_json::json!({"job_id":request.parameters.get("progress_job_id").and_then(serde_json::Value::as_str).unwrap_or(&request.job_id),"stage_job_id":request.job_id,"generation":request.generation,"phase":phase,"completed":completed,"total":total}),
+                &basecraft_protocol::producer_records::DelimitationProgress {
+                    job_id: request
+                        .parameters
+                        .get("progress_job_id")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or(&request.job_id)
+                        .into(),
+                    stage_job_id: request.job_id.clone(),
+                    generation: request.generation,
+                    phase: phase.into(),
+                    completed,
+                    total,
+                },
             )?;
             Ok(())
         })?;

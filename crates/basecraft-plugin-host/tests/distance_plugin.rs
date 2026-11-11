@@ -1,7 +1,7 @@
 //! Registered distance operations: outputs, provenance, history and replay.
 #[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
 mod isolated_profile;
-use basecraft_ops::links::AlignmentLinkExt;
+use basecraft_ops::records::AlignmentLinkExt;
 mod common;
 
 use std::path::Path;
@@ -71,7 +71,7 @@ fn distance_outputs_are_logged_and_replay() {
     let tree = session.open(&root.join("upgma.nwk")).unwrap();
     assert_eq!(session.tree(tree).unwrap().tip_count(), 4);
     drop(session);
-    let replay = basecraft_ops::replay::replay(root).unwrap();
+    let replay = basecraft_ops::records::replay(root).unwrap();
     assert!(replay.ok(), "{:?}", replay.problems);
 }
 
@@ -100,12 +100,12 @@ fn forest_members_share_one_alignment_snapshot() {
     });
     common::assert_completed(&outcome);
     let output = dir.path().join("forest.nwk");
-    let main = basecraft_ops::links::AlignmentLink::read(&output).unwrap();
+    let main = basecraft_ops::records::AlignmentLink::read(&output).unwrap();
     // Component trees travel with the exported tree and share its snapshot.
     for index in 1..=2 {
         let path = dir.path().join(format!("forest.component-{index}.nwk"));
         let tree = session.open(&path).unwrap();
-        let link = basecraft_ops::links::AlignmentLink::read(&path).unwrap();
+        let link = basecraft_ops::records::AlignmentLink::read(&path).unwrap();
         assert_eq!(link.snapshot, main.snapshot);
         assert!(
             link.checked_snapshot(&path, session.tree(tree).unwrap())
@@ -119,7 +119,7 @@ fn forest_members_share_one_alignment_snapshot() {
             .any(|name| name.ends_with(".alignment.afa"))
     );
     session.flush().unwrap();
-    assert!(basecraft_ops::replay::replay(dir.path()).unwrap().ok());
+    assert!(basecraft_ops::records::replay(dir.path()).unwrap().ok());
 }
 
 #[test]
@@ -166,7 +166,7 @@ fn bootstrap_provenance_success_and_withheld_support_replay() {
                     basecraft_protocol::SupportKind::Bootstrap
                 );
                 assert_eq!(generated.supports()[0].decimals(generated.style()), 0);
-                let link = basecraft_ops::links::AlignmentLink::read(&output).unwrap();
+                let link = basecraft_ops::records::AlignmentLink::read(&output).unwrap();
                 assert!(link.inferred);
                 assert_eq!(link.source, input);
                 assert!(link.checked_snapshot(&output, generated).is_ok());
@@ -192,7 +192,7 @@ fn bootstrap_provenance_success_and_withheld_support_replay() {
         }
         session.flush().unwrap();
     }
-    let replay = basecraft_ops::replay::replay(root).unwrap();
+    let replay = basecraft_ops::records::replay(root).unwrap();
     assert!(replay.ok(), "{:?}", replay.problems);
 }
 
@@ -220,7 +220,7 @@ fn reference_tree_save_as_and_complete_export_retain_alignment_and_support() {
     let tree = session.open(&output).unwrap();
     let copied = root.path().join("copied.nwk");
     session.save(tree, Some(&copied)).unwrap();
-    let link = basecraft_ops::links::AlignmentLink::read(&copied).unwrap();
+    let link = basecraft_ops::records::AlignmentLink::read(&copied).unwrap();
     assert_eq!(link.schema, 2);
     assert!(
         link.checked_snapshot(&copied, session.tree(tree).unwrap())
@@ -232,11 +232,11 @@ fn reference_tree_save_as_and_complete_export_retain_alignment_and_support() {
             .any(|name| name.ends_with(".alignment.afa"))
     );
     let package = root.path().join("portable");
-    basecraft_ops::provenance::package(&output, &package).unwrap();
+    basecraft_ops::records::package(&output, &package).unwrap();
     std::fs::remove_file(&source).unwrap();
     let exported = package.join("tree.nwk");
     assert_eq!(
-        basecraft_ops::provenance::verify(&exported).unwrap(),
+        basecraft_ops::records::verify(&exported).unwrap(),
         Vec::<String>::new()
     );
     let tree = basecraft_ops::files::load_tree(&exported).unwrap().doc;
@@ -244,7 +244,7 @@ fn reference_tree_save_as_and_complete_export_retain_alignment_and_support() {
         tree.supports()[0].kind,
         basecraft_protocol::SupportKind::Bootstrap
     );
-    let link = basecraft_ops::links::AlignmentLink::read(&exported).unwrap();
+    let link = basecraft_ops::records::AlignmentLink::read(&exported).unwrap();
     assert!(link.checked_snapshot(&exported, &tree).is_ok());
     assert!(Path::new(&common::evidence(&outcome)).is_dir());
 }
@@ -301,7 +301,7 @@ fn registered_cache_reuses_distances_across_consumers_and_refuses_mismatch() {
             );
         }
         assert_eq!(
-            basecraft_ops::provenance::verify(&common::member(&outcome, report)).unwrap(),
+            basecraft_ops::records::verify(&common::member(&outcome, report)).unwrap(),
             Vec::<String>::new()
         );
     }
@@ -367,7 +367,7 @@ fn bootstrap_destination_publishes_working_copy_and_repairs_late_collision() {
                 std::fs::read(retained).unwrap()
             );
             assert_eq!(
-                basecraft_ops::provenance::verify(&visible).unwrap(),
+                basecraft_ops::records::verify(&visible).unwrap(),
                 Vec::<String>::new()
             );
         }
@@ -391,7 +391,7 @@ fn bootstrap_destination_publishes_working_copy_and_repairs_late_collision() {
     std::fs::remove_file(&visible).unwrap();
     common::assert_completed(&manager.repair(&accepted.run_id).unwrap());
     assert_eq!(
-        basecraft_ops::provenance::verify(&visible).unwrap(),
+        basecraft_ops::records::verify(&visible).unwrap(),
         Vec::<String>::new()
     );
 }

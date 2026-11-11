@@ -4,7 +4,7 @@
 //! it into viewport changes, selections and operations, and every edit goes
 //! through the ops session.
 
-use basecraft_ops::links::AlignmentLinkExt;
+use basecraft_ops::records::AlignmentLinkExt;
 #[cxx_qt::bridge]
 pub mod qobject {
     impl cxx_qt::Threading for TreeController {}
@@ -95,6 +95,8 @@ pub mod qobject {
         fn workspace_created(self: Pin<&mut TreeController>, path: QString);
         #[qinvokable]
         fn open_file(self: Pin<&mut TreeController>, path: &QString) -> bool;
+        #[qsignal]
+        fn opened(self: Pin<&mut TreeController>, success: bool);
         #[qinvokable]
         fn highlight_taxa(self: Pin<&mut TreeController>, names: &QString);
         #[qsignal]
@@ -547,6 +549,12 @@ impl qobject::TreeController {
 
     /// Rebuild the frame, status line and scroll bars.
     fn refresh(mut self: Pin<&mut Self>) {
+        if let Some(warning) =
+            crate::document_open::recovery_notice(self.rust().session.as_ref(), self.rust().doc)
+        {
+            self.as_mut().set_message_kind(QString::from("error"));
+            self.as_mut().set_message(warning);
+        }
         let access_thread = self.qt_thread();
         if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
             crate::bridge::checked_document!(sync self, session.tree(doc));
@@ -719,10 +727,10 @@ impl qobject::TreeController {
 
     fn refresh_link(mut self: Pin<&mut Self>) {
         let path = PathBuf::from(self.rust().file_path.to_string());
-        let origin = basecraft_ops::links::AlignmentLink::read(&path)
+        let origin = basecraft_ops::records::AlignmentLink::read(&path)
             .ok()
             .filter(|l| l.inferred);
-        let linked = basecraft_ops::links::AlignmentLink::read_view(&path);
+        let linked = basecraft_ops::records::AlignmentLink::read_view(&path);
         let (source, status) = match linked {
             Ok(link) => {
                 let status = crate::bridge::checked_document!(
@@ -733,12 +741,12 @@ impl qobject::TreeController {
                 (link.source.to_string_lossy().into_owned(), status)
             }
             Err(e)
-                if basecraft_ops::links::metadata_present(&basecraft_ops::links::sidecar(
+                if basecraft_ops::records::metadata_present(&basecraft_ops::records::sidecar(
                     &path,
                 ))
                 .unwrap_or(true)
-                    || basecraft_ops::links::metadata_present(
-                        &basecraft_ops::links::view_sidecar(&path),
+                    || basecraft_ops::records::metadata_present(
+                        &basecraft_ops::records::view_sidecar(&path),
                     )
                     .unwrap_or(true) =>
             {
@@ -770,7 +778,7 @@ impl qobject::TreeController {
                 return Ok(());
             };
             let source = PathBuf::from(path.to_string());
-            let outputs = basecraft_ops::links::AlignmentLink::associate(
+            let outputs = basecraft_ops::records::AlignmentLink::associate(
                 &tree_path,
                 session.tree(doc)?,
                 &source,
@@ -861,7 +869,7 @@ impl qobject::TreeController {
             session,
             move |session| {
                 let tree = session.tree(doc).map_err(|e| e.to_string())?;
-                let link = basecraft_ops::links::AlignmentLink::read_view(&tree_path)
+                let link = basecraft_ops::records::AlignmentLink::read_view(&tree_path)
                     .map_err(|e| format!("Link an alignment first: {e}"))?;
                 let input = link
                     .checked_snapshot(&tree_path, tree)
@@ -890,8 +898,8 @@ impl qobject::TreeController {
                             "selection_tree".into(),
                             vec![InputReference::Document {
                                 doc: doc.0.to_string(),
-                                generation: session.generation(doc),
-                                revision: session.revision(doc),
+                                generation: session.generation(doc).map_err(|e| e.to_string())?,
+                                revision: session.revision(doc).map_err(|e| e.to_string())?,
                             }],
                         ),
                     ]
@@ -1020,34 +1028,20 @@ impl qobject::TreeController {
         true
     }
     pub fn open_file(mut self: Pin<&mut Self>, path: &QString) -> bool {
-        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
-            crate::bridge::checked_document!(sync self, session.tree(doc));
-        }
         if self.rust().busy {
             self.fail("Wait for the running operation before replacing this document");
             return false;
         }
-        let path = PathBuf::from(path.to_string());
-        let root = project_root(&path);
-        let result: Result<(), crate::document_open::OpenError> = (|| {
-            let mut session = Session::recoverable(&root)?;
-            let doc = session.open(&path)?;
-            let candidate = crate::document_open::Candidate::prepare(
-                session,
-                doc,
-                basecraft_ops::files::Kind::Tree,
-                path,
-                root,
-            )?;
-            self.as_mut().install_opened(candidate)
-        })();
-        match result {
-            Ok(()) => true,
-            Err(error) => {
-                self.fail(&error.to_string());
-                false
+        self.as_mut().set_busy(true);
+        crate::document_open::open_file(self, path, |mut this, result| {
+            let result = result.and_then(|candidate| this.as_mut().install_opened(candidate));
+            this.as_mut().set_busy(false);
+            let ok = result.is_ok();
+            if let Err(error) = result {
+                this.as_mut().fail(&error.to_string());
             }
-        }
+            this.opened(ok);
+        })
     }
 
     pub(crate) fn install_fresh(
@@ -1070,8 +1064,8 @@ impl qobject::TreeController {
         Some((
             session.id().into(),
             doc,
-            session.generation(doc),
-            session.revision(doc),
+            session.generation(doc).unwrap(),
+            session.revision(doc).unwrap(),
         ))
     }
 
@@ -1753,7 +1747,9 @@ impl qobject::TreeController {
                 .map_err(|e| e.to_string())?;
             basecraft_ops::metadata::verify_label_owner(&previous_style, &source)
                 .map_err(|e| e.to_string())?;
-            let path = session.root().join(session.doc_key(doc));
+            let path = session
+                .root()
+                .join(session.doc_key(doc).map_err(|e| e.to_string())?);
             let request = basecraft_ops::metadata::ConsumerRequest::Labels {
                 document: path.to_string_lossy().into_owned(),
                 records: tree

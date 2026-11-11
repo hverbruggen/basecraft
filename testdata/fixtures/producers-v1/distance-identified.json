@@ -1,0 +1,1 @@
+{"schema":1,"input_hash":"234ea237f06fe7713e0731102a7add6d7a31ec90656c83470c9abc2d2dfdbdb2","names":["a","b","c"],"columns":8,"model":"p","min_overlap":1,"gap_policy":"pairwise deletion; ACGTU valid; U=T","distances":[0.125,0.125,0.125],"shared_sites":[8,8,8],"variances":[0.013671875,0.013671875,0.013671875],"basecraft_identity":{"operation":"fixture"}}

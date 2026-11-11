@@ -78,10 +78,11 @@ impl Session {
     ) -> Result<SaveCheck> {
         let target = crate::save_guard::target_path(target)?;
         let publication = match &self.write_publication {
-            crate::documents::WritePublication::Immediate => None,
+            crate::documents::WritePublication::Immediate
+            | crate::documents::WritePublication::Create => None,
             crate::documents::WritePublication::Recovery { destination, .. } => Some((
                 self.write_publication.logical(&target)?,
-                crate::replay::directory_identity(
+                crate::records::replay::directory_identity(
                     destination
                         .parent()
                         .ok_or_else(|| invalid("recovery parent missing"))?,
@@ -102,8 +103,8 @@ impl Session {
             session: self.id.clone(),
             document: id.0,
             document_key: self.docs[id.0].key.clone(),
-            generation: self.generation(id),
-            revision: self.revision(id),
+            generation: self.generation(id)?,
+            revision: self.revision(id)?,
             accepted_hashes: self.docs[id.0].accepted_hashes.clone(),
             target,
             target_revision,
@@ -212,7 +213,8 @@ impl Session {
 
     pub(crate) fn recovery_stores(&self) -> Result<Vec<crate::analysis_store::ArtifactRun>> {
         match &self.write_publication {
-            crate::documents::WritePublication::Immediate => Err(invalid("not a recovery Session")),
+            crate::documents::WritePublication::Immediate
+            | crate::documents::WritePublication::Create => Err(invalid("not a recovery Session")),
             crate::documents::WritePublication::Recovery { stores, .. } => Ok(stores
                 .lock()
                 .map_err(|_| invalid("recovery stores unavailable"))?

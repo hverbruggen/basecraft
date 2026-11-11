@@ -1,7 +1,7 @@
 //! Imported support values keep a verifiable, referenced (not copied) source.
-#[path = "support/isolated_profile.rs"]
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
 mod isolated_profile;
-use basecraft_ops::{Session, provenance, replay};
+use basecraft_ops::{Session, records};
 use basecraft_protocol::Op;
 use std::path::Path;
 
@@ -58,17 +58,17 @@ fn imported_source_is_referenced_verified_and_survives_a_folder_move() {
     session.save(doc, None).unwrap();
     drop(session);
 
-    let publication = provenance::inspect(&target).unwrap();
+    let publication = records::inspect(&target).unwrap();
     assert!(publication.events.iter().any(|event| matches!(&event.op,
         Op::ToolRun { plugin, operation, params, .. }
             if plugin == "basecraft.tree" && operation == "import_support"
                 && params["input_run"]["id"].is_string() && params["sets"][0] == "Bootstrap")));
-    assert_eq!(provenance::verify(&target).unwrap(), Vec::<String>::new());
+    assert_eq!(records::verify(&target).unwrap(), Vec::<String>::new());
     // Reference-first: the source bytes are not copied into any store.
     let source_hash = basecraft_io::hash_file(&source).unwrap();
     let copied = walk(&target.parent().unwrap().join(".basecraft"))
         .into_iter()
-        .chain(walk(&provenance::companion(&target)))
+        .chain(walk(&records::companion(&target)))
         .any(|path| basecraft_io::hash_file(&path).ok().as_ref() == Some(&source_hash));
     assert!(!copied, "the support source was copied");
 
@@ -76,7 +76,7 @@ fn imported_source_is_referenced_verified_and_survives_a_folder_move() {
     let moved = dir.path().join("moved");
     std::fs::rename(target.parent().unwrap(), &moved).unwrap();
     let target = moved.join("target.nwk");
-    assert_eq!(provenance::verify(&target).unwrap(), Vec::<String>::new());
+    assert_eq!(records::verify(&target).unwrap(), Vec::<String>::new());
     // Reopening keeps the imported values and their names.
     let reopened = basecraft_ops::files::load_tree(&target).unwrap();
     assert_eq!(
@@ -86,7 +86,7 @@ fn imported_source_is_referenced_verified_and_survives_a_folder_move() {
 
     // A changed source is reported, never silently accepted.
     std::fs::write(moved.join("support.nwk"), "((A:1,B:1)10:1,(C:1,D:1)20:1);").unwrap();
-    assert_ne!(provenance::verify(&target).unwrap(), Vec::<String>::new());
+    assert_ne!(records::verify(&target).unwrap(), Vec::<String>::new());
 }
 
 #[test]
@@ -116,7 +116,7 @@ fn a_source_without_support_or_a_clashing_name_changes_and_records_nothing() {
     std::fs::write(&other, "((A:1,E:1)75:1,(C:1,D:1)60:1);").unwrap();
     assert!(session.import_support(doc, &other, "x").is_err());
     assert_eq!(session.tree(doc).unwrap().supports(), before.as_slice());
-    assert!(!session.can_undo(doc));
+    assert!(!session.can_undo(doc).unwrap());
     assert!(!target.parent().unwrap().join(".basecraft").exists());
 }
 
@@ -134,7 +134,7 @@ fn imported_values_replay_from_the_journal() {
     }
     // Replay never rereads the live source: change it first.
     std::fs::write(&source, "((A:1,B:1)1:1,(C:1,D:1)2:1);").unwrap();
-    let report = replay::replay(root).unwrap();
+    let report = records::replay(root).unwrap();
     assert!(report.ok(), "{:#?}", report.problems);
 }
 

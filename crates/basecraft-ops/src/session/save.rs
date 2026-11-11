@@ -79,6 +79,9 @@ impl Session {
         if !self.is_open(id) {
             return Err(Error::UnknownDocument { id });
         }
+        if let Some(message) = self.content(id)?.as_document().save_refusal() {
+            return Err(Error::Unsupported(message.into()));
+        }
         let mut warnings = Vec::new();
         let mut target_check = None;
         let new_sequence = self.docs[id.0].accepted_hashes.is_empty();
@@ -87,12 +90,17 @@ impl Session {
                 "Choose a destination with Save as for this new sequence",
             ));
         }
+        // Reviews keep the link and identity guards their former payload owned.
+        let review = self.docs[id.0].content.kind() == files::Kind::SangerReview;
+        if review {
+            let requested =
+                path.map_or_else(|| self.resolve(&self.docs[id.0].key), Path::to_path_buf);
+            self.check_target_identity(id, &requested)?;
+        }
         let path = path.filter(|p| !self.is_own_file(id, p));
         let target = path.map_or_else(|| self.resolve(&self.docs[id.0].key), Path::to_path_buf);
-
-        let clean = (history_only || (self.log.is_some() && path.is_none()))
-            && self.docs[id.0].undo.last().map(|edit| &edit.entry_id)
-                == self.docs[id.0].saved_edit.as_ref();
+        let clean =
+            (history_only || (self.log.is_some() && path.is_none())) && self.docs[id.0].is_clean();
         if history_only && !clean {
             return Err(invalid("history publication requires a saved document"));
         }
@@ -108,8 +116,10 @@ impl Session {
                 warnings,
             });
         }
-        if new_sequence || (mode == SaveMode::NewDestination && path.is_some()) {
-            crate::save_guard::Revision::check(None, &target)?;
+        if (new_sequence || (mode == SaveMode::NewDestination && path.is_some()))
+            && !self.check_previous_save_target(id, &target)?
+        {
+            crate::save_guard::check_new_target(&target)?;
         }
 
         let mut evidence_lock = crate::input_evidence::lock_save(&target)?;
@@ -177,6 +187,16 @@ impl Session {
         }
 
         self.track(id)?;
+        // Retaining the original by hard link changes only its change time.
+        for (source, stamp) in &mut source_stamps {
+            let now = crate::save_guard::change_stamp(source)?;
+            if now.as_ref().map(|now| &now.0) != stamp.as_ref().map(|stamp| &stamp.0) {
+                return Err(Error::ChangedOnDisk {
+                    path: source.clone(),
+                });
+            }
+            *stamp = now;
+        }
 
         self.flush()?;
         let mut prepared = if history_only {
@@ -184,7 +204,7 @@ impl Session {
         } else {
             Some(self.docs[id.0].content.as_document().prepare_write(
                 &target,
-                files::Format::from_path(&target)?,
+                self.save_format(id, &target)?,
                 &self.storage_root,
                 &self.write_publication,
             )?)
@@ -200,8 +220,35 @@ impl Session {
             |p| p.hashes().into_iter().map(|(_, hash)| hash).collect(),
         );
         if self.log.is_some() {
+            let document = self.docs[id.0].content.as_document();
+            let mut paths = document.independently_saved_files(&target);
+            if paths.is_empty() {
+                paths.push(target.clone());
+                paths.extend(
+                    document
+                        .saved_companion(&target)
+                        .filter(|_| expected.len() > 1),
+                );
+            }
+            let hashes = paths
+                .iter()
+                .zip(&expected)
+                .map(|(path, hash)| (self.relative(path), hash.clone()))
+                .collect();
+            let baseline = self.entry(
+                id,
+                self.actor.clone(),
+                Op::Save {
+                    path: self.relative(&target),
+                },
+                OpResult {
+                    hashes,
+                    feature: None,
+                },
+            );
             let intent = serde_json::to_vec_pretty(&serde_json::to_value(
                 basecraft_protocol::records::PendingSave {
+                    baseline,
                     schema_version: 1,
                     session: self.id.clone(),
                     target: target.clone(),
@@ -224,7 +271,9 @@ impl Session {
         }
         // Preservation and pending-intent publication can take time. A decision
         // cannot authorize an externally replaced destination during that work.
-
+        if review {
+            self.check_target_identity(id, &target)?;
+        }
         if let Some(check) = &target_check
             && !check.target_is_current(&target)?
         {
@@ -237,8 +286,10 @@ impl Session {
                 return Err(Error::ChangedOnDisk { path: source });
             }
         }
-        if new_sequence || (mode == SaveMode::NewDestination && path.is_some()) {
-            crate::save_guard::Revision::check(None, &target)?;
+        if (new_sequence || (mode == SaveMode::NewDestination && path.is_some()))
+            && !self.check_previous_save_target(id, &target)?
+        {
+            crate::save_guard::check_new_target(&target)?;
         }
         #[cfg(not(unix))]
         {
@@ -254,18 +305,20 @@ impl Session {
         let outcome = if history_only {
             self.log_save(id, &target, self.docs[id.0].accepted_hashes.clone())
         } else {
-            self.save_inner(id, path, prepared.unwrap())
+            self.save_inner(id, path, prepared.unwrap(), before.is_none())
         };
         if outcome.is_ok() {
+            // A review is clean after any completed save, Save As included.
+            if review {
+                self.docs[id.0].saved_at = Some(self.docs[id.0].mark());
+            }
+            self.docs[id.0].saved_target = Some((
+                target.clone(),
+                crate::input_evidence::stamp(&target)?,
+                expected[0].clone(),
+            ));
             if target == self.resolve(&self.docs[id.0].key) {
-                self.docs[id.0].saved_state_hashes.clone_from(&expected);
-                self.docs[id.0].saved_edit = self.docs[id.0]
-                    .undo
-                    .last()
-                    .map(|edit| edit.entry_id.clone());
-                self.docs[id.0].current_saved_hashes.take();
-                let _ = self.docs[id.0].current_saved_hashes.set(expected.clone());
-
+                self.docs[id.0].saved_at = Some(self.docs[id.0].mark());
                 self.docs[id.0].disk_stamp = crate::input_evidence::stamp(&target)?;
             }
             if self.log.is_some() {
@@ -296,6 +349,14 @@ impl Session {
                 }
             }
             let now = basecraft_io::hash_file(&target).ok();
+            if now.as_ref() == expected.first()
+                && let Ok(stamp) = crate::input_evidence::stamp(&target)
+            {
+                if self.is_own_file(id, &target) {
+                    self.docs[id.0].disk_stamp = stamp.clone();
+                }
+                self.docs[id.0].saved_target = Some((target.clone(), stamp, expected[0].clone()));
+            }
             if now != before && now.as_ref() == expected.first() {
                 // Our main-file replacement completed. Accept precisely that
                 // generation for retry, while retaining old sidecar checks.
@@ -391,18 +452,29 @@ impl Session {
         id: DocId,
         path: Option<&Path>,
         prepared: crate::documents::PreparedWrite,
+        create: bool,
     ) -> Result<()> {
         self.flush()?;
         let target = path.map_or_else(|| self.resolve(&self.docs[id.0].key), Path::to_path_buf);
         // An unchanged ordinary save neither rewrites data nor creates history.
 
         self.track(id)?;
-
-        let format = files::Format::from_path(&target)?;
+        let format = self.save_format(id, &target)?;
         let original = self.resolve(&self.docs[id.0].key);
         let document = self.docs[id.0].content.as_document();
         let links = document.prepare_links(&original, &target, format)?;
-        let write = || document.publish_write(prepared, &target, &self.write_publication);
+        let publication = if create
+            && matches!(
+                self.write_publication,
+                crate::documents::WritePublication::Immediate
+            ) {
+            &crate::documents::WritePublication::Create
+        } else {
+            &self.write_publication
+        };
+        #[cfg(test)]
+        super::save_failure_tests::fail_write(super::save_failure_tests::WriteStep::Replace)?;
+        let write = || document.publish_write(prepared, &target, publication);
         let (hashes, outputs) = if let Some(links) = links {
             links.publish(write)?
         } else {
@@ -433,7 +505,7 @@ impl Session {
         hashes: Vec<(String, String)>,
     ) -> Result<()> {
         let key = self.relative(target);
-        let entry = self.entry(
+        let mut entry = self.entry(
             id,
             self.actor.clone(),
             Op::Save { path: key },
@@ -442,38 +514,55 @@ impl Session {
                 feature: None,
             },
         );
-
-        let prepared = if self.tracked
+        entry.source.as_mut().expect("save source").files = entry
+            .result
+            .hashes
+            .iter()
+            .map(|(path, hash)| {
+                Ok(basecraft_protocol::provenance::InputReference {
+                    path: path.clone(),
+                    stamp: crate::input_evidence::stamp(&self.resolve(path))?,
+                    hash: hash.clone(),
+                    extra: std::collections::BTreeMap::default(),
+                })
+            })
+            .collect::<Result<_>>()?;
+        #[cfg(test)]
+        super::save_failure_tests::fail_write(super::save_failure_tests::WriteStep::Journal)?;
+        self.write(&entry)?;
+        self.docs[id.0].recovery_boundary = Some(entry.id.clone());
+        self.docs[id.0].baseline = Some(entry.clone());
+        self.docs[id.0].baseline_logged = true;
+        self.docs[id.0].source_stamps = entry
+            .source
+            .as_ref()
+            .expect("save source")
+            .files
+            .iter()
+            .map(|file| (self.resolve(&file.path), Some(file.stamp.clone())))
+            .collect();
+        self.docs[id.0].recovery_changed = false;
+        if target == self.resolve(&self.docs[id.0].key) {
+            self.docs[id.0]
+                .accepted_hashes
+                .clone_from(&entry.result.hashes);
+            self.docs[id.0].disk_stamp = entry.source.as_ref().expect("save source").files[0]
+                .stamp
+                .clone();
+            self.docs[id.0].absent_sidecars.clear();
+        }
+        if self.tracked
             && self.provenance_policy != basecraft_platform::settings::ProvenancePolicy::None
         {
-            self.prepare_save_history(id, target, &entry, &[], None)?
-        } else {
-            crate::documents::PreparedWrite::default()
-        };
-        // Sync staged history alongside the journal, but publish no history
-        // destination until the Save record and every candidate are durable.
-        prepared
-            .publish_with(|| {
-                #[cfg(test)]
-                super::save_failure_tests::fail_write(
-                    super::save_failure_tests::WriteStep::Journal,
-                )?;
-                self.write(&entry)?;
-                if target == self.resolve(&self.docs[id.0].key) {
-                    self.docs[id.0]
-                        .accepted_hashes
-                        .clone_from(&entry.result.hashes);
-                    self.docs[id.0].absent_sidecars.clear();
-                }
-                Ok(())
-            })
-            .map_err(|error| Error::Damaged {
-                path: target.into(),
-                detail: format!(
-                    "data saved; history incomplete: {error}. Recovery remains at {}",
-                    self.storage_root.display()
-                ),
-            })?;
+            self.publish_save(id, target, &entry, &[], None)
+                .map_err(|error| Error::Damaged {
+                    path: target.into(),
+                    detail: format!(
+                        "data saved; history incomplete: {error}. Recovery remains at {}",
+                        self.storage_root.display()
+                    ),
+                })?;
+        }
         Ok(())
     }
 
@@ -504,25 +593,69 @@ impl Session {
     /// Hashes the files a save would write, without writing them.
     pub fn save_hashes(&self, id: DocId) -> Result<Vec<String>> {
         let slot = &self.docs[id.0];
-        if !slot.content.as_document().saved_hashes_are_content_only() {
-            return self.save_hashes_at(id, Path::new(&slot.key));
-        }
-        if let Some(hashes) = slot.current_saved_hashes.get() {
-            return Ok(hashes.clone());
-        }
-        let hashes = self.save_hashes_at(id, Path::new(&slot.key))?;
-        // Concurrent readers may compute the same vector; a losing set is ordinary.
-        let _ = slot.current_saved_hashes.set(hashes.clone());
-        Ok(hashes)
+        self.save_hashes_at(id, Path::new(&slot.key))
     }
 
     /// Replay a save using its actual exchange format, including Save As.
     pub fn save_hashes_at(&self, id: DocId, target: &Path) -> Result<Vec<String>> {
-        #[cfg(test)]
-        super::saved_fingerprint_tests::attempt();
         self.docs[id.0].content.as_document().saved_hashes(
             &self.resolve(&target.to_string_lossy()),
             &self.write_publication,
         )
+    }
+}
+
+impl Session {
+    fn save_format(&self, id: DocId, target: &Path) -> Result<files::Format> {
+        if self.docs[id.0].content.kind() == files::Kind::SangerReview {
+            Ok(files::Format::SangerReview)
+        } else {
+            files::Format::from_path(target)
+        }
+    }
+
+    fn check_target_identity(&self, id: DocId, target: &Path) -> Result<()> {
+        crate::save_guard::reject_link_target(target)?;
+        let slot = &self.docs[id.0];
+        let expected = slot
+            .saved_target
+            .as_ref()
+            .filter(|(path, _, _)| crate::save_guard::same_target(path, target))
+            .map(|(_, stamp, _)| stamp)
+            .or_else(|| {
+                (!slot.accepted_hashes.is_empty() && self.is_own_file(id, target))
+                    .then_some(&slot.disk_stamp)
+            });
+        if let Some(expected) = expected
+            && crate::input_evidence::stamp(target)? != *expected
+        {
+            return Err(Error::ChangedOnDisk {
+                path: target.into(),
+            });
+        }
+        Ok(())
+    }
+
+    // The latest Save As target remains owned by this session without changing the
+    // journal's stable document key or discarding its undo stack.
+    pub(super) fn check_previous_save_target(
+        &self,
+        id: DocId,
+        target: &std::path::Path,
+    ) -> Result<bool> {
+        if self.docs.iter().enumerate().any(|(index, slot)| {
+            index != id.0 && crate::save_guard::same_target(&self.resolve(&slot.key), target)
+        }) {
+            return Ok(false);
+        }
+        let Some((_, _, hash)) = self.docs[id.0]
+            .saved_target
+            .as_ref()
+            .filter(|(path, _, _)| crate::save_guard::same_target(path, target))
+        else {
+            return Ok(false);
+        };
+        crate::save_guard::check_hash(target, hash)?;
+        Ok(true)
     }
 }

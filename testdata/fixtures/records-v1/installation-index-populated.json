@@ -49,18 +49,5 @@
   "editable": [
     "a/\"quoted\"\\path",
     "z/é"
-  ],
-  "a-extra": {
-    "a": [
-      "é",
-      false
-    ],
-    "z": 2
-  },
-  "middle-extra": "\n\t\\\"",
-  "z-extra": [
-    null,
-    true,
-    1.25
   ]
 }

@@ -130,6 +130,8 @@ pub mod qobject {
         fn workspace_created(self: Pin<&mut AlignmentController>, path: QString);
         #[qinvokable]
         fn open_file(self: Pin<&mut AlignmentController>, path: &QString) -> bool;
+        #[qsignal]
+        fn opened(self: Pin<&mut AlignmentController>, success: bool);
         #[qinvokable]
         fn highlight_taxa(self: Pin<&mut AlignmentController>, names: &QString);
         #[qsignal]
@@ -326,7 +328,7 @@ use crate::bridge::{
     ALT, CTRL, KEY_0, KEY_BACKSPACE, KEY_DELETE, KEY_DOWN, KEY_END, KEY_EQUAL, KEY_ESCAPE,
     KEY_HOME, KEY_LEFT, KEY_MINUS, KEY_PAGE_DOWN, KEY_PAGE_UP, KEY_PLUS, KEY_RIGHT, KEY_UP, KEY_Y,
     KEY_Z, SHIFT, WHEEL_ZOOM, ZOOM_STEP, css, file_name, load_theme, memory_text, monospace_font,
-    plugin_dir, project_root, theme_stamp, took,
+    plugin_dir, theme_stamp, took,
 };
 
 const KEY_A: i32 = 0x41;
@@ -521,6 +523,12 @@ impl qobject::AlignmentController {
 
     /// Rebuild the frame, status line and scroll bars.
     fn refresh(mut self: Pin<&mut Self>) {
+        if let Some(warning) =
+            crate::document_open::recovery_notice(self.rust().session.as_ref(), self.rust().doc)
+        {
+            self.as_mut().set_message_kind(QString::from("error"));
+            self.as_mut().set_message(warning);
+        }
         let access_thread = self.qt_thread();
         if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
             crate::bridge::checked_document!(sync self, session.alignment(doc));
@@ -883,34 +891,20 @@ impl qobject::AlignmentController {
         true
     }
     pub fn open_file(mut self: Pin<&mut Self>, path: &QString) -> bool {
-        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
-            crate::bridge::checked_document!(sync self, session.alignment(doc));
-        }
         if self.rust().busy {
-            self.fail("Wait for the running tool before replacing this document");
+            self.fail("Wait for the running operation before replacing this document");
             return false;
         }
-        let path = PathBuf::from(path.to_string());
-        let root = project_root(&path);
-        let result: Result<(), crate::document_open::OpenError> = (|| {
-            let mut session = Session::recoverable(&root)?;
-            let doc = session.open(&path)?;
-            let candidate = crate::document_open::Candidate::prepare(
-                session,
-                doc,
-                basecraft_ops::files::Kind::Alignment,
-                path,
-                root,
-            )?;
-            self.as_mut().install_opened(candidate)
-        })();
-        match result {
-            Ok(()) => true,
-            Err(error) => {
-                self.fail(&error.to_string());
-                false
+        self.as_mut().set_busy(true);
+        crate::document_open::open_file(self, path, |mut this, result| {
+            let result = result.and_then(|candidate| this.as_mut().install_opened(candidate));
+            this.as_mut().set_busy(false);
+            let ok = result.is_ok();
+            if let Err(error) = result {
+                this.as_mut().fail(&error.to_string());
             }
-        }
+            this.opened(ok);
+        })
     }
 
     pub(crate) fn install_fresh(
@@ -933,8 +927,8 @@ impl qobject::AlignmentController {
         Some((
             session.id().into(),
             doc,
-            session.generation(doc),
-            session.revision(doc),
+            session.generation(doc).unwrap(),
+            session.revision(doc).unwrap(),
         ))
     }
 
@@ -1529,7 +1523,7 @@ impl qobject::AlignmentController {
                 let (Some(session), Some(doc)) = (&r.session, r.doc) else {
                     return Err("Alignment was closed".into());
                 };
-                if session.generation(doc) != generation {
+                if session.generation(doc).map_err(|e| e.to_string())? != generation {
                     return Err("Alignment changed during addition; try again".into());
                 }
             }
@@ -1730,7 +1724,7 @@ impl qobject::AlignmentController {
                 let exports = vec![(primary_member(&operation)?, output.clone())];
                 (output, exports)
             };
-            let generation = session.generation(doc);
+            let generation = session.generation(doc).map_err(|e| e.to_string())?;
             let job = DocumentJob::submit(
                 &mut r.session,
                 doc,

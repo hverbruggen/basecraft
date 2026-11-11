@@ -1,0 +1,1 @@
+{"schema":1,"input_hash":"a3dfb8cd185a5c17128d503522147a9c58df1fd1325884c0c14330c5f07644f6","names":["a","b","c","d"],"columns":20,"model":"p","min_overlap":1,"gap_policy":"pairwise deletion; ACGTU valid; U=T","basecraft_identity":{"operation":"fixture"}}

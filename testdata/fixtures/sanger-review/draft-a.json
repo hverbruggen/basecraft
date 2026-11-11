@@ -1,0 +1,76 @@
+{
+  "aligned_columns": 4,
+  "columns": [
+    {
+      "column": 1,
+      "conflict": false,
+      "consensus": "A",
+      "review": true,
+      "support": [
+        {
+          "base": "A",
+          "kind": "call",
+          "read": 1
+        }
+      ]
+    },
+    {
+      "column": 2,
+      "conflict": false,
+      "consensus": "C",
+      "review": true,
+      "support": [
+        {
+          "base": "C",
+          "kind": "call",
+          "read": 1
+        }
+      ]
+    },
+    {
+      "column": 3,
+      "conflict": false,
+      "consensus": "G",
+      "review": true,
+      "support": [
+        {
+          "base": "G",
+          "kind": "call",
+          "read": 1
+        }
+      ]
+    },
+    {
+      "column": 4,
+      "conflict": false,
+      "consensus": "T",
+      "review": true,
+      "support": [
+        {
+          "base": "T",
+          "kind": "call",
+          "read": 1
+        }
+      ]
+    }
+  ],
+  "conflict_columns": 0,
+  "consensus": "ACGT",
+  "consensus_length": 4,
+  "engine": "Tracy",
+  "engine_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "inputs": [
+    {
+      "orientation": "forward",
+      "path": "trace.ab1",
+      "read": 1,
+      "sha256": "245fb10f874da417017b6d7d0434ed887f7021ce0641d6ef5f533a8ff0c6bf3a"
+    }
+  ],
+  "minimum_identity": 0.8,
+  "minimum_overlap": 1,
+  "mode": "basecall",
+  "overlaps": [],
+  "status": "draft_requires_review",
+  "version_output": "synthetic caller 1"
+}

@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DistanceGroupReport",
+  "type": "object",
+  "properties": {
+    "gap_policy": {
+      "type": "string"
+    },
+    "groups": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/GroupSummary"
+      }
+    },
+    "input_hash": {
+      "type": "string"
+    },
+    "min_overlap": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "model": {
+      "$ref": "#/$defs/DistanceModel"
+    },
+    "unassigned": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "model",
+    "min_overlap",
+    "gap_policy",
+    "input_hash",
+    "unassigned",
+    "groups"
+  ],
+  "$defs": {
+    "DistanceModel": {
+      "type": "string",
+      "enum": [
+        "p",
+        "jc69",
+        "k2p"
+      ]
+    },
+    "GroupSummary": {
+      "type": "object",
+      "properties": {
+        "barcode_gap": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "group": {
+          "type": "string"
+        },
+        "max_within": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "mean_within": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "min_between": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "missing_between": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "missing_within": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "nearest_group": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "nearest_groups": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "observed_between": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "observed_within": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "specimens": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "group",
+        "specimens",
+        "nearest_groups",
+        "observed_between",
+        "observed_within",
+        "missing_within",
+        "missing_between"
+      ]
+    }
+  }
+}

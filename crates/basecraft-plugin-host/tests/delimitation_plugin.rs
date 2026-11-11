@@ -1,12 +1,12 @@
 //! Actual public socket/SDK/native-engine workflows through registered
 //! operations; no mock numerical results. Cancellation uses a gated engine
 //! wrapper to hold execution without relying on scientific workload duration.
-use basecraft_ops::links::AlignmentLinkExt;
+use basecraft_ops::records::AlignmentLinkExt;
 mod common;
 #[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
 mod isolated_profile;
 
-use basecraft_ops::{Session, input_evidence, replay};
+use basecraft_ops::{Session, input_evidence, records};
 use basecraft_plugin_host::jobs::JobManager;
 use basecraft_protocol::{delimitation::JobStatus, operation::RuntimeState};
 use serde_json::{Value, json};
@@ -44,7 +44,8 @@ fn finished(session: &Session, doc: basecraft_ops::DocId) -> Vec<(String, JobSta
         .document_record(doc)
         .unwrap()
         .events
-        .into_iter()
+        .iter()
+        .cloned()
         .filter_map(|event| match event.op {
             basecraft_protocol::Op::JobFinished { report } => Some((report.id, report.status)),
             _ => None,
@@ -73,7 +74,10 @@ fn snapshots_and_terminal_outcomes_survive_success_and_failure() {
         // The submitted tree is referenced in place, with its accepted hash.
         let run = common::evidence(&outcome);
         let input = input_evidence::read_input(&run).unwrap();
-        assert_eq!(input.state, "referenced");
+        assert_eq!(
+            input.state,
+            basecraft_protocol::input_records::EvidenceState::Referenced
+        );
         assert_eq!(
             input.source.unwrap().hash,
             basecraft_io::hash_file(&source).unwrap()
@@ -95,7 +99,7 @@ fn snapshots_and_terminal_outcomes_survive_success_and_failure() {
     // Both attempts are in the tree's history with their terminal state.
     assert_eq!(finished(&session, doc), expected);
     drop(session);
-    let report = replay::replay(root.path()).unwrap();
+    let report = records::replay(root.path()).unwrap();
     assert!(report.ok(), "{:?}", report.problems);
 }
 
@@ -137,13 +141,22 @@ fn exact_identity_precedes_public_tree_inference_and_restores_specimens() {
             common::read_json(&common::evidence(&outcome).join("stages.json")),
         )
         .unwrap();
+        if std::env::var_os("BASECRAFT_CAPTURE_WORKFLOW_RECORDS").is_some() {
+            let fixtures =
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/records-v1");
+            for (file, name) in [
+                ("stages.json", "workflow-stages.json"),
+                ("validated-artifacts.json", "validated-artifacts.json"),
+            ] {
+                std::fs::copy(common::evidence(&outcome).join(file), fixtures.join(name)).unwrap();
+            }
+        }
         assert_eq!(stages.len(), 3);
         for stage in &stages {
             common::assert_completed(stage);
             assert!(common::evidence(stage).join("execution.json").is_file());
         }
-        let publication =
-            basecraft_ops::provenance::inspect(&root.path().join(&workspace)).unwrap();
+        let publication = basecraft_ops::records::inspect(&root.path().join(&workspace)).unwrap();
         for operation in ["haplotypes", "tree", "gmyc_single"] {
             assert!(
                 publication.events.iter().any(|event| matches!(&event.op,
@@ -219,9 +232,18 @@ fn exact_identity_precedes_public_tree_inference_and_restores_specimens() {
         &find(&common::evidence(&outcome), "fit.json.run.json").expect("unavailable report"),
     );
     assert_eq!(report["job"]["status"], "unavailable");
+    let bytes =
+        std::fs::read(find(&common::evidence(&outcome), "fit.json.run.json").unwrap()).unwrap();
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../testdata/fixtures/records-v1/workflow-failure.json");
+    if std::env::var_os("BASECRAFT_CAPTURE_WORKFLOW_RECORDS").is_some() {
+        std::fs::write(fixture, bytes).unwrap();
+    } else {
+        assert_eq!(bytes, std::fs::read(fixture).unwrap());
+    }
     assert!(!root.path().join("single.spart").exists());
     drop(session);
-    let result = replay::replay(root.path()).unwrap();
+    let result = records::replay(root.path()).unwrap();
     assert!(result.ok(), "{:?}", result.problems);
 }
 
@@ -305,7 +327,7 @@ fn asap_sampling_restores_roster_and_replays() {
         2
     );
     drop(session);
-    let report = replay::replay(root.path()).unwrap();
+    let report = records::replay(root.path()).unwrap();
     assert!(report.ok(), "{:?}", report.problems);
 }
 
@@ -400,18 +422,18 @@ fn tree_methods_update_one_canonical_spart_and_export_without_sources() {
     });
     assert!(refused.contains("output_conflict"), "{refused}");
     assert_eq!(before, std::fs::read(&canonical).unwrap());
-    let issues = basecraft_ops::provenance::verify(&canonical).unwrap();
+    let issues = basecraft_ops::records::verify(&canonical).unwrap();
     assert!(issues.is_empty(), "{issues:?}");
     let saved_folder = parent.path().join("saved-copy");
     std::fs::create_dir(&saved_folder).unwrap();
     let copied = saved_folder.join("species.spart");
     session.save(doc, Some(&copied)).unwrap();
     assert_eq!(
-        basecraft_ops::provenance::verify(&copied).unwrap(),
+        basecraft_ops::records::verify(&copied).unwrap(),
         Vec::<String>::new()
     );
     let package = parent.path().join("package");
-    basecraft_ops::provenance::package(&copied, &package).unwrap();
+    basecraft_ops::records::package(&copied, &package).unwrap();
     let expected = session
         .delimitation(doc)
         .unwrap()
@@ -426,7 +448,7 @@ fn tree_methods_update_one_canonical_spart_and_export_without_sources() {
     std::fs::rename(&package, &relocated_package).unwrap();
     let exported = relocated_package.join("species.spart");
     assert_eq!(
-        basecraft_ops::provenance::verify(&exported).unwrap(),
+        basecraft_ops::records::verify(&exported).unwrap(),
         Vec::<String>::new()
     );
     let work = basecraft_ops::files::load_delimitation(&exported).unwrap();
@@ -477,7 +499,10 @@ fn dirty_tree_submission_retains_generated_bytes_without_stale_original_claim() 
     common::assert_completed(&outcome);
     let run = common::evidence(&outcome);
     let input = input_evidence::read_input(&run).unwrap();
-    assert_eq!(input.state, "generated");
+    assert_eq!(
+        input.state,
+        basecraft_protocol::input_records::EvidenceState::Generated
+    );
     assert!(input.source.is_none());
     let generated = run.join("submitted.fasta");
     assert!(
@@ -602,7 +627,7 @@ fn ptp_cases() {
             "{outcome:#?}"
         );
         assert_eq!(
-            basecraft_ops::provenance::verify(&root.path().join("species.spart")).unwrap(),
+            basecraft_ops::records::verify(&root.path().join("species.spart")).unwrap(),
             Vec::<String>::new()
         );
     }
@@ -711,11 +736,11 @@ fn optional_display_tree_uses_hidden_reference_first_companions() {
     let run = common::evidence(&outcome);
     assert_eq!(
         input_evidence::read_input(&run).unwrap().state,
-        "referenced"
+        basecraft_protocol::input_records::EvidenceState::Referenced
     );
     assert!(!run.join("submitted.fasta").exists());
     let tree = basecraft_ops::files::load_tree(&display).unwrap();
-    let link = basecraft_ops::links::AlignmentLink::read(&display).unwrap();
+    let link = basecraft_ops::records::AlignmentLink::read(&display).unwrap();
     // The link resolves to exactly the alignment the run read: the referenced
     // source in the canonical FASTA the descriptor's view submits.
     assert_eq!(link.source, source);
@@ -736,7 +761,7 @@ fn optional_display_tree_uses_hidden_reference_first_companions() {
         link.snapshot_hash
     );
     assert_eq!(
-        basecraft_ops::provenance::verify(&display).unwrap(),
+        basecraft_ops::records::verify(&display).unwrap(),
         Vec::<String>::new()
     );
     assert!(
@@ -790,7 +815,14 @@ fn alignment_workflows_use_frozen_unsaved_inputs() {
         let outcome = common::wait_in(&manager, &mut session, &accepted.run_id);
         common::assert_completed(&outcome);
         let input = input_evidence::read_input(&common::evidence(&outcome)).unwrap();
-        assert_eq!(input.state, if dirty { "generated" } else { "referenced" });
+        assert_eq!(
+            input.state,
+            if dirty {
+                basecraft_protocol::input_records::EvidenceState::Generated
+            } else {
+                basecraft_protocol::input_records::EvidenceState::Referenced
+            }
+        );
         let submitted = common::evidence(&outcome).join("submitted.fasta");
         if dirty {
             assert_eq!(
@@ -884,7 +916,7 @@ os.execv({real_engine}, [{real_engine}, *sys.argv[1:]])
     let registry = common::registry(&bundled);
     let mut session = Session::new(root.path());
     let doc = session.open(&source).unwrap();
-    let generation = session.generation(doc);
+    let generation = session.generation(doc).unwrap();
     let mut manager = JobManager::default();
     let accepted = common::submit_in(&mut manager, &registry, &mut session, |s| json!({
         "operation":"basecraft.host/asap_alignment@1", "inputs":{"alignment":common::document(s,doc)},
@@ -914,7 +946,7 @@ os.execv({real_engine}, [{real_engine}, *sys.argv[1:]])
     manager.cancel(&accepted.run_id).unwrap();
     let cancelled = common::wait_in(&manager, &mut session, &accepted.run_id);
     assert_eq!(cancelled.state, RuntimeState::Cancelled);
-    assert_eq!(session.generation(doc), generation);
+    assert_eq!(session.generation(doc).unwrap(), generation);
     assert_eq!(
         finished(&session, doc),
         [(accepted.run_id, JobStatus::Cancelled)]
@@ -996,11 +1028,11 @@ fn workflow_repairs_publication_and_applies_all_hypotheses_in_one_undo_group() {
     session.redo(doc).unwrap();
     assert_eq!(session.delimitation(doc).unwrap().hypotheses, applied);
     assert_eq!(
-        basecraft_ops::provenance::verify(&export).unwrap(),
+        basecraft_ops::records::verify(&export).unwrap(),
         Vec::<String>::new()
     );
     drop(session);
-    assert!(replay::replay(root.path()).unwrap().ok());
+    assert!(records::replay(root.path()).unwrap().ok());
 }
 
 #[test]
@@ -1060,12 +1092,12 @@ fn workflow_save_decision_covers_nested_stages_and_original_ancestry() {
             );
             std::fs::remove_file(&source).unwrap();
             assert_eq!(
-                basecraft_ops::provenance::verify(&root.path().join("species.spart")).unwrap(),
+                basecraft_ops::records::verify(&root.path().join("species.spart")).unwrap(),
                 Vec::<String>::new()
             );
             for stage in stages {
                 assert_eq!(
-                    basecraft_ops::provenance::verify(Path::new(&stage.artifacts[0].path)).unwrap(),
+                    basecraft_ops::records::verify(Path::new(&stage.artifacts[0].path)).unwrap(),
                     Vec::<String>::new()
                 );
             }
@@ -1074,14 +1106,14 @@ fn workflow_save_decision_covers_nested_stages_and_original_ancestry() {
                 if policy == SavePolicy::BreakEvidence {
                     assert_eq!(
                         input_evidence::read_input(&affected.run).unwrap().state,
-                        "broken"
+                        basecraft_protocol::input_records::EvidenceState::Broken
                     );
                 } else {
                     assert!(!affected.run.exists());
                 }
             }
             assert!(
-                !matches!(basecraft_ops::provenance::verify(&root.path().join("species.spart")),Ok(issues) if issues.is_empty())
+                !matches!(basecraft_ops::records::verify(&root.path().join("species.spart")),Ok(issues) if issues.is_empty())
             );
         }
     }

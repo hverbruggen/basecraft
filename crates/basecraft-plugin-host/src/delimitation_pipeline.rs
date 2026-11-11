@@ -31,8 +31,7 @@ impl AlignmentWorkflow<'_> {
         if self.cancelled.load(Ordering::Acquire) {
             return Err(Error::Protocol("cancelled before workflow stage".into()));
         }
-        let operation = format!("{operation}@1");
-        let descriptor = &self.registry.resolve(&operation, None)?.descriptor;
+        let descriptor = &self.registry.resolve(operation, None)?.descriptor;
         // The workflow descriptor is the superset. Pass only parameters declared
         // by each stage, retaining the normalized nested settings in its receipt.
         let properties = descriptor.parameters["properties"]
@@ -98,12 +97,7 @@ impl AlignmentWorkflow<'_> {
         // Connect immutable completed stage publications to the existing parent
         // ledger. They carry their own execution identity, history and inputs.
         let mut input = mutation.read_input(self.parent.run.directory())?;
-        let upstream = input
-            .extra
-            .entry("upstream".into())
-            .or_insert_with(|| json!([]))
-            .as_array_mut()
-            .ok_or_else(|| Error::Protocol("invalid workflow ancestry".into()))?;
+        let upstream = &mut input.upstream;
         for stage in &self.stages {
             if stage.state != RuntimeState::Completed {
                 continue;
@@ -114,14 +108,32 @@ impl AlignmentWorkflow<'_> {
                     .as_ref()
                     .ok_or_else(|| Error::Protocol("stage evidence missing".into()))?,
             );
-            if upstream.iter().any(|parent| parent["id"] == stage.run_id) {
+            if upstream.iter().any(|parent| parent.id == stage.run_id) {
                 continue;
             }
-            upstream.push(json!({"bundle":basecraft_ops::input_evidence::relative(self.parent.run.directory(), directory)?,
-                "id":stage.run_id,"hash":basecraft_io::hash_file(&directory.join("manifest.json")).map_err(basecraft_ops::Error::from)?}));
+            upstream.push(basecraft_protocol::input_records::UpstreamLink {
+                bundle: (basecraft_ops::input_evidence::relative(
+                    self.parent.run.directory(),
+                    directory,
+                )?)
+                .into(),
+                id: stage.run_id.clone(),
+                hash: basecraft_io::hash_file(&directory.join("manifest.json"))?,
+            });
         }
         mutation.write_input(self.parent.run.directory(), &input)?;
         Ok(())
+    }
+
+    fn stage_operation(&self, name: &str) -> Result<String> {
+        self.parent
+            .operation
+            .descriptor
+            .host
+            .as_ref()
+            .and_then(|host| host.workflow_operations.get(name))
+            .cloned()
+            .ok_or_else(|| Error::Protocol(format!("workflow has no {name} operation")))
     }
 
     pub fn run(&mut self, method: &str, effective: Value) -> Result<InvokeResult> {
@@ -137,7 +149,7 @@ impl AlignmentWorkflow<'_> {
             &source,
         )?;
         let prepare = self.stage(
-            "basecraft.delimitation/haplotypes",
+            &self.stage_operation("prepare")?,
             &json!({"alignment":[{"kind":"file","path":source}]}),
             &effective,
         )?;
@@ -159,7 +171,15 @@ impl AlignmentWorkflow<'_> {
                 "GMYC unavailable: fewer than two retained haplotypes; no tree or fit was invented";
             basecraft_ops::input_evidence::write_json(
                 &Path::new(&self.parent.context.outputs["artifacts"]).join("fit.json.run.json"),
-                &json!({"version":1,"job":{"status":"unavailable","diagnostics":[diagnostic]},"workspace":null,"metrics":{}}),
+                &serde_json::to_value(basecraft_protocol::records::WorkflowFailure {
+                    version: 1,
+                    job: basecraft_protocol::records::WorkflowFailureJob {
+                        status: basecraft_protocol::delimitation::JobStatus::Unavailable,
+                        diagnostics: vec![diagnostic.into()],
+                    },
+                    workspace: None,
+                    metrics: std::collections::BTreeMap::new(),
+                })?,
             )?;
             return Err(Error::Protocol(diagnostic.into()));
         }
@@ -168,8 +188,7 @@ impl AlignmentWorkflow<'_> {
         } else {
             source.clone()
         };
-        let alignment_hash =
-            basecraft_io::hash_file(&alignment).map_err(basecraft_ops::Error::from)?;
+        let alignment_hash = basecraft_io::hash_file(&alignment)?;
         if unique
             && !report["job"]["outputs"].as_object().is_some_and(|outputs| {
                 outputs.iter().any(|(path, hash)| {
@@ -196,7 +215,7 @@ impl AlignmentWorkflow<'_> {
         }
         if unique {
             let mapping = prepare.join("result.json.haplotypes.json");
-            let hash = basecraft_io::hash_file(&mapping).map_err(basecraft_ops::Error::from)?;
+            let hash = basecraft_io::hash_file(&mapping)?;
             if !report["job"]["outputs"].as_object().is_some_and(|outputs| {
                 outputs.iter().any(|(path, digest)| {
                     Path::new(path).file_name() == mapping.file_name() && digest == &hash
@@ -211,7 +230,7 @@ impl AlignmentWorkflow<'_> {
             let mut tree_params = effective;
             tree_params["method"] = json!("upgma");
             let tree = self.stage(
-                "basecraft.distance/tree",
+                &self.stage_operation("tree")?,
                 &json!({"alignment":[{"kind":"file","path":alignment}]}),
                 &tree_params,
             )?;
@@ -221,7 +240,7 @@ impl AlignmentWorkflow<'_> {
             params["tree_inference"] =
                 json!("UPGMA equal-rate clustering from retained aligned sequences");
         }
-        let result = self.stage(&format!("basecraft.delimitation/{fit}"), &inputs, &params)?;
+        let result = self.stage(&self.stage_operation("fit")?, &inputs, &params)?;
         let target = Path::new(&self.parent.context.outputs["artifacts"]);
         // Keep nested stage results in their owned runs. The parent's stable fit
         // report is the one logical result consumed by every interface.

@@ -278,6 +278,7 @@ version = "0.0.0"
 dependencies = [
  "basecraft-io",
  "basecraft-platform",
+ "basecraft-protocol",
  "blake3",
  "clap",
  "rayon",
@@ -330,7 +331,6 @@ dependencies = [
  "blake3",
  "calamine",
  "memchr",
- "memmap2",
  "roxmltree 0.21.1",
  "sha2",
  "tempfile",
@@ -348,6 +348,7 @@ dependencies = [
  "basecraft-protocol",
  "basecraft-viewmodel",
  "fs4",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",

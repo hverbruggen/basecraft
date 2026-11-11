@@ -4,6 +4,9 @@
   "description": "`pending-save.json`; data and provenance remain separate writes.",
   "type": "object",
   "properties": {
+    "baseline": {
+      "$ref": "#/$defs/LogEntry"
+    },
     "before_hash": {
       "description": "Always emitted, including JSON null when the target did not exist.",
       "type": [
@@ -37,6 +40,7 @@
   },
   "additionalProperties": true,
   "required": [
+    "baseline",
     "schema_version",
     "session",
     "target",
@@ -45,20 +49,4992 @@
     "note"
   ],
   "$defs": {
-    "RecoveryStatus": {
-      "description": "Recovery lifecycle labels. Retain an unfamiliar label without reinterpreting it.",
-      "anyOf": [
+    "AccessionEntry": {
+      "type": "object",
+      "properties": {
+        "accession": {
+          "description": "Accession, with its version when the archive gave one.",
+          "type": "string"
+        },
+        "record": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "record",
+        "accession"
+      ]
+    },
+    "AccessionPolicy": {
+      "description": "Legacy suggestions are retained on old documents. Configured sources prevent\nspecimen identifiers elsewhere in a name from influencing inclusion suggestions.",
+      "oneOf": [
         {
-          "type": "string",
-          "enum": [
-            "unsaved",
-            "pending"
+          "type": "object",
+          "properties": {
+            "policy": {
+              "type": "string",
+              "const": "legacy_heuristic"
+            }
+          },
+          "required": [
+            "policy"
           ]
         },
         {
-          "type": "string"
+          "type": "object",
+          "properties": {
+            "include_metadata": {
+              "type": "boolean"
+            },
+            "input": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/IdentifierSource"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "policy": {
+              "type": "string",
+              "const": "configured"
+            }
+          },
+          "required": [
+            "policy",
+            "include_metadata"
+          ]
         }
       ]
+    },
+    "Actor": {
+      "description": "Who made a change: a person in the GUI (`human`), a script through the\nCLI or Python API (`script`), an assistant over MCP (`agent`), or a tool,\nplugin or outside program. New kinds are additive; older records keep\ntheir kinds.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "human"
+            },
+            "user": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "user"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "tool"
+            },
+            "tool": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "tool",
+            "version"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "plugin"
+            },
+            "version": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "version"
+          ]
+        },
+        {
+          "description": "An assistant over MCP, named by its client's model ID.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "agent"
+            },
+            "model": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "model"
+          ]
+        },
+        {
+          "description": "A script driving Basecraft through the CLI or the Python API, named by\nits client (for example `CLI` or `Python`).",
+          "type": "object",
+          "properties": {
+            "client": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "script"
+            }
+          },
+          "required": [
+            "kind",
+            "client"
+          ]
+        },
+        {
+          "description": "A change Basecraft detected on disk but didn't make.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "external"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    },
+    "Author": {
+      "type": "object",
+      "properties": {
+        "first": {
+          "type": "string"
+        },
+        "last": {
+          "type": "string"
+        },
+        "middle": {
+          "description": "Middle names or initials, without the first name's, such as `Marie` or `M.R.`.\nBare uppercase runs (`MR`) retain their legacy initials meaning; uppercase full names are ambiguous.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "first",
+        "last"
+      ]
+    },
+    "BatchSettings": {
+      "description": "Settings shared by every record of the batch.",
+      "type": "object",
+      "properties": {
+        "ends": {
+          "$ref": "#/$defs/EndPolicy",
+          "default": "auto"
+        },
+        "genetic_code": {
+          "description": "NCBI genetic code (translation table) number.",
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "marker": {
+          "$ref": "#/$defs/Marker"
+        },
+        "mol_type": {
+          "$ref": "#/$defs/MolType",
+          "default": "genomic_dna"
+        },
+        "organelle": {
+          "description": "The organelle the marker is from; none for nuclear markers.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Organelle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "marker",
+        "genetic_code"
+      ]
+    },
+    "Cell": {
+      "description": "One value. The variant must match its column's kind; any column may hold\na missing-value reason instead.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "date": {
+              "$ref": "#/$defs/PartialDate"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "date"
+          ]
+        },
+        {
+          "description": "Latitude or longitude in decimal degrees.",
+          "type": "object",
+          "properties": {
+            "degrees": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "degrees"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "number": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "number"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "category": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "category"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "missing": {
+              "$ref": "#/$defs/MissingReason"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "missing"
+          ]
+        }
+      ]
+    },
+    "CellChange": {
+      "description": "One value to set, or with no value, to clear.",
+      "type": "object",
+      "properties": {
+        "column": {
+          "type": "string"
+        },
+        "specimen": {
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Cell"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "specimen",
+        "column"
+      ]
+    },
+    "ChangeSet": {
+      "description": "Additions and updates applied together: one undo step. Every import\nroute produces one, reviewed before it is applied.",
+      "type": "object",
+      "properties": {
+        "cells": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CellChange"
+          }
+        },
+        "columns": {
+          "description": "New specimen columns.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Column"
+          }
+        },
+        "identifications": {
+          "description": "Appended identifications.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Identification"
+          }
+        },
+        "links": {
+          "description": "New links, or replacements for a record's existing link.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RecordLink"
+          }
+        },
+        "specimens": {
+          "description": "New specimen IDs, appended to the roster.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "taxa": {
+          "description": "New taxa, or replacements for taxa with the same ID.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Taxon"
+          }
+        }
+      }
+    },
+    "CladeAnnotation": {
+      "description": "A highlighted clade: a name on its stem branch, a bar along its tips, a\nfield of colour behind it, or any mix of these.",
+      "type": "object",
+      "properties": {
+        "bar": {
+          "description": "Draw a bar along the clade's tips, labelled beside it.",
+          "type": "boolean",
+          "default": false
+        },
+        "bar_width": {
+          "description": "Bar thickness in pixels.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 3,
+          "minimum": 0
+        },
+        "clade": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "colour": {
+          "description": "`#rrggbb`, for the bar and the field.",
+          "type": "string",
+          "default": "#808080"
+        },
+        "field": {
+          "description": "Fill the area the clade covers.",
+          "type": "boolean",
+          "default": false
+        },
+        "label": {
+          "type": "string",
+          "default": ""
+        },
+        "on_branch": {
+          "description": "Write the label on the clade's stem branch.",
+          "type": "boolean",
+          "default": false
+        },
+        "opacity_left": {
+          "description": "The field's opacity at its left and right edges, in percent. Two\ndifferent values make a gradient.",
+          "type": "integer",
+          "format": "uint8",
+          "default": 30,
+          "maximum": 255,
+          "minimum": 0
+        },
+        "opacity_right": {
+          "type": "integer",
+          "format": "uint8",
+          "default": 30,
+          "maximum": 255,
+          "minimum": 0
+        }
+      },
+      "required": [
+        "clade"
+      ]
+    },
+    "Column": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ColumnKind"
+        },
+        "name": {
+          "description": "A Darwin Core term (`catalogNumber`, `eventDate`, ...) or a user name:\nan ASCII letter followed by letters, digits or underscores.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "kind"
+      ]
+    },
+    "ColumnKind": {
+      "description": "What a column holds. Every kind also accepts an INSDC missing-value reason.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "A calendar date at its true precision: year, year and month, or day.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "date"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "WGS84 decimal degrees, -90 to 90.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "latitude"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "WGS84 decimal degrees, -180 to 180.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "longitude"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "A number, in `unit` when given.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "number"
+            },
+            "unit": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "One of `levels`.",
+          "type": "object",
+          "properties": {
+            "levels": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "categorical"
+            }
+          },
+          "required": [
+            "type",
+            "levels"
+          ]
+        }
+      ]
+    },
+    "ColumnStyle": {
+      "description": "How one hypothesis column is drawn. Unset fields follow the theme.",
+      "type": "object",
+      "properties": {
+        "colors": {
+          "description": "Group ID to `#rrggbb`.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "gap": {
+          "description": "Pixels between the previous column and this one; the first column\nhas none. Unset: 1.5 bar widths.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "names": {
+          "description": "Write the species names to the right of the bars.",
+          "type": "boolean"
+        },
+        "spacing": {
+          "description": "Pixels between one species' bar and the next down the column.\nUnset: 0.65 bar widths.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "width": {
+          "description": "Bar width in pixels.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      }
+    },
+    "Decision": {
+      "description": "What to do with a row.",
+      "oneOf": [
+        {
+          "description": "A newly generated sequence, exported for submission.",
+          "type": "object",
+          "properties": {
+            "decision": {
+              "type": "string",
+              "const": "new"
+            }
+          },
+          "required": [
+            "decision"
+          ]
+        },
+        {
+          "description": "Already in an archive (a downloaded reference, or submitted\nbefore); not exported.",
+          "type": "object",
+          "properties": {
+            "accession": {
+              "type": "string"
+            },
+            "decision": {
+              "type": "string",
+              "const": "existing"
+            }
+          },
+          "required": [
+            "decision",
+            "accession"
+          ]
+        },
+        {
+          "description": "Left out of the submission.",
+          "type": "object",
+          "properties": {
+            "decision": {
+              "type": "string",
+              "const": "exclude"
+            }
+          },
+          "required": [
+            "decision"
+          ]
+        }
+      ]
+    },
+    "DelimitationEdit": {
+      "description": "One atomic edit. Inferred and imported results must first be derived.",
+      "oneOf": [
+        {
+          "description": "Explicit workspace specimen -> project roster ID links. Empty replaces\nall links with unlinked status; local scientific IDs stay unchanged.",
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "set_roster_links"
+            },
+            "links": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "metadata": {
+              "description": "Standard source reference, with the metadata's existing owner activity.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/InputReference"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "required": [
+            "action",
+            "links"
+          ]
+        },
+        {
+          "description": "Import a validated batch without splitting lineage across separate edits.",
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "combine"
+            },
+            "hypotheses": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Hypothesis"
+              }
+            }
+          },
+          "required": [
+            "action",
+            "hypotheses"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "add"
+            },
+            "hypothesis": {
+              "$ref": "#/$defs/Hypothesis"
+            }
+          },
+          "required": [
+            "action",
+            "hypothesis"
+          ]
+        },
+        {
+          "description": "Drop hypotheses. Refused while a kept hypothesis was copied from one.",
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "remove"
+            },
+            "hypotheses": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "action",
+            "hypotheses"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "derive"
+            },
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "source": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "action",
+            "source",
+            "id",
+            "name"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "rename"
+            },
+            "hypothesis": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "action",
+            "hypothesis",
+            "name"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "rename_group"
+            },
+            "group": {
+              "type": "string"
+            },
+            "hypothesis": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "action",
+            "hypothesis",
+            "group",
+            "label"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "split"
+            },
+            "group": {
+              "$ref": "#/$defs/Group"
+            },
+            "hypothesis": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "action",
+            "hypothesis",
+            "group"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "merge"
+            },
+            "groups": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "uniqueItems": true
+            },
+            "hypothesis": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "action",
+            "hypothesis",
+            "groups",
+            "id",
+            "label"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "reassign"
+            },
+            "group": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "hypothesis": {
+              "type": "string"
+            },
+            "specimens": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "action",
+            "hypothesis",
+            "specimens"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "save_cut"
+            },
+            "boundary": {
+              "type": "string"
+            },
+            "hypothesis": {
+              "$ref": "#/$defs/Hypothesis"
+            },
+            "threshold": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "required": [
+            "action",
+            "hypothesis",
+            "threshold",
+            "boundary"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "set_view"
+            },
+            "view": {
+              "$ref": "#/$defs/DelimitationView"
+            }
+          },
+          "required": [
+            "action",
+            "view"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "set_display_tree"
+            },
+            "evidence_run": {
+              "type": "string"
+            },
+            "hash": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "action",
+            "path",
+            "hash",
+            "evidence_run"
+          ]
+        }
+      ]
+    },
+    "DelimitationView": {
+      "type": "object",
+      "properties": {
+        "columns": {
+          "description": "Hypothesis ID to its bar column style.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/ColumnStyle"
+          }
+        },
+        "display_tree": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "selected": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "tree_edits": {
+          "description": "How the display tree is drawn here: the tree editor's own drawing\nedits, replayed in order on the display tree. Its file is not changed.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TreeDrawingEdit"
+          }
+        },
+        "visible": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "visible",
+        "selected"
+      ]
+    },
+    "DocState": {
+      "description": "A cheap fingerprint of a document after an operation. Replay compares\nit at every step; full content hashes are compared at open and save.",
+      "type": "object",
+      "properties": {
+        "counts": {
+          "description": "Named counts and document kind. Absent in logs written before these\ndescriptors were introduced; the original fields retain their meaning.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DocumentCounts"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "features": {
+          "description": "Annotations: features of a sequence, clade annotations of a tree.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "len": {
+          "description": "Residues of a sequence, columns of an alignment, tips of a tree.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "rows": {
+          "description": "Rows of an alignment.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "len",
+        "features"
+      ]
+    },
+    "DocumentCounts": {
+      "description": "A document fingerprint names what it counts instead of interpreting a\nmetadata link as an alignment row or a submission frame as a feature.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "call_sets": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "columns": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "kind": {
+              "type": "string",
+              "const": "sanger_review"
+            },
+            "unresolved": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "kind",
+            "columns",
+            "unresolved",
+            "call_sets"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "features": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "kind": {
+              "type": "string",
+              "const": "sequence"
+            },
+            "residues": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "kind",
+            "residues",
+            "features"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "columns": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "kind": {
+              "type": "string",
+              "const": "alignment"
+            },
+            "rows": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "kind",
+            "columns",
+            "rows"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "annotations": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "kind": {
+              "type": "string",
+              "const": "tree"
+            },
+            "tips": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "kind",
+            "tips",
+            "annotations"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "hypotheses": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "kind": {
+              "type": "string",
+              "const": "delimitation"
+            },
+            "specimens": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "kind",
+            "specimens",
+            "hypotheses"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "identifications": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "kind": {
+              "type": "string",
+              "const": "metadata"
+            },
+            "links": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "specimens": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "kind",
+            "specimens",
+            "identifications",
+            "links"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "accessions": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "frames": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "kind": {
+              "type": "string",
+              "const": "submission"
+            },
+            "records": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "kind",
+            "records",
+            "frames",
+            "accessions"
+          ]
+        }
+      ]
+    },
+    "EndPolicy": {
+      "description": "How the feature's ends are marked.",
+      "oneOf": [
+        {
+          "description": "Coding markers: an end is complete when it has a start (5') or stop\n(3') codon in frame. Other markers: both ends partial.",
+          "type": "string",
+          "const": "auto"
+        },
+        {
+          "description": "Both ends partial.",
+          "type": "string",
+          "const": "partial"
+        },
+        {
+          "description": "Both ends complete.",
+          "type": "string",
+          "const": "complete"
+        }
+      ]
+    },
+    "ExportMapping": {
+      "description": "Retained identities for interpreting archive returns after later selection edits.",
+      "type": "object",
+      "properties": {
+        "records": {
+          "description": "Submitted `SeqID` to original biological record name.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceAlignment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "records"
+      ]
+    },
+    "ExportSettings": {
+      "type": "object",
+      "properties": {
+        "trim_terminal_unknown": {
+          "description": "Remove runs of unknown bases (N, ?) at the ends of each record.\nThe trimmed lengths are recorded in the coordinate map.",
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "Feature": {
+      "description": "A feature: a type, a location and qualifiers. GFF3 attributes map to\nqualifiers too, with `ID` and `Parent` kept as ordinary qualifiers.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "location": {
+          "$ref": "#/$defs/Location"
+        },
+        "qualifiers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Qualifier"
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "location",
+        "qualifiers"
+      ]
+    },
+    "FieldTarget": {
+      "description": "What an imported field holds.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "role": {
+              "type": "string",
+              "const": "ignore"
+            }
+          },
+          "required": [
+            "role"
+          ]
+        },
+        {
+          "description": "The specimen's local ID: the key that rows are matched on.",
+          "type": "object",
+          "properties": {
+            "role": {
+              "type": "string",
+              "const": "specimen"
+            }
+          },
+          "required": [
+            "role"
+          ]
+        },
+        {
+          "description": "A sequence record ID to link to the row's specimen.",
+          "type": "object",
+          "properties": {
+            "role": {
+              "type": "string",
+              "const": "record"
+            }
+          },
+          "required": [
+            "role"
+          ]
+        },
+        {
+          "description": "A taxon name; the specimen is identified as that taxon.",
+          "type": "object",
+          "properties": {
+            "role": {
+              "type": "string",
+              "const": "taxon"
+            }
+          },
+          "required": [
+            "role"
+          ]
+        },
+        {
+          "description": "A value for a specimen column.",
+          "type": "object",
+          "properties": {
+            "column": {
+              "type": "string"
+            },
+            "role": {
+              "type": "string",
+              "const": "column"
+            }
+          },
+          "required": [
+            "role",
+            "column"
+          ]
+        }
+      ]
+    },
+    "FileStamp": {
+      "description": "Cheap change signal captured during an existing verified read. Matching time\nand length alone do not prove content identity.",
+      "type": "object",
+      "properties": {
+        "device": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "inode": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "modified_nanos": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "modified_seconds": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "size": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "size",
+        "modified_seconds",
+        "modified_nanos"
+      ]
+    },
+    "FrameChoice": {
+      "description": "A reading frame the user reviewed for one record.",
+      "type": "object",
+      "properties": {
+        "codon_start": {
+          "description": "1, 2 or 3: the first base of the first complete codon.",
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "record": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "record",
+        "codon_start"
+      ]
+    },
+    "Group": {
+      "type": "object",
+      "properties": {
+        "attributes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "color": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "individual_scores": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Score"
+            }
+          },
+          "default": {}
+        },
+        "label": {
+          "type": "string"
+        },
+        "members": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "scores": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Score"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "color",
+        "members"
+      ]
+    },
+    "HeaderPattern": {
+      "description": "How to read fields from structured FASTA headers, such as\n`HV1234|Caulerpa taxifolia|2019-05-12`.",
+      "type": "object",
+      "properties": {
+        "fields": {
+          "description": "What each field holds, in order. Fields past the end are ignored.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FieldTarget"
+          }
+        },
+        "name": {
+          "type": "string"
+        },
+        "separator": {
+          "description": "Splits the header line (without `>`). Must not be empty.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "separator",
+        "fields"
+      ]
+    },
+    "Hypothesis": {
+      "type": "object",
+      "properties": {
+        "attributes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Group"
+          }
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "origin": {
+          "$ref": "#/$defs/HypothesisOrigin"
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "scores": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Score"
+          }
+        },
+        "unassigned": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "origin",
+        "groups",
+        "unassigned",
+        "provenance"
+      ]
+    },
+    "HypothesisOrigin": {
+      "type": "string",
+      "enum": [
+        "manual",
+        "imported",
+        "inferred",
+        "derived",
+        "manual_cut"
+      ]
+    },
+    "Identification": {
+      "description": "A recorded assignment of a specimen to a taxon. Re-identification adds\nanother; it never overwrites the earlier one.",
+      "type": "object",
+      "properties": {
+        "date": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PartialDate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "identified_by": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "remarks": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "specimen": {
+          "type": "string"
+        },
+        "taxon": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "specimen",
+        "taxon"
+      ]
+    },
+    "IdentifierSource": {
+      "description": "Identifier fields use the same literal splitting primitive as metadata header imports.\nSubmission rules always use the FASTA identifier, never the full description header.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "const": "identifier"
+            }
+          },
+          "required": [
+            "source"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "index": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            "separator": {
+              "type": "string"
+            },
+            "source": {
+              "type": "string",
+              "const": "field"
+            }
+          },
+          "required": [
+            "source",
+            "separator",
+            "index"
+          ]
+        }
+      ]
+    },
+    "ImportSettings": {
+      "description": "Saved import settings, so a project's next import repeats its last one.",
+      "type": "object",
+      "properties": {
+        "header_patterns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HeaderPattern"
+          }
+        },
+        "inclusion_rules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InclusionRule"
+          }
+        },
+        "spreadsheet_mappings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SpreadsheetMapping"
+          }
+        }
+      }
+    },
+    "InclusionAction": {
+      "type": "string",
+      "enum": [
+        "include",
+        "exclude",
+        "unchanged"
+      ]
+    },
+    "InclusionPlan": {
+      "type": "object",
+      "properties": {
+        "changed": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "fingerprint": {
+          "description": "Hash of target content, source bytes and metadata evidence; recomputed before apply.",
+          "type": "string"
+        },
+        "included": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "matching": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "preserved": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InclusionPreviewRow"
+          }
+        },
+        "rule": {
+          "$ref": "#/$defs/InclusionRule"
+        },
+        "unresolved": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "rule",
+        "fingerprint",
+        "rows",
+        "matching",
+        "unresolved",
+        "preserved",
+        "changed",
+        "included"
+      ]
+    },
+    "InclusionPreviewRow": {
+      "type": "object",
+      "properties": {
+        "current": {
+          "$ref": "#/$defs/Decision"
+        },
+        "extracted": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "matched": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "preserved_manual": {
+          "type": "boolean"
+        },
+        "proposed": {
+          "$ref": "#/$defs/Decision"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "record": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "record",
+        "reason",
+        "preserved_manual",
+        "current",
+        "proposed"
+      ]
+    },
+    "InclusionRule": {
+      "type": "object",
+      "properties": {
+        "case_sensitive": {
+          "type": "boolean",
+          "default": false
+        },
+        "input": {
+          "$ref": "#/$defs/IdentifierSource"
+        },
+        "matching": {
+          "$ref": "#/$defs/InclusionAction"
+        },
+        "mode": {
+          "$ref": "#/$defs/MatchMode"
+        },
+        "name": {
+          "type": "string"
+        },
+        "nonmatching": {
+          "$ref": "#/$defs/InclusionAction"
+        },
+        "override_manual": {
+          "type": "boolean",
+          "default": false
+        },
+        "pattern": {
+          "type": "string"
+        },
+        "trim": {
+          "type": "boolean",
+          "default": false
+        },
+        "unresolved": {
+          "$ref": "#/$defs/InclusionAction",
+          "default": "unchanged"
+        }
+      },
+      "required": [
+        "name",
+        "input",
+        "mode",
+        "pattern",
+        "matching",
+        "nonmatching"
+      ]
+    },
+    "InputReference": {
+      "type": "object",
+      "properties": {
+        "hash": {
+          "description": "Source bytes hash reused from the verified document read.",
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "stamp": {
+          "$ref": "#/$defs/FileStamp"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "path",
+        "stamp",
+        "hash"
+      ]
+    },
+    "ItsComponent": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "ITS1",
+            "5.8S",
+            "ITS2"
+          ]
+        },
+        {
+          "description": "Small subunit (18S) ribosomal RNA.",
+          "type": "string",
+          "const": "SSU"
+        },
+        {
+          "description": "Large subunit (28S) ribosomal RNA.",
+          "type": "string",
+          "const": "LSU"
+        }
+      ]
+    },
+    "JobRecord": {
+      "type": "object",
+      "properties": {
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "elapsed_seconds": {
+          "type": "number",
+          "format": "double"
+        },
+        "generation": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "id": {
+          "type": "string"
+        },
+        "inputs": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "method": {
+          "type": "string"
+        },
+        "outputs": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "status": {
+          "$ref": "#/$defs/JobStatus"
+        }
+      },
+      "required": [
+        "id",
+        "generation",
+        "status",
+        "method",
+        "inputs",
+        "outputs",
+        "diagnostics",
+        "elapsed_seconds"
+      ]
+    },
+    "JobStatus": {
+      "type": "string",
+      "enum": [
+        "completed",
+        "failed",
+        "cancelled",
+        "unavailable"
+      ]
+    },
+    "Location": {
+      "description": "A feature location: segments in biological order, 5' to 3' of the\nfeature. A reverse-strand two-exon gene lists its downstream exon first.\nLocations crossing the origin of a circular sequence are split into two\nsegments at the origin.",
+      "type": "object",
+      "properties": {
+        "segments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Segment"
+          }
+        },
+        "unordered": {
+          "description": "GenBank `order()`: the segments' order is unknown, as opposed to\n`join()`, where they are joined in the given order.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "segments"
+      ]
+    },
+    "LogEntry": {
+      "description": "One line of the operation log.",
+      "type": "object",
+      "properties": {
+        "actor": {
+          "$ref": "#/$defs/Actor"
+        },
+        "doc": {
+          "description": "Project-relative path of the document the op applies to.",
+          "type": "string"
+        },
+        "host": {
+          "type": "string"
+        },
+        "id": {
+          "description": "ULID: unique, and sorts by time.",
+          "type": "string"
+        },
+        "result": {
+          "$ref": "#/$defs/OpResult"
+        },
+        "session": {
+          "type": "string"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceRecord"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/DocState"
+        },
+        "t": {
+          "description": "RFC 3339 UTC.",
+          "type": "string"
+        },
+        "v": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "oneOf": [
+        {
+          "description": "Open a file. Records its content hash, so replay can check it starts\nfrom the same input.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "doc.open"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Create an independent unsaved DNA sequence. The initial residues are\nretained so recovery and replay do not need an external source file.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "doc.create_sequence"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "residues": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "residues"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Save a document. Records the hash of each file written.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "doc.save"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Replace residues `start..end` with `residues`. Insertions and\ndeletions are replacements with an empty side.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "seq.replace"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "end": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                },
+                "residues": {
+                  "type": "string"
+                },
+                "start": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "start",
+                "end",
+                "residues"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "feature.add"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "feature": {
+                  "$ref": "#/$defs/Feature"
+                }
+              },
+              "required": [
+                "feature"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "feature.remove"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "id"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "feature.update"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "feature": {
+                  "$ref": "#/$defs/Feature"
+                },
+                "id": {
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "id",
+                "feature"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Write residues `start..end` and the annotations within them to a new\nfile at `path`. Annotations cut by the range are clipped and marked\nincomplete at the cut. Records the new file's hash.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "doc.extract"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "end": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                },
+                "path": {
+                  "type": "string"
+                },
+                "reverse": {
+                  "description": "Write the reverse complement, so a reverse-strand annotation\nreads 5' to 3' in the new file.",
+                  "type": "boolean"
+                },
+                "segments": {
+                  "description": "Parts to splice together, 5' to 3', instead of `start..end`.",
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "type": "integer",
+                        "format": "uint64",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "integer",
+                        "format": "uint64",
+                        "minimum": 0
+                      }
+                    ]
+                  }
+                },
+                "start": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "start",
+                "end",
+                "path"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Replace columns `start..end` of one row with `residues`.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "aln.replace"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "end": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                },
+                "residues": {
+                  "type": "string"
+                },
+                "row": {
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0
+                },
+                "start": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "row",
+                "start",
+                "end",
+                "residues"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Insert `residues` before column `col` in `rows`. Like gaps, they use\nup each row's trailing gaps first, unless every row gets them.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "aln.insert"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "col": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                },
+                "residues": {
+                  "type": "string"
+                },
+                "rows": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "type": "integer",
+                        "format": "uint32",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "integer",
+                        "format": "uint32",
+                        "minimum": 0
+                      }
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "rows",
+                "col",
+                "residues"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Type one residue, or a gap, over the block `rows` × `start..end`.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "aln.fill"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "end": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                },
+                "residue": {
+                  "type": "string"
+                },
+                "rows": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "type": "integer",
+                        "format": "uint32",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "integer",
+                        "format": "uint32",
+                        "minimum": 0
+                      }
+                    ]
+                  }
+                },
+                "start": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "rows",
+                "start",
+                "end",
+                "residue"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Insert `count` gaps before column `col`. Rows use up their own\ntrailing gaps first, unless every row gets gaps: that's a new column.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "aln.insert_gaps"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "col": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                },
+                "count": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                },
+                "rows": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "type": "integer",
+                        "format": "uint32",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "integer",
+                        "format": "uint32",
+                        "minimum": 0
+                      }
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "rows",
+                "col",
+                "count"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Delete columns `start..end` of `rows`; what follows moves left.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "aln.delete"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "end": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                },
+                "rows": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "type": "integer",
+                        "format": "uint32",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "integer",
+                        "format": "uint32",
+                        "minimum": 0
+                      }
+                    ]
+                  }
+                },
+                "start": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "rows",
+                "start",
+                "end"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Slide the block `rows` × `start..end` by `by` columns into the gaps\nbeside it.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "aln.shift"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "by": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "end": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                },
+                "rows": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "type": "integer",
+                        "format": "uint32",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "integer",
+                        "format": "uint32",
+                        "minimum": 0
+                      }
+                    ]
+                  }
+                },
+                "start": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "rows",
+                "start",
+                "end",
+                "by"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Delete every column that is a gap in all rows.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "aln.remove_gap_columns"
+            },
+            "params": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Move `rows`, in order, so the first lands at index `to` among the\nrows that remain.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "aln.move_rows"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "rows": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "type": "integer",
+                        "format": "uint32",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "integer",
+                        "format": "uint32",
+                        "minimum": 0
+                      }
+                    ]
+                  }
+                },
+                "to": {
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "rows",
+                "to"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "aln.rename_row"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "row": {
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "row",
+                "name"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "aln.remove_rows"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "rows": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "type": "integer",
+                        "format": "uint32",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "integer",
+                        "format": "uint32",
+                        "minimum": 0
+                      }
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "rows"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Append sequences, optionally replacing reference rows with their\ngap-expanded forms from an alignment addition tool.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "aln.add_sequences"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "reference": {
+                  "type": [
+                    "array",
+                    "null"
+                  ],
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "rows": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "rows"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Root the tree halfway along the branch above `clade`.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.reroot"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "clade": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "clade"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Root halfway along a longest tip-to-tip branch-length path.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.midpoint_root"
+            },
+            "params": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Globally minimize unweighted root-to-all-tip distance variance.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.minimum_variance_root"
+            },
+            "params": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Move the root along its branch: `clade`, one of the root's two\nchildren, gets `fraction` of the branch's length, the other the\nrest.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.root_position"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "clade": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "fraction": {
+                  "type": "number",
+                  "format": "double"
+                }
+              },
+              "required": [
+                "clade",
+                "fraction"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Reverse the order of the clade's children.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.rotate"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "clade": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "clade"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Order every node's children by size: smallest first (on top), or\nlargest first.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.ladderize"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "small_first": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "small_first"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.rename_tip"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "from": {
+                  "type": "string"
+                },
+                "to": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "from",
+                "to"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Add, change (same `id`) or, with no annotation, remove a clade\nannotation.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.annotate"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "annotation": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/CladeAnnotation"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "id": {
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "id"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "A set of support values, such as bootstraps from another analysis:\none per internal node in preorder, as text.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.add_support"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "$ref": "#/$defs/SupportKind",
+                  "default": "unknown"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "source": {
+                  "description": "Where the values came from, for the record.",
+                  "type": "string",
+                  "default": ""
+                },
+                "values": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "name",
+                "values"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.remove_support"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.style"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "remove_supports": {
+                  "description": "Support sets removed on accepting Style; cancellation makes no edits.",
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "style": {
+                  "$ref": "#/$defs/TreeStyle"
+                }
+              },
+              "required": [
+                "style",
+                "remove_supports"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "A figure or other derived file written from a document, such as a\ntree as SVG. The result holds its hash; replay doesn't rewrite it.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "doc.export"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "format": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "format"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "A plugin operation that reads and writes files, such as an aligner.\n`inputs` and `outputs` are project-relative paths; the result holds\ntheir content hashes. The actor names the tool and its version.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tool.run"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "inputs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "operation": {
+                  "type": "string"
+                },
+                "outputs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "params": {
+                  "default": null
+                },
+                "plugin": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "plugin",
+                "operation",
+                "inputs",
+                "outputs"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "An atomic species-hypothesis edit against a workspace.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "delimitation.edit"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "edit": {
+                  "$ref": "#/$defs/DelimitationEdit"
+                }
+              },
+              "required": [
+                "edit"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "An atomic edit to the project's specimen and taxon metadata.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "metadata.edit"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "edit": {
+                  "$ref": "#/$defs/MetadataEdit"
+                }
+              },
+              "required": [
+                "edit"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "An atomic edit to a GenBank marker submission document.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "submission.edit"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "edit": {
+                  "$ref": "#/$defs/SubmissionEdit"
+                }
+              },
+              "required": [
+                "edit"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Initial review referencing an immutable record of drafts and biological events.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "doc.create_sanger_review"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "review": {
+                  "$ref": "#/$defs/ReviewRecord"
+                }
+              },
+              "required": [
+                "review"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "An explicit analysis continuation. Selection and decisions have their own operations.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "sanger.update"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "review": {
+                  "$ref": "#/$defs/ReviewRecord"
+                }
+              },
+              "required": [
+                "review"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Select a retained call set without copying its evidence.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "sanger.select"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "call_set": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "call_set"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "A decision addressed to an immutable Sanger call-set digest.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "sanger.review"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "call_set": {
+                  "type": "string"
+                },
+                "edit": {
+                  "$ref": "#/$defs/ReviewOp"
+                }
+              },
+              "required": [
+                "call_set",
+                "edit"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "A terminal job record, including failures and cancellation.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "job.finished"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "report": {
+                  "$ref": "#/$defs/JobRecord"
+                }
+              },
+              "required": [
+                "report"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Undo the operation with log id `of`.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "history.undo"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "of": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "of"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Redo the operation with log id `of`.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "history.redo"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "of": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "of"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        }
+      ],
+      "required": [
+        "v",
+        "id",
+        "t",
+        "host",
+        "session",
+        "actor",
+        "doc",
+        "state"
+      ]
+    },
+    "Marker": {
+      "description": "The marker type, which decides the one feature each record gets.",
+      "oneOf": [
+        {
+          "description": "A protein-coding gene: a `gene` and a `CDS` feature.",
+          "type": "object",
+          "properties": {
+            "gene": {
+              "description": "Gene symbol, such as `rbcL`; may be empty.",
+              "type": "string",
+              "default": ""
+            },
+            "kind": {
+              "type": "string",
+              "const": "coding"
+            },
+            "product": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "product"
+          ]
+        },
+        {
+          "description": "A ribosomal RNA gene, such as `18S ribosomal RNA`.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "rrna"
+            },
+            "product": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "product"
+          ]
+        },
+        {
+          "description": "The ITS region: one `misc_RNA` with a note listing the components\npresent. Internal boundaries are not annotated.",
+          "type": "object",
+          "properties": {
+            "components": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ItsComponent"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "its"
+            }
+          },
+          "required": [
+            "kind",
+            "components"
+          ]
+        },
+        {
+          "description": "A non-coding region, such as an intergenic spacer: one\n`misc_feature` with this description as its note.",
+          "type": "object",
+          "properties": {
+            "description": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "spacer"
+            }
+          },
+          "required": [
+            "kind",
+            "description"
+          ]
+        }
+      ]
+    },
+    "MaskSettings": {
+      "type": "object",
+      "properties": {
+        "end": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "error_percent": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "evidence": {
+          "type": "string"
+        },
+        "forward": {
+          "type": "string"
+        },
+        "minimum_overlap": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "reverse": {
+          "type": "string"
+        },
+        "start": {
+          "description": "Zero-based inclusive start, exclusive end in consensus columns.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "start",
+        "end",
+        "forward",
+        "reverse",
+        "minimum_overlap",
+        "error_percent",
+        "evidence"
+      ]
+    },
+    "MatchMode": {
+      "type": "string",
+      "enum": [
+        "exact",
+        "contains",
+        "starts",
+        "ends",
+        "wildcard",
+        "regex"
+      ]
+    },
+    "MetadataEdit": {
+      "description": "One atomic metadata edit.",
+      "oneOf": [
+        {
+          "description": "Add or replace a project partition using the shared hypothesis model.",
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "put_partition"
+            },
+            "partition": {
+              "$ref": "#/$defs/Hypothesis"
+            }
+          },
+          "required": [
+            "action",
+            "partition"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "remove_partition"
+            },
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "action",
+            "id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "apply"
+            },
+            "changes": {
+              "$ref": "#/$defs/ChangeSet"
+            }
+          },
+          "required": [
+            "action",
+            "changes"
+          ]
+        },
+        {
+          "description": "Refused while a removed specimen has identifications or links.",
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "remove_specimens"
+            },
+            "specimens": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "action",
+            "specimens"
+          ]
+        },
+        {
+          "description": "Remove a column and its values.",
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "remove_column"
+            },
+            "column": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "action",
+            "column"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "unlink"
+            },
+            "records": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/RecordRef"
+              }
+            }
+          },
+          "required": [
+            "action",
+            "records"
+          ]
+        },
+        {
+          "description": "Withdraw identifications recorded in error. Re-identification adds a\nnew identification instead.",
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "remove_identifications"
+            },
+            "identifications": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "action",
+            "identifications"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "set_import_settings"
+            },
+            "settings": {
+              "$ref": "#/$defs/ImportSettings"
+            }
+          },
+          "required": [
+            "action",
+            "settings"
+          ]
+        }
+      ]
+    },
+    "MissingReason": {
+      "description": "Why a value is missing: the INSDC missing-value vocabulary, written as\nINSDC writes it.",
+      "type": "string",
+      "enum": [
+        "not applicable",
+        "missing",
+        "not collected",
+        "not provided",
+        "restricted access",
+        "missing: control sample",
+        "missing: sample group",
+        "missing: synthetic construct",
+        "missing: lab stock",
+        "missing: third party data",
+        "missing: data agreement established pre-2023",
+        "missing: endangered species",
+        "missing: human-identifiable"
+      ]
+    },
+    "MolType": {
+      "type": "string",
+      "enum": [
+        "genomic_dna",
+        "genomic_rna"
+      ]
+    },
+    "OpResult": {
+      "type": "object",
+      "properties": {
+        "feature": {
+          "description": "Id assigned to a new feature.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "hashes": {
+          "description": "Content hashes of files read or written, by project-relative path.",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "Organelle": {
+      "type": "string",
+      "enum": [
+        "mitochondrion",
+        "chloroplast",
+        "plastid",
+        "apicoplast",
+        "chromoplast",
+        "cyanelle",
+        "kinetoplast",
+        "nucleomorph"
+      ]
+    },
+    "PartialDate": {
+      "description": "A date at year, month or day precision",
+      "type": "string",
+      "pattern": "^[0-9]{4}(-[0-9]{2}(-[0-9]{2})?)?$"
+    },
+    "Provenance": {
+      "type": "object",
+      "properties": {
+        "analysis_tree": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "diagnostics": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "haplotypes": {
+          "description": "Representative ID to original specimen IDs; never likelihood weights.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          },
+          "default": {}
+        },
+        "inputs": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "method": {
+          "type": "string"
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": true,
+          "default": {}
+        },
+        "seed": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JobStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "version": {
+          "type": "string"
+        },
+        "workers": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "method",
+        "version"
+      ]
+    },
+    "Publication": {
+      "description": "The publication the sequences belong to, written to the `.sbt`.",
+      "type": "object",
+      "properties": {
+        "authors": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Author"
+          }
+        },
+        "title": {
+          "type": "string",
+          "default": ""
+        }
+      }
+    },
+    "Qualifier": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "value": {
+          "description": "`None` for flag qualifiers like GenBank `/pseudo`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "key"
+      ]
+    },
+    "RecordLink": {
+      "description": "A stored link from a sequence record to the specimen it came from. Many\nrecords may link to one specimen. Links are made at import and never\nre-derived from names.",
+      "type": "object",
+      "properties": {
+        "document": {
+          "type": "string"
+        },
+        "record": {
+          "type": "string"
+        },
+        "specimen": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "document",
+        "record",
+        "specimen"
+      ]
+    },
+    "RecordRef": {
+      "description": "A sequence record in a project document.",
+      "type": "object",
+      "properties": {
+        "document": {
+          "description": "Project-relative path of the sequence file.",
+          "type": "string"
+        },
+        "record": {
+          "description": "The record's ID: its FASTA header up to the first whitespace, or its\nalignment row name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "document",
+        "record"
+      ]
+    },
+    "RecoveryStatus": {
+      "description": "Current pending-save lifecycle label.",
+      "type": "string",
+      "enum": [
+        "pending"
+      ]
+    },
+    "ReviewChoice": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "choice": {
+              "type": "string",
+              "const": "pending"
+            }
+          },
+          "required": [
+            "choice"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "choice": {
+              "type": "string",
+              "const": "accept"
+            }
+          },
+          "required": [
+            "choice"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "base": {
+              "type": "string",
+              "maxLength": 1,
+              "minLength": 1
+            },
+            "choice": {
+              "type": "string",
+              "const": "auto"
+            }
+          },
+          "required": [
+            "choice",
+            "base"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "choice": {
+              "type": "string",
+              "const": "reject"
+            }
+          },
+          "required": [
+            "choice"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "base": {
+              "type": "string",
+              "maxLength": 1,
+              "minLength": 1
+            },
+            "choice": {
+              "type": "string",
+              "const": "edit"
+            }
+          },
+          "required": [
+            "choice",
+            "base"
+          ]
+        }
+      ]
+    },
+    "ReviewOp": {
+      "oneOf": [
+        {
+          "description": "Conservative initial triage; retained in the replay log, outside undo history.",
+          "type": "object",
+          "properties": {
+            "columns": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "format": "uint",
+                "minimum": 0
+              }
+            },
+            "op": {
+              "type": "string",
+              "const": "auto_accept"
+            }
+          },
+          "required": [
+            "op",
+            "columns"
+          ]
+        },
+        {
+          "description": "Re-evaluate automatic calls while preserving all explicit manual decisions.\nThe rule version and frozen reference counts make this portable and auditable.",
+          "type": "object",
+          "properties": {
+            "calls": {
+              "type": "array",
+              "items": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 1,
+                "minLength": 1
+              }
+            },
+            "op": {
+              "type": "string",
+              "const": "evaluate"
+            },
+            "reference": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ReviewReference"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "settings": {
+              "$ref": "#/$defs/ReviewSettings"
+            },
+            "version": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "op",
+            "version",
+            "settings",
+            "calls"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "choice": {
+              "$ref": "#/$defs/ReviewChoice"
+            },
+            "columns": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "format": "uint",
+                "minimum": 0
+              }
+            },
+            "op": {
+              "type": "string",
+              "const": "set"
+            }
+          },
+          "required": [
+            "op",
+            "columns",
+            "choice"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "mask"
+            },
+            "settings": {
+              "$ref": "#/$defs/MaskSettings"
+            }
+          },
+          "required": [
+            "op",
+            "settings"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "export"
+            },
+            "path": {
+              "type": "string"
+            },
+            "sha256": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "path",
+            "sha256"
+          ]
+        }
+      ]
+    },
+    "ReviewRecord": {
+      "description": "Immutable analysis data stored separately from edit-sized journal entries.",
+      "type": "object",
+      "properties": {
+        "hash": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "hash"
+      ]
+    },
+    "ReviewReference": {
+      "description": "Frozen whole-alignment counts used by a recorded triage operation.",
+      "type": "object",
+      "properties": {
+        "counts": {
+          "type": "array",
+          "items": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "maxItems": 4,
+            "minItems": 4
+          }
+        },
+        "source_path": {
+          "type": "string"
+        },
+        "source_sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_path",
+        "source_sha256",
+        "counts"
+      ]
+    },
+    "ReviewSettings": {
+      "description": "Versioned, explicit rules for automatic review triage, not error probabilities.",
+      "type": "object",
+      "properties": {
+        "allow_weak_disagreement": {
+          "type": "boolean",
+          "default": true
+        },
+        "ambiguity_percent": {
+          "description": "A secondary peak at or above this percentage is ambiguous.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 35,
+          "minimum": 0
+        },
+        "check_reference": {
+          "type": "boolean",
+          "default": true
+        },
+        "paired_score": {
+          "type": "integer",
+          "format": "int32",
+          "default": 20
+        },
+        "reference_min_rows": {
+          "type": "integer",
+          "format": "uint32",
+          "default": 1,
+          "minimum": 0
+        },
+        "reference_percent": {
+          "description": "Zero means any observed canonical occurrence; denominator is A/C/G/T rows.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 0,
+          "minimum": 0
+        },
+        "strong_score": {
+          "type": "integer",
+          "format": "int32",
+          "default": 30
+        },
+        "weak_support_percent": {
+          "description": "Minimum candidate / strongest peak ratio in a non-confident opposing read.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 80,
+          "minimum": 0
+        }
+      }
+    },
+    "RowDecision": {
+      "description": "What to do with a row.",
+      "type": "object",
+      "properties": {
+        "record": {
+          "description": "The alignment row name (FASTA ID).",
+          "type": "string"
+        }
+      },
+      "oneOf": [
+        {
+          "description": "A newly generated sequence, exported for submission.",
+          "type": "object",
+          "properties": {
+            "decision": {
+              "type": "string",
+              "const": "new"
+            }
+          },
+          "required": [
+            "decision"
+          ]
+        },
+        {
+          "description": "Already in an archive (a downloaded reference, or submitted\nbefore); not exported.",
+          "type": "object",
+          "properties": {
+            "accession": {
+              "type": "string"
+            },
+            "decision": {
+              "type": "string",
+              "const": "existing"
+            }
+          },
+          "required": [
+            "decision",
+            "accession"
+          ]
+        },
+        {
+          "description": "Left out of the submission.",
+          "type": "object",
+          "properties": {
+            "decision": {
+              "type": "string",
+              "const": "exclude"
+            }
+          },
+          "required": [
+            "decision"
+          ]
+        }
+      ],
+      "required": [
+        "record"
+      ]
+    },
+    "Score": {
+      "type": "object",
+      "properties": {
+        "interpretation": {
+          "type": "string"
+        },
+        "method": {
+          "type": "string"
+        },
+        "scale": {
+          "type": "string"
+        },
+        "value": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "value",
+        "method",
+        "scale",
+        "interpretation"
+      ]
+    },
+    "Segment": {
+      "description": "One contiguous piece of a feature's location.",
+      "type": "object",
+      "properties": {
+        "end": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "partial_end": {
+          "description": "The feature extends beyond `end` (GenBank `>`).",
+          "type": "boolean"
+        },
+        "partial_start": {
+          "description": "The feature extends beyond `start` (GenBank `<`).",
+          "type": "boolean"
+        },
+        "start": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "strand": {
+          "$ref": "#/$defs/Strand"
+        }
+      },
+      "required": [
+        "start",
+        "end",
+        "strand"
+      ]
+    },
+    "SourceAlignment": {
+      "description": "An alignment file inside the project and the BLAKE3 hash of the bytes\nthe submission was prepared from. A different file content is refused\nuntil the source is selected again.",
+      "type": "object",
+      "properties": {
+        "document": {
+          "description": "Project-relative path.",
+          "type": "string"
+        },
+        "hash": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "document",
+        "hash"
+      ]
+    },
+    "SourceRecord": {
+      "description": "Original files described by an open journal record.",
+      "type": "object",
+      "properties": {
+        "checkpoint": {
+          "type": "boolean"
+        },
+        "feature_slots": {
+          "type": "array",
+          "items": {
+            "type": "boolean"
+          }
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InputReference"
+          }
+        },
+        "links": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "node_ids": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          }
+        },
+        "root": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "links",
+        "checkpoint",
+        "feature_slots",
+        "node_ids",
+        "root",
+        "files"
+      ]
+    },
+    "SpreadsheetMapping": {
+      "description": "Remembered spreadsheet column mapping.",
+      "type": "object",
+      "properties": {
+        "columns": {
+          "description": "Source column header to what it holds. Unmapped columns are ignored.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/FieldTarget"
+          }
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "columns"
+      ]
+    },
+    "Strand": {
+      "type": "string",
+      "enum": [
+        "forward",
+        "reverse",
+        "unstranded"
+      ]
+    },
+    "SubmissionEdit": {
+      "description": "One atomic submission edit.",
+      "oneOf": [
+        {
+          "description": "Select the source alignment (or accept a changed one).",
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "set_source"
+            },
+            "source": {
+              "$ref": "#/$defs/SourceAlignment"
+            }
+          },
+          "required": [
+            "action",
+            "source"
+          ]
+        },
+        {
+          "description": "Set the decision of these rows.",
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "set_rows"
+            },
+            "rows": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/RowDecision"
+              }
+            }
+          },
+          "required": [
+            "action",
+            "rows"
+          ]
+        },
+        {
+          "description": "Confirm the selection fingerprint returned by submission review.",
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "confirm_selection"
+            },
+            "selection_hash": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "action",
+            "selection_hash"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "set_batch"
+            },
+            "batch": {
+              "$ref": "#/$defs/BatchSettings"
+            }
+          },
+          "required": [
+            "action",
+            "batch"
+          ]
+        },
+        {
+          "description": "Save annotation settings with type-specific drafts. Legacy `set_batch`\nretains its historical meaning so previously saved histories replay exactly.",
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "set_batch_draft"
+            },
+            "batch": {
+              "$ref": "#/$defs/BatchSettings"
+            }
+          },
+          "required": [
+            "action",
+            "batch"
+          ]
+        },
+        {
+          "description": "Confirm or choose reading frames; `clear` forgets choices.",
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "set_frames"
+            },
+            "clear": {
+              "type": "array",
+              "default": [],
+              "items": {
+                "type": "string"
+              }
+            },
+            "frames": {
+              "type": "array",
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/FrameChoice"
+              }
+            }
+          },
+          "required": [
+            "action"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "set_export"
+            },
+            "export": {
+              "$ref": "#/$defs/ExportSettings"
+            }
+          },
+          "required": [
+            "action",
+            "export"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "set_publication"
+            },
+            "publication": {
+              "$ref": "#/$defs/Publication"
+            }
+          },
+          "required": [
+            "action",
+            "publication"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "set_accession_policy"
+            },
+            "policy": {
+              "$ref": "#/$defs/AccessionPolicy"
+            }
+          },
+          "required": [
+            "action",
+            "policy"
+          ]
+        },
+        {
+          "description": "Both citations in one undoable change. Disabled custom publication values are retained.",
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "set_details"
+            },
+            "publication": {
+              "$ref": "#/$defs/Publication"
+            },
+            "publication_differs": {
+              "type": "boolean"
+            },
+            "submission": {
+              "$ref": "#/$defs/Publication"
+            }
+          },
+          "required": [
+            "action",
+            "submission",
+            "publication",
+            "publication_differs"
+          ]
+        },
+        {
+          "description": "Apply a reviewed rule. The shared ops boundary checks this plan against live inputs.",
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "apply_inclusion"
+            },
+            "plan": {
+              "$ref": "#/$defs/InclusionPlan"
+            }
+          },
+          "required": [
+            "action",
+            "plan"
+          ]
+        },
+        {
+          "description": "Retain the mapping after writing a submission package.",
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "record_export"
+            },
+            "mapping": {
+              "$ref": "#/$defs/ExportMapping"
+            }
+          },
+          "required": [
+            "action",
+            "mapping"
+          ]
+        },
+        {
+          "description": "Record accessions returned by the archive.",
+          "type": "object",
+          "properties": {
+            "accessions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/AccessionEntry"
+              }
+            },
+            "action": {
+              "type": "string",
+              "const": "set_accessions"
+            }
+          },
+          "required": [
+            "action",
+            "accessions"
+          ]
+        }
+      ]
+    },
+    "SupportKind": {
+      "description": "Scientific support semantics supplied by a producer, never guessed from its name.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "unknown",
+            "bootstrap",
+            "probability"
+          ]
+        },
+        {
+          "description": "Percentage support from a method other than ordinary bootstrap.",
+          "type": "string",
+          "const": "percentage"
+        }
+      ]
+    },
+    "SupportPlacement": {
+      "description": "Where support values sit relative to their branch.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "above",
+            "below"
+          ]
+        },
+        {
+          "description": "Above branches that go up from their parent, below those that go\ndown.",
+          "type": "string",
+          "const": "natural"
+        }
+      ]
+    },
+    "SupportSymbols": {
+      "description": "Support shown as filled circles at nodes: dark at or above `high`\npercent, grey at or above `low`, white below, as in many published\ntrees. Proportions count as percentages, as for `support_min`.",
+      "type": "object",
+      "properties": {
+        "high": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "low": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "set": {
+          "description": "The support set the circles show.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "set",
+        "high",
+        "low"
+      ]
+    },
+    "Taxon": {
+      "description": "A taxon that specimens can be identified as.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "description": "The name used in this project's research.",
+          "type": "string"
+        },
+        "submitted_name": {
+          "description": "The name to submit when it differs, such as an informal name for an\nundescribed species (`Caulerpa sp. 3 HV-2026`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "taxid": {
+          "description": "NCBI Taxonomy ID, when known.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ]
+    },
+    "TreeDrawingEdit": {
+      "description": "A tree editor edit that changes only how a tree is drawn. Written as the\nmatching operation (`tree.rotate`, `tree.ladderize`, `tree.style`).",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.rotate"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "clade": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "clade"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.ladderize"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "small_first": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "small_first"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.style"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "style": {
+                  "$ref": "#/$defs/TreeStyle"
+                }
+              },
+              "required": [
+                "style"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        }
+      ]
+    },
+    "TreeStyle": {
+      "description": "How a tree is drawn. Sizes are pixels at 100 % zoom.",
+      "type": "object",
+      "properties": {
+        "branch_width": {
+          "type": "integer",
+          "format": "uint32",
+          "default": 1,
+          "minimum": 0
+        },
+        "scale_bar": {
+          "type": "boolean",
+          "default": true
+        },
+        "support_decimals": {
+          "description": "Decimal places per set; missing entries use the support semantics. Maximum 10.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0
+          },
+          "default": {}
+        },
+        "support_font": {
+          "type": "integer",
+          "format": "uint32",
+          "default": 10,
+          "minimum": 0
+        },
+        "support_fraction": {
+          "description": "Display conversion only: true renders fractions, false percentages.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "default": {}
+        },
+        "support_legend": {
+          "description": "Show an ordered legend when more than one support set is displayed.",
+          "type": "boolean",
+          "default": true
+        },
+        "support_min": {
+          "description": "Hide support values below this percentage. Known producer metadata sets\nthe scale; ambiguous imported sets with all finite values in 0–1 use\nproportions. Legacy `support_proportions` overrides only Unknown imports. 0 shows all.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 0,
+          "minimum": 0
+        },
+        "support_minimums": {
+          "description": "Per-set thresholds in percent, falling back to `support_min`.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "default": {}
+        },
+        "support_placement": {
+          "$ref": "#/$defs/SupportPlacement",
+          "default": "natural"
+        },
+        "support_proportions": {
+          "description": "Legacy source-unit interpretation for Unknown imports only (true means 0–1).",
+          "type": "object",
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "default": {}
+        },
+        "support_shown": {
+          "description": "Support sets shown at nodes, in order, joined with \"/\". Empty shows\nevery set.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "symbols": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SupportSymbols"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "tip_font": {
+          "type": "integer",
+          "format": "uint32",
+          "default": 13,
+          "minimum": 0
+        },
+        "tip_labels": {
+          "description": "Display-only labels keyed by original tip identity.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "vertical_bar_labels": {
+          "description": "Write clade labels beside bars top to bottom, rather than across.",
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "additionalProperties": true
     }
   }
 }

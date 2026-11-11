@@ -28,6 +28,9 @@ ulid.workspace = true
 [dev-dependencies]
 basecraft-viewmodel.workspace = true
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+rustix.workspace = true
+
 [lints]
 workspace = true
 

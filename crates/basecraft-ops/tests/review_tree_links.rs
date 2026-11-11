@@ -1,8 +1,8 @@
 //! Independent REV-0004 probes: failures describe the required persistence contract.
-#[path = "support/isolated_profile.rs"]
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
 mod isolated_profile;
-use basecraft_ops::links::AlignmentLinkExt;
-use basecraft_ops::{Session, files, links, links::AlignmentLink};
+use basecraft_ops::records::AlignmentLinkExt;
+use basecraft_ops::{Session, files, records, records::AlignmentLink};
 
 fn write_alignment(path: &std::path::Path, bases: &str) {
     std::fs::write(path, format!(">a\n{bases}\n>b\n{bases}\n")).unwrap();
@@ -89,7 +89,7 @@ fn dangling_explicit_view_link_refuses_fallback() {
     write_alignment(&source, "AA");
     std::fs::write(&input, "(a,b);").unwrap();
     AlignmentLink::create(&input, &source, &source, 3, true, None).unwrap();
-    std::os::unix::fs::symlink("missing-view.json", links::view_sidecar(&input)).unwrap();
+    std::os::unix::fs::symlink("missing-view.json", records::view_sidecar(&input)).unwrap();
     assert!(
         AlignmentLink::read_view(&input).is_err(),
         "an unreadable explicit association must not fall back to scientific origin"
@@ -116,7 +116,7 @@ fn failed_view_replacement_preserves_retained_snapshot() {
     let snapshot = old.checked_snapshot(&input, &tree).unwrap();
     let bytes = std::fs::read(&snapshot).unwrap();
     // Force metadata replacement to fail after the snapshot write.
-    let metadata = links::view_sidecar(&input);
+    let metadata = records::view_sidecar(&input);
     let backup = root.join("view-metadata-backup.json");
     std::fs::rename(&metadata, &backup).unwrap();
     std::fs::create_dir(&metadata).unwrap();

@@ -1,8 +1,8 @@
 //! End to end: realign an alignment with the registered MAFFT operation and
 //! record the run. Skips when the plugin's Python or MAFFT isn't available.
+mod common;
 #[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
 mod isolated_profile;
-mod common;
 
 use std::fmt::Write as _;
 
@@ -74,7 +74,7 @@ fn realigns_with_mafft_and_logs_the_run() {
         assert_eq!(ungapped, seq.as_bytes(), "row {name}");
     }
     assert_eq!(
-        basecraft_ops::provenance::verify(&output).unwrap(),
+        basecraft_ops::records::verify(&output).unwrap(),
         Vec::<String>::new()
     );
     // The source document's history holds the run, by MAFFT, linked by run ID.
@@ -104,13 +104,13 @@ fn realigns_with_mafft_and_logs_the_run() {
     let bundle = common::evidence(&outcome);
     let methods_path = bundle.join("methods.md");
     std::fs::write(&methods_path, "User-authored explanation.\n").unwrap();
-    let publication = basecraft_ops::provenance::inspect(&output).unwrap();
-    basecraft_ops::provenance::publish_operation(&bundle, &publication).unwrap();
+    let publication = basecraft_ops::records::inspect(&output).unwrap();
+    basecraft_ops::records::publish(&bundle, &publication).unwrap();
     assert_eq!(
         std::fs::read_to_string(&methods_path).unwrap(),
         "User-authored explanation.\n"
     );
-    let reopened = basecraft_ops::document_record::DocumentRecord::from_file(&output).unwrap();
+    let reopened = basecraft_ops::records::DocumentRecord::from_file(&output).unwrap();
     assert!(
         reopened
             .report()
@@ -121,6 +121,6 @@ fn realigns_with_mafft_and_logs_the_run() {
     );
     drop(session);
 
-    let report = basecraft_ops::replay::replay(root).unwrap();
+    let report = basecraft_ops::records::replay(root).unwrap();
     assert!(report.ok(), "{:#?}", report.problems);
 }

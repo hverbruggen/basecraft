@@ -194,7 +194,7 @@ pub fn run(command: MetadataCommand, save_options: crate::save::Options) -> Resu
             if apply {
                 let operation = plan.get("operation").ok_or("this request is read-only")?;
                 let target = plan["target"].as_str().ok_or("missing plan target")?;
-                let target_doc = if target == session.doc_key(doc) {
+                let target_doc = if target == session.doc_key(doc)? {
                     doc
                 } else {
                     session.open(&session.root().join(target))?

@@ -1,9 +1,9 @@
 //! Faults after visible publication must resume owned work without rerunning tools.
+mod common;
 #[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
 mod isolated_profile;
-mod common;
 
-use basecraft_ops::{Session, provenance};
+use basecraft_ops::{Session, records};
 use basecraft_plugin_host::{jobs::JobManager, policy::SessionPolicy};
 use basecraft_protocol::operation::RuntimeState;
 use serde_json::json;
@@ -63,8 +63,8 @@ fn member_metadata_repair_requires_owned_bytes_and_retries_companions() {
         } else {
             common::assert_completed(&repaired);
             assert!(fault.is_file());
-            assert!(basecraft_ops::links::sidecar(&output).is_file());
-            assert_eq!(provenance::verify(&output).unwrap(), Vec::<String>::new());
+            assert!(basecraft_ops::records::sidecar(&output).is_file());
+            assert_eq!(records::verify(&output).unwrap(), Vec::<String>::new());
         }
     }
 }
@@ -112,14 +112,14 @@ fn workspace_inventory_survives_repair_and_rejects_changed_export() {
             assert_eq!(repaired.state, RuntimeState::Finalizing);
             let completed = common::wait_in(&jobs, &mut session, &accepted.run_id);
             common::assert_completed(&completed);
-            let publication = provenance::inspect(&output).unwrap();
+            let publication = records::inspect(&output).unwrap();
             assert!(
                 publication
                     .outputs
                     .iter()
                     .any(|artifact| artifact.logical_name == "species.spart")
             );
-            assert_eq!(provenance::verify(&output).unwrap(), Vec::<String>::new());
+            assert_eq!(records::verify(&output).unwrap(), Vec::<String>::new());
         }
     }
 }
@@ -224,13 +224,13 @@ fn assert_reopened_completion(workspace: &std::path::Path, run_id: &str, hypothe
         1
     );
     let portable = workspace.parent().unwrap().join("portable-completion");
-    provenance::package(workspace, &portable).unwrap();
+    records::package(workspace, &portable).unwrap();
     let portable_result = portable.join(workspace.file_name().unwrap());
     assert_eq!(
-        provenance::verify(&portable_result).unwrap(),
+        records::verify(&portable_result).unwrap(),
         Vec::<String>::new()
     );
-    let publication = provenance::inspect(&portable_result).unwrap();
+    let publication = records::inspect(&portable_result).unwrap();
     assert_eq!(
         publication
             .events
@@ -242,7 +242,7 @@ fn assert_reopened_completion(workspace: &std::path::Path, run_id: &str, hypothe
         1
     );
     let portable_record =
-        basecraft_ops::document_record::DocumentRecord::from_file(&portable_result).unwrap();
+        basecraft_ops::records::DocumentRecord::from_file(&portable_result).unwrap();
     assert!(
         portable_record
             .report()
@@ -362,7 +362,7 @@ fn terminal_report_publication_failure_repairs_without_duplicate_completion_or_d
     let workspace = root.path().join("species.spart");
     let before = std::fs::read(&workspace).unwrap();
     let metadata = std::fs::metadata(&workspace).unwrap();
-    let bundle = provenance::bundle_for_result(&workspace);
+    let bundle = records::bundle_for_result(&workspace);
     let authored = bundle.join("methods.md");
     std::fs::write(&authored, "User-authored Methods.\n").unwrap();
     let fault = bundle.join("reports/history.md");

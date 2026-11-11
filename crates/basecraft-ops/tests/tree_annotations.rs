@@ -1,8 +1,8 @@
 //! Viewer names remain annotations: save, history and links preserve scientific identity.
-#[path = "support/isolated_profile.rs"]
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
 mod isolated_profile;
-use basecraft_ops::links::AlignmentLinkExt;
-use basecraft_ops::{Session, files, links::AlignmentLink, replay};
+use basecraft_ops::records::AlignmentLinkExt;
+use basecraft_ops::{Session, files, records, records::AlignmentLink};
 use basecraft_protocol::{CladeAnnotation, Op};
 
 #[test]
@@ -24,7 +24,7 @@ fn display_names_preserve_support_tip_identity_links_and_replay() {
         let mut session = Session::new(root);
         let doc = session.open(&path).unwrap();
         AlignmentLink::associate(&path, session.tree(doc).unwrap(), &source).unwrap();
-        let link = std::fs::read(basecraft_ops::links::sidecar(&path)).unwrap();
+        let link = std::fs::read(basecraft_ops::records::sidecar(&path)).unwrap();
         let snapshot = AlignmentLink::read(&path)
             .unwrap()
             .checked_snapshot(&path, session.tree(doc).unwrap())
@@ -81,12 +81,12 @@ fn display_names_preserve_support_tip_identity_links_and_replay() {
         assert!(reopened.find_tip("A").is_some());
         assert!(reopened.find_tip("Tip display name").is_none());
         assert_eq!(
-            std::fs::read(basecraft_ops::links::sidecar(&path)).unwrap(),
+            std::fs::read(basecraft_ops::records::sidecar(&path)).unwrap(),
             link
         );
         assert_eq!(std::fs::read(snapshot).unwrap(), snapshot_bytes);
         session.flush().unwrap();
-        let report = replay::replay(root).unwrap();
+        let report = records::replay(root).unwrap();
         assert!(report.ok(), "{:#?}", report.problems);
     }
 }

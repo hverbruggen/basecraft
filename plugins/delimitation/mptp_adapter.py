@@ -114,7 +114,7 @@ def invoke(method, params, native, run_native):
         diagnostic = stderr.read_text()[-16000:] or "mPTP stopped without a partition"
         report.write_text(json.dumps({"job": {"id": params.get("job_id", directory.name), "generation": params.get("generation", 0),
                           "method": method, "status": status, "inputs": {}, "outputs": {},
-                          "diagnostics": [diagnostic], "elapsed_seconds": time.monotonic()-started}, "command": command})+"\n")
+                          "diagnostics": [diagnostic], "elapsed_seconds": time.monotonic()-started}, "command": command}, sort_keys=True)+"\n")
         raise RuntimeError(diagnostic)
     parsed = parse_result(Path(str(output) + ".txt").read_text(), expected)
     parameters = dict(params, input=str(snapshot), **parsed, mptp_version=version, command=command,

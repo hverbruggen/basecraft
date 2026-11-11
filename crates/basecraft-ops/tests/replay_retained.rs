@@ -4,7 +4,7 @@ mod isolated_profile;
 
 use std::{collections::BTreeMap, path::Path};
 
-use basecraft_ops::{Session, delimitation, replay};
+use basecraft_ops::{Session, delimitation, records};
 use basecraft_protocol::{Op, delimitation::DelimitationEdit};
 
 const SPART: &str = include_str!("../../../testdata/fixtures/delimitation/manual.spart");
@@ -16,17 +16,28 @@ fn fingerprint(path: &Path) -> (u64, String) {
     )
 }
 
+/// Every retained file: checkpoints in objects/, recovery links in originals/.
 fn objects(root: &Path) -> BTreeMap<String, (u64, String)> {
-    std::fs::read_dir(root.join(".basecraft/objects"))
-        .unwrap()
-        .map(|entry| {
+    let mut found = BTreeMap::new();
+    let mut pending = vec![
+        root.join(".basecraft/objects"),
+        root.join(".basecraft/originals"),
+    ];
+    while let Some(directory) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&directory) else {
+            continue;
+        };
+        for entry in entries {
             let path = entry.unwrap().path();
-            (
-                path.file_name().unwrap().to_str().unwrap().into(),
-                fingerprint(&path),
-            )
-        })
-        .collect()
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                let key = path.strip_prefix(root).unwrap().display().to_string();
+                found.insert(key, fingerprint(&path));
+            }
+        }
+    }
+    found
 }
 
 fn qualify(root: &Path, recovered: &Path) {
@@ -34,11 +45,11 @@ fn qualify(root: &Path, recovered: &Path) {
     assert!(!before.is_empty());
     println!("retained objects before replay/recovery: {before:?}");
     for _ in 0..2 {
-        let report = replay::replay(root).unwrap();
+        let report = records::replay(root).unwrap();
         assert!(report.ok(), "{report:#?}");
         assert_eq!(objects(root), before);
     }
-    let outputs = replay::recover(root, recovered).unwrap();
+    let outputs = records::recover(root, recovered).unwrap();
     assert_eq!(outputs, vec![recovered.join("a.spart")]);
     assert_eq!(objects(root), before);
     println!(
@@ -78,7 +89,14 @@ fn repeated_open_with_edits_preserves_inputs_in_replay_and_recovery() {
         drop(session);
         assert_eq!(fingerprint(&path), original);
         match source_state {
-            "changed" => std::fs::write(&path, "changed source").unwrap(),
+            // Editors replace by rename; a hard link keeps the old inode. An
+            // in-place rewrite after the session ends cannot be recovered
+            // without a private copy.
+            "changed" => {
+                let replacement = root.join("replacement.tmp");
+                std::fs::write(&replacement, "changed source").unwrap();
+                std::fs::rename(&replacement, &path).unwrap();
+            }
             "missing" => std::fs::remove_file(&path).unwrap(),
             _ => (),
         }

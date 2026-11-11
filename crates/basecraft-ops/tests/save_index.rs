@@ -211,7 +211,10 @@ fn damaged_catalogue_cannot_hide_a_reference() {
     let mut value: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&cache).unwrap()).unwrap();
     value["value"]["sources"] = serde_json::Value::Array(Vec::new());
-    for damaged in [serde_json::to_vec(&value).unwrap(), b"broken cache".to_vec()] {
+    for damaged in [
+        serde_json::to_vec(&value).unwrap(),
+        b"broken cache".to_vec(),
+    ] {
         std::fs::write(&cache, damaged).unwrap();
         let check = evidence::check(&source).unwrap();
         assert_eq!(check.conflict.analyses.len(), 1);
@@ -221,8 +224,7 @@ fn damaged_catalogue_cannot_hide_a_reference() {
 
 #[test]
 fn deleted_project_does_not_concern_other_saves() {
-    let Some(root) = isolated_profile::enter("deleted_project_does_not_concern_other_saves")
-    else {
+    let Some(root) = isolated_profile::enter("deleted_project_does_not_concern_other_saves") else {
         return;
     };
     let project = root.join("project");
