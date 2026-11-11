@@ -432,7 +432,6 @@ pub struct OpResult {
 /// Original files described by an open journal record.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SourceRecord {
-    pub links: std::collections::BTreeMap<String, std::path::PathBuf>,
     pub checkpoint: bool,
     pub feature_slots: Vec<bool>,
     pub node_ids: Vec<usize>,

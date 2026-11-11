@@ -362,7 +362,6 @@ impl History<'_> {
             event.doc = name(&target.to_string_lossy());
             if let Some(source) = &mut event.source {
                 source.root = PathBuf::from(".");
-                source.links.clear();
                 for file in &mut source.files {
                     file.path = name(&file.path);
                 }

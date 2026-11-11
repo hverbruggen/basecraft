@@ -117,7 +117,6 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut ReplayReport)
                 &source_root,
                 work.path(),
                 &e.result.hashes,
-                e.source.as_ref(),
             ) {
                 Ok(()) => match session.open(&work.path().join(path)) {
                     Ok(id) => {
@@ -223,7 +222,6 @@ fn materialise(
     source_root: &Path,
     work: &Path,
     inputs: &[(String, String)],
-    record: Option<&basecraft_protocol::ops::SourceRecord>,
 ) -> std::result::Result<(), String> {
     let stage = tempfile::tempdir_in(work).map_err(|e| e.to_string())?;
     let mut written = Vec::new();
@@ -251,12 +249,6 @@ fn materialise(
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         let mut candidates = vec![objects_dir(root).join(digest)];
-        if let Some(link) = record.and_then(|record| record.links.get(rel)) {
-            if !safe_key(&link.to_string_lossy()) {
-                return Err("unsafe recovery link".into());
-            }
-            candidates.push(root.join(link));
-        }
         candidates.push(source_root.join(rel));
         let mut verified = false;
         for source in candidates
@@ -522,7 +514,6 @@ fn recover_entries(
                         &source_root,
                         staging.path(),
                         &entry.result.hashes,
-                        entry.source.as_ref(),
                     ) {
                         Ok(()) => session.open(&local).and_then(|doc| {
                             let source = entry.source.as_ref().ok_or_else(|| {
@@ -1103,12 +1094,12 @@ mod tests {
             }
             std::fs::hard_link(&source, &dest).unwrap();
             let inputs = vec![("a.fa".into(), hash.clone())];
-            materialise(root.path(), root.path(), work.path(), &inputs, None).unwrap();
+            materialise(root.path(), root.path(), work.path(), &inputs).unwrap();
             assert_eq!(std::fs::read(&dest).unwrap(), bytes);
             // Editing scratch must also be independent of the retained inode.
             std::fs::write(&dest, "scratch edit").unwrap();
             assert_eq!(basecraft_io::hash_file(&source).unwrap(), hash);
-            materialise(root.path(), root.path(), work.path(), &inputs, None).unwrap();
+            materialise(root.path(), root.path(), work.path(), &inputs).unwrap();
             assert_eq!(std::fs::read(&dest).unwrap(), bytes);
             assert_eq!(basecraft_io::hash_file(&source).unwrap(), hash);
         }
@@ -1125,18 +1116,18 @@ mod tests {
         let inputs = vec![("a.fa".into(), hash)];
         let dest = work.path().join("a.fa");
         std::fs::write(&dest, "previous").unwrap();
-        assert!(materialise(root.path(), root.path(), work.path(), &inputs, None).is_err());
+        assert!(materialise(root.path(), root.path(), work.path(), &inputs).is_err());
         assert_eq!(std::fs::read(&object).unwrap(), b"corrupt");
         assert_eq!(std::fs::read(&dest).unwrap(), b"previous");
         std::fs::remove_file(&object).unwrap();
-        assert!(materialise(root.path(), root.path(), work.path(), &inputs, None).is_err());
+        assert!(materialise(root.path(), root.path(), work.path(), &inputs).is_err());
         std::fs::write(root.path().join("a.fa"), "changed").unwrap();
-        assert!(materialise(root.path(), root.path(), work.path(), &inputs, None).is_err());
+        assert!(materialise(root.path(), root.path(), work.path(), &inputs).is_err());
         // Force atomic persistence failure after the temporary copy is written.
         std::fs::write(root.path().join("a.fa"), "expected").unwrap();
         std::fs::remove_file(&dest).unwrap();
         std::fs::create_dir(&dest).unwrap();
-        assert!(materialise(root.path(), root.path(), work.path(), &inputs, None).is_err());
+        assert!(materialise(root.path(), root.path(), work.path(), &inputs).is_err());
         assert_eq!(std::fs::read_dir(work.path()).unwrap().count(), 1);
         assert_eq!(
             std::fs::read(root.path().join("a.fa")).unwrap(),
@@ -1148,8 +1139,7 @@ mod tests {
                     root.path(),
                     root.path(),
                     work.path(),
-                    &[(rel.into(), inputs[0].1.clone())],
-                    None
+                    &[(rel.into(), inputs[0].1.clone())]
                 )
                 .is_err()
             );

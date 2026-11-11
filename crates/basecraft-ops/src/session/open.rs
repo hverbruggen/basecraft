@@ -1,4 +1,4 @@
-//! Document loading, baseline tracking and retained originals.
+//! Document loading and baseline tracking.
 use super::Session;
 use super::{DocId, Op, OpResult, Path, PathBuf, Result, Slot, files, invalid, objects_dir};
 
@@ -106,8 +106,8 @@ impl Session {
         Ok((id, kind))
     }
 
-    /// First edit retains an inode when possible. Later edits check only stamps;
-    /// a changed original requires a snapshot of the live document before editing.
+    /// Every edit checks the original's stamps; a changed original requires a
+    /// snapshot of the live document before editing.
     pub(super) fn track(&mut self, id: DocId) -> Result<()> {
         if !self.tracked {
             return Ok(());
@@ -138,107 +138,11 @@ impl Session {
             }
             return Ok(());
         }
-        if let Some(mut entry) = self.docs[id.0].baseline.clone() {
-            let files = entry
-                .source
-                .as_ref()
-                .map(|source| source.files.clone())
-                .unwrap_or_default();
-            let review = self.docs[id.0].content.kind() == files::Kind::SangerReview;
-            if self.store_objects && !files.is_empty() {
-                let originals = self.storage_root.join(".basecraft/originals");
-                recovery_directory(&originals)?;
-                let stage = tempfile::tempdir_in(&originals)?;
-                let directory = originals.join(&entry.id);
-                for (index, reference) in files.iter().enumerate() {
-                    let original = self.resolve(&reference.path);
-                    if crate::records::input_evidence::stamp(&original)? != reference.stamp {
-                        return Err(crate::Error::ChangedOnDisk { path: original });
-                    }
-                    let link = stage.path().join(index.to_string());
-                    // Reviews (at most 64 MiB) are copied: their save refuses aliased targets.
-                    let retained = if review {
-                        std::fs::copy(&original, &link).map(|_| ())
-                    } else {
-                        std::fs::hard_link(&original, &link)
-                    };
-                    match retained {
-                        Ok(()) => {
-                            let same = if review {
-                                basecraft_io::hash_file(&link)? == reference.hash
-                            } else {
-                                crate::records::input_evidence::stamp(&link)? == reference.stamp
-                            };
-                            if !same
-                                || crate::records::input_evidence::stamp(&original)?
-                                    != reference.stamp
-                            {
-                                std::fs::remove_file(&link)?;
-                                return Err(crate::Error::ChangedOnDisk { path: original });
-                            }
-                            entry
-                                .source
-                                .as_mut()
-                                .expect("baseline source")
-                                .links
-                                .insert(
-                                    reference.path.clone(),
-                                    directory
-                                        .join(index.to_string())
-                                        .strip_prefix(&self.storage_root)
-                                        .expect("recovery link")
-                                        .to_path_buf(),
-                                );
-                        }
-                        Err(error)
-                            if matches!(
-                                error.kind(),
-                                std::io::ErrorKind::CrossesDevices
-                                    | std::io::ErrorKind::Unsupported
-                                    | std::io::ErrorKind::PermissionDenied
-                            ) => {}
-                        Err(error) => return Err(error.into()),
-                    }
-                }
-                if entry
-                    .source
-                    .as_ref()
-                    .is_some_and(|source| !source.links.is_empty())
-                {
-                    basecraft_platform::files::sync_directory(stage.path())?;
-                    std::fs::rename(stage.path(), &directory)?;
-                    basecraft_platform::files::sync_directory(&originals)?;
-                }
-            }
-            if self.docs[id.0].baseline_logged {
-                // The baseline is already durable. Record its newly retained source
-                // as a checkpoint, without pretending another save occurred.
-                if entry
-                    .source
-                    .as_ref()
-                    .is_some_and(|source| !source.links.is_empty())
-                {
-                    let (Op::Open { path } | Op::Save { path }) = &entry.op else {
-                        unreachable!("logged baseline")
-                    };
-                    let mut retained = self.entry(
-                        id,
-                        self.actor.clone(),
-                        Op::Open { path: path.clone() },
-                        entry.result.clone(),
-                    );
-                    retained.source = entry.source;
-                    retained
-                        .source
-                        .as_mut()
-                        .expect("baseline source")
-                        .checkpoint = true;
-                    self.pending_baselines.push(retained);
-                }
-            } else {
+        if let Some(entry) = self.docs[id.0].baseline.take() {
+            // A logged baseline is already durable.
+            if !self.docs[id.0].baseline_logged {
                 self.pending_baselines.push(entry);
             }
-            self.docs[id.0].baseline = None;
         }
         Ok(())
     }

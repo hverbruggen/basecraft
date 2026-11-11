@@ -21,20 +21,6 @@ struct SaveTarget {
     review: bool,
 }
 
-/// Retaining the original by hard link changes only its change time.
-fn restamp_after_retention(mut stamps: SourceStamps) -> Result<SourceStamps> {
-    for (source, stamp) in &mut stamps {
-        let now = crate::records::save_guard::change_stamp(source)?;
-        if now.as_ref().map(|now| &now.0) != stamp.as_ref().map(|stamp| &stamp.0) {
-            return Err(Error::ChangedOnDisk {
-                path: source.clone(),
-            });
-        }
-        *stamp = now;
-    }
-    Ok(stamps)
-}
-
 /// The three supported save intents; history publication never writes document data.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum SaveMode {
@@ -141,7 +127,6 @@ impl Session {
 
         // 3. Stage every file and the recovery intent; nothing is replaced yet.
         self.track(id)?;
-        let stamps = restamp_after_retention(stamps)?;
         let mut prepared = self.docs[id.0].content.as_document().prepare_write(
             &target.path,
             self.save_format(id, &target.path)?,
