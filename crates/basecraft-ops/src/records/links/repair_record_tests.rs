@@ -72,14 +72,14 @@ fn repair_original_producer_bytes() {
         let origin = (mode > 0).then(|| StagedLink {
             snapshot: None,
             metadata: include_bytes!(
-                "../../../../testdata/fixtures/records-v1/link-snapshot-extra.json"
+                "../../../../../testdata/fixtures/records-v1/link-snapshot-extra.json"
             )
             .to_vec(),
         });
         let view = (mode > 1).then(|| StagedLink {
             snapshot: None,
             metadata: include_bytes!(
-                "../../../../testdata/fixtures/records-v1/link-referenced-extra.json"
+                "../../../../../testdata/fixtures/records-v1/link-referenced-extra.json"
             )
             .to_vec(),
         });

@@ -107,7 +107,7 @@ mod tests {
     use super::*;
     use basecraft_ops::{
         input_evidence::{EvidenceConflict, InspectionCode, InspectionIssue, InspectionRelevance},
-        replay::{PublishedWithFailure, RecoveryCompletion},
+        records::{PublishedWithFailure, RecoveryCompletion},
         session::{EvidenceAction, SaveWarning},
     };
 
@@ -275,7 +275,7 @@ mod typed_error_tests {
 
     #[test]
     fn changed_input_and_record_budget_produce_distinct_codes() {
-        use basecraft_ops::links::{AlignmentLink, AlignmentLinkExt};
+        use basecraft_ops::records::{AlignmentLink, AlignmentLinkExt};
         let root = tempfile::tempdir().unwrap();
         let source = root.path().join("source.afa");
         let tree = root.path().join("tree.nwk");
@@ -292,7 +292,7 @@ mod typed_error_tests {
             .unwrap()
             .set_len((64 << 20) + 1)
             .unwrap();
-        let limit = basecraft_ops::provenance::read_record(&oversized).unwrap_err();
+        let limit = basecraft_ops::records::read_record(&oversized).unwrap_err();
         for (error, code) in [(changed, "changed_on_disk"), (limit, "limit")] {
             assert_eq!(error.code(), code);
             assert_eq!(error_value(&error)["errors"][0]["code"], code);

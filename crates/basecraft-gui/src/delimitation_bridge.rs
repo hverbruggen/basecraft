@@ -2361,7 +2361,7 @@ mod naming_tests {
                 );
             }
             for result in [&first, &second] {
-                let publication = basecraft_ops::provenance::inspect(result).unwrap();
+                let publication = basecraft_ops::records::inspect(result).unwrap();
                 assert!(
                     publication
                         .inputs
@@ -2375,19 +2375,19 @@ mod naming_tests {
                         .any(|edit| edit.operation.name() == operation)
                 );
                 assert_eq!(
-                    basecraft_ops::provenance::verify(result).unwrap(),
+                    basecraft_ops::records::verify(result).unwrap(),
                     Vec::<String>::new()
                 );
             }
             // A supplied tree can itself have ancestry (including IQ-TREE's
             // inference). Save As must carry its contributing publication.
-            let parent = basecraft_ops::provenance::inspect(&first).unwrap();
+            let parent = basecraft_ops::records::inspect(&first).unwrap();
             let mut session = rooting_session(dir.path());
             let descendant = root_tree_copy(&mut session, &first, method).unwrap();
-            let publication = basecraft_ops::provenance::inspect(&descendant).unwrap();
+            let publication = basecraft_ops::records::inspect(&descendant).unwrap();
             assert!(publication.parents.contains(&parent.id));
             assert_eq!(
-                basecraft_ops::provenance::verify(&descendant).unwrap(),
+                basecraft_ops::records::verify(&descendant).unwrap(),
                 Vec::<String>::new()
             );
         }

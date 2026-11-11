@@ -72,7 +72,7 @@ pub(crate) trait Document {
         _original: &Path,
         _target: &Path,
         _format: Format,
-    ) -> Result<Option<crate::links::PreparedLinks>> {
+    ) -> Result<Option<crate::records::links::PreparedLinks>> {
         Ok(None)
     }
     fn write(

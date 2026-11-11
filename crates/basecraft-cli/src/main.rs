@@ -7,7 +7,7 @@ mod operations;
 mod save;
 mod submission;
 
-use basecraft_ops::document_record::ReportExt;
+use basecraft_ops::records::ReportExt;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
@@ -250,7 +250,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Command::Metadata { action } => metadata::run(action, save_options)?,
         Command::Submission { action } => submission::run(action, save_options)?,
         Command::History { file, json } => {
-            let report = basecraft_ops::document_record::DocumentRecord::saved_report(&file)?;
+            let report = basecraft_ops::records::DocumentRecord::saved_report(&file)?;
             println!(
                 "{}",
                 if json {
@@ -261,7 +261,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         Command::Methods { file, json, output } => {
-            let report = basecraft_ops::document_record::DocumentRecord::saved_report(&file)?;
+            let report = basecraft_ops::records::DocumentRecord::saved_report(&file)?;
             if let Some(output) = output {
                 report.export(&output)?;
             }
@@ -287,13 +287,13 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         } => {
             let restored = if verified_prefix {
                 let (restored, problem) =
-                    basecraft_ops::replay::recover_verified_prefix(&session, &output)?;
+                    basecraft_ops::records::recover_verified_prefix(&session, &output)?;
                 if let Some(problem) = problem {
                     eprintln!("Recovered the verified edits before damage: {problem}");
                 }
                 restored
             } else {
-                basecraft_ops::replay::recover(&session, &output)?
+                basecraft_ops::records::recover(&session, &output)?
             };
             for restored in restored {
                 println!("{}", restored.display());
@@ -303,22 +303,22 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             ProvenanceCommand::Inspect { result } => {
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&basecraft_ops::provenance::inspect(&result)?)?
+                    serde_json::to_string_pretty(&basecraft_ops::records::inspect(&result)?)?
                 );
             }
             ProvenanceCommand::Verify { result } => {
-                let issues = basecraft_ops::provenance::verify(&result)?;
+                let issues = basecraft_ops::records::verify(&result)?;
                 if !issues.is_empty() {
                     return Err(issues.join("\n").into());
                 }
                 println!("done: recorded hashes verified; replay verification is a separate check");
             }
             ProvenanceCommand::Methods { result, output } => {
-                let publication = basecraft_ops::provenance::inspect(&result)?;
-                basecraft_ops::provenance::write_reports(&output, &publication)?;
+                let publication = basecraft_ops::records::inspect(&result)?;
+                basecraft_ops::records::write_reports(&output, &publication)?;
             }
             ProvenanceCommand::Package { result, output } => {
-                basecraft_ops::provenance::package(&result, &output)?;
+                basecraft_ops::records::package(&result, &output)?;
             }
         },
         Command::NewSequence {
@@ -433,7 +433,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         Command::Replay { project } => {
-            let report = basecraft_ops::replay::replay(&project)?;
+            let report = basecraft_ops::records::replay(&project)?;
             for p in &report.problems {
                 println!("problem: {p}");
             }
@@ -829,10 +829,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 (
                     "submission-edit",
                     schemars::schema_for!(basecraft_protocol::submission::SubmissionEdit),
-                ),
-                (
-                    "log-entry",
-                    schemars::schema_for!(basecraft_protocol::LogEntry),
                 ),
                 (
                     "feature",

@@ -6,11 +6,9 @@ pub mod analysis_store;
 pub mod blast;
 pub mod files;
 pub mod input_evidence;
-pub mod links;
 pub mod log;
 pub mod metadata;
-pub mod provenance;
-pub mod replay;
+pub mod records;
 pub mod sanger_review;
 pub mod service_reads;
 pub mod session;
@@ -23,11 +21,7 @@ mod save_guard;
 pub use error::{Error, Result};
 pub use session::{DocId, Session};
 
-pub mod document_record;
-
 pub mod delimitation;
-
-mod contributions;
 
 #[cfg(test)]
 #[path = "../tests/support/isolated_profile.rs"]

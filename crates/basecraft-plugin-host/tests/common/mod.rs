@@ -305,7 +305,7 @@ pub fn align_document(
     });
     assert_completed(&outcome);
     assert_eq!(
-        basecraft_ops::provenance::verify(output).unwrap(),
+        basecraft_ops::records::verify(output).unwrap(),
         Vec::<String>::new()
     );
     outcome

@@ -1,10 +1,10 @@
 //! Actual public socket/SDK/native-engine workflows through registered
 //! operations; no mock numerical results. Cancellation uses a gated engine
 //! wrapper to hold execution without relying on scientific workload duration.
-use basecraft_ops::links::AlignmentLinkExt;
+use basecraft_ops::records::AlignmentLinkExt;
 mod common;
 
-use basecraft_ops::{Session, input_evidence, replay};
+use basecraft_ops::{Session, input_evidence, records};
 use basecraft_plugin_host::jobs::JobManager;
 use basecraft_protocol::{delimitation::JobStatus, operation::RuntimeState};
 use serde_json::{Value, json};
@@ -96,7 +96,7 @@ fn snapshots_and_terminal_outcomes_survive_success_and_failure() {
     // Both attempts are in the tree's history with their terminal state.
     assert_eq!(finished(&session, doc), expected);
     drop(session);
-    let report = replay::replay(root.path()).unwrap();
+    let report = records::replay(root.path()).unwrap();
     assert!(report.ok(), "{:?}", report.problems);
 }
 
@@ -152,8 +152,7 @@ fn exact_identity_precedes_public_tree_inference_and_restores_specimens() {
             common::assert_completed(stage);
             assert!(common::evidence(stage).join("execution.json").is_file());
         }
-        let publication =
-            basecraft_ops::provenance::inspect(&root.path().join(&workspace)).unwrap();
+        let publication = basecraft_ops::records::inspect(&root.path().join(&workspace)).unwrap();
         for operation in ["haplotypes", "tree", "gmyc_single"] {
             assert!(
                 publication.events.iter().any(|event| matches!(&event.op,
@@ -240,7 +239,7 @@ fn exact_identity_precedes_public_tree_inference_and_restores_specimens() {
     }
     assert!(!root.path().join("single.spart").exists());
     drop(session);
-    let result = replay::replay(root.path()).unwrap();
+    let result = records::replay(root.path()).unwrap();
     assert!(result.ok(), "{:?}", result.problems);
 }
 
@@ -323,7 +322,7 @@ fn asap_sampling_restores_roster_and_replays() {
         2
     );
     drop(session);
-    let report = replay::replay(root.path()).unwrap();
+    let report = records::replay(root.path()).unwrap();
     assert!(report.ok(), "{:?}", report.problems);
 }
 
@@ -417,18 +416,18 @@ fn tree_methods_update_one_canonical_spart_and_export_without_sources() {
     });
     assert!(refused.contains("output_conflict"), "{refused}");
     assert_eq!(before, std::fs::read(&canonical).unwrap());
-    let issues = basecraft_ops::provenance::verify(&canonical).unwrap();
+    let issues = basecraft_ops::records::verify(&canonical).unwrap();
     assert!(issues.is_empty(), "{issues:?}");
     let saved_folder = parent.path().join("saved-copy");
     std::fs::create_dir(&saved_folder).unwrap();
     let copied = saved_folder.join("species.spart");
     session.save(doc, Some(&copied)).unwrap();
     assert_eq!(
-        basecraft_ops::provenance::verify(&copied).unwrap(),
+        basecraft_ops::records::verify(&copied).unwrap(),
         Vec::<String>::new()
     );
     let package = parent.path().join("package");
-    basecraft_ops::provenance::package(&copied, &package).unwrap();
+    basecraft_ops::records::package(&copied, &package).unwrap();
     let expected = session
         .delimitation(doc)
         .unwrap()
@@ -443,7 +442,7 @@ fn tree_methods_update_one_canonical_spart_and_export_without_sources() {
     std::fs::rename(&package, &relocated_package).unwrap();
     let exported = relocated_package.join("species.spart");
     assert_eq!(
-        basecraft_ops::provenance::verify(&exported).unwrap(),
+        basecraft_ops::records::verify(&exported).unwrap(),
         Vec::<String>::new()
     );
     let work = basecraft_ops::files::load_delimitation(&exported).unwrap();
@@ -620,7 +619,7 @@ fn ptp_cases() {
             "{outcome:#?}"
         );
         assert_eq!(
-            basecraft_ops::provenance::verify(&root.path().join("species.spart")).unwrap(),
+            basecraft_ops::records::verify(&root.path().join("species.spart")).unwrap(),
             Vec::<String>::new()
         );
     }
@@ -731,7 +730,7 @@ fn optional_display_tree_uses_hidden_reference_first_companions() {
     );
     assert!(!run.join("submitted.fasta").exists());
     let tree = basecraft_ops::files::load_tree(&display).unwrap();
-    let link = basecraft_ops::links::AlignmentLink::read(&display).unwrap();
+    let link = basecraft_ops::records::AlignmentLink::read(&display).unwrap();
     // The link resolves to exactly the alignment the run read: the referenced
     // source in the canonical FASTA the descriptor's view submits.
     assert_eq!(link.source, source);
@@ -752,7 +751,7 @@ fn optional_display_tree_uses_hidden_reference_first_companions() {
         link.snapshot_hash
     );
     assert_eq!(
-        basecraft_ops::provenance::verify(&display).unwrap(),
+        basecraft_ops::records::verify(&display).unwrap(),
         Vec::<String>::new()
     );
     assert!(
@@ -1016,11 +1015,11 @@ fn workflow_repairs_publication_and_applies_all_hypotheses_in_one_undo_group() {
     session.redo(doc).unwrap();
     assert_eq!(session.delimitation(doc).unwrap().hypotheses, applied);
     assert_eq!(
-        basecraft_ops::provenance::verify(&export).unwrap(),
+        basecraft_ops::records::verify(&export).unwrap(),
         Vec::<String>::new()
     );
     drop(session);
-    assert!(replay::replay(root.path()).unwrap().ok());
+    assert!(records::replay(root.path()).unwrap().ok());
 }
 
 #[test]
@@ -1079,12 +1078,12 @@ fn workflow_save_decision_covers_nested_stages_and_original_ancestry() {
             );
             std::fs::remove_file(&source).unwrap();
             assert_eq!(
-                basecraft_ops::provenance::verify(&root.path().join("species.spart")).unwrap(),
+                basecraft_ops::records::verify(&root.path().join("species.spart")).unwrap(),
                 Vec::<String>::new()
             );
             for stage in stages {
                 assert_eq!(
-                    basecraft_ops::provenance::verify(Path::new(&stage.artifacts[0].path)).unwrap(),
+                    basecraft_ops::records::verify(Path::new(&stage.artifacts[0].path)).unwrap(),
                     Vec::<String>::new()
                 );
             }
@@ -1100,7 +1099,7 @@ fn workflow_save_decision_covers_nested_stages_and_original_ancestry() {
                 }
             }
             assert!(
-                !matches!(basecraft_ops::provenance::verify(&root.path().join("species.spart")),Ok(issues) if issues.is_empty())
+                !matches!(basecraft_ops::records::verify(&root.path().join("species.spart")),Ok(issues) if issues.is_empty())
             );
         }
     }

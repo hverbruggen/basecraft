@@ -175,20 +175,20 @@ impl Server {
             )?),
             // The same report as `basecraft history --json`, including saved Sanger reviews.
             "file_record" => Ok(serde_json::to_value(
-                basecraft_ops::document_record::DocumentRecord::saved_report(
+                basecraft_ops::records::DocumentRecord::saved_report(
                     &self.path(text(args, "path")?)?,
                 )?,
             )?),
             // The same readers as `basecraft provenance inspect|verify` and `replay`.
-            "provenance_inspect" => Ok(serde_json::to_value(basecraft_ops::provenance::inspect(
+            "provenance_inspect" => Ok(serde_json::to_value(basecraft_ops::records::inspect(
                 &self.path(text(args, "path")?)?,
             )?)?),
             "provenance_verify" => {
-                let issues = basecraft_ops::provenance::verify(&self.path(text(args, "path")?)?)?;
+                let issues = basecraft_ops::records::verify(&self.path(text(args, "path")?)?)?;
                 Ok(json!({"verified":issues.is_empty(),"issues":issues}))
             }
             "replay" => {
-                let report = basecraft_ops::replay::replay(self.session.root())?;
+                let report = basecraft_ops::records::replay(self.session.root())?;
                 Ok(
                     json!({"sessions":report.sessions,"entries":report.entries,"problems":report.problems}),
                 )

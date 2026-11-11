@@ -2,7 +2,7 @@
 #[path = "support/sanger_fixture.rs"]
 mod sanger_fixture;
 
-use basecraft_ops::{Session, replay, sanger_review::SangerReview};
+use basecraft_ops::{Session, records, sanger_review::SangerReview};
 use basecraft_platform::settings::{Change, ProvenancePolicy, SettingsStore};
 use basecraft_protocol::{
     Op,
@@ -55,22 +55,22 @@ fn new_review_updates_undo_replay_and_recover() {
     session.redo(id).unwrap();
     edit(&mut session, id, 'A');
     session.flush().unwrap();
-    let report = replay::replay(&root).unwrap();
+    let report = records::replay(&root).unwrap();
     assert!(report.ok(), "{:?}", report.problems);
-    let recovered = replay::recover(&root, &root.join("recovered")).unwrap();
+    let recovered = records::recover(&root, &root.join("recovered")).unwrap();
     assert_eq!(
         SangerReview::load(&recovered[0]).unwrap().decision(0),
         Some(&ReviewChoice::Edit('A'))
     );
     let output = root.join("saved.json");
     session.save_new(id, Some(&output)).unwrap();
-    let report = replay::replay(&root).unwrap();
+    let report = records::replay(&root).unwrap();
     assert!(report.ok(), "{:?}", report.problems);
     edit(&mut session, id, 'G');
     session.save_new(id, Some(&output)).unwrap();
     session.undo(id).unwrap();
     session.save_new(id, Some(&output)).unwrap();
-    let report = replay::replay(&root).unwrap();
+    let report = records::replay(&root).unwrap();
     assert!(report.ok(), "{:?}", report.problems);
     let reopened = SangerReview::load(&output).unwrap();
     assert_eq!(reopened.call_sets().len(), 2);
@@ -183,7 +183,7 @@ fn stale_and_failed_saves_keep_decisions_recoverable() {
     std::fs::write(blocked.join("unrelated"), b"keep").unwrap();
     assert!(second.save_new(b, Some(&blocked)).is_err());
     assert_eq!(std::fs::read(blocked.join("unrelated")).unwrap(), b"keep");
-    let recovered = replay::recover(second.recovery_root(), &root.join("recovered")).unwrap();
+    let recovered = records::recover(second.recovery_root(), &root.join("recovered")).unwrap();
     let review = SangerReview::load(&recovered[0]).unwrap();
     assert_eq!(review.call_sets().len(), 2);
     assert_eq!(review.decision(0), Some(&ReviewChoice::Edit('A')));
@@ -218,7 +218,7 @@ fn structural_redo_keeps_decisions_and_shared_ancestry() {
         SangerReview::load(&path).unwrap().decision(0),
         Some(&ReviewChoice::Edit('N'))
     );
-    let first = basecraft_ops::provenance::inspect(&path).unwrap();
+    let first = basecraft_ops::records::inspect(&path).unwrap();
     let first_decision = first
         .events
         .iter()
@@ -230,7 +230,7 @@ fn structural_redo_keeps_decisions_and_shared_ancestry() {
     let id = session.open(&path).unwrap();
     edit(&mut session, id, 'A');
     session.save(id, None).unwrap();
-    let record = basecraft_ops::document_record::DocumentRecord::from_file(&path).unwrap();
+    let record = basecraft_ops::records::DocumentRecord::from_file(&path).unwrap();
     assert!(
         record
             .report()
@@ -276,8 +276,7 @@ fn support_survives_private_history_and_recovery_publication() {
             Some(&ReviewChoice::Edit('A'))
         );
         if policy == ProvenancePolicy::LocalOnly {
-            let record =
-                basecraft_ops::document_record::DocumentRecord::from_file(&target).unwrap();
+            let record = basecraft_ops::records::DocumentRecord::from_file(&target).unwrap();
             assert!(
                 record
                     .events
@@ -286,7 +285,7 @@ fn support_survives_private_history_and_recovery_publication() {
             );
         }
         edit(&mut session, id, 'T');
-        let output = replay::recover(session.recovery_root(), &folder.join("recovered")).unwrap();
+        let output = records::recover(session.recovery_root(), &folder.join("recovered")).unwrap();
         let mut recovered = Session::recoverable(output[0].parent().unwrap()).unwrap();
         let id = recovered.open(&output[0]).unwrap();
         edit(&mut recovered, id, 'G');
@@ -381,7 +380,7 @@ fn selections_are_small_and_undo_restores_every_saved_byte() {
     let after = root.join("after.json");
     session.save_new(id, Some(&after)).unwrap();
     assert_eq!(std::fs::read(&after).unwrap(), bytes);
-    assert!(replay::replay(&root).unwrap().ok());
+    assert!(records::replay(&root).unwrap().ok());
 }
 
 #[test]
@@ -475,8 +474,8 @@ fn direct_analysis_update_retains_its_record_and_history_is_readable_once() {
             .count(),
         1
     );
-    assert!(replay::replay(&root).unwrap().ok());
-    replay::recover(&root, &root.join("recovered")).unwrap();
+    assert!(records::replay(&root).unwrap().ok());
+    records::recover(&root, &root.join("recovered")).unwrap();
     session
         .save_new(id, Some(&root.join("saved.json")))
         .unwrap();

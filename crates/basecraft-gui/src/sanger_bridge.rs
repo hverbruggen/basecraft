@@ -540,7 +540,7 @@ impl qobject::SangerController {
     pub fn document_record(&self) -> QString {
         let result = self.rust().review_session.as_ref().map_or_else(
             || {
-                basecraft_ops::document_record::DocumentRecord::empty(
+                basecraft_ops::records::DocumentRecord::empty(
                     &self.rust().file_path.to_string(),
                 )
                 .report()

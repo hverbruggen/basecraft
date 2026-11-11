@@ -1,7 +1,7 @@
 //! Deterministic bounded-depth trees through the ordinary recoverable Session.
 use super::Result;
 use basecraft_docs::tree::TreeDoc;
-use basecraft_ops::{Session, log, replay};
+use basecraft_ops::{Session, log, records};
 use basecraft_platform::paths::AppPaths;
 use basecraft_protocol::Op;
 use serde_json::json;
@@ -147,7 +147,7 @@ pub fn run(scenario: &str, root: &Path) -> Result<()> {
         {
             return Err("midpoint operation missing from recovery journal".into());
         }
-        let replayed = replay::replay(session.recovery_root())?;
+        let replayed = records::replay(session.recovery_root())?;
         if !replayed.ok() || replayed.entries != entries.len() || replayed.entries < 4 {
             return Err(format!("tree recovery replay failed: {replayed:?}").into());
         }

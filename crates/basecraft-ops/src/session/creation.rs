@@ -62,7 +62,7 @@ impl Session {
         self.docs.push(Slot::new(
             key.into(),
             content,
-            crate::provenance::bundle_for_result(&self.resolve(key)),
+            crate::records::provenance::bundle_for_result(&self.resolve(key)),
             basecraft_protocol::provenance::FileStamp {
                 size: 0,
                 modified_seconds: 0,
@@ -129,7 +129,7 @@ impl Session {
         self.docs.push(Slot::new(
             key.into(),
             Loaded::SangerReview(Box::new(review)),
-            crate::provenance::bundle_for_result(&self.resolve(key)),
+            crate::records::provenance::bundle_for_result(&self.resolve(key)),
             basecraft_protocol::provenance::FileStamp {
                 size: 0,
                 modified_seconds: 0,

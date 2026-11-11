@@ -1,7 +1,7 @@
 //! Known producer shapes only; no strict production guard/repair decoder is added.
 use basecraft_ops::{
-    links,
-    links::{AlignmentLink, AlignmentLinkExt},
+    records,
+    records::{AlignmentLink, AlignmentLinkExt},
 };
 use basecraft_protocol::link_records::{AlignmentLinkRecovery, AlignmentLinkUnavailable};
 use serde::Serialize;
@@ -48,8 +48,8 @@ fn selected_guard_fields_keep_existing_acceptance_and_view_refusal() {
     let dir = tempfile::tempdir().unwrap();
     let tree = dir.path().join("tree.nwk");
     std::fs::write(&tree, "(a,b);").unwrap();
-    let origin = links::sidecar(&tree);
-    let view = links::view_sidecar(&tree);
+    let origin = records::sidecar(&tree);
+    let view = records::view_sidecar(&tree);
     let valid = include_bytes!("../../../testdata/fixtures/records-v1/link-snapshot-inferred.json");
     std::fs::write(&origin, valid).unwrap();
     for reason in ["", "unavailable test"] {

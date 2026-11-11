@@ -149,7 +149,7 @@ impl Session {
             None
         };
         if (new_sequence || (!overwrite && path.is_some()))
-            && !(review && self.check_previous_save_target(id, &target)?)
+            && !self.check_previous_save_target(id, &target)?
         {
             crate::save_guard::check_new_target(&target)?;
         }
@@ -232,7 +232,7 @@ impl Session {
             )));
         }
         if (new_sequence || (!overwrite && path.is_some()))
-            && !(review && self.check_previous_save_target(id, &target)?)
+            && !self.check_previous_save_target(id, &target)?
         {
             crate::save_guard::check_new_target(&target)?;
         }
@@ -245,12 +245,12 @@ impl Session {
         if outcome.is_ok() {
             if review {
                 self.docs[id.0].saved_state_hashes = self.save_hashes(id)?;
-                self.docs[id.0].saved_target = Some((
-                    target.clone(),
-                    crate::input_evidence::stamp(&target)?,
-                    expected[0].clone(),
-                ));
             }
+            self.docs[id.0].saved_target = Some((
+                target.clone(),
+                crate::input_evidence::stamp(&target)?,
+                expected[0].clone(),
+            ));
             if target == self.resolve(&self.docs[id.0].key) {
                 hooks.boundary(SaveSite::SavedHashes, self)?;
                 if !review {
@@ -288,8 +288,7 @@ impl Session {
                 }
             }
             let now = basecraft_io::hash_file(&target).ok();
-            if review
-                && now.as_ref() == expected.first()
+            if now.as_ref() == expected.first()
                 && let Ok(stamp) = crate::input_evidence::stamp(&target)
             {
                 if self.is_own_file(id, &target) {

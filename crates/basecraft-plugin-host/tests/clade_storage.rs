@@ -1,6 +1,6 @@
 //! Clade selection uses the same generated/document input and publication path
 //! as the GUI and headless registered operation routes.
-use basecraft_ops::{Session, provenance};
+use basecraft_ops::{Session, records};
 use basecraft_plugin_host::{
     jobs::JobManager,
     policy::SessionPolicy,
@@ -75,7 +75,7 @@ fn unsaved_clade_tree_with_referenced_alignment_retains_both_inputs_and_selectio
         std::fs::read_to_string(&result).unwrap(),
         ">a\nAC-G\n>b\nAT-G\n"
     );
-    let publication = provenance::inspect(&result).unwrap();
+    let publication = records::inspect(&result).unwrap();
     assert!(
         publication
             .inputs
@@ -94,12 +94,12 @@ fn unsaved_clade_tree_with_referenced_alignment_retains_both_inputs_and_selectio
             .any(|e| matches!(e.op, Op::TreeRenameTip { .. }))
     );
     assert!(publication.events.iter().any(|e| matches!(&e.op, Op::ToolRun { params, .. } if params.pointer("/effective/taxa") == Some(&json!(["a","b"])))));
-    assert_eq!(provenance::verify(&result).unwrap(), Vec::<String>::new());
+    assert_eq!(records::verify(&result).unwrap(), Vec::<String>::new());
     let package = root.join("package");
-    provenance::package(&result, &package).unwrap();
+    records::package(&result, &package).unwrap();
     std::fs::remove_file(&alignment).unwrap();
     assert_eq!(
-        provenance::verify(&package.join("selected.afa")).unwrap(),
+        records::verify(&package.join("selected.afa")).unwrap(),
         Vec::<String>::new()
     );
 }

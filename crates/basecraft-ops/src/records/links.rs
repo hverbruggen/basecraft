@@ -721,7 +721,7 @@ mod tests {
                 .is_ok()
         );
         session.flush().unwrap();
-        assert!(crate::replay::replay(dir.path()).unwrap().ok());
+        assert!(crate::records::replay::replay(dir.path()).unwrap().ok());
     }
 
     #[test]

@@ -516,7 +516,7 @@ pub fn apply_drawing_edits(
 }
 
 pub(crate) fn portable_analysis_activity(
-    snapshot: &crate::document_record::DocumentRecord,
+    snapshot: &crate::records::document_record::DocumentRecord,
     activity: &LogEntry,
 ) -> (
     Vec<LogEntry>,

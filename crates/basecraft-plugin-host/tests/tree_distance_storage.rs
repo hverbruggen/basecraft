@@ -1,10 +1,10 @@
 //! Real engines and real directory listings for registered tree and matrix runs.
-use basecraft_ops::links::AlignmentLinkExt;
+use basecraft_ops::records::AlignmentLinkExt;
 mod common;
 
 use std::path::Path;
 
-use basecraft_ops::{Session, analysis_store::ArtifactRun, input_evidence, provenance};
+use basecraft_ops::{Session, analysis_store::ArtifactRun, input_evidence, records};
 use basecraft_protocol::Op;
 use serde_json::{Value, json};
 
@@ -60,7 +60,7 @@ fn matrix_reference_generated_failure_move_and_export_use_the_common_store() {
         input.source.unwrap().hash,
         basecraft_io::hash_file(&source).unwrap()
     );
-    assert_eq!(provenance::verify(&output).unwrap(), Vec::<String>::new());
+    assert_eq!(records::verify(&output).unwrap(), Vec::<String>::new());
     listing(&root, &run, "matrix-clean");
 
     session
@@ -112,26 +112,26 @@ fn matrix_reference_generated_failure_move_and_export_use_the_common_store() {
     );
     session.flush().unwrap();
     assert!(
-        basecraft_ops::replay::replay(session.recovery_root())
+        basecraft_ops::records::replay(session.recovery_root())
             .unwrap()
             .ok()
     );
     drop(session);
     std::fs::write(&source, ALIGNMENT.replace("ACGT", "TCGT")).unwrap();
-    assert_ne!(provenance::verify(&output).unwrap(), Vec::<String>::new());
+    assert_ne!(records::verify(&output).unwrap(), Vec::<String>::new());
     std::fs::remove_file(&source).unwrap();
-    assert_ne!(provenance::verify(&output).unwrap(), Vec::<String>::new());
+    assert_ne!(records::verify(&output).unwrap(), Vec::<String>::new());
     std::fs::write(&source, ALIGNMENT).unwrap();
 
     let moved = parent.path().join("moved");
     std::fs::rename(&root, &moved).unwrap();
     let output = moved.join("matrix.tsv");
-    assert_eq!(provenance::verify(&output).unwrap(), Vec::<String>::new());
+    assert_eq!(records::verify(&output).unwrap(), Vec::<String>::new());
     let package = parent.path().join("export");
-    provenance::package(&output, &package).unwrap();
+    records::package(&output, &package).unwrap();
     std::fs::rename(&moved, parent.path().join("unavailable")).unwrap();
     assert_eq!(
-        provenance::verify(&package.join("matrix.tsv")).unwrap(),
+        records::verify(&package.join("matrix.tsv")).unwrap(),
         Vec::<String>::new()
     );
     println!("matrix-export: {:?}", common::names(&package));
@@ -197,7 +197,7 @@ fn ordinary_tree_and_forest_routes_keep_only_scientific_results_visible() {
             let tree = root.join(name);
             assert_eq!(ArtifactRun::for_result(&tree).unwrap().unwrap(), run);
             let id = session.open(&tree).unwrap();
-            let link = basecraft_ops::links::AlignmentLink::read(&tree).unwrap();
+            let link = basecraft_ops::records::AlignmentLink::read(&tree).unwrap();
             assert_eq!(link.source, source);
             assert!(
                 link.checked_snapshot(&tree, session.tree(id).unwrap())

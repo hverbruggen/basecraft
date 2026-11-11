@@ -1,5 +1,5 @@
-use basecraft_ops::document_record::ReportExt;
-use basecraft_ops::{blast, document_record::DocumentRecord, metadata};
+use basecraft_ops::records::ReportExt;
+use basecraft_ops::{blast, metadata, records::DocumentRecord};
 use serde_json::json;
 use std::path::Path;
 
@@ -16,7 +16,8 @@ fn golden(name: &str, bytes: &[u8]) {
 
 #[test]
 fn metadata_report_and_query_original_writers() {
-    let bytes = metadata::encode(&basecraft_protocol::metadata::ProjectMetadata::default()).unwrap();
+    let bytes =
+        metadata::encode(&basecraft_protocol::metadata::ProjectMetadata::default()).unwrap();
     golden("metadata-manifest.json", &bytes[0]);
     let record = DocumentRecord::empty("input.fasta");
     let report = record.report().unwrap();
@@ -48,9 +49,9 @@ fn provenance_lookup_returns_existing_bundle_then_nearest_project_then_fallback(
     let root = tempfile::tempdir().unwrap();
     let result = root.path().join("result.fa");
     std::fs::write(&result, ">sample\nACGT\n").unwrap();
-    let standalone = basecraft_ops::provenance::companion(&result);
+    let standalone = basecraft_ops::records::companion(&result);
     assert_eq!(
-        basecraft_ops::provenance::bundle_for_result(&result),
+        basecraft_ops::records::bundle_for_result(&result),
         standalone
     );
     std::fs::create_dir_all(root.path().join(".basecraft")).unwrap();
@@ -59,14 +60,11 @@ fn provenance_lookup_returns_existing_bundle_then_nearest_project_then_fallback(
         .path()
         .join(".basecraft/provenance")
         .join(basecraft_io::hash_bytes(b"result.fa").trim_start_matches("b3:"));
-    assert_eq!(
-        basecraft_ops::provenance::bundle_for_result(&result),
-        expected
-    );
+    assert_eq!(basecraft_ops::records::bundle_for_result(&result), expected);
     std::fs::create_dir(&standalone).unwrap();
     std::fs::write(standalone.join("manifest.json"), "{}").unwrap();
     assert_eq!(
-        basecraft_ops::provenance::bundle_for_result(&result),
+        basecraft_ops::records::bundle_for_result(&result),
         standalone
     );
 }
@@ -157,7 +155,7 @@ fn embedded_activity_original_records() {
     session
         .extract(doc, (1, 5), &[], false, &extracted)
         .unwrap();
-    let bundle = basecraft_ops::provenance::bundle_for_result(&extracted);
+    let bundle = basecraft_ops::records::bundle_for_result(&extracted);
     let input = basecraft_ops::input_evidence::read_input(&bundle).unwrap();
     assert_eq!(input.extra["extraction"]["schema_version"], 1);
     if std::env::var_os("BASECRAFT_CAPTURE_ADDITIONAL_RECORDS").is_some() {

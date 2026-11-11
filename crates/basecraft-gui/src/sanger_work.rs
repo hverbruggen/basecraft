@@ -399,7 +399,7 @@ impl ReviewDocument {
         session.sanger_review(id).map_err(|e| e.to_string())?;
         Ok(Self { session, id })
     }
-    pub fn report(&self, _dirty: bool) -> Result<basecraft_ops::document_record::Report, String> {
+    pub fn report(&self, _dirty: bool) -> Result<basecraft_ops::records::Report, String> {
         self.review()
             .ok_or("No review is open")?
             .report_with_history(

@@ -81,7 +81,7 @@ impl Session {
             | crate::documents::WritePublication::Create => None,
             crate::documents::WritePublication::Recovery { destination, .. } => Some((
                 self.write_publication.logical(&target)?,
-                crate::replay::directory_identity(
+                crate::records::replay::directory_identity(
                     destination
                         .parent()
                         .ok_or_else(|| invalid("recovery parent missing"))?,

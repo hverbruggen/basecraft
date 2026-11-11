@@ -1,8 +1,8 @@
 //! Original writer oracles intentionally use literal JSON, independently of protocol types.
-use basecraft_ops::document_record::ReportExt;
+use basecraft_ops::records::ReportExt;
 use basecraft_ops::{
-    document_record::{DocumentRecord, MethodsParagraph, Report},
-    provenance,
+    records,
+    records::{DocumentRecord, MethodsParagraph, Report},
 };
 use basecraft_protocol::provenance::{Completeness, Publication};
 use serde_json::{Value, json};
@@ -73,7 +73,7 @@ fn check_provenance(publication: &Publication, directory: &Path, capture: Option
     let report = DocumentRecord::from_publication(publication)
         .report()
         .unwrap();
-    provenance::write_reports(directory, publication).unwrap();
+    records::write_reports(directory, publication).unwrap();
     let reports = directory.join("reports");
     check_file(
         &reports,
@@ -313,7 +313,7 @@ fn provenance_regeneration_and_partial_writes() {
         std::fs::remove_file(reports.join(obstructed)).unwrap();
         std::fs::create_dir(reports.join(obstructed)).unwrap();
         let before = snapshot(&reports);
-        let error = provenance::write_reports(folder.path(), &publication).unwrap_err();
+        let error = records::write_reports(folder.path(), &publication).unwrap_err();
         assert!(matches!(
             error,
             basecraft_ops::Error::Format(basecraft_io::Error::Io(_))

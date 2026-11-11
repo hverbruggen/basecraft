@@ -1,4 +1,4 @@
-use basecraft_ops::{Session, replay};
+use basecraft_ops::{Session, records};
 use basecraft_protocol::Op;
 
 #[test]
@@ -34,7 +34,7 @@ fn compact_alignment_unicode_path_edit_undo_save_reopen_replay() {
         session.redo(doc).unwrap();
         session.save(doc, None).unwrap();
     }
-    let report = replay::replay(dir.path()).unwrap();
+    let report = records::replay(dir.path()).unwrap();
     assert!(report.ok(), "{:?}", report.problems);
     let mut session = Session::new(dir.path());
     let doc = session.open(&path).unwrap();

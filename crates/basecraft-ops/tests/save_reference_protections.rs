@@ -6,7 +6,7 @@ use basecraft_ops::{
     DocId, Error, Session,
     analysis_store::ArtifactRun,
     input_evidence::{self, EvidenceConflict, SavePolicy},
-    replay,
+    records,
 };
 use basecraft_protocol::Op;
 
@@ -68,7 +68,7 @@ fn recoverable(session: &mut Session, doc: DocId, destination: &Path) {
     assert!(session.document_record(doc).unwrap().unsaved);
     assert!(session.can_undo(doc).unwrap());
     session.flush().unwrap();
-    let outputs = replay::recover(session.recovery_root(), destination).unwrap();
+    let outputs = records::recover(session.recovery_root(), destination).unwrap();
     assert_eq!(outputs.len(), 1);
     assert!(
         std::fs::read_to_string(&outputs[0])
@@ -86,7 +86,7 @@ fn recovery_refused(session: &mut Session, doc: DocId, destination: &Path) {
     let journal =
         serde_json::to_value(basecraft_ops::log::read_all(session.recovery_root()).unwrap())
             .unwrap();
-    let error = replay::recover(session.recovery_root(), destination).unwrap_err();
+    let error = records::recover(session.recovery_root(), destination).unwrap_err();
     assert!(matches!(error, Error::SaveCheckRequired(check) if !check.evidence().is_complete()));
     assert_eq!(
         serde_json::to_value(basecraft_ops::log::read_all(session.recovery_root()).unwrap())

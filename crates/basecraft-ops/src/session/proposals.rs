@@ -342,7 +342,7 @@ mod tests {
             assert_eq!(session.delimitation(doc).unwrap(), &before);
             session.redo(doc).unwrap();
             assert_eq!(session.delimitation(doc).unwrap().hypotheses.len(), 1);
-            assert!(crate::replay::replay(dir.path()).unwrap().ok());
+            assert!(crate::records::replay::replay(dir.path()).unwrap().ok());
         }
     }
 
@@ -442,7 +442,7 @@ mod tests {
         assert_eq!(session.doc(doc).unwrap().read(0, 5), b"ACGTA");
         session.undo(doc).unwrap();
         assert_eq!(session.doc(doc).unwrap().read(0, 4), b"ACGT");
-        assert!(crate::replay::replay(dir.path()).unwrap().ok());
+        assert!(crate::records::replay::replay(dir.path()).unwrap().ok());
     }
 
     #[test]
@@ -518,6 +518,6 @@ mod tests {
         assert_eq!(session.doc(doc).unwrap().feature(fid), Some(&feature));
         session.redo(doc).unwrap();
         assert!(session.doc(doc).unwrap().feature(fid).is_none());
-        assert!(crate::replay::replay(dir.path()).unwrap().ok());
+        assert!(crate::records::replay::replay(dir.path()).unwrap().ok());
     }
 }

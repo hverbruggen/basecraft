@@ -6,7 +6,7 @@ mod finalize;
 mod prepare;
 mod captures;
 
-use basecraft_ops::links::AlignmentLinkExt;
+use basecraft_ops::records::AlignmentLinkExt;
 use basecraft_platform::files::{identity, link_count};
 use basecraft_protocol::publication_records::{
     CollectionExportIntent, CollectionIntent, MemberExportReceipt,
@@ -29,7 +29,7 @@ use basecraft_protocol::{
         PublishedArtifact,
     },
     plugin::InvokeResult,
-    provenance::{ArtifactRevision, Completeness, Publication},
+    provenance::{ArtifactRevision, Publication},
     records::{
         ExternalExecution, HostWorkflowExecution, JobIndexPlugin, JobIndexSource, LocalJobIndex,
     },
@@ -104,7 +104,7 @@ pub fn verify_completed_result(
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
         return Err(Error::Protocol("unsafe completed run directory".into()));
     }
-    let execution: Value = serde_json::from_slice(&basecraft_ops::provenance::read_record(
+    let execution: Value = serde_json::from_slice(&basecraft_ops::records::read_record(
         &directory.join("execution.json"),
     )?)?;
     if execution["schema"] != 1
@@ -141,20 +141,20 @@ pub fn verify_completed_result(
         return Err(Error::Protocol("completed receipt has no artifacts".into()));
     }
     let first = Path::new(&outcome.artifacts[0].path);
-    let bundle = basecraft_ops::provenance::bundle_for_result(first);
+    let bundle = basecraft_ops::records::bundle_for_result(first);
     if bundle.canonicalize()? != directory.canonicalize()? {
         return Err(Error::Protocol(
             "retained artifact is bound to a different run".into(),
         ));
     }
-    let issues = basecraft_ops::provenance::verify(first)?;
+    let issues = basecraft_ops::records::verify(first)?;
     if !issues.is_empty() {
         return Err(Error::Protocol(format!(
             "completed publication is not reusable: {}",
             issues.join("; ")
         )));
     }
-    let publication = basecraft_ops::provenance::inspect(first)?;
+    let publication = basecraft_ops::records::inspect(first)?;
     for artifact in &outcome.artifacts {
         let path = Path::new(&artifact.path);
         if !path.canonicalize()?.starts_with(directory.canonicalize()?)
@@ -197,7 +197,7 @@ pub fn lookup_completed_result(
         } // Input ledgers and legacy domain runs have no runtime receipt.
         let candidate = (|| -> Result<Option<VerifiedOperationResult>> {
             let outcome: OperationOutcome =
-                serde_json::from_slice(&basecraft_ops::provenance::read_record(&receipt)?)?;
+                serde_json::from_slice(&basecraft_ops::records::read_record(&receipt)?)?;
             if outcome.schema != 1 {
                 return Err(Error::Protocol(
                     "unsupported operation receipt version".into(),
@@ -245,7 +245,7 @@ pub struct DocumentTarget {
     pub session: String,
     pub generation: u64,
     pub revision: u64,
-    pub record: basecraft_ops::document_record::DocumentRecord,
+    pub record: basecraft_ops::records::DocumentRecord,
     /// History key and submitted hash of the document's input.
     pub input: (String, String),
     /// The saved file the run read, or `None` for an unsaved snapshot.
@@ -266,7 +266,7 @@ pub struct PreparedOperation {
     pub(crate) input_diagnostics: Vec<String>,
     pub sequence: Option<SequenceTarget>,
     pub document: Option<DocumentTarget>,
-    pub(crate) input_record: basecraft_ops::document_record::DocumentRecord,
+    pub(crate) input_record: basecraft_ops::records::DocumentRecord,
     pub operation: RegisteredOperation,
     pub run: ArtifactRun,
     pub request: OperationRequest,
@@ -387,8 +387,7 @@ impl PreparedOperation {
             input.analysis_run = Some(input_evidence::relative(&directory, parent)?);
             let upstream = &mut input.upstream;
             for dependency in &dependencies {
-                let bytes =
-                    basecraft_ops::provenance::read_record(&dependency.join("manifest.json"))?;
+                let bytes = basecraft_ops::records::read_record(&dependency.join("manifest.json"))?;
                 let publication: Publication = serde_json::from_slice(&bytes)?;
                 if !upstream.iter().any(|entry| entry.id == publication.id) {
                     upstream.push(basecraft_protocol::input_records::UpstreamLink {
@@ -422,23 +421,20 @@ impl PreparedOperation {
     /// for ordinary inputs. Stage publications remain separate immutable origins.
     pub(crate) fn publication_input_record(
         &self,
-    ) -> Result<basecraft_ops::document_record::DocumentRecord> {
+    ) -> Result<basecraft_ops::records::DocumentRecord> {
         let mut record = self.input_record.clone();
         let stages = self.run.artifact("stages.json")?;
         if stages.is_file() {
             let outcomes: Vec<OperationOutcome> =
-                serde_json::from_slice(&basecraft_ops::provenance::read_record(&stages)?)?;
+                serde_json::from_slice(&basecraft_ops::records::read_record(&stages)?)?;
             for stage in outcomes {
                 if stage.state != basecraft_protocol::operation::RuntimeState::Completed {
                     continue;
                 }
                 if let Some(artifact) = stage.artifacts.first() {
-                    let publication =
-                        basecraft_ops::provenance::inspect(Path::new(&artifact.path))?;
+                    let publication = basecraft_ops::records::inspect(Path::new(&artifact.path))?;
                     record.include_input(
-                        &basecraft_ops::document_record::DocumentRecord::from_publication(
-                            &publication,
-                        ),
+                        &basecraft_ops::records::DocumentRecord::from_publication(&publication),
                     );
                 }
             }
@@ -589,7 +585,7 @@ impl PreparedOperation {
             return Err(Error::Protocol("undeclared extra staged outputs".into()));
         }
         if self.lifecycle.external() {
-            let plan: Value = serde_json::from_slice(&basecraft_ops::provenance::read_record(
+            let plan: Value = serde_json::from_slice(&basecraft_ops::records::read_record(
                 &self.run.artifact("query-preparation.json")?,
             )?)?;
             self.lifecycle.validate_receipt(
@@ -649,10 +645,9 @@ impl PreparedOperation {
     /// Publish the species workspace in a validated run's result as a new
     /// SPART file in the project.
     fn publish_workspace(&self, destination: &str) -> Result<PathBuf> {
-        let validated: Vec<(String, PathBuf, String)> =
-            serde_json::from_slice(&basecraft_ops::provenance::read_record(
-                &self.run.artifact("validated-artifacts.json")?,
-            )?)?;
+        let validated: Vec<(String, PathBuf, String)> = serde_json::from_slice(
+            &basecraft_ops::records::read_record(&self.run.artifact("validated-artifacts.json")?)?,
+        )?;
         let name = self.species_result_name();
         let (role, staged, hash) = validated
             .iter()
@@ -739,7 +734,7 @@ impl PreparedOperation {
                 0,
             ),
         };
-        basecraft_ops::links::AlignmentLink::create_referenced(
+        basecraft_ops::records::AlignmentLink::create_referenced(
             tree,
             &source,
             Path::new(frozen),
@@ -754,34 +749,14 @@ impl PreparedOperation {
         outcome: &OperationOutcome,
     ) -> Result<(basecraft_protocol::Actor, Value)> {
         let manifest = &self.operation.package.manifest;
-        // The external program and its process evidence, when the plugin reported
-        // them, name the software in history and methods text.
-        let execution: serde_json::Value = std::fs::read(self.run.artifact("execution.json")?)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default();
-        let tool = serde_json::from_value::<basecraft_protocol::plugin::ToolInfo>(
-            execution["tool"].clone(),
-        )
-        .ok();
-        let actor = tool.as_ref().map_or_else(
-            || basecraft_protocol::Actor::Plugin {
-                id: manifest.id.clone(),
-                version: manifest.version.clone(),
-            },
-            |tool| basecraft_protocol::Actor::Tool {
-                tool: tool.name.clone(),
-                version: tool.version.clone(),
-            },
-        );
         let mut params = json!({"requested":self.request.parameters,"effective":outcome.effective_parameters,
         "operation":self.operation.id,"pins":outcome.pins,"initiator":self.initiator,"run_id":outcome.run_id});
-        if !execution["execution"].is_null() {
-            params["_execution"] = execution["execution"].clone();
-        }
-        if !execution["tool"].is_null() {
-            params["_observed_tool"] = execution["tool"].clone();
-        }
+        let plugin = basecraft_protocol::Actor::Plugin {
+            id: manifest.id.clone(),
+            version: manifest.version.clone(),
+        };
+        let execution = self.run.artifact("execution.json")?;
+        let actor = basecraft_ops::records::tool_actor(&execution, plugin, &mut params);
         Ok((actor, params))
     }
 
@@ -912,7 +887,7 @@ fn verify_collection(root: &Path, expected: &BTreeMap<PathBuf, String>) -> Resul
 /// A pre-rename inode receipt proves which file this run created. Matching
 /// bytes alone never authorize adopting somebody else's existing file.
 fn verify_member_receipt(destination: &Path, hash: &str, intent: &Path) -> Result<()> {
-    let receipt: Value = serde_json::from_slice(&basecraft_ops::provenance::read_record(intent)?)?;
+    let receipt: Value = serde_json::from_slice(&basecraft_ops::records::read_record(intent)?)?;
     let metadata = std::fs::symlink_metadata(destination)?;
     if !metadata.is_file()
         || metadata.file_type().is_symlink()

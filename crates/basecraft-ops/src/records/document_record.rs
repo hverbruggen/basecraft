@@ -36,11 +36,11 @@ pub fn read_origin(
             Some(format!("Hidden analysis binding could not be read: {e}")),
         );
     }
-    let bundle = crate::provenance::bundle_for_result(path);
+    let bundle = crate::records::provenance::bundle_for_result(path);
     if !bundle.join("manifest.json").exists() {
         return (None, None);
     }
-    match crate::provenance::inspect(path) {
+    match crate::records::provenance::inspect(path) {
         Ok(p) if !hashes.is_empty() && hashes.iter().all(|(_, hash)| p.outputs.iter().any(|a| &a.hash == hash)) => (Some(p), None),
         Ok(_) => (None, Some("The saved record describes different file contents. Earlier ancestry is unavailable for this revision.".into())),
         Err(e) => (None, Some(format!("The saved record could not be read: {e}"))),
@@ -57,7 +57,7 @@ impl DocumentRecord {
     ) -> crate::Result<()> {
         let manifest = run.directory().join("manifest.json");
         let mut publication: Publication =
-            serde_json::from_slice(&crate::provenance::read_record(&manifest)?)?;
+            serde_json::from_slice(&crate::records::provenance::read_record(&manifest)?)?;
         let (events, effective) = crate::session::portable_analysis_activity(self, activity);
         publication.events = events;
         publication.effective_edits = effective;
@@ -84,7 +84,7 @@ impl DocumentRecord {
             input.upstream = upstream;
             crate::input_evidence::write_json(&run.directory().join("input.json"), &input)?;
         }
-        crate::provenance::publish_operation(run.directory(), &publication)
+        crate::records::provenance::publish(run.directory(), &publication)
     }
 
     /// In-memory locations of contributing publication bundles. Reading them
@@ -147,7 +147,7 @@ impl DocumentRecord {
         record.revision.clone_from(&p.id);
         record.events.clone_from(&p.events);
         record.effective.clone_from(&p.effective_edits);
-        crate::contributions::project(&record.data.events, &mut record.data.effective);
+        crate::records::contributions::project(&record.data.events, &mut record.data.effective);
         if record.events.iter().any(|event| matches!(&event.op,
             Op::ToolRun { outputs, params, .. } if outputs.is_empty() && params.get("contributions").is_none())) {
             record.warnings.push("Retained contribution ownership is unknown for legacy no-output activities; historical invocation evidence was not reassigned to current edits.".into());
@@ -637,7 +637,7 @@ impl TaskReadBudget {
                 "retained task aggregate reading limit (64 MiB) exceeded",
             ));
         }
-        crate::provenance::read_record_with_budget(path, &mut self.0)
+        crate::records::provenance::read_record_with_budget(path, &mut self.0)
     }
 }
 
@@ -985,9 +985,10 @@ mod tests {
         let root = receipt.parent().unwrap();
         let tree = root.join("artifacts/tree.nwk");
         let bootstrap = root.join("artifacts/bootstrap-run.partial.nex");
-        let contract: OperationContract =
-            serde_json::from_slice(include_bytes!("../../../plugins/distance/operations.json"))
-                .unwrap();
+        let contract: OperationContract = serde_json::from_slice(include_bytes!(
+            "../../../../plugins/distance/operations.json"
+        ))
+        .unwrap();
         let mut descriptor = contract
             .operations
             .into_iter()
@@ -1167,7 +1168,7 @@ mod tests {
             std::fs::create_dir_all(jobs.join("regular")).unwrap();
             std::fs::write(jobs.join("regular/manifest.json"), serde_json::json!({"schema_version":1,"id":"regular","operation":"legacy","status":"completed","source":{"path":"input"},"outputs":{},"owner_instance":"current"}).to_string()).unwrap();
             let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-                .args(["--exact", "document_record::tests::task_nonregular_evidence_is_rejected_in_bounded_subprocess", "--nocapture"])
+                .args(["--exact", "records::document_record::tests::task_nonregular_evidence_is_rejected_in_bounded_subprocess", "--nocapture"])
                 .env(CHILD, temp.path()).spawn().unwrap();
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
             loop {
@@ -1188,7 +1189,10 @@ mod tests {
         let link = temp.path().join("regular-link.json");
         std::fs::write(&regular, "{}").unwrap();
         std::os::unix::fs::symlink(&regular, &link).unwrap();
-        assert_eq!(crate::provenance::read_record(&link).unwrap(), b"{}");
+        assert_eq!(
+            crate::records::provenance::read_record(&link).unwrap(),
+            b"{}"
+        );
         let mut budget = TaskReadBudget(1024);
         assert!(budget.read(temp.path()).is_err());
         assert_eq!(budget.0, 1024);
@@ -1245,7 +1249,7 @@ mod tests {
         assert_eq!(budget.0, 0);
         let file = std::fs::File::create(&receipt).unwrap();
         file.set_len((64 << 20) + 1).unwrap();
-        assert!(crate::provenance::read_record(&receipt).is_err());
+        assert!(crate::records::provenance::read_record(&receipt).is_err());
         let rows = job_records(&jobs, false, "current").unwrap();
         assert_eq!(rows["jobs"][0]["receipt_confirmed"], false);
         assert!(

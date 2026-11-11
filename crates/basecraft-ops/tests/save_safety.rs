@@ -4,8 +4,8 @@
 #[path = "support/isolated_profile.rs"]
 mod isolated_profile;
 
-use basecraft_ops::document_record::ReportExt;
-use basecraft_ops::{Session, delimitation, log, replay};
+use basecraft_ops::records::ReportExt;
+use basecraft_ops::{Session, delimitation, log, records};
 use basecraft_protocol::{
     Op,
     delimitation::{ColumnStyle, DelimitationEdit, TreeDrawingEdit},
@@ -305,7 +305,7 @@ fn full_disk_journal_append_rolls_back_and_keeps_a_recoverable_prefix() {
     assert!(prefix.problem.is_none(), "{:?}", prefix.problem);
     std::fs::remove_file(filler).unwrap();
     let recovered = dir.path().join("recovered");
-    let outputs = replay::recover(&root, &recovered).unwrap();
+    let outputs = records::recover(&root, &recovered).unwrap();
     assert!(
         std::fs::read_to_string(&outputs[0])
             .unwrap()
@@ -348,12 +348,12 @@ fn damaged_journal_recovery_names_the_salvage_and_never_skips_events() {
     torn.extend_from_slice(b"{\"v\":1,\"id\":\"incomplete");
     std::fs::write(&journal, &torn).unwrap();
     let strict = dir.path().join("strict");
-    let error = replay::recover(&root, &strict).unwrap_err().to_string();
+    let error = records::recover(&root, &strict).unwrap_err().to_string();
     assert!(error.contains("--verified-prefix"), "{error}");
     assert!(error.contains("3 verified journal events"), "{error}");
     assert!(!strict.exists());
     let salvaged = dir.path().join("salvaged");
-    let (outputs, problem) = replay::recover_verified_prefix(&root, &salvaged).unwrap();
+    let (outputs, problem) = records::recover_verified_prefix(&root, &salvaged).unwrap();
     assert!(problem.unwrap().contains("torn"));
     assert!(
         std::fs::read_to_string(&outputs[0])
@@ -369,7 +369,7 @@ fn damaged_journal_recovery_names_the_salvage_and_never_skips_events() {
     lines[1] = &damaged;
     std::fs::write(&journal, format!("{}\n", lines.join("\n"))).unwrap();
     let partial = dir.path().join("partial");
-    let (outputs, problem) = replay::recover_verified_prefix(&root, &partial).unwrap();
+    let (outputs, problem) = records::recover_verified_prefix(&root, &partial).unwrap();
     assert!(problem.unwrap().contains("checksum"));
     assert!(
         outputs.is_empty()
@@ -428,7 +428,7 @@ fn analysis_result_hypotheses_and_columns_undo_as_one_step() {
     assert_eq!(session.delimitation(doc).unwrap(), &added);
     session.save(doc, None).unwrap();
     drop(session);
-    assert!(replay::replay(dir.path()).unwrap().ok());
+    assert!(records::replay(dir.path()).unwrap().ok());
 }
 
 #[test]
@@ -484,7 +484,7 @@ fn species_view_columns_and_tree_flips_survive_save_reopen_undo_and_replay() {
     let copy = reopened.open(&path).unwrap();
     assert_eq!(reopened.delimitation(copy).unwrap().view, initial);
     drop(session);
-    let report = replay::replay(dir.path()).unwrap();
+    let report = records::replay(dir.path()).unwrap();
     assert!(report.ok(), "{:?}", report.problems);
 }
 
@@ -604,6 +604,6 @@ fn interrupted_result_group_resumes_after_journal_failure_as_one_undo_step() {
     session.redo(doc).unwrap();
     assert_eq!(session.delimitation(doc).unwrap(), &completed);
     drop(session);
-    let replay = replay::replay(dir.path()).unwrap();
+    let replay = records::replay(dir.path()).unwrap();
     assert!(replay.ok(), "{:?}", replay.problems);
 }

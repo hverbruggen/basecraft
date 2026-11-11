@@ -97,7 +97,8 @@ impl Session {
                 }
             }
         }
-        let (origin, mut origin_issue) = crate::document_record::read_origin(path, &hashes);
+        let (origin, mut origin_issue) =
+            crate::records::document_record::read_origin(path, &hashes);
         if let Some(warning) = content.as_document().opening_warning() {
             origin_issue = Some(
                 origin_issue
@@ -108,7 +109,7 @@ impl Session {
         let mut slot = Slot::new(
             key.clone(),
             content,
-            crate::provenance::bundle_for_result(path),
+            crate::records::provenance::bundle_for_result(path),
             disk_stamp,
         );
         slot.accepted_hashes.clone_from(&hashes);
@@ -199,15 +200,18 @@ impl Session {
     }
 
     /// Read-only evidence for this session's exact current revision, including pending edits.
-    pub fn document_record(&self, id: DocId) -> Result<crate::document_record::DocumentRecord> {
+    pub fn document_record(
+        &self,
+        id: DocId,
+    ) -> Result<crate::records::document_record::DocumentRecord> {
         use basecraft_protocol::provenance::EditActivity;
         let slot = self
             .docs
             .get(id.0)
             .ok_or_else(|| invalid("unknown document"))?;
         let mut record = slot.origin.as_ref().map_or_else(
-            || crate::document_record::DocumentRecord::empty(&slot.key),
-            crate::document_record::DocumentRecord::from_publication,
+            || crate::records::document_record::DocumentRecord::empty(&slot.key),
+            crate::records::document_record::DocumentRecord::from_publication,
         );
         if let Some(origin) = &slot.origin {
             record
@@ -240,7 +244,7 @@ impl Session {
                 operation: a.op.clone(),
             }));
         record.deduplicate();
-        crate::contributions::project(&record.data.events, &mut record.data.effective);
+        crate::records::contributions::project(&record.data.events, &mut record.data.effective);
         Ok(record)
     }
 

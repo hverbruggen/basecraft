@@ -102,7 +102,7 @@ impl Session {
         let mut input = input;
         let mut upstream = Vec::new();
         for dependency in snapshot.origin_bundles() {
-            let bytes = crate::provenance::read_record(&dependency.join("manifest.json"))?;
+            let bytes = crate::records::provenance::read_record(&dependency.join("manifest.json"))?;
             let parent: Publication = serde_json::from_slice(&bytes)?;
             upstream.push(basecraft_protocol::input_records::UpstreamLink {
                 bundle: (crate::input_evidence::relative(
@@ -167,7 +167,7 @@ impl Session {
             },
             report_template_version: 2,
         };
-        crate::provenance::publish(&bundle, &publication)?;
+        crate::records::provenance::publish(&bundle, &publication)?;
         if let Some(run) = &run {
             run.bind(path)?;
         }

@@ -108,7 +108,9 @@ pub struct InvokeResult {
     pub data: Option<Box<Value>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artifacts: Vec<crate::operation::PluginArtifact>,
+    /// Journal operations; their shape is defined once, in journal-entry.schema.json.
     #[serde(default)]
+    #[schemars(with = "Vec<Value>")]
     pub ops: Vec<Op>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,

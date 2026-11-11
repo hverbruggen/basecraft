@@ -35,7 +35,7 @@ pub fn evidence_kind(path: &Path) -> Option<EvidenceKind> {
     {
         return None;
     }
-    let bytes = crate::provenance::read_record(path).ok()?;
+    let bytes = crate::records::provenance::read_record(path).ok()?;
     if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes)
         && value.get("version").is_some()
     {
@@ -96,8 +96,8 @@ impl SangerReview {
     /// Combine baseline scientific decisions with chronological shared history once.
     pub fn report_with_history(
         &self,
-        record: &crate::document_record::DocumentRecord,
-    ) -> Result<crate::document_record::Report, String> {
+        record: &crate::records::document_record::DocumentRecord,
+    ) -> Result<crate::records::document_record::Report, String> {
         let mut report = self.document_report(record.unsaved)?;
         let mut represented = std::collections::HashSet::new();
         let mut duplicate_rows = std::collections::HashSet::new();
@@ -135,8 +135,11 @@ impl SangerReview {
         Ok(report)
     }
     /// Describe the actual review state, retaining the complete decision audit separately.
-    pub fn document_report(&self, unsaved: bool) -> Result<crate::document_record::Report, String> {
-        use crate::document_record::{DocumentRecord, HistoryRow, MethodsParagraph};
+    pub fn document_report(
+        &self,
+        unsaved: bool,
+    ) -> Result<crate::records::document_record::Report, String> {
+        use crate::records::document_record::{DocumentRecord, HistoryRow, MethodsParagraph};
         let mut state = serde_json::json!({
             "draft": self.draft, "draft_sha256": self.draft_sha256, "events": self.events,
             "settings": self.settings, "reference": self.reference, "mask": self.mask,
@@ -547,7 +550,7 @@ pub(crate) fn read_journal_record(
             detail: "Invalid review record digest".into(),
         });
     }
-    let bytes = crate::provenance::read_record(&record.path)?;
+    let bytes = crate::records::provenance::read_record(&record.path)?;
     if basecraft_io::hash_bytes(&bytes) != record.hash {
         return Err(crate::Error::Damaged {
             path: record.path.clone(),
@@ -668,7 +671,7 @@ mod call_set_tests {
         assert_eq!(reopened.decision(0), Some(&ReviewChoice::Edit('C')));
         assert_eq!(std::fs::read(&session.draft_path).unwrap(), original);
         let package = tmp.path().join("package");
-        crate::provenance::package(&saved, &package).unwrap();
+        crate::records::provenance::package(&saved, &package).unwrap();
         std::fs::remove_file(&session.draft_path).unwrap();
         let packaged = ReviewSession::load(&package.join("review.json")).unwrap();
         assert!(packaged.working_draft().is_ok());
