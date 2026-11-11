@@ -15,9 +15,9 @@ impl std::ops::Deref for ReviewSession {
     }
 }
 impl ReviewSession {
-    pub(super) fn new(review: SangerReview) -> Self {
+    pub(super) fn new(review: &SangerReview) -> Self {
         let mut owner = Session::recoverable(review.storage_anchor().parent().unwrap()).unwrap();
-        let id = owner.create_sanger_review(&review).unwrap();
+        let id = owner.create_sanger_review(review).unwrap();
         Self { owner, id }
     }
     pub(super) fn load(path: &Path) -> Result<Self, String> {
@@ -49,7 +49,7 @@ impl ReviewSession {
             .map(|_| ())
             .map_err(|e| e.to_string())
     }
-    pub(super) fn retain_call_set(&mut self, other: Self) -> Result<(), String> {
+    pub(super) fn retain_call_set(&mut self, other: &Self) -> Result<(), String> {
         let mut review = (**self).clone();
         review.retain_call_set((*other).clone())?;
         self.owner

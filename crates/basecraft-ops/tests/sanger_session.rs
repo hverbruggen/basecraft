@@ -7,6 +7,7 @@ use basecraft_protocol::{
     Op,
     sanger::{ReviewChoice, ReviewOp},
 };
+use basecraft_platform::settings::{Change, ProvenancePolicy, SettingsStore};
 use std::path::Path;
 #[path = "support/isolated_profile.rs"]
 mod isolated_profile;
@@ -199,9 +200,8 @@ fn structural_redo_keeps_decisions_and_shared_ancestry() {
     let mut session = Session::recoverable(&root).unwrap();
     let id = session.open(&path).unwrap();
     let mut selected = session.sanger_review(id).unwrap().clone();
-    selected
-        .select_call_set(&selected.call_sets()[1].0.to_owned())
-        .unwrap();
+    let call_set = selected.call_sets()[1].0.to_string();
+    selected.select_call_set(&call_set).unwrap();
     session.update_sanger_review(id, &selected).unwrap();
     edit(&mut session, id, 'N');
     session.undo(id).unwrap();
@@ -252,7 +252,6 @@ fn support_survives_private_history_and_recovery_publication() {
     else {
         return;
     };
-    use basecraft_platform::settings::{Change, ProvenancePolicy, SettingsStore};
     let settings = SettingsStore::new(
         basecraft_platform::paths::AppPaths::discover()
             .unwrap()

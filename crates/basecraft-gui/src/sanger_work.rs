@@ -160,7 +160,7 @@ fn directory(outcome: &OperationOutcome) -> Result<&Path, String> {
         .ok_or_else(|| "Operation receipt has no evidence directory".into())
 }
 fn edit_analysis(review: &mut SangerReview, edit: ReviewOp) -> Result<(), String> {
-    let mut owner = ReviewDocument::new(review.clone())?;
+    let mut owner = ReviewDocument::new(review)?;
     owner.apply(edit)?;
     *review = owner.review().ok_or("No review is open")?.clone();
     Ok(())
@@ -370,109 +370,6 @@ fn execute(
     })
 }
 
-#[cfg(test)]
-mod tests {
-    #[allow(unused_imports)] // harness=false application_bootstrap includes this module.
-    use super::*;
-
-    #[test]
-    fn cancelled_stage_does_not_prepare_or_replace_review() {
-        let flag = AtomicBool::new(true);
-        let result = execute(
-            Request::Prepare(
-                vec![PathBuf::from("missing.ab1"), PathBuf::from("missing-2.ab1")],
-                20,
-            ),
-            None,
-            &flag,
-        );
-        assert!(result.err().unwrap().contains("cancelled"));
-    }
-
-    #[test]
-    #[ignore = "requires BASECRAFT_SANGER_PAIR_DIR with two AB1 reads, full reference, Tracy and MAFFT"]
-    fn real_pair_full_reference_survives_temporary_input_deletion() {
-        let fixture = PathBuf::from(std::env::var_os("BASECRAFT_SANGER_PAIR_DIR").unwrap());
-        let temp = tempfile::tempdir().unwrap();
-        let mut reads = Vec::new();
-        let mut reference = None;
-        for entry in std::fs::read_dir(fixture).unwrap() {
-            let path = entry.unwrap().path();
-            let Some(extension) = path.extension().and_then(|e| e.to_str()) else {
-                continue;
-            };
-            if !matches!(extension, "ab1" | "fasta") {
-                continue;
-            }
-            let target = temp.path().join(path.file_name().unwrap());
-            std::fs::copy(&path, &target).unwrap();
-            if extension == "ab1" {
-                reads.push(target);
-            } else {
-                reference = Some(target);
-            }
-        }
-        reads.sort();
-        assert_eq!(reads.len(), 2);
-        let reference = reference.unwrap();
-        let original_hash = basecraft_io::hash_file(&reference).unwrap();
-        let frozen = retain_reference(&reads[0], &reference).unwrap();
-        let flag = AtomicBool::new(false);
-        let preparation = start(Request::Prepare(reads.clone(), 20), None).unwrap();
-        // Dispose the alignment-owned snapshot before observing first completion.
-        std::fs::remove_file(&reference).unwrap();
-        assert_eq!(basecraft_io::hash_file(&frozen).unwrap(), original_hash);
-        assert_eq!(retain_reference(&reads[0], &frozen).unwrap(), frozen);
-        let prepared = preparation
-            .receiver
-            .recv()
-            .unwrap()
-            .unwrap_or_else(|e| panic!("prepare: {e}"));
-        assert_eq!(prepared.session.draft.inputs.len(), 2);
-        let oriented = execute(
-            Request::Orient(frozen.clone()),
-            Some(prepared.session),
-            &flag,
-        )
-        .unwrap_or_else(|e| panic!("orient: {e}"));
-        // A replacement source between stages must not change the request.
-        std::fs::write(&reference, ">replacement\nAAAA\n").unwrap();
-        assert_eq!(basecraft_io::hash_file(&frozen).unwrap(), original_hash);
-        let placed = execute(
-            Request::Place(frozen.clone()),
-            Some(oriented.session),
-            &flag,
-        )
-        .unwrap_or_else(|e| panic!("place: {e}"));
-        assert!(
-            placed.session.unresolved() > 0,
-            "review must not auto-accept conflicts"
-        );
-        assert!(placed.session.placement().unwrap().unwrap().source_rows > 1000);
-        for source in reads.into_iter().chain([reference]) {
-            std::fs::remove_file(source).unwrap();
-        }
-        let saved = temp.path().join("saved-review.json");
-        ReviewDocument::new(placed.session.clone())
-            .unwrap()
-            .save(&saved)
-            .unwrap();
-        let reopened = SangerReview::load(&saved).unwrap();
-        let view = session_view(&reopened).unwrap();
-        assert_eq!(view.draft.consensus, placed.view.draft.consensus);
-        assert_eq!(reopened.unresolved(), placed.session.unresolved());
-        let placement = reopened.placement().unwrap().unwrap();
-        assert_eq!(
-            basecraft_io::hash_file(&placement.source_path).unwrap(),
-            original_hash
-        );
-        assert_eq!(
-            reopened.draft.columns.len(),
-            placed.session.draft.columns.len()
-        );
-    }
-}
-
 /// The editor owns a regular Session and its checked document handle.
 /// This adapter holds no history, checkpoint or save implementation.
 pub(super) struct ReviewDocument {
@@ -480,14 +377,14 @@ pub(super) struct ReviewDocument {
     pub id: basecraft_ops::DocId,
 }
 impl ReviewDocument {
-    pub fn new(review: SangerReview) -> Result<Self, String> {
+    pub fn new(review: &SangerReview) -> Result<Self, String> {
         let root = review
             .storage_anchor()
             .parent()
             .ok_or("Review has no parent")?;
         let mut session = basecraft_ops::Session::recoverable(root).map_err(|e| e.to_string())?;
         let id = session
-            .create_sanger_review(&review)
+            .create_sanger_review(review)
             .map_err(|e| e.to_string())?;
         Ok(Self { session, id })
     }
@@ -588,8 +485,8 @@ pub(super) fn load_draft_review(path: &Path) -> Result<(SangerReviewView, Sanger
 }
 
 pub(super) fn sync_review_view(review: &mut SangerReviewView, session: &SangerReview) {
-    review.review_settings = session.settings.clone();
-    review.reference_evidence = session.reference.clone();
+    review.review_settings.clone_from(&session.settings);
+    review.reference_evidence.clone_from(&session.reference);
     for i in 0..review.consensus.len() {
         review.consensus[i] = match session.decision(i) {
             Some(ReviewChoice::Edit(base) | ReviewChoice::Auto(base)) => *base as u8,
@@ -621,4 +518,107 @@ pub(super) fn session_view(session: &SangerReview) -> Result<SangerReviewView, S
         view.attach_alignment(placement, alignment)?;
     }
     Ok(view)
+}
+
+#[cfg(test)]
+mod tests {
+    #[allow(unused_imports)] // harness=false application_bootstrap includes this module.
+    use super::*;
+
+    #[test]
+    fn cancelled_stage_does_not_prepare_or_replace_review() {
+        let flag = AtomicBool::new(true);
+        let result = execute(
+            Request::Prepare(
+                vec![PathBuf::from("missing.ab1"), PathBuf::from("missing-2.ab1")],
+                20,
+            ),
+            None,
+            &flag,
+        );
+        assert!(result.err().unwrap().contains("cancelled"));
+    }
+
+    #[test]
+    #[ignore = "requires BASECRAFT_SANGER_PAIR_DIR with two AB1 reads, full reference, Tracy and MAFFT"]
+    fn real_pair_full_reference_survives_temporary_input_deletion() {
+        let fixture = PathBuf::from(std::env::var_os("BASECRAFT_SANGER_PAIR_DIR").unwrap());
+        let temp = tempfile::tempdir().unwrap();
+        let mut reads = Vec::new();
+        let mut reference = None;
+        for entry in std::fs::read_dir(fixture).unwrap() {
+            let path = entry.unwrap().path();
+            let Some(extension) = path.extension().and_then(|e| e.to_str()) else {
+                continue;
+            };
+            if !matches!(extension, "ab1" | "fasta") {
+                continue;
+            }
+            let target = temp.path().join(path.file_name().unwrap());
+            std::fs::copy(&path, &target).unwrap();
+            if extension == "ab1" {
+                reads.push(target);
+            } else {
+                reference = Some(target);
+            }
+        }
+        reads.sort();
+        assert_eq!(reads.len(), 2);
+        let reference = reference.unwrap();
+        let original_hash = basecraft_io::hash_file(&reference).unwrap();
+        let frozen = retain_reference(&reads[0], &reference).unwrap();
+        let flag = AtomicBool::new(false);
+        let preparation = start(Request::Prepare(reads.clone(), 20), None).unwrap();
+        // Dispose the alignment-owned snapshot before observing first completion.
+        std::fs::remove_file(&reference).unwrap();
+        assert_eq!(basecraft_io::hash_file(&frozen).unwrap(), original_hash);
+        assert_eq!(retain_reference(&reads[0], &frozen).unwrap(), frozen);
+        let prepared = preparation
+            .receiver
+            .recv()
+            .unwrap()
+            .unwrap_or_else(|e| panic!("prepare: {e}"));
+        assert_eq!(prepared.session.draft.inputs.len(), 2);
+        let oriented = execute(
+            Request::Orient(frozen.clone()),
+            Some(prepared.session),
+            &flag,
+        )
+        .unwrap_or_else(|e| panic!("orient: {e}"));
+        // A replacement source between stages must not change the request.
+        std::fs::write(&reference, ">replacement\nAAAA\n").unwrap();
+        assert_eq!(basecraft_io::hash_file(&frozen).unwrap(), original_hash);
+        let placed = execute(
+            Request::Place(frozen.clone()),
+            Some(oriented.session),
+            &flag,
+        )
+        .unwrap_or_else(|e| panic!("place: {e}"));
+        assert!(
+            placed.session.unresolved() > 0,
+            "review must not auto-accept conflicts"
+        );
+        assert!(placed.session.placement().unwrap().unwrap().source_rows > 1000);
+        for source in reads.into_iter().chain([reference]) {
+            std::fs::remove_file(source).unwrap();
+        }
+        let saved = temp.path().join("saved-review.json");
+        ReviewDocument::new(&placed.session)
+            .unwrap()
+            .save(&saved)
+            .unwrap();
+        let reopened = SangerReview::load(&saved).unwrap();
+        let view = session_view(&reopened).unwrap();
+        assert_eq!(view.draft.consensus, placed.view.draft.consensus);
+        assert_eq!(reopened.unresolved(), placed.session.unresolved());
+        let placement = reopened.placement().unwrap().unwrap();
+        assert_eq!(
+            basecraft_io::hash_file(&placement.source_path).unwrap(),
+            original_hash
+        );
+        assert_eq!(
+            reopened.draft.columns.len(),
+            placed.session.draft.columns.len()
+        );
+    }
 }

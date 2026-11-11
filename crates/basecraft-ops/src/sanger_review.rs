@@ -608,7 +608,7 @@ mod call_set_tests {
             &path,
         )
         .unwrap();
-        ReviewSession::new(instrument_review(&path).unwrap())
+        ReviewSession::new(&instrument_review(&path).unwrap())
     }
 
     fn alternative(session: &SangerReview, version: &str) -> ReviewSession {
@@ -617,7 +617,7 @@ mod call_set_tests {
         draft.mode = "basecall".into();
         draft.version_output = version.into();
         draft.engine_sha256 = "a".repeat(64);
-        ReviewSession::new(SangerReview::from_draft(draft, &session.draft_path).unwrap())
+        ReviewSession::new(&SangerReview::from_draft(draft, &session.draft_path).unwrap())
     }
 
     #[test]
@@ -640,7 +640,7 @@ mod call_set_tests {
                 choice: ReviewChoice::Edit('G'),
             })
             .unwrap();
-        session.retain_call_set(computed).unwrap();
+        session.retain_call_set(&computed).unwrap();
         assert_eq!(session.draft_sha256, instrument_id);
         session.select_call_set(&computed_id).unwrap();
         assert_eq!(session.decision(0), Some(&ReviewChoice::Edit('C')));
@@ -648,7 +648,7 @@ mod call_set_tests {
         mask.start = 1;
         session.apply(ReviewOp::Mask { settings: mask }).unwrap();
         let newer = alternative(&session, "caller 2");
-        session.retain_call_set(newer).unwrap();
+        session.retain_call_set(&newer).unwrap();
         let saved = tmp.path().join("review.json");
         session.save(&saved).unwrap();
         let bytes = std::fs::read(&saved).unwrap();
@@ -693,7 +693,7 @@ mod call_set_tests {
             3
         );
         session
-            .retain_call_set(alternative(&session, "caller 1"))
+            .retain_call_set(&alternative(&session, "caller 1"))
             .unwrap();
         let saved = tmp.path().join("review.json");
         session.save(&saved).unwrap();
@@ -749,14 +749,14 @@ mod readonly_tests {
             &path,
         )
         .unwrap();
-        let mut review = ReviewSession::new(instrument_review(&path).unwrap());
+        let mut review = ReviewSession::new(&instrument_review(&path).unwrap());
         let saved = tmp.path().join("review.json");
         review.save(&saved).unwrap();
         let previous = std::fs::read(&saved).unwrap();
         let original = std::fs::read(&path).unwrap();
         let _restore = Restore(tmp.path().into());
         std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
-        let mut fresh = ReviewSession::new(instrument_review(&path).unwrap());
+        let mut fresh = ReviewSession::new(&instrument_review(&path).unwrap());
         fresh
             .apply(ReviewOp::Set {
                 columns: vec![0],
@@ -789,12 +789,12 @@ mod moved_and_failed_recovery_tests {
             &source,
         )
         .unwrap();
-        let mut review = ReviewSession::new(instrument_review(&source).unwrap());
+        let mut review = ReviewSession::new(&instrument_review(&source).unwrap());
         let mut draft = review.draft.clone();
         draft.engine = "Tracy".into();
         draft.mode = "basecall".into();
         draft.version_output = "caller".into();
-        let mut alternative = ReviewSession::new(SangerReview::from_draft(draft, &source).unwrap());
+        let mut alternative = ReviewSession::new(&SangerReview::from_draft(draft, &source).unwrap());
         alternative
             .apply(ReviewOp::Set {
                 columns: vec![0],
@@ -807,7 +807,7 @@ mod moved_and_failed_recovery_tests {
                 choice: ReviewChoice::Edit('G'),
             })
             .unwrap();
-        review.retain_call_set(alternative).unwrap();
+        review.retain_call_set(&alternative).unwrap();
         review
     }
 

@@ -442,7 +442,7 @@ impl qobject::SangerController {
             {
                 document.update(&completed.session)?;
             } else {
-                r.review_session = Some(work::ReviewDocument::new(completed.session.clone())?);
+                r.review_session = Some(work::ReviewDocument::new(&completed.session)?);
             }
             Ok(completed)
         });
@@ -903,7 +903,7 @@ impl qobject::SangerController {
         let path = input;
         let loaded = basecraft_ops::sanger_review::instrument_review(&path).and_then(|review| {
             let view = session_view(&review)?;
-            Ok((work::ReviewDocument::new(review)?, view))
+            Ok((work::ReviewDocument::new(&review)?, view))
         });
         match loaded {
             Ok((session, mut view)) => {
@@ -955,7 +955,7 @@ impl qobject::SangerController {
         self.as_mut().set_busy(false);
         self.as_mut().set_calling(false);
         let result =
-            result.and_then(|(view, review)| Ok((view, work::ReviewDocument::new(review)?)));
+            result.and_then(|(view, review)| Ok((view, work::ReviewDocument::new(&review)?)));
         match result {
             Ok((mut review, session)) => {
                 self.as_mut().cancel_calls();

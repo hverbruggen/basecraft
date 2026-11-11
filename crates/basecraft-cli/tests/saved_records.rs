@@ -320,8 +320,6 @@ fn damaged_unknown_future_and_draft_files_are_refused_without_records() {
     assert_eq!(listing(&project), before);
 }
 
-/// Recovery writes every retained call set to a new destination only.
-
 fn trees(project: &Path) -> (PathBuf, PathBuf) {
     std::fs::create_dir_all(project).unwrap();
     let target = project.join("target.nwk");
