@@ -25,7 +25,6 @@ impl serde_json::ser::Formatter for PythonCompact {
 }
 type Encoder = fn(&[u8], bool, bool) -> Vec<u8>;
 fn encode<T: DeserializeOwned + Serialize>(original: &[u8], python: bool, sorted: bool) -> Vec<u8> {
-    let record: T = serde_json::from_slice(original).unwrap();
     fn render(record: &impl Serialize, original: &[u8], python: bool) -> Vec<u8> {
         let mut bytes = Vec::new();
         if original.starts_with(b"{\n") || original.starts_with(b"[\n") {
@@ -45,6 +44,7 @@ fn encode<T: DeserializeOwned + Serialize>(original: &[u8], python: bool, sorted
         }
         bytes
     }
+    let record: T = serde_json::from_slice(original).unwrap();
     if sorted {
         render(&serde_json::to_value(record).unwrap(), original, python)
     } else {
