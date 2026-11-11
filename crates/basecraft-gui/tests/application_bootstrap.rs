@@ -83,6 +83,87 @@ unsafe extern "C" {
     fn g_get_prgname() -> *const std::ffi::c_char;
 }
 
+/// The production window in its own process, with one real document of each
+/// kind; see fixtures/ribbon-walk.qml. Exits with the event loop's code.
+fn ribbon_walk(folder: &str) -> ! {
+    bridge::qobject::configure_canvas_graphics();
+    let mut app = application::new(&["basecraft-gui".into()], true);
+    let mut app = app.as_mut().expect("Qt application");
+    let mut engine = QQmlApplicationEngine::new();
+    let source = include_str!("fixtures/ribbon-walk.qml").replace(
+        "RIBBON_TEST_FOLDER",
+        &serde_json::to_string(folder).unwrap(),
+    );
+    engine
+        .pin_mut()
+        .on_object_creation_failed(|_, _| std::process::exit(4))
+        .release();
+    engine
+        .pin_mut()
+        .load_data(&QByteArray::from(source.as_str()), &QUrl::default());
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_secs(180));
+        eprintln!("RIBBON_WALK did not finish within 180 seconds");
+        std::process::exit(5);
+    });
+    std::process::exit(app.as_mut().exec());
+}
+
+/// Every ribbon tab of every document kind on the real window, with no QML
+/// warning on the way.
+fn ribbon_journey() {
+    let profile = std::env::var_os("BASECRAFT_PROFILE_DIR").expect("isolated bootstrap profile");
+    let folder = tempfile::tempdir_in(&profile).unwrap();
+    let fixtures =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/compact");
+    for (set, file) in [
+        ("sequences-annotations", "locus.gb"),
+        ("alignment-editing", "homologues.afa"),
+        ("species-delimitation", "time.nwk"),
+        ("species-delimitation", "hypotheses.spart"),
+        ("species-delimitation", "specimens.afa"),
+        ("sanger-review", "forward.ab1"),
+    ] {
+        std::fs::copy(fixtures.join(set).join(file), folder.path().join(file)).unwrap();
+    }
+    let run = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--ribbon-walk", folder.path().to_str().unwrap()])
+        .env("QT_FORCE_STDERR_LOGGING", "1")
+        .output()
+        .unwrap();
+    let log = String::from_utf8_lossy(&run.stderr);
+    // Layout loops that predate this test: forms sized from their content and
+    // the Sanger review's canvas. Anything else fails the journey.
+    let known = |line: &str| {
+        line.contains("Dialog: Binding loop detected for property \"implicitWidth\"")
+            || line.contains("SangerView.qml")
+            || line.contains("QQuickAnchors: Binding loop detected for property \"bottomMargin\"")
+    };
+    let warnings: Vec<_> = log
+        .lines()
+        .filter(|line| {
+            [
+                "TypeError",
+                "ReferenceError",
+                "Binding loop",
+                "Unable to assign",
+                "is not a function",
+                "failed",
+            ]
+            .iter()
+            .any(|word| line.contains(word))
+                && !known(line)
+        })
+        .collect();
+    assert!(
+        run.status.success() && log.contains("RIBBON_WALK passed") && warnings.is_empty(),
+        "ribbon journey failed ({:?}); warnings: {warnings:#?}\n{log}",
+        run.status
+    );
+    let _ = folder.keep();
+    println!("Every ribbon tab of every document kind showed its commands, without QML warnings");
+}
+
 fn check_identity_case(case: &str) {
     let (gui_test, kind, expected) = match case {
         "validation" => (true, None, "org.basecraft.Validation"),
@@ -337,6 +418,9 @@ fn main() {
         );
         std::process::exit(1);
     }
+    if std::env::args().nth(1).as_deref() == Some("--ribbon-walk") {
+        ribbon_walk(&std::env::args().nth(2).expect("document folder"));
+    }
     if std::env::args().nth(1).as_deref() == Some("--startup-window") {
         let trace = startup_trace::Trace::from_env(std::time::Instant::now());
         let mut app = application::new(&["startup-test".into()], true);
@@ -417,6 +501,7 @@ fn main() {
             "isolated identity case {case} failed"
         );
     }
+    ribbon_journey();
     #[cfg(feature = "test-counters")]
     open_argv::spawn();
     let args = vec![

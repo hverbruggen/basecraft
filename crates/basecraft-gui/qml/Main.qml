@@ -209,7 +209,7 @@ ApplicationWindow {
     property bool preferencesReady: false
     AppSettings {
         id: preferences
-        onSnapshotChanged: if (window.preferencesReady) window.applyPreferences()
+        onSnapshotChanged: if (window.preferencesReady) window.loadPreferences()
         onErrorChanged: if (error.length && window.preferencesReady) {
             preferencesError.open()
         }
@@ -1461,7 +1461,7 @@ ApplicationWindow {
                             ToolTip.visible: callSetTipHover.hovered || activeFocus
                         }
                         RibbonButton { commandId: "trace.compute-calls"; text: "Compute"; tip: "Compute or reuse alternative Tracy calls"; enabled: window.current && !window.current.calling && window.traceDocument && window.traceDocument.traceRows.length === 1; onInvoked: window.current.compute_calls() }
-                        RibbonButton { commandId: "trace.cancel-calls"; text: "Cancel"; tip: "Cancel background calling; keep the current review"; enabled: window.current && window.current.calling; onInvoked: window.current.cancel_calls() }
+                        RibbonButton { commandId: "trace.cancel-calls"; text: "Cancel"; tip: "Cancel background calling; keep the current review"; enabled: !!window.current && !!window.current.calling; onInvoked: window.current.cancel_calls() }
                     }
                     RibbonGroup {
                         title: "Issues"
@@ -2032,6 +2032,7 @@ ApplicationWindow {
 
             TabBar {
                 id: tabs
+                objectName: "documentTabs"
                 Layout.fillWidth: true
                 visible: documentOpens.count > 0
                 onCurrentIndexChanged: { if (!window.applyingOpenFocus) documentOpens.revoke_focus(); Qt.callLater(window.refreshCurrent) }
