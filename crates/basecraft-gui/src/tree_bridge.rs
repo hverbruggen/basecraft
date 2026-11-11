@@ -461,7 +461,7 @@ fn annotation_request(
     let mut value = serde_json::to_value(annotation).map_err(|e| e.to_string())?;
     value["id"] = json!(id);
     value["exists"] = json!(original.is_some());
-    value["tips"] = json!(doc.tip_counts()[node]);
+    value["tip_count"] = json!(doc.tip_counts()[node]);
     value["target"] = json!({
         "revision": revision,
         "node": node,
