@@ -4,7 +4,7 @@
 //! it into viewport changes, selections and operations, and every edit goes
 //! through the ops session.
 
-use basecraft_ops::links::AlignmentLinkExt;
+use basecraft_ops::records::AlignmentLinkExt;
 #[cxx_qt::bridge]
 pub mod qobject {
     impl cxx_qt::Threading for TreeController {}
@@ -715,10 +715,10 @@ impl qobject::TreeController {
 
     fn refresh_link(mut self: Pin<&mut Self>) {
         let path = PathBuf::from(self.rust().file_path.to_string());
-        let origin = basecraft_ops::links::AlignmentLink::read(&path)
+        let origin = basecraft_ops::records::AlignmentLink::read(&path)
             .ok()
             .filter(|l| l.inferred);
-        let linked = basecraft_ops::links::AlignmentLink::read_view(&path);
+        let linked = basecraft_ops::records::AlignmentLink::read_view(&path);
         let (source, status) = match linked {
             Ok(link) => {
                 let status = crate::bridge::checked_document!(
@@ -729,12 +729,12 @@ impl qobject::TreeController {
                 (link.source.to_string_lossy().into_owned(), status)
             }
             Err(e)
-                if basecraft_ops::links::metadata_present(&basecraft_ops::links::sidecar(
+                if basecraft_ops::records::metadata_present(&basecraft_ops::records::sidecar(
                     &path,
                 ))
                 .unwrap_or(true)
-                    || basecraft_ops::links::metadata_present(
-                        &basecraft_ops::links::view_sidecar(&path),
+                    || basecraft_ops::records::metadata_present(
+                        &basecraft_ops::records::view_sidecar(&path),
                     )
                     .unwrap_or(true) =>
             {
@@ -766,7 +766,7 @@ impl qobject::TreeController {
                 return Ok(());
             };
             let source = PathBuf::from(path.to_string());
-            let outputs = basecraft_ops::links::AlignmentLink::associate(
+            let outputs = basecraft_ops::records::AlignmentLink::associate(
                 &tree_path,
                 session.tree(doc)?,
                 &source,
@@ -857,7 +857,7 @@ impl qobject::TreeController {
             session,
             move |session| {
                 let tree = session.tree(doc).map_err(|e| e.to_string())?;
-                let link = basecraft_ops::links::AlignmentLink::read_view(&tree_path)
+                let link = basecraft_ops::records::AlignmentLink::read_view(&tree_path)
                     .map_err(|e| format!("Link an alignment first: {e}"))?;
                 let input = link
                     .checked_snapshot(&tree_path, tree)
@@ -886,8 +886,8 @@ impl qobject::TreeController {
                             "selection_tree".into(),
                             vec![InputReference::Document {
                                 doc: doc.0.to_string(),
-                                generation: session.generation(doc),
-                                revision: session.revision(doc),
+                                generation: session.generation(doc).map_err(|e| e.to_string())?,
+                                revision: session.revision(doc).map_err(|e| e.to_string())?,
                             }],
                         ),
                     ]
@@ -1052,8 +1052,8 @@ impl qobject::TreeController {
         Some((
             session.id().into(),
             doc,
-            session.generation(doc),
-            session.revision(doc),
+            session.generation(doc).unwrap(),
+            session.revision(doc).unwrap(),
         ))
     }
 
@@ -1780,7 +1780,9 @@ impl qobject::TreeController {
                 .map_err(|e| e.to_string())?;
             basecraft_ops::metadata::verify_label_owner(&previous_style, &source)
                 .map_err(|e| e.to_string())?;
-            let path = session.root().join(session.doc_key(doc));
+            let path = session
+                .root()
+                .join(session.doc_key(doc).map_err(|e| e.to_string())?);
             let request = basecraft_ops::metadata::ConsumerRequest::Labels {
                 document: path.to_string_lossy().into_owned(),
                 records: tree

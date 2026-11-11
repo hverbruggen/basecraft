@@ -88,15 +88,15 @@ fn installed_multi_input_job_uses_common_storage_and_frozen_identity() {
         json!({"include_newlines":true,"mode":"normal"})
     );
     let output = temp.path().join("report.json");
-    let publication = basecraft_ops::provenance::inspect(&output).unwrap();
+    let publication = basecraft_ops::records::inspect(&output).unwrap();
     assert_eq!(publication.inputs.len(), 2);
     assert_eq!(
-        basecraft_ops::provenance::verify(&output).unwrap(),
+        basecraft_ops::records::verify(&output).unwrap(),
         Vec::<String>::new()
     );
     std::fs::write(temp.path().join("b.txt"), b"changed").unwrap();
     assert_ne!(
-        basecraft_ops::provenance::verify(&output).unwrap(),
+        basecraft_ops::records::verify(&output).unwrap(),
         Vec::<String>::new()
     );
     let execution: serde_json::Value = serde_json::from_slice(
@@ -149,7 +149,7 @@ fn registered_newick_inputs_keep_verifiable_identity_evidence() {
     let outcome = wait(&jobs, &accepted.run_id);
     assert_eq!(outcome.state, RuntimeState::Completed, "{outcome:?}");
     assert_eq!(
-        basecraft_ops::provenance::verify(&temp.path().join("report.json")).unwrap(),
+        basecraft_ops::records::verify(&temp.path().join("report.json")).unwrap(),
         Vec::<String>::new()
     );
     for name in ["a.txt", "b.txt"] {
@@ -259,7 +259,7 @@ fn installed_snapshot_proposals_commit_in_owner_and_stale_jobs_preserve_edits() 
     let doc = session.open(&source).unwrap();
     let mut manager = JobManager::default();
     let request: OperationRequest = serde_json::from_value(json!({"operation":"org.example.registry-sequence/annotate@1",
-        "inputs":{"sequence":[{"kind":"document","doc":doc.0.to_string(),"generation":session.generation(doc),"revision":session.doc(doc).unwrap().version()}]},"parameters":{}})).unwrap();
+        "inputs":{"sequence":[{"kind":"document","doc":doc.0.to_string(),"generation":session.generation(doc).unwrap(),"revision":session.doc(doc).unwrap().version()}]},"parameters":{}})).unwrap();
     let accepted = manager
         .submit_in_session(
             &registry,
@@ -290,7 +290,7 @@ fn installed_snapshot_proposals_commit_in_owner_and_stale_jobs_preserve_edits() 
     session.redo(doc).unwrap();
     assert_eq!(session.doc(doc).unwrap().feature_count(), 1);
     let stale: OperationRequest = serde_json::from_value(json!({"operation":"org.example.registry-sequence/annotate@1",
-        "inputs":{"sequence":[{"kind":"document","doc":doc.0.to_string(),"generation":session.generation(doc),"revision":session.doc(doc).unwrap().version()}]},"parameters":{"slow":true}})).unwrap();
+        "inputs":{"sequence":[{"kind":"document","doc":doc.0.to_string(),"generation":session.generation(doc).unwrap(),"revision":session.doc(doc).unwrap().version()}]},"parameters":{"slow":true}})).unwrap();
     let accepted = manager
         .submit_in_session(
             &registry,
@@ -400,7 +400,7 @@ fn submitted_views_remain_frozen_when_both_originals_change_during_execution() {
     assert_eq!(outcome.state, RuntimeState::Completed, "{outcome:?}");
     assert_eq!(outcome.data, Some(json!({"bytes":7})));
     assert_ne!(
-        basecraft_ops::provenance::verify(&temp.path().join("report.json")).unwrap(),
+        basecraft_ops::records::verify(&temp.path().join("report.json")).unwrap(),
         Vec::<String>::new()
     );
 }
@@ -470,7 +470,7 @@ fn committed_proposals_stay_partial_and_repair_requires_recorded_session_activit
         let request: OperationRequest = serde_json::from_value(json!({
             "operation":"org.example.registry-sequence/annotate@1",
             "inputs":{"sequence":[{"kind":"document","doc":doc.0.to_string(),
-                "generation":session.generation(doc),"revision":session.doc(doc).unwrap().version()}]},
+                "generation":session.generation(doc).unwrap(),"revision":session.doc(doc).unwrap().version()}]},
             "parameters":{}
         }))
         .unwrap();
@@ -525,7 +525,7 @@ fn committed_proposals_stay_partial_and_repair_requires_recorded_session_activit
                 .document_record(doc)
                 .unwrap()
                 .events
-                .into_iter()
+                .iter()
                 .filter(|event| matches!(event.op, basecraft_protocol::Op::ToolRun { .. }))
                 .count()
         };
@@ -651,14 +651,14 @@ fn document_inputs_read_the_session_revision_and_record_history() {
     let mut session = Session::new(temp.path());
     let doc = session.open(&source).unwrap();
     let mut manager = JobManager::default();
-    let document = |session: &Session| json!([{"kind":"document","doc":doc.0.to_string(),"generation":session.generation(doc),"revision":session.revision(doc)}]);
+    let document = |session: &Session| json!([{"kind":"document","doc":doc.0.to_string(),"generation":session.generation(doc).unwrap(),"revision":session.revision(doc).unwrap()}]);
     // A clean document is submitted as its saved file.
     let request = json!({"operation":"org.example.registry-fixture/count@1","inputs":{"sources":document(&session)},
             "parameters":{"mode":"normal"},"destinations":{"report":"clean.json"}});
     let clean = run_in_session(&mut manager, &registry, &mut session, request);
     assert_eq!(clean.state, RuntimeState::Completed, "{clean:?}");
     assert_eq!(
-        basecraft_ops::provenance::verify(&temp.path().join("clean.json")).unwrap(),
+        basecraft_ops::records::verify(&temp.path().join("clean.json")).unwrap(),
         Vec::<String>::new()
     );
     // Unsaved edits are submitted as a generated snapshot; the file is untouched.
@@ -692,7 +692,7 @@ fn document_inputs_read_the_session_revision_and_record_history() {
         ">a\nAC-T\n>b\nACGT\n"
     );
     // The result carries the submitted revision and producing activity, too.
-    let publication = basecraft_ops::provenance::inspect(&temp.path().join("edited.json")).unwrap();
+    let publication = basecraft_ops::records::inspect(&temp.path().join("edited.json")).unwrap();
     assert!(publication.events.iter().any(|event| matches!(&event.op,
         basecraft_protocol::Op::ToolRun { params, .. } if params["run_id"] == edited.run_id)));
     assert!(
@@ -737,7 +737,7 @@ fn document_inputs_read_the_session_revision_and_record_history() {
         ]
     );
     // The Tasks view lists registered runs and points at their own record.
-    let tasks = basecraft_ops::document_record::jobs(true).unwrap();
+    let tasks = basecraft_ops::records::jobs(true).unwrap();
     let listed = tasks["jobs"]
         .as_array()
         .unwrap()
@@ -761,7 +761,7 @@ fn document_inputs_read_the_session_revision_and_record_history() {
     let stale = manager.submit_in_session(
         &registry,
         serde_json::from_value(json!({"operation":"org.example.registry-fixture/count@1",
-            "inputs":{"sources":[{"kind":"document","doc":doc.0.to_string(),"generation":session.generation(doc),"revision":0}]},
+            "inputs":{"sources":[{"kind":"document","doc":doc.0.to_string(),"generation":session.generation(doc).unwrap(),"revision":0}]},
             "parameters":{"mode":"normal"},"destinations":{"report":"stale.json"}}))
         .unwrap(),
         SessionPolicy::new(temp.path(), true).unwrap(),
@@ -784,7 +784,7 @@ fn document_repair_waits_for_owner_history_and_does_not_repeat_activity() {
     let mut manager = JobManager::default();
     let accepted = manager.submit_in_session(&registry, serde_json::from_value(json!({
         "operation":"org.example.registry-fixture/count@1",
-        "inputs":{"sources":[{"kind":"document","doc":doc.0.to_string(),"generation":session.generation(doc),"revision":session.revision(doc)}]},
+        "inputs":{"sources":[{"kind":"document","doc":doc.0.to_string(),"generation":session.generation(doc).unwrap(),"revision":session.revision(doc).unwrap()}]},
         "parameters":{"mode":"delayed"},"destinations":{"report":"result.json"}
     })).unwrap(), SessionPolicy::new(root.path(), true).unwrap(), "test", &mut session).unwrap();
     let output = root.path().join("result.json");
@@ -825,7 +825,7 @@ fn document_repair_waits_for_owner_history_and_does_not_repeat_activity() {
             .count(),
         1
     );
-    let publication = basecraft_ops::provenance::inspect(&output).unwrap();
+    let publication = basecraft_ops::records::inspect(&output).unwrap();
     assert!(publication.events.iter().any(|event| matches!(&event.op,
         basecraft_protocol::Op::ToolRun { params, .. } if params["run_id"] == accepted.run_id)));
 }
@@ -884,7 +884,7 @@ fn canonical_alignment_evidence_preserves_order_headers_and_residues() {
     );
     assert_eq!(outcome.data, Some(json!({"bytes":canonical.len()})));
     assert_eq!(std::fs::read_to_string(&source).unwrap(), original);
-    let publication = basecraft_ops::provenance::inspect(&root.path().join("result.json")).unwrap();
+    let publication = basecraft_ops::records::inspect(&root.path().join("result.json")).unwrap();
     assert!(publication.events.iter().any(|event| matches!(&event.op,
         basecraft_protocol::Op::ToolRun { params, .. } if params["run_id"] == outcome.run_id)));
 }
@@ -930,7 +930,7 @@ fn unequal_alignment_inputs_are_refused_before_execution_for_files_and_documents
             json!({"kind":"file","path":"input.afa"})
         } else {
             json!({"kind":"document","doc":doc.0.to_string(),
-                "generation":session.generation(doc),"revision":session.revision(doc)})
+                "generation":session.generation(doc).unwrap(),"revision":session.revision(doc).unwrap()})
         };
         let request = serde_json::from_value(json!({
             "operation":"org.example.registry-fixture/count@1", "inputs":{"sources":[input]},
@@ -978,7 +978,7 @@ fn ungapped_alignment_input_accepts_unequal_lengths_without_padding() {
             json!({"kind":"file","path":"input.afa"})
         } else {
             json!({"kind":"document","doc":doc.0.to_string(),
-                "generation":session.generation(doc),"revision":session.revision(doc)})
+                "generation":session.generation(doc).unwrap(),"revision":session.revision(doc).unwrap()})
         };
         let outcome = run_in_session(
             &mut manager,
@@ -1019,7 +1019,7 @@ fn tasks_cancel_registered_document_run_through_owner_without_success_history() 
         let request = serde_json::from_value(json!({
             "operation":"org.example.registry-fixture/count@1",
             "inputs":{"sources":[{"kind":"document","doc":doc.0.to_string(),
-                "generation":session.generation(doc),"revision":session.revision(doc)}]},
+                "generation":session.generation(doc).unwrap(),"revision":session.revision(doc).unwrap()}]},
             "parameters":{"mode":mode},"destinations":{"report":"cancelled.json"}
         }))
         .unwrap();
@@ -1126,7 +1126,7 @@ fn tasks_refuse_document_publication_awaiting_owner_finalization() {
     let request = serde_json::from_value(json!({
         "operation":"org.example.registry-fixture/count@1",
         "inputs":{"sources":[{"kind":"document","doc":doc.0.to_string(),
-            "generation":session.generation(doc),"revision":session.revision(doc)}]},
+            "generation":session.generation(doc).unwrap(),"revision":session.revision(doc).unwrap()}]},
         "parameters":{},"destinations":{"report":"report.json"}
     }))
     .unwrap();
@@ -1196,11 +1196,11 @@ fn retained_inputs_survive_job_drop_and_temporary_source_removal() {
     std::fs::remove_file(temp.path().join("b.txt")).unwrap();
     assert_eq!(std::fs::read(&inputs[0]).unwrap(), b"abc\n");
     assert_eq!(std::fs::read(&inputs[1]).unwrap(), b"xy\n");
-    let issues = basecraft_ops::provenance::verify(&temp.path().join("report.json")).unwrap();
+    let issues = basecraft_ops::records::verify(&temp.path().join("report.json")).unwrap();
     assert!(issues.is_empty(), "{issues:?}");
     std::fs::write(&inputs[0], b"damaged").unwrap();
     assert_ne!(
-        basecraft_ops::provenance::verify(&temp.path().join("report.json")).unwrap(),
+        basecraft_ops::records::verify(&temp.path().join("report.json")).unwrap(),
         Vec::<String>::new()
     );
 }
@@ -1279,7 +1279,10 @@ fn equal_content_retention_keeps_exact_primary_owner_and_leaf_lifecycles() {
                         run.join(origin).canonicalize().unwrap(),
                         owner.canonicalize().unwrap()
                     );
-                    assert_eq!(primary.state, "preserved");
+                    assert_eq!(
+                        primary.state,
+                        basecraft_protocol::input_records::EvidenceState::Preserved
+                    );
                     assert_eq!(
                         std::fs::read(owner.join("preserved-input")).unwrap(),
                         original
@@ -1289,10 +1292,13 @@ fn equal_content_retention_keeps_exact_primary_owner_and_leaf_lifecycles() {
                         !primary.extra.contains_key("origin_run"),
                         "unretained primary delegated to a distinct equal-byte original"
                     );
-                    assert_eq!(primary.state, "referenced");
+                    assert_eq!(
+                        primary.state,
+                        basecraft_protocol::input_records::EvidenceState::Referenced
+                    );
                     assert_eq!(
                         input_evidence::read_input(owner).unwrap().state,
-                        "referenced"
+                        basecraft_protocol::input_records::EvidenceState::Referenced
                     );
                 }
                 assert_eq!(
@@ -1314,7 +1320,7 @@ fn equal_content_retention_keeps_exact_primary_owner_and_leaf_lifecycles() {
                     original
                 );
                 assert_eq!(
-                    basecraft_ops::provenance::verify(&temp.path().join("report.json")).unwrap(),
+                    basecraft_ops::records::verify(&temp.path().join("report.json")).unwrap(),
                     Vec::<String>::new()
                 );
                 drop(jobs);
@@ -1344,7 +1350,10 @@ fn equal_content_retention_keeps_exact_primary_owner_and_leaf_lifecycles() {
                     owner_before
                 );
                 if policy == SavePolicy::BreakEvidence {
-                    assert_eq!(input_evidence::read_input(sibling).unwrap().state, "broken");
+                    assert_eq!(
+                        input_evidence::read_input(sibling).unwrap().state,
+                        basecraft_protocol::input_records::EvidenceState::Broken
+                    );
                 } else {
                     assert!(!sibling.exists());
                 }
@@ -1422,6 +1431,7 @@ fn registered_target_preparation_preserves_permissions_and_session_identity() {
                 "test".into(),
                 session,
                 &registry,
+                &[],
             )
         };
     // No explicit target needs no session, even without document-write permission.
@@ -1457,7 +1467,7 @@ fn registered_target_preparation_preserves_permissions_and_session_identity() {
     let id = target.doc;
     assert!(session.is_open(id));
     let document = json!({"kind":"document","doc":id.0.to_string(),
-        "generation":session.generation(id),"revision":session.revision(id)});
+        "generation":session.generation(id).unwrap(),"revision":session.revision(id).unwrap()});
     let prepared = prepare(Some(document.clone()), false, Some(&mut session)).unwrap();
     let target = prepared.document.as_ref().unwrap();
     assert_eq!(target.doc, id);
@@ -1471,12 +1481,12 @@ fn registered_target_preparation_preserves_permissions_and_session_identity() {
         ),
         (
             "generation",
-            json!(session.generation(id) + 1),
+            json!(session.generation(id).unwrap() + 1),
             "stale_revision: target document changed",
         ),
         (
             "revision",
-            json!(session.revision(id) + 1),
+            json!(session.revision(id).unwrap() + 1),
             "stale_revision: target document changed",
         ),
     ] {
@@ -1487,5 +1497,42 @@ fn registered_target_preparation_preserves_permissions_and_session_identity() {
             .unwrap()
             .to_string();
         assert!(error.contains(message), "{error}");
+    }
+}
+
+#[test]
+#[cfg(feature = "test-counters")]
+fn captured_inputs_reach_the_registered_caller_without_rereading_originals() {
+    use basecraft_ops::sanger_review::CapturedInput;
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let paths = [root.join("a.txt"), root.join("b.txt")];
+    std::fs::write(&paths[0], b"abc\n").unwrap();
+    std::fs::write(&paths[1], b"xy\n").unwrap();
+    let registry = registry(root);
+    basecraft_io::counters::reset();
+    let captures = paths
+        .iter()
+        .map(|path| CapturedInput::open(path).unwrap())
+        .collect();
+    let mut jobs = JobManager::default().with_captured_inputs(captures);
+    let accepted = jobs
+        .submit(
+            &registry,
+            request("normal"),
+            SessionPolicy::new(root, true).unwrap(),
+            "captured inputs",
+        )
+        .unwrap();
+    let result = wait(&jobs, &accepted.run_id);
+    assert_eq!(result.state, RuntimeState::Completed, "{result:?}");
+    assert_eq!(result.data.as_ref().unwrap()["bytes"], 7);
+    let counts = basecraft_io::counters::snapshot();
+    for path in paths {
+        assert_eq!(
+            counts.reads[&path.canonicalize().unwrap()].full_reads,
+            1,
+            "{counts:?}"
+        );
     }
 }

@@ -24,6 +24,29 @@ impl Source {
         Ok((source, hasher.finish()))
     }
 
+    /// Bounded capture with BLAKE3 and SHA-256 computed in the same read.
+    pub fn open_hashed_with_sha256(path: &Path, limit: u64) -> Result<(Vec<u8>, String, String)> {
+        use sha2::{Digest, Sha256};
+        let mut hasher = crate::Hasher::new();
+        let mut sha = Sha256::new();
+        let mut total = 0_u64;
+        let source = Self::read(path, |bytes| {
+            total += bytes.len() as u64;
+            if total > limit {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "input exceeds capture limit",
+                )
+                .into());
+            }
+            hasher.update(bytes);
+            sha.update(bytes);
+            Ok(())
+        })?;
+        let bytes = std::sync::Arc::try_unwrap(source.0).unwrap_or_else(|shared| (*shared).clone());
+        Ok((bytes, hasher.finish(), format!("{:x}", sha.finalize())))
+    }
+
     /// Read, hash and index each FASTA block while it is hot in memory.
     pub fn open_fasta(path: &Path) -> Result<(Self, crate::fasta::FastaIndex, String)> {
         let mut hasher = crate::Hasher::new();

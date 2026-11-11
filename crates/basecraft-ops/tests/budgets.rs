@@ -269,12 +269,12 @@ fn large_first_edit_retains_without_reading() {
     assert_eq!(counters::snapshot().sync_all, 0);
     assert_eq!(counters::snapshot().sync_data, 1);
     drop(session);
-    let recovered = basecraft_ops::replay::recover(&recovery, &root.join("recovered")).unwrap();
+    let recovered = basecraft_ops::records::recover(&recovery, &root.join("recovered")).unwrap();
     let mut reopened = Session::unlogged(&root);
     let doc = reopened.open(&recovered[0]).unwrap();
     assert_eq!(reopened.doc(doc).unwrap().read(0, 4), b"CAAA");
     std::fs::remove_file(&file).unwrap();
-    let retained = basecraft_ops::replay::recover(&recovery, &root.join("missing")).unwrap();
+    let retained = basecraft_ops::records::recover(&recovery, &root.join("missing")).unwrap();
     let current = reopened.open(&retained[0]).unwrap();
     assert_eq!(reopened.doc(current).unwrap().read(0, 4), b"CAAA");
 }

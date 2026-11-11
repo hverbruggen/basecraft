@@ -4,7 +4,6 @@ use std::path::Path;
 
 use basecraft_docs::SequenceDoc;
 use basecraft_protocol::{Feature, Strand};
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{Result, error::invalid};
@@ -38,31 +37,7 @@ pub fn suggested_alphabet(queries: &[Query]) -> &'static str {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Query {
-    pub name: String,
-    pub sequence: String,
-    #[serde(default)]
-    pub source: Value,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Plan {
-    pub schema: u32,
-    pub alphabet: String,
-    pub program: String,
-    pub database: String,
-    pub original_residues: usize,
-    pub limit: usize,
-    pub submitted_residues: usize,
-    pub oversized: bool,
-    pub records: Vec<Value>,
-    pub fasta: String,
-    pub query_hash: String,
-    pub approval_hash: String,
-    pub truncation: bool,
-}
+pub use basecraft_protocol::query_records::{Query, QueryPlan as Plan};
 
 pub fn from_fasta(bytes: &[u8], source: &str) -> Result<Vec<Query>> {
     let index = basecraft_io::fasta::FastaIndex::build(bytes)?;
@@ -193,9 +168,10 @@ pub fn prepare(queries: &[Query], settings: &Value) -> Result<Plan> {
         return Err(invalid("BLAST query contains no records"));
     }
     if queries.len() > 4096 {
-        return Err(invalid(
-            "BLAST supports at most 4096 query records per submission; choose a smaller batch",
-        ));
+        return Err(crate::Error::Limit {
+            what: "BLAST query records per submission".into(),
+            limit: 4096,
+        });
     }
     let alphabet = settings["alphabet"].as_str().unwrap_or("");
     let (allowed, limit) = match alphabet {
@@ -268,7 +244,19 @@ pub fn prepare(queries: &[Query], settings: &Value) -> Result<Plan> {
         let id = format!("query_{}", i + 1);
         let input_ranges = retained_offsets(&query.sequence, retained);
         let source_ranges = project_ranges(&query.source, &input_ranges)?;
-        records.push(json!({"submitted_input_ranges":input_ranges,"submitted_source_ranges":source_ranges,"id":id,"name":query.name,"source":query.source,"original_length":seq.len(),"submitted_length":retained,"submitted_query_range":[0,retained],"omitted":retained==0,"shortened":retained>0 && retained<seq.len(),"removed_gaps_or_whitespace":query.sequence.len()-seq.len()}));
+        records.push(basecraft_protocol::query_records::QueryRecord {
+            id: id.clone(),
+            name: query.name.clone(),
+            source: query.source.clone(),
+            original_length: seq.len(),
+            submitted_length: retained,
+            submitted_query_range: [0, retained],
+            omitted: retained == 0,
+            shortened: retained > 0 && retained < seq.len(),
+            removed_gaps_or_whitespace: query.sequence.len() - seq.len(),
+            submitted_input_ranges: input_ranges,
+            submitted_source_ranges: source_ranges,
+        });
         if retained > 0 {
             basecraft_io::fasta::write_record(&mut fasta, id.as_bytes(), &seq[..retained], 80)?;
         }
@@ -431,8 +419,8 @@ mod tests {
             ];
             let p = prepare(&q, &s).unwrap();
             assert!(authorize(&p, &s).is_err());
-            assert_eq!(p.records[1]["submitted_length"], 2);
-            assert_eq!(p.records[2]["omitted"], true);
+            assert_eq!(p.records[1].submitted_length, 2);
+            assert!(p.records[2].omitted);
             s["truncate"] = json!(true);
             s["approval_hash"] = json!(p.approval_hash);
             authorize(&prepare(&q, &s).unwrap(), &s).unwrap();
@@ -481,7 +469,7 @@ mod tests {
         let s = settings("nucleotide");
         let p = prepare(std::slice::from_ref(&q), &s).unwrap();
         assert_eq!(
-            p.records[0]["submitted_source_ranges"],
+            serde_json::to_value(&p.records[0].submitted_source_ranges).unwrap(),
             json!([{"start":3,"end":8,"strand":"+"}])
         );
         let mut approved = s;
@@ -513,7 +501,7 @@ mod tests {
         assert_eq!(plan.records.len(), 2);
         assert_eq!(plan.submitted_residues, 9);
         assert_eq!(
-            plan.records[0]["submitted_input_ranges"],
+            serde_json::to_value(&plan.records[0].submitted_input_ranges).unwrap(),
             json!([[0, 1], [2, 5]])
         );
         let q = from_alignment(&doc, (1, 2), (2, 4)).unwrap();

@@ -3,6 +3,18 @@
   "title": "SubmittedInput",
   "type": "object",
   "properties": {
+    "analysis_run": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "proposal_target": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
     "schema_version": {
       "type": "integer",
       "format": "uint32",
@@ -19,7 +31,7 @@
       ]
     },
     "state": {
-      "type": "string"
+      "$ref": "#/$defs/EvidenceState"
     },
     "submitted_hash": {
       "type": "string"
@@ -32,6 +44,12 @@
     "transformation": {
       "description": "canonical-fasta-v1 or ungapped-fasta-v1; generated inputs retain their bytes.",
       "type": "string"
+    },
+    "upstream": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/UpstreamLink"
+      }
     }
   },
   "additionalProperties": true,
@@ -43,6 +61,23 @@
     "state"
   ],
   "$defs": {
+    "EvidenceState": {
+      "description": "Unknown states remain readable and serialize without losing their spelling.",
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "referenced",
+            "generated",
+            "preserved",
+            "broken"
+          ]
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
     "FileStamp": {
       "description": "Cheap change signal captured during an existing verified read. Matching time\nand length alone do not prove content identity.",
       "type": "object",
@@ -104,6 +139,25 @@
         "path",
         "stamp",
         "hash"
+      ]
+    },
+    "UpstreamLink": {
+      "type": "object",
+      "properties": {
+        "bundle": {
+          "type": "string"
+        },
+        "hash": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "bundle",
+        "hash",
+        "id"
       ]
     }
   }

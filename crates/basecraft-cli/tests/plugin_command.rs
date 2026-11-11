@@ -128,12 +128,10 @@ fn plugin_command_runs_registered_sequence_operations() {
             assert_eq!(input.submitted_hash, source.hash, "{}", run.display());
             let path = run.join(&source.path).canonicalize().unwrap();
             assert_eq!(basecraft_io::hash_file(&path).unwrap(), source.hash);
-            let target = input
-                .extra
-                .get(basecraft_ops::input_evidence::PROPOSAL_TARGET);
+            let target = input.proposal_target;
             if path == sequence.canonicalize().unwrap() {
                 // The editable source is exempt from guarding its own save.
-                assert_eq!(target, Some(&Value::Bool(true)), "{}", run.display());
+                assert_eq!(target, Some(true), "{}", run.display());
                 saw_proposal_target = true;
             } else {
                 // Explicit contribution ancestry refers to the immutable

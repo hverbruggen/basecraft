@@ -97,7 +97,7 @@ with Session(root, writes=True) as session:
     refuses(lambda: session.save(doc, decision=decision(check)), "save_decision_stale")
     assert path.read_bytes() == b">gene\nGGGG\n"
     check = session.save_check(doc)
-    refuses(lambda: session.save(doc, decision=decision(check)), "invalid_arguments")
+    refuses(lambda: session.save(doc, decision=decision(check)), "changed_on_disk")
     assert path.read_bytes() == b">gene\nGGGG\n"
 
     # Same bytes in a replacement file still have a different target identity.

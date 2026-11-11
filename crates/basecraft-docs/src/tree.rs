@@ -6,7 +6,9 @@
 //! branch, so rerooting moves them along the reversed path. Clades are
 //! named by tips (see [`CladeRef`]), which survive restructuring.
 
+mod edit;
 mod rooting;
+pub use edit::TreeUndo;
 
 use std::collections::BTreeMap;
 

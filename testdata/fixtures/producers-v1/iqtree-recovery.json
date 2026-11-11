@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "artifacts": [
+    {
+      "destination": "/work/tmp/tmpsaer333d/old.nwk",
+      "staged": "/work/tmp/tmpsaer333d/.basecraft-iqtree-publish-0omz2c7d/new-0",
+      "previous": "/work/tmp/tmpsaer333d/.basecraft-iqtree-publish-0omz2c7d/previous-0"
+    },
+    {
+      "destination": "/work/tmp/tmpsaer333d/optional",
+      "staged": null,
+      "previous": null
+    }
+  ]
+}

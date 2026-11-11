@@ -58,7 +58,7 @@ fn finds_orfs_and_maps_them_onto_a_newer_version() {
     let dir = tempfile::tempdir().unwrap();
     let mut session = Session::unlogged(dir.path());
     let doc = session.open(&record(dir.path())).unwrap();
-    let snap = Snapshot::of(session.doc_key(doc), session.doc(doc).unwrap()).unwrap();
+    let snap = Snapshot::of(session.doc_key(doc).unwrap(), session.doc(doc).unwrap()).unwrap();
 
     let result = p
         .invoke("find_orfs", json!({ "min_codons": 100 }), Some(&snap))

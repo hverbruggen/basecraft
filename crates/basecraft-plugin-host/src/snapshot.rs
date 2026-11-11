@@ -108,11 +108,11 @@ impl Snapshot {
     pub fn payload(&self) -> Result<Vec<u8>> {
         let residues = self.residues.map()?;
         let features = self.features.map()?;
-        let mut payload = Vec::with_capacity(8 + residues.len() + features.len());
-        payload.extend_from_slice(&(residues.len() as u64).to_le_bytes());
-        payload.extend_from_slice(&residues);
-        payload.extend_from_slice(&features);
-        Ok(payload)
+        Ok(basecraft_protocol::plugin::ArrowPair {
+            residues: &residues,
+            features: &features,
+        }
+        .encode())
     }
 
     /// The protocol description, with buffer indices 0 and 1.
@@ -126,5 +126,31 @@ impl Snapshot {
             residues: 0,
             features: 1,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use basecraft_protocol::plugin::ArrowPair;
+    #[test]
+    fn retained_arrow_pair_matches_current_writer() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures");
+        let record = basecraft_io::genbank::parse(
+            &std::fs::read(root.join("compact/sequences-annotations/locus.gb")).unwrap(),
+        )
+        .unwrap()
+        .remove(0);
+        let snapshot = Snapshot::of("locus.gb", &SequenceDoc::from_genbank(record)).unwrap();
+        let bytes = snapshot.payload().unwrap();
+        let golden = root.join("producers-v1/sequence-arrow-pair.bin");
+        if std::env::var_os("BASECRAFT_UPDATE_RECORDS").is_some() {
+            std::fs::write(&golden, &bytes).unwrap();
+        }
+        let original = std::fs::read(golden).unwrap();
+        assert_eq!(bytes, original);
+        assert_eq!(ArrowPair::decode(&original).unwrap().encode(), original);
+        assert!(ArrowPair::decode(&[0; 7]).is_none());
+        assert!(ArrowPair::decode(&u64::MAX.to_le_bytes()).is_none());
     }
 }

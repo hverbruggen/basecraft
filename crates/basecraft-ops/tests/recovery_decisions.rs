@@ -2,7 +2,7 @@
 use basecraft_ops::{
     Error, Session,
     input_evidence::SavePolicy,
-    replay::{self, RecoveryMode},
+    records::{self, RecoveryMode},
 };
 use basecraft_platform::files::{OrdinaryKind, object_identity};
 use basecraft_protocol::Op;
@@ -60,7 +60,7 @@ fn complete_multiple_documents_publish_once_without_rewriting() {
     let session = source(&root, 2);
     let destination = root.join("recovered");
     let mut attempt =
-        replay::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
+        records::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
             .unwrap();
     let check = attempt.check(0).unwrap();
     let stage = check.target().parent().unwrap().to_path_buf();
@@ -90,7 +90,7 @@ fn changed_inventory_requires_fresh_final_consent_without_resaving() {
     let session = source(&root, 2);
     let destination = root.join("recovered");
     let mut attempt =
-        replay::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
+        records::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
             .unwrap();
     let path = attempt.check(0).unwrap().target().to_path_buf();
     attempt.advance(0, None).unwrap();
@@ -102,7 +102,7 @@ fn changed_inventory_requires_fresh_final_consent_without_resaving() {
         .unwrap();
     let fresh = required(attempt.publish().unwrap_err());
     let status = attempt.status().unwrap();
-    assert_eq!(status.phase, replay::RecoveryPhase::NeedsFinalization);
+    assert_eq!(status.phase, records::RecoveryPhase::NeedsFinalization);
     assert!(status.documents.iter().all(|document| document.written));
     assert_eq!(
         serde_json::to_value(&status.warnings).unwrap(),
@@ -131,13 +131,13 @@ fn receipts_are_single_use_session_document_and_phase_bound() {
     };
     let session = source(&root, 2);
     damage();
-    let mut a = replay::prepare_recovery(
+    let mut a = records::prepare_recovery(
         session.recovery_root(),
         &root.join("a"),
         RecoveryMode::Strict,
     )
     .unwrap();
-    let mut b = replay::prepare_recovery(
+    let mut b = records::prepare_recovery(
         session.recovery_root(),
         &root.join("b"),
         RecoveryMode::Strict,
@@ -185,7 +185,7 @@ fn same_bytes_replacement_and_cancel_preserve_originals() {
         return;
     };
     let session = source(&root, 1);
-    let mut attempt = replay::prepare_recovery(
+    let mut attempt = records::prepare_recovery(
         session.recovery_root(),
         &root.join("out"),
         RecoveryMode::Strict,
@@ -227,7 +227,7 @@ fn destination_competitors_and_replaced_parent_fail_closed() {
     for kind in 0..3 {
         let destination = root.join(format!("competitor-{kind}"));
         let mut attempt =
-            replay::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
+            records::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
                 .unwrap();
         attempt.advance(0, None).unwrap();
         match kind {
@@ -241,13 +241,13 @@ fn destination_competitors_and_replaced_parent_fail_closed() {
         assert!(attempt.publish().is_err());
         assert!(std::fs::symlink_metadata(&destination).is_ok());
         assert!(
-            replay::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
+            records::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
                 .is_err()
         );
     }
     let parent = root.join("parent");
     std::fs::create_dir(&parent).unwrap();
-    let mut attempt = replay::prepare_recovery(
+    let mut attempt = records::prepare_recovery(
         session.recovery_root(),
         &parent.join("out"),
         RecoveryMode::Strict,
@@ -288,19 +288,15 @@ fn stage_and_final_policies_validate_all_groups_before_any_mutation() {
     std::fs::remove_file(&final_file).unwrap();
     std::fs::remove_dir(&destination).unwrap();
     let mut attempt =
-        replay::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
+        records::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
             .unwrap();
     let stage_file = attempt.check(0).unwrap().target().to_path_buf();
     let stage_run = reference(&root.join("stage-analysis/result"), &stage_file);
     let owner = reference(&root.join("owner/result"), &root.join("source/0.fasta"));
     for run in [&stage_run, &final_run] {
         let mut input = basecraft_ops::input_evidence::read_input(run.directory()).unwrap();
-        input.extra.insert(
-            "analysis_run".into(),
-            serde_json::json!(
-                basecraft_ops::input_evidence::relative(run.directory(), owner.directory())
-                    .unwrap()
-            ),
+        input.analysis_run = Some(
+            basecraft_ops::input_evidence::relative(run.directory(), owner.directory()).unwrap(),
         );
         basecraft_ops::input_evidence::write_json(&run.directory().join("input.json"), &input)
             .unwrap();
@@ -383,7 +379,7 @@ fn stage_and_final_policies_validate_all_groups_before_any_mutation() {
             basecraft_ops::input_evidence::read_input(run.directory())
                 .unwrap()
                 .state,
-            "broken"
+            basecraft_protocol::input_records::EvidenceState::Broken
         );
     }
 }
@@ -456,7 +452,7 @@ fn nested_delimitation_registers_only_final_stores_and_reopens() {
     source.flush().unwrap();
     let destination = root.join("final");
     let mut attempt =
-        replay::prepare_recovery(source.recovery_root(), &destination, RecoveryMode::Strict)
+        records::prepare_recovery(source.recovery_root(), &destination, RecoveryMode::Strict)
             .unwrap();
     let stage = attempt
         .check(0)
@@ -498,7 +494,8 @@ fn nested_delimitation_registers_only_final_stores_and_reopens() {
             .unwrap()
             .unwrap();
         let input = basecraft_ops::input_evidence::read_input(&run).unwrap();
-        let upstream = input.extra["upstream"].as_array().unwrap();
+        let upstream = serde_json::to_value(&input.upstream).unwrap();
+        let upstream = upstream.as_array().unwrap();
         assert!(upstream.iter().any(|record| {
             run.join(record["bundle"].as_str().unwrap())
                 .canonicalize()
@@ -541,9 +538,9 @@ fn damaged_journal_requires_explicit_prefix_and_preserves_bytes() {
         .write_all(b"{torn")
         .unwrap();
     let bytes = std::fs::read(&journal).unwrap();
-    assert!(replay::recover(session.recovery_root(), &root.join("strict")).is_err());
+    assert!(records::recover(session.recovery_root(), &root.join("strict")).is_err());
     assert!(!root.join("strict").exists());
-    let mut prefix = replay::prepare_recovery(
+    let mut prefix = records::prepare_recovery(
         session.recovery_root(),
         &root.join("prefix"),
         RecoveryMode::VerifiedPrefix,
@@ -573,7 +570,7 @@ fn permission_and_preservation_failures_spend_receipts_without_publication() {
     let session = source(&root, 1);
     let destination = root.join("out");
     let mut attempt =
-        replay::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
+        records::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
             .unwrap();
     let check = attempt.check(0).unwrap();
     let stage_file = check.target().to_path_buf();
@@ -637,7 +634,7 @@ fn removal_of_shared_backing_ledgers_across_target_groups_is_once() {
     std::fs::remove_file(destination.join("0.fasta")).unwrap();
     std::fs::remove_dir(&destination).unwrap();
     let mut attempt =
-        replay::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
+        records::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
             .unwrap();
     let stage_run = reference(
         &root.join("stage/result"),
@@ -646,12 +643,8 @@ fn removal_of_shared_backing_ledgers_across_target_groups_is_once() {
     let owner = reference(&root.join("owner/result"), &root.join("source/0.fasta"));
     for run in [&stage_run, &final_run] {
         let mut input = basecraft_ops::input_evidence::read_input(run.directory()).unwrap();
-        input.extra.insert(
-            "analysis_run".into(),
-            serde_json::json!(
-                basecraft_ops::input_evidence::relative(run.directory(), owner.directory())
-                    .unwrap()
-            ),
+        input.analysis_run = Some(
+            basecraft_ops::input_evidence::relative(run.directory(), owner.directory()).unwrap(),
         );
         basecraft_ops::input_evidence::write_json(&run.directory().join("input.json"), &input)
             .unwrap();
@@ -695,7 +688,7 @@ fn new_unsaved_sequence_has_final_only_issue_group_and_explicit_recovery() {
     let mut source = Session::recoverable(&root).unwrap();
     source.create_sequence("new", "ACGT").unwrap();
     source.flush().unwrap();
-    let mut attempt = replay::prepare_recovery(
+    let mut attempt = records::prepare_recovery(
         source.recovery_root(),
         &root.join("out"),
         RecoveryMode::Strict,
@@ -737,12 +730,12 @@ fn new_unsaved_sequence_has_final_only_issue_group_and_explicit_recovery() {
     assert_eq!(complete.outputs.len(), 1);
     let mut reopened = Session::unlogged(&root);
     let doc = reopened.open(&complete.outputs[0]).unwrap();
-    assert_eq!(reopened.state(doc).len, 4);
+    assert_eq!(reopened.state(doc).unwrap().len, 4);
 }
 
 #[test]
 fn status_is_read_only_and_tracks_document_progress_without_slot_ids() {
-    use replay::RecoveryPhase;
+    use records::RecoveryPhase;
     let Some(root) = isolated_profile::enter(
         "status_is_read_only_and_tracks_document_progress_without_slot_ids",
     ) else {
@@ -764,7 +757,7 @@ fn status_is_read_only_and_tracks_document_progress_without_slot_ids() {
     session.flush().unwrap();
     let destination = root.join("out");
     let mut attempt =
-        replay::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
+        records::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
             .unwrap();
     let check = attempt.check(0).unwrap();
     assert_ne!(check.document(), 0);
@@ -843,13 +836,13 @@ fn unix_dangling_destination_is_occupied() {
     let session = source(&root, 1);
     let destination = root.join("out");
     let mut attempt =
-        replay::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
+        records::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
             .unwrap();
     attempt.advance(0, None).unwrap();
     std::os::unix::fs::symlink("missing", &destination).unwrap();
     assert!(attempt.publish().is_err());
     assert!(
-        replay::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
+        records::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
             .is_err()
     );
     assert_eq!(
@@ -876,13 +869,13 @@ fn windows_reparse_destinations_are_occupied() {
     for junction in [false, true] {
         let destination = root.join(if junction { "junction" } else { "dangling" });
         let mut attempt =
-            replay::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
+            records::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
                 .unwrap();
         attempt.advance(0, None).unwrap();
         recovery_windows::competitor(&destination, &external, junction);
         assert!(attempt.publish().is_err());
         assert!(
-            replay::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
+            records::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
                 .is_err()
         );
         recovery_windows::assert_reparse(&destination);
@@ -916,7 +909,7 @@ fn replaced_stage_directory_is_refused_with_file_identity_unchanged() {
     session.flush().unwrap();
     let destination = root.join("out");
     let mut attempt =
-        replay::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
+        records::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
             .unwrap();
     let stage = attempt
         .check(0)

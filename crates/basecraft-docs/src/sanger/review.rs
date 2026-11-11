@@ -26,7 +26,7 @@ pub struct ReviewStateMut<'a> {
 
 /// A private in-memory delta, not an on-disk record or an undo stack. The owner
 /// retains it for undo; columns address this one immutable source draft.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ReviewChange {
     columns: Vec<usize>,
     before: Vec<ReviewChoice>,
@@ -55,7 +55,7 @@ impl ReviewState<'_> {
                 reference,
             } => {
                 settings.validate()?;
-                if ![1, 2].contains(version)
+                if *version != 2
                     || calls.len() != self.decisions.len()
                     || calls.iter().flatten().any(|b| !"ACGT".contains(*b))
                     || reference.as_ref().is_some_and(|r| {
@@ -161,9 +161,15 @@ impl ReviewState<'_> {
                     mask: None,
                 })
             }
-            ReviewOp::Undo | ReviewOp::Redo | ReviewOp::Export { .. } => {
-                Err("History and export are owned by the review session".into())
-            }
+            ReviewOp::Export { .. } => Ok(ReviewChange {
+                columns: vec![],
+                before: vec![],
+                after: vec![],
+                manual_before: vec![],
+                manual_after: vec![],
+                triage: None,
+                mask: None,
+            }),
         }
     }
 }

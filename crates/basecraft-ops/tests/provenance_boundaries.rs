@@ -22,7 +22,7 @@ fn same_path_replacement_cannot_reuse_tree_metadata() {
     session.save(doc, None).unwrap();
     std::fs::write(&path, "((c,b)10,a);\n").unwrap();
     assert!(
-        files::load_tree(&path).is_err(),
+        files::load_tree(&path).unwrap().metadata_warning.is_some(),
         "stale metadata was accepted"
     );
 }
@@ -52,6 +52,24 @@ fn paths(root: &std::path::Path) -> basecraft_platform::paths::AppPaths {
         (key == "BASECRAFT_PROFILE_DIR").then(|| root.join("profile").into_os_string())
     })
     .unwrap()
+}
+
+#[test]
+fn unversioned_tree_metadata_is_ignored_without_changing_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tree.nwk");
+    std::fs::write(&path, "(a,b);").unwrap();
+    let sidecar = basecraft_ops::files::tree_sidecar(&path);
+    let bytes = br#"{"supports":[],"annotations":{},"style":{}}"#;
+    std::fs::write(&sidecar, bytes).unwrap();
+    assert!(
+        basecraft_ops::files::load_tree(&path)
+            .unwrap()
+            .metadata_warning
+            .is_some()
+    );
+    assert_eq!(std::fs::read(sidecar).unwrap(), bytes);
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "(a,b);");
 }
 
 #[test]
@@ -91,7 +109,7 @@ fn hidden_binding_errors_never_fall_back_to_adjacent_metadata() {
     let mut future: serde_json::Value = serde_json::from_slice(&metadata).unwrap();
     future["schema_version"] = serde_json::json!(99);
     std::fs::write(&sidecar, serde_json::to_vec(&future).unwrap()).unwrap();
-    assert!(files::load_tree(&path).is_err());
+    assert!(files::load_tree(&path).unwrap().metadata_warning.is_some());
     std::fs::write(&sidecar, &metadata).unwrap();
     let binding = std::fs::read_dir(dir.path().join(".basecraft/analyses-v1/bindings"))
         .unwrap()
@@ -102,12 +120,12 @@ fn hidden_binding_errors_never_fall_back_to_adjacent_metadata() {
     let original = std::fs::read(&binding).unwrap();
     for broken in [b"{".as_slice(), br#"{"schema_version":42}"#.as_slice()] {
         std::fs::write(&binding, broken).unwrap();
-        assert!(files::load_tree(&path).is_err());
+        assert!(files::load_tree(&path).unwrap().metadata_warning.is_some());
     }
     std::fs::write(&binding, original).unwrap();
     // The first tree still matches: the full forest binding must detect this.
     std::fs::write(&path, "((a,b)90,c);\n(x,y,z);\n").unwrap();
-    assert!(files::load_tree(&path).is_err());
+    assert!(files::load_tree(&path).unwrap().metadata_warning.is_some());
     assert!(
         ArtifactRun::for_result(&path).unwrap().is_some(),
         "writer lookup must remain available"
@@ -116,7 +134,7 @@ fn hidden_binding_errors_never_fall_back_to_adjacent_metadata() {
 
 #[test]
 fn imported_support_partial_removal_undo_save_reopen_and_redo() {
-    use basecraft_ops::provenance;
+    use basecraft_ops::records;
     let dir = tempfile::tempdir().unwrap();
     let target = dir.path().join("tree.nwk");
     let source = dir.path().join("source.nwk");
@@ -163,9 +181,13 @@ fn imported_support_partial_removal_undo_save_reopen_and_redo() {
             .contains("import_support")
     );
     let input =
-        basecraft_ops::input_evidence::read_input(&provenance::bundle_for_result(&target)).unwrap();
+        basecraft_ops::input_evidence::read_input(&records::bundle_for_result(&target)).unwrap();
     assert_eq!(
-        input.extra["upstream"].as_array().unwrap().as_slice(),
+        serde_json::to_value(&input.upstream)
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .as_slice(),
         [] as [serde_json::Value; 0]
     );
     session.undo(doc).unwrap();
@@ -195,7 +217,7 @@ fn imported_support_partial_removal_undo_save_reopen_and_redo() {
     );
     std::fs::write(&source, "((a,b)0/0,c);\n").unwrap();
     assert!(
-        provenance::verify(&target).unwrap().is_empty(),
+        records::verify(&target).unwrap().is_empty(),
         "removed source still linked"
     );
 }
@@ -223,8 +245,8 @@ fn annotate(session: &mut Session, doc: basecraft_ops::DocId, label: &str, start
     let ids = session
         .apply_sequence_proposals(
             doc,
-            session.generation(doc),
-            session.revision(doc),
+            session.generation(doc).unwrap(),
+            session.revision(doc).unwrap(),
             &ops,
             &actor,
         )
@@ -336,7 +358,7 @@ fn generic_no_output_activity_does_not_own_unrelated_manual_edits() {
 
 #[test]
 fn extraction_is_reference_first_and_packages_exact_source_and_mapping() {
-    use basecraft_ops::provenance;
+    use basecraft_ops::records;
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("gene.fasta");
     let result = dir.path().join("extract.gb");
@@ -346,7 +368,7 @@ fn extraction_is_reference_first_and_packages_exact_source_and_mapping() {
     session
         .extract(doc, (1, 7), &[(1, 3), (5, 7)], true, &result)
         .unwrap();
-    let publication = provenance::inspect(&result).unwrap();
+    let publication = records::inspect(&result).unwrap();
     let conflicts = basecraft_ops::input_evidence::conflicts(&source).unwrap();
     assert!(
         !conflicts.analyses.is_empty(),
@@ -360,20 +382,20 @@ fn extraction_is_reference_first_and_packages_exact_source_and_mapping() {
     );
     assert!(publication.inputs[0].retained.is_none());
     assert!(publication.inputs[0].reference.is_some());
-    let issues = provenance::verify(&result).unwrap();
+    let issues = records::verify(&result).unwrap();
     assert!(issues.is_empty(), "{issues:?}");
     let input =
-        basecraft_ops::input_evidence::read_input(&provenance::bundle_for_result(&result)).unwrap();
+        basecraft_ops::input_evidence::read_input(&records::bundle_for_result(&result)).unwrap();
     assert_eq!(
         input.extra["extraction"]["selection"]["params"]["segments"],
         serde_json::json!([[1, 3], [5, 7]])
     );
     let package = dir.path().join("package");
-    provenance::package(&result, &package).unwrap();
+    records::package(&result, &package).unwrap();
     std::fs::write(&source, ">gene\nTTTTTTTT\n").unwrap();
-    assert_ne!(provenance::verify(&result).unwrap(), Vec::<String>::new());
+    assert_ne!(records::verify(&result).unwrap(), Vec::<String>::new());
     assert_eq!(
-        provenance::verify(&package.join("extract.gb")).unwrap(),
+        records::verify(&package.join("extract.gb")).unwrap(),
         Vec::<String>::new()
     );
 }
@@ -488,7 +510,12 @@ fn interrupted_tree_metadata_save_is_explicit_and_never_reuses_old_semantics() {
     let error = session.save(doc, Some(&target)).unwrap_err().to_string();
     assert!(error.contains("metadata incomplete"), "{error}");
     assert!(target.is_file());
-    assert!(files::load_tree(&target).is_err());
+    assert!(
+        files::load_tree(&target)
+            .unwrap()
+            .metadata_warning
+            .is_some()
+    );
     assert_eq!(
         std::fs::read_to_string(&original).unwrap(),
         "((a,b)90,c);\n"

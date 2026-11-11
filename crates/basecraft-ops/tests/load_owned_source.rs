@@ -414,10 +414,22 @@ fn bound_tree_snapshot_verification_keeps_binding_run_namespace_and_metadata_gua
             }
             _ => {}
         }
+        // Faulty or mismatched bindings leave the given bytes open without metadata.
+        let files::Loaded::Tree(tree) = files::load_from(&path, source).unwrap() else {
+            panic!("expected tree");
+        };
+        let warning = tree.metadata_warning.unwrap_or_default();
         assert!(
-            files::load_from(&path, source).is_err(),
-            "guard was bypassed: {fault}"
+            warning.starts_with("Tree metadata was ignored"),
+            "{fault}: {warning}"
         );
+        assert!(tree.doc.supports().is_empty(), "{fault}");
+        let expected = if fault == "snapshot" {
+            "(other,tree);"
+        } else {
+            "(a,b);"
+        };
+        assert_eq!(tree.doc.to_newick().trim(), expected, "{fault}");
     }
 }
 
@@ -468,8 +480,8 @@ fn captured_companion_refusals_preserve_baseline_undo_and_journal() {
             ));
             assert_eq!(session.doc(id).unwrap().read(0, 4), b"ACGT");
             assert_eq!(session.doc(id).unwrap().features().count(), 1);
-            assert!(!session.can_undo(id));
-            assert!(!session.can_redo(id));
+            assert!(!session.can_undo(id).unwrap());
+            assert!(!session.can_redo(id).unwrap());
             assert_eq!(
                 serde_json::to_value(session.document_record(id).unwrap()).unwrap(),
                 serde_json::to_value(before).unwrap()
@@ -528,7 +540,7 @@ fn captured_multirecord_writer_and_retained_replay_inputs_match_legacy() {
     // Replay must use the exact retained source and companion after both vanish.
     std::fs::remove_file(&path).unwrap();
     std::fs::remove_file(&sidecar).unwrap();
-    let report = basecraft_ops::replay::replay(dir.path()).unwrap();
+    let report = basecraft_ops::records::replay(dir.path()).unwrap();
     assert!(report.ok(), "{report:#?}");
     for bytes in [main.as_slice(), gff.as_slice()] {
         assert!(retained(dir.path()).contains(&bytes.to_vec()));
@@ -597,7 +609,7 @@ fn cold_recoverable_retention_reads_each_raw_input_once_and_recovers_without_sou
     std::fs::remove_file(&sidecar).unwrap();
     drop(session);
     let destination = dir.path().join("recovered");
-    basecraft_ops::replay::recover(&recovery, &destination).unwrap();
+    basecraft_ops::records::recover(&recovery, &destination).unwrap();
     let restored = files::open(&destination.join("séquences.fasta")).unwrap();
     assert_eq!(restored.doc.to_genbank(), expected);
     assert_eq!(restored.fasta.unwrap().index.records.len(), 1);

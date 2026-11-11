@@ -2,7 +2,7 @@
 use std::collections::BTreeMap;
 
 use basecraft_ops::metadata::{self, ImportOptions};
-use basecraft_ops::{Session, replay};
+use basecraft_ops::{Session, records};
 use basecraft_protocol::Op;
 use basecraft_protocol::metadata::{
     Cell, ChangeSet, FieldTarget, HeaderPattern, MetadataEdit, MissingReason, PartialDate,
@@ -158,7 +158,7 @@ fn header_import_links_identifies_saves_and_replays() {
     );
     assert_eq!(meta.import.header_patterns, [pattern()]);
     assert_eq!(meta.identifications.len(), 2);
-    let report = replay::replay(root).unwrap();
+    let report = records::replay(root).unwrap();
     assert!(report.ok(), "{:#?}", report.problems);
     let history = s.document_record(doc).unwrap().report().unwrap();
     assert!(
@@ -363,7 +363,10 @@ fn outside_edits_future_versions_and_unknown_fields() {
         .err()
         .unwrap()
         .to_string();
-    assert!(error.contains("newer Basecraft"), "{error}");
+    assert!(
+        error.contains("metadata format version 2 is not supported"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -379,8 +382,8 @@ fn saved_metadata_and_submission_reports_use_their_document_readers() {
         basecraft_ops::submission::create(&mut session, &submission_path, &alignment).unwrap();
     session.save(submission, None).unwrap();
     for path in [metadata::manifest_path(dir.path()), submission_path] {
-        let saved = basecraft_ops::document_record::DocumentRecord::saved_report(&path).unwrap();
-        let ordinary = basecraft_ops::document_record::DocumentRecord::from_file(&path)
+        let saved = basecraft_ops::records::DocumentRecord::saved_report(&path).unwrap();
+        let ordinary = basecraft_ops::records::DocumentRecord::from_file(&path)
             .unwrap()
             .report()
             .unwrap();
@@ -438,8 +441,8 @@ fn document_interface_preserves_metadata_bytes_and_rejections() {
     )
     .unwrap();
     assert_eq!(
-        serde_json::to_string(&s.state(doc)).unwrap(),
-        r#"{"len":2,"features":0,"rows":0}"#
+        serde_json::to_string(&s.state(doc).unwrap()).unwrap(),
+        r#"{"len":2,"features":0,"rows":0,"counts":{"kind":"metadata","specimens":2,"identifications":0,"links":0}}"#
     );
     assert_eq!(s.save_hashes(doc).unwrap(), expected_hashes);
     // Historical hashing ignores the target's format; writing rejects it.
@@ -447,7 +450,7 @@ fn document_interface_preserves_metadata_bytes_and_rejections() {
         s.save_hashes_at(doc, &root.join("wrong.fasta")).unwrap(),
         expected_hashes
     );
-    let revision = s.revision(doc);
+    let revision = s.revision(doc).unwrap();
     let wrong = s
         .apply(
             doc,
@@ -458,7 +461,7 @@ fn document_interface_preserves_metadata_bytes_and_rejections() {
         )
         .unwrap_err();
     assert!(
-        matches!(wrong, basecraft_ops::Error::Invalid(ref text) if text.ends_with("can't be applied to the project metadata")),
+        matches!(wrong, basecraft_ops::Error::Unsupported(_)),
         "{wrong}"
     );
 
@@ -485,10 +488,10 @@ fn document_interface_preserves_metadata_bytes_and_rejections() {
     );
     let wrong = s.save(doc, Some(&root.join("wrong.fasta"))).unwrap_err();
     assert!(
-        matches!(wrong, basecraft_ops::Error::Invalid(ref text) if text == "project metadata is saved as metadata.basecraft.json"),
+        matches!(wrong, basecraft_ops::Error::Unsupported(ref text) if text == "project metadata is saved as metadata.basecraft.json"),
         "{wrong}"
     );
-    assert_eq!(s.revision(doc), revision);
+    assert_eq!(s.revision(doc).unwrap(), revision);
     assert_eq!(s.metadata(doc).unwrap(), &expected);
     s.undo(doc).unwrap();
     assert_eq!(s.metadata(doc).unwrap(), &before);
@@ -502,7 +505,7 @@ fn document_interface_preserves_metadata_bytes_and_rejections() {
     let mut reopened = Session::unlogged(root);
     let doc = reopened.open(&manifest).unwrap();
     assert_eq!(reopened.metadata(doc).unwrap(), &expected);
-    let report = replay::replay(root).unwrap();
+    let report = records::replay(root).unwrap();
     assert!(report.ok(), "{:#?}", report.problems);
 }
 
@@ -532,7 +535,7 @@ fn metadata_partial_writer_failure_retains_payload_and_allows_retry() {
     std::fs::create_dir_all(blocked).unwrap();
     let error = s.save(doc, Some(&target)).unwrap_err();
     assert!(
-        matches!(error, basecraft_ops::Error::Invalid(ref text) if text.starts_with("partial metadata save: replaced ")),
+        matches!(error, basecraft_ops::Error::Damaged { ref detail, .. } if detail.starts_with("partial metadata save: replaced ")),
         "{error}"
     );
     assert_eq!(s.metadata(doc).unwrap(), &expected);

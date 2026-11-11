@@ -93,8 +93,8 @@ impl DocumentJob {
                 input,
                 vec![InputReference::Document {
                     doc: doc.0.to_string(),
-                    generation: session.generation(doc),
-                    revision: session.revision(doc),
+                    generation: session.generation(doc).map_err(|e| e.to_string())?,
+                    revision: session.revision(doc).map_err(|e| e.to_string())?,
                 }],
             )]
             .into(),
@@ -155,8 +155,8 @@ impl DocumentJob {
             request_key: None,
             target: Some(InputReference::Document {
                 doc: target.0.to_string(),
-                generation: session.generation(target),
-                revision: session.revision(target),
+                generation: session.generation(target).map_err(|e| e.to_string())?,
+                revision: session.revision(target).map_err(|e| e.to_string())?,
             }),
         };
         let mut manager = JobManager::default().with_task_cancellation();

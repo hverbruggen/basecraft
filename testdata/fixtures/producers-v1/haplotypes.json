@@ -1,0 +1,31 @@
+{
+  "policy": "aligned-dna-case-u-to-t-literal-gap-ambiguity-v1",
+  "input_hash": "b3:044bfe297ca767c681493a66776dcd062fdeee9cd9dd1e49693e5390129274ab",
+  "original_count": 4,
+  "unique": [
+    [
+      "a",
+      "ACGTACGTACGTACGTACGT"
+    ],
+    [
+      "b",
+      "ACGTACGTACGTACGTACGA"
+    ],
+    [
+      "c",
+      "ACGTACGTACGTACGTACGG"
+    ]
+  ],
+  "members": {
+    "a": [
+      "a"
+    ],
+    "b": [
+      "b"
+    ],
+    "c": [
+      "c",
+      "d"
+    ]
+  }
+}

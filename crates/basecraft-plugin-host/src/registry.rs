@@ -1,20 +1,15 @@
 //! Read-only discovery and atomic managed-package selection. No install hooks.
 
 use std::collections::BTreeMap;
-#[cfg(test)]
-use std::collections::BTreeSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::{Error, Manifest, Result, contract};
 use basecraft_platform::paths::AppPaths;
 use basecraft_protocol::operation::{MAX_DESCRIPTOR_BYTES, OperationDescriptor, OperationPins};
 use fs4::fs_std::FileExt;
 use serde::Serialize;
-#[cfg(test)]
-use serde_json::Value;
-
-use crate::{Error, Manifest, Result, contract};
 
 pub const INSTALL_WARNING: &str = "Third-party plugins run code with your user account's permissions. Install only code you trust. You are responsible for checking that the plugin's code is safe.";
 const MAX_PACKAGE_BYTES: u64 = 64 * 1024 * 1024;
@@ -110,10 +105,7 @@ fn load_index(config: &RegistryConfig) -> Result<InstallationIndex> {
     let file = match std::fs::File::open(&config.index) {
         Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(InstallationIndex {
-                schema: 1,
-                ..InstallationIndex::default()
-            });
+            return Ok(InstallationIndex::default());
         }
         Err(e) => return Err(e.into()),
     };
@@ -316,10 +308,7 @@ pub fn package_digest(root: &Path) -> Result<String> {
         let name = relative
             .to_str()
             .ok_or_else(|| Error::Protocol("package paths must be UTF-8".into()))?;
-        hashes.push((
-            name.to_owned(),
-            basecraft_io::hash_file(&path).map_err(basecraft_ops::Error::from)?,
-        ));
+        hashes.push((name.to_owned(), basecraft_io::hash_file(&path)?));
     }
     Ok(basecraft_io::hash_bytes(&serde_json::to_vec(&hashes)?))
 }
@@ -392,8 +381,7 @@ fn write_index(
     if bytes.len() > MAX_DESCRIPTOR_BYTES {
         return Err(Error::Protocol("plugin index exceeds size limit".into()));
     }
-    basecraft_io::write_atomic(&config.index, |out| std::io::Write::write_all(out, &bytes))
-        .map_err(basecraft_ops::Error::from)?;
+    basecraft_io::write_atomic(&config.index, |out| std::io::Write::write_all(out, &bytes))?;
     Ok(())
 }
 

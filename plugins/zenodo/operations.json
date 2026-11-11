@@ -347,6 +347,12 @@
       },
       "credentials": {
         "zenodo_access": "BASECRAFT_ZENODO_TOKEN"
+      },
+      "host": {
+        "ambient_credentials": [
+          "zenodo_access"
+        ],
+        "lifecycle": "remote_draft"
       }
     }
   ]

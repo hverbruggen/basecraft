@@ -1,5 +1,6 @@
 //! Frozen alignment context for one review-only Sanger placement.
 
+use basecraft_docs::sanger::SangerPlacementExt;
 use std::collections::hash_map::RandomState;
 use std::hash::BuildHasher;
 

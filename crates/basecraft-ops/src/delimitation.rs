@@ -130,9 +130,9 @@ pub(crate) fn dependencies(
                     .ok_or_else(|| invalid("Species report has no path"))?,
             );
             if report["hash"].as_str() != Some(basecraft_io::hash_file(path)?.as_str()) {
-                return Err(invalid(
-                    "Species analysis report changed; saved evidence was not replaced",
-                ));
+                return Err(crate::Error::ChangedOnDisk {
+                    path: path.to_path_buf(),
+                });
             }
             if let Some(run) = crate::analysis_store::ArtifactRun::for_result(path)? {
                 runs.insert(run);
@@ -165,7 +165,7 @@ pub fn checked_alignment(
     }
     // Workspaces written before the owning field was introduced still have a
     // bound input ledger (or its Save As delegation / contributing ancestry).
-    let bundle = crate::provenance::bundle_for_result(workspace_path);
+    let bundle = crate::records::provenance::bundle_for_result(workspace_path);
     if bundle.join("input.json").is_file() {
         let mut candidates = vec![bundle.clone()];
         candidates.extend(
@@ -189,16 +189,14 @@ pub fn checked_alignment(
     }
     let path = PathBuf::from(path);
     if basecraft_io::hash_file(&path)? != *hash {
-        return Err(invalid(
-            "The retained alignment changed; select an intact input explicitly",
-        ));
+        return Err(crate::Error::ChangedOnDisk { path: path.clone() });
     }
     Ok(Some(path))
 }
 
 fn checked_workspace_input(run: &std::path::Path, hash: &str) -> Result<PathBuf> {
     let input = crate::input_evidence::read_input(run)?;
-    if input.state == "broken" {
+    if input.state == basecraft_protocol::input_records::EvidenceState::Broken {
         return Err(invalid("Workspace input evidence was explicitly broken"));
     }
     let source = if let Some(reference) = &input.source {
@@ -207,9 +205,9 @@ fn checked_workspace_input(run: &std::path::Path, hash: &str) -> Result<PathBuf>
         run.join("submitted.fasta")
     };
     if basecraft_io::hash_file(&source)? != hash {
-        return Err(invalid(
-            "Workspace input changed; select an unchanged input explicitly",
-        ));
+        return Err(crate::Error::ChangedOnDisk {
+            path: source.clone(),
+        });
     }
     Ok(source)
 }
@@ -224,15 +222,15 @@ pub fn checked_display_tree(
         if let Some(hash) = work.exchange_fields.get("basecraft_display_hash")
             && &basecraft_io::hash_file(std::path::Path::new(path))? != hash
         {
-            return Err(invalid(
-                "Display tree changed; select an unchanged tree explicitly",
-            ));
+            return Err(crate::Error::ChangedOnDisk {
+                path: PathBuf::from(path),
+            });
         }
         return Ok(Some(PathBuf::from(path)));
     };
     let run = std::path::Path::new(run);
     let input = crate::input_evidence::read_input(run)?;
-    if input.state == "broken" {
+    if input.state == basecraft_protocol::input_records::EvidenceState::Broken {
         return Err(invalid("Display tree evidence was explicitly broken"));
     }
     let source = if let Some(reference) = &input.source {
@@ -246,9 +244,7 @@ pub fn checked_display_tree(
         .map(String::as_str)
         != Some(basecraft_io::hash_file(&source)?.as_str())
     {
-        return Err(invalid(
-            "Display tree changed; select an unchanged tree explicitly",
-        ));
+        return Err(crate::Error::ChangedOnDisk { path: source });
     }
     Ok(Some(source))
 }
@@ -339,8 +335,8 @@ pub fn combine_selected(
     keep: Option<&BTreeMap<PathBuf, BTreeSet<String>>>,
 ) -> Result<()> {
     session.delimitation(doc)?;
-    let generation = session.generation(doc);
-    let revision = session.revision(doc);
+    let generation = session.generation(doc)?;
+    let revision = session.revision(doc)?;
     let hypotheses = combined_hypotheses(session, doc, paths, keep)?;
     if hypotheses.is_empty() {
         if keep.is_some() && !session.delimitation(doc)?.hypotheses.is_empty() {
@@ -389,9 +385,7 @@ fn combined_hypotheses(
                 None
             }) != side_hash
         {
-            return Err(invalid(
-                "A source changed while combining; retry with unchanged files",
-            ));
+            return Err(crate::Error::ChangedOnDisk { path: path.clone() });
         }
         if let Some(wanted) = keep.and_then(|keep| keep.get(path)) {
             let available = work.hypotheses.iter().map(|h| h.id.clone()).collect();
@@ -402,7 +396,7 @@ fn combined_hypotheses(
                 )));
             }
         }
-        let anchor = session.root().join(session.doc_key(doc));
+        let anchor = session.root().join(session.doc_key(doc)?);
         if work
             .specimens
             .iter()
@@ -584,8 +578,8 @@ pub fn combine_to(
     if !session.is_delimitation(doc) {
         return Err(invalid("Choose saved species hypothesis files"));
     }
-    let generation = session.generation(doc);
-    let revision = session.revision(doc);
+    let generation = session.generation(doc)?;
+    let revision = session.revision(doc)?;
     let mut ops = Vec::new();
     let current = session.delimitation(doc)?;
     let retained = if let Some(keep) = keep {

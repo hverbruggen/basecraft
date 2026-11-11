@@ -21,3 +21,9 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl From<basecraft_io::Error> for Error {
+    fn from(error: basecraft_io::Error) -> Self {
+        Self::Ops(error.into())
+    }
+}

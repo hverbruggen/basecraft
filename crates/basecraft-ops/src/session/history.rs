@@ -1,9 +1,34 @@
 //! Shared edit, grouping, undo, redo and journal ownership.
 use super::{
-    Actor, Applied, DocId, Error, FeatureId, Instant, Inverse, LOG_VERSION, LogEntry, MERGE_WINDOW,
-    Op, OpResult, Outcome, Pending, ReplayMode, Result, Session, invalid, mergeable,
-    restore_inverse,
+    Actor, AlnUndo, Applied, DocId, EditResult, Error, Feature, FeatureId, Instant, LOG_VERSION,
+    LogEntry, MERGE_WINDOW, Op, OpResult, Outcome, Pending, ReplayMode, Result, Session, invalid,
+    mergeable, restore_inverse,
 };
+
+pub(crate) enum Inverse {
+    SangerSelect(String),
+    // Structural analysis continuations can replace all call sets; ordinary decisions use edit-sized deltas.
+    SangerUpdate(Box<crate::sanger_review::SangerReview>),
+    SangerReview {
+        call_set: String,
+        change: Box<basecraft_docs::sanger::review::ReviewChange>,
+        events: usize,
+    },
+    Residues {
+        inserted: u64,
+        result: EditResult,
+    },
+    Feature {
+        id: FeatureId,
+        before: Option<Feature>,
+    },
+    Alignment(Vec<AlnUndo>),
+    Tree(basecraft_docs::tree::TreeUndo),
+    Delimitation(Box<basecraft_protocol::delimitation::DelimitationWorkspace>),
+    /// The whole metadata as it was: one edit can touch every table.
+    Metadata(Box<basecraft_protocol::metadata::ProjectMetadata>),
+    Submission(Box<basecraft_protocol::submission::Submission>),
+}
 
 impl Session {
     pub(super) fn entry(&self, doc: DocId, actor: Actor, op: Op, result: OpResult) -> LogEntry {
@@ -38,7 +63,7 @@ impl Session {
             doc: self.docs[doc.0].key.clone(),
             op,
             result,
-            state: self.state(doc),
+            state: self.docs[doc.0].content.as_document().fingerprint(),
         }
     }
 
@@ -86,21 +111,28 @@ impl Session {
         self.apply_as(doc, op, actor)
     }
 
-    pub fn apply_as(&mut self, doc: DocId, op: Op, actor: Actor) -> Result<Outcome> {
+    pub fn apply_as(&mut self, doc: DocId, mut op: Op, actor: Actor) -> Result<Outcome> {
         let content = &self
             .docs
             .get(doc.0)
             .ok_or_else(|| invalid("unknown document"))?
             .content;
-        content
-            .as_document()
-            .check_preparation_kind(&op, matches!(self.replay_mode, ReplayMode::Live))?;
-        let prepared = content.as_document().prepare_edit(
+        if !content.as_document().accepts(&op) {
+            return Err(Error::Unsupported(format!(
+                "{} cannot be applied to {:?}",
+                op.name(),
+                content.kind()
+            )));
+        }
+        content.as_document().validate(
             &op,
             self.root(),
             matches!(self.replay_mode, ReplayMode::Live),
         )?;
-        self.track(doc)?;
+        if let Op::SangerUpdate { review } = &mut op {
+            *review =
+                self.retain_review_record(&crate::sanger_review::read_journal_record(review)?)?;
+        }
         if self.merge && self.try_merge(doc, &op, &actor)? {
             self.docs[doc.0].generation += 1;
             let id = self
@@ -114,10 +146,22 @@ impl Session {
             });
         }
         self.flush()?;
+        // A checkpoint describes the content an edit applies to, so it is taken
+        // first. Otherwise apply first, so a refused edit starts no tracking.
+        let slot = &self.docs[doc.0];
+        let checkpoints = self.tracked
+            && (self.source_changed(doc) || slot.baseline_logged && slot.baseline.is_some());
+        if checkpoints {
+            self.track(doc)?;
+        }
         let (inverse, feature) = self.docs[doc.0]
             .content_mut()
             .as_document_mut()
-            .apply_prepared(&op, prepared)?;
+            .apply(&op)?;
+        if !checkpoints && let Err(error) = self.track(doc) {
+            restore_inverse(self.docs[doc.0].content_mut(), &inverse)?;
+            return Err(error);
+        }
         self.docs[doc.0].generation += 1;
         let result = OpResult {
             hashes: Vec::new(),
@@ -167,7 +211,7 @@ impl Session {
             return Ok(false);
         };
         let (inverse, _) = self.execute(doc, op)?;
-        let state = self.state(doc);
+        let state = self.state(doc)?;
         let slot = &mut self.docs[doc.0];
         slot.redo.clear();
         let top = slot
@@ -246,6 +290,7 @@ impl Session {
     /// Undo the last step on a document (one operation, or a whole group);
     /// returns the id of the last entry undone.
     pub fn undo(&mut self, id: DocId) -> Result<String> {
+        self.docs.get(id.0).ok_or(Error::UnknownDocument { id })?;
         let group = self.docs[id.0].undo.last().and_then(|a| a.group);
         let mut last = self.undo_one(id)?;
         while group.is_some() && self.docs[id.0].undo.last().and_then(|a| a.group) == group {
@@ -256,12 +301,35 @@ impl Session {
 
     /// Redo the last undone step (one operation, or a whole group).
     pub fn redo(&mut self, id: DocId) -> Result<String> {
+        self.docs.get(id.0).ok_or(Error::UnknownDocument { id })?;
         let group = self.docs[id.0].redo.last().and_then(|a| a.group);
         let mut last = self.redo_one(id)?;
         while group.is_some() && self.docs[id.0].redo.last().and_then(|a| a.group) == group {
             last = self.redo_one(id)?;
         }
         Ok(last)
+    }
+
+    /// Verify an explicitly named history target before changing anything. An empty
+    /// target selects the latest edit in this session.
+    pub fn apply_history(&mut self, id: DocId, op: &Op) -> Result<String> {
+        let slot = self.docs.get(id.0).ok_or(Error::UnknownDocument { id })?;
+        let (of, stack, action) = match op {
+            Op::Undo { of } => (of, &slot.undo, "undo"),
+            Op::Redo { of } => (of, &slot.redo, "redo"),
+            _ => return Err(Error::Unsupported("expected a history operation".into())),
+        };
+        let target = stack.last().ok_or(Error::NothingTo(action))?;
+        if !of.is_empty() && *of != target.entry_id {
+            return Err(Error::Unsupported(
+                "history target is not the latest edit".into(),
+            ));
+        }
+        if matches!(op, Op::Undo { .. }) {
+            self.undo(id)
+        } else {
+            self.redo(id)
+        }
     }
 
     /// Undo exactly one operation, ignoring groups. Replay uses this: the
@@ -275,6 +343,7 @@ impl Session {
     }
 
     pub(super) fn undo_one(&mut self, id: DocId) -> Result<String> {
+        self.track(id)?;
         self.flush()?;
         let applied = self.docs[id.0].undo.pop().ok_or(Error::NothingTo("undo"))?;
         self.docs[id.0]
@@ -300,6 +369,7 @@ impl Session {
     }
 
     pub(super) fn redo_one(&mut self, id: DocId) -> Result<String> {
+        self.track(id)?;
         self.flush()?;
         let applied = self.docs[id.0].redo.pop().ok_or(Error::NothingTo("redo"))?;
         let inverse = self.reexecute(id, &applied)?;

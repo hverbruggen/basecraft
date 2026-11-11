@@ -1,0 +1,671 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MetadataManifest",
+  "type": "object",
+  "properties": {
+    "format": {
+      "type": "string"
+    },
+    "import": {
+      "$ref": "#/$defs/ImportSettings",
+      "default": {}
+    },
+    "partitions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Hypothesis"
+      }
+    },
+    "tables": {
+      "$ref": "#/$defs/Tables"
+    },
+    "version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": true,
+  "required": [
+    "format",
+    "version",
+    "tables"
+  ],
+  "$defs": {
+    "Column": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ColumnKind"
+        },
+        "name": {
+          "description": "A Darwin Core term (`catalogNumber`, `eventDate`, ...) or a user name:\nan ASCII letter followed by letters, digits or underscores.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "kind"
+      ]
+    },
+    "ColumnKind": {
+      "description": "What a column holds. Every kind also accepts an INSDC missing-value reason.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "A calendar date at its true precision: year, year and month, or day.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "date"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "WGS84 decimal degrees, -90 to 90.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "latitude"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "WGS84 decimal degrees, -180 to 180.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "longitude"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "A number, in `unit` when given.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "number"
+            },
+            "unit": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "One of `levels`.",
+          "type": "object",
+          "properties": {
+            "levels": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "categorical"
+            }
+          },
+          "required": [
+            "type",
+            "levels"
+          ]
+        }
+      ]
+    },
+    "FieldTarget": {
+      "description": "What an imported field holds.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "role": {
+              "type": "string",
+              "const": "ignore"
+            }
+          },
+          "required": [
+            "role"
+          ]
+        },
+        {
+          "description": "The specimen's local ID: the key that rows are matched on.",
+          "type": "object",
+          "properties": {
+            "role": {
+              "type": "string",
+              "const": "specimen"
+            }
+          },
+          "required": [
+            "role"
+          ]
+        },
+        {
+          "description": "A sequence record ID to link to the row's specimen.",
+          "type": "object",
+          "properties": {
+            "role": {
+              "type": "string",
+              "const": "record"
+            }
+          },
+          "required": [
+            "role"
+          ]
+        },
+        {
+          "description": "A taxon name; the specimen is identified as that taxon.",
+          "type": "object",
+          "properties": {
+            "role": {
+              "type": "string",
+              "const": "taxon"
+            }
+          },
+          "required": [
+            "role"
+          ]
+        },
+        {
+          "description": "A value for a specimen column.",
+          "type": "object",
+          "properties": {
+            "column": {
+              "type": "string"
+            },
+            "role": {
+              "type": "string",
+              "const": "column"
+            }
+          },
+          "required": [
+            "role",
+            "column"
+          ]
+        }
+      ]
+    },
+    "Group": {
+      "type": "object",
+      "properties": {
+        "attributes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "color": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "individual_scores": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Score"
+            }
+          },
+          "default": {}
+        },
+        "label": {
+          "type": "string"
+        },
+        "members": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "scores": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Score"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "color",
+        "members"
+      ]
+    },
+    "HeaderPattern": {
+      "description": "How to read fields from structured FASTA headers, such as\n`HV1234|Caulerpa taxifolia|2019-05-12`.",
+      "type": "object",
+      "properties": {
+        "fields": {
+          "description": "What each field holds, in order. Fields past the end are ignored.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FieldTarget"
+          }
+        },
+        "name": {
+          "type": "string"
+        },
+        "separator": {
+          "description": "Splits the header line (without `>`). Must not be empty.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "separator",
+        "fields"
+      ]
+    },
+    "Hypothesis": {
+      "type": "object",
+      "properties": {
+        "attributes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Group"
+          }
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "origin": {
+          "$ref": "#/$defs/HypothesisOrigin"
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "scores": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Score"
+          }
+        },
+        "unassigned": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "origin",
+        "groups",
+        "unassigned",
+        "provenance"
+      ]
+    },
+    "HypothesisOrigin": {
+      "type": "string",
+      "enum": [
+        "manual",
+        "imported",
+        "inferred",
+        "derived",
+        "manual_cut"
+      ]
+    },
+    "IdentifierSource": {
+      "description": "Identifier fields use the same literal splitting primitive as metadata header imports.\nSubmission rules always use the FASTA identifier, never the full description header.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "const": "identifier"
+            }
+          },
+          "required": [
+            "source"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "index": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            "separator": {
+              "type": "string"
+            },
+            "source": {
+              "type": "string",
+              "const": "field"
+            }
+          },
+          "required": [
+            "source",
+            "separator",
+            "index"
+          ]
+        }
+      ]
+    },
+    "ImportSettings": {
+      "description": "Saved import settings, so a project's next import repeats its last one.",
+      "type": "object",
+      "properties": {
+        "header_patterns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HeaderPattern"
+          }
+        },
+        "inclusion_rules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InclusionRule"
+          }
+        },
+        "spreadsheet_mappings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SpreadsheetMapping"
+          }
+        }
+      }
+    },
+    "InclusionAction": {
+      "type": "string",
+      "enum": [
+        "include",
+        "exclude",
+        "unchanged"
+      ]
+    },
+    "InclusionRule": {
+      "type": "object",
+      "properties": {
+        "case_sensitive": {
+          "type": "boolean",
+          "default": false
+        },
+        "input": {
+          "$ref": "#/$defs/IdentifierSource"
+        },
+        "matching": {
+          "$ref": "#/$defs/InclusionAction"
+        },
+        "mode": {
+          "$ref": "#/$defs/MatchMode"
+        },
+        "name": {
+          "type": "string"
+        },
+        "nonmatching": {
+          "$ref": "#/$defs/InclusionAction"
+        },
+        "override_manual": {
+          "type": "boolean",
+          "default": false
+        },
+        "pattern": {
+          "type": "string"
+        },
+        "trim": {
+          "type": "boolean",
+          "default": false
+        },
+        "unresolved": {
+          "$ref": "#/$defs/InclusionAction",
+          "default": "unchanged"
+        }
+      },
+      "required": [
+        "name",
+        "input",
+        "mode",
+        "pattern",
+        "matching",
+        "nonmatching"
+      ]
+    },
+    "JobStatus": {
+      "type": "string",
+      "enum": [
+        "completed",
+        "failed",
+        "cancelled",
+        "unavailable"
+      ]
+    },
+    "MatchMode": {
+      "type": "string",
+      "enum": [
+        "exact",
+        "contains",
+        "starts",
+        "ends",
+        "wildcard",
+        "regex"
+      ]
+    },
+    "Provenance": {
+      "type": "object",
+      "properties": {
+        "analysis_tree": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "diagnostics": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "haplotypes": {
+          "description": "Representative ID to original specimen IDs; never likelihood weights.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          },
+          "default": {}
+        },
+        "inputs": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "method": {
+          "type": "string"
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": true,
+          "default": {}
+        },
+        "seed": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JobStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "version": {
+          "type": "string"
+        },
+        "workers": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "method",
+        "version"
+      ]
+    },
+    "Score": {
+      "type": "object",
+      "properties": {
+        "interpretation": {
+          "type": "string"
+        },
+        "method": {
+          "type": "string"
+        },
+        "scale": {
+          "type": "string"
+        },
+        "value": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "value",
+        "method",
+        "scale",
+        "interpretation"
+      ]
+    },
+    "SpreadsheetMapping": {
+      "description": "Remembered spreadsheet column mapping.",
+      "type": "object",
+      "properties": {
+        "columns": {
+          "description": "Source column header to what it holds. Unmapped columns are ignored.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/FieldTarget"
+          }
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "columns"
+      ]
+    },
+    "TableEntry": {
+      "type": "object",
+      "properties": {
+        "columns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Column"
+          }
+        },
+        "file": {
+          "type": "string"
+        },
+        "hash": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "file",
+        "hash"
+      ]
+    },
+    "Tables": {
+      "type": "object",
+      "properties": {
+        "identifications": {
+          "$ref": "#/$defs/TableEntry"
+        },
+        "records": {
+          "$ref": "#/$defs/TableEntry"
+        },
+        "specimens": {
+          "$ref": "#/$defs/TableEntry"
+        },
+        "taxa": {
+          "$ref": "#/$defs/TableEntry"
+        }
+      },
+      "required": [
+        "specimens",
+        "taxa",
+        "identifications",
+        "records"
+      ]
+    }
+  }
+}

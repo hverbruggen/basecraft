@@ -915,8 +915,8 @@ impl qobject::AlignmentController {
         Some((
             session.id().into(),
             doc,
-            session.generation(doc),
-            session.revision(doc),
+            session.generation(doc).unwrap(),
+            session.revision(doc).unwrap(),
         ))
     }
 
@@ -1553,7 +1553,7 @@ impl qobject::AlignmentController {
                 let (Some(session), Some(doc)) = (&r.session, r.doc) else {
                     return Err("Alignment was closed".into());
                 };
-                if session.generation(doc) != generation {
+                if session.generation(doc).map_err(|e| e.to_string())? != generation {
                     return Err("Alignment changed during addition; try again".into());
                 }
             }
@@ -1754,7 +1754,7 @@ impl qobject::AlignmentController {
                 let exports = vec![(primary_member(&operation)?, output.clone())];
                 (output, exports)
             };
-            let generation = session.generation(doc);
+            let generation = session.generation(doc).map_err(|e| e.to_string())?;
             let job = DocumentJob::submit(
                 &mut r.session,
                 doc,

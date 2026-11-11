@@ -681,7 +681,10 @@ impl qobject::DelimitationController {
                             return false;
                         };
                         basecraft_ops::delimitation::reference_input(
-                            &session.root().join(session.doc_key(doc)),
+                            &session.root().join(crate::bridge::checked_document!(
+                                access_thread,
+                                session.doc_key(doc)
+                            )),
                             &retained,
                             &hash,
                         )
@@ -1667,7 +1670,9 @@ impl qobject::DelimitationController {
                 return Err("Unknown analysis".into());
             }
             let display_job = method.starts_with("display_");
-            let workspace_path = session.root().join(session.doc_key(doc));
+            let workspace_path = session
+                .root()
+                .join(session.doc_key(doc).map_err(|e| e.to_string())?);
             let output = workspace_path
                 .parent()
                 .unwrap_or(session.root())
@@ -1814,8 +1819,11 @@ impl qobject::DelimitationController {
                 Value::Object(params),
                 exports,
                 output,
-                session.generation(doc),
-                (session.id().to_owned(), session.doc_key(doc).to_owned()),
+                session.generation(doc).map_err(|e| e.to_string())?,
+                (
+                    session.id().to_owned(),
+                    session.doc_key(doc).map_err(|e| e.to_string())?.to_owned(),
+                ),
             ))
         })();
         let (operation, role, analysis_input, params, exports, output, generation, identity) =
@@ -1917,10 +1925,12 @@ impl qobject::DelimitationController {
                 .as_mut()
                 .zip(state.doc)
                 .ok_or("Workspace closed")?;
-            if session.id() != analysis.identity.0 || session.doc_key(doc) != analysis.identity.1 {
+            if session.id() != analysis.identity.0
+                || session.doc_key(doc).map_err(|e| e.to_string())? != analysis.identity.1
+            {
                 return Err("Analysis completed for its original workspace; its result remains available for review".into());
             }
-            if session.generation(doc)
+            if session.generation(doc).map_err(|e| e.to_string())?
                 != analysis
                     .job
                     .finalized_generation()
@@ -2050,7 +2060,10 @@ impl qobject::DelimitationController {
             {
                 return false;
             }
-            session.root().join(session.doc_key(doc))
+            session.root().join(crate::bridge::checked_document!(
+                access_thread,
+                session.doc_key(doc)
+            ))
         };
         let generated = path
             .file_name()
@@ -2184,7 +2197,9 @@ pub(crate) fn create_workspace_in_session(
     doc: DocId,
     method: &str,
 ) -> Result<String, String> {
-    let source_path = session.root().join(session.doc_key(doc));
+    let source_path = session
+        .root()
+        .join(session.doc_key(doc).map_err(|e| e.to_string())?);
     let output = workspace_path(&source_path, method);
     let operation = bundled(
         "delimitation",
@@ -2377,7 +2392,7 @@ mod naming_tests {
                 );
             }
             for result in [&first, &second] {
-                let publication = basecraft_ops::provenance::inspect(result).unwrap();
+                let publication = basecraft_ops::records::inspect(result).unwrap();
                 assert!(
                     publication
                         .inputs
@@ -2391,19 +2406,19 @@ mod naming_tests {
                         .any(|edit| edit.operation.name() == operation)
                 );
                 assert_eq!(
-                    basecraft_ops::provenance::verify(result).unwrap(),
+                    basecraft_ops::records::verify(result).unwrap(),
                     Vec::<String>::new()
                 );
             }
             // A supplied tree can itself have ancestry (including IQ-TREE's
             // inference). Save As must carry its contributing publication.
-            let parent = basecraft_ops::provenance::inspect(&first).unwrap();
+            let parent = basecraft_ops::records::inspect(&first).unwrap();
             let mut session = rooting_session(dir.path());
             let descendant = root_tree_copy(&mut session, &first, method).unwrap();
-            let publication = basecraft_ops::provenance::inspect(&descendant).unwrap();
+            let publication = basecraft_ops::records::inspect(&descendant).unwrap();
             assert!(publication.parents.contains(&parent.id));
             assert_eq!(
-                basecraft_ops::provenance::verify(&descendant).unwrap(),
+                basecraft_ops::records::verify(&descendant).unwrap(),
                 Vec::<String>::new()
             );
         }

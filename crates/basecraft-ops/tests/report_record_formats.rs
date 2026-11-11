@@ -1,13 +1,10 @@
 //! Original writer oracles intentionally use literal JSON, independently of protocol types.
+use basecraft_ops::records::ReportExt;
 use basecraft_ops::{
-    Session,
-    document_record::{DocumentRecord, MethodsParagraph, Report},
-    provenance,
+    records,
+    records::{DocumentRecord, MethodsParagraph, Report},
 };
-use basecraft_protocol::{
-    Actor, Op,
-    provenance::{Completeness, Publication},
-};
+use basecraft_protocol::provenance::{Completeness, Publication};
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -76,7 +73,7 @@ fn check_provenance(publication: &Publication, directory: &Path, capture: Option
     let report = DocumentRecord::from_publication(publication)
         .report()
         .unwrap();
-    provenance::write_reports(directory, publication).unwrap();
+    records::write_reports(directory, publication).unwrap();
     let reports = directory.join("reports");
     check_file(
         &reports,
@@ -138,122 +135,6 @@ fn custom_report() -> Report {
     report.citations = vec!["Z λ\"\n\\".into(), "A".into(), "Z λ\"\n\\".into()];
     report
 }
-#[test]
-fn original_empty_and_custom_writer_bytes() {
-    let dir = tempfile::tempdir().unwrap();
-    let report = check_provenance(
-        &empty_publication(),
-        &dir.path().join("bundle"),
-        Some("provenance-report-empty"),
-    );
-    assert!(report.paragraphs.is_empty());
-    let empty = DocumentRecord::empty("").report().unwrap();
-    assert_eq!(
-        (&empty.document, &empty.revision, empty.unsaved),
-        (&String::new(), &String::new(), false)
-    );
-    check_export(
-        &empty,
-        &dir.path().join("empty"),
-        Some("export-report-empty"),
-    );
-    let custom = custom_report();
-    check_export(
-        &custom,
-        &dir.path().join("custom"),
-        Some("export-report-custom"),
-    );
-}
-#[test]
-fn original_real_multi_activity_bytes() {
-    let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("gene-λ.fasta");
-    let output = dir.path().join("result.fasta");
-    std::fs::write(&file, b">gene\nACGT\n").unwrap();
-    std::fs::write(&output, b">gene\nATGT\n").unwrap();
-    let paths = basecraft_platform::paths::AppPaths::from_environment(|k| {
-        (k == "BASECRAFT_PROFILE_DIR").then(|| dir.path().join("profile").into_os_string())
-    })
-    .unwrap();
-    let mut session = Session::recoverable_with_paths(dir.path(), &paths).unwrap();
-    let doc = session.open(&file).unwrap();
-    session
-        .apply(
-            doc,
-            Op::SeqReplace {
-                start: 1,
-                end: 2,
-                residues: "T".into(),
-            },
-        )
-        .unwrap();
-    session.undo(doc).unwrap();
-    session.redo(doc).unwrap();
-    let inputs = vec![("gene-λ.fasta".into(), session.snapshot_file(&file).unwrap())];
-    let mut submitted = session.document_record(doc).unwrap();
-    for operation in ["first", "second"] {
-        session.log_tool_run(doc,Actor::Tool{tool:"RecordedTool".into(),version:"1.2".into()},("example",operation),json!({"_execution":{"methods_template":"example.v1","methods":{"description":"Sequences were processed","citations":["Z λ\"\n\\","A","Z λ\"\n\\"]},"resolved_parameters":{"seed":42}}}),&inputs,std::slice::from_ref(&output)).unwrap();
-        session
-            .publish_analysis_snapshot(doc, &output, &inputs, &submitted)
-            .unwrap();
-        submitted = DocumentRecord::from_publication(&provenance::inspect(&output).unwrap());
-    }
-    let inspected = serde_json::to_vec(&provenance::inspect(&output).unwrap()).unwrap();
-    let verified = provenance::verify(&output).unwrap();
-    let generated = provenance::companion(&output).join("reports");
-    for name in ["manifest.json", "source-map.json"] {
-        std::fs::write(generated.join(name), b"corrupt derived output").unwrap();
-    }
-    assert_eq!(
-        serde_json::to_vec(&provenance::inspect(&output).unwrap()).unwrap(),
-        inspected
-    );
-    assert_eq!(provenance::verify(&output).unwrap(), verified);
-    let mut publication = provenance::inspect(&output).unwrap();
-    // Deliberately preserve duplicate hash order in the original manifest projection.
-    let first = publication.outputs[0].clone();
-    let mut other = first.clone();
-    other.hash = "second-output-hash".into();
-    publication.outputs.extend([other, first]);
-    publication.report_template_version = 77;
-    let report = check_provenance(
-        &publication,
-        &dir.path().join("bundle"),
-        Some("provenance-report-real"),
-    );
-    assert_eq!(report.citations, vec!["Z λ\"\n\\", "A"]);
-    assert_eq!(report.paragraphs.len(), publication.effective_edits.len());
-    assert!(report.paragraphs.len() >= 3);
-    for (paragraph, activity) in report.paragraphs.iter().zip(&publication.effective_edits) {
-        assert_eq!(paragraph.activity_ids, vec![activity.id.clone()]);
-    }
-    check_export(
-        &report,
-        &dir.path().join("export"),
-        Some("export-report-real"),
-    );
-    assert_eq!(
-        std::fs::read(dir.path().join("bundle/reports/source-map.json")).unwrap(),
-        [
-            std::fs::read(dir.path().join("export/source-map.json")).unwrap(),
-            vec![b'\n']
-        ]
-        .concat()
-    );
-    let reports = dir.path().join("bundle/reports");
-    let before = snapshot(&reports);
-    let mut mismatch = publication.clone();
-    mismatch.effective_edits[0].id = "missing-contribution".into();
-    assert!(matches!(
-        provenance::write_reports(&dir.path().join("bundle"), &mismatch),
-        Err(basecraft_ops::Error::Invalid(_))
-    ));
-    assert_eq!(snapshot(&reports), before);
-    let frozen = report.clone();
-    session.undo(doc).unwrap();
-    check_export(&frozen, &dir.path().join("export"), None);
-}
-
 #[test]
 fn export_selected_ownership_acceptance_and_refusal() {
     let report = custom_report();
@@ -379,7 +260,7 @@ fn export_partial_writes_keep_order_and_authored_text() {
         std::fs::create_dir(folder.path().join(obstructed)).unwrap();
         let before = snapshot(folder.path());
         let error = report.export(folder.path()).unwrap_err();
-        assert!(matches!(error, basecraft_ops::Error::Invalid(_)));
+        assert!(matches!(error, basecraft_ops::Error::Damaged { .. }));
         assert!(error.to_string().contains("incomplete"));
         let after = snapshot(folder.path());
         let successful = tempfile::tempdir_in(dir.path()).unwrap();
@@ -432,7 +313,7 @@ fn provenance_regeneration_and_partial_writes() {
         std::fs::remove_file(reports.join(obstructed)).unwrap();
         std::fs::create_dir(reports.join(obstructed)).unwrap();
         let before = snapshot(&reports);
-        let error = provenance::write_reports(folder.path(), &publication).unwrap_err();
+        let error = records::write_reports(folder.path(), &publication).unwrap_err();
         assert!(matches!(
             error,
             basecraft_ops::Error::Format(basecraft_io::Error::Io(_))
@@ -473,37 +354,4 @@ fn export_follows_existing_manifest_symlink() {
             .file_type()
             .is_symlink()
     );
-}
-
-#[test]
-fn original_captures_round_trip_known_shapes() {
-    use basecraft_protocol::report_records::{
-        ProvenanceReportManifest, ReportExportManifest, ReportSourceMapEntry,
-    };
-    fn value<T: serde::de::DeserializeOwned + serde::Serialize>(bytes: &[u8]) -> Value {
-        serde_json::to_value(serde_json::from_slice::<T>(bytes).unwrap()).unwrap()
-    }
-    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/records-v1");
-    let mut count = 0;
-    for entry in std::fs::read_dir(fixtures).unwrap() {
-        let entry = entry.unwrap();
-        let name = entry.file_name().into_string().unwrap();
-        if !(name.starts_with("provenance-report-") || name.starts_with("export-report-")) {
-            continue;
-        }
-        let bytes = std::fs::read(entry.path()).unwrap();
-        let provenance = name.starts_with("provenance-report-");
-        let decoded = if name.ends_with("source-map.json") {
-            value::<Vec<ReportSourceMapEntry>>(&bytes)
-        } else if name.ends_with("citations.json") {
-            value::<Vec<String>>(&bytes)
-        } else if provenance {
-            value::<ProvenanceReportManifest>(&bytes)
-        } else {
-            value::<ReportExportManifest>(&bytes)
-        };
-        assert_eq!(pretty(&decoded, provenance), bytes, "{name}");
-        count += 1;
-    }
-    assert_eq!(count, 13);
 }

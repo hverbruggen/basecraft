@@ -9,6 +9,7 @@ publish.workspace = true
 repository.workspace = true
 
 [dependencies]
+basecraft-protocol = { path = "../basecraft-protocol" }
 basecraft-io = { path = "../basecraft-io" }
 basecraft-platform = { path = "../basecraft-platform" }
 rayon.workspace = true

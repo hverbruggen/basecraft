@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ValidationSummary",
+  "description": "A table2asn run, as recorded in the package.",
+  "type": "object",
+  "properties": {
+    "copies": {
+      "description": "Hashes of the `.sqn` and `.gbf` copied into `genbank/`.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {}
+    },
+    "directory": {
+      "description": "Package-relative folder with the raw reports.",
+      "type": "string"
+    },
+    "errors": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "infos": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "input_hash": {
+      "type": "string"
+    },
+    "issues": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Issue"
+      }
+    },
+    "message": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "status": {
+      "description": "`passed` (completed, a report was read and it has no errors),\n`errors`, `unavailable` (the tool could not run: nothing is known\nabout the sequences) or `failed`.",
+      "type": "string"
+    },
+    "tool_version": {
+      "type": "string"
+    },
+    "warnings": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "input_hash",
+    "status",
+    "tool_version",
+    "run_id",
+    "directory",
+    "errors",
+    "warnings",
+    "infos",
+    "message"
+  ],
+  "$defs": {
+    "Issue": {
+      "description": "A finding, tied to the record (and specimen) it concerns when it\nconcerns one.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "description": "A stable code: Basecraft's, or the tool's (`SEQ_INST.TerminalNs`).",
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "record": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "source": {
+          "description": "`basecraft` for local checks; `table2asn` for its reports.",
+          "type": "string"
+        },
+        "specimen": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_severity": {
+          "description": "The tool's own severity word, when it reported one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "severity",
+        "source",
+        "code",
+        "message"
+      ]
+    },
+    "Severity": {
+      "description": "How serious a finding is. Blocking issues keep a package from being\nready; review issues need a look but don't block; unavailable means a\ncheck could not run, which says nothing about the sequences.",
+      "type": "string",
+      "enum": [
+        "blocking",
+        "review",
+        "info",
+        "unavailable"
+      ]
+    }
+  }
+}

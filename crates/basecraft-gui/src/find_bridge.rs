@@ -2,7 +2,14 @@
 use basecraft_viewmodel::find::{Row, Session};
 
 pub fn document_key(session: &basecraft_ops::Session, doc: basecraft_ops::DocId) -> String {
-    format!("{}:{}:{}", session.id(), doc.0, session.revision(doc))
+    format!(
+        "{}:{}:{}",
+        session.id(),
+        doc.0,
+        session
+            .revision(doc)
+            .map_or_else(|_| "closed".into(), |revision| revision.to_string())
+    )
 }
 
 pub fn rows_key(rows: &[Row], identity: &str) -> String {

@@ -1,17 +1,9 @@
 //! Exact aligned DNA identity, with no pairwise-deletion inference or weights.
 use crate::{Error, Result};
-use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const POLICY: &str = "aligned-dna-case-u-to-t-literal-gap-ambiguity-v1";
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Haplotypes {
-    pub policy: String,
-    pub input_hash: String,
-    pub original_count: usize,
-    pub unique: Vec<(String, String)>,
-    pub members: BTreeMap<String, BTreeSet<String>>,
-}
+pub use basecraft_protocol::producer_records::Haplotypes;
 
 /// Representatives are the lexicographically smallest stable specimen IDs.
 /// `BTreeMap` compares entire byte strings, so hash collisions cannot merge rows.

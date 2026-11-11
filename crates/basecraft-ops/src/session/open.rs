@@ -1,6 +1,6 @@
 //! Document loading, baseline tracking and retained originals.
+use super::Session;
 use super::{DocId, Op, OpResult, Path, PathBuf, Result, Slot, files, invalid, objects_dir};
-use super::{Session, save_authority};
 
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct SavedMark(pub(super) Option<String>);
@@ -32,11 +32,6 @@ impl Session {
     }
 
     pub(super) fn open_inner(&mut self, path: &Path) -> Result<(DocId, files::Kind)> {
-        if crate::sanger_review::evidence_kind(path).is_some() {
-            return Err(invalid(
-                "Saved Sanger reviews and drafts are edited only in the Basecraft application; read a saved Sanger review's history, methods and provenance with the history, methods and provenance commands",
-            ));
-        }
         self.flush()?;
         let format = files::Format::from_path(path)?;
         let captured = files::capture_load(path, format)?;
@@ -56,7 +51,8 @@ impl Session {
             .filter(|(_, stamp)| stamp.is_none())
             .map(|(path, _)| self.relative(path))
             .collect();
-        let (origin, mut origin_issue) = crate::document_record::read_origin(path, &hashes);
+        let (origin, mut origin_issue) =
+            crate::records::document_record::read_origin(path, &hashes);
         if let Some(warning) = content.as_document().opening_warning() {
             origin_issue = Some(
                 origin_issue
@@ -82,26 +78,19 @@ impl Session {
             })
             .collect::<Result<_>>()?;
         let disk_stamp = captured.stamps[0].1.clone().expect("main file stamp");
-        self.docs.push(Slot {
-            key: key.clone(),
+        let mut slot = Slot::new(
+            key.clone(),
             content,
-            generation: 0,
-            save_authority: save_authority::PendingSaveAuthority::default(),
-            undo: Vec::new(),
-            redo: Vec::new(),
-            baseline: None,
-            baseline_logged: false,
-            accepted_hashes: hashes.clone(),
-            recovery_boundary: None,
-            saved_at: Some(super::SavedMark(None)),
-            source_stamps: captured.stamps,
-            recovery_changed: false,
-            absent_sidecars,
-            origin,
-            origin_issue,
-            origin_bundle: crate::provenance::bundle_for_result(path),
+            crate::records::provenance::bundle_for_result(path),
             disk_stamp,
-        });
+        );
+        slot.accepted_hashes.clone_from(&hashes);
+        slot.absent_sidecars = absent_sidecars;
+        slot.origin = origin;
+        slot.origin_issue = origin_issue;
+        slot.saved_at = Some(super::SavedMark(None));
+        slot.source_stamps = captured.stamps;
+        self.docs.push(slot);
         let id = DocId(self.docs.len() - 1);
         let mut entry = self.entry(
             id,
@@ -151,29 +140,37 @@ impl Session {
             return Ok(());
         }
         if let Some(mut entry) = self.docs[id.0].baseline.clone() {
-            if self.store_objects {
+            let files = entry
+                .source
+                .as_ref()
+                .map(|source| source.files.clone())
+                .unwrap_or_default();
+            let review = self.docs[id.0].content.kind() == files::Kind::SangerReview;
+            if self.store_objects && !files.is_empty() {
                 let originals = self.storage_root.join(".basecraft/originals");
                 recovery_directory(&originals)?;
                 let stage = tempfile::tempdir_in(&originals)?;
                 let directory = originals.join(&entry.id);
-                for (index, reference) in entry
-                    .source
-                    .as_ref()
-                    .expect("baseline source")
-                    .files
-                    .clone()
-                    .iter()
-                    .enumerate()
-                {
+                for (index, reference) in files.iter().enumerate() {
                     let original = self.resolve(&reference.path);
                     if crate::input_evidence::stamp(&original)? != reference.stamp {
                         return Err(crate::Error::ChangedOnDisk { path: original });
                     }
                     let link = stage.path().join(index.to_string());
-                    match std::fs::hard_link(&original, &link) {
+                    // Reviews (at most 64 MiB) are copied: their save refuses aliased targets.
+                    let retained = if review {
+                        std::fs::copy(&original, &link).map(|_| ())
+                    } else {
+                        std::fs::hard_link(&original, &link)
+                    };
+                    match retained {
                         Ok(()) => {
-                            if crate::input_evidence::stamp(&link)? != reference.stamp
-                                || crate::input_evidence::stamp(&original)? != reference.stamp
+                            let same = if review {
+                                basecraft_io::hash_file(&link)? == reference.hash
+                            } else {
+                                crate::input_evidence::stamp(&link)? == reference.stamp
+                            };
+                            if !same || crate::input_evidence::stamp(&original)? != reference.stamp
                             {
                                 std::fs::remove_file(&link)?;
                                 return Err(crate::Error::ChangedOnDisk { path: original });
@@ -202,12 +199,10 @@ impl Session {
                         Err(error) => return Err(error.into()),
                     }
                 }
-                if !entry
+                if entry
                     .source
                     .as_ref()
-                    .expect("baseline source")
-                    .links
-                    .is_empty()
+                    .is_some_and(|source| !source.links.is_empty())
                 {
                     basecraft_platform::files::sync_directory(stage.path())?;
                     std::fs::rename(stage.path(), &directory)?;
@@ -217,12 +212,10 @@ impl Session {
             if self.docs[id.0].baseline_logged {
                 // The baseline is already durable. Record its newly retained source
                 // as a checkpoint, without pretending another save occurred.
-                if !entry
+                if entry
                     .source
                     .as_ref()
-                    .expect("baseline source")
-                    .links
-                    .is_empty()
+                    .is_some_and(|source| !source.links.is_empty())
                 {
                     let (Op::Open { path } | Op::Save { path }) = &entry.op else {
                         unreachable!("logged baseline")
@@ -280,10 +273,11 @@ impl Session {
         recovery_directory(&directory)?;
         let stage = tempfile::tempdir_in(&directory)?;
         let key = &self.docs[id.0].key;
-        let local = crate::replay::scratch_key(key).map_err(|detail| crate::Error::Damaged {
-            path: self.storage_root.clone(),
-            detail,
-        })?;
+        let local =
+            crate::records::replay::scratch_key(key).map_err(|detail| crate::Error::Damaged {
+                path: self.storage_root.clone(),
+                detail,
+            })?;
         let target = stage.path().join(&local);
         let original = self.resolve(key);
         if let Some(parent) = target.parent() {
@@ -294,9 +288,15 @@ impl Session {
             destination: original.parent().expect("source parent").to_path_buf(),
             stores: std::sync::Mutex::default(),
         };
+        // A review's format is recognised from content, which the target lacks yet.
+        let format = if self.docs[id.0].content.kind() == files::Kind::SangerReview {
+            files::Format::SangerReview
+        } else {
+            files::Format::from_path(&target)?
+        };
         let written = self.docs[id.0].content.as_document().write(
             &target,
-            files::Format::from_path(&target)?,
+            format,
             &self.storage_root,
             &publication,
         )?;
@@ -377,15 +377,18 @@ impl Session {
     }
 
     /// Read-only evidence for this session's exact current revision, including pending edits.
-    pub fn document_record(&self, id: DocId) -> Result<crate::document_record::DocumentRecord> {
+    pub fn document_record(
+        &self,
+        id: DocId,
+    ) -> Result<crate::records::document_record::DocumentRecord> {
         use basecraft_protocol::provenance::EditActivity;
         let slot = self
             .docs
             .get(id.0)
             .ok_or_else(|| invalid("unknown document"))?;
         let mut record = slot.origin.as_ref().map_or_else(
-            || crate::document_record::DocumentRecord::empty(&slot.key),
-            crate::document_record::DocumentRecord::from_publication,
+            || crate::records::document_record::DocumentRecord::empty(&slot.key),
+            crate::records::document_record::DocumentRecord::from_publication,
         );
         if let Some(origin) = &slot.origin {
             record
@@ -427,7 +430,7 @@ impl Session {
                 operation: a.op.clone(),
             }));
         record.deduplicate();
-        crate::contributions::project(&record.events, &mut record.effective);
+        crate::records::contributions::project(&record.data.events, &mut record.data.effective);
         Ok(record)
     }
 
@@ -454,6 +457,13 @@ impl Session {
             .ok_or_else(|| invalid("unknown document"))?;
         if !slot.is_clean() {
             return Ok(None);
+        }
+        if let Some((path, stamp, hash)) = &slot.saved_target {
+            let current = crate::input_evidence::stamp(path)?;
+            if current != *stamp {
+                return Err(crate::Error::ChangedOnDisk { path: path.clone() });
+            }
+            return Ok(Some((path.clone(), current, hash.clone())));
         }
         let path = self.resolve(&slot.key).canonicalize()?;
         let current = crate::input_evidence::stamp(&path)?;

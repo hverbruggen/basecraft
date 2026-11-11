@@ -9,6 +9,9 @@
 //! and [`record_validation`] reads its reports back into the package.
 //! Everything here is local preparation: a clean table2asn report is not
 //! archive acceptance.
+use basecraft_protocol::submission_records::{
+    PackageDocument, PackageIssues, PackageRecord, PackageTools, SubmissionPackage,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -51,16 +54,16 @@ pub fn load(path: &Path) -> Result<Submission> {
 }
 
 pub(crate) fn load_from(path: &Path, bytes: &[u8]) -> Result<Submission> {
-    let value: Value = serde_json::from_slice(bytes)
-        .map_err(|e| invalid(format!("{} is not valid JSON: {e}", path.display())))?;
-    let version = value["version"].as_u64().unwrap_or(0);
-    if version > u64::from(SUBMISSION_VERSION) {
-        return Err(invalid(format!(
-            "this submission was written by a newer Basecraft (format version {version}); this version reads version {SUBMISSION_VERSION}"
+    let sub: Submission = serde_json::from_slice(bytes).map_err(|e| crate::Error::Damaged {
+        path: path.to_path_buf(),
+        detail: format!("not a submission: {e}"),
+    })?;
+    if sub.version != SUBMISSION_VERSION {
+        return Err(crate::Error::Unsupported(format!(
+            "submission format version {} is not supported",
+            sub.version
         )));
     }
-    let sub: Submission = serde_json::from_value(value)
-        .map_err(|e| invalid(format!("{} is not a submission: {e}", path.display())))?;
     model::validate(&sub).map_err(|e| invalid(e.0))?;
     Ok(sub)
 }
@@ -174,18 +177,23 @@ pub fn plan_inclusion_submission(
         .ok_or_else(|| invalid("Choose a source alignment"))?;
     let hash = basecraft_io::hash_file(&project.join(&source.document))?;
     if hash != source.hash {
-        return Err(invalid(
-            "Source changed; choose it again before previewing inclusion",
-        ));
+        return Err(crate::Error::ChangedOnDisk {
+            path: project.join(&source.document),
+        });
     }
     let metadata_stamp = metadata_evidence(project)?;
     let (meta, metadata_hash) = project_metadata(project)?;
     let rows = read_rows(&project.join(&source.document))?;
     // Detect replacement between hashing and reading; immutable byte input is cached by GUI review separately.
-    if basecraft_io::hash_file(&project.join(&source.document))? != hash
-        || metadata_evidence(project)? != metadata_stamp
-    {
-        return Err(invalid("Source changed while planning"));
+    if basecraft_io::hash_file(&project.join(&source.document))? != hash {
+        return Err(crate::Error::ChangedOnDisk {
+            path: project.join(&source.document),
+        });
+    }
+    if metadata_evidence(project)? != metadata_stamp {
+        return Err(crate::Error::ChangedOnDisk {
+            path: crate::metadata::manifest_path(project),
+        });
     }
     let records: Vec<_> = rows
         .iter()
@@ -272,7 +280,7 @@ pub fn read_rows(path: &Path) -> Result<Vec<SourceRow>> {
     let bytes = std::fs::read(path)?;
     let index = basecraft_io::fasta::FastaIndex::build(&bytes)?;
     if index.records.is_empty() {
-        return Err(invalid(format!("{} has no records", path.display())));
+        return Err(crate::Error::Empty(path.to_path_buf()));
     }
     index
         .records
@@ -323,7 +331,9 @@ pub fn project_metadata(project: &Path) -> Result<(ProjectMetadata, Option<Strin
     let manifest_hash = basecraft_io::hash_file(&manifest)?;
     let opened = crate::metadata::load(&manifest)?;
     if metadata_evidence(project)? != before {
-        return Err(invalid("Metadata changed while reading"));
+        return Err(crate::Error::ChangedOnDisk {
+            path: manifest.clone(),
+        });
     }
     Ok((opened.metadata, Some(manifest_hash)))
 }
@@ -410,7 +420,9 @@ pub fn review_submission_cached_with_stage(
     {
         let (metadata, read_hash) = project_metadata(project)?;
         if read_hash != metadata_hash || metadata_evidence(project)? != metadata_stamp {
-            return Err(invalid("Metadata changed while reading"));
+            return Err(crate::Error::ChangedOnDisk {
+                path: manifest.clone(),
+            });
         }
         cache.metadata = Some((metadata_stamp.clone(), metadata));
     }
@@ -433,7 +445,7 @@ pub fn review_submission_cached_with_stage(
                 {
                     let parsed = read_rows(&path)?;
                     if basecraft_io::hash_file(&path)? != hash {
-                        return Err(invalid("Source changed while reading"));
+                        return Err(crate::Error::ChangedOnDisk { path: path.clone() });
                     }
                     cache.source = Some((source.clone(), std::sync::Arc::new(parsed)));
                 }
@@ -611,22 +623,7 @@ fn ascii_issues(
 
 // The package.
 
-/// What an export wrote.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PackageSummary {
-    pub directory: String,
-    /// Hash of the four table2asn input files together; a validation run
-    /// belongs to exactly this hash.
-    pub input_hash: String,
-    pub records: usize,
-    pub blocking: usize,
-    pub review: usize,
-    /// `draft` (blocking issues remain), `prepared` (no local blocking
-    /// issues; not yet validated), `validated` (table2asn reported no
-    /// errors for these exact files) or `validation_errors`.
-    pub status: String,
-    pub files: BTreeMap<String, String>,
-}
+pub use basecraft_protocol::submission_records::PackageSummary;
 
 fn tsv(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
@@ -1154,24 +1151,41 @@ pub fn export(
             &readme(&summary, &sub, &review.prepared.issues, validation.as_ref()),
         )?,
     );
-    let package = json!({
-        "schema": PACKAGE_SCHEMA,
-        "version": 1,
-        "destination": "genbank",
-        "note": DISCLAIMER,
-        "status": summary.status,
-        "submission": {"document": session.doc_key(doc), "hash": basecraft_io::hash_bytes(&encode(&sub)?)},
-        "source": sub.source,
-        "metadata_manifest_hash": review.metadata_hash,
-        "batch": sub.batch,
-        "export": sub.export,
-        "input_hash": hash,
-        "records": review.prepared.exported().map(|r| json!({"export_id": r.export_id, "record": r.record, "row": r.row + 1, "specimen": r.specimen})).collect::<Vec<_>>(),
-        "issues": {"blocking": summary.blocking, "review": summary.review},
-        "files": files,
-        "validation": validation,
-        "tools": {"table2asn": validation.as_ref().map(|v| v.tool_version.clone())},
-    });
+    let package = serde_json::to_value(SubmissionPackage {
+        schema: PACKAGE_SCHEMA.into(),
+        version: 1,
+        destination: "genbank".into(),
+        note: DISCLAIMER.into(),
+        status: summary.status.clone(),
+        submission: PackageDocument {
+            document: session.doc_key(doc)?.into(),
+            hash: basecraft_io::hash_bytes(&encode(&sub)?),
+        },
+        source: sub.source.clone(),
+        metadata_manifest_hash: review.metadata_hash.clone(),
+        batch: sub.batch.clone(),
+        export: sub.export.clone(),
+        input_hash: hash,
+        records: review
+            .prepared
+            .exported()
+            .map(|r| PackageRecord {
+                export_id: r.export_id.clone(),
+                record: r.record.clone(),
+                row: r.row + 1,
+                specimen: r.specimen.clone(),
+            })
+            .collect(),
+        issues: PackageIssues {
+            blocking: summary.blocking,
+            review: summary.review,
+        },
+        files,
+        tools: PackageTools {
+            table2asn: validation.as_ref().map(|v| v.tool_version.clone()),
+        },
+        validation,
+    })?;
     let mut bytes = serde_json::to_vec_pretty(&package)?;
     bytes.push(b'\n');
     session.export(doc, &manifest, "genbank-submission-package", |w| {
@@ -1207,28 +1221,7 @@ fn status(blocking: usize, validation: Option<&ValidationSummary>) -> String {
 
 // Validation.
 
-/// A table2asn run, as recorded in the package.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct ValidationSummary {
-    pub input_hash: String,
-    /// `passed` (completed, a report was read and it has no errors),
-    /// `errors`, `unavailable` (the tool could not run: nothing is known
-    /// about the sequences) or `failed`.
-    pub status: String,
-    pub tool_version: String,
-    pub run_id: String,
-    /// Package-relative folder with the raw reports.
-    pub directory: String,
-    pub errors: usize,
-    pub warnings: usize,
-    pub infos: usize,
-    pub message: String,
-    /// Hashes of the `.sqn` and `.gbf` copied into `genbank/`.
-    #[serde(default)]
-    pub copies: BTreeMap<String, String>,
-    #[serde(default)]
-    pub issues: Vec<Issue>,
-}
+pub use basecraft_protocol::submission_records::ValidationSummary;
 
 fn read_validation(package: &Path, input_hash: &str) -> Result<Option<ValidationSummary>> {
     let path = validation_dir(package, input_hash).join("summary.json");
@@ -1302,9 +1295,9 @@ fn verified_reports(
     outcome: &Value,
 ) -> Result<Option<PathBuf>> {
     let read = |path: &Path| -> Result<Value> {
-        Ok(serde_json::from_slice(&crate::provenance::read_record(
-            path,
-        )?)?)
+        Ok(serde_json::from_slice(
+            &crate::records::provenance::read_record(path)?,
+        )?)
     };
     let run = Path::new(
         outcome["evidence"]
@@ -1360,7 +1353,7 @@ fn verified_reports(
             || evidence.source_hash.as_deref() != Some(expected.as_str())
             || evidence.submitted_hash != expected
             || evidence.transformation != "identity-v1"
-            || ledger.state == "broken"
+            || ledger.state == basecraft_protocol::input_records::EvidenceState::Broken
             || ledger.submitted_hash != expected
             || ledger.transformation != "identity-v1"
         {
@@ -1395,18 +1388,22 @@ fn verified_reports(
         );
         if artifact["role"] != "reports"
             || basecraft_io::hash_file(&path)? != artifact["digest"].as_str().unwrap_or_default()
-            || crate::provenance::bundle_for_result(&path).canonicalize()? != run.canonicalize()?
+            || crate::records::provenance::bundle_for_result(&path).canonicalize()?
+                != run.canonicalize()?
         {
             return Err(invalid(
                 "validation artifact or publication evidence differs",
             ));
         }
-        let issues = crate::provenance::verify(&path)?;
+        let issues = crate::records::provenance::verify(&path)?;
         if !issues.is_empty() {
-            return Err(invalid(format!(
-                "validation publication verification failed: {}",
-                issues.join("; ")
-            )));
+            return Err(crate::Error::Damaged {
+                path: path.clone(),
+                detail: format!(
+                    "validation publication verification failed: {}",
+                    issues.join("; ")
+                ),
+            });
         }
     }
     // Only read files actually published by this run, including optional reports.
@@ -1677,28 +1674,19 @@ pub fn plan_accessions(
     session: &Session,
     doc: DocId,
     text: &str,
-    submitter: &Submitter,
+    _submitter: &Submitter,
 ) -> Result<AccessionPlan> {
     let sub = checked(session, doc)?;
     let mut ids: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    if sub.exported.is_empty() {
-        // Compatibility for documents made before export mappings were retained.
-        for r in &review(session, doc, submitter)?.prepared.records {
-            if let Some(id) = &r.export_id {
-                ids.entry(id.clone()).or_default().insert(r.record.clone());
-            }
+    for mapping in sub.exported.iter().filter(|m| m.source == sub.source) {
+        for (id, record) in &mapping.records {
+            ids.entry(id.clone()).or_default().insert(record.clone());
         }
-    } else {
-        for mapping in sub.exported.iter().filter(|m| m.source == sub.source) {
-            for (id, record) in &mapping.records {
-                ids.entry(id.clone()).or_default().insert(record.clone());
-            }
-        }
-        if ids.is_empty() {
-            return Err(invalid(
-                "the submission source changed since export; use the original submission for returned accessions",
-            ));
-        }
+    }
+    if ids.is_empty() {
+        return Err(invalid(
+            "export this submission before importing returned accessions",
+        ));
     }
     let originals: BTreeSet<&String> = ids.values().flatten().collect();
     let mut plan = AccessionPlan::default();

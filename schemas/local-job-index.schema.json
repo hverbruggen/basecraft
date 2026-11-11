@@ -58,7 +58,6 @@
       "$ref": "#/$defs/RuntimeState"
     }
   },
-  "additionalProperties": true,
   "required": [
     "schema_version",
     "id",
@@ -85,7 +84,6 @@
           "type": "string"
         }
       },
-      "additionalProperties": true,
       "required": [
         "id",
         "version"
@@ -99,7 +97,6 @@
           "type": "string"
         }
       },
-      "additionalProperties": true,
       "required": [
         "path"
       ]

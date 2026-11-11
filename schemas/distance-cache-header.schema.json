@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CacheHeader",
+  "type": "object",
+  "properties": {
+    "basecraft_identity": true,
+    "columns": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "gap_policy": {
+      "type": "string"
+    },
+    "input_hash": {
+      "type": "string"
+    },
+    "min_overlap": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "model": {
+      "$ref": "#/$defs/DistanceModel"
+    },
+    "names": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "schema": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "schema",
+    "input_hash",
+    "names",
+    "columns",
+    "model",
+    "min_overlap",
+    "gap_policy",
+    "basecraft_identity"
+  ],
+  "$defs": {
+    "DistanceModel": {
+      "type": "string",
+      "enum": [
+        "p",
+        "jc69",
+        "k2p"
+      ]
+    }
+  }
+}

@@ -63,6 +63,7 @@ struct Job {
 
 #[derive(Default)]
 pub struct JobManager {
+    captured_inputs: Vec<basecraft_ops::sanger_review::CapturedInput>,
     jobs: BTreeMap<String, Arc<Job>>,
     requests: BTreeMap<String, (String, String)>,
     skip_known_features: bool,
@@ -118,8 +119,7 @@ fn cancel_job(job: &Job, strict: bool) -> Result<OperationOutcome> {
         basecraft_io::write_atomic(
             std::path::Path::new(&job.prepared.context.cancel_file),
             |w| std::io::Write::write_all(w, b"cancel\n"),
-        )
-        .map_err(basecraft_ops::Error::from)?;
+        )?;
         outcome.state = RuntimeState::Cancelling;
         job.prepared.persist(&outcome)?;
     } else if strict {
@@ -143,6 +143,15 @@ impl JobManager {
     /// input ancestry and logical analysis ownership are inherited before spawn.
     pub(crate) fn with_workflow_parent(mut self, parent: &PreparedOperation) -> Self {
         self.stage_parent = Some(parent.run.directory().into());
+        self
+    }
+
+    #[must_use]
+    pub fn with_captured_inputs(
+        mut self,
+        inputs: Vec<basecraft_ops::sanger_review::CapturedInput>,
+    ) -> Self {
+        self.captured_inputs = inputs;
         self
     }
 
@@ -354,7 +363,7 @@ impl JobManager {
                         .state = RuntimeState::Running;
                     fail(
                         job,
-                        if error.to_string().contains("stale_revision") {
+                        if matches!(error, basecraft_ops::Error::StaleRevision { .. }) {
                             OperationErrorCode::StaleRevision
                         } else {
                             OperationErrorCode::PluginProtocolViolation
@@ -376,11 +385,13 @@ impl JobManager {
             outcome.warnings.push(format!(
                 "Proposals attached to session document {} at generation {}",
                 target.doc.0,
-                session.generation(target.doc)
+                session
+                    .generation(target.doc)
+                    .map_or_else(|_| "unavailable".into(), |value| value.to_string())
             ));
             let snapshot_path = job.prepared.run.artifact("snapshot.arrow-pair");
             let activity = snapshot_path.and_then(|path| {
-                let hash = basecraft_io::hash_file(&path).map_err(basecraft_ops::Error::from)?;
+                let hash = basecraft_io::hash_file(&path)?;
                 let key = basecraft_ops::input_evidence::relative(session.root(),&path)?;
                 let params = json!({"requested":job.prepared.request.parameters,"effective":outcome.effective_parameters,
                     "operation":job.prepared.operation.id,"pins":outcome.pins,"initiator":job.prepared.initiator,"run_id":outcome.run_id});
@@ -472,6 +483,7 @@ impl JobManager {
             initiator.into(),
             session,
             registry,
+            &self.captured_inputs,
         )?;
         if let Some(parent) = &self.stage_parent {
             prepared.inherit_input_ancestry(parent)?;
@@ -574,11 +586,11 @@ impl JobManager {
                 "evidence_incomplete: proposal tool-run activity was not recorded; publication-only repair cannot restore the owning session journal".into(),
             ));
         }
-        let result = serde_json::from_slice(&basecraft_ops::provenance::read_record(
+        let result = serde_json::from_slice(&basecraft_ops::records::read_record(
             &job.prepared.run.artifact("validated.json")?,
         )?)?;
         let artifacts = serde_json::from_slice::<Vec<(String, std::path::PathBuf, String)>>(
-            &basecraft_ops::provenance::read_record(
+            &basecraft_ops::records::read_record(
                 &job.prepared.run.artifact("validated-artifacts.json")?,
             )?,
         )?;
@@ -846,7 +858,9 @@ fn execute(job: &Job) {
 fn same_document(session: &basecraft_ops::Session, target: &crate::runner::DocumentTarget) -> bool {
     session.id() == target.session
         && session.is_open(target.doc)
-        && session.root().join(session.doc_key(target.doc)) == target.path
+        && session
+            .doc_key(target.doc)
+            .is_ok_and(|key| session.root().join(key) == target.path)
 }
 
 /// Owner-thread continuation used by both execution and publication repair.
@@ -892,15 +906,15 @@ fn finalize_document(
     session.complete_operation_publication(target.doc, &snapshot, &job.prepared.run)?;
     if !progress.applied {
         let unchanged = if let Some(revision) = progress.expected_revision {
-            session.revision(target.doc) == revision
+            session.revision(target.doc)? == revision
         } else {
-            session.generation(target.doc) == target.generation
-                && session.revision(target.doc) == target.revision
+            session.generation(target.doc)? == target.generation
+                && session.revision(target.doc)? == target.revision
         };
         let warning = apply_target_results(job, target, outcome, session, &mut progress)?;
         progress.applied = true;
         if unchanged {
-            progress.generation = Some(session.generation(target.doc));
+            progress.generation = Some(session.generation(target.doc)?);
         }
         if let Some(warning) = warning {
             job.outcome
@@ -912,7 +926,7 @@ fn finalize_document(
     }
     if target.save && !progress.saved {
         if let Some(generation) = progress.generation {
-            if session.generation(target.doc) != generation {
+            if session.generation(target.doc)? != generation {
                 return Err(Error::Protocol("stale_revision: target changed after result attachment; save remains incomplete".into()));
             }
             session.save(target.doc, None)?;
@@ -932,7 +946,7 @@ fn finalize_document(
         && progress.generation.is_some()
         && progress.terminal_history != TerminalHistory::Published
     {
-        if progress.generation != Some(session.generation(target.doc)) {
+        if progress.generation != Some(session.generation(target.doc)?) {
             return Err(Error::Protocol(
                 "stale_revision: target changed before terminal history publication".into(),
             ));
@@ -992,12 +1006,15 @@ fn apply_target_results(
     let mut warning = None;
     // Only species analyses add hypotheses; a display tree run with a
     // workspace target is recorded in its history and nothing more.
-    let species = matches!(
-        job.prepared.operation.package.manifest.id.as_str(),
-        "basecraft.delimitation" | "basecraft.host"
-    );
+    let species = job
+        .prepared
+        .operation
+        .descriptor
+        .host
+        .as_ref()
+        .is_some_and(|host| host.species_workspace);
     if species && session.is_delimitation(target.doc) {
-        if session.revision(target.doc) == progress.expected_revision.unwrap_or(target.revision) {
+        if session.revision(target.doc)? == progress.expected_revision.unwrap_or(target.revision) {
             let name = job.prepared.species_result_name();
             if let Some(result) = outcome
                 .artifacts
@@ -1028,7 +1045,7 @@ fn apply_target_results(
                                 },
                             )?;
                             progress.next_edit += 1;
-                            progress.expected_revision = Some(session.revision(target.doc));
+                            progress.expected_revision = Some(session.revision(target.doc)?);
                         }
                         Ok(())
                     })();
@@ -1094,7 +1111,20 @@ pub fn error_value(
     code: OperationErrorCode,
     message: impl Into<String>,
 ) -> serde_json::Value {
-    json!({"schema":1,"operation":operation,"state":"failed","errors":[OperationError {code,message:message.into(),field:None,operation:operation.into(),run_id:None,evidence:None}]})
+    serde_json::to_value(basecraft_protocol::operation::OperationFailure {
+        schema: 1,
+        operation: operation.into(),
+        state: RuntimeState::Failed,
+        errors: vec![OperationError {
+            code,
+            message: message.into(),
+            field: None,
+            operation: operation.into(),
+            run_id: None,
+            evidence: None,
+        }],
+    })
+    .expect("operation errors contain only JSON values")
 }
 
 pub fn error_code(error: &Error) -> OperationErrorCode {
@@ -1125,36 +1155,5 @@ pub fn error_code(error: &Error) -> OperationErrorCode {
 
 /// Preserve typed core failures across the CLI, MCP and registered job adapters.
 pub fn ops_error_code(error: &basecraft_ops::Error) -> OperationErrorCode {
-    use basecraft_ops::Error as Core;
-    match error {
-        Core::ChangedOnDisk { .. } => OperationErrorCode::ChangedOnDisk,
-        Core::WrongKind { .. } => OperationErrorCode::WrongDocumentKind,
-        Core::UnknownDocument { .. } => OperationErrorCode::UnknownDocument,
-        Core::NotFound { .. } => OperationErrorCode::NotFound,
-        Core::Limit { .. } => OperationErrorCode::Limit,
-        Core::Unsupported(_) | Core::UnknownFormat(_) => OperationErrorCode::Unsupported,
-        Core::Busy(_) => OperationErrorCode::Busy,
-        Core::Access(basecraft_ops::access::AccessError::Denied(_)) => {
-            OperationErrorCode::PermissionDenied
-        }
-        Core::Access(basecraft_ops::access::AccessError::DestinationExists) => {
-            OperationErrorCode::OutputConflict
-        }
-        Core::EvidenceConflict(_)
-        | Core::EvidenceCheckIncomplete(_)
-        | Core::SaveCheckRequired(_) => OperationErrorCode::EvidenceIncomplete,
-        Core::SaveDecisionStale(_) => OperationErrorCode::StaleRevision,
-        Core::PublishedWithFailure(_) => OperationErrorCode::PublicationIncomplete,
-        Core::Io(e)
-        | Core::Access(basecraft_ops::access::AccessError::Io(e))
-        | Core::Format(basecraft_io::Error::Io(e)) => match e.kind() {
-            std::io::ErrorKind::NotFound => OperationErrorCode::NotFound,
-            std::io::ErrorKind::PermissionDenied => OperationErrorCode::PermissionDenied,
-            _ => OperationErrorCode::ToolFailure,
-        },
-        Core::Damaged { .. } | Core::Json(_) | Core::Format(_) => OperationErrorCode::Damaged,
-        Core::Empty(_) | Core::Invalid(_) | Core::NothingTo(_) => {
-            OperationErrorCode::InvalidArguments
-        }
-    }
+    error.operation_code()
 }

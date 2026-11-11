@@ -14,7 +14,7 @@ use basecraft_docs::metadata::{
 };
 use basecraft_protocol::metadata::{
     Cell, CellChange, ChangeSet, Column, FieldTarget, HeaderPattern, Identification,
-    ImportSettings, METADATA_VERSION, ProjectMetadata, RecordLink, Row, Taxon,
+    METADATA_VERSION, ProjectMetadata, RecordLink, Row, Taxon,
 };
 use serde::{Deserialize, Serialize};
 
@@ -72,34 +72,7 @@ pub fn files(manifest: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-#[derive(Serialize, Deserialize)]
-struct TableEntry {
-    file: String,
-    hash: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    columns: Vec<Column>,
-}
-
-#[derive(Serialize, Deserialize)]
-struct Tables {
-    specimens: TableEntry,
-    taxa: TableEntry,
-    identifications: TableEntry,
-    records: TableEntry,
-}
-
-#[derive(Serialize, Deserialize)]
-struct Manifest {
-    format: String,
-    version: u32,
-    tables: Tables,
-    #[serde(default)]
-    import: ImportSettings,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    partitions: Vec<basecraft_protocol::delimitation::Hypothesis>,
-    #[serde(flatten)]
-    extra: BTreeMap<String, serde_json::Value>,
-}
+use basecraft_protocol::metadata_records::{MetadataManifest as Manifest, TableEntry, Tables};
 
 /// A metadata document as opened: its contents and anything noticed while
 /// reading it.
@@ -127,33 +100,39 @@ pub(crate) fn load_with(
     read: &mut impl FnMut(&Path) -> Result<(basecraft_io::Source, String)>,
 ) -> Result<OpenedMetadata> {
     let dir = manifest_path.parent().unwrap_or(Path::new("."));
-    let value: serde_json::Value = serde_json::from_slice(read(manifest_path)?.0.bytes())
-        .map_err(|e| invalid(format!("{MANIFEST} is not valid JSON: {e}")))?;
+    let value: serde_json::Value =
+        serde_json::from_slice(read(manifest_path)?.0.bytes()).map_err(|e| {
+            crate::Error::Damaged {
+                path: manifest_path.to_path_buf(),
+                detail: format!("not valid JSON: {e}"),
+            }
+        })?;
     if value["format"] != FORMAT {
-        return Err(invalid(format!(
-            "{MANIFEST} is not a Basecraft metadata manifest"
-        )));
+        return Err(crate::Error::Damaged {
+            path: manifest_path.to_path_buf(),
+            detail: format!("{MANIFEST} is not a Basecraft metadata manifest"),
+        });
     }
     let version = value["version"].as_u64().unwrap_or(0);
-    if version > u64::from(METADATA_VERSION) {
-        return Err(invalid(format!(
-            "this project's metadata was written by a newer Basecraft (format version {version}); this version reads version {METADATA_VERSION}"
-        )));
-    }
     if version != u64::from(METADATA_VERSION) {
-        return Err(invalid(format!(
+        return Err(crate::Error::Unsupported(format!(
             "metadata format version {version} is not supported"
         )));
     }
-    let manifest: Manifest = serde_json::from_value(value)
-        .map_err(|e| invalid(format!("{MANIFEST} is malformed: {e}")))?;
+    let manifest: Manifest = serde_json::from_value(value).map_err(|e| crate::Error::Damaged {
+        path: manifest_path.to_path_buf(),
+        detail: format!("{MANIFEST} is malformed: {e}"),
+    })?;
     let mut notices = Vec::new();
     let mut read = |entry: &TableEntry, expected: &str| -> Result<basecraft_io::table::Sheet> {
         if entry.file != expected {
-            return Err(invalid(format!(
-                "{MANIFEST} names table {} where {expected} was expected",
-                entry.file
-            )));
+            return Err(crate::Error::Damaged {
+                path: manifest_path.to_path_buf(),
+                detail: format!(
+                    "{MANIFEST} names table {} where {expected} was expected",
+                    entry.file
+                ),
+            });
         }
         let (source, hash) = read(&dir.join(expected))?;
         let bytes = source.bytes();
@@ -162,7 +141,10 @@ pub(crate) fn load_with(
                 "{expected} was changed outside Basecraft since the last save; it was read and checked against its column types"
             ));
         }
-        basecraft_io::table::read_tsv(bytes).map_err(|e| invalid(format!("{expected}: {e}")))
+        basecraft_io::table::read_tsv(bytes).map_err(|e| crate::Error::Damaged {
+            path: dir.join(expected),
+            detail: format!("{expected}: {e}"),
+        })
     };
     let tables = &manifest.tables;
     let specimens = read(&tables.specimens, SPECIMENS)?;
@@ -174,16 +156,21 @@ pub(crate) fn load_with(
         .chain(columns.iter().map(|c| c.name.as_str()))
         .collect();
     if specimens.headers != expected {
-        return Err(invalid(format!(
-            "the columns of {SPECIMENS} differ from those declared in {MANIFEST}; import the edited table as a spreadsheet instead"
-        )));
+        return Err(crate::Error::Damaged {
+            path: dir.join(SPECIMENS),
+            detail: format!(
+                "the columns of {SPECIMENS} differ from those declared in {MANIFEST}; import the edited table as a spreadsheet instead"
+            ),
+        });
     }
     let mut rows = Vec::with_capacity(specimens.rows.len());
     for (line, fields) in specimens.rows.iter().enumerate() {
         let mut cells = BTreeMap::new();
         for (column, text) in columns.iter().zip(&fields[1..]) {
-            let cell = parse_cell(column, text)
-                .map_err(|e| invalid(format!("{SPECIMENS} line {}: {e}", line + 2)))?;
+            let cell = parse_cell(column, text).map_err(|e| crate::Error::Damaged {
+                path: dir.join(SPECIMENS),
+                detail: format!("{SPECIMENS} line {}: {e}", line + 2),
+            })?;
             if let Some(cell) = cell {
                 cells.insert(column.name.clone(), cell);
             }
@@ -195,7 +182,10 @@ pub(crate) fn load_with(
     }
     let check = |sheet: &basecraft_io::table::Sheet, header: &[&str], file: &str| {
         if sheet.headers != header {
-            return Err(invalid(format!("{file} has unexpected columns")));
+            return Err(crate::Error::Damaged {
+                path: dir.join(file),
+                detail: format!("{file} has unexpected columns"),
+            });
         }
         Ok(())
     };
@@ -213,8 +203,9 @@ pub(crate) fn load_with(
                 submitted_name: optional(&f[2]),
                 taxid: optional(&f[3])
                     .map(|t| {
-                        t.parse().map_err(|_| {
-                            invalid(format!("{TAXA} line {}: {t:?} is not a TaxID", line + 2))
+                        t.parse().map_err(|_| crate::Error::Damaged {
+                            path: dir.join(TAXA),
+                            detail: format!("{TAXA} line {}: {t:?} is not a TaxID", line + 2),
                         })
                     })
                     .transpose()?,
@@ -234,7 +225,10 @@ pub(crate) fn load_with(
                 date: optional(&f[4])
                     .map(|d| {
                         basecraft_protocol::metadata::PartialDate::parse(&d).map_err(|e| {
-                            invalid(format!("{IDENTIFICATIONS} line {}: {e}", line + 2))
+                            crate::Error::Damaged {
+                                path: dir.join(IDENTIFICATIONS),
+                                detail: format!("{IDENTIFICATIONS} line {}: {e}", line + 2),
+                            }
                         })
                     })
                     .transpose()?,
@@ -1190,9 +1184,7 @@ pub fn document_key(project: &Path, path: &Path) -> Result<String> {
     } else {
         project.join(path)
     };
-    let full = full
-        .canonicalize()
-        .map_err(|e| invalid(format!("{}: {e}", path.display())))?;
+    let full = full.canonicalize()?;
     let root = project.canonicalize()?;
     let relative = full.strip_prefix(&root).map_err(|_| {
         invalid(format!(
@@ -1365,7 +1357,7 @@ pub fn consumer_plan(
             let mut checked = meta.clone();
             model::apply(&mut checked, &edit).map_err(|e| invalid(e.0))?;
             return Ok(
-                serde_json::json!({"target":session.doc_key(doc), "operation": Op::MetadataEdit { edit: Box::new(edit) }, "metadata_hash": metadata_hash}),
+                serde_json::json!({"target":session.doc_key(doc)?, "operation": Op::MetadataEdit { edit: Box::new(edit) }, "metadata_hash": metadata_hash}),
             );
         }
         ConsumerRequest::Labels {
@@ -1450,7 +1442,7 @@ pub fn consumer_plan(
                 .map_err(|e| invalid(e.to_string()))?,
         );
         (
-            session.doc_key(doc).to_string(),
+            session.doc_key(doc)?.to_string(),
             Op::MetadataEdit {
                 edit: Box::new(MetadataEdit::PutPartition {
                     partition: Box::new(partition),
@@ -1475,8 +1467,8 @@ pub fn consumer_source(
     let (_, stamp, hash) = session
         .saved_source(doc)?
         .ok_or_else(|| invalid("Save the specimen metadata before binding consumers"))?;
-    let path = session.root().join(session.doc_key(doc));
-    let publication = crate::provenance::inspect(&path).map_err(|_| invalid("Metadata owner evidence is unavailable; save its document history before binding consumers"))?;
+    let path = session.root().join(session.doc_key(doc)?);
+    let publication = crate::records::provenance::inspect(&path).map_err(|_| invalid("Metadata owner evidence is unavailable; save its document history before binding consumers"))?;
     let event = publication
         .events
         .iter()
@@ -1485,7 +1477,7 @@ pub fn consumer_source(
             invalid("Metadata owner Open activity is unavailable; restore its provenance")
         })?;
     Ok(basecraft_protocol::provenance::InputReference {
-        path: session.doc_key(doc).into(),
+        path: session.doc_key(doc)?.into(),
         stamp,
         hash,
         extra: BTreeMap::from([("owner_event".into(), serde_json::json!(event.id))]),

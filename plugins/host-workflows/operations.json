@@ -110,7 +110,15 @@
       "required_features": [
         "operation-contract-v1",
         "host-workflow-v1"
-      ]
+      ],
+      "host": {
+        "species_workspace": true,
+        "workflow_operations": {
+          "prepare": "basecraft.delimitation/haplotypes@1",
+          "fit": "basecraft.delimitation/gmyc_single@1",
+          "tree": "basecraft.distance/tree@1"
+        }
+      }
     },
     {
       "name": "gmyc_alignment_multiple",
@@ -225,7 +233,15 @@
       "required_features": [
         "operation-contract-v1",
         "host-workflow-v1"
-      ]
+      ],
+      "host": {
+        "species_workspace": true,
+        "workflow_operations": {
+          "prepare": "basecraft.delimitation/haplotypes@1",
+          "fit": "basecraft.delimitation/gmyc_multiple@1",
+          "tree": "basecraft.distance/tree@1"
+        }
+      }
     },
     {
       "name": "asap_alignment",
@@ -337,7 +353,14 @@
       "required_features": [
         "operation-contract-v1",
         "host-workflow-v1"
-      ]
+      ],
+      "host": {
+        "species_workspace": true,
+        "workflow_operations": {
+          "prepare": "basecraft.delimitation/haplotypes@1",
+          "fit": "basecraft.delimitation/asap@1"
+        }
+      }
     }
   ]
 }

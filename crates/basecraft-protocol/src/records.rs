@@ -79,25 +79,13 @@ pub struct ExternalExecution {
     pub initiator: String,
     pub executor: String,
     pub process_instance: String,
-    /// The public invocation context rejects unknown fields, including in input
-    /// evidence. Retain its complete snapshot for lossless nested extensions;
-    /// production still constructs this from the shared `InvocationContext`.
-    #[schemars(with = "crate::operation::InvocationContext")]
-    pub context: Value,
+    pub context: crate::operation::InvocationContext,
     pub requested_parameters: Value,
     pub effective_parameters: Value,
     pub stdout: String,
     pub stderr: String,
-    /// `ToolInfo` currently discards extras. Keep the original snapshot; null is
-    /// always emitted, including on process failure. No production parse changes.
-    #[schemars(with = "Option<crate::plugin::ToolInfo>")]
-    pub tool: Option<Value>,
-    /// `ExecutionInfo` and `MethodsInfo` currently discard extras. Preserve nested
-    /// process evidence rather than introducing a lossy parsing boundary.
-    #[schemars(with = "Option<crate::plugin::ExecutionInfo>")]
-    pub execution: Option<Value>,
-    #[serde(flatten)]
-    pub extra: BTreeMap<String, Value>,
+    pub tool: Option<crate::plugin::ToolInfo>,
+    pub execution: Option<crate::plugin::ExecutionInfo>,
 }
 
 /// Host-workflow `execution.json`. This explicit shape intentionally has no
@@ -113,8 +101,6 @@ pub struct HostWorkflowExecution {
     pub package_digest: String,
     pub descriptor_digest: String,
     pub process_instance: String,
-    #[serde(flatten)]
-    pub extra: BTreeMap<String, Value>,
 }
 
 /// The existing two-field plugin identity in the local index. Neither `Actor`'s
@@ -123,16 +109,12 @@ pub struct HostWorkflowExecution {
 pub struct JobIndexPlugin {
     pub id: String,
     pub version: String,
-    #[serde(flatten)]
-    pub extra: BTreeMap<String, Value>,
 }
 
 /// Existing display path wrapper; not a hashed `InputReference` or a new path rule.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct JobIndexSource {
     pub path: String,
-    #[serde(flatten)]
-    pub extra: BTreeMap<String, Value>,
 }
 
 /// Lightweight application-state `jobs/<id>/manifest.json`. The pointed-to
@@ -156,8 +138,6 @@ pub struct LocalJobIndex {
     /// First runtime error message or explicit null.
     pub diagnostics: Option<String>,
     pub runtime_record: PathBuf,
-    #[serde(flatten)]
-    pub extra: BTreeMap<String, Value>,
 }
 
 /// Existing rollback-durability poison marker. Recovery refuses its presence,
@@ -229,6 +209,61 @@ pub struct AlignmentLink {
     pub alignment_version: u64,
     /// False for an explicitly associated imported tree: matching names is not inference provenance.
     pub inferred: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis_run: Option<PathBuf>,
     #[serde(default, flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
+}
+
+/// Checksummed JSONL envelope. Its flattened entry already carries log version `v`.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct JournalEntry<T = crate::LogEntry> {
+    #[serde(rename = "_checksum")]
+    pub checksum: String,
+    #[serde(rename = "_sequence")]
+    pub sequence: u64,
+    #[serde(flatten)]
+    pub entry: T,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct WorkflowFailure {
+    pub version: u32,
+    pub job: WorkflowFailureJob,
+    pub workspace: Option<crate::delimitation::DelimitationWorkspace>,
+    pub metrics: BTreeMap<String, Value>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct WorkflowFailureJob {
+    pub status: crate::delimitation::JobStatus,
+    pub diagnostics: Vec<String>,
+}
+
+/// Embedded provenance for an activity's exact submitted input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct ActivityInputRun {
+    pub schema_version: u32,
+    pub id: String,
+    pub hash: String,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct ActivityContributions {
+    pub schema_version: u32,
+    pub edits: Vec<String>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct ExtractionRecord {
+    pub schema_version: u32,
+    pub source_revision: String,
+    #[schemars(with = "serde_json::Value")]
+    pub selection: crate::Op,
+    pub coordinates: String,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
 }

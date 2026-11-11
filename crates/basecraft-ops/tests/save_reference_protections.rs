@@ -6,7 +6,7 @@ use basecraft_ops::{
     DocId, Error, Session,
     analysis_store::ArtifactRun,
     input_evidence::{self, EvidenceConflict, SavePolicy},
-    replay,
+    records,
 };
 use basecraft_protocol::Op;
 
@@ -66,9 +66,9 @@ fn conflict(error: Error) -> EvidenceConflict {
 
 fn recoverable(session: &mut Session, doc: DocId, destination: &Path) {
     assert!(session.document_record(doc).unwrap().unsaved);
-    assert!(session.can_undo(doc));
+    assert!(session.can_undo(doc).unwrap());
     session.flush().unwrap();
-    let outputs = replay::recover(session.recovery_root(), destination).unwrap();
+    let outputs = records::recover(session.recovery_root(), destination).unwrap();
     assert_eq!(outputs.len(), 1);
     assert!(
         std::fs::read_to_string(&outputs[0])
@@ -81,12 +81,12 @@ fn recoverable(session: &mut Session, doc: DocId, destination: &Path) {
 // replay writes to staging. Keep its journal and require an explicit next action.
 fn recovery_refused(session: &mut Session, doc: DocId, destination: &Path) {
     assert!(session.document_record(doc).unwrap().unsaved);
-    assert!(session.can_undo(doc));
+    assert!(session.can_undo(doc).unwrap());
     session.flush().unwrap();
     let journal =
         serde_json::to_value(basecraft_ops::log::read_all(session.recovery_root()).unwrap())
             .unwrap();
-    let error = replay::recover(session.recovery_root(), destination).unwrap_err();
+    let error = records::recover(session.recovery_root(), destination).unwrap_err();
     assert!(matches!(error, Error::SaveCheckRequired(check) if !check.evidence().is_complete()));
     assert_eq!(
         serde_json::to_value(basecraft_ops::log::read_all(session.recovery_root()).unwrap())
@@ -115,13 +115,13 @@ fn registered_other_folder_policies_preserve_original_and_pending_edits() {
                 std::fs::write(&source, ORIGINAL).unwrap();
                 let run = reference(&elsewhere, &source);
                 let (mut session, doc) = edited(&data, &source);
-                let generation = session.generation(doc);
+                let generation = session.generation(doc).unwrap();
                 // The store is not an ancestor of the target: only registration
                 // makes this conflict visible to Session.
                 let found = conflict(session.save(doc, None).unwrap_err());
                 assert_eq!(found.analyses.len(), 1);
                 assert_eq!(found.analyses[0].run, run.directory());
-                assert_eq!(session.generation(doc), generation);
+                assert_eq!(session.generation(doc).unwrap(), generation);
                 assert_eq!(std::fs::read(&source).unwrap(), ORIGINAL);
                 recoverable(&mut session, doc, &root.join(format!("recovered-{index}")));
                 if policy == SavePolicy::Cancel {
@@ -129,7 +129,7 @@ fn registered_other_folder_policies_preserve_original_and_pending_edits() {
                     assert_eq!(std::fs::read(&source).unwrap(), ORIGINAL);
                     assert_eq!(
                         input_evidence::read_input(run.directory()).unwrap().state,
-                        "referenced"
+                        basecraft_protocol::input_records::EvidenceState::Referenced
                     );
                     continue;
                 }
@@ -143,9 +143,15 @@ fn registered_other_folder_policies_preserve_original_and_pending_edits() {
                     )
                     .unwrap();
                     assert_eq!(std::fs::read(retained).unwrap(), ORIGINAL);
-                    assert_eq!(input.state, "preserved");
+                    assert_eq!(
+                        input.state,
+                        basecraft_protocol::input_records::EvidenceState::Preserved
+                    );
                 } else {
-                    assert_eq!(input.state, "broken");
+                    assert_eq!(
+                        input.state,
+                        basecraft_protocol::input_records::EvidenceState::Broken
+                    );
                     assert!(
                         input_evidence::verified_source(
                             run.directory(),
@@ -283,7 +289,7 @@ fn lexical_old_path_still_guards_missing_or_replaced_source() {
                     .unwrap();
                 assert_eq!(
                     input_evidence::read_input(run.directory()).unwrap().state,
-                    "broken"
+                    basecraft_protocol::input_records::EvidenceState::Broken
                 );
                 assert!(std::fs::read_to_string(source).unwrap().contains("ATGT"));
                 assert_eq!(std::fs::read(&moved).unwrap(), ORIGINAL);
@@ -339,7 +345,7 @@ fn registered_transitive_dependencies_are_included_in_session_conflict() {
             for run in [&child, &grandchild] {
                 assert_eq!(
                     input_evidence::read_input(run.directory()).unwrap().state,
-                    "referenced"
+                    basecraft_protocol::input_records::EvidenceState::Referenced
                 );
                 let reference = input_evidence::read_input(parent.directory())
                     .unwrap()

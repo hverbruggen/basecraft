@@ -1,9 +1,13 @@
+use basecraft_distance::DistanceMatrixExt;
 use basecraft_distance::{
     Alignment, BootstrapOptions, BootstrapPublicationError, DistanceMatrix, Method, Model, Result,
     bootstrap, partial_collection_path, write_json,
 };
+use basecraft_protocol::distance_records::{
+    DistanceCalculation, DistanceGroupReport, DistanceRunReport, OutputStatus,
+};
 use clap::Parser;
-use serde_json::json;
+type RunReport = DistanceRunReport<Model, Method>;
 use std::{collections::BTreeMap, fs, path::PathBuf, time::Instant};
 #[derive(Parser)]
 #[command(
@@ -203,7 +207,14 @@ fn run(a: &Args) -> Result<()> {
             Ok(result) => result,
             Err(error) => {
                 if let Some(published) = error.downcast_ref::<BootstrapPublicationError>() {
-                    let mut metadata = json!({"tool":"basecraft-distance", "version":env!("CARGO_PKG_VERSION"), "bootstrap":published.report});
+                    let mut metadata = RunReport {
+                        tool: "basecraft-distance".into(),
+                        version: env!("CARGO_PKG_VERSION").into(),
+                        bootstrap: Some(published.report.clone()),
+                        calculation: None,
+                        output_status: OutputStatus::Failed,
+                        error: None,
+                    };
                     return finish_report(a, &mut metadata, Err(error));
                 }
                 return Err(error);
@@ -248,7 +259,15 @@ fn run(a: &Args) -> Result<()> {
         if let (Some(path), Some(summary)) = (&a.summary, &summary) {
             write_json(
                 path,
-                &json!({"model":matrix.model,"min_overlap":matrix.min_overlap,"gap_policy":matrix.gap_policy,"input_hash":matrix.input_hash,"unassigned":matrix.names.len()-summary.iter().map(|g|g.specimens).sum::<usize>(),"groups":summary}),
+                &DistanceGroupReport {
+                    model: matrix.model,
+                    min_overlap: matrix.min_overlap,
+                    gap_policy: matrix.gap_policy.clone(),
+                    input_hash: matrix.input_hash.clone(),
+                    unassigned: matrix.names.len()
+                        - summary.iter().map(|g| g.specimens).sum::<usize>(),
+                    groups: summary.clone(),
+                },
             )?;
         }
         if bootstrap_report.is_some() && tree.is_none() {
@@ -259,35 +278,63 @@ fn run(a: &Args) -> Result<()> {
         }
         Ok(())
     })();
-    let mut result = json!({"tool":"basecraft-distance","version":env!("CARGO_PKG_VERSION"),"model":matrix.model,"method":a.method,"min_overlap":matrix.min_overlap,"gap_policy":matrix.gap_policy,"input_hash":matrix.input_hash,"cache_reused":cached,"sequences":matrix.names.len(),"columns":matrix.columns,"distance_threads":threads,"tree_threads":tt,"distance_s":distance_s,"total_s":start.elapsed().as_secs_f64(),"zero_overlap_pairs":zero_overlap,"short_overlap_pairs":short_overlap,"saturated_pairs":saturated,"tree":tree,"bootstrap":bootstrap_report});
     if let Some(report) = &bootstrap_report
         && report.support_withheld
     {
         eprintln!("Bootstrap support withheld: {}", report.failures.join("; "));
     }
+    let mut result = RunReport {
+        tool: "basecraft-distance".into(),
+        version: env!("CARGO_PKG_VERSION").into(),
+        bootstrap: bootstrap_report,
+        calculation: Some(DistanceCalculation {
+            model: matrix.model,
+            method: a.method,
+            min_overlap: matrix.min_overlap,
+            gap_policy: matrix.gap_policy,
+            input_hash: matrix.input_hash,
+            cache_reused: cached,
+            sequences: matrix.names.len(),
+            columns: matrix.columns,
+            distance_threads: threads,
+            tree_threads: tt,
+            distance_s,
+            total_s: start.elapsed().as_secs_f64(),
+            zero_overlap_pairs: zero_overlap,
+            short_overlap_pairs: short_overlap,
+            saturated_pairs: saturated,
+            tree,
+        }),
+        output_status: OutputStatus::Written,
+        error: None,
+    };
     finish_report(a, &mut result, publication)
 }
 
 // Publication status is separate from scientific bootstrap status. Only a
 // collection returned by the writer can appear here; no filesystem discovery.
-fn finish_report(a: &Args, result: &mut serde_json::Value, publication: Result<()>) -> Result<()> {
+fn finish_report(a: &Args, result: &mut RunReport, publication: Result<()>) -> Result<()> {
     let mut error = publication.err();
-    result["output_status"] = json!(if error.is_some() { "failed" } else { "written" });
+    result.output_status = if error.is_some() {
+        OutputStatus::Failed
+    } else {
+        OutputStatus::Written
+    };
     if let Some(error) = &error {
-        result["error"] = json!(error.to_string());
+        result.error = Some(error.to_string());
     }
     if let Some(path) = &a.report
-        && let Err(report_error) = write_json(path, result)
+        && let Err(report_error) = write_json(path, &serde_json::to_value(&*result)?)
     {
         let diagnostic = error.as_ref().map_or_else(
             || format!("run report write failed: {report_error}"),
             |error| format!("{error}; run report write failed: {report_error}"),
         );
-        result["output_status"] = json!("failed");
-        result["error"] = json!(diagnostic);
+        result.output_status = OutputStatus::Failed;
+        result.error = Some(diagnostic.clone());
         error = Some(diagnostic.into());
     }
-    println!("{result}");
+    println!("{}", serde_json::to_string(&serde_json::to_value(result)?)?);
     match error {
         Some(error) => Err(error),
         None => Ok(()),

@@ -1,0 +1,17 @@
+[
+  {
+    "name": "sample",
+    "sequence": "ACGT",
+    "source": {
+      "path": "source.fasta",
+      "ranges": [
+        [
+          0,
+          4
+        ]
+      ],
+      "record": 0,
+      "strand": "+"
+    }
+  }
+]

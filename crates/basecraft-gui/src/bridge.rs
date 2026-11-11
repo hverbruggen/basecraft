@@ -1060,8 +1060,8 @@ impl qobject::GenomeController {
         Some((
             session.id().into(),
             doc,
-            session.generation(doc),
-            session.revision(doc),
+            session.generation(doc).unwrap(),
+            session.revision(doc).unwrap(),
         ))
     }
 
@@ -1629,14 +1629,14 @@ impl qobject::GenomeController {
     }
 
     pub fn file_kind(&self, path: &QString) -> QString {
-        if basecraft_ops::sanger_review::evidence_kind(Path::new(&path.to_string())).is_some() {
-            return QString::from("trace");
-        }
         if Path::new(&path.to_string())
             .extension()
             .and_then(|ext| ext.to_str())
             .is_some_and(|ext| ext.eq_ignore_ascii_case("ab1") || ext.eq_ignore_ascii_case("abi"))
         {
+            return QString::from("trace");
+        }
+        if basecraft_ops::sanger_review::evidence_kind(Path::new(&path.to_string())).is_some() {
             return QString::from("trace");
         }
         let kind = basecraft_ops::files::kind(Path::new(&path.to_string()));
@@ -2040,7 +2040,7 @@ impl qobject::GenomeController {
                     binding,
                     vec![InputReference::Document {
                         doc: doc.0.to_string(),
-                        generation: session.generation(doc),
+                        generation: session.generation(doc).unwrap(),
                         revision,
                     }],
                 )]
@@ -2277,7 +2277,7 @@ impl qobject::GenomeController {
                 };
                 let mut query = basecraft_ops::blast::from_doc(doc, range, selected)?;
                 query.source["session"] = serde_json::json!(session.id());
-                query.source["generation"] = serde_json::json!(session.generation(id));
+                query.source["generation"] = serde_json::json!(session.generation(id).unwrap());
                 Ok(vec![query])
             })
             .unwrap_or_else(|| Err(basecraft_ops::Error::Invalid("Sequence closed".into())));

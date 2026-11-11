@@ -1,5 +1,6 @@
 //! Referenced-input lifecycle. Only known stores are inspected, never filesystem trees.
-use crate::links::AlignmentLinkExt;
+
+use crate::records::links::AlignmentLinkExt;
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
@@ -91,7 +92,14 @@ impl Mutation {
         transformation: &str,
         result_label: &str,
     ) -> Result<()> {
-        link_generated_input_locked(run, dependencies, payload, transformation, result_label)
+        link_generated_input_locked(
+            run,
+            dependencies,
+            payload,
+            transformation,
+            result_label,
+            register,
+        )
     }
 
     /// Recheck the caller's frozen original hash under the held evidence lock.
@@ -103,16 +111,17 @@ impl Mutation {
         dependencies: &[PathBuf],
         origin: &str,
     ) -> Result<ArtifactRun> {
-        reference_input_locked(anchor, source, hash, dependencies, origin)
+        reference_input_locked(anchor, source, hash, dependencies, origin, None)
     }
 }
 
-fn reference_input_locked(
+pub(crate) fn reference_input_locked(
     anchor: &Path,
     source: &Path,
     hash: &str,
     dependencies: &[PathBuf],
     origin: &str,
+    captured_stamp: Option<&FileStamp>,
 ) -> Result<ArtifactRun> {
     use basecraft_protocol::provenance::{
         ArtifactRevision, Completeness, InputReference, Publication,
@@ -120,12 +129,19 @@ fn reference_input_locked(
     let run =
         crate::analysis_store::ArtifactRun::create(anchor, &ulid::Ulid::generate().to_string())?;
     let source = source.canonicalize()?;
-    if basecraft_io::hash_file(&source)? != hash {
-        return Err(invalid("Input changed while registering its evidence"));
+    if captured_stamp.map_or_else(
+        || {
+            basecraft_io::hash_file(&source)
+                .map(|actual| actual != hash)
+                .map_err(crate::Error::from)
+        },
+        |before| stamp(&source).map(|now| &now != before),
+    )? {
+        return Err(crate::Error::ChangedOnDisk { path: source });
     }
     let reference = InputReference {
         path: crate::input_evidence::relative(run.directory(), &source)?,
-        stamp: crate::input_evidence::stamp(&source)?,
+        stamp: captured_stamp.cloned().map_or_else(|| stamp(&source), Ok)?,
         hash: hash.into(),
         extra: BTreeMap::new(),
     };
@@ -136,22 +152,27 @@ fn reference_input_locked(
         submitted_size: reference.stamp.size,
         transformation: "identity-v1".into(),
         state: "referenced".into(),
+        analysis_run: None,
+        proposal_target: None,
+        upstream: Vec::new(),
         extra: BTreeMap::new(),
     };
-    let source_bundle = crate::provenance::bundle_for_result(&source);
+    let source_bundle = crate::records::provenance::bundle_for_result(&source);
     let mut upstream = Vec::new();
     for dependency in dependencies.iter().chain(std::iter::once(&source_bundle)) {
         let manifest = dependency.join("manifest.json");
         if manifest.is_file() {
-            let bytes = crate::provenance::read_record(&manifest)?;
+            let bytes = crate::records::provenance::read_record(&manifest)?;
             let record: Publication = serde_json::from_slice(&bytes)?;
-            upstream.push(serde_json::json!({"bundle":crate::input_evidence::relative(run.directory(), dependency)?,"id":record.id,"hash":basecraft_io::hash_bytes(&bytes)}));
+            upstream.push(basecraft_protocol::input_records::UpstreamLink {
+                bundle: (crate::input_evidence::relative(run.directory(), dependency)?).into(),
+                id: record.id.clone(),
+                hash: basecraft_io::hash_bytes(&bytes),
+            });
         }
     }
     if !upstream.is_empty() {
-        input
-            .extra
-            .insert("upstream".into(), serde_json::json!(upstream));
+        input.upstream = upstream;
     }
     crate::input_evidence::write_json(&run.artifact("input.json")?, &input)?;
     crate::input_evidence::write_json(
@@ -200,7 +221,7 @@ fn reference_input_locked(
         },
         report_template_version: 2,
     };
-    crate::provenance::publish(run.directory(), &publication)?;
+    crate::records::provenance::publish(run.directory(), &publication)?;
     Ok(run)
 }
 
@@ -319,7 +340,7 @@ impl Inspection {
     }
 
     fn record_bounded(&mut self, path: &Path, mut limit: u64) -> Result<Vec<u8>> {
-        let result = crate::provenance::read_record_with_budget(path, &mut limit);
+        let result = crate::records::provenance::read_record_with_budget(path, &mut limit);
         self.observe(path, &result);
         result
     }
@@ -446,7 +467,7 @@ pub fn relative(base: &Path, target: &Path) -> Result<String> {
 }
 
 pub fn read_input(run: &Path) -> Result<SubmittedInput> {
-    let bytes = crate::provenance::read_record(&run.join("input.json"))?;
+    let bytes = crate::records::provenance::read_record(&run.join("input.json"))?;
     validate_input(run, &bytes)
 }
 
@@ -473,7 +494,8 @@ fn validate_input(run: &Path, bytes: &[u8]) -> Result<SubmittedInput> {
             | "blast-query-preparation-v1"
             | "sequence-arrow-buffers-v1"
     ) || matches!(record.state.as_str(), "referenced" | "preserved") && record.source.is_none()
-        || record.state == "generated" && record.source.is_some()
+        || record.state == basecraft_protocol::input_records::EvidenceState::Generated
+            && record.source.is_some()
     {
         return Err(invalid(
             "unsupported or inconsistent submitted input evidence",
@@ -542,12 +564,12 @@ fn store_registry() -> Result<StoreRegistry> {
     match std::fs::File::open(registry()?) {
         Ok(file) => {
             let length = file.metadata()?.len();
-            let bytes = crate::provenance::read_record_from_open(
+            let bytes = crate::records::provenance::read_record_from_open(
                 file,
                 length,
                 &mut (1 << 20),
                 1 << 20,
-                crate::provenance::RecordLimit::Registry,
+                crate::records::provenance::RecordLimit::Registry,
             )?;
             parse_store_registry(&bytes)
         }
@@ -564,7 +586,9 @@ mod service_registry {
         Inspection, PathBuf, Result, StoreRegistry, empty_registry, parse_store_registry,
         validate_store_paths,
     };
-    use crate::{access::Access, provenance::RecordLimit, service_reads::ServiceReadContext};
+    use crate::{
+        access::Access, records::provenance::RecordLimit, service_reads::ServiceReadContext,
+    };
     use basecraft_platform::files::CheckedRead;
 
     enum RegistryBytes {
@@ -587,7 +611,7 @@ mod service_registry {
             .and_then(|input| match input {
                 CheckedRead::File(file) => {
                     let length = file.metadata()?.len();
-                    let result = crate::provenance::read_record_from_open(
+                    let result = crate::records::provenance::read_record_from_open(
                         file,
                         length,
                         remaining,
@@ -800,7 +824,7 @@ mod service_registry {
             }
             std::fs::write(path, vec![b' '; (1 << 20) + 1]).unwrap();
             assert!(
-                matches!(store_registry_with_access(&context, &Bound(&context)), Err(crate::Error::Invalid(s)) if s == "known-store registry exceeds 1 MiB")
+                matches!(store_registry_with_access(&context, &Bound(&context)), Err(crate::Error::Limit { limit, .. }) if limit == 1 << 20)
             );
             let mut inspection = Inspection::default();
             let mut budget = 1 << 22;
@@ -809,7 +833,8 @@ mod service_registry {
                 .unwrap();
             assert_eq!(budget, 1 << 22); // metadata rejection precedes content
             assert!(
-                inspection.observations[path].contains("provenance record exceeds reading limit")
+                inspection.observations[path]
+                    .contains("provenance record reading exceeds the limit of 1048576")
             );
         }
 
@@ -943,7 +968,7 @@ mod service_registry {
             }
             let source = std::sync::Arc::new(());
             let mut budget = 100;
-            let outcome = crate::provenance::read_record_from_open(
+            let outcome = crate::records::provenance::read_record_from_open(
                 Failing {
                     first: true,
                     error: Some(io::Error::new(
@@ -1236,59 +1261,12 @@ fn scan_run(
         return Ok(None);
     }
     let input = inspection.input(&run)?;
-    for field in ["analysis_run", "origin_run"] {
-        if input
-            .extra
-            .get(field)
-            .is_some_and(|value| !value.is_string())
-        {
-            inspection.issue(
-                InspectionCode::DependencyUnavailable,
-                &run.join("input.json"),
-                format!("{field} location is invalid"),
-            );
-        }
-    }
-    if input
-        .extra
-        .get("upstream")
-        .is_some_and(|value| !value.is_array())
-    {
-        inspection.issue(
-            InspectionCode::DependencyUnavailable,
-            &run.join("input.json"),
-            "upstream inventory is invalid",
-        );
-    }
-    if input
-        .extra
-        .get(PROPOSAL_TARGET)
-        .is_some_and(|value| !value.is_boolean())
-    {
-        inspection.issue(
-            InspectionCode::LedgerInvalid,
-            &run.join("input.json"),
-            "proposal target marker is invalid",
-        );
-    }
-    if let Some(parents) = input
-        .extra
-        .get("upstream")
-        .and_then(serde_json::Value::as_array)
-    {
-        for parent in parents {
-            if parent["bundle"].as_str().is_none() {
-                inspection.issue(
-                    InspectionCode::DependencyUnavailable,
-                    &run.join("input.json"),
-                    "ancestor location is missing",
-                );
-            }
-        }
-    }
     let mut analysis = None;
-    let proposal_target = input.extra.get(PROPOSAL_TARGET) == Some(&serde_json::json!(true));
-    let source_matches = if input.state == "referenced" && !proposal_target {
+    let proposal_target = input.proposal_target == Some(true);
+    let source_matches = if input.state
+        == basecraft_protocol::input_records::EvidenceState::Referenced
+        && !proposal_target
+    {
         input.source.as_ref().is_some_and(|reference| {
             if same_source(&run, reference, target) {
                 return true;
@@ -1355,20 +1333,9 @@ fn inspect_in(
                 continue;
             }
             let mut dependent = false;
-            if let Some(parents) = input
-                .extra
-                .get("upstream")
-                .and_then(serde_json::Value::as_array)
-            {
+            if let Some(parents) = Some(&input.upstream) {
                 for parent in parents {
-                    let Some(path) = parent["bundle"].as_str() else {
-                        inspection.issue(
-                            InspectionCode::DependencyUnavailable,
-                            &run.join("input.json"),
-                            "ancestor location is missing",
-                        );
-                        continue;
-                    };
+                    let path = &parent.bundle;
                     match depends_on_inspected(&run.join(path), &analyses, &mut inspection) {
                         Ok(found) => dependent |= found,
                         Err(error) => inspection.issue(
@@ -1398,11 +1365,7 @@ fn inspect_in(
     // collapse records. Equal names/hashes alone never merge distinct analyses.
     let mut owners = BTreeMap::new();
     for (run, input) in &known_runs {
-        if let Some(owner) = input
-            .extra
-            .get("analysis_run")
-            .and_then(serde_json::Value::as_str)
-        {
+        if let Some(owner) = input.analysis_run.as_deref() {
             let owner = lexical(&run.join(owner));
             if known_runs.iter().any(|(path, _)| lexical(path) == owner) {
                 owners.insert(run.clone(), owner);
@@ -1412,24 +1375,6 @@ fn inspect_in(
                     &owner,
                     "analysis owner is unavailable in inspected inventory",
                 );
-            }
-        } else if run.join("runtime.json").is_file()
-            && let Some(parents) = input
-                .extra
-                .get("upstream")
-                .and_then(serde_json::Value::as_array)
-        {
-            // Compatibility with registered runs written before analysis_run.
-            // A reference-only ledger is dedicated to the declaring operation.
-            for parent in parents {
-                if let Some(path) = parent["bundle"].as_str() {
-                    let ledger = lexical(&run.join(path));
-                    if known_runs.iter().any(|(path, _)| lexical(path) == ledger)
-                        && !ledger.join("runtime.json").exists()
-                    {
-                        owners.entry(ledger).or_insert_with(|| run.clone());
-                    }
-                }
             }
         }
     }
@@ -1658,7 +1603,7 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
                     let destination = affected.run.join("preserved-input");
                     // A public retry must never touch the live source or replace
                     // retained bytes. The owning ledger may have advanced already.
-                    if input.state == "preserved" {
+                    if input.state == basecraft_protocol::input_records::EvidenceState::Preserved {
                         let (owner, retained) = owning_ledger(&affected.run)?;
                         let effective = retained
                             .source
@@ -1668,7 +1613,7 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
                         preserved.insert(reference.hash.clone(), owner);
                         continue;
                     }
-                    if input.state != "referenced" {
+                    if input.state != basecraft_protocol::input_records::EvidenceState::Referenced {
                         return Err(invalid("input evidence changed; refresh the save decision"));
                     }
                     let source = affected.run.join(&reference.path);
@@ -1792,8 +1737,20 @@ fn owning_ledger(bundle: &Path) -> Result<(PathBuf, SubmittedInput)> {
 
 /// Resolve evidence only on explicit verification/export/relink. No UI-event hashing.
 pub fn verified_source(bundle: &Path, reference: &InputReference) -> Result<PathBuf> {
+    let path = source_location(bundle, reference)?;
+    if basecraft_io::hash_file(&path)? != reference.hash
+        || std::fs::metadata(&path)?.len() != reference.stamp.size
+    {
+        return Err(invalid(
+            "referenced input changed; original evidence unavailable (timestamp alone is not identity)",
+        ));
+    }
+    Ok(path.canonicalize()?)
+}
+
+pub(crate) fn source_location(bundle: &Path, reference: &InputReference) -> Result<PathBuf> {
     let (mut location, mut input) = owning_ledger(bundle)?;
-    if input.state == "broken" {
+    if input.state == basecraft_protocol::input_records::EvidenceState::Broken {
         return Err(invalid("evidence chain explicitly broken"));
     }
     let primary_matches = input.source.as_ref().is_some_and(|source| {
@@ -1819,7 +1776,7 @@ pub fn verified_source(bundle: &Path, reference: &InputReference) -> Result<Path
         }) {
             // Check every declared matching owner before selecting one: an
             // intact same-hash sibling must not hide an explicit evidence break.
-            if candidate.state == "broken" {
+            if candidate.state == basecraft_protocol::input_records::EvidenceState::Broken {
                 return Err(invalid("evidence chain explicitly broken"));
             }
             if matching.is_none() {
@@ -1838,19 +1795,12 @@ pub fn verified_source(bundle: &Path, reference: &InputReference) -> Result<Path
     if effective.hash != reference.hash {
         return Err(invalid("input reference identity changed"));
     }
-    let path = if input.state == "preserved" {
+    let path = if input.state == basecraft_protocol::input_records::EvidenceState::Preserved {
         location.join("preserved-input")
     } else {
         location.join(&effective.path)
     };
-    if basecraft_io::hash_file(&path)? != reference.hash
-        || std::fs::metadata(&path)?.len() != reference.stamp.size
-    {
-        return Err(invalid(
-            "referenced input changed; original evidence unavailable (timestamp alone is not identity)",
-        ));
-    }
-    Ok(path.canonicalize()?)
+    Ok(path)
 }
 
 /// Honest repair: only a byte-verified original may replace a missing/changed reference.
@@ -1885,7 +1835,9 @@ pub fn relink(bundle: &Path, original: &Path) -> Result<()> {
             continue;
         }
         let mut ledger = read_input(&directory)?;
-        if ledger.state == "broken" || ledger.extra.contains_key("origin_run") {
+        if ledger.state == basecraft_protocol::input_records::EvidenceState::Broken
+            || ledger.extra.contains_key("origin_run")
+        {
             continue;
         }
         let Some(source) = ledger.source.as_mut() else {
@@ -1904,7 +1856,7 @@ pub fn relink(bundle: &Path, original: &Path) -> Result<()> {
 
 /// Explicit portable export materializes referenced dependencies; ordinary analysis does not.
 pub fn package(result: &Path, destination: &Path) -> Result<()> {
-    let issues = crate::provenance::verify(result)?;
+    let issues = crate::records::provenance::verify(result)?;
     if !issues.is_empty() {
         return Err(invalid(issues.join("; ")));
     }
@@ -1919,8 +1871,8 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
     let staging = tempfile::Builder::new()
         .prefix(".basecraft-package-")
         .tempdir_in(parent)?;
-    let bundle = crate::provenance::bundle_for_result(result);
-    let mut publication = crate::provenance::inspect(result)?;
+    let bundle = crate::records::provenance::bundle_for_result(result);
+    let mut publication = crate::records::provenance::inspect(result)?;
     if let Some(index) = publication
         .outputs
         .iter()
@@ -1933,7 +1885,7 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
             .file_name()
             .ok_or_else(|| invalid("result has no filename"))?,
     );
-    let target_bundle = crate::provenance::companion(&copied);
+    let target_bundle = crate::records::provenance::companion(&copied);
     std::fs::create_dir_all(target_bundle.join("artifacts"))?;
     // Rebase the whole immutable record graph, not only today's inputs.
     // Original record bytes are retained as checked artifacts; relocated records
@@ -2037,7 +1989,7 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
                 .file_name()
                 .ok_or_else(|| invalid("package destination has no name"))?,
         );
-        let final_bundle = crate::provenance::companion(
+        let final_bundle = crate::records::provenance::companion(
             &final_folder.join(copied.file_name().unwrap_or_default()),
         );
         // Resolve declared paths to the checked, materialized dependency closure.
@@ -2119,6 +2071,8 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
         if original == result {
             publication.outputs[0].hash = hash;
             publication.outputs[0].size = size;
+            // Relocation changes the visible review, not its retained original artifact.
+            publication.outputs[0].retained = None;
         } else {
             publication.outputs.push(ArtifactRevision {
                 id: format!("{}:sanger-review", publication.id),
@@ -2137,9 +2091,9 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
     // Complete tree exports deliberately materialize the legacy exchange
     // association, so extraction still works with the original store absent.
     if let Ok(tree) = crate::files::load_tree(result)
-        && crate::links::metadata_present(&crate::links::sidecar(result))?
+        && crate::records::links::metadata_present(&crate::records::links::sidecar(result))?
     {
-        let link = crate::links::AlignmentLink::read(result)?;
+        let link = crate::records::links::AlignmentLink::read(result)?;
         let input_path = link.checked_snapshot(result, &tree.doc)?;
         let indexed = std::sync::Arc::new(basecraft_io::fasta::IndexedFasta::open(&input_path)?);
         let alignment = basecraft_docs::AlignmentDoc::from_fasta("Exported input", &indexed);
@@ -2158,7 +2112,7 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
                 .as_ref()
                 .ok_or_else(|| invalid("exported source is not retained"))?,
         );
-        let paths = crate::links::AlignmentLink::create(
+        let paths = crate::records::links::AlignmentLink::create(
             &copied,
             &source_path,
             canonical.path(),
@@ -2191,15 +2145,20 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
         "Portable export of revision {}. {}",
         original_id, publication.origin
     );
-    crate::provenance::publish(&target_bundle, &publication)?;
+    crate::records::provenance::publish(&target_bundle, &publication)?;
     let authored = bundle.join("reports/methods.md");
     if authored.is_file() {
         copy(&authored, &target_bundle.join("reports/methods.md"))?;
     }
-    if !crate::provenance::verify(&copied)?.is_empty() {
-        return Err(invalid(
-            "export verification failed; original source and records preserved",
-        ));
+    let issues = crate::records::provenance::verify(&copied)?;
+    if !issues.is_empty() {
+        return Err(crate::Error::Damaged {
+            path: copied.clone(),
+            detail: format!(
+                "export verification failed: {}; original source and records preserved",
+                issues.join("; ")
+            ),
+        });
     }
     if destination.exists() {
         return Err(invalid("package destination appeared during export"));
@@ -2296,8 +2255,9 @@ fn export_history(
         {
             return Err(invalid("unsafe publication identity"));
         }
-        let bytes =
-            crate::provenance::read_record(&key.0.join("records").join(format!("{}.json", key.1)))?;
+        let bytes = crate::records::provenance::read_record(
+            &key.0.join("records").join(format!("{}.json", key.1)),
+        )?;
         record_bytes = record_bytes.saturating_add(bytes.len());
         if record_bytes > 128 << 20 || scheduled > 10_000 {
             return Err(invalid("export history exceeds bounded record limit"));
@@ -2445,22 +2405,13 @@ pub(crate) fn ancestors(
         {
             stack.push((location.join(origin), false));
         }
-        if let Some(upstream) = input
-            .extra
-            .get("upstream")
-            .and_then(serde_json::Value::as_array)
-        {
+        if let Some(upstream) = Some(&input.upstream) {
             for reference in upstream {
                 if records.len() + stack.len() >= 10_000 {
                     return Err(invalid("evidence ancestry exceeds 10,000 references"));
                 }
-                let directory = reference["bundle"]
-                    .as_str()
-                    .ok_or_else(|| invalid("ancestor location is missing"))?;
-                let directory = location.join(directory).canonicalize()?;
-                let id = reference["id"]
-                    .as_str()
-                    .ok_or_else(|| invalid("ancestor identity is missing"))?;
+                let directory = location.join(&reference.bundle).canonicalize()?;
+                let id = &reference.id;
                 if id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
                     return Err(invalid("unsafe ancestor identity"));
                 }
@@ -2468,19 +2419,19 @@ pub(crate) fn ancestors(
                 if !seen_records.insert((directory.clone(), id.to_owned())) {
                     continue;
                 }
-                let bytes = crate::provenance::read_record(
+                let bytes = crate::records::provenance::read_record(
                     &directory.join("records").join(format!("{id}.json")),
                 )?;
                 bytes_read = bytes_read.saturating_add(bytes.len());
                 if bytes_read > 128 << 20 {
                     return Err(invalid("evidence ancestry exceeds 128 MiB"));
                 }
-                if reference["hash"].as_str() != Some(basecraft_io::hash_bytes(&bytes).as_str()) {
+                if reference.hash != basecraft_io::hash_bytes(&bytes) {
                     return Err(invalid("ancestor record hash differs"));
                 }
                 let publication: basecraft_protocol::provenance::Publication =
                     serde_json::from_slice(&bytes)?;
-                if publication.id != id || publication.schema_version != 1 {
+                if &publication.id != id || publication.schema_version != 1 {
                     return Err(invalid("unsupported or inconsistent ancestor record"));
                 }
                 records.push((directory, publication));
@@ -2494,7 +2445,10 @@ pub(crate) fn ancestors(
 pub fn verify_ancestors(bundle: &Path) -> Result<Vec<String>> {
     let mut issues = Vec::new();
     for (directory, publication) in ancestors(bundle)? {
-        issues.extend(crate::provenance::verify_records(&directory, &publication)?);
+        issues.extend(crate::records::provenance::verify_records(
+            &directory,
+            &publication,
+        )?);
     }
     Ok(issues)
 }
@@ -2524,13 +2478,18 @@ pub(crate) fn link_generated_input_locked(
     payload: &[u8],
     transformation: &str,
     result_label: &str,
+    register: impl FnOnce(&ArtifactRun) -> Result<()>,
 ) -> Result<()> {
     let mut upstream = Vec::new();
     for dependency in dependencies {
-        let bytes = crate::provenance::read_record(&dependency.join("manifest.json"))?;
+        let bytes = crate::records::provenance::read_record(&dependency.join("manifest.json"))?;
         let publication: basecraft_protocol::provenance::Publication =
             serde_json::from_slice(&bytes)?;
-        upstream.push(serde_json::json!({"bundle":crate::input_evidence::relative(run.directory(), dependency)?, "id":publication.id,"hash":basecraft_io::hash_bytes(&bytes)}));
+        upstream.push(basecraft_protocol::input_records::UpstreamLink {
+            bundle: (crate::input_evidence::relative(run.directory(), dependency)?).into(),
+            id: publication.id.clone(),
+            hash: basecraft_io::hash_bytes(&bytes),
+        });
     }
     crate::input_evidence::write_json(
         &run.artifact("input.json")?,
@@ -2541,7 +2500,10 @@ pub(crate) fn link_generated_input_locked(
             submitted_size: payload.len() as u64,
             transformation: transformation.into(),
             state: "generated".into(),
-            extra: BTreeMap::from([("upstream".into(), serde_json::json!(upstream))]),
+            analysis_run: None,
+            proposal_target: None,
+            upstream,
+            extra: BTreeMap::new(),
         },
     )?;
     crate::input_evidence::write_json(
@@ -2555,7 +2517,7 @@ pub(crate) fn link_generated_input_locked(
             extra: BTreeMap::new(),
         })?,
     )?;
-    crate::input_evidence::register(run)
+    register(run)
 }
 
 #[cfg(test)]
@@ -2578,6 +2540,9 @@ mod store_scan_tests {
                 submitted_size: stamp(source).unwrap().size,
                 transformation: "identity-v1".into(),
                 state: "referenced".into(),
+                analysis_run: None,
+                proposal_target: None,
+                upstream: Vec::new(),
                 extra: BTreeMap::new(),
             },
         )

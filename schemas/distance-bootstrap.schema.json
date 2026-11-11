@@ -1,0 +1,137 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BootstrapReport",
+  "type": "object",
+  "properties": {
+    "algorithm": {
+      "type": "string"
+    },
+    "attempted": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "cancelled": {
+      "type": "boolean"
+    },
+    "completed": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "distance_s": {
+      "type": "number",
+      "format": "double"
+    },
+    "failed_replicates": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "failures": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "method": {
+      "$ref": "#/$defs/DistanceMethod"
+    },
+    "replicate_trees": {
+      "description": "Set only after atomic publication. Progress never advertises scratch files.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ReplicateCollection"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "requested": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "rng": {
+      "type": "string"
+    },
+    "seed": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "support_kind": {
+      "type": "string"
+    },
+    "support_scale": {
+      "type": "string"
+    },
+    "support_withheld": {
+      "type": "boolean"
+    },
+    "total_s": {
+      "type": "number",
+      "format": "double"
+    },
+    "tree_s": {
+      "type": "number",
+      "format": "double"
+    }
+  },
+  "required": [
+    "seed",
+    "requested",
+    "completed",
+    "attempted",
+    "method",
+    "support_kind",
+    "support_scale",
+    "support_withheld",
+    "cancelled",
+    "failures",
+    "failed_replicates",
+    "distance_s",
+    "tree_s",
+    "total_s",
+    "algorithm",
+    "rng"
+  ],
+  "$defs": {
+    "DistanceMethod": {
+      "type": "string",
+      "enum": [
+        "upgma",
+        "sorted",
+        "fourpoint",
+        "njstar",
+        "mvrstar"
+      ]
+    },
+    "ReplicateCollection": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "trees": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "path",
+        "format",
+        "status",
+        "trees"
+      ]
+    }
+  }
+}

@@ -21,6 +21,8 @@ pub struct ArtifactRevision {
 #[serde(deny_unknown_fields)]
 pub struct EditActivity {
     pub id: String,
+    /// A journal operation; its shape is defined once, in journal-entry.schema.json.
+    #[schemars(with = "serde_json::Value")]
     pub operation: Op,
 }
 
@@ -48,7 +50,9 @@ pub struct Publication {
     pub origin: String,
     pub inputs: Vec<ArtifactRevision>,
     pub outputs: Vec<ArtifactRevision>,
-    /// Full chronology, including undo/redo and abandoned branches.
+    /// Full chronology, including undo/redo and abandoned branches, as journal
+    /// entries (journal-entry.schema.json) without the checksum envelope.
+    #[schemars(with = "serde_json::Value")]
     pub events: Vec<LogEntry>,
     /// Operations actually contributing to this revision, in causal order.
     pub effective_edits: Vec<EditActivity>,

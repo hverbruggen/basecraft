@@ -60,6 +60,71 @@ pub struct OperationDescriptor {
     pub host_workflow: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub presentation: Option<String>,
+    /// Host services selected by this contract, available to any accepted plugin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<HostServices>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HostServices {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub species_workspace: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bootstrap_exports: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verify_inputs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tree_support: Vec<TreeSupportRule>,
+    /// Workflow stage name -> registered operation id, including major version.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub workflow_operations: BTreeMap<String, String>,
+    /// Ambient credentials are supplied only to bundled packages. Installed
+    /// packages still need an explicit grant bound to their accepted digests.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ambient_credentials: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caller: Option<String>,
+    /// Cooperative cancellation and receipt rules for a bundled remote service.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lifecycle: Option<LifecyclePolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query_preparation: Option<QueryPreparation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retained_query_transformation: Option<String>,
+    /// Bundled operations may obtain a missing parameter from a named environment setting.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub parameter_environment: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum QueryPreparation {
+    Blast,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LifecyclePolicy {
+    ExternalSubmission,
+    RetainedReceipt,
+    RemoteDraft,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TreeSupportRule {
+    pub name: String,
+    pub kind: crate::tree::SupportKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<ParameterCondition>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "test", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ParameterCondition {
+    Equals { parameter: String, value: Value },
+    Positive { parameter: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -243,6 +308,15 @@ impl RuntimeState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum OperationErrorCode {
+    IoError,
+    FormatError,
+    UnknownFormat,
+    EmptyDocument,
+    AnalysisInputConflict,
+    EvidenceCheckIncomplete,
+    SaveDecisionStale,
+    PublishedWithFailure,
+    NothingToDo,
     ChangedOnDisk,
     WrongDocumentKind,
     UnknownDocument,
@@ -266,6 +340,45 @@ pub enum OperationErrorCode {
     Timeout,
     PublicationIncomplete,
     EvidenceIncomplete,
+}
+
+impl OperationErrorCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::IoError => "io_error",
+            Self::FormatError => "format_error",
+            Self::UnknownFormat => "unknown_format",
+            Self::EmptyDocument => "empty_document",
+            Self::AnalysisInputConflict => "analysis_input_conflict",
+            Self::EvidenceCheckIncomplete => "evidence_check_incomplete",
+            Self::SaveDecisionStale => "save_decision_stale",
+            Self::PublishedWithFailure => "published_with_failure",
+            Self::NothingToDo => "nothing_to_do",
+            Self::ChangedOnDisk => "changed_on_disk",
+            Self::WrongDocumentKind => "wrong_document_kind",
+            Self::UnknownDocument => "unknown_document",
+            Self::NotFound => "not_found",
+            Self::Damaged => "damaged",
+            Self::Limit => "limit",
+            Self::Unsupported => "unsupported",
+            Self::Busy => "busy",
+            Self::InvalidArguments => "invalid_arguments",
+            Self::IncompatibleContract => "incompatible_contract",
+            Self::PluginDisabled => "plugin_disabled",
+            Self::PluginUnavailable => "plugin_unavailable",
+            Self::PluginChanged => "plugin_changed",
+            Self::PermissionDenied => "permission_denied",
+            Self::StaleRevision => "stale_revision",
+            Self::OutputConflict => "output_conflict",
+            Self::UnsupportedInput => "unsupported_input",
+            Self::PluginProtocolViolation => "plugin_protocol_violation",
+            Self::ToolFailure => "tool_failure",
+            Self::Cancelled => "cancelled",
+            Self::Timeout => "timeout",
+            Self::PublicationIncomplete => "publication_incomplete",
+            Self::EvidenceIncomplete => "evidence_incomplete",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -295,6 +408,15 @@ pub struct ProposalOutcome {
     pub document: Option<String>,
     pub applied: usize,
     pub rejected: Vec<String>,
+}
+
+/// Structured rejection before a run has an outcome or durable identity.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct OperationFailure {
+    pub schema: u32,
+    pub operation: String,
+    pub state: RuntimeState,
+    pub errors: Vec<OperationError>,
 }
 
 /// Session-owned runtime view, independent of historical scientific `JobStatus`.

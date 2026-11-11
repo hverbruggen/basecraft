@@ -168,7 +168,7 @@ def date_tree(_snapshot, parameters, context):
               "nodes": [{"id": node.key, "label": node.label, "original_length_text": node.length_text,
                          "age": result["ages"][index], "fitted_rate_per_site": result["rates_per_site"][index]}
                         for index, node in enumerate(root.walk())]}
-    report_text = json.dumps(report, ensure_ascii=False, allow_nan=False, indent=2) + "\n"
+    report_text = json.dumps(report, ensure_ascii=False, allow_nan=False, indent=2, sort_keys=True) + "\n"
     Path(context["outputs"]["chronogram"]).write_text(chronogram)
     Path(context["outputs"]["report"]).write_text(report_text)
     return {"data": {"lambda": result["lambda"], "root_age": settings["root_age"],

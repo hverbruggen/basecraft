@@ -15,54 +15,84 @@ pub struct SubmittedInput {
     pub submitted_size: u64,
     /// canonical-fasta-v1 or ungapped-fasta-v1; generated inputs retain their bytes.
     pub transformation: String,
-    pub state: String,
+    pub state: EvidenceState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis_run: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposal_target: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub upstream: Vec<UpstreamLink>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
 }
 
+/// Unknown states remain readable and serialize without losing their spelling.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceState {
+    Referenced,
+    Generated,
+    Preserved,
+    Broken,
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+impl EvidenceState {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Referenced => "referenced",
+            Self::Generated => "generated",
+            Self::Preserved => "preserved",
+            Self::Broken => "broken",
+            Self::Unknown(value) => value,
+        }
+    }
+}
+impl From<&str> for EvidenceState {
+    fn from(value: &str) -> Self {
+        match value {
+            "referenced" => Self::Referenced,
+            "generated" => Self::Generated,
+            "preserved" => Self::Preserved,
+            "broken" => Self::Broken,
+            _ => Self::Unknown(value.into()),
+        }
+    }
+}
+impl From<String> for EvidenceState {
+    fn from(value: String) -> Self {
+        Self::from(value.as_str())
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct UpstreamLink {
+    pub bundle: std::path::PathBuf,
+    pub hash: String,
+    pub id: String,
+}
+
 #[cfg(test)]
 mod tests {
-    use super::SubmittedInput;
-    use serde_json::{Value, json};
-
+    use super::*;
     #[test]
-    fn input_records_schema_describes_data_without_host_policy() {
-        let schema = serde_json::to_value(schemars::schema_for!(SubmittedInput)).unwrap();
-        let properties = &schema["properties"];
-        for name in ["state", "transformation"] {
-            assert_eq!(properties[name]["type"], "string");
-            assert!(properties[name].get("enum").is_none());
+    fn evidence_state_keeps_unknown_values() {
+        for value in [
+            "referenced",
+            "generated",
+            "preserved",
+            "broken",
+            "future",
+            "",
+        ] {
+            let encoded = serde_json::to_string(value).unwrap();
+            let state: EvidenceState = serde_json::from_str(&encoded).unwrap();
+            assert_eq!(state.as_str(), value);
+            assert_eq!(serde_json::to_string(&state).unwrap(), encoded);
         }
-        assert_eq!(properties["schema_version"]["type"], "integer");
-        assert!(properties["schema_version"].get("const").is_none());
-        assert!(properties["schema_version"].get("default").is_none());
-        let required = schema["required"].as_array().unwrap();
-        assert!(required.contains(&json!("schema_version")));
-        assert!(!required.contains(&json!("source")));
-        assert!(
-            properties["source"]["anyOf"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|s| s["type"] == "null")
-        );
-        assert_ne!(schema["additionalProperties"], false);
-        // Schemars describes an object here. Reused FileStamp serde also accepts
-        // positional sequences; schema generation does not change that decoder.
-        assert_eq!(schema["$defs"]["FileStamp"]["type"], "object");
-        for stamp in [json!([7, 0, 0]), json!([7, 0, 0, null, null])] {
-            let input = json!({
-                "schema_version": 42, "state": "future", "transformation": "future",
-                "submitted_hash": "", "submitted_size": 9,
-                "source": {"path": "x", "hash": "h", "stamp": stamp, "future": null},
-                "future": {"nested": [null, "雪"]}
-            });
-            let decoded: SubmittedInput = serde_json::from_value(input).unwrap();
-            assert_eq!(decoded.schema_version, 42);
-            assert_eq!(decoded.state, "future");
-            assert_eq!(decoded.transformation, "future");
-            assert_eq!(decoded.source.unwrap().extra["future"], Value::Null);
-            assert_eq!(decoded.extra["future"], json!({"nested": [null, "雪"]}));
-        }
+        assert!(matches!(
+            EvidenceState::from("future"),
+            EvidenceState::Unknown(_)
+        ));
     }
 }

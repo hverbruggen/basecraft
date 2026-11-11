@@ -17,6 +17,23 @@ impl Document for OpenedAlignment {
     fn save_refusal(&self) -> Option<&str> {
         self.save_refusal
     }
+    fn accepts(&self, op: &Op) -> bool {
+        matches!(
+            op,
+            Op::AlnReplace { .. }
+                | Op::AlnInsert { .. }
+                | Op::AlnFill { .. }
+                | Op::AlnInsertGaps { .. }
+                | Op::AlnDelete { .. }
+                | Op::AlnShift { .. }
+                | Op::AlnRemoveGapColumns {}
+                | Op::AlnMoveRows { .. }
+                | Op::AlnRenameRow { .. }
+                | Op::AlnRemoveRows { .. }
+                | Op::AlnAddSequences { .. }
+        )
+    }
+
     fn kind(&self) -> crate::files::Kind {
         crate::files::Kind::Alignment
     }

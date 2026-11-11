@@ -112,6 +112,15 @@
     "OperationErrorCode": {
       "type": "string",
       "enum": [
+        "io_error",
+        "format_error",
+        "unknown_format",
+        "empty_document",
+        "analysis_input_conflict",
+        "evidence_check_incomplete",
+        "save_decision_stale",
+        "published_with_failure",
+        "nothing_to_do",
         "changed_on_disk",
         "wrong_document_kind",
         "unknown_document",

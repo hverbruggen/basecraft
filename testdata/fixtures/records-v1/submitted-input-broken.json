@@ -15,13 +15,13 @@
   "submitted_size": 13,
   "transformation": "identity-v1",
   "state": "broken",
-  "sanger_input_events": [],
-  "selected_input_links": {},
   "upstream": [
     {
       "bundle": "../01M739D45M5BQKJ1JSBBKVQ1VN",
       "hash": "b3:979c8f247c50ca1b31299296f8d2b1bba766b671ca1b99e33d8d6cde4eb8fc1b",
       "id": "01M739D45M5BQKJ1JSBBKVQ1VN"
     }
-  ]
+  ],
+  "sanger_input_events": [],
+  "selected_input_links": {}
 }

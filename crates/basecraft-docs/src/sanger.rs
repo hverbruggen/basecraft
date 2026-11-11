@@ -2,97 +2,30 @@
 
 pub mod review;
 
-use std::path::{Path, PathBuf};
-
-use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 pub use basecraft_protocol::sanger::{ReviewReference, ReviewSettings};
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TraceCalls {
-    pub sequence: String,
-    /// Native secondary calls, indexed by the same events as sequence/positions/scores.
-    /// Missing legacy or instrument evidence is unknown, never primary agreement.
-    /// Draft orientation and clipping do not transform these native arrays.
-    #[serde(default)]
-    pub secondary_sequence: Option<String>,
-    pub positions: Vec<u32>,
-    pub scores: Vec<i32>,
+pub use basecraft_protocol::sanger_records::{
+    DraftColumn, InputRead, Orientation, Overlap, ReadSupport, SangerDraft, SangerPlacement,
+    SupportKind, TraceCalls,
+};
+
+pub trait SangerDraftExt: Sized {
+    fn read(path: &Path) -> Result<Self, String>;
+    fn validate(&self) -> Result<(), String>;
+    #[must_use]
+    fn reverse_complemented(&self) -> Self;
+    fn proposed_read_calls(&self, read: usize) -> Vec<u8>;
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct InputRead {
-    pub read: usize,
-    pub path: PathBuf,
-    pub sha256: String,
-    pub orientation: Orientation,
-    #[serde(default)]
-    pub calls: Option<TraceCalls>,
+pub trait SangerPlacementExt: Sized {
+    fn read(path: &Path) -> Result<Self, String>;
+    fn validate(&self) -> Result<(), String>;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Orientation {
-    Forward,
-    Reverse,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SupportKind {
-    Call,
-    InternalGap,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ReadSupport {
-    pub read: usize,
-    pub base: char,
-    pub kind: SupportKind,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DraftColumn {
-    /// One-based column in the Tracy alignment, including gap columns.
-    pub column: usize,
-    pub consensus: char,
-    pub support: Vec<ReadSupport>,
-    pub conflict: bool,
-    pub review: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Overlap {
-    pub reads: [usize; 2],
-    pub comparable_bases: usize,
-    pub identity: f64,
-    pub accepted: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct SangerDraft {
-    pub status: String,
-    pub engine: String,
-    pub version_output: String,
-    pub engine_sha256: String,
-    pub mode: String,
-    #[serde(default)]
-    pub signal_threshold: Option<u32>,
-    pub inputs: Vec<InputRead>,
-    pub consensus: String,
-    pub consensus_length: usize,
-    pub minimum_overlap: usize,
-    pub minimum_identity: f64,
-    pub overlaps: Vec<Overlap>,
-    pub aligned_columns: usize,
-    pub conflict_columns: usize,
-    pub columns: Vec<DraftColumn>,
-    #[serde(default)]
-    pub limitations: Vec<String>,
-}
-
-impl SangerDraft {
-    pub fn read(path: &Path) -> Result<Self, String> {
+impl SangerDraftExt for SangerDraft {
+    fn read(path: &Path) -> Result<Self, String> {
         let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
         if bytes.len() > 32 * 1024 * 1024 {
             return Err("Sanger evidence exceeds 32 MiB".into());
@@ -102,7 +35,7 @@ impl SangerDraft {
         Ok(draft)
     }
 
-    pub fn validate(&self) -> Result<(), String> {
+    fn validate(&self) -> Result<(), String> {
         if self
             .signal_threshold
             .is_some_and(|v| !(1..=90).contains(&v))
@@ -204,8 +137,7 @@ impl SangerDraft {
 
     /// Orient a draft to the opposite strand while retaining the mapping to
     /// each immutable input trace. Review decisions are created afterwards.
-    #[must_use]
-    pub fn reverse_complemented(&self) -> Self {
+    fn reverse_complemented(&self) -> Self {
         fn complement(base: char) -> char {
             match base {
                 'A' => 'T',
@@ -244,7 +176,7 @@ impl SangerDraft {
 
     /// The sequence of Tracy call events for one oriented read. Terminal
     /// noncoverage and internal gaps are excluded from this call sequence.
-    pub fn proposed_read_calls(&self, read: usize) -> Vec<u8> {
+    fn proposed_read_calls(&self, read: usize) -> Vec<u8> {
         self.columns
             .iter()
             .flat_map(|column| {
@@ -258,24 +190,8 @@ impl SangerDraft {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct SangerPlacement {
-    pub status: String,
-    pub engine: String,
-    pub version: String,
-    pub source_path: PathBuf,
-    pub source_sha256: String,
-    pub source_rows: usize,
-    pub source_width: usize,
-    pub fragment: String,
-    pub map: Vec<Option<usize>>,
-    pub aligned_probe: String,
-    pub insertions: usize,
-    pub parameters: Vec<String>,
-}
-
-impl SangerPlacement {
-    pub fn read(path: &Path) -> Result<Self, String> {
+impl SangerPlacementExt for SangerPlacement {
+    fn read(path: &Path) -> Result<Self, String> {
         let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
         if bytes.len() > 32 * 1024 * 1024 {
             return Err("Sanger placement exceeds 32 MiB".into());
@@ -285,7 +201,7 @@ impl SangerPlacement {
         Ok(placement)
     }
 
-    pub fn validate(&self) -> Result<(), String> {
+    fn validate(&self) -> Result<(), String> {
         if self.status != "candidate_requires_review"
             || self.engine != "MAFFT"
             || self.source_rows < 2

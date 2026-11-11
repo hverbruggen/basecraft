@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PrimerReport",
+  "type": "object",
+  "properties": {
+    "error_percent": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "forward": {
+      "type": "string"
+    },
+    "hits": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PrimerHit"
+      }
+    },
+    "keep_end": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "keep_start": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "minimum_overlap": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "orientation": {
+      "type": "string"
+    },
+    "reverse": {
+      "type": "string"
+    },
+    "window": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "keep_start",
+    "keep_end",
+    "orientation",
+    "hits",
+    "forward",
+    "reverse",
+    "minimum_overlap",
+    "error_percent",
+    "window"
+  ],
+  "$defs": {
+    "PrimerHit": {
+      "type": "object",
+      "properties": {
+        "end": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "errors": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "evidence_score": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "informative_matches": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "overlap": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "side": {
+          "type": "string"
+        },
+        "start": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "side",
+        "start",
+        "end",
+        "overlap",
+        "errors",
+        "informative_matches",
+        "evidence_score"
+      ]
+    }
+  }
+}

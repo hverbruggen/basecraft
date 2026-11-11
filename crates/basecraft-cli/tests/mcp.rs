@@ -1,4 +1,4 @@
-use basecraft_ops::links::AlignmentLinkExt;
+use basecraft_ops::records::AlignmentLinkExt;
 use serde_json::{Value, json};
 use std::{
     io::Write,
@@ -84,14 +84,14 @@ fn stdio_edits_are_version_checked_logged_and_project_scoped() {
             .unwrap()
             .contains("TCGT")
     );
-    let log = basecraft_ops::provenance::inspect(&d.path().join("input.afa"))
+    let log = basecraft_ops::records::inspect(&d.path().join("input.afa"))
         .unwrap()
         .events;
     assert!(log.iter().any(
         |e| matches!(&e.actor,basecraft_protocol::Actor::Agent{model} if model=="test-agent")
     ));
     assert_eq!(
-        basecraft_ops::provenance::verify(&d.path().join("input.afa")).unwrap(),
+        basecraft_ops::records::verify(&d.path().join("input.afa")).unwrap(),
         Vec::<String>::new()
     );
 }
@@ -154,7 +154,7 @@ fn script_clients_record_script_edits() {
         "{}",
         String::from_utf8_lossy(&edited.stderr)
     );
-    let events = basecraft_ops::provenance::inspect(&file).unwrap().events;
+    let events = basecraft_ops::records::inspect(&file).unwrap().events;
     let actors: Vec<&Actor> = events
         .iter()
         .filter(|e| matches!(e.op, basecraft_protocol::Op::AlnReplace { .. }))
@@ -177,7 +177,7 @@ fn script_clients_record_script_edits() {
             .any(|e| matches!(e.actor, Actor::Agent { .. }))
     );
     assert_eq!(
-        basecraft_ops::provenance::verify(&file).unwrap(),
+        basecraft_ops::records::verify(&file).unwrap(),
         Vec::<String>::new()
     );
     // Read back through the history command: script edits show as script edits.
@@ -337,7 +337,7 @@ fn document_record_describes_unsaved_headless_edits_and_undo() {
         serde_json::from_str(replies[5]["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
     assert_eq!(after["unsaved"], false);
     assert_eq!(after["paragraphs"], json!([]));
-    assert!(!basecraft_ops::provenance::companion(&dir.path().join("gene.fasta")).exists());
+    assert!(!basecraft_ops::records::companion(&dir.path().join("gene.fasta")).exists());
 }
 
 /// A synchronous MCP client for one server process, waiting on job results.
@@ -459,7 +459,7 @@ fn species_mcp_uses_the_canonical_workspace_contract() {
             .all(|h| h.name.starts_with("GMYC species hypothesis "))
     );
     assert_eq!(
-        basecraft_ops::provenance::verify(&root.join("species.spart")).unwrap(),
+        basecraft_ops::records::verify(&root.join("species.spart")).unwrap(),
         Vec::<String>::new()
     );
 }
@@ -571,9 +571,9 @@ fn tree_mcp_routes_share_hidden_storage() {
             .unwrap()
             .unwrap();
         assert!(run.join("execution.json").is_file());
-        assert!(basecraft_ops::links::AlignmentLink::read(&output).is_ok());
+        assert!(basecraft_ops::records::AlignmentLink::read(&output).is_ok());
         assert_eq!(
-            basecraft_ops::provenance::verify(&output).unwrap(),
+            basecraft_ops::records::verify(&output).unwrap(),
             Vec::<String>::new()
         );
     }
@@ -891,11 +891,15 @@ fn wrong_kind_requests_fail_without_mutation_and_the_server_remains_usable() {
         .lines()
         .map(|s| serde_json::from_str(s).unwrap())
         .collect();
-    for reply in &replies[2..=4] {
+    for (reply, code) in replies[2..=4].iter().zip([
+        "wrong_document_kind",
+        "wrong_document_kind",
+        "unknown_document",
+    ]) {
         assert_eq!(reply["result"]["isError"], true);
         assert_eq!(
             reply["result"]["structuredContent"]["errors"][0]["code"],
-            "invalid_arguments"
+            code
         );
     }
     assert_eq!(

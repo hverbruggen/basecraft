@@ -68,7 +68,8 @@ fn multi_record_genbank_and_annotated_fasta_refuse_save_and_save_as() {
         }
         session.flush().unwrap();
         let recovery = root.join(format!("recovered-{extension}"));
-        let error = basecraft_ops::replay::recover(session.recovery_root(), &recovery).unwrap_err();
+        let error =
+            basecraft_ops::records::recover(session.recovery_root(), &recovery).unwrap_err();
         assert!(
             error.to_string().contains("other records would be lost"),
             "{error}"

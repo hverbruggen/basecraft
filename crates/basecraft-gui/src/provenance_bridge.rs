@@ -1,4 +1,5 @@
 //! Asynchronous, read-only inspection and explicit provenance exports.
+use basecraft_ops::records::ReportExt;
 use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::QString;
 use std::{path::Path, pin::Pin};
@@ -97,11 +98,11 @@ fn task_capabilities(data: &mut serde_json::Value, previous: bool) {
 }
 
 fn run(operation: &str, result: &Path, destination: &Path) -> Result<String, String> {
-    use basecraft_ops::provenance;
+    use basecraft_ops::records;
     let outcome = (|| -> basecraft_ops::Result<String> {
         match operation {
             "recover" => {
-                let outputs = basecraft_ops::replay::recover(result, destination)?;
+                let outputs = basecraft_ops::records::recover(result, destination)?;
                 Ok(format!(
                     "Recovered copies:\n{}\nOriginal files and recovery records are preserved.",
                     outputs
@@ -112,11 +113,11 @@ fn run(operation: &str, result: &Path, destination: &Path) -> Result<String, Str
                 ))
             }
             "history" => {
-                let publication = provenance::inspect(result)?;
+                let publication = records::inspect(result)?;
                 Ok(serde_json::to_string_pretty(&publication)?)
             }
             "verify" => {
-                let issues = provenance::verify(result)?;
+                let issues = records::verify(result)?;
                 if issues.is_empty() {
                     Ok("Recorded artifact hashes match. Replay verification has not been performed.".into())
                 } else {
@@ -127,15 +128,15 @@ fn run(operation: &str, result: &Path, destination: &Path) -> Result<String, Str
                 }
             }
             "methods" => {
-                let publication = provenance::inspect(result)?;
-                provenance::write_reports(destination, &publication)?;
+                let publication = records::inspect(result)?;
+                records::write_reports(destination, &publication)?;
                 Ok(format!(
                     "Generated reports: {}\nUser-authored methods.md is preserved.",
                     destination.join("reports").display()
                 ))
             }
             "package" => {
-                provenance::package(result, destination)?;
+                records::package(result, destination)?;
                 Ok(format!(
                     "Package saved: {}\nThis contains retained data and recorded history; external-tool replay has not been verified.",
                     destination.display()
@@ -191,8 +192,8 @@ impl qobject::AppProvenance {
     fn relink_input(self: Pin<&mut Self>, result: &QString, original: &QString) -> bool {
         let result = (|| -> basecraft_ops::Result<()> {
             let result = std::path::PathBuf::from(result.to_string());
-            basecraft_ops::provenance::inspect(&result)?;
-            let run = basecraft_ops::provenance::bundle_for_result(&result);
+            basecraft_ops::records::inspect(&result)?;
+            let run = basecraft_ops::records::bundle_for_result(&result);
             basecraft_ops::input_evidence::relink(&run, Path::new(&original.to_string()))
         })();
         let success = result.is_ok();
@@ -210,10 +211,8 @@ impl qobject::AppProvenance {
     }
     fn saved_report(&self, path: &QString) -> QString {
         report_json(
-            basecraft_ops::provenance::inspect(Path::new(&path.to_string()))
-                .and_then(|p| {
-                    basecraft_ops::document_record::DocumentRecord::from_publication(&p).report()
-                })
+            basecraft_ops::records::inspect(Path::new(&path.to_string()))
+                .and_then(|p| basecraft_ops::records::DocumentRecord::from_publication(&p).report())
                 .and_then(|r| serde_json::to_string(&r).map_err(Into::into))
                 .map_err(|e| e.to_string()),
         )
@@ -243,7 +242,7 @@ impl qobject::AppProvenance {
         let snapshot = snapshot.to_string();
         let directory = std::path::PathBuf::from(directory.to_string());
         self.start_work(move || {
-            let report: basecraft_ops::document_record::Report =
+            let report: basecraft_ops::records::Report =
                 serde_json::from_str(&snapshot).map_err(|e| e.to_string())?;
             report
                 .export(&directory)
@@ -274,7 +273,7 @@ impl qobject::AppProvenance {
     }
     fn jobs(&self, previous: bool) -> QString {
         report_json(
-            basecraft_ops::document_record::jobs(previous)
+            basecraft_ops::records::jobs(previous)
                 .map(|mut data| {
                     task_capabilities(&mut data, previous);
                     data.to_string()
@@ -335,9 +334,9 @@ impl qobject::AppProvenance {
 
     fn bundle_path(mut self: Pin<&mut Self>, result: &QString) -> QString {
         let path = std::path::PathBuf::from(result.to_string());
-        match basecraft_ops::provenance::inspect(&path) {
+        match basecraft_ops::records::inspect(&path) {
             Ok(_) => QString::from(
-                basecraft_ops::provenance::bundle_for_result(&path)
+                basecraft_ops::records::bundle_for_result(&path)
                     .to_string_lossy()
                     .as_ref(),
             ),

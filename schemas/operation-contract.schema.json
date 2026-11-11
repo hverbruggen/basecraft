@@ -51,6 +51,84 @@
         "sequence_proposal"
       ]
     },
+    "HostServices": {
+      "type": "object",
+      "properties": {
+        "ambient_credentials": {
+          "description": "Ambient credentials are supplied only to bundled packages. Installed\npackages still need an explicit grant bound to their accepted digests.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "bootstrap_exports": {
+          "type": "boolean"
+        },
+        "caller": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lifecycle": {
+          "description": "Cooperative cancellation and receipt rules for a bundled remote service.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LifecyclePolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "parameter_environment": {
+          "description": "Bundled operations may obtain a missing parameter from a named environment setting.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "query_preparation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/QueryPreparation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "retained_query_transformation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "species_workspace": {
+          "type": "boolean"
+        },
+        "tree_support": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TreeSupportRule"
+          }
+        },
+        "verify_inputs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "workflow_operations": {
+          "description": "Workflow stage name -> registered operation id, including major version.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "InputBinding": {
       "type": "object",
       "properties": {
@@ -154,6 +232,14 @@
         "path"
       ]
     },
+    "LifecyclePolicy": {
+      "type": "string",
+      "enum": [
+        "external_submission",
+        "retained_receipt",
+        "remote_draft"
+      ]
+    },
     "OperationDescriptor": {
       "type": "object",
       "properties": {
@@ -184,6 +270,17 @@
         },
         "family": {
           "$ref": "#/$defs/ExecutionFamily"
+        },
+        "host": {
+          "description": "Host services selected by this contract, available to any accepted plugin.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HostServices"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "host_workflow": {
           "type": [
@@ -289,6 +386,96 @@
         "min",
         "max",
         "visibility"
+      ]
+    },
+    "ParameterCondition": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "parameter": {
+              "type": "string"
+            },
+            "test": {
+              "type": "string",
+              "const": "equals"
+            },
+            "value": true
+          },
+          "additionalProperties": false,
+          "required": [
+            "test",
+            "parameter",
+            "value"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "parameter": {
+              "type": "string"
+            },
+            "test": {
+              "type": "string",
+              "const": "positive"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "test",
+            "parameter"
+          ]
+        }
+      ]
+    },
+    "QueryPreparation": {
+      "type": "string",
+      "enum": [
+        "blast"
+      ]
+    },
+    "SupportKind": {
+      "description": "Scientific support semantics supplied by a producer, never guessed from its name.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "unknown",
+            "bootstrap",
+            "probability"
+          ]
+        },
+        {
+          "description": "Percentage support from a method other than ordinary bootstrap.",
+          "type": "string",
+          "const": "percentage"
+        }
+      ]
+    },
+    "TreeSupportRule": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/SupportKind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "when": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ParameterCondition"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "kind"
       ]
     }
   }

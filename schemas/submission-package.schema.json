@@ -1,0 +1,502 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SubmissionPackage",
+  "type": "object",
+  "properties": {
+    "batch": {
+      "$ref": "#/$defs/BatchSettings"
+    },
+    "destination": {
+      "type": "string"
+    },
+    "export": {
+      "$ref": "#/$defs/ExportSettings"
+    },
+    "files": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "input_hash": {
+      "type": "string"
+    },
+    "issues": {
+      "$ref": "#/$defs/PackageIssues"
+    },
+    "metadata_manifest_hash": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "note": {
+      "type": "string"
+    },
+    "records": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PackageRecord"
+      }
+    },
+    "schema": {
+      "type": "string"
+    },
+    "source": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SourceAlignment"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "status": {
+      "type": "string"
+    },
+    "submission": {
+      "$ref": "#/$defs/PackageDocument"
+    },
+    "tools": {
+      "$ref": "#/$defs/PackageTools"
+    },
+    "validation": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ValidationSummary"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "destination",
+    "note",
+    "status",
+    "submission",
+    "batch",
+    "export",
+    "input_hash",
+    "records",
+    "issues",
+    "files",
+    "tools"
+  ],
+  "$defs": {
+    "BatchSettings": {
+      "description": "Settings shared by every record of the batch.",
+      "type": "object",
+      "properties": {
+        "ends": {
+          "$ref": "#/$defs/EndPolicy",
+          "default": "auto"
+        },
+        "genetic_code": {
+          "description": "NCBI genetic code (translation table) number.",
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "marker": {
+          "$ref": "#/$defs/Marker"
+        },
+        "mol_type": {
+          "$ref": "#/$defs/MolType",
+          "default": "genomic_dna"
+        },
+        "organelle": {
+          "description": "The organelle the marker is from; none for nuclear markers.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Organelle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "marker",
+        "genetic_code"
+      ]
+    },
+    "EndPolicy": {
+      "description": "How the feature's ends are marked.",
+      "oneOf": [
+        {
+          "description": "Coding markers: an end is complete when it has a start (5') or stop\n(3') codon in frame. Other markers: both ends partial.",
+          "type": "string",
+          "const": "auto"
+        },
+        {
+          "description": "Both ends partial.",
+          "type": "string",
+          "const": "partial"
+        },
+        {
+          "description": "Both ends complete.",
+          "type": "string",
+          "const": "complete"
+        }
+      ]
+    },
+    "ExportSettings": {
+      "type": "object",
+      "properties": {
+        "trim_terminal_unknown": {
+          "description": "Remove runs of unknown bases (N, ?) at the ends of each record.\nThe trimmed lengths are recorded in the coordinate map.",
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "Issue": {
+      "description": "A finding, tied to the record (and specimen) it concerns when it\nconcerns one.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "description": "A stable code: Basecraft's, or the tool's (`SEQ_INST.TerminalNs`).",
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "record": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "source": {
+          "description": "`basecraft` for local checks; `table2asn` for its reports.",
+          "type": "string"
+        },
+        "specimen": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_severity": {
+          "description": "The tool's own severity word, when it reported one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "severity",
+        "source",
+        "code",
+        "message"
+      ]
+    },
+    "ItsComponent": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "ITS1",
+            "5.8S",
+            "ITS2"
+          ]
+        },
+        {
+          "description": "Small subunit (18S) ribosomal RNA.",
+          "type": "string",
+          "const": "SSU"
+        },
+        {
+          "description": "Large subunit (28S) ribosomal RNA.",
+          "type": "string",
+          "const": "LSU"
+        }
+      ]
+    },
+    "Marker": {
+      "description": "The marker type, which decides the one feature each record gets.",
+      "oneOf": [
+        {
+          "description": "A protein-coding gene: a `gene` and a `CDS` feature.",
+          "type": "object",
+          "properties": {
+            "gene": {
+              "description": "Gene symbol, such as `rbcL`; may be empty.",
+              "type": "string",
+              "default": ""
+            },
+            "kind": {
+              "type": "string",
+              "const": "coding"
+            },
+            "product": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "product"
+          ]
+        },
+        {
+          "description": "A ribosomal RNA gene, such as `18S ribosomal RNA`.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "rrna"
+            },
+            "product": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "product"
+          ]
+        },
+        {
+          "description": "The ITS region: one `misc_RNA` with a note listing the components\npresent. Internal boundaries are not annotated.",
+          "type": "object",
+          "properties": {
+            "components": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ItsComponent"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "its"
+            }
+          },
+          "required": [
+            "kind",
+            "components"
+          ]
+        },
+        {
+          "description": "A non-coding region, such as an intergenic spacer: one\n`misc_feature` with this description as its note.",
+          "type": "object",
+          "properties": {
+            "description": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "spacer"
+            }
+          },
+          "required": [
+            "kind",
+            "description"
+          ]
+        }
+      ]
+    },
+    "MolType": {
+      "type": "string",
+      "enum": [
+        "genomic_dna",
+        "genomic_rna"
+      ]
+    },
+    "Organelle": {
+      "type": "string",
+      "enum": [
+        "mitochondrion",
+        "chloroplast",
+        "plastid",
+        "apicoplast",
+        "chromoplast",
+        "cyanelle",
+        "kinetoplast",
+        "nucleomorph"
+      ]
+    },
+    "PackageDocument": {
+      "type": "object",
+      "properties": {
+        "document": {
+          "type": "string"
+        },
+        "hash": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "document",
+        "hash"
+      ]
+    },
+    "PackageIssues": {
+      "type": "object",
+      "properties": {
+        "blocking": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "review": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "blocking",
+        "review"
+      ]
+    },
+    "PackageRecord": {
+      "type": "object",
+      "properties": {
+        "export_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "record": {
+          "type": "string"
+        },
+        "row": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "specimen": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "record",
+        "row"
+      ]
+    },
+    "PackageTools": {
+      "type": "object",
+      "properties": {
+        "table2asn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "Severity": {
+      "description": "How serious a finding is. Blocking issues keep a package from being\nready; review issues need a look but don't block; unavailable means a\ncheck could not run, which says nothing about the sequences.",
+      "type": "string",
+      "enum": [
+        "blocking",
+        "review",
+        "info",
+        "unavailable"
+      ]
+    },
+    "SourceAlignment": {
+      "description": "An alignment file inside the project and the BLAKE3 hash of the bytes\nthe submission was prepared from. A different file content is refused\nuntil the source is selected again.",
+      "type": "object",
+      "properties": {
+        "document": {
+          "description": "Project-relative path.",
+          "type": "string"
+        },
+        "hash": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "document",
+        "hash"
+      ]
+    },
+    "ValidationSummary": {
+      "description": "A table2asn run, as recorded in the package.",
+      "type": "object",
+      "properties": {
+        "copies": {
+          "description": "Hashes of the `.sqn` and `.gbf` copied into `genbank/`.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "directory": {
+          "description": "Package-relative folder with the raw reports.",
+          "type": "string"
+        },
+        "errors": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "infos": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "input_hash": {
+          "type": "string"
+        },
+        "issues": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Issue"
+          }
+        },
+        "message": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "status": {
+          "description": "`passed` (completed, a report was read and it has no errors),\n`errors`, `unavailable` (the tool could not run: nothing is known\nabout the sequences) or `failed`.",
+          "type": "string"
+        },
+        "tool_version": {
+          "type": "string"
+        },
+        "warnings": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "input_hash",
+        "status",
+        "tool_version",
+        "run_id",
+        "directory",
+        "errors",
+        "warnings",
+        "infos",
+        "message"
+      ]
+    }
+  }
+}

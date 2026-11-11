@@ -83,10 +83,13 @@ impl LogWriter {
         }
         let mut line = Vec::new();
         for (offset, entry) in entries.iter().enumerate() {
-            let mut value = serde_json::to_value(entry)?;
+            let value = serde_json::to_value(entry)?;
             let checksum = basecraft_io::hash_bytes(&serde_json::to_vec(&value)?);
-            value["_checksum"] = serde_json::json!(checksum);
-            value["_sequence"] = serde_json::json!(self.sequence + offset as u64);
+            let value = serde_json::to_value(basecraft_protocol::records::JournalEntry {
+                checksum,
+                sequence: self.sequence + offset as u64,
+                entry: value,
+            })?;
             serde_json::to_writer(&mut line, &value)?;
             line.push(b'\n');
             if line.len() > 8 << 20 {
@@ -140,9 +143,12 @@ impl LogWriter {
                     )?)?;
                     let _ =
                         basecraft_io::write_atomic(&self.poison_marker, |w| w.write_all(&bytes));
-                    return Err(crate::error::invalid(format!(
-                        "journal write failed ({error}); rollback durability is uncertain; inspect recovery before continuing"
-                    )));
+                    return Err(crate::Error::Damaged {
+                        path: self.poison_marker.clone(),
+                        detail: format!(
+                            "journal write failed ({error}); rollback durability is uncertain; inspect recovery before continuing"
+                        ),
+                    });
                 }
                 return Err(error.into());
             }
@@ -208,16 +214,22 @@ fn read_entries(root: &Path, lenient: bool) -> Result<(Vec<LogEntry>, usize)> {
                             if let Some(sequence) = value["_sequence"].as_u64() {
                                 let expected = sequences.entry(e.session.clone()).or_insert(0);
                                 if sequence != *expected {
-                                    return Err(crate::error::invalid(
-                                        "journal sequence gap or reordered segment",
-                                    ));
+                                    return Err(crate::Error::Damaged {
+                                        path: file.clone(),
+                                        detail: "journal sequence gap or reordered segment".into(),
+                                    });
                                 }
                                 *expected += 1;
                             }
                             entries.push(e);
                         }
                         Err(_) if lenient => skipped += 1,
-                        Err(e) => return Err(e.into()),
+                        Err(e) => {
+                            return Err(crate::Error::Damaged {
+                                path: file.clone(),
+                                detail: e.to_string(),
+                            });
+                        }
                     }
                 }
             }
@@ -334,9 +346,10 @@ pub fn verified_session_prefix(root: &Path) -> Result<VerifiedPrefix> {
             prefix.entries.extend(segment.entries);
             prefix.verified_bytes += segment.verified_bytes;
             if prefix.verified_bytes > 128 << 20 {
-                return Err(crate::error::invalid(
-                    "journal exceeds the 128 MiB session reading limit",
-                ));
+                return Err(crate::Error::Limit {
+                    what: "journal session reading".into(),
+                    limit: 128 << 20,
+                });
             }
             if let Some(problem) = segment.problem {
                 prefix.problem = Some(format!("{}: {problem}", file.display()));
@@ -347,37 +360,16 @@ pub fn verified_session_prefix(root: &Path) -> Result<VerifiedPrefix> {
     Ok(prefix)
 }
 
-/// One log line, with entries written by earlier versions brought up to
-/// date.
+/// Verify the current journal envelope before decoding its operation.
 pub fn parse_entry(line: &str) -> serde_json::Result<LogEntry> {
-    let mut v: serde_json::Value = serde_json::from_str(line)?;
-    if let Some(object) = v.as_object_mut()
-        && let Some(checksum) = object.remove("_checksum")
-    {
-        let sequence = object.remove("_sequence");
-        if sequence
-            .as_ref()
-            .and_then(serde_json::Value::as_u64)
-            .is_none()
-            || checksum.as_str()
-                != Some(basecraft_io::hash_bytes(&serde_json::to_vec(&v)?).as_str())
-        {
-            return Err(<serde_json::Error as serde::de::Error>::custom(
-                "journal checksum mismatch",
-            ));
-        }
+    let record: basecraft_protocol::records::JournalEntry<serde_json::Value> =
+        serde_json::from_str(line)?;
+    if record.checksum != basecraft_io::hash_bytes(&serde_json::to_vec(&record.entry)?) {
+        return Err(<serde_json::Error as serde::de::Error>::custom(
+            "journal checksum mismatch",
+        ));
     }
-    // aln.insert named one row before it took row ranges.
-    if v["op"] == "aln.insert"
-        && let Some(params) = v["params"].as_object_mut()
-        && let Some(row) = params.remove("row").and_then(|r| r.as_u64())
-    {
-        params.insert(
-            "rows".into(),
-            serde_json::json!([[row, row.saturating_add(1)]]),
-        );
-    }
-    serde_json::from_value(v)
+    serde_json::from_value(record.entry)
 }
 
 /// A readable account of what happened in the projects under `roots` since
@@ -590,6 +582,10 @@ pub fn describe(op: &Op) -> String {
         Op::DelimitationEdit { .. } => "Edited species hypothesis".into(),
         Op::MetadataEdit { edit } => crate::metadata::describe(edit),
         Op::SubmissionEdit { edit } => crate::submission::describe(edit),
+        Op::CreateSangerReview { .. } => "Created Sanger review".into(),
+        Op::SangerSelect { .. } => "Selected Sanger call set".into(),
+        Op::SangerUpdate { .. } => "Updated Sanger call sets and supporting evidence".into(),
+        Op::SangerReview { edit, .. } => crate::sanger_review::describe(edit),
         Op::JobFinished { report } => format!("{} {:?}", report.method, report.status),
     }
 }
@@ -640,12 +636,10 @@ mod activity_tests {
     fn poison_marker_writer_bytes() {
         let root = tempfile::tempdir().unwrap();
         let entry = parse_entry(
-            include_str!(
-                "../../../testdata/fixtures/provenance-v1/floating-metrics-baseline.jsonl"
-            )
-            .lines()
-            .next()
-            .unwrap(),
+            include_str!("../../../testdata/fixtures/records-v1/journal-entry.jsonl")
+                .lines()
+                .next()
+                .unwrap(),
         )
         .unwrap();
         for populated in [false, true] {
@@ -831,19 +825,5 @@ mod activity_tests {
         assert_eq!(describe(&op), "Slid columns 10–12 of rows 3–5 left by 2");
         let op = Op::AlnRemoveRows { rows: vec![(0, 1)] };
         assert_eq!(describe(&op), "Deleted row 1");
-    }
-
-    #[test]
-    fn old_insert_entries_still_read() {
-        let line = r#"{"v":1,"id":"01","t":"2026-10-11T07:37:59.475Z","host":"h","session":"s","actor":{"kind":"human","user":"u"},"doc":"a.fas","op":"aln.insert","params":{"row":3,"col":6,"residues":"A"},"state":{"len":10,"features":0,"rows":5}}"#;
-        let e = parse_entry(line).unwrap();
-        assert_eq!(
-            e.op,
-            Op::AlnInsert {
-                rows: vec![(3, 4)],
-                col: 6,
-                residues: "A".into()
-            }
-        );
     }
 }

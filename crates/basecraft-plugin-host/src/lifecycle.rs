@@ -29,11 +29,17 @@ impl Lifecycle {
     pub fn for_operation(operation: &RegisteredOperation) -> Result<Self> {
         operation.package.verify()?;
         Ok(if operation.package.origin == Origin::Bundled {
-            match operation.id.as_str() {
-                "basecraft.blast/submit@1" => Self::ExternalSubmission,
-                "basecraft.blast/receipt@1" => Self::RetainedReceipt,
-                "basecraft.zenodo/draft@1" => Self::RemoteDraft,
-                _ => Self::Ordinary,
+            use basecraft_protocol::operation::LifecyclePolicy;
+            match operation
+                .descriptor
+                .host
+                .as_ref()
+                .and_then(|host| host.lifecycle)
+            {
+                Some(LifecyclePolicy::ExternalSubmission) => Self::ExternalSubmission,
+                Some(LifecyclePolicy::RetainedReceipt) => Self::RetainedReceipt,
+                Some(LifecyclePolicy::RemoteDraft) => Self::RemoteDraft,
+                None => Self::Ordinary,
             }
         } else {
             Self::Ordinary
@@ -52,20 +58,26 @@ impl Lifecycle {
     pub fn verify_retained(
         self,
         inputs: &std::collections::BTreeMap<String, Vec<std::path::PathBuf>>,
+        transformation: Option<&str>,
     ) -> Result<Vec<String>> {
         if self != Self::RetainedReceipt {
             return Ok(Vec::new());
         }
-        let receipt = &inputs["receipt"][0];
-        let query = &inputs["query"][0];
+        let required = |name| {
+            inputs
+                .get(name)
+                .and_then(|paths| paths.first())
+                .ok_or_else(|| Error::Protocol(format!("retained receipt needs {name} input")))
+        };
+        let receipt = required("receipt")?;
+        let query = required("query")?;
         let run = query
             .parent()
             .ok_or_else(|| Error::Protocol("missing query evidence directory".into()))?;
         let input = basecraft_ops::input_evidence::read_input(run)?;
-        if input.state != "generated"
-            || input.transformation != "blast-query-preparation-v1"
-            || input.submitted_hash
-                != basecraft_io::hash_file(query).map_err(basecraft_ops::Error::from)?
+        if input.state != basecraft_protocol::input_records::EvidenceState::Generated
+            || Some(input.transformation.as_str()) != transformation
+            || input.submitted_hash != basecraft_io::hash_file(query)?
         {
             return Err(Error::Protocol(
                 "retained query differs from shared input evidence".into(),
@@ -73,9 +85,9 @@ impl Lifecycle {
         }
         let mut diagnostics = basecraft_ops::input_evidence::verify_ancestors(run)?;
         if run.join("manifest.json").is_file() {
-            diagnostics.extend(basecraft_ops::provenance::verify(receipt)?);
-            let publication = basecraft_ops::provenance::inspect(receipt)?;
-            let hash = basecraft_io::hash_file(receipt).map_err(basecraft_ops::Error::from)?;
+            diagnostics.extend(basecraft_ops::records::verify(receipt)?);
+            let publication = basecraft_ops::records::inspect(receipt)?;
+            let hash = basecraft_io::hash_file(receipt)?;
             if !publication.outputs.iter().any(|output| output.hash == hash) {
                 return Err(Error::Protocol(
                     "retained receipt differs from published artifact identity".into(),
@@ -206,8 +218,7 @@ impl Lifecycle {
             .data
             .as_deref()
             .ok_or_else(|| Error::Protocol("external submission missing data".into()))?;
-        let stored: Value =
-            serde_json::from_slice(&basecraft_ops::provenance::read_record(receipt)?)?;
+        let stored: Value = serde_json::from_slice(&basecraft_ops::records::read_record(receipt)?)?;
         if &stored != data
             || data["query_hash"] != plan["query_hash"]
             || data["approval_hash"] != plan["approval_hash"]
@@ -234,5 +245,48 @@ impl ContactPermit {
             .as_secs_f64();
         basecraft_ops::input_evidence::write_json(&self.stamp, &now)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lifecycle_follows_the_descriptor_and_requires_bundled_origin() {
+        use crate::registry::{Registry, RegistryConfig};
+        let root = tempfile::tempdir().unwrap();
+        let registry = Registry::load(&RegistryConfig {
+            bundled: Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins"),
+            packages: root.path().join("packages"),
+            index: root.path().join("plugins.json"),
+        })
+        .unwrap();
+        let mut checked = 0;
+        for original in registry.operations.values().filter(|op| {
+            op.descriptor
+                .host
+                .as_ref()
+                .is_some_and(|host| host.lifecycle.is_some())
+        }) {
+            let expected = Lifecycle::for_operation(original).unwrap();
+            assert_ne!(expected, Lifecycle::Ordinary);
+            let mut renamed = original.clone();
+            renamed.id = "example.renamed/operation@1".into();
+            assert_eq!(Lifecycle::for_operation(&renamed).unwrap(), expected);
+            let mut undeclared = original.clone();
+            undeclared.descriptor.host.as_mut().unwrap().lifecycle = None;
+            assert_eq!(
+                Lifecycle::for_operation(&undeclared).unwrap(),
+                Lifecycle::Ordinary
+            );
+            std::sync::Arc::make_mut(&mut renamed.package).origin = Origin::Editable;
+            assert_eq!(
+                Lifecycle::for_operation(&renamed).unwrap(),
+                Lifecycle::Ordinary
+            );
+            checked += 1;
+        }
+        assert_eq!(checked, 3);
     }
 }

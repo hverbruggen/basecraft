@@ -20,7 +20,7 @@ fn changed_original_is_rejected_before_editing() {
             )
             .is_err()
     );
-    assert!(!session.can_undo(doc));
+    assert!(!session.can_undo(doc).unwrap());
     assert!(!session.document_record(doc).unwrap().unsaved);
 }
 
@@ -49,7 +49,7 @@ fn recovery_starts_at_completed_save() {
     session.apply(doc, replace(1, "A")).unwrap();
     session.flush().unwrap();
     let recovered =
-        crate::replay::recover(session.recovery_root(), &root.join("recovered")).unwrap();
+        crate::records::replay::recover(session.recovery_root(), &root.join("recovered")).unwrap();
     assert_eq!(std::fs::read(&recovered[0]).unwrap(), b">sequence\nTAGT\n");
     assert_eq!(std::fs::read(&path).unwrap(), b">sequence\nTCGT\n");
     assert!(!source.join(".basecraft/recovery-references").exists());
@@ -155,7 +155,8 @@ fn recovery_retains_replaced_sources_and_checkpoints_external_edits_and_undo() {
             };
             let recovery = session.recovery_root().to_path_buf();
             std::mem::forget(session);
-            let outputs = crate::replay::recover(&recovery, &source.join("recovered")).unwrap();
+            let outputs =
+                crate::records::replay::recover(&recovery, &source.join("recovered")).unwrap();
             let mut check = Session::unlogged(outputs[0].parent().unwrap());
             let doc = check.open(&outputs[0]).unwrap();
             assert_eq!(
@@ -254,7 +255,7 @@ fn cross_device_recovery_after_save_as_and_interrupted_save() {
         let recovery = session.recovery_root().to_path_buf();
         std::mem::forget(session);
         let output = root.join(scenario);
-        let outputs = crate::replay::recover(&recovery, &output).unwrap();
+        let outputs = crate::records::replay::recover(&recovery, &output).unwrap();
         let restored = files::open(&outputs[0]).unwrap();
         assert_eq!(restored.doc.read(0, 4), expected, "{scenario}");
     }
@@ -290,7 +291,8 @@ fn recovery_links_do_not_replace_immutable_objects_or_reject_metadata_changes() 
     assert!(session.recovery_warning(doc).is_none());
     std::fs::write(&path, b">outside\nCCCC\n").unwrap();
     assert_eq!(std::fs::read(&object).unwrap(), original);
-    let outputs = crate::replay::recover(session.recovery_root(), &root.join("recovered")).unwrap();
+    let outputs =
+        crate::records::replay::recover(session.recovery_root(), &root.join("recovered")).unwrap();
     assert_eq!(std::fs::read(&outputs[0]).unwrap(), b">sequence\nTAAA\n");
 }
 
@@ -335,7 +337,8 @@ fn recovery_after_save_keeps_feature_ids_and_external_save_as() {
         .apply(doc, Op::FeatureRemove { id: added.0 })
         .unwrap();
     let expected = session.doc(doc).unwrap().to_genbank();
-    let outputs = crate::replay::recover(session.recovery_root(), &root.join("recovered")).unwrap();
+    let outputs =
+        crate::records::replay::recover(session.recovery_root(), &root.join("recovered")).unwrap();
     let restored = files::open(&outputs[0]).unwrap();
     assert_eq!(restored.doc.to_genbank(), expected);
 }
@@ -365,7 +368,7 @@ fn external_document_checkpoint_stays_inside_recovery_storage() {
     session.flush().unwrap();
     assert_eq!(std::fs::read(&source).unwrap(), b">outside\nCCCC\n");
     let recovered =
-        crate::replay::recover(session.recovery_root(), &root.join("recovered")).unwrap();
+        crate::records::replay::recover(session.recovery_root(), &root.join("recovered")).unwrap();
     assert_eq!(std::fs::read(&recovered[0]).unwrap(), b">outside\nGTAA\n");
 }
 
@@ -399,7 +402,7 @@ fn missing_cross_device_document_does_not_block_other_recovery() {
     let recovery = session.recovery_root().to_path_buf();
     std::mem::forget(session);
     let before = serde_json::to_vec(&crate::log::read_all(&recovery).unwrap()).unwrap();
-    let outputs = crate::replay::recover(&recovery, &root.join("recovered")).unwrap();
+    let outputs = crate::records::replay::recover(&recovery, &root.join("recovered")).unwrap();
     assert_eq!(outputs.len(), 1);
     assert_eq!(std::fs::read(&outputs[0]).unwrap(), b">available\nGAAA\n");
     assert_eq!(crate::log::read_all(&recovery).unwrap().len(), 4);

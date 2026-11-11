@@ -617,61 +617,7 @@ pub fn its_note(components: &[ItsComponent]) -> String {
 
 // Preparation.
 
-/// How serious a finding is. Blocking issues keep a package from being
-/// ready; review issues need a look but don't block; unavailable means a
-/// check could not run, which says nothing about the sequences.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Severity {
-    Blocking,
-    Review,
-    Info,
-    Unavailable,
-}
-
-impl Severity {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Blocking => "blocking",
-            Self::Review => "review",
-            Self::Info => "info",
-            Self::Unavailable => "unavailable",
-        }
-    }
-}
-
-/// A finding, tied to the record (and specimen) it concerns when it
-/// concerns one.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Issue {
-    pub severity: Severity,
-    /// `basecraft` for local checks; `table2asn` for its reports.
-    pub source: String,
-    /// A stable code: Basecraft's, or the tool's (`SEQ_INST.TerminalNs`).
-    pub code: String,
-    pub message: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub record: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub specimen: Option<String>,
-    /// The tool's own severity word, when it reported one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_severity: Option<String>,
-}
-
-impl Issue {
-    fn local(severity: Severity, code: &str, message: impl Into<String>) -> Self {
-        Self {
-            severity,
-            source: "basecraft".into(),
-            code: code.into(),
-            message: message.into(),
-            record: None,
-            specimen: None,
-            tool_severity: None,
-        }
-    }
-}
+pub use basecraft_protocol::submission_records::{Issue, Severity};
 
 /// An alignment row as read from the source file.
 #[derive(Clone, Debug)]

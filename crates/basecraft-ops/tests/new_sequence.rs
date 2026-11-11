@@ -1,4 +1,4 @@
-use basecraft_ops::{Session, replay};
+use basecraft_ops::{Session, records};
 use basecraft_protocol::{Feature, Location, Op, Strand};
 
 #[test]
@@ -31,7 +31,7 @@ fn new_sequence_validates_before_creating_and_replays_unsaved_edits() {
     assert_eq!(id.0, 0);
     assert_eq!(session.doc(id).unwrap().read(0, 15), b"ACGTRYSWKMBDHVN");
     assert!(session.document_record(id).unwrap().unsaved);
-    assert!(!root.path().join(session.doc_key(id)).exists());
+    assert!(!root.path().join(session.doc_key(id).unwrap()).exists());
     assert!(session.save(id, None).is_err());
     // Cancelling a proposed annotation does not apply an operation.
     let before = session.record_revision(id).unwrap();
@@ -60,11 +60,11 @@ fn new_sequence_validates_before_creating_and_replays_unsaved_edits() {
     session.flush().unwrap();
     let recovery = session.recovery_root().to_owned();
     assert_eq!(
-        replay::replay(&recovery).unwrap().problems,
+        records::replay(&recovery).unwrap().problems,
         Vec::<String>::new()
     );
     let restored = root.path().join("restored");
-    let outputs = replay::recover(&recovery, &restored).unwrap();
+    let outputs = records::recover(&recovery, &restored).unwrap();
     let mut recovered = Session::unlogged(&restored);
     let copy = recovered.open(&outputs[0]).unwrap();
     assert_eq!(

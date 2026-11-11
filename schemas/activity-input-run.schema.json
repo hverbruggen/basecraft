@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ActivityInputRun",
+  "description": "Embedded provenance for an activity's exact submitted input.",
+  "type": "object",
+  "properties": {
+    "hash": {
+      "type": "string"
+    },
+    "id": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "id",
+    "hash"
+  ]
+}

@@ -231,7 +231,9 @@ impl SubmissionRust {
 
     fn package_path(&self) -> Option<PathBuf> {
         let (session, doc) = (self.session.as_ref()?, self.doc?);
-        Some(package_dir(&session.root().join(session.doc_key(doc))))
+        Some(package_dir(
+            &session.root().join(session.doc_key(doc).ok()?),
+        ))
     }
 }
 
@@ -247,8 +249,8 @@ impl qobject::SubmissionController {
         Some((
             session.id().into(),
             doc,
-            session.generation(doc),
-            session.revision(doc),
+            session.generation(doc).unwrap(),
+            session.revision(doc).unwrap(),
         ))
     }
 
@@ -285,9 +287,9 @@ impl qobject::SubmissionController {
                         .publication
                         .authors,
                 ),
-                session.doc_key(doc).to_string(),
-                session.can_undo(doc),
-                session.can_redo(doc),
+                crate::bridge::checked_document!(access_thread, session.doc_key(doc)).to_string(),
+                session.can_undo(doc).unwrap_or(false),
+                session.can_redo(doc).unwrap_or(false),
             )),
             _ => None,
         };

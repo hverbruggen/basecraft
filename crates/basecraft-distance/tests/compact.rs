@@ -1,3 +1,4 @@
+use basecraft_distance::DistanceMatrixExt;
 use basecraft_distance::{Alignment, DistanceMatrix, Model};
 use std::path::PathBuf;
 
@@ -36,4 +37,24 @@ fn compact_invalid_alignments_are_rejected_without_renaming() {
     let matrix = DistanceMatrix::calculate(&alignment, Model::P, 1, 1).unwrap();
     assert_eq!(matrix.names, alignment.names);
     assert!(matrix.distances.iter().all(|d| d.is_finite()));
+}
+
+#[test]
+fn current_binary_cache_keeps_exact_bytes() {
+    let root =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/producers-v1");
+    let source = root.join("distance-cache.bin");
+    let header: basecraft_protocol::distance_records::CacheHeader =
+        serde_json::from_slice(&std::fs::read(root.join("distance-cache-header.json")).unwrap())
+            .unwrap();
+    let matrix = DistanceMatrix::read(&source).unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let written = temp.path().join("cache.bin");
+    matrix
+        .write_identified(&written, &header.basecraft_identity)
+        .unwrap();
+    assert_eq!(
+        std::fs::read(written).unwrap(),
+        std::fs::read(source).unwrap()
+    );
 }

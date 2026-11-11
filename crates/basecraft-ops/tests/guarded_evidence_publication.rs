@@ -176,22 +176,18 @@ fn publication_worker() {
             barrier.send("published");
             return;
         }
-        input.extra.insert(
-            "analysis_run".into(),
-            json!(input_evidence::relative(ledger.directory(), owner.directory()).unwrap()),
-        );
+        input.analysis_run =
+            Some(input_evidence::relative(ledger.directory(), owner.directory()).unwrap());
         if mode == "proposal" {
-            input
-                .extra
-                .insert(input_evidence::PROPOSAL_TARGET.into(), json!(true));
+            input.proposal_target = Some(true);
         }
         mutation.write_input(ledger.directory(), &input).unwrap();
         input.source.as_mut().unwrap().path =
             input_evidence::relative(owner.directory(), &source).unwrap();
-        input.extra.insert("upstream".into(), json!([{
+        input.upstream = serde_json::from_value(json!([{
             "bundle":input_evidence::relative(owner.directory(), ledger.directory()).unwrap(),
             "id":ledger.id(), "hash":basecraft_io::hash_file(&ledger.artifact("manifest.json").unwrap()).unwrap()
-        }]));
+        }])).unwrap();
         mutation.write_input(owner.directory(), &input).unwrap();
         input_evidence::write_json(
             &owner.artifact("run.json").unwrap(),
@@ -243,12 +239,12 @@ fn publication_worker() {
                     assert_eq!(conflicts.analyses[0].run.file_name().unwrap(), "owner");
                     assert_eq!(conflicts.analyses[0].backing_analyses.len(), 2);
                     let owner = mutation.read_input(&conflicts.analyses[0].run).unwrap();
-                    assert_eq!(owner.extra["upstream"].as_array().unwrap().len(), 1);
+                    assert_eq!(owner.upstream.len(), 1);
                 }
             }
         }
         let recovered =
-            basecraft_ops::replay::recover(session.recovery_root(), &root.join("recovered"))
+            basecraft_ops::records::recover(session.recovery_root(), &root.join("recovered"))
                 .unwrap();
         assert_eq!(std::fs::read(&recovered[0]).unwrap(), b">gene\nATGT\n");
         session
@@ -265,15 +261,18 @@ fn publication_worker() {
         if mode != "save-first" {
             let ledger = PathBuf::from(std::fs::read_to_string(root.join("ledger-path")).unwrap());
             let input = input_evidence::read_input(&ledger).unwrap();
-            assert_eq!(
-                input.extra.contains_key("analysis_run"),
-                mode != "interrupted"
-            );
+            assert_eq!(input.analysis_run.is_some(), mode != "interrupted");
             if mode == "proposal" {
-                assert_eq!(input.extra[input_evidence::PROPOSAL_TARGET], true);
-                assert_eq!(input.state, "referenced");
+                assert_eq!(input.proposal_target, Some(true));
+                assert_eq!(
+                    input.state,
+                    basecraft_protocol::input_records::EvidenceState::Referenced
+                );
             } else {
-                assert_eq!(input.state, "preserved");
+                assert_eq!(
+                    input.state,
+                    basecraft_protocol::input_records::EvidenceState::Preserved
+                );
                 // The mutable record must retain the preservation performed by
                 // the save, rather than a later stale post-helper rewrite.
                 assert_eq!(
@@ -343,22 +342,18 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
             )
             .unwrap();
         let mut input = mutation.read_input(leaf.directory()).unwrap();
-        input.extra.insert(
-            "analysis_run".into(),
-            json!(input_evidence::relative(leaf.directory(), owner.directory()).unwrap()),
-        );
+        input.analysis_run =
+            Some(input_evidence::relative(leaf.directory(), owner.directory()).unwrap());
         mutation.write_input(leaf.directory(), &input).unwrap();
-        input.extra.remove("analysis_run");
+        input.analysis_run = None;
         input.source.as_mut().unwrap().path =
             input_evidence::relative(owner.directory(), &source).unwrap();
-        input.extra.insert(
-            "upstream".into(),
-            json!([{
-                "bundle":input_evidence::relative(owner.directory(), leaf.directory()).unwrap(),
-                "id":leaf.id(),
-                "hash":basecraft_io::hash_file(&leaf.artifact("manifest.json").unwrap()).unwrap()
-            }]),
-        );
+        input.upstream = serde_json::from_value(json!([{
+            "bundle":input_evidence::relative(owner.directory(), leaf.directory()).unwrap(),
+            "id":leaf.id(),
+            "hash":basecraft_io::hash_file(&leaf.artifact("manifest.json").unwrap()).unwrap()
+        }]))
+        .unwrap();
         mutation.write_input(owner.directory(), &input).unwrap();
         input_evidence::write_json(
             &owner.artifact("run.json").unwrap(),
@@ -376,11 +371,11 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
             if mode == "retain-break" {
                 assert_eq!(
                     mutation.read_input(owner.directory()).unwrap().state,
-                    "broken"
+                    basecraft_protocol::input_records::EvidenceState::Broken
                 );
                 assert_eq!(
                     mutation.read_input(leaf.directory()).unwrap().state,
-                    "broken"
+                    basecraft_protocol::input_records::EvidenceState::Broken
                 );
             } else {
                 assert!(!owner.directory().exists());
@@ -393,7 +388,10 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
         mutation.preserve_input(leaf.directory()).unwrap();
         mutation.preserve_input(leaf.directory()).unwrap();
         let mut primary = mutation.read_input(owner.directory()).unwrap();
-        assert_eq!(primary.state, "referenced");
+        assert_eq!(
+            primary.state,
+            basecraft_protocol::input_records::EvidenceState::Referenced
+        );
         barrier.send("prepared");
         barrier.expect("commit");
         if mode == "retain-failure" {
@@ -420,7 +418,10 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
             ORIGINAL
         );
         let primary = input_evidence::read_input(owner.directory()).unwrap();
-        assert_eq!(primary.state, "preserved");
+        assert_eq!(
+            primary.state,
+            basecraft_protocol::input_records::EvidenceState::Preserved
+        );
         if mode == "retain-preserve" {
             assert_eq!(
                 primary.extra["origin_run"],
@@ -472,12 +473,12 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
                         )
                         .unwrap()
                         .state,
-                    "referenced"
+                    basecraft_protocol::input_records::EvidenceState::Referenced
                 );
             }
         }
         let recovered =
-            basecraft_ops::replay::recover(session.recovery_root(), &root.join("recovered"))
+            basecraft_ops::records::recover(session.recovery_root(), &root.join("recovered"))
                 .unwrap();
         assert_eq!(std::fs::read(&recovered[0]).unwrap(), b">gene\nATGT\n");
         session

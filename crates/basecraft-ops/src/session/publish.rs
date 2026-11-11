@@ -37,7 +37,7 @@ impl Session {
         id: DocId,
         target: &Path,
         inputs: &[(String, String)],
-        snapshot: &crate::document_record::DocumentRecord,
+        snapshot: &crate::records::document_record::DocumentRecord,
     ) -> Result<()> {
         if !self.tracked
             || self.provenance_policy == basecraft_platform::settings::ProvenancePolicy::None
@@ -65,7 +65,7 @@ impl Session {
         target: &Path,
         save: &LogEntry,
         analysis_inputs: &[(String, String)],
-        snapshot: Option<&crate::document_record::DocumentRecord>,
+        snapshot: Option<&crate::records::document_record::DocumentRecord>,
     ) -> Result<()> {
         use basecraft_protocol::provenance::{
             ArtifactRevision, Completeness, EditActivity, Publication,
@@ -80,7 +80,7 @@ impl Session {
                             .trim_start_matches("b3:"),
                     )
                 } else {
-                    crate::provenance::companion(target)
+                    crate::records::provenance::companion(target)
                 }
             }
             basecraft_platform::settings::ProvenancePolicy::LocalOnly => {
@@ -96,18 +96,18 @@ impl Session {
             || self.docs[id.0].origin_bundle.clone(),
             |(path, _)| path.clone(),
         );
-        let previous_bundle = if bundle.join("manifest.json").exists() {
+        let mut previous_bundle = if bundle.join("manifest.json").exists() {
             &bundle
         } else {
             &source_bundle
         };
-        let previous = if snapshot.is_some() {
+        let mut previous = if snapshot.is_some() {
             snapshot
                 .and_then(|r| r.origins.first())
                 .map(|(_, p)| p.clone())
         } else if previous_bundle.join("manifest.json").is_file() {
             let publication: Publication = serde_json::from_slice(
-                &crate::provenance::read_record(&previous_bundle.join("manifest.json"))?,
+                &crate::records::provenance::read_record(&previous_bundle.join("manifest.json"))?,
             )?;
             if publication.schema_version != 1 {
                 return Err(invalid("unsupported parent provenance version"));
@@ -116,6 +116,26 @@ impl Session {
         } else {
             None
         };
+        // A newly allocated output-support record is not the accepted document
+        // history. Prefer the opened origin when the writer has just bound one.
+        if snapshot.is_none()
+            && previous_bundle != &source_bundle
+            && previous
+                .as_ref()
+                .is_some_and(|p| p.events.is_empty() && p.effective_edits.is_empty())
+            && source_bundle.join("manifest.json").is_file()
+        {
+            previous_bundle = &source_bundle;
+            let publication: Publication = serde_json::from_slice(
+                &crate::records::provenance::read_record(&source_bundle.join("manifest.json"))?,
+            )?;
+            if publication.schema_version != 1 {
+                return Err(crate::Error::Unsupported(
+                    "unsupported parent provenance version".into(),
+                ));
+            }
+            previous = Some(publication);
+        }
         let baseline_hash = self
             .events
             .iter()
@@ -147,8 +167,9 @@ impl Session {
                 // in the new bundle; clean source references remain references.
                 for entry in std::fs::read_dir(previous_bundle.join("records"))? {
                     let entry = entry?;
-                    let record: Publication =
-                        serde_json::from_slice(&crate::provenance::read_record(&entry.path())?)?;
+                    let record: Publication = serde_json::from_slice(
+                        &crate::records::provenance::read_record(&entry.path())?,
+                    )?;
                     for output in record.outputs {
                         let Some(name) = output.retained else {
                             continue;
@@ -188,28 +209,17 @@ impl Session {
             && previous_bundle.join("input.json").is_file()
         {
             let mut input = crate::input_evidence::read_input(previous_bundle)?;
-            let mut upstream = input
-                .extra
-                .get("upstream")
-                .and_then(serde_json::Value::as_array)
-                .cloned()
-                .unwrap_or_default();
+            let mut upstream = input.upstream.clone();
             for reference in &mut upstream {
-                let path = reference["bundle"]
-                    .as_str()
-                    .ok_or_else(|| invalid("ancestor location missing"))?;
-                reference["bundle"] = serde_json::json!(crate::input_evidence::relative(
+                reference.bundle = crate::input_evidence::relative(
                     &bundle.canonicalize()?,
-                    &previous_bundle.join(path).canonicalize()?
-                )?);
+                    &previous_bundle.join(&reference.bundle).canonicalize()?,
+                )?
+                .into();
             }
             if bundle.join("input.json").is_file() {
                 let current = crate::input_evidence::read_input(&bundle)?;
-                if let Some(dependencies) = current
-                    .extra
-                    .get("upstream")
-                    .and_then(serde_json::Value::as_array)
-                {
+                if let Some(dependencies) = Some(&current.upstream) {
                     for dependency in dependencies {
                         if !upstream.contains(dependency) {
                             upstream.push(dependency.clone());
@@ -218,9 +228,7 @@ impl Session {
                 }
             }
             if !upstream.is_empty() {
-                input
-                    .extra
-                    .insert("upstream".into(), serde_json::json!(upstream));
+                input.upstream = upstream;
             }
             if input.source.is_some() {
                 input.extra.insert(
@@ -293,6 +301,22 @@ impl Session {
                     retained: None,
                     reference: None,
                 });
+            }
+        }
+        for event in self
+            .events
+            .iter()
+            .filter(|event| event.doc == self.docs[id.0].key)
+        {
+            if let Op::CreateSangerReview { review } | Op::SangerUpdate { review } = &event.op {
+                let source =
+                    objects_dir(&self.storage_root).join(review.hash.trim_start_matches("b3:"));
+                inputs.push(retain(
+                    &source,
+                    &review.hash,
+                    format!("{}:review", event.id),
+                    "Sanger analysis record".into(),
+                )?);
             }
         }
         for (key, hash) in analysis_inputs {
@@ -371,7 +395,7 @@ impl Session {
                 }
             }
             match &mut event.op {
-                Op::Open { path } | Op::Save { path } => path.clone_from(&event.doc),
+                Op::Open { path } | Op::Save { path, .. } => path.clone_from(&event.doc),
                 _ => {}
             }
             redact_operation_paths(&mut event.op);
@@ -488,7 +512,7 @@ impl Session {
             let path = bundle.join("records").join(format!("{parent}.json"));
             parent_hashes.insert(parent.clone(), basecraft_io::hash_file(&path)?);
         }
-        crate::contributions::project(&events, &mut effective_edits);
+        crate::records::contributions::project(&events, &mut effective_edits);
         let input_bytes_available = inputs.iter().all(|input| input.retained.is_some());
         let publication = Publication {
             schema_version: 1,
@@ -510,7 +534,7 @@ impl Session {
             },
             report_template_version: 2,
         };
-        crate::provenance::publish(&bundle, &publication)
+        crate::records::provenance::publish(&bundle, &publication)
     }
 
     /// Add a captured input revision and its recorded producing activity to an
@@ -518,7 +542,7 @@ impl Session {
     pub fn complete_operation_publication(
         &self,
         id: DocId,
-        snapshot: &crate::document_record::DocumentRecord,
+        snapshot: &crate::records::document_record::DocumentRecord,
         run: &crate::analysis_store::ArtifactRun,
     ) -> Result<()> {
         let activity = self
@@ -526,7 +550,7 @@ impl Session {
             .iter()
             .rev()
             .find(|event| {
-                event.doc == self.doc_key(id)
+                self.doc_key(id).is_ok_and(|key| event.doc == key)
                     && matches!(&event.op,
                 Op::ToolRun { params, .. } if params["run_id"].as_str() == Some(run.id()))
             })
@@ -542,26 +566,27 @@ impl Session {
         id: DocId,
         target: &Path,
         outputs: &[PathBuf],
-        snapshot: &crate::document_record::DocumentRecord,
+        snapshot: &crate::records::document_record::DocumentRecord,
         run: &crate::analysis_store::ArtifactRun,
     ) -> Result<()> {
         use basecraft_protocol::provenance::{ArtifactRevision, Completeness, Publication};
         let mut input = crate::input_evidence::read_input(run.directory())?;
-        let mut upstream = input
-            .extra
-            .get("upstream")
-            .and_then(serde_json::Value::as_array)
-            .cloned()
-            .unwrap_or_default();
+        let mut upstream = input.upstream.clone();
         for (bundle, origin) in &snapshot.origins {
             let mut bytes = serde_json::to_vec_pretty(origin)?;
             bytes.push(b'\n');
-            upstream.push(serde_json::json!({"bundle":crate::input_evidence::relative(run.directory(), &bundle.canonicalize()?)?,"id":origin.id,"hash":basecraft_io::hash_bytes(&bytes)}));
+            upstream.push(basecraft_protocol::input_records::UpstreamLink {
+                bundle: (crate::input_evidence::relative(
+                    run.directory(),
+                    &bundle.canonicalize()?,
+                )?)
+                .into(),
+                id: origin.id.clone(),
+                hash: basecraft_io::hash_bytes(&bytes),
+            });
         }
         if !upstream.is_empty() {
-            input
-                .extra
-                .insert("upstream".into(), serde_json::json!(upstream));
+            input.upstream = upstream;
             crate::input_evidence::write_json(&run.directory().join("input.json"), &input)?;
         }
         let activity = self
@@ -663,14 +688,15 @@ impl Session {
         }
         let (events, effective) = portable_analysis_activity(snapshot, &activity);
         let publication = Publication {
-            schema_version: 1, id: activity.id, session: self.id.clone(), parents: Vec::new(), parent_hashes: std::collections::BTreeMap::new(),
+            schema_version: 1,
+            id: activity.id, session: self.id.clone(), parents: Vec::new(), parent_hashes: std::collections::BTreeMap::new(),
             created: activity.t, origin: "Referenced source; submitted transformation recorded in input.json. Declared immutable upstream records are referenced without copying input bytes. Earlier history before import remains unknown.".into(),
             inputs, outputs: artifacts, events, effective_edits: effective,
-            completeness: Completeness { ancestry_known: false, input_bytes_available: input.state != "broken", execution_specification_available: false, replay_verified: false }, report_template_version: 2,
+            completeness: Completeness { ancestry_known: false, input_bytes_available: input.state != basecraft_protocol::input_records::EvidenceState::Broken, execution_specification_available: false, replay_verified: false }, report_template_version: 2,
         };
         match self.provenance_policy {
             basecraft_platform::settings::ProvenancePolicy::Portable => {
-                crate::provenance::publish(run.directory(), &publication)?;
+                crate::records::provenance::publish(run.directory(), &publication)?;
             }
             basecraft_platform::settings::ProvenancePolicy::LocalOnly => {
                 let bundle = self.local_provenance_root.join(
@@ -708,7 +734,7 @@ impl Session {
                         })?;
                     }
                 }
-                crate::provenance::publish(&bundle, &publication)?;
+                crate::records::provenance::publish(&bundle, &publication)?;
             }
             basecraft_platform::settings::ProvenancePolicy::None => {}
         }
