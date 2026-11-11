@@ -179,6 +179,18 @@ fn snapshot(store: &Path) -> Result<IndexedAnalysisStore> {
 
 /// Input writes publish a durable dirty marker before touching their ledger.
 /// A failed update stays incomplete, including lookups for newly added sources.
+/// Basecraft's own state and cache folders hold recovery staging, never an
+/// analysis store a user's file can depend on. They are never indexed.
+pub(super) fn is_private(store: &Path) -> bool {
+    let Ok(paths) = basecraft_platform::paths::AppPaths::discover() else {
+        return false;
+    };
+    let store = store.canonicalize().unwrap_or_else(|_| lexical(store));
+    [paths.state, paths.cache].iter().any(|root| {
+        store.starts_with(root.canonicalize().unwrap_or_else(|_| lexical(root)))
+    })
+}
+
 pub(super) fn changing(path: &Path, sources: Option<BTreeSet<PathBuf>>) -> Result<Option<PathBuf>> {
     let Some(run) = path.parent() else {
         return Ok(None);
@@ -195,6 +207,9 @@ pub(super) fn changing(path: &Path, sources: Option<BTreeSet<PathBuf>>) -> Resul
     else {
         return Ok(None);
     };
+    if is_private(store) {
+        return Ok(None);
+    }
     let marker = shard("dirty", store)?;
     let sources = match read::<IndexChange>(&marker) {
         Ok(previous) => previous.sources.zip(sources).map(|(mut old, new)| {
@@ -215,12 +230,24 @@ pub(super) fn changing(path: &Path, sources: Option<BTreeSet<PathBuf>>) -> Resul
 }
 
 pub(super) fn register(store: &Path, guard: Option<std::fs::File>) -> Result<()> {
+    if is_private(store) {
+        return Ok(());
+    }
     let entry = match snapshot(store) {
         Ok(entry) => entry,
         Err(error @ crate::Error::Busy(_)) => return Err(error),
         Err(_) => {
             let _guard = guard.map_or_else(registry_lock, Ok)?;
             let marker = shard("dirty", store)?;
+            // A store that is gone holds no ledger anything can depend on.
+            if !store.try_exists()? {
+                match std::fs::remove_file(&marker) {
+                    Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                        return Err(error.into());
+                    }
+                    _ => return Ok(()),
+                }
+            }
             if !marker.try_exists()? {
                 write(
                     &marker,
@@ -400,6 +427,11 @@ pub(super) fn select(
             for entry in std::fs::read_dir(&dirty)? {
                 let path = entry?.path();
                 let change: IndexChange = read(&path)?;
+                // A pending change in a store that no longer exists cannot
+                // concern this target: its ledgers went with it.
+                if change.store.try_exists().ok() == Some(false) {
+                    continue;
+                }
                 if change.sources.as_ref().is_some_and(|pending| {
                     !pending.iter().any(|p| sources.contains(p) || same_file(p))
                 }) {

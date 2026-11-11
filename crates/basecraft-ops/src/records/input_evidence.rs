@@ -820,6 +820,9 @@ pub fn register(run: &ArtifactRun) -> Result<()> {
         .parent()
         .and_then(Path::parent)
         .ok_or_else(|| invalid("run has no store"))?;
+    if index::is_private(store) {
+        return Ok(());
+    }
     // The catalogue lock serialises index publication. Reserving the store
     // here too would order store before inputs, the reverse of a writer that
     // reserves its inputs first, and the two would wait on each other.
