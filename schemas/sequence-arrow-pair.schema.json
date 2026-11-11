@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ArrowPair",
+  "description": "Durable `sequence-arrow-buffers-v1` payload: little-endian u64 residue-stream\nlength, then residue and feature Arrow IPC streams. The schema describes the\nmembers; the retained file uses this binary framing, not JSON.",
+  "type": "object",
+  "properties": {
+    "features": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint8",
+        "maximum": 255,
+        "minimum": 0
+      }
+    },
+    "residues": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint8",
+        "maximum": 255,
+        "minimum": 0
+      }
+    }
+  },
+  "required": [
+    "residues",
+    "features"
+  ]
+}

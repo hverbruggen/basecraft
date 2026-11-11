@@ -152,3 +152,29 @@ pub struct ToolInfo {
     pub name: String,
     pub version: String,
 }
+
+/// Durable `sequence-arrow-buffers-v1` payload: little-endian u64 residue-stream
+/// length, then residue and feature Arrow IPC streams. The schema describes the
+/// members; the retained file uses this binary framing, not JSON.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ArrowPair<'a> {
+    pub residues: &'a [u8],
+    pub features: &'a [u8],
+}
+impl<'a> ArrowPair<'a> {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(8 + self.residues.len() + self.features.len());
+        bytes.extend_from_slice(&(self.residues.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(self.residues);
+        bytes.extend_from_slice(self.features);
+        bytes
+    }
+    pub fn decode(bytes: &'a [u8]) -> Option<Self> {
+        let length = u64::from_le_bytes(bytes.get(..8)?.try_into().ok()?);
+        let split = 8usize.checked_add(usize::try_from(length).ok()?)?;
+        Some(Self {
+            residues: bytes.get(8..split)?,
+            features: bytes.get(split..)?,
+        })
+    }
+}

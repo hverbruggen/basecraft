@@ -612,6 +612,10 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     ),
                 ),
                 (
+                    "sequence-arrow-pair",
+                    schemars::schema_for!(basecraft_protocol::plugin::ArrowPair),
+                ),
+                (
                     "sanderson-report",
                     schemars::schema_for!(basecraft_protocol::sanderson_records::SandersonReport),
                 ),

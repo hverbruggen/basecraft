@@ -50,21 +50,17 @@ pub fn is_submission(path: &Path) -> bool {
 
 /// Read a submission document.
 pub fn load(path: &Path) -> Result<Submission> {
-    let value: Value =
+    let sub: Submission =
         serde_json::from_slice(&std::fs::read(path)?).map_err(|e| crate::Error::Damaged {
             path: path.to_path_buf(),
-            detail: format!("not valid JSON: {e}"),
+            detail: format!("not a submission: {e}"),
         })?;
-    let version = value["version"].as_u64().unwrap_or(0);
-    if version > u64::from(SUBMISSION_VERSION) {
+    if sub.version != SUBMISSION_VERSION {
         return Err(crate::Error::Unsupported(format!(
-            "this submission was written by a newer Basecraft (format version {version}); this version reads version {SUBMISSION_VERSION}"
+            "submission format version {} is not supported",
+            sub.version
         )));
     }
-    let sub: Submission = serde_json::from_value(value).map_err(|e| crate::Error::Damaged {
-        path: path.to_path_buf(),
-        detail: format!("not a submission: {e}"),
-    })?;
     model::validate(&sub).map_err(|e| invalid(e.0))?;
     Ok(sub)
 }

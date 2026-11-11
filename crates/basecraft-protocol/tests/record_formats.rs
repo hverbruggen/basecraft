@@ -88,10 +88,7 @@ fn current_records_round_trip() {
         if !matches!(
             path.extension().and_then(|s| s.to_str()),
             Some("json" | "jsonl")
-        ) || name.contains("observations")
-            || name == "document-fingerprints.jsonl"
-            || name == "installation-index-defaulted.json"
-            || name == "installation-index-identity-compact.json"
+        ) || name == "document-fingerprints.jsonl"
         {
             continue;
         }

@@ -84,6 +84,18 @@ fn bundled_producer_records_round_trip_exactly() {
             true,
             false,
         ),
+        (
+            "distance-identified",
+            encode::<IdentifiedMatrix>,
+            false,
+            false,
+        ),
+        (
+            "distance-groups",
+            encode::<DistanceGroupReport>,
+            false,
+            false,
+        ),
         ("distance-matrix", encode::<DistanceMatrix>, false, false),
         ("distance-cache-header", encode::<CacheHeader>, false, false),
         ("distance-report", encode::<DistanceRunReport>, false, true),
