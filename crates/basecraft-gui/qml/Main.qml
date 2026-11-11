@@ -156,8 +156,6 @@ ApplicationWindow {
     readonly property var ribbonTabs: commandList.ribbon_tabs(currentKind)
     onRibbonTabsChanged: if (!projectingDocument) ribbonTabName = commandList.ribbon_tab(currentKind, ribbonTabName)
     readonly property string ribbonTab: ribbonTabs.includes(ribbonTabName) ? ribbonTabName : "File"
-    // Each tab's panel in the ribbon's stack.
-    readonly property var ribbonPanels: ({ "File": 0, "View": 1, "Sequence": 2, "Alignment": 3, "Tree": 4, "Phylogeny": 5, "Delimitation": 6, "Trace": 7, "Export": 8 })
     // Only the wrapped layout is offered for now; files always open in it.
 
     readonly property int availableCpuThreads: shell.available_cpu_threads()
@@ -185,30 +183,14 @@ ApplicationWindow {
         }
     }
     readonly property var applicationCommands: [findCommand, newSequenceCommand, addAnnotationCommand, openCommand, saveCommand, saveAsCommand, projectCommand, shortcutsCommand, aboutCommand, preferencesCommand, textRepresentationCommand, contextShortcutsCommand, learnCommand, exportSvgCommand, exportPngCommand, historyCommand, methodsCommand, showProvenanceCommand, verifyProvenanceCommand, packageCommand, recoverCommand, installedOperationsCommand].concat(ribbonCommands)
-    property var recentProjects: []
-    property string recentProjectsError: ""
-    function updateRecentProjects(reply) {
-        const result = JSON.parse(reply)
-        recentProjects = result.projects || []
-        recentProjectsError = result.error || ""
-    }
     function selectProject(path) {
-        if (!preferences.project_is_directory(path)) {
-            recentProjectsError = "Project folder is unavailable: " + path
-            return
-        }
-        const result = JSON.parse(preferences.remember_project(path))
-        if (result.error) {
-            recentProjectsError = result.error
-            return
-        }
-        shell.project_dir = path
-        recentProjects = result.projects
-        recentProjectsError = ""
+        const chosen = preferences.select_project(path)
+        if (chosen.length) shell.project_dir = chosen
     }
     property bool preferencesReady: false
     AppSettings {
         id: preferences
+        objectName: "preferences"
         onSnapshotChanged: if (window.preferencesReady) window.loadPreferences()
         onErrorChanged: if (error.length && window.preferencesReady) {
             preferencesError.open()
@@ -250,9 +232,7 @@ ApplicationWindow {
 
     function fileName(path) { return path.split("/").pop() }
     function activeFolder() {
-        if (currentPath.startsWith("untitled:")) return shell.local_file_url(preferences.untitled_folder(shell.project_dir))
-        const path = traceOpen && current && current.export_path ? current.export_path : current && current.file_path ? current.file_path : currentPath
-        return path.length ? shell.parent_folder_url(path) : shell.local_file_url(shell.project_dir)
+        return shell.local_file_url(preferences.dialog_folder(shell.project_dir, currentPath, current ? current.export_path || current.file_path || "" : ""))
     }
     function projectPickerFolder() { return shell.local_file_url(preferences.project_picker_directory()) }
     property var projectDialog: null
@@ -891,9 +871,9 @@ ApplicationWindow {
             AppButton { text: "Details…"; onClicked: preferencesError.open() }
         }
         Label {
-            visible: window.recentProjectsError.length > 0
+            visible: preferences.project_error.length > 0
             Layout.fillWidth: true
-            text: window.recentProjectsError
+            text: preferences.project_error
             wrapMode: Text.Wrap
             Accessible.role: Accessible.AlertMessage
         }
@@ -964,7 +944,7 @@ ApplicationWindow {
             // Keep the same compact symbol band on every page.
             symbolBandSize: 16
             Layout.fillWidth: true
-            currentIndex: window.ribbonPanels[window.ribbonTab]
+            currentIndex: commandList.ribbon_panel(window.ribbonTab)
             background: Rectangle { color: Qt.alpha(shell.foreground, 0.025) }
 
                 RibbonPage {
@@ -984,9 +964,9 @@ ApplicationWindow {
                                 id: recentProjectMenu
                                 objectName: "recentProjectMenu"
                                 sizeFactor: window.ribbonSizeFactor
-                                RibbonMenuItem { sizeFactor: window.ribbonSizeFactor; text: "No recent projects"; enabled: false; visible: window.recentProjects.length === 0 }
+                                RibbonMenuItem { sizeFactor: window.ribbonSizeFactor; text: "No recent projects"; enabled: false; visible: preferences.recent_projects.length === 0 }
                                 Repeater {
-                                    model: window.recentProjects
+                                    model: preferences.recent_projects
                                     RibbonMenuItem { sizeFactor: window.ribbonSizeFactor;
                                         required property string modelData
                                         text: window.fileName(modelData)
@@ -1551,8 +1531,7 @@ ApplicationWindow {
     }
     readonly property var metadataTable: JSON.parse(specimenMetadata.table)
     // The open FASTA file whose records can be imported, linked or templated.
-    readonly property string metadataFasta: current && (alignmentOpen || currentKind === "sequence")
-        && /\.(fa|fasta|fna|fas|ffn|faa|afa)$/i.test(current.file_path || "") ? current.file_path : ""
+    readonly property string metadataFasta: current ? specimenMetadata.fasta_source(currentKind, current.file_path || "") : ""
     // Records of that file without a stored specimen link; only reported.
     readonly property var metadataLinks: metadataFasta.length && specimenMetadata.available && metadataTable
         ? JSON.parse(specimenMetadata.link_status(metadataFasta)) : ({})
@@ -2274,7 +2253,7 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 backgroundColor: shell.background
-                recentProjects: window.recentProjects
+                recentProjects: preferences.recent_projects
                 onOpenProject: window.openProjectPicker()
                 onOpenRecent: path => window.selectProject(path)
             }
@@ -2738,7 +2717,6 @@ ApplicationWindow {
         loadPreferences()
         if (preferenceValues.ui && !preferenceValues.ui.welcomed && !arg("--screenshot")) firstLaunch.dialog().open()
         if (preferenceValues.ui && preferenceValues.ui.release_notices) checkRelease()
-        updateRecentProjects(preferences.project_history())
         computeReady = true
         localCpuThreads = Math.max(1, Math.min(availableCpuThreads, localCpuThreads))
         shell.configure_cpu_threads(localCpuThreads)
@@ -2766,7 +2744,7 @@ ApplicationWindow {
                 action: previousAction, folder: projectDialog ? projectDialog.currentFolder.toString() : window.projectPickerFolder().toString(),
                 policyFolder: window.projectPickerFolder().toString(),
                 visible: projectDialog !== null && projectDialog.visible, project: shell.project_dir,
-                historyError: window.recentProjectsError, preferencesError: preferences.error,
+                historyError: preferences.project_error, preferencesError: preferences.error,
                 preferencesReady: window.preferencesReady
             }))
             if (!steps.length) { stop(); Qt.quit(); return }

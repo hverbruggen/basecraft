@@ -119,6 +119,10 @@ pub mod qobject {
         ) -> bool;
         #[qinvokable]
         fn link_status(self: &MetadataController, file: &QString) -> QString;
+        /// `path` when a document of `kind` there is a FASTA file whose
+        /// records can be imported, linked or templated, else "".
+        #[qinvokable]
+        fn fasta_source(self: &MetadataController, kind: &QString, path: &QString) -> QString;
         #[qinvokable]
         fn consumer(self: Pin<&mut MetadataController>, request: &QString, apply: bool) -> QString;
     }
@@ -951,6 +955,11 @@ impl qobject::MetadataController {
         }
     }
 
+    pub fn fasta_source(&self, kind: &QString, path: &QString) -> QString {
+        let path = path.to_string();
+        QString::from(if fasta_source(&kind.to_string(), &path) { path.as_str() } else { "" })
+    }
+
     /// `{records, unlinked: [...]}` for a sequence file, or `{}` when it
     /// can't be checked (not FASTA, outside the project, no table).
     pub fn link_status(&self, file: &QString) -> QString {
@@ -964,9 +973,30 @@ impl qobject::MetadataController {
     }
 }
 
+/// Whether an open sequence or alignment at `path` is a FASTA file.
+fn fasta_source(kind: &str, path: &str) -> bool {
+    matches!(kind, "sequence" | "alignment")
+        && std::path::Path::new(path)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                ["fa", "fasta", "fna", "fas", "ffn", "faa", "afa"]
+                    .contains(&extension.to_ascii_lowercase().as_str())
+            })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_open_fasta_sequences_and_alignments_are_metadata_sources() {
+        assert!(fasta_source("alignment", "/p/coi.AFA"));
+        assert!(fasta_source("sequence", "/p/reads.fasta"));
+        assert!(!fasta_source("sequence", "/p/locus.gb"));
+        assert!(!fasta_source("tree", "/p/coi.fa"));
+        assert!(!fasta_source("alignment", ""));
+    }
 
     #[test]
     fn field_roles_round_trip_their_qml_names() {

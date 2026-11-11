@@ -4,7 +4,7 @@ use basecraft_platform::{
     settings::{Change, DataColorScheme, Preferences, SettingsStore, ThemeChoice},
 };
 use cxx_qt::CxxQtType;
-use cxx_qt_lib::QString;
+use cxx_qt_lib::{QString, QStringList};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
@@ -13,25 +13,36 @@ pub mod qobject {
     unsafe extern "C++" {
         include!("cxx-qt-lib/qstring.h");
         type QString = cxx_qt_lib::QString;
+        include!("cxx-qt-lib/qstringlist.h");
+        type QStringList = cxx_qt_lib::QStringList;
     }
     unsafe extern "RustQt" {
         #[qobject]
         #[qml_element]
         #[qproperty(QString, snapshot)]
         #[qproperty(QString, error)]
+        /// Recently chosen project folders, newest first.
+        #[qproperty(QStringList, recent_projects)]
+        /// Why the recent projects could not be read, or a project not chosen.
+        #[qproperty(QString, project_error)]
         type AppSettings = super::SettingsRust;
+    }
+    impl cxx_qt::Initialize for AppSettings {}
+    unsafe extern "RustQt" {
         #[qinvokable]
         fn reload(self: Pin<&mut AppSettings>) -> bool;
         #[qinvokable]
         fn update(self: Pin<&mut AppSettings>, key: &QString, value: &QString) -> bool;
+        /// Choose `path` as the project: remembered first in the recent
+        /// projects. Returns `path`, or "" with `project_error` set.
         #[qinvokable]
-        fn project_history(self: &AppSettings) -> QString;
-        #[qinvokable]
-        fn remember_project(self: Pin<&mut AppSettings>, path: &QString) -> QString;
+        fn select_project(self: Pin<&mut AppSettings>, path: &QString) -> QString;
         #[qinvokable]
         fn project_picker_directory(self: &AppSettings) -> QString;
         #[qinvokable]
-        fn untitled_folder(self: &AppSettings, project: &QString) -> QString;
+        /// Where a file dialog starts for the document at `document`
+        /// (its tab path) whose file is `file` (may be empty).
+        fn dialog_folder(self: &AppSettings, project: &QString, document: &QString, file: &QString) -> QString;
         /// Where the latest release is described, for the release notice.
         #[qinvokable]
         fn release_url(self: &AppSettings) -> QString;
@@ -39,13 +50,13 @@ pub mod qobject {
         /// build, else "".
         #[qinvokable]
         fn release_notice(self: &AppSettings, response: &QString) -> QString;
-        #[qinvokable]
-        fn project_is_directory(self: &AppSettings, path: &QString) -> bool;
     }
 }
 pub struct SettingsRust {
     snapshot: QString,
     error: QString,
+    recent_projects: QStringList,
+    project_error: QString,
     project_picker: ProjectPickerLocation,
 }
 impl Default for SettingsRust {
@@ -53,6 +64,8 @@ impl Default for SettingsRust {
         Self {
             snapshot: snapshot(&Preferences::default()).unwrap_or_default(),
             error: QString::default(),
+            recent_projects: QStringList::default(),
+            project_error: QString::default(),
             project_picker: ProjectPickerLocation::default(),
         }
     }
@@ -170,17 +183,32 @@ fn change(key: &str, value: &serde_json::Value) -> Result<Change, String> {
     })
 }
 impl qobject::AppSettings {
-    fn project_history(&self) -> QString {
-        history_reply(load_project_history())
+    fn select_project(mut self: Pin<&mut Self>, path: &QString) -> QString {
+        let chosen = path.to_string();
+        let result = history_path().and_then(|file| {
+            choose_project(
+                &mut self.as_mut().rust_mut().project_picker,
+                Path::new(&chosen),
+                &file,
+            )
+        });
+        let accepted = result.is_ok();
+        self.show_projects(result);
+        QString::from(if accepted { chosen.as_str() } else { "" })
     }
-    fn remember_project(mut self: Pin<&mut Self>, path: &QString) -> QString {
-        let result = self
-            .as_mut()
-            .rust_mut()
-            .project_picker
-            .opened(Path::new(&path.to_string()))
-            .and_then(|path| remember_project_path(&path));
-        history_reply(result)
+    /// Publish the recent projects, or keep the shown ones and say why not.
+    fn show_projects(mut self: Pin<&mut Self>, result: Result<Vec<PathBuf>, String>) {
+        match result {
+            Ok(projects) => {
+                let mut list = QStringList::default();
+                for project in projects {
+                    list.append(QString::from(project.to_string_lossy().as_ref()));
+                }
+                self.as_mut().set_recent_projects(list);
+                self.set_project_error(QString::default());
+            }
+            Err(error) => self.set_project_error(QString::from(&error)),
+        }
     }
     fn project_picker_directory(&self) -> QString {
         let home = AppPaths::discover()
@@ -200,13 +228,15 @@ impl qobject::AppSettings {
             &release_notice(env!("CARGO_PKG_VERSION"), &response.to_string()).unwrap_or_default(),
         )
     }
-    fn untitled_folder(&self, project: &QString) -> QString {
+    fn dialog_folder(&self, project: &QString, document: &QString, file: &QString) -> QString {
         let home = AppPaths::discover().ok().and_then(|paths| paths.home);
-        let folder = untitled_folder(&project.to_string(), home.as_deref());
+        let folder = dialog_folder(
+            &project.to_string(),
+            &document.to_string(),
+            &file.to_string(),
+            home.as_deref(),
+        );
         QString::from(folder.to_string_lossy().as_ref())
-    }
-    fn project_is_directory(&self, path: &QString) -> bool {
-        Path::new(&path.to_string()).is_dir()
     }
     fn publish(mut self: Pin<&mut Self>, result: Result<Preferences, String>) -> bool {
         match result.and_then(|prefs| snapshot(&prefs)) {
@@ -308,6 +338,20 @@ fn untitled_folder(project: &str, home: Option<&Path>) -> PathBuf {
     }
 }
 
+/// Where a file dialog starts: a never-saved document's untitled folder,
+/// else the folder of its file (or its tab path), else the project.
+fn dialog_folder(project: &str, document: &str, file: &str, home: Option<&Path>) -> PathBuf {
+    if document.starts_with("untitled:") {
+        return untitled_folder(project, home);
+    }
+    let path = if file.is_empty() { document } else { file };
+    if path.is_empty() {
+        PathBuf::from(project)
+    } else {
+        Path::new(path).parent().map(Path::to_owned).unwrap_or_default()
+    }
+}
+
 #[cfg(test)]
 mod untitled_tests {
     use super::*;
@@ -326,6 +370,16 @@ mod untitled_tests {
             home.path().join("Documents")
         );
         assert_eq!(untitled_folder("", None), PathBuf::new());
+    }
+
+    #[test]
+    fn dialogs_start_beside_the_file_else_the_tab_else_the_project() {
+        let home = tempfile::tempdir().unwrap();
+        let at = |document, file| dialog_folder("/project", document, file, Some(home.path()));
+        assert_eq!(at("untitled:2", ""), Path::new("/project"));
+        assert_eq!(at("/data/a.gb", "/exports/a.fasta"), Path::new("/exports"));
+        assert_eq!(at("/data/a.gb", ""), Path::new("/data"));
+        assert_eq!(at("", ""), Path::new("/project"));
     }
 }
 
@@ -419,10 +473,6 @@ fn load_project_history_at(path: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(history.projects)
 }
 
-fn remember_project_path(path: &Path) -> Result<Vec<PathBuf>, String> {
-    remember_project_path_at(path, &history_path()?)
-}
-
 fn remember_project_path_at(path: &Path, file: &Path) -> Result<Vec<PathBuf>, String> {
     let canonical = project_directory(path)?;
     let mut projects = load_project_history_at(file)?;
@@ -444,6 +494,25 @@ fn remember_project_path_at(path: &Path, file: &Path) -> Result<Vec<PathBuf>, St
 #[cfg(test)]
 mod project_history_tests {
     use super::*;
+
+    #[test]
+    fn choosing_a_project_remembers_it_first_and_refuses_a_missing_folder() {
+        let temp = tempfile::tempdir().unwrap();
+        let history = temp.path().join("state/projects.json");
+        let (one, two) = (temp.path().join("one"), temp.path().join("two"));
+        std::fs::create_dir_all(&one).unwrap();
+        std::fs::create_dir_all(&two).unwrap();
+        let mut picker = ProjectPickerLocation::default();
+        choose_project(&mut picker, &one, &history).unwrap();
+        let projects = choose_project(&mut picker, &two, &history).unwrap();
+        assert_eq!(
+            projects,
+            [two.canonicalize().unwrap(), one.canonicalize().unwrap()]
+        );
+        let missing = choose_project(&mut picker, &temp.path().join("gone"), &history);
+        assert!(missing.unwrap_err().starts_with("Project folder is unavailable: "));
+        assert_eq!(load_project_history_at(&history).unwrap(), projects);
+    }
 
     #[test]
     fn picker_uses_available_directories_and_component_ancestors() {
@@ -566,18 +635,23 @@ mod project_history_tests {
     }
 }
 
-fn history_reply(result: Result<Vec<PathBuf>, String>) -> QString {
-    let value = match result {
-        Ok(projects) => serde_json::json!({ "projects": projects, "error": "" }),
-        Err(error) => serde_json::json!({ "projects": [], "error": error }),
-    };
-    QString::from(
-        serde_json::to_string(&value)
-            .unwrap_or_else(|_| {
-                "{\"projects\":[],\"error\":\"Cannot display recent projects\"}".into()
-            })
-            .as_str(),
-    )
+impl cxx_qt::Initialize for qobject::AppSettings {
+    fn initialize(self: Pin<&mut Self>) {
+        self.show_projects(load_project_history());
+    }
+}
+
+/// Remember `path` as the latest project, refusing a missing folder.
+fn choose_project(
+    picker: &mut ProjectPickerLocation,
+    path: &Path,
+    history: &Path,
+) -> Result<Vec<PathBuf>, String> {
+    if !path.is_dir() {
+        return Err(format!("Project folder is unavailable: {}", path.display()));
+    }
+    let canonical = picker.opened(path)?;
+    remember_project_path_at(&canonical, history)
 }
 
 #[cfg(test)]

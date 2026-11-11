@@ -189,9 +189,9 @@ Main {
             record.close()
             // A missing project folder changes nothing; an existing one is chosen.
             selectProject(folder + "/missing")
-            check(recentProjectsError.includes("/missing") && metadataProject !== folder + "/missing", "missing project accepted")
+            check(dialog("preferences").project_error.includes("/missing") && metadataProject !== folder + "/missing", "missing project accepted")
             selectProject(folder)
-            check(metadataProject === folder && recentProjects.includes(folder) && recentProjectsError === "", "project not chosen")
+            check(metadataProject === folder && dialog("preferences").recent_projects.includes(folder) && dialog("preferences").project_error === "", "project not chosen")
         })
         // Figure export options: PNG width, selection for alignments only.
         list.push(() => { show(1); exportSvg("png") })

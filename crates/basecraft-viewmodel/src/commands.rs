@@ -1243,9 +1243,37 @@ pub fn ribbon_tab(kind: &str, chosen: &str) -> &'static str {
     if tabs.len() > 3 { tabs[2] } else { "File" }
 }
 
+/// Every ribbon tab, in the order of the ribbon's stack of pages.
+const PANELS: [&str; 9] = [
+    "File",
+    "View",
+    "Sequence",
+    "Alignment",
+    "Tree",
+    "Phylogeny",
+    "Delimitation",
+    "Trace",
+    "Export",
+];
+
+/// The page in the ribbon's stack that shows `tab`; File for an unknown tab.
+pub fn ribbon_panel(tab: &str) -> usize {
+    PANELS.iter().position(|name| *name == tab).unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_ribbon_tab_has_its_own_page() {
+        for kind in ["", "sequence", "alignment", "tree", "delimitation", "trace"] {
+            for tab in ribbon_tabs(kind) {
+                assert_eq!(PANELS[ribbon_panel(tab)], tab);
+            }
+        }
+        assert_eq!(ribbon_panel("Gone"), 0);
+    }
 
     #[test]
     fn every_command_is_listed_once_and_keys_have_a_scope() {

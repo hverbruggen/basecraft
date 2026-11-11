@@ -31,6 +31,9 @@ pub mod qobject {
         fn ribbon_tabs(self: &AppCommands, kind: &QString) -> QStringList;
         #[qinvokable]
         fn ribbon_tab(self: &AppCommands, kind: &QString, chosen: &QString) -> QString;
+        /// The ribbon page index that shows `tab`.
+        #[qinvokable]
+        fn ribbon_panel(self: &AppCommands, tab: &QString) -> i32;
         #[qinvokable]
         fn blast_source(
             self: &AppCommands,
@@ -77,6 +80,9 @@ impl qobject::AppCommands {
             &asked.to_string(),
             has_selection,
         ))
+    }
+    fn ribbon_panel(&self, tab: &QString) -> i32 {
+        i32::try_from(commands::ribbon_panel(&tab.to_string())).unwrap_or(0)
     }
     fn ribbon_tab(&self, kind: &QString, chosen: &QString) -> QString {
         QString::from(commands::ribbon_tab(&kind.to_string(), &chosen.to_string()))
