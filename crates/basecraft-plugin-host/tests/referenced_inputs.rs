@@ -170,7 +170,8 @@ fn common_save_route_preserves_actual_original_and_dirty_submitted_input() {
         basecraft_ops::records::verify(&copied_result).unwrap(),
         Vec::<String>::new()
     );
-    assert!(basecraft_ops::records::replay(dir.path()).unwrap().ok());
+    let report = basecraft_ops::records::replay(dir.path()).unwrap();
+    assert!(report.ok(), "{:?}", report.problems);
 }
 
 #[test]

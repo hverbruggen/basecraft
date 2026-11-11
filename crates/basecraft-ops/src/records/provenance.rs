@@ -367,7 +367,11 @@ pub(crate) fn verify_records(bundle: &Path, current: &Publication) -> Result<Vec
     Ok(issues)
 }
 
-fn atomic_json(path: &Path, value: &impl serde::Serialize) -> Result<()> {
+fn stage_json(
+    prepared: &mut crate::documents::PreparedWrite,
+    path: &Path,
+    value: &impl serde::Serialize,
+) -> Result<()> {
     let mut bytes = serde_json::to_vec_pretty(value)?;
     bytes.push(b'\n');
     if bytes.len() > 64 << 20 {
@@ -376,7 +380,7 @@ fn atomic_json(path: &Path, value: &impl serde::Serialize) -> Result<()> {
             limit: 64 << 20,
         });
     }
-    basecraft_io::write_atomic(path, |w| w.write_all(&bytes))?;
+    prepared.push(path, |w| w.write_all(&bytes))?;
     Ok(())
 }
 
@@ -664,25 +668,47 @@ pub fn tool_run_entry(
 
 /// Artifacts must already be durable before this final manifest publication.
 pub fn publish(bundle: &Path, publication: &Publication) -> Result<()> {
+    stage(bundle, publication)?.publish().map(|_| ())
+}
+
+/// Stage the record, reports, README and manifest. They sync together on
+/// publication and are renamed in order, the manifest last.
+pub(crate) fn stage(
+    bundle: &Path,
+    publication: &Publication,
+) -> Result<crate::documents::PreparedWrite> {
     std::fs::create_dir_all(bundle.join("records"))?;
     link_selected_inputs(bundle, publication)?;
-    atomic_json(
+    let mut prepared = crate::documents::PreparedWrite::default();
+    stage_json(
+        &mut prepared,
         &bundle
             .join("records")
             .join(format!("{}.json", publication.id)),
         publication,
     )?;
-    write_reports(bundle, publication)?;
-    basecraft_io::write_atomic(&bundle.join("README.md"), |w| {
+    stage_reports(&mut prepared, bundle, publication)?;
+    prepared.push(&bundle.join("README.md"), |w| {
         w.write_all(
         b"# Basecraft provenance v1\n\nmanifest.json selects the latest publication. records/ holds immutable publication records; artifacts/ holds BLAKE3-addressed original and saved bytes. Reports are generated descriptions, not inferred laboratory protocols. Imported history before Basecraft is unknown. Checksums detect changes; they are not signatures. No file in this bundle should be executed to inspect or verify it.\n"
     )
     })?;
-    atomic_json(&bundle.join("manifest.json"), publication)
+    stage_json(&mut prepared, &bundle.join("manifest.json"), publication)?;
+    Ok(prepared)
 }
 
 /// Deterministic evidence-based reports. User-authored methods.md is untouched.
 pub fn write_reports(output: &Path, publication: &Publication) -> Result<()> {
+    let mut prepared = crate::documents::PreparedWrite::default();
+    stage_reports(&mut prepared, output, publication)?;
+    prepared.publish().map(|_| ())
+}
+
+fn stage_reports(
+    prepared: &mut crate::documents::PreparedWrite,
+    output: &Path,
+    publication: &Publication,
+) -> Result<()> {
     std::fs::create_dir_all(output.join("reports"))?;
     let report =
         crate::records::document_record::DocumentRecord::from_publication(publication).report()?;
@@ -714,10 +740,11 @@ pub fn write_reports(output: &Path, publication: &Publication) -> Result<()> {
         ("methods.generated.md", methods.as_bytes()),
         ("parameters.tsv", params.as_bytes()),
     ] {
-        basecraft_io::write_atomic(&output.join("reports").join(name), |w| w.write_all(bytes))?;
+        prepared.push(&output.join("reports").join(name), |w| w.write_all(bytes))?;
     }
-    atomic_json(&output.join("reports/source-map.json"), &mappings)?;
-    atomic_json(
+    stage_json(prepared, &output.join("reports/source-map.json"), &mappings)?;
+    stage_json(
+        prepared,
         &output.join("reports/manifest.json"),
         &serde_json::to_value(
             basecraft_protocol::report_records::ProvenanceReportManifest {

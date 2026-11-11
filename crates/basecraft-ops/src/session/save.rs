@@ -527,41 +527,38 @@ impl Session {
                 })
             })
             .collect::<Result<_>>()?;
-        #[cfg(test)]
-        super::save_failure_tests::fail_write(super::save_failure_tests::WriteStep::Journal)?;
-        self.write(&entry)?;
-        self.docs[id.0].recovery_boundary = Some(entry.id.clone());
-        self.docs[id.0].baseline = Some(entry.clone());
-        self.docs[id.0].baseline_logged = true;
-        self.docs[id.0].source_stamps = entry
-            .source
-            .as_ref()
-            .expect("save source")
-            .files
-            .iter()
-            .map(|file| (self.resolve(&file.path), Some(file.stamp.clone())))
-            .collect();
-        self.docs[id.0].recovery_changed = false;
-        if target == self.resolve(&self.docs[id.0].key) {
-            self.docs[id.0]
-                .accepted_hashes
-                .clone_from(&entry.result.hashes);
-            self.docs[id.0].disk_stamp = entry.source.as_ref().expect("save source").files[0]
-                .stamp
-                .clone();
-            self.docs[id.0].absent_sidecars.clear();
+        // History is staged first so its files sync alongside the journal
+        // append. None becomes visible until the Save record is durable.
+        let history = (self.tracked
+            && self.provenance_policy != basecraft_platform::settings::ProvenancePolicy::None)
+            .then(|| self.prepare_save_history(id, target, &entry, &[], None));
+        let (prepared, mut history_error) = match history {
+            Some(Ok(prepared)) => (prepared, None),
+            Some(Err(error)) => (crate::documents::PreparedWrite::default(), Some(error)),
+            None => (crate::documents::PreparedWrite::default(), None),
+        };
+        let mut journal_written = false;
+        let published = prepared.publish_with(|| {
+            #[cfg(test)]
+            super::save_failure_tests::fail_write(super::save_failure_tests::WriteStep::Journal)?;
+            self.write(&entry)?;
+            journal_written = true;
+            self.accept_logged_save(id, target, &entry);
+            Ok(())
+        });
+        match published {
+            Err(error) if !journal_written => return Err(error),
+            Err(error) => history_error = Some(error),
+            Ok(_) => {}
         }
-        if self.tracked
-            && self.provenance_policy != basecraft_platform::settings::ProvenancePolicy::None
-        {
-            self.publish_save(id, target, &entry, &[], None)
-                .map_err(|error| Error::Damaged {
-                    path: target.into(),
-                    detail: format!(
-                        "data saved; history incomplete: {error}. Recovery remains at {}",
-                        self.storage_root.display()
-                    ),
-                })?;
+        if let Some(error) = history_error {
+            return Err(Error::Damaged {
+                path: target.into(),
+                detail: format!(
+                    "data saved; history incomplete: {error}. Recovery remains at {}",
+                    self.storage_root.display()
+                ),
+            });
         }
         Ok(())
     }
@@ -606,6 +603,27 @@ impl Session {
 }
 
 impl Session {
+    /// The Save record is durable: it becomes the recovery baseline and, for the
+    /// document's own file, the accepted revision.
+    fn accept_logged_save(&mut self, id: DocId, target: &Path, entry: &basecraft_protocol::LogEntry) {
+        let files = &entry.source.as_ref().expect("save source").files;
+        self.docs[id.0].recovery_boundary = Some(entry.id.clone());
+        self.docs[id.0].baseline = Some(entry.clone());
+        self.docs[id.0].baseline_logged = true;
+        self.docs[id.0].source_stamps = files
+            .iter()
+            .map(|file| (self.resolve(&file.path), Some(file.stamp.clone())))
+            .collect();
+        self.docs[id.0].recovery_changed = false;
+        if target == self.resolve(&self.docs[id.0].key) {
+            self.docs[id.0]
+                .accepted_hashes
+                .clone_from(&entry.result.hashes);
+            self.docs[id.0].disk_stamp = files[0].stamp.clone();
+            self.docs[id.0].absent_sidecars.clear();
+        }
+    }
+
     fn save_format(&self, id: DocId, target: &Path) -> Result<files::Format> {
         if self.docs[id.0].content.kind() == files::Kind::SangerReview {
             Ok(files::Format::SangerReview)

@@ -473,15 +473,20 @@ pub(crate) fn retained_source(root: &Path, hash: &str) -> Result<Option<PathBuf>
             continue;
         }
         let input = crate::input_evidence::read_input(&run)?;
-        if input.state == basecraft_protocol::input_records::EvidenceState::Preserved
+        // A delegating ledger is also Preserved but holds no bytes; keep looking.
+        let retained = if input.state == basecraft_protocol::input_records::EvidenceState::Preserved
             && input.source.as_ref().is_some_and(|r| r.hash == hash)
         {
-            return Ok(Some(run.join("preserved-input")));
-        }
-        if input.state == basecraft_protocol::input_records::EvidenceState::Generated
+            run.join("preserved-input")
+        } else if input.state == basecraft_protocol::input_records::EvidenceState::Generated
             && input.submitted_hash == hash
         {
-            return Ok(Some(run.join("submitted.fasta")));
+            run.join("submitted.fasta")
+        } else {
+            continue;
+        };
+        if retained.is_file() {
+            return Ok(Some(retained));
         }
     }
     Ok(None)

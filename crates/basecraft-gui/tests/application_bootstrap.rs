@@ -749,9 +749,11 @@ fn main() {
             .unwrap();
             let trace = folder.path().join("trace.ab1");
             std::fs::copy(fixtures.join("sanger-review/forward.ab1"), &trace).unwrap();
-            basecraft_ops::sanger_review::instrument_review(&trace)
-                .unwrap()
-                .save(&folder.path().join("trace.submission.json"))
+            let review = basecraft_ops::sanger_review::instrument_review(&trace).unwrap();
+            let mut session = basecraft_ops::Session::new(folder.path());
+            let id = session.create_sanger_review(&review).unwrap();
+            session
+                .save(id, Some(&folder.path().join("trace.submission.json")))
                 .unwrap();
             std::fs::write(folder.path().join("unknown.data"), "unsupported").unwrap();
         }
