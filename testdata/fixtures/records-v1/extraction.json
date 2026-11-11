@@ -1,0 +1,1 @@
+{"coordinates":"zero-based-half-open; segments in biological order; reverse-complement after splicing","schema_version":1,"selection":{"op":"doc.extract","params":{"end":5,"path":"extracted.fa","start":1}},"source_revision":"01M74PPEHDFSJZPTXJ52CQSM8W:1:0"}
