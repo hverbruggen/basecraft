@@ -47,7 +47,11 @@ pub fn is_submission(path: &Path) -> bool {
 
 /// Read a submission document.
 pub fn load(path: &Path) -> Result<Submission> {
-    let value: Value = serde_json::from_slice(&std::fs::read(path)?)
+    load_from(path, basecraft_io::Source::open(path)?.bytes())
+}
+
+pub(crate) fn load_from(path: &Path, bytes: &[u8]) -> Result<Submission> {
+    let value: Value = serde_json::from_slice(bytes)
         .map_err(|e| invalid(format!("{} is not valid JSON: {e}", path.display())))?;
     let version = value["version"].as_u64().unwrap_or(0);
     if version > u64::from(SUBMISSION_VERSION) {

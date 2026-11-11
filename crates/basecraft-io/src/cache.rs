@@ -43,8 +43,8 @@ fn key(path: &Path) -> Result<String> {
     Ok(h.finalize().to_hex()[..32].to_string())
 }
 
-/// BLAKE3 content hash of a file, cached under the same stat-based key as
-/// indexes, so a large unchanged file is hashed once.
+/// BLAKE3 content hash of the current bytes. Use `content_hash_in` only when
+/// a metadata-keyed cache is appropriate; it is not proof of file identity.
 pub fn content_hash(path: &Path) -> Result<String> {
     crate::hash_file(path)
 }
@@ -94,10 +94,15 @@ pub fn index_fasta(source: Source) -> Result<IndexedFasta> {
 }
 
 pub fn open_fasta_in(path: &Path, cache: &Path) -> Result<IndexedFasta> {
-    let source = Source::open(path)?;
+    index_fasta_in(path, Source::open(path)?, cache)
+}
+
+/// Reuse an index without reopening the already acquired source.
+pub fn index_fasta_in(path: &Path, source: Source, cache: &Path) -> Result<IndexedFasta> {
     let entry = cache.join("index").join(format!("{}.fai2", key(path)?));
     if let Ok(bytes) = fs::read(&entry)
         && let Some(index) = FastaIndex::from_bytes(&bytes)
+        && valid_index(&index, source.bytes())
     {
         return Ok(IndexedFasta {
             source,
@@ -115,6 +120,43 @@ pub fn open_fasta_in(path: &Path, cache: &Path) -> Result<IndexedFasta> {
         index,
         cached: false,
     })
+}
+
+// A cache is untrusted. Validate all arithmetic used by RecordIndex::read and
+// header(), including every ragged line, before allowing it to address bytes.
+fn valid_index(index: &FastaIndex, data: &[u8]) -> bool {
+    use crate::fasta::Layout;
+    let size = data.len() as u64;
+    if index.records.len() > data.len() / 2 { return false; }
+    for (i, record) in index.records.iter().enumerate() {
+        let end = index.records.get(i + 1).map_or(size, |r| r.header_offset);
+        if record.header_offset >= end || end > size
+            || data.get(record.header_offset as usize) != Some(&b'>')
+            || (record.header_offset > 0 && data[record.header_offset as usize - 1] != b'\n')
+        { return false; }
+        if record.len == 0 { continue; }
+        if record.seq_offset <= record.header_offset || record.seq_offset >= end { return false; }
+        match &record.layout {
+            Layout::Uniform { residues, bytes } => {
+                if *residues == 0 || bytes < residues { return false; }
+                let last = record.len - 1;
+                let offset = (last / residues).checked_mul(*bytes)
+                    .and_then(|n| n.checked_add(record.seq_offset))
+                    .and_then(|n| n.checked_add(last % residues));
+                if offset.is_none_or(|n| n >= end) { return false; }
+            }
+            Layout::Ragged(lines) => {
+                if lines.first() != Some(&(0, record.seq_offset)) { return false; }
+                for (j, &(first, offset)) in lines.iter().enumerate() {
+                    let (next, limit) = lines.get(j + 1).copied().unwrap_or((record.len, end));
+                    if first >= next || next > record.len || offset < record.seq_offset
+                        || limit > end || offset.checked_add(next - first).is_none_or(|n| n > limit)
+                    { return false; }
+                }
+            }
+        }
+    }
+    !index.records.is_empty() || !data.contains(&b'>')
 }
 
 #[cfg(test)]

@@ -95,6 +95,8 @@ struct Slot {
     baseline_logged: bool,
     accepted_hashes: Vec<(String, String)>,
     saved_at: Option<SavedMark>,
+    retained: Option<tempfile::TempDir>,
+    source_stamps: Vec<(PathBuf, Option<std::fs::Metadata>)>,
     absent_sidecars: Vec<String>,
     origin: Option<basecraft_protocol::provenance::Publication>,
     origin_issue: Option<String>,

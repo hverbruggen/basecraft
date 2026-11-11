@@ -117,8 +117,15 @@ fn optional(text: &str) -> Option<String> {
 
 /// Read a metadata document from its manifest.
 pub fn load(manifest_path: &Path) -> Result<OpenedMetadata> {
+    load_with(manifest_path, &mut |path| Ok(basecraft_io::Source::open(path)?))
+}
+
+pub(crate) fn load_with(
+    manifest_path: &Path,
+    read: &mut impl FnMut(&Path) -> Result<basecraft_io::Source>,
+) -> Result<OpenedMetadata> {
     let dir = manifest_path.parent().unwrap_or(Path::new("."));
-    let value: serde_json::Value = serde_json::from_slice(&std::fs::read(manifest_path)?)
+    let value: serde_json::Value = serde_json::from_slice(read(manifest_path)?.bytes())
         .map_err(|e| invalid(format!("{MANIFEST} is not valid JSON: {e}")))?;
     if value["format"] != FORMAT {
         return Err(invalid(format!(
@@ -146,13 +153,14 @@ pub fn load(manifest_path: &Path) -> Result<OpenedMetadata> {
                 entry.file
             )));
         }
-        let bytes = std::fs::read(dir.join(expected))?;
-        if basecraft_io::hash_bytes(&bytes) != entry.hash {
+        let source = read(&dir.join(expected))?;
+        let bytes = source.bytes();
+        if basecraft_io::hash_bytes(bytes) != entry.hash {
             notices.push(format!(
                 "{expected} was changed outside Basecraft since the last save; it was read and checked against its column types"
             ));
         }
-        basecraft_io::table::read_tsv(&bytes).map_err(|e| invalid(format!("{expected}: {e}")))
+        basecraft_io::table::read_tsv(bytes).map_err(|e| invalid(format!("{expected}: {e}")))
     };
     let tables = &manifest.tables;
     let specimens = read(&tables.specimens, SPECIMENS)?;
@@ -719,7 +727,7 @@ impl<'a> Planner<'a> {
 /// The records of a FASTA file: ID (up to the first whitespace) and full
 /// header line.
 pub fn fasta_headers(path: &Path) -> Result<Vec<(String, String)>> {
-    let file = basecraft_io::cache::open_fasta(path)?;
+    let file = crate::files::indexed_fasta(path)?;
     Ok(file
         .index
         .records

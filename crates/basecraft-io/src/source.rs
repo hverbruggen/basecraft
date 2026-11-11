@@ -12,9 +12,10 @@ use crate::Result;
 /// few MB is cheap, and an owned copy can't fault if the file is truncated.
 pub const MAP_THRESHOLD: u64 = 4 << 20;
 
+#[derive(Clone)]
 pub enum Source {
-    Mapped(Mmap),
-    Owned(Vec<u8>),
+    Mapped(std::sync::Arc<Mmap>),
+    Owned(std::sync::Arc<Vec<u8>>),
 }
 
 impl Source {
@@ -33,7 +34,7 @@ impl Source {
         file.read_to_end(&mut bytes)?;
         #[cfg(feature = "test-counters")]
         crate::counters::record_read(path, bytes.len() as u64);
-        Ok(Source::Owned(bytes))
+        Ok(Source::Owned(std::sync::Arc::new(bytes)))
     }
 
     /// Read once and hash the exact owned bytes returned to the caller.
@@ -46,7 +47,7 @@ impl Source {
     }
 
     pub fn from_vec(bytes: Vec<u8>) -> Self {
-        Source::Owned(bytes)
+        Source::Owned(std::sync::Arc::new(bytes))
     }
 
     pub fn bytes(&self) -> &[u8] {

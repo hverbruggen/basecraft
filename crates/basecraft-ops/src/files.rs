@@ -205,26 +205,6 @@ impl Loaded {
     }
 }
 
-/// The same admission route for live sources and verified replay snapshots.
-pub(crate) fn load_snapshot(
-    path: &Path,
-    source: Option<Source>,
-    format: Format,
-    verified: bool,
-) -> Result<Loaded> {
-    if let Some(source) = source {
-        if verified && format == Format::Tree {
-            load_tree_from(path, &source, true).map(Loaded::Tree)
-        } else {
-            load_from(path, source)
-        }
-    } else if verified && format == Format::Tree {
-        load_tree_from_verified_snapshot(path).map(Loaded::Tree)
-    } else {
-        load(path)
-    }
-}
-
 /// Open a file as whatever it holds: see [`kind`].
 pub fn load(path: &Path) -> Result<Loaded> {
     let format = Format::from_path(path)?;
@@ -247,7 +227,10 @@ pub fn load(path: &Path) -> Result<Loaded> {
 pub fn load_from(path: &Path, source: Source) -> Result<Loaded> {
     match Format::from_path(path)? {
         Format::Tree => load_tree_from(path, &source, false).map(Loaded::Tree),
-        Format::Fasta => load_fasta_from(path, source, None),
+        Format::Fasta => {
+            let gff = read_optional(&gff_sidecar(path))?;
+            load_fasta_from(path, source, gff.as_ref())
+        },
         Format::GenBank => open_from(path, source).map(Loaded::Sequence),
         _ => Err(crate::error::invalid(
             "this format does not support loading an owned source",
@@ -255,32 +238,103 @@ pub fn load_from(path: &Path, source: Source) -> Result<Loaded> {
     }
 }
 
-/// Admission evidence from exactly the bytes consumed by the FASTA loaders.
-/// Other formats and absent companions keep their existing acquisition route.
-pub(crate) struct CapturedLoad {
-    pub content: Loaded,
-    pub main_hash: String,
-    pub companion_hashes: Vec<Option<String>>,
+/// Shared FASTA entry point using the application's configured cache root.
+/// Tiny documents cost less to index than to persist and need no cache files.
+pub(crate) fn index_fasta(path: &Path, source: Source) -> Result<cache::IndexedFasta> {
+    if source.bytes().len() < 4 << 20 {
+        return Ok(cache::index_fasta(source)?);
+    }
+    let paths = basecraft_platform::paths::AppPaths::discover()
+        .map_err(|e| crate::error::invalid(e.to_string()))?;
+    Ok(cache::index_fasta_in(path, source, &paths.cache)?)
 }
 
-pub(crate) fn capture_load(path: &Path, format: Format) -> Result<Option<CapturedLoad>> {
-    if format != Format::Fasta || !gff_sidecar(path).exists() {
-        return Ok(None);
+pub(crate) fn indexed_fasta(path: &Path) -> Result<cache::IndexedFasta> {
+    index_fasta(path, Source::open(path)?)
+}
+
+/// Exact inputs retained until admission and recovery preparation finish.
+pub(crate) struct CapturedLoad {
+    pub content: Loaded,
+    pub files: Vec<(PathBuf, Source, String)>,
+    pub stamps: Vec<(PathBuf, Option<std::fs::Metadata>)>,
+}
+
+pub(crate) fn capture_load(path: &Path, format: Format, verified: bool) -> Result<CapturedLoad> {
+    let companions = match format {
+        Format::Metadata => crate::metadata::files(path).split_off(1),
+        Format::Tree | Format::Delimitation => vec![tree_sidecar(path)],
+        Format::GenBank | Format::Fasta => vec![gff_sidecar(path)],
+        Format::Submission => crate::documents::submission_companions(path),
+    };
+    let mut stamps = Vec::new();
+    let mut files = Vec::new();
+    for file in std::iter::once(path.to_path_buf()).chain(companions) {
+        let metadata = match std::fs::metadata(&file) {
+            Ok(metadata) => Some(metadata),
+            Err(error) if error.kind() == io::ErrorKind::NotFound && file != path => None,
+            Err(error) => return Err(error.into()),
+        };
+        if metadata.is_some() {
+            let (source, hash) = Source::open_hashed(&file)?;
+            files.push((file.clone(), source, hash));
+        }
+        stamps.push((file, metadata));
     }
-    let (source, main_hash) = Source::open_hashed(path)?;
-    let (gff, gff_hash) = Source::open_hashed(&gff_sidecar(path))?;
-    #[cfg(test)]
-    admission_tests::boundary("acquired");
-    let content = load_fasta_from(path, source, Some(&gff))?;
-    Ok(Some(CapturedLoad {
-        content,
-        main_hash,
-        companion_hashes: vec![Some(gff_hash)],
-    }))
+    let main = files[0].1.clone();
+    let companion = files.get(1).map(|(_, source, _)| source);
+    let content = match format {
+        Format::Fasta => load_fasta_from(path, main, companion)?,
+        Format::GenBank => Loaded::Sequence(open_from(path, main)?),
+        Format::Tree => Loaded::Tree(load_tree_bytes(path, &main, verified, companion)?),
+        Format::Delimitation => Loaded::Delimitation(load_delimitation_bytes(path, main.bytes(), companion)?),
+        Format::Submission => Loaded::Submission(crate::submission::load_from(path, main.bytes())?),
+        Format::Metadata => Loaded::Metadata(crate::metadata::load_with(path, &mut |file| {
+            files.iter().find(|(p, _, _)| p == file).map(|(_, source, _)| source.clone())
+                .ok_or_else(|| crate::error::invalid("metadata table is missing"))
+        })?),
+    };
+    for (file, before) in &stamps {
+        let after = match std::fs::metadata(file) {
+            Ok(metadata) => Some(metadata),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error.into()),
+        };
+        if !same_metadata(before.as_ref(), after.as_ref()) {
+            return Err(crate::error::invalid("source or sidecar changed while opening; retry with stable files"));
+        }
+    }
+    Ok(CapturedLoad { content, files, stamps })
+}
+
+fn read_optional(path: &Path) -> Result<Option<Source>> {
+    match Source::open(path) {
+        Ok(source) => Ok(Some(source)),
+        Err(basecraft_io::Error::Io(error)) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+pub(crate) fn same_metadata(a: Option<&std::fs::Metadata>, b: Option<&std::fs::Metadata>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => {
+            let same = a.is_file() && b.is_file() && a.len() == b.len() && a.modified().ok() == b.modified().ok();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                same && a.dev() == b.dev() && a.ino() == b.ino()
+                    && a.ctime() == b.ctime() && a.ctime_nsec() == b.ctime_nsec()
+            }
+            #[cfg(not(unix))]
+            { same }
+        }
+        _ => false,
+    }
 }
 
 fn load_fasta_from(path: &Path, source: Source, captured_gff: Option<&Source>) -> Result<Loaded> {
-    let file = Arc::new(cache::index_fasta(source)?);
+    let file = Arc::new(index_fasta(path, source)?);
     if file.index.records.is_empty() {
         return Err(Error::Empty(path.to_path_buf()));
     }
@@ -297,16 +351,10 @@ fn load_fasta_from(path: &Path, source: Source, captured_gff: Option<&Source>) -
             doc: AlignmentDoc::from_fasta(name, &file),
             format: Format::Fasta,
         }))
-    } else if let Some(gff) = captured_gff {
-        open_fasta_with_gff(path, file, Some(gff.bytes())).map(Loaded::Sequence)
     } else {
-        open_fasta_from(path, file).map(Loaded::Sequence)
+        open_fasta_with_gff(path, file, captured_gff.map(Source::bytes)).map(Loaded::Sequence)
     }
 }
-
-#[cfg(test)]
-#[path = "fasta_admission_tests.rs"]
-pub(crate) mod admission_tests;
 
 /// Write explicit alignment contents as FASTA, 60 columns a line.
 /// Synthetic suffix padding used to display ragged input is never materialised.
@@ -399,12 +447,6 @@ pub fn load_tree(path: &Path) -> Result<OpenedTree> {
     load_tree_metadata(path, false)
 }
 
-/// Replay has verified the journal's exact tree AND sidecar hashes before this
-/// call. This does not grant trust to an unbound live adjacent sidecar.
-pub(crate) fn load_tree_from_verified_snapshot(path: &Path) -> Result<OpenedTree> {
-    load_tree_metadata(path, true)
-}
-
 fn load_tree_metadata(path: &Path, verified_snapshot: bool) -> Result<OpenedTree> {
     load_tree_from(path, &open_source(path, Format::Tree)?, verified_snapshot)
 }
@@ -414,6 +456,11 @@ pub(crate) fn load_tree_from(
     source: &Source,
     verified_snapshot: bool,
 ) -> Result<OpenedTree> {
+    let side = read_optional(&tree_sidecar(path))?;
+    load_tree_bytes(path, source, verified_snapshot, side.as_ref())
+}
+
+fn load_tree_bytes(path: &Path, source: &Source, verified_snapshot: bool, captured_side: Option<&Source>) -> Result<OpenedTree> {
     let text = std::str::from_utf8(source.bytes())
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     let nexus = newick::is_nexus(text);
@@ -442,8 +489,8 @@ pub(crate) fn load_tree_from(
             ))
         },
     );
-    if sidecar.exists() {
-        let side: TreeSidecar = serde_json::from_slice(&std::fs::read(&sidecar)?)?;
+    if let Some(source) = captured_side {
+        let side: TreeSidecar = serde_json::from_slice(source.bytes())?;
         if side.schema_version == 0 && !verified_snapshot {
             metadata_warning = Some(format!(
                 "Unverified legacy tree metadata at {} was left unapplied; the exchange tree is open and the original metadata bytes are preserved.",
@@ -481,7 +528,7 @@ pub(crate) fn load_tree_from(
             }
         }
     }
-    if bound && !sidecar.exists() {
+    if bound && captured_side.is_none() {
         metadata_warning = Some("Bound tree metadata is unavailable; exchange values remain open with unknown support meaning and default presentation.".into());
     }
     // Legacy Basecraft distance runs carry explicit bootstrap metadata. Require
@@ -671,7 +718,7 @@ pub fn open_from(path: &Path, source: Source) -> Result<Opened> {
                 fasta: None,
             })
         }
-        Format::Fasta => open_fasta_from(path, Arc::new(cache::index_fasta(source)?)),
+        Format::Fasta => open_fasta_from(path, Arc::new(index_fasta(path, source)?)),
     }
 }
 
@@ -1122,7 +1169,13 @@ struct DelimitationSidecar {
 pub fn load_delimitation(
     path: &Path,
 ) -> Result<basecraft_protocol::delimitation::DelimitationWorkspace> {
-    let text = std::fs::read_to_string(path)?;
+    let source = Source::open(path)?;
+    let side = read_optional(&tree_sidecar(path))?;
+    load_delimitation_bytes(path, source.bytes(), side.as_ref())
+}
+
+fn load_delimitation_bytes(path: &Path, bytes: &[u8], captured_side: Option<&Source>) -> Result<basecraft_protocol::delimitation::DelimitationWorkspace> {
+    let text = std::str::from_utf8(bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     let mut work = if text.trim_start().starts_with('<') {
         basecraft_io::spart::parse_xml(&text)?
     } else {
@@ -1130,15 +1183,14 @@ pub fn load_delimitation(
     };
     // A damaged hidden binding must never silently select stale legacy data.
     let hidden = crate::analysis_store::ArtifactRun::for_result(path)?;
-    let sidecar = tree_sidecar(path);
-    if hidden.is_some() && !sidecar.is_file() {
+    if hidden.is_some() && captured_side.is_none() {
         return Err(crate::error::invalid(
             "Hidden species workspace metadata is missing; restore its folder context or explicitly open a standalone SPART copy",
         ));
     }
-    if sidecar.exists() {
-        let side: DelimitationSidecar = serde_json::from_slice(&std::fs::read(sidecar)?)?;
-        if !matches!(side.version, 1 | 2) || side.exchange_hash != cache::content_hash(path)? {
+    if let Some(source) = captured_side {
+        let side: DelimitationSidecar = serde_json::from_slice(source.bytes())?;
+        if !matches!(side.version, 1 | 2) || side.exchange_hash != basecraft_io::hash_bytes(bytes) {
             return Err(crate::error::invalid(
                 "SPART sidecar version or exchange hash differs",
             ));

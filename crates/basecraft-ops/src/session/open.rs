@@ -1,6 +1,4 @@
 //! Document loading, baseline tracking and retained originals.
-#[cfg(test)]
-use super::retention_tests;
 use super::{DocId, Op, OpResult, Path, PathBuf, Result, Slot, files, invalid, objects_dir};
 use super::{OBJECT_STORE_LIMIT, Session, save_authority};
 
@@ -33,75 +31,38 @@ impl Session {
         self.flush()?;
         let disk_stamp = crate::input_evidence::stamp(path)?;
         let format = files::Format::from_path(path)?;
-        // Files read with the main one: a sidecar, or a metadata manifest's tables.
-        let companions = match format {
-            files::Format::Metadata => crate::metadata::files(path).split_off(1),
-            files::Format::Tree | files::Format::Delimitation => vec![files::tree_sidecar(path)],
-            files::Format::GenBank | files::Format::Fasta => vec![files::gff_sidecar(path)],
-            files::Format::Submission => crate::documents::submission_companions(path),
-        };
-        // A captured loader couples parser bytes and hashes, but companions
-        // still require final content checks before admission.
-        let captured = files::capture_load(path, format)?;
-        let owned_main = captured.is_none()
-            && matches!(
-                format,
-                files::Format::Fasta | files::Format::GenBank | files::Format::Tree
-            )
-            && !companions.iter().any(|c| c.exists());
-        let hash_companions = || -> Result<Vec<Option<String>>> {
-            companions
-                .iter()
-                .map(|c| {
-                    if c.exists() {
-                        basecraft_io::hash_file(c).map(Some).map_err(Into::into)
-                    } else {
-                        Ok(None)
-                    }
-                })
-                .collect()
-        };
-        let (content, accepted_hash, companion_hashes) = if let Some(captured) = captured {
-            (
-                captured.content,
-                captured.main_hash,
-                captured.companion_hashes,
-            )
-        } else {
-            let (source, accepted_hash) = if owned_main {
-                let (source, hash) = basecraft_io::Source::open_hashed(path)?;
-                (Some(source), hash)
-            } else {
-                (None, basecraft_io::hash_file(path)?)
-            };
-            let companion_hashes = hash_companions()?;
-            #[cfg(test)]
-            files::admission_tests::boundary("acquired");
-            let content = files::load_snapshot(path, source, format, verified_snapshot)?;
-            (content, accepted_hash, companion_hashes)
-        };
-        #[cfg(test)]
-        files::admission_tests::boundary("parsed");
-        if (!owned_main && basecraft_io::hash_file(path)? != accepted_hash)
-            || hash_companions()? != companion_hashes
-            || crate::input_evidence::stamp(path)? != disk_stamp
-        {
-            return Err(invalid(
-                "source or sidecar changed while opening; retry with stable files",
-            ));
-        }
+        let captured = files::capture_load(path, format, verified_snapshot)?;
+        let content = captured.content;
         let key = self.relative(path);
-        let mut hashes = vec![(key.clone(), accepted_hash)];
-        let absent_sidecars = companions
-            .iter()
-            .zip(&companion_hashes)
-            .filter(|(_, hash)| hash.is_none())
-            .map(|(c, _)| self.relative(c))
+        let retain_companions = content.as_document().retains_companions();
+        let hashes: Vec<_> = captured.files.iter().enumerate()
+            .filter(|(i, _)| *i == 0 || retain_companions)
+            .map(|(_, (path, _, hash))| (self.relative(path), hash.clone()))
             .collect();
-        if content.as_document().retains_companions() {
-            for (companion, hash) in companions.iter().zip(companion_hashes) {
-                if let Some(hash) = hash {
-                    hashes.push((self.relative(companion), hash));
+        let absent_sidecars = captured.stamps.iter()
+            .filter(|(_, stamp)| stamp.is_none())
+            .map(|(path, _)| self.relative(path)).collect();
+        // Stage retained originals before returning to the interface. The staging
+        // directory shares the destination filesystem so promotion only renames.
+        let retained = if self.tracked && self.store_objects {
+            let mut ancestor = self.storage_root.as_path();
+            while !ancestor.is_dir() {
+                ancestor = ancestor.parent().ok_or_else(|| invalid("recovery parent unavailable"))?;
+            }
+            let stage = tempfile::Builder::new().prefix(".basecraft-open-").tempdir_in(ancestor)?;
+            for (_, source, hash) in &captured.files {
+                if source.bytes().len() as u64 <= OBJECT_STORE_LIMIT {
+                    let dest = stage.path().join(hash.trim_start_matches("b3:"));
+                    basecraft_io::write_atomic(&dest, |w| w.write_all(source.bytes()))?;
+                }
+            }
+            Some(stage)
+        } else { None };
+        if self.tracked && !self.store_objects {
+            let mut objects = self.memory_objects.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            for (_, source, hash) in &captured.files {
+                if source.bytes().len() as u64 <= OBJECT_STORE_LIMIT {
+                    objects.entry(hash.clone()).or_insert_with(|| source.bytes().to_vec());
                 }
             }
         }
@@ -124,6 +85,8 @@ impl Session {
             baseline_logged: false,
             accepted_hashes: hashes.clone(),
             saved_at: Some(super::SavedMark(None)),
+            retained,
+            source_stamps: captured.stamps,
             absent_sidecars,
             origin,
             origin_issue,
@@ -157,17 +120,23 @@ impl Session {
             return Ok(());
         };
         if self.tracked {
-            for (key, hash) in &entry.result.hashes {
-                let source = self.resolve(key);
-                if self.store_objects {
-                    self.store_object(&source, hash)?;
-                } else {
-                    if basecraft_io::hash_file(&source)? != *hash {
-                        return Err(invalid(
-                            "source changed since opening; reopen it before editing",
-                        ));
+            for (path, before) in &self.docs[id.0].source_stamps {
+                let after = std::fs::metadata(path).ok();
+                if !files::same_metadata(before.as_ref(), after.as_ref()) {
+                    return Err(invalid("source changed since opening; reopen it before editing"));
+                }
+                if let Some(before) = before && before.len() > OBJECT_STORE_LIMIT {
+                    return Err(invalid(format!("original input is {} bytes; exact recovery retention currently supports at most {OBJECT_STORE_LIMIT} bytes", before.len())));
+                }
+            }
+            if let Some(stage) = &self.docs[id.0].retained {
+                std::fs::create_dir_all(objects_dir(&self.storage_root))?;
+                for (_, hash) in &entry.result.hashes {
+                    let name = hash.trim_start_matches("b3:");
+                    let destination = objects_dir(&self.storage_root).join(name);
+                    if !destination.exists() {
+                        std::fs::rename(stage.path().join(name), destination)?;
                     }
-                    self.snapshot_file(&source)?;
                 }
             }
         }
@@ -193,6 +162,7 @@ impl Session {
             self.write(&entry)?;
         }
         self.docs[id.0].baseline = None;
+        self.docs[id.0].retained = None;
         Ok(())
     }
 
@@ -351,57 +321,4 @@ impl Session {
         Ok(hash)
     }
 
-    pub(super) fn store_object(&self, path: &Path, hash: &str) -> Result<()> {
-        let dest = objects_dir(&self.storage_root).join(hash.trim_start_matches("b3:"));
-        // These probes select an acquisition strategy, never establish identity.
-        // Keep streaming verification (and its errors) for known/oversize inputs.
-        let capture =
-            !dest.exists() && std::fs::metadata(path).is_ok_and(|m| m.len() <= OBJECT_STORE_LIMIT);
-        #[cfg(test)]
-        retention_tests::boundary(retention_tests::Stage::BeforeRead, path);
-        let (captured, current_hash) = if capture {
-            let (source, current_hash) = basecraft_io::Source::open_hashed(path)?;
-            (Some(source), current_hash)
-        } else {
-            (None, basecraft_io::hash_file(path)?)
-        };
-        if current_hash != hash {
-            return Err(invalid(
-                "source changed since opening; reopen it before editing",
-            ));
-        }
-        #[cfg(test)]
-        retention_tests::boundary(retention_tests::Stage::AfterRead, path);
-        let size = std::fs::metadata(path)?.len();
-        if size > OBJECT_STORE_LIMIT {
-            return Err(invalid(format!(
-                "original input is {size} bytes; exact recovery retention currently supports at most {OBJECT_STORE_LIMIT} bytes"
-            )));
-        }
-        if let Some(source) = &captured {
-            let size = source.bytes().len() as u64;
-            if size > OBJECT_STORE_LIMIT {
-                return Err(invalid(format!(
-                    "original input is {size} bytes; exact recovery retention currently supports at most {OBJECT_STORE_LIMIT} bytes"
-                )));
-            }
-        }
-        if !dest.exists() {
-            std::fs::create_dir_all(objects_dir(&self.storage_root))?;
-            let fallback;
-            let bytes = if let Some(source) = &captured {
-                source.bytes()
-            } else {
-                fallback = std::fs::read(path)?;
-                #[cfg(feature = "test-counters")]
-                basecraft_io::counters::record_read(path, fallback.len() as u64);
-                if basecraft_io::hash_bytes(&fallback) != hash {
-                    return Err(invalid("source changed while retaining its snapshot"));
-                }
-                &fallback
-            };
-            basecraft_io::write_atomic(&dest, |w| w.write_all(bytes))?;
-        }
-        Ok(())
-    }
 }
