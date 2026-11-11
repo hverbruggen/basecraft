@@ -68,13 +68,9 @@ AppDialog {
     onSavedRevisionChanged: { token = ""; if (visible) refreshReport() }
     onControllerChanged: { token = ""; if (visible) refreshReport() }
     onClosed: rememberDraft()
-    Connections {
-        target: dialog.visible ? dialog.controller : null
-        ignoreUnknownSignals: true
-        // Every edit or finished run redraws the document or rewrites the workspace.
-        function onFrameChanged() { dialog.refreshReport() }
-        function onWorkspace_jsonChanged() { dialog.refreshReport() }
-    }
+    // Every edit or finished run redraws the document or rewrites the workspace.
+    readonly property var redrawn: controller ? [controller.frame, controller.workspace_json] : []
+    onRedrawnChanged: if (visible) refreshReport()
 
     contentItem: ColumnLayout {
         spacing: 8

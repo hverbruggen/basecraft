@@ -40,7 +40,7 @@ pub fn status(find: &Session, y: f32) -> String {
 }
 
 /// Find for a document controller. A scan runs as a job; when it finishes the
-/// controller reveals the first hit and emits `find_changed` with the status.
+/// controller reveals the first hit and sets `find_status`.
 /// `find_update(true)` starts the first scan for a query; `find_update(false)`,
 /// called from `refresh`, only rescans after the document changed.
 macro_rules! controller_find {
@@ -135,7 +135,7 @@ macro_rules! controller_find {
                         }
                         this.as_mut().refresh();
                         let status = crate::find_bridge::status(&this.rust().find, this.find_y());
-                        this.find_changed(cxx_qt_lib::QString::from(&status));
+                        this.set_find_status(cxx_qt_lib::QString::from(&status));
                     },
                 );
                 if let Err(error) = started {
@@ -145,7 +145,7 @@ macro_rules! controller_find {
                         .failed(format!("Cannot start Find: {error}"));
                 }
                 let status = crate::find_bridge::status(&self.rust().find, self.find_y());
-                self.find_changed(cxx_qt_lib::QString::from(&status));
+                self.set_find_status(cxx_qt_lib::QString::from(&status));
             }
         }
     };

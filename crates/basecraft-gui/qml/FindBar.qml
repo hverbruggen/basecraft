@@ -62,10 +62,9 @@ Control {
     Component.onDestruction: if (controller) controller.find_query("", false)
     Keys.onEscapePressed: event => { closeFind(); event.accepted = true }
     Timer { id: debounce; interval: 160; onTriggered: bar.poll(0) }
-    Connections {
-        target: bar.opened && bar.activeDocument ? bar.controller : null
-        function onFindChanged(status) { bar.poll(0, status) }
-    }
+    // The controller publishes each new status: a finished scan or a rescan.
+    readonly property string status: opened && activeDocument && controller ? controller.find_status : ""
+    onStatusChanged: if (status.length) poll(0, status)
 
     contentItem: ColumnLayout {
         spacing: metrics.height * 0.2

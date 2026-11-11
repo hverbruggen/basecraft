@@ -15,7 +15,7 @@ Item {
         property int selection: 17
         property int reveals: 0
         function find_query(text, rc) { query = text; reverse = rc; current = 1 }
-        signal findChanged(string status)
+        property string find_status: ""
         function find_step(direction) {
             current = direction === 0 ? current : (current + (direction > 0 ? 1 : 2) - 1) % 3 + 1
             const count = query.length && query !== "missing" ? 3 : 0

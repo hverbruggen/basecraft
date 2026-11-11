@@ -31,10 +31,8 @@ AppDialog {
     }
     function refreshJobs() { if (service) jobData = JSON.parse(service.jobs(previousRuns.checked)) }
     onOpened: refreshJobs()
-    Connections {
-        target: dialog.visible ? dialog.jobs : null
-        function onRevisionChanged() { dialog.refreshJobs() }
-    }
+    readonly property int jobsRevision: jobs ? jobs.revision : 0
+    onJobsRevisionChanged: if (visible) refreshJobs()
     contentItem: ColumnLayout {
         AppCheckBox { id: previousRuns; text: "Include retained runs from earlier sessions"; onToggled: dialog.refreshJobs() }
         Label { text: dialog.jobData.error || (dialog.jobData.warnings || []).join("\n"); Layout.fillWidth: true; wrapMode: Text.Wrap; visible: text.length > 0 }

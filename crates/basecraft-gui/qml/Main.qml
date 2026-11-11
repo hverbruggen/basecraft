@@ -1741,7 +1741,7 @@ ApplicationWindow {
 
     ShortcutsDialog { id: shortcuts; commands: window.applicationCommands }
 
-    AppOperations { id: zenodoJobs }
+    AppOperations { id: zenodoJobs; onBusyChanged: if (!busy) zenodoDialog.completed() }
     ZenodoDialog { id: zenodoDialog; backend: zenodoJobs; onChooseFiles: zenodoPicker.open() }
     FileDialog {
         id: zenodoPicker
@@ -2541,7 +2541,7 @@ ApplicationWindow {
         }
     }
 
-    AppOperations { id: blastBackend }
+    AppOperations { id: blastBackend; onBusyChanged: if (!busy) blastDialog.completed() }
     BlastDialog { id: blastDialog; backend: blastBackend; onCopyText: text => clipboard.put(text) }
     function beginBlast(mode, feature) {
         const controller = window.current

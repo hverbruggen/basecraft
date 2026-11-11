@@ -67,6 +67,7 @@ pub mod qobject {
         #[qproperty(QByteArray, frame)]
         #[qproperty(QString, status)]
         #[qproperty(QString, title)]
+        #[qproperty(QString, find_status)]
         #[qproperty(QString, message)]
         /// "ok", "error", or "" for a neutral hint.
         #[qproperty(QString, message_kind)]
@@ -93,9 +94,6 @@ pub mod qobject {
         fn find_query(self: Pin<&mut GenomeController>, query: &QString, reverse: bool);
         #[qinvokable]
         fn find_step(self: Pin<&mut GenomeController>, direction: i32) -> QString;
-        #[qsignal]
-        #[cxx_name = "findChanged"]
-        fn find_changed(self: Pin<&mut GenomeController>, status: QString);
 
         #[qinvokable]
         fn document_record(self: &GenomeController) -> QString;
@@ -442,6 +440,7 @@ pub(crate) const ALT: i32 = 0x0800_0000;
 
 pub struct ControllerRust {
     find: basecraft_viewmodel::find::Session,
+    find_status: QString,
     overview_content: QString,
     overview_matches: QString,
     overview_match_cache: basecraft_viewmodel::overview::Cache,
@@ -481,6 +480,7 @@ impl Default for ControllerRust {
     fn default() -> Self {
         let c = Self {
             find: basecraft_viewmodel::find::Session::default(),
+            find_status: QString::default(),
             overview_content: QString::from("{\"shapes\":[]}"),
             overview_matches: QString::from("[]"),
             overview_match_cache: basecraft_viewmodel::overview::Cache::default(),

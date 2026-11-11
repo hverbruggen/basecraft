@@ -21,6 +21,7 @@ pub mod qobject {
         #[qproperty(QString, overview_matches)]
         #[qproperty(QByteArray, frame)]
         #[qproperty(QString, status)]
+        #[qproperty(QString, find_status)]
         #[qproperty(QString, message)]
         #[qproperty(QString, message_kind)]
         #[qproperty(QString, ok_color)]
@@ -62,9 +63,6 @@ pub mod qobject {
         fn find_query(self: Pin<&mut SangerController>, query: &QString, reverse: bool);
         #[qinvokable]
         fn find_step(self: Pin<&mut SangerController>, direction: i32) -> QString;
-        #[qsignal]
-        #[cxx_name = "findChanged"]
-        fn find_changed(self: Pin<&mut SangerController>, status: QString);
 
         #[qinvokable]
         fn cancel_stage(self: Pin<&mut SangerController>);
@@ -233,6 +231,7 @@ use work::{load_draft_review, session_view, sync_review_view};
 #[allow(clippy::struct_excessive_bools)]
 pub struct SangerRust {
     find: basecraft_viewmodel::find::Session,
+    find_status: QString,
     find_source_key: String,
     overview_content: QString,
     overview_matches: QString,
@@ -290,6 +289,7 @@ impl Default for SangerRust {
     fn default() -> Self {
         Self {
             find: basecraft_viewmodel::find::Session::default(),
+            find_status: QString::default(),
             find_source_key: String::new(),
             overview_content: QString::from("{\"shapes\":[]}"),
             overview_matches: QString::from("[]"),

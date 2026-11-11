@@ -20,6 +20,7 @@ pub mod qobject {
         #[qproperty(QString, linked_alignment)]
         #[qproperty(QString, file_path)]
         #[qproperty(QString, status)]
+        #[qproperty(QString, find_status)]
         #[qproperty(QString, message)]
         #[qproperty(QString, message_kind)]
         #[qproperty(QString, message_details)]
@@ -42,9 +43,6 @@ pub mod qobject {
         fn find_query(self: Pin<&mut DelimitationController>, query: &QString, reverse: bool);
         #[qinvokable]
         fn find_step(self: Pin<&mut DelimitationController>, direction: i32) -> QString;
-        #[qsignal]
-        #[cxx_name = "findChanged"]
-        fn find_changed(self: Pin<&mut DelimitationController>, status: QString);
 
         #[qinvokable]
         fn accessible_page(self: &DelimitationController, page: i32) -> QString;
@@ -204,6 +202,7 @@ use std::{
 
 pub struct DelimitationRust {
     find: basecraft_viewmodel::find::Session,
+    find_status: QString,
     workspace_json: QString,
     selection_json: QString,
     preview_json: QString,
@@ -240,6 +239,7 @@ impl Default for DelimitationRust {
     fn default() -> Self {
         Self {
             find: basecraft_viewmodel::find::Session::default(),
+            find_status: QString::default(),
             workspace_json: QString::from("{}"),
             selection_json: QString::from("[]"),
             preview_json: QString::from("[]"),

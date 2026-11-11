@@ -29,10 +29,6 @@ AppFormDialog {
     readonly property var programDatabases: ["nt", "nr", "nr", "nt"]
     signal copyText(string text)
     required property var backend
-    Connections {
-        target: dialog.backend
-        function onBusyChanged() { if (!dialog.backend.busy) dialog.completed() }
-    }
     function show(provider, mode, isAlignment) {
         if (backend.busy) { open(); return }
         alignment = isAlignment === true

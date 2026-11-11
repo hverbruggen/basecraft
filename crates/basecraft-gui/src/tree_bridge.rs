@@ -24,6 +24,7 @@ pub mod qobject {
         #[qproperty(QByteArray, frame)]
         #[qproperty(QString, canvas_geometry)]
         #[qproperty(QString, status)]
+        #[qproperty(QString, find_status)]
         #[qproperty(QString, message)]
         /// "ok", "error", or "" for a neutral hint.
         #[qproperty(QString, message_kind)]
@@ -69,9 +70,6 @@ pub mod qobject {
         fn find_query(self: Pin<&mut TreeController>, query: &QString, reverse: bool);
         #[qinvokable]
         fn find_step(self: Pin<&mut TreeController>, direction: i32) -> QString;
-        #[qsignal]
-        #[cxx_name = "findChanged"]
-        fn find_changed(self: Pin<&mut TreeController>, status: QString);
 
         #[qinvokable]
         fn show_tree(self: Pin<&mut TreeController>, path: &QString, edits: &QString) -> bool;
@@ -290,6 +288,7 @@ use crate::bridge::{
 #[allow(clippy::struct_excessive_bools)]
 pub struct TreeRust {
     find: basecraft_viewmodel::find::Session,
+    find_status: QString,
     overview_content: QString,
     overview_matches: QString,
     overview_match_cache: basecraft_viewmodel::overview::Cache,
@@ -340,6 +339,7 @@ impl Default for TreeRust {
     fn default() -> Self {
         Self {
             find: basecraft_viewmodel::find::Session::default(),
+            find_status: QString::default(),
             overview_content: QString::from("{\"shapes\":[]}"),
             overview_matches: QString::from("[]"),
             overview_match_cache: basecraft_viewmodel::overview::Cache::default(),

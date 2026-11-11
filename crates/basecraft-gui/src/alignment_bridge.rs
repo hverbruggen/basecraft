@@ -23,6 +23,7 @@ pub mod qobject {
         #[qproperty(QString, overview_matches)]
         #[qproperty(QByteArray, frame)]
         #[qproperty(QString, status)]
+        #[qproperty(QString, find_status)]
         #[qproperty(QString, message)]
         /// "ok", "error", or "" for a neutral hint.
         #[qproperty(QString, message_kind)]
@@ -61,9 +62,6 @@ pub mod qobject {
         fn find_query(self: Pin<&mut AlignmentController>, query: &QString, reverse: bool);
         #[qinvokable]
         fn find_step(self: Pin<&mut AlignmentController>, direction: i32) -> QString;
-        #[qsignal]
-        #[cxx_name = "findChanged"]
-        fn find_changed(self: Pin<&mut AlignmentController>, status: QString);
 
         #[qinvokable]
         fn document_record(self: &AlignmentController) -> QString;
@@ -342,6 +340,7 @@ const KEY_SPACE: i32 = 0x20;
 #[allow(clippy::struct_excessive_bools)]
 pub struct AlignmentRust {
     find: basecraft_viewmodel::find::Session,
+    find_status: QString,
     overview_content: QString,
     overview_matches: QString,
     overview_match_cache: basecraft_viewmodel::overview::Cache,
@@ -417,6 +416,7 @@ impl Default for AlignmentRust {
     fn default() -> Self {
         Self {
             find: basecraft_viewmodel::find::Session::default(),
+            find_status: QString::default(),
             overview_content: QString::from("{\"shapes\":[]}"),
             overview_matches: QString::from("[]"),
             overview_match_cache: basecraft_viewmodel::overview::Cache::default(),
