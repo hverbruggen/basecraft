@@ -164,7 +164,7 @@ fn every_kind_reads_each_input_once() {
 #[test]
 fn large_documents_keep_one_copy() {
     let Ok(case) = std::env::var("BASECRAFT_LARGE_OPEN") else {
-        for case in ["fasta", "alignment", "genbank"] {
+        for case in ["fasta", "alignment", "genbank", "genbank-tail"] {
             let root = tempfile::tempdir().unwrap();
             let result = std::process::Command::new(std::env::current_exe().unwrap())
                 .args(["--exact", "large_documents_keep_one_copy", "--nocapture"])
@@ -189,6 +189,8 @@ fn large_documents_keep_one_copy() {
     let file = root.join(match case.as_str() {
         "alignment" => "large.afa",
         "genbank" => "large.gb",
+        // A small first record and a large unseen one, kept as raw bytes.
+        "genbank-tail" => "large-tail.gb",
         _ => "large.fa",
     });
     let residues = 100_000_000_usize;
@@ -196,10 +198,14 @@ fn large_documents_keep_one_copy() {
         use std::io::Write;
         let mut output = std::io::BufWriter::new(std::fs::File::create(&file).unwrap());
         let line = [b'A'; 60];
-        let rows = if case == "alignment" { 2 } else { 1 };
-        for row in 0..rows {
-            let length = residues / rows;
-            if case == "genbank" {
+        let genbank = case.starts_with("genbank");
+        let lengths = match case.as_str() {
+            "alignment" => vec![residues / 2; 2],
+            "genbank-tail" => vec![60, residues],
+            _ => vec![residues],
+        };
+        for (row, &length) in lengths.iter().enumerate() {
+            if genbank {
                 writeln!(
                     output,
                     "LOCUS       sequence {length} bp DNA linear UNK 01-JAN-1970\nORIGIN"
@@ -209,7 +215,7 @@ fn large_documents_keep_one_copy() {
                 writeln!(output, ">sequence{row}").unwrap();
             }
             for offset in (0..length).step_by(60) {
-                if case == "genbank" {
+                if genbank {
                     write!(output, "{:>9} ", offset + 1).unwrap();
                 }
                 output
@@ -217,7 +223,7 @@ fn large_documents_keep_one_copy() {
                     .unwrap();
                 output.write_all(b"\n").unwrap();
             }
-            if case == "genbank" {
+            if genbank {
                 writeln!(output, "//").unwrap();
             }
         }
@@ -246,6 +252,8 @@ fn large_documents_keep_one_copy() {
     );
     if case == "alignment" {
         assert_eq!(session.alignment(id).unwrap().row_count(), 2);
+    } else if case == "genbank-tail" {
+        assert_eq!(session.doc(id).unwrap().len(), 60);
     } else {
         assert_eq!(session.doc(id).unwrap().len(), residues as u64);
     }

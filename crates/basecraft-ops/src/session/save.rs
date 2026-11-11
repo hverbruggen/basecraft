@@ -106,6 +106,10 @@ impl Session {
         if !self.is_open(id) {
             return Err(invalid("save document is not open"));
         }
+        let own_target = path.is_none_or(|path| self.is_own_file(id, path));
+        if let Some(message) = self.content(id)?.as_document().save_refusal(own_target) {
+            return Err(Error::Unsupported(message));
+        }
         let mut warnings = Vec::new();
         let mut target_check = None;
         let new_sequence = self.docs[id.0].accepted_hashes.is_empty();

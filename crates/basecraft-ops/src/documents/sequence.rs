@@ -10,6 +10,17 @@ use crate::files::{self, Format, HashingWriter, Opened};
 use crate::session::{Inverse, normalise};
 
 impl Document for Opened {
+    fn save_refusal(&self, _own_target: bool) -> Option<String> {
+        self.others
+            .gff
+            .as_ref()
+            .is_some_and(|kept| kept.embeds_sequence())
+            .then(|| {
+                "The GFF3 companion holds its own copy of this sequence after ##FASTA; \
+                 saving would leave that copy unchanged. Remove the ##FASTA section to save."
+                    .into()
+            })
+    }
     fn accepts(&self, op: &Op) -> bool {
         matches!(
             op,

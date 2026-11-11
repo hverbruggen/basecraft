@@ -199,3 +199,130 @@ fn recovery_restores_every_record() {
     assert_eq!(after_first(&bytes), after_first(original.as_bytes()));
     assert_eq!(basecraft_io::genbank::parse(&bytes).unwrap().len(), 2);
 }
+
+#[test]
+fn genbank_record_without_end_line_is_refused_not_merged() {
+    let Some(root) =
+        isolated_profile::enter("genbank_record_without_end_line_is_refused_not_merged")
+    else {
+        return;
+    };
+    let open_ended = LOCUS.trim_end().trim_end_matches("//");
+    for (name, original) in [
+        ("first.gb", format!("{open_ended}\n{LOCUS}")),
+        (
+            "no-origin.gb",
+            format!("{}\n{LOCUS}", LOCUS.lines().next().unwrap()),
+        ),
+    ] {
+        let path = root.join(name);
+        std::fs::write(&path, &original).unwrap();
+        let error = Session::recoverable(&root)
+            .unwrap()
+            .open(&path)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("//"), "{name}: {error}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    }
+}
+
+#[test]
+fn annotated_alignment_refuses_saves_that_would_stale_its_companion() {
+    let Some(root) =
+        isolated_profile::enter("annotated_alignment_refuses_saves_that_would_stale_its_companion")
+    else {
+        return;
+    };
+    let path = root.join("rows.afa");
+    let original = ">first\nACGT\n>second\nTTTT\n";
+    std::fs::write(&path, original).unwrap();
+    std::fs::write(
+        basecraft_ops::files::gff_sidecar(&path),
+        "##gff-version 3\nsecond\t.\tgene\t2\t4\t.\t+\t.\tID=two\n",
+    )
+    .unwrap();
+    let mut session = Session::recoverable(&root).unwrap();
+    let (doc, _) = session.open_classified(&path).unwrap();
+    // A gap in the annotated row shifts every later coordinate.
+    session
+        .apply(
+            doc,
+            Op::AlnReplace {
+                row: 1,
+                start: 0,
+                end: 1,
+                residues: "-".into(),
+            },
+        )
+        .unwrap();
+    let error = session.save(doc, None).unwrap_err().to_string();
+    assert!(error.contains("row second"), "{error}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    // A new file carries no companion, so nothing goes stale there.
+    session
+        .save(doc, Some(&root.join("elsewhere.afa")))
+        .unwrap();
+}
+
+#[test]
+fn companion_details_survive_and_conflicting_copies_refuse() {
+    let Some(root) =
+        isolated_profile::enter("companion_details_survive_and_conflicting_copies_refuse")
+    else {
+        return;
+    };
+    // An escaped seqid, a region not starting at 1, a comment between the
+    // open record's features, CRLF lines and text before the first record.
+    let path = root.join("escaped.fa");
+    std::fs::write(&path, "\r\n>x%y first\r\nACGT\r\n>other\r\nGG\r\n").unwrap();
+    let gff = root.join("escaped.gff3");
+    std::fs::write(
+        &gff,
+        "##gff-version 3\n##sequence-region x%25y 11 14\n\
+         x%25y\t.\tgene\t1\t2\t.\t+\t.\tID=a\n# between\nx%25y\t.\tgene\t3\t4\t.\t+\t.\tID=b\n",
+    )
+    .unwrap();
+    let mut session = Session::recoverable(&root).unwrap();
+    let doc = session.open(&path).unwrap();
+    session.apply(doc, replace()).unwrap();
+    session.save(doc, None).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "\r\n>x%y first\r\nGGCGT\r\n>other\r\nGG\r\n"
+    );
+    let companion = std::fs::read_to_string(&gff).unwrap();
+    assert_eq!(
+        companion.matches("##sequence-region").count(),
+        1,
+        "{companion}"
+    );
+    assert!(
+        companion.contains("##sequence-region x%25y 11 15\n"),
+        "{companion}"
+    );
+    assert!(companion.contains("# between\n"), "{companion}");
+
+    // Recovery restores the main file and keeps the companion's other lines.
+    session.apply(doc, replace()).unwrap();
+    session.flush().unwrap();
+    let journal = session.recovery_root().to_path_buf();
+    std::mem::forget(session);
+    let recovered = basecraft_ops::records::recover(&journal, &root.join("recovered")).unwrap();
+    let main = std::fs::read_to_string(&recovered[0]).unwrap();
+    assert!(main.ends_with(">other\r\nGG\r\n"), "{main}");
+
+    // A companion with its own copy of the sequence after ##FASTA would disagree.
+    let embedded = root.join("embedded.fa");
+    std::fs::write(&embedded, ">a\nACGT\n>b\nTT\n").unwrap();
+    std::fs::write(
+        root.join("embedded.gff3"),
+        "##gff-version 3\na\t.\tgene\t1\t2\t.\t+\t.\tID=g\n##FASTA\n>a\nACGT\n",
+    )
+    .unwrap();
+    let mut session = Session::recoverable(&root).unwrap();
+    let doc = session.open(&embedded).unwrap();
+    session.apply(doc, replace()).unwrap();
+    let error = session.save(doc, None).unwrap_err().to_string();
+    assert!(error.contains("##FASTA"), "{error}");
+}

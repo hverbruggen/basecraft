@@ -22,6 +22,11 @@ mod tree;
 
 pub(crate) trait Document {
     fn kind(&self) -> crate::files::Kind;
+    /// Why saving would leave related data inconsistent, if it would.
+    /// `own_target` is true when the document's own file is replaced.
+    fn save_refusal(&self, _own_target: bool) -> Option<String> {
+        None
+    }
     /// Reject operations for another payload before durable tracking starts.
     fn accepts(&self, op: &Op) -> bool;
     /// Whether admission must retain the discovered companion hashes.

@@ -121,6 +121,8 @@ pub const LONGEST_ALIGNMENT_ROW: u64 = 1_000_000;
 /// An open alignment plus what's needed to write its file back.
 pub struct OpenedAlignment {
     pub doc: AlignmentDoc,
+    /// Rows the GFF3 companion annotates, with their residue counts at open.
+    pub annotated: Vec<(String, u64)>,
     pub format: Format,
 }
 
@@ -454,13 +456,45 @@ fn load_fasta_from(
         let name = path
             .file_name()
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        let doc = AlignmentDoc::from_fasta(name, &file);
         Ok(Loaded::Alignment(OpenedAlignment {
-            doc: AlignmentDoc::from_fasta(name, &file),
+            annotated: annotated_rows(&doc, captured_gff),
+            doc,
             format: Format::Fasta,
         }))
     } else {
         open_fasta_with_gff(path, file, captured_gff.map(Source::bytes)).map(Loaded::Sequence)
     }
+}
+
+/// Residues of an alignment row, gaps excluded.
+pub(crate) fn ungapped_len(doc: &AlignmentDoc, row: usize) -> u64 {
+    let mut residues = Vec::new();
+    doc.read_into(row, 0, doc.width(), &mut residues);
+    residues
+        .iter()
+        .filter(|&&byte| !basecraft_docs::alignment::is_gap(byte))
+        .count() as u64
+}
+
+/// The rows a companion annotates. An unreadable companion counts every row.
+fn annotated_rows(doc: &AlignmentDoc, gff: Option<&Source>) -> Vec<(String, u64)> {
+    let Some(gff) = gff else {
+        return Vec::new();
+    };
+    let named: Option<std::collections::BTreeSet<String>> =
+        gff3::parse(gff.bytes()).ok().map(|gff| {
+            gff.sequences
+                .into_iter()
+                .map(|seq| seq.seqid)
+                .chain(gff.regions.into_iter().map(|region| region.seqid))
+                .collect()
+        });
+    doc.rows()
+        .enumerate()
+        .filter(|(_, row)| named.as_ref().is_none_or(|named| named.contains(&row.name)))
+        .map(|(index, row)| (row.name.clone(), ungapped_len(doc, index)))
+        .collect()
 }
 
 /// Write explicit alignment contents as FASTA, 60 columns a line.
@@ -721,8 +755,8 @@ pub struct Opened {
 pub struct OtherRecords {
     /// Records in the file, the open one included.
     pub count: usize,
-    /// GenBank: the exact bytes after the first record.
-    pub genbank: Arc<[u8]>,
+    /// GenBank: the exact bytes after the first record, held once.
+    pub genbank: Arc<Vec<u8>>,
     /// FASTA: the GFF3 companion without the open record's lines.
     pub gff: Option<Arc<gff3::Kept>>,
 }
@@ -773,7 +807,7 @@ fn opened_genbank(first: genbank::First) -> Opened {
         fasta: None,
         others: OtherRecords {
             count: first.records,
-            genbank: first.rest.into(),
+            genbank: Arc::new(first.rest),
             gff: None,
         },
     }
@@ -838,10 +872,17 @@ pub fn write_main(opened: &Opened, w: &mut dyn Write) -> io::Result<()> {
         Format::Tree => Err(io::Error::other("a sequence can't be written as a tree")),
         Format::Fasta => {
             let Some(file) = &opened.fasta else {
-                return write_fasta_record(doc, None, w);
+                return write_fasta_record(doc, None, b"\n", w);
             };
-            let records = &file.index.records;
-            write_fasta_record(doc, Some(records[0].header(file.bytes())), w)?;
+            let (bytes, records) = (file.bytes(), &file.index.records);
+            #[allow(clippy::cast_possible_truncation)]
+            let start = records[0].header_offset as usize;
+            // Text before the first record (blank lines, comments) stays.
+            w.write_all(&bytes[..start])?;
+            let header = records[0].header(bytes);
+            let crlf = bytes.get(start + 1 + header.len()) == Some(&b'\r');
+            let eol: &[u8] = if crlf { b"\r\n" } else { b"\n" };
+            write_fasta_record(doc, Some(header), eol, w)?;
             // The other records, byte for byte.
             if let Some(next) = records.get(1) {
                 #[allow(clippy::cast_possible_truncation)]
@@ -852,16 +893,18 @@ pub fn write_main(opened: &Opened, w: &mut dyn Write) -> io::Result<()> {
     }
 }
 
+/// `eol` keeps the line ending the file already uses.
 fn write_fasta_record(
     doc: &SequenceDoc,
     header: Option<&[u8]>,
+    eol: &[u8],
     w: &mut dyn Write,
 ) -> io::Result<()> {
     let header = header.map_or_else(|| doc.name.as_bytes().to_vec(), <[u8]>::to_vec);
     // Stream in chunks so a huge record never sits in memory twice.
     w.write_all(b">")?;
     w.write_all(&header)?;
-    w.write_all(b"\n")?;
+    w.write_all(eol)?;
     let mut buf = Vec::new();
     let chunk = 60 * 16_384;
     let mut pos = 0;
@@ -871,7 +914,7 @@ fn write_fasta_record(
         doc.read_into(pos, end, &mut buf);
         for line in buf.chunks(60) {
             w.write_all(line)?;
-            w.write_all(b"\n")?;
+            w.write_all(eol)?;
         }
         pos = end;
     }
