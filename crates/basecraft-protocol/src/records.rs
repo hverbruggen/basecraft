@@ -45,6 +45,7 @@ pub struct RecoveryManifest {
 /// `pending-save.json`; data and provenance remain separate writes.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct PendingSave {
+    pub baseline: crate::LogEntry,
     pub schema_version: u32,
     pub session: String,
     pub target: PathBuf,

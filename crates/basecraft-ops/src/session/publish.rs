@@ -279,18 +279,6 @@ impl Session {
                     .find(|(path, _)| *path == original)
                     && metadata.len() > super::OBJECT_STORE_LIMIT
                 {
-                    let saved_reference = std::fs::read(self.storage_root.join("recovery.json"))
-                        .ok()
-                        .and_then(|bytes| {
-                            serde_json::from_slice::<basecraft_protocol::records::RecoveryManifest>(
-                                &bytes,
-                            )
-                            .ok()
-                        })
-                        .and_then(|manifest| manifest.references.get(hash).cloned());
-                    let original = saved_reference.as_ref().map_or(original, |reference| {
-                        self.storage_root.join(&reference.path)
-                    });
                     let stamp = basecraft_protocol::provenance::FileStamp {
                         size: metadata.len(),
                         modified_seconds: metadata

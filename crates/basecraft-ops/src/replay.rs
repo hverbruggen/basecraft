@@ -49,7 +49,7 @@ pub fn replay(root: &Path) -> Result<Report> {
 fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Result<()> {
     let work = tempfile::tempdir()?;
     let mut session = Session::replay_session(work.path());
-    let source_root = recorded_source_root(root)?;
+    let source_root = recorded_source_root(root, entries.iter().copied())?;
     let mut docs: HashMap<&str, DocId> = HashMap::new();
     // Replay entry id -> logged entry id, to check undo and redo targets.
     let mut ids: HashMap<String, String> = HashMap::new();
@@ -82,7 +82,7 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
                 problem("unsafe or inconsistent document identity".into());
                 continue;
             }
-            match materialise(root, work.path(), &e.result.hashes) {
+            match materialise(root, &source_root, work.path(), &e.result.hashes) {
                 Ok(()) => match session.open_replay_snapshot(&work.path().join(path)) {
                     Ok(id) => {
                         session.restore_replay_paths(id, work.path(), &source_root);
@@ -105,13 +105,7 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
                 Ok(got) => {
                     let want: Vec<&String> = e.result.hashes.iter().map(|(_, h)| h).collect();
                     if got.iter().collect::<Vec<_>>() != want {
-                        let legacy = session.legacy_delimitation_hashes(doc, Path::new(path))?;
-                        if legacy
-                            .as_ref()
-                            .is_none_or(|hashes| hashes.iter().collect::<Vec<_>>() != want)
-                        {
-                            problem(format!("saved content differs: {got:?} vs {want:?}"));
-                        }
+                        problem(format!("saved content differs: {got:?} vs {want:?}"));
                     }
                 }
                 Err(err) => problem(err.to_string()),
@@ -175,21 +169,16 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
     Ok(())
 }
 
-fn recorded_source_root(root: &Path) -> Result<std::path::PathBuf> {
-    let entries = log::read_all(root)?;
-    let source = entries
-        .iter()
-        .find_map(|entry| entry.source.as_ref())
-        .ok_or_else(|| crate::Error::Damaged {
-            path: root.to_path_buf(),
-            detail: "Recovery journal has no source record".into(),
-        })?;
+fn recorded_source_root<'a>(root: &Path, entries: impl Iterator<Item = &'a LogEntry>) -> Result<PathBuf> {
+    let source = entries.filter_map(|entry| entry.source.as_ref()).next()
+        .ok_or_else(|| Error::Damaged { path: root.to_path_buf(), detail: "Recovery journal has no source record".into() })?;
     Ok(root.join(&source.root))
 }
 
 /// Put each recorded input into `work` under its project-relative path.
 fn materialise(
     root: &Path,
+    source_root: &Path,
     work: &Path,
     inputs: &[(String, String)],
 ) -> std::result::Result<(), String> {
@@ -207,23 +196,7 @@ fn materialise(
             return Err("invalid input hash".into());
         }
         let stored = objects_dir(root).join(hash.trim_start_matches("b3:"));
-        let references = root.join("recovery.json");
-        let reference = if references.exists() {
-            let manifest: basecraft_protocol::records::RecoveryManifest =
-                serde_json::from_slice(&std::fs::read(&references).map_err(|e| e.to_string())?)
-                    .map_err(|e| e.to_string())?;
-            manifest
-                .references
-                .get(hash)
-                .map(|reference| root.join(&reference.path))
-        } else {
-            None
-        };
-        let original = reference.unwrap_or(
-            recorded_source_root(root)
-                .map_err(|e| e.to_string())?
-                .join(rel),
-        );
+        let original = source_root.join(rel);
         let source = if stored.exists() {
             stored
         } else if basecraft_io::cache::content_hash(&original).ok().as_deref() == Some(hash) {
@@ -234,7 +207,7 @@ fn materialise(
             retained
         } else {
             return Err(format!(
-                "input {rel} changed or is missing and no stored copy exists; recovery of large files requires the unchanged original"
+                "input {rel} changed or is missing and no stored copy exists; recovery requires the unchanged original"
             ));
         };
         let mut dest = work.join(rel);
@@ -378,7 +351,7 @@ fn require_absent(destination: &Path) -> Result<()> {
 fn recover_entries(
     root: &Path,
     destination: &Path,
-    entries: Vec<LogEntry>,
+    mut entries: Vec<LogEntry>,
     damage: Option<String>,
 ) -> Result<RecoveryAttempt> {
     if entries.is_empty() {
@@ -401,9 +374,28 @@ fn recover_entries(
         .prefix(".basecraft-recover-")
         .tempdir_in(&parent)?;
     let mut session = Session::unlogged(staging.path());
-    let source_root = recorded_source_root(root)?;
+    let source_root = recorded_source_root(root, entries.iter())?;
+    let pending_path = root.join("pending-save.json");
+    if pending_path.is_file() {
+        let pending: basecraft_protocol::records::PendingSave = serde_json::from_slice(&std::fs::read(&pending_path)?)?;
+        if !pending.baseline.result.hashes.is_empty() && pending.baseline.result.hashes.iter().all(|(path, hash)| {
+            safe_key(path) && basecraft_io::hash_file(&source_root.join(path)).ok().as_ref() == Some(hash)
+        }) {
+            entries.push(pending.baseline);
+        }
+    }
+
     let mut documents = std::collections::BTreeMap::<String, DocId>::new();
-    for entry in entries {
+    let mut baselines = HashMap::new();
+    for (index, entry) in entries.iter().enumerate() {
+        if matches!(entry.op, Op::Open { .. } | Op::CreateSequence { .. } | Op::Save { .. }) {
+            baselines.insert(entry.doc.clone(), index);
+        }
+    }
+    for (index, entry) in entries.into_iter().enumerate() {
+        if baselines.get(&entry.doc).is_some_and(|baseline| index < *baseline) {
+            continue;
+        }
         if let Op::CreateSequence { name, residues } = &entry.op {
             if !safe_key(&entry.doc) {
                 return Err(crate::error::invalid("unsafe recovery document identity"));
@@ -415,16 +407,19 @@ fn recover_entries(
             documents.insert(entry.doc.clone(), doc);
             continue;
         }
-        if let Op::Open { path } = &entry.op {
-            if !safe_key(path) || !safe_key(&entry.doc) || path != &entry.doc {
+        if let Op::Open { path } | Op::Save { path } = &entry.op {
+            if !safe_key(path) || !safe_key(&entry.doc) {
                 return Err(crate::error::invalid(
                     "unsafe or inconsistent recovery document identity",
                 ));
             }
-            materialise(root, staging.path(), &entry.result.hashes)
+            materialise(root, &source_root, staging.path(), &entry.result.hashes)
                 .map_err(crate::error::invalid)?;
             let doc = session.open(&staging.path().join(path))?;
             session.restore_replay_paths(doc, staging.path(), &source_root);
+            if !session.state(doc).matches_recorded(&entry.state) {
+                return Err(Error::Damaged { path: root.to_path_buf(), detail: "Recovery baseline state differs".into() });
+            }
             documents.insert(entry.doc.clone(), doc);
             continue;
         }
@@ -1292,12 +1287,12 @@ mod tests {
             }
             std::fs::hard_link(&source, &dest).unwrap();
             let inputs = vec![("a.fa".into(), hash.clone())];
-            materialise(root.path(), work.path(), &inputs).unwrap();
+            materialise(root.path(), root.path(), work.path(), &inputs).unwrap();
             assert_eq!(std::fs::read(&dest).unwrap(), bytes);
             // Editing scratch must also be independent of the retained inode.
             std::fs::write(&dest, "scratch edit").unwrap();
             assert_eq!(basecraft_io::hash_file(&source).unwrap(), hash);
-            materialise(root.path(), work.path(), &inputs).unwrap();
+            materialise(root.path(), root.path(), work.path(), &inputs).unwrap();
             assert_eq!(std::fs::read(&dest).unwrap(), bytes);
             assert_eq!(basecraft_io::hash_file(&source).unwrap(), hash);
         }
@@ -1314,18 +1309,18 @@ mod tests {
         let inputs = vec![("a.fa".into(), hash)];
         let dest = work.path().join("a.fa");
         std::fs::write(&dest, "previous").unwrap();
-        assert!(materialise(root.path(), work.path(), &inputs).is_err());
+        assert!(materialise(root.path(), root.path(), work.path(), &inputs).is_err());
         assert_eq!(std::fs::read(&object).unwrap(), b"corrupt");
         assert_eq!(std::fs::read(&dest).unwrap(), b"previous");
         std::fs::remove_file(&object).unwrap();
-        assert!(materialise(root.path(), work.path(), &inputs).is_err());
+        assert!(materialise(root.path(), root.path(), work.path(), &inputs).is_err());
         std::fs::write(root.path().join("a.fa"), "changed").unwrap();
-        assert!(materialise(root.path(), work.path(), &inputs).is_err());
+        assert!(materialise(root.path(), root.path(), work.path(), &inputs).is_err());
         // Force atomic persistence failure after the temporary copy is written.
         std::fs::write(root.path().join("a.fa"), "expected").unwrap();
         std::fs::remove_file(&dest).unwrap();
         std::fs::create_dir(&dest).unwrap();
-        assert!(materialise(root.path(), work.path(), &inputs).is_err());
+        assert!(materialise(root.path(), root.path(), work.path(), &inputs).is_err());
         assert_eq!(std::fs::read_dir(work.path()).unwrap().count(), 1);
         assert_eq!(
             std::fs::read(root.path().join("a.fa")).unwrap(),
@@ -1334,6 +1329,7 @@ mod tests {
         for rel in ["../escape", "/absolute"] {
             assert!(
                 materialise(
+                    root.path(),
                     root.path(),
                     work.path(),
                     &[(rel.into(), inputs[0].1.clone())]

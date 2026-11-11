@@ -362,13 +362,6 @@ impl Session {
             .rebase_replay_paths(from, to);
     }
 
-    pub(crate) fn legacy_delimitation_hashes(
-        &self,
-        id: DocId,
-        target: &Path,
-    ) -> Result<Option<Vec<String>>> {
-        self.docs[id.0].content.as_document().legacy_hashes(target)
-    }
 
     pub fn is_tree(&self, id: DocId) -> bool {
         self.docs

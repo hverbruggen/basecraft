@@ -65,10 +65,6 @@ pub(crate) trait Document {
     fn opening_warning(&self) -> Option<&str> {
         None
     }
-    /// Legacy replay projections live with the format that produced them.
-    fn legacy_hashes(&self, _target: &Path) -> Result<Option<Vec<String>>> {
-        Ok(None)
-    }
     fn rebase_replay_paths(&mut self, _from: &Path, _to: &Path) {}
     /// Detached proposal staging retains the same payload and writer metadata.
     /// Unsupported kinds cannot be mutated through the proposal route.

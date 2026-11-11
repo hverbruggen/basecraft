@@ -189,9 +189,18 @@ impl Session {
         hooks.at(SaveSite::ExpectedHashes);
         let expected = self.save_hashes_at(id, &target)?;
         if self.log.is_some() {
+            let document = self.docs[id.0].content.as_document();
+            let mut paths = document.independently_saved_files(&target);
+            if paths.is_empty() {
+                paths.push(target.clone());
+                paths.extend(document.saved_companion(&target).filter(|_| expected.len() > 1));
+            }
+            let hashes = paths.iter().zip(&expected).map(|(path, hash)| (self.relative(path), hash.clone())).collect();
+            let baseline = self.entry(id, self.actor.clone(), Op::Save { path: self.relative(&target) }, OpResult { hashes, feature: None });
             hooks.at(SaveSite::PendingEncode);
             let intent = serde_json::to_vec_pretty(&serde_json::to_value(
                 basecraft_protocol::records::PendingSave {
+                    baseline,
                     schema_version: 1,
                     session: self.id.clone(),
                     target: target.clone(),
@@ -355,7 +364,6 @@ impl Session {
         if target == self.resolve(&self.docs[id.0].key) {
             hooks.at(SaveSite::SourceCheck);
             self.check_save_source(id)?;
-            self.preserve_references(&target)?;
         }
         hooks.at(SaveSite::Format);
         let format = files::Format::from_path(&target)?;

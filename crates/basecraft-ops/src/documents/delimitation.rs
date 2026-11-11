@@ -18,14 +18,6 @@ impl Document for DelimitationWorkspace {
     fn rebase_replay_paths(&mut self, from: &Path, to: &Path) {
         files::rebase_delimitation_paths(self, from, to);
     }
-    fn legacy_hashes(&self, target: &Path) -> Result<Option<Vec<String>>> {
-        let mut main = HashingWriter::new(std::io::sink());
-        files::write_delimitation(self, files::delimitation_xml(target), &mut main)?;
-        let hash = main.hash();
-        let mut side = HashingWriter::new(std::io::sink());
-        files::write_delimitation_sidecar(self, &hash, &mut side)?;
-        Ok(Some(vec![hash, side.hash()]))
-    }
     fn proposal_candidate(&self) -> Result<files::Loaded> {
         Ok(files::Loaded::Delimitation(self.clone()))
     }
