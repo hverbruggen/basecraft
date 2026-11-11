@@ -2015,16 +2015,10 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
             }
         }
         let sidecar = crate::files::tree_sidecar(&copied);
-        basecraft_io::write_atomic(&sidecar, |w| {
-            crate::files::write_companion(
-                &crate::files::delimitation_companion(
-                    &work,
-                    &publication.outputs[0].hash,
-                    &final_folder.join(copied.file_name().unwrap_or_default()),
-                )?,
-                w,
-            )
-        })?;
+        let target = final_folder.join(copied.file_name().unwrap_or_default());
+        let companion =
+            crate::files::delimitation_companion(&work, &publication.outputs[0].hash, &target)?;
+        basecraft_io::write_atomic(&sidecar, |w| crate::files::write_companion(&companion, w))?;
         let side_hash = basecraft_io::hash_file(&sidecar)?;
         if let Some(artifact) = publication
             .outputs
