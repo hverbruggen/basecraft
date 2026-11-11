@@ -1,7 +1,8 @@
 use basecraft_ops::{Session, records};
 use basecraft_protocol::{
     Op,
-    delimitation::{DelimitationEdit as Edit, HypothesisOrigin, JobRecord, JobStatus},
+    delimitation::{DelimitationEdit as Edit, HypothesisOrigin},
+    records::{JobRecord, JobStatus},
 };
 
 const SPART: &str = include_str!("../../../testdata/fixtures/delimitation/manual.spart");

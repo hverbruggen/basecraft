@@ -159,7 +159,6 @@ impl ServiceContext {
         .read(access)?;
         SettingsStore::load_checked(input).map_err(|error| match error {
             basecraft_platform::settings::Error::Io(error) => crate::Error::Io(error),
-            basecraft_platform::settings::Error::Save(error) => crate::Error::Format(error),
             basecraft_platform::settings::Error::Busy => crate::error::invalid(
                 "preferences are being changed by another process; retry shortly",
             ),

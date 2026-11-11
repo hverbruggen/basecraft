@@ -3212,6 +3212,7 @@
       ]
     },
     "JobRecord": {
+      "description": "Outcome of one analysis job, as reported by its engine.",
       "type": "object",
       "properties": {
         "diagnostics": {

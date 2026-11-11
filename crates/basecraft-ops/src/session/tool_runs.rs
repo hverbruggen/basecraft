@@ -158,7 +158,7 @@ impl Session {
     pub fn log_job_finished(
         &mut self,
         id: DocId,
-        report: basecraft_protocol::delimitation::JobRecord,
+        report: basecraft_protocol::records::JobRecord,
     ) -> Result<()> {
         self.track(id)?;
         self.flush()?;
@@ -175,7 +175,7 @@ impl Session {
     pub fn log_referenced_job_finished(
         &mut self,
         id: DocId,
-        report: basecraft_protocol::delimitation::JobRecord,
+        report: basecraft_protocol::records::JobRecord,
     ) -> Result<()> {
         self.reference_baseline(id)?;
         self.flush()?;

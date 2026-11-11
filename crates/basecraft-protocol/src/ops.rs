@@ -211,9 +211,7 @@ pub enum Op {
     },
     /// A terminal job record, including failures and cancellation.
     #[serde(rename = "job.finished")]
-    JobFinished {
-        report: crate::delimitation::JobRecord,
-    },
+    JobFinished { report: crate::records::JobRecord },
     /// Undo the operation with log id `of`.
     #[serde(rename = "history.undo")]
     Undo { of: String },

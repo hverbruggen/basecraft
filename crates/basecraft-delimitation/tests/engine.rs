@@ -1,4 +1,7 @@
-use basecraft_protocol::delimitation::{DelimitationRequest, DelimitationResult, JobStatus};
+use basecraft_protocol::{
+    delimitation::{DelimitationRequest, DelimitationResult},
+    records::JobStatus,
+};
 use std::{collections::BTreeMap, process::Command};
 
 #[test]

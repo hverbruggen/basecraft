@@ -4,7 +4,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{CladeRef, Op, TreeStyle};
+use crate::{
+    CladeRef, Op, TreeStyle,
+    records::{JobRecord, JobStatus},
+};
 
 /// IDs refer to source records, never current tree row positions.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -37,15 +40,6 @@ pub struct Group {
     pub individual_scores: BTreeMap<String, Vec<Score>>,
     #[serde(default)]
     pub attributes: BTreeMap<String, String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum JobStatus {
-    Completed,
-    Failed,
-    Cancelled,
-    Unavailable,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -257,18 +251,6 @@ pub enum DelimitationEdit {
         hash: String,
         evidence_run: String,
     },
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct JobRecord {
-    pub id: String,
-    pub generation: u64,
-    pub status: JobStatus,
-    pub method: String,
-    pub inputs: BTreeMap<String, String>,
-    pub outputs: BTreeMap<String, String>,
-    pub diagnostics: Vec<String>,
-    pub elapsed_seconds: f64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]

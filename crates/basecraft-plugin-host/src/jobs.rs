@@ -1054,7 +1054,7 @@ fn record_document_finished(
     outcome: &OperationOutcome,
     session: &mut basecraft_ops::Session,
 ) -> Result<()> {
-    use basecraft_protocol::delimitation::{JobRecord, JobStatus};
+    use basecraft_protocol::records::{JobRecord, JobStatus};
     if !same_document(session, target) {
         return Err(Error::Protocol(
             "input document was closed or replaced".into(),

@@ -256,7 +256,7 @@ pub struct WorkflowFailure {
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct WorkflowFailureJob {
-    pub status: crate::delimitation::JobStatus,
+    pub status: crate::records::JobStatus,
     pub diagnostics: Vec<String>,
 }
 
@@ -287,4 +287,26 @@ pub struct ExtractionRecord {
     pub coordinates: String,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+/// Outcome of one analysis job, as reported by its engine.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct JobRecord {
+    pub id: String,
+    pub generation: u64,
+    pub status: JobStatus,
+    pub method: String,
+    pub inputs: BTreeMap<String, String>,
+    pub outputs: BTreeMap<String, String>,
+    pub diagnostics: Vec<String>,
+    pub elapsed_seconds: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum JobStatus {
+    Completed,
+    Failed,
+    Cancelled,
+    Unavailable,
 }

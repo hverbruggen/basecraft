@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     fs::{File, OpenOptions},
-    io::Read,
-    path::PathBuf,
+    io::{Read, Write},
+    path::{Path, PathBuf},
 };
 
 pub const SCHEMA_VERSION: u32 = 1;
@@ -20,8 +20,6 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("invalid preferences: {0}")]
     Invalid(String),
-    #[error("preferences save: {0}")]
-    Save(#[from] basecraft_io::Error),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -637,7 +635,11 @@ impl SettingsStore {
         if text.len() as u64 > MAX_BYTES {
             return Err(Error::Invalid("serialized file exceeds 1 MiB".into()));
         }
-        basecraft_io::write_atomic(&self.path, |writer| writer.write_all(text.as_bytes()))?;
+        let directory = self.path.parent().unwrap_or(Path::new("."));
+        let mut staged = tempfile::NamedTempFile::new_in(directory)?;
+        staged.write_all(text.as_bytes())?;
+        staged.as_file().sync_all()?;
+        staged.persist(&self.path).map_err(|error| error.error)?;
         Ok(prefs)
     }
     /// Import only known legacy UI preferences once; never alter the old store.

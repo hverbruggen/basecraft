@@ -138,7 +138,7 @@ pub struct DelimitationReport {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct MptpFailure {
-    pub job: crate::delimitation::JobRecord,
+    pub job: crate::records::JobRecord,
     pub command: Vec<String>,
 }
 

@@ -96,6 +96,3 @@ testdata scale="compact":
         *) echo 'scale must be compact, small or full' >&2; exit 2 ;;
     esac
 
-# Build the basecraft-core Python module into the pixi environment.
-py:
-    pixi run maturin develop -m crates/basecraft-py/Cargo.toml

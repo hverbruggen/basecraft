@@ -800,7 +800,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 ),
                 (
                     "job-record",
-                    schemars::schema_for!(basecraft_protocol::delimitation::JobRecord),
+                    schemars::schema_for!(basecraft_protocol::records::JobRecord),
                 ),
                 (
                     "project-metadata",
