@@ -33,8 +33,7 @@ fn save_streams_small_and_large_documents_once() {
             if extension == "gb" {
                 writeln!(
                     file,
-                    "LOCUS       input {} bp DNA linear UNK 01-JAN-1970",
-                    size
+                    "LOCUS       input {size} bp DNA linear UNK 01-JAN-1970"
                 )
                 .unwrap();
                 file.write_all(b"FEATURES             Location/Qualifiers\nORIGIN\n")

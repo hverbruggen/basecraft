@@ -86,9 +86,9 @@ impl Drop for HeldElsewhere {
 
 pub(crate) fn check_hash(path: &Path, expected: &str) -> Result<()> {
     if basecraft_io::hash_file(path)? != expected {
-        return Err(invalid(
-            "source changed on disk; save to a new path or reopen it",
-        ));
+        return Err(crate::Error::ChangedOnDisk {
+            path: path.to_path_buf(),
+        });
     }
     Ok(())
 }

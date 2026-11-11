@@ -331,8 +331,8 @@ fn alignment_interface_rejections_normalization_and_hashes() {
 
 #[test]
 fn alignment_bursts_respect_actor_group_and_nonadjacent_boundaries() {
-    crate::isolated_profile::isolate!();
     use basecraft_protocol::Actor;
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("source.afa");
     std::fs::write(&source, ">a\nAAAAAAAA\n>b\nAAAAAAAA\n").unwrap();
