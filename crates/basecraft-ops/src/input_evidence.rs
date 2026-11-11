@@ -482,7 +482,6 @@ pub fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
     bytes.push(b'\n');
     if path.file_name().is_some_and(|name| name == "input.json") {
         let locks = lock()?;
-        let guard = registry_lock()?;
         let mut sources = Some(std::collections::BTreeSet::new());
         if let Ok(input) = serde_json::from_slice::<SubmittedInput>(&bytes) {
             locks.input(
@@ -494,6 +493,8 @@ pub fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
         } else {
             sources = None;
         }
+        // Lock order: the ledger and its inputs first, then the catalogue.
+        let guard = registry_lock()?;
         // An ancestry change cannot be scoped until its index is published.
         // Keep it atomic to lookups; direct-source updates need no long lock.
         let ancestry = sources.is_none();
@@ -817,14 +818,14 @@ pub(crate) fn registered_run(id: &str, expected: &str) -> Result<PathBuf> {
 
 /// Caller holds `lock`. Only explicit analysis execution registers a store.
 pub fn register(run: &ArtifactRun) -> Result<()> {
-    let locks = lock()?;
     let store = run
         .directory()
         .parent()
         .and_then(Path::parent)
         .ok_or_else(|| invalid("run has no store"))?;
-    // Same lock order as every writer: the store first, then the catalogue.
-    locks.reserve([store.to_path_buf()], true)?;
+    // The catalogue lock serialises index publication. Reserving the store
+    // here too would order store before inputs, the reverse of a writer that
+    // reserves its inputs first, and the two would wait on each other.
     let registry_guard = registry_lock()?;
     let mut all = stores()?;
     if !all.iter().any(|p| p == store) {
