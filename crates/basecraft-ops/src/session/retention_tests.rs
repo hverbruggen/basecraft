@@ -60,7 +60,7 @@ fn unchanged(session: &Session, id: DocId, before: &basecraft_io::genbank::Recor
     assert!(slot.undo.is_empty());
     assert!(slot.redo.is_empty());
     assert_eq!(slot.generation, 0);
-    assert!(session.events.is_empty());
+    assert_eq!(session.events, Vec::<basecraft_protocol::LogEntry>::new());
     assert!(session.pending.is_none());
 }
 
@@ -115,7 +115,7 @@ fn current_source_is_verified_even_with_a_known_object() {
                         #[cfg(unix)]
                         {
                             use std::os::unix::fs::PermissionsExt;
-                            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0))
+                            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o0))
                                 .unwrap();
                         }
                     }

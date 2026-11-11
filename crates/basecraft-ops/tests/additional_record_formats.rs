@@ -16,7 +16,7 @@ fn golden(name: &str, bytes: &[u8]) {
 
 #[test]
 fn metadata_report_and_query_original_writers() {
-    let bytes = metadata::encode(&Default::default()).unwrap();
+    let bytes = metadata::encode(&basecraft_protocol::metadata::ProjectMetadata::default()).unwrap();
     golden("metadata-manifest.json", &bytes[0]);
     let record = DocumentRecord::empty("input.fasta");
     let report = record.report().unwrap();

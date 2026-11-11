@@ -116,7 +116,7 @@ fn original_export_maps() {
         basecraft_io::hash_bytes(&original),
         roots[0].id.clone(),
     )];
-    assert_originals(&dest, &archives, &[original.clone()]);
+    assert_originals(&dest, &archives, std::slice::from_ref(&original));
     assert_eq!(
         std::fs::read(bundle.join("records/Single.json")).unwrap(),
         original

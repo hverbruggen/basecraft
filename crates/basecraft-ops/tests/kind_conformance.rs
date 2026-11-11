@@ -1,6 +1,7 @@
 //! The common lifecycle contract for the six existing Session kinds.
 //! Keep semantic assertions as well as fingerprints: equal counts do not imply
 //! equal documents. Sanger review is not a Session kind yet.
+use basecraft_protocol::ops::DocumentCounts;
 use std::{
     collections::BTreeMap,
     fmt::Debug,
@@ -132,7 +133,6 @@ fn scenario<T: Debug + PartialEq>(
     // Equal aggregate counts do not make different document kinds equivalent.
     let mut wrong_kind = entries;
     let state = &mut wrong_kind[1].state;
-    use basecraft_protocol::ops::DocumentCounts;
     state.counts = Some(
         if matches!(state.counts, Some(DocumentCounts::Sequence { .. })) {
             DocumentCounts::Tree {

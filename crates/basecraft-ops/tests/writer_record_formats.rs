@@ -1,4 +1,11 @@
 use basecraft_ops::{files, metadata, submission};
+use basecraft_protocol::submission::{
+    AccessionEntry, Author, Decision, FrameChoice, Publication, RowDecision, SourceAlignment,
+    Submission,
+};
+use basecraft_protocol::metadata::{
+    Cell, Column, ColumnKind, Identification, ProjectMetadata, RecordLink, Row, Table, Taxon,
+};
 use std::path::Path;
 
 fn golden(format: &str, variant: &str, path: &Path, bytes: Vec<u8>) {
@@ -98,9 +105,6 @@ fn document_writer_bytes_require_a_version_bump() {
             bytes.replace(&allocated, "\"snapshot.afa\"").into_bytes(),
         );
     }
-    use basecraft_protocol::metadata::{
-        Cell, Column, ColumnKind, Identification, ProjectMetadata, RecordLink, Row, Table, Taxon,
-    };
     let metadata_fixture = ProjectMetadata {
         specimens: Table {
             columns: vec![
@@ -128,7 +132,7 @@ fn document_writer_bytes_require_a_version_bump() {
                 },
                 Row {
                     id: "S2".into(),
-                    cells: Default::default(),
+                    cells: std::collections::BTreeMap::new(),
                 },
             ],
         },
@@ -169,10 +173,6 @@ fn document_writer_bytes_require_a_version_bump() {
             bytes,
         );
     }
-    use basecraft_protocol::submission::{
-        AccessionEntry, Author, Decision, FrameChoice, Publication, RowDecision, SourceAlignment,
-        Submission,
-    };
     let submission_fixture = Submission {
         source: Some(SourceAlignment {
             document: "locus.afa".into(),

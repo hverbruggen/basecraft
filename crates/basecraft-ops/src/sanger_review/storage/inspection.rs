@@ -231,9 +231,7 @@ fn inspect_set<'a>(set: &'a SangerReviewSession, target: &Path, sets: &mut Vec<S
             let legacy_selected =
                 position == 0 && !selected && followed.as_ref().is_ok_and(fs::Metadata::is_file);
             selected |= legacy_selected;
-            let open = if !legacy_selected {
-                OpenObservation::NotRequested
-            } else {
+            let open = if legacy_selected {
                 match &leaf {
                     Ok(metadata) if metadata.file_type().is_symlink() => OpenObservation::Symlink,
                     Ok(metadata) if metadata.is_file() => {
@@ -241,6 +239,8 @@ fn inspect_set<'a>(set: &'a SangerReviewSession, target: &Path, sets: &mut Vec<S
                     }
                     _ => OpenObservation::UnavailableLeaf,
                 }
+            } else {
+                OpenObservation::NotRequested
             };
             RunInspection {
                 run,

@@ -420,7 +420,7 @@ mod tests {
             let p = prepare(&q, &s).unwrap();
             assert!(authorize(&p, &s).is_err());
             assert_eq!(p.records[1].submitted_length, 2);
-            assert_eq!(p.records[2].omitted, true);
+            assert!(p.records[2].omitted);
             s["truncate"] = json!(true);
             s["approval_hash"] = json!(p.approval_hash);
             authorize(&prepare(&q, &s).unwrap(), &s).unwrap();

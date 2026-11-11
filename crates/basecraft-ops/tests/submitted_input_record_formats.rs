@@ -29,15 +29,13 @@ fn submitted_input_ancestry_and_source_identity() {
     assert_eq!(input.upstream.len(), 1);
     assert_eq!(input.upstream[0].id, original.id());
     assert_eq!(input.submitted_hash, basecraft_io::hash_bytes(b">a\nAC\n"));
-    assert!(
-        evidence::verify_ancestors(generated.directory())
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        evidence::verify_ancestors(generated.directory()).unwrap(),
+        Vec::<String>::new()
     );
     std::fs::write(&source, b">a\nAAAA\n").unwrap();
-    assert!(
-        !evidence::verify_ancestors(generated.directory())
-            .unwrap()
-            .is_empty()
+    assert_ne!(
+        evidence::verify_ancestors(generated.directory()).unwrap(),
+        Vec::<String>::new()
     );
 }

@@ -222,8 +222,8 @@ pub fn tool_run_events(session: &Session, doc: DocId) -> Vec<basecraft_protocol:
         .unwrap()
         .events
         .iter()
+        .filter(|&event| matches!(event.op, basecraft_protocol::Op::ToolRun { .. }))
         .cloned()
-        .filter(|event| matches!(event.op, basecraft_protocol::Op::ToolRun { .. }))
         .collect()
 }
 

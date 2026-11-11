@@ -96,7 +96,7 @@ fn persistent_changes_refuse_admission_at_both_boundaries() {
                             }
                             _ => std::fs::write(&target, &replacement).unwrap(),
                         }
-                    }))
+                    }));
                 });
                 let reset = Reset;
                 assert!(
@@ -136,7 +136,7 @@ fn capture_hashes_and_writers_use_the_owned_pair() {
             assert_eq!(stage, "acquired");
             std::fs::remove_file(&target).unwrap();
             std::fs::remove_file(&sidecar).unwrap();
-        }))
+        }));
     });
     let reset = Reset;
     let captured = files::capture_load(&path, files::Format::Fasta)

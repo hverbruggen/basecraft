@@ -54,12 +54,12 @@ fn invalid_format(s: &mut Session, id: DocId, format: files::Format) {
 
 #[test]
 fn formats_queries_and_explicit_save_windows() {
+    fn send_sync<T: Send + Sync>() {}
     let Some(root) = crate::isolated_profile::enter(
         "session::saved_fingerprint_tests::formats_queries_and_explicit_save_windows",
     ) else {
         return;
     };
-    fn send_sync<T: Send + Sync>() {}
     send_sync::<Session>();
     let formats: &[(&str, &[u8], Op)] = &[
         ("records.fa", b">a description\nACGT\n>b retained\nTTAA\n", replace("T")),
@@ -321,7 +321,7 @@ fn errors_are_retried_and_creation_is_not_saved() {
     invalid_format(&mut s, id, files::Format::Fasta);
     assert_eq!(check(&s, id, 1), baseline);
     let new = s.create_sequence("new", "ACGT").unwrap();
-    assert!(s.docs[new.0].saved_state_hashes.is_empty());
+    assert_eq!(s.docs[new.0].saved_state_hashes, Vec::<String>::new());
     check(&s, new, 1);
     assert!(s.document_record(new).unwrap().unsaved);
     assert!(s.saved_source(new).unwrap().is_none());
@@ -354,7 +354,7 @@ fn tree_payload_and_excluded_kinds() {
             name: "support".into(),
             source: "test".into(),
             values: vec![Some("90".into()), Some("80".into())],
-            kind: Default::default(),
+            kind: basecraft_protocol::SupportKind::default(),
         },
     )
     .unwrap();
@@ -548,12 +548,12 @@ fn drop_keeps_flush_pending_dirty_and_error_gates() {
 
 #[test]
 fn opted_in_save_milestones_do_not_infer_acceptance() {
+    use super::save_attempt_observation::{Observer, Site, tests::observer};
     let Some(root) = crate::isolated_profile::enter(
         "session::saved_fingerprint_tests::opted_in_save_milestones_do_not_infer_acceptance",
     ) else {
         return;
     };
-    use super::save_attempt_observation::{Observer, Site, tests::observer};
     for case in 2..8 {
         let dir = root.join(case.to_string());
         let path = fixture(&dir, "source.fa", b">a\nACGT\n");

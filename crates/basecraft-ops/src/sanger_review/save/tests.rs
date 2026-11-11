@@ -217,7 +217,7 @@ fn binding_covers_public_inactive_inverse_evidence_and_operational_state() {
                 source_path: "reference".into(),
                 source_sha256: "a".repeat(64),
                 counts: vec![Some([1, 2, 3, 4])],
-            })
+            });
         },
         |s| s.events.push(ReviewOp::Undo),
         // Inverse internals now belong to the document layer. The owner can
@@ -228,14 +228,14 @@ fn binding_covers_public_inactive_inverse_evidence_and_operational_state() {
                     columns: vec![1],
                     choice: ReviewChoice::Reject,
                 })
-                .unwrap()
+                .unwrap();
         },
         |s| {
             s.undo[0] = s
                 .prepare_change(&ReviewOp::Mask {
                     settings: s.mask.clone(),
                 })
-                .unwrap()
+                .unwrap();
         },
         |s| {
             s.undo[0] = s
@@ -245,7 +245,7 @@ fn binding_covers_public_inactive_inverse_evidence_and_operational_state() {
                     calls: vec![None; s.decisions.len()],
                     reference: s.reference.clone(),
                 })
-                .unwrap()
+                .unwrap();
         },
         |s| s.redo.push(s.undo[0].clone()),
         |s| s.evidence.schema_version += 1,
@@ -308,7 +308,7 @@ fn source_placement_extensions_and_failed_selection_are_bound() {
                 .as_mut()
                 .unwrap()
                 .hash
-                .push('0')
+                .push('0');
         },
         |s| {
             s.evidence.sources[0]
@@ -320,7 +320,7 @@ fn source_placement_extensions_and_failed_selection_are_bound() {
                 extra: BTreeMap::new(),
                 path: "placement".into(),
                 hash: "hash".into(),
-            })
+            });
         },
     ];
     for change in changes {
