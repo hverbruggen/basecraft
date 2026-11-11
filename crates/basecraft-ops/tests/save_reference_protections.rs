@@ -1,5 +1,7 @@
 //! M3 step 1: Session-level guards across store locations and file identities.
 //! These pin existing protections, not the future registry/locking policy.
+#[path = "support/decided_save.rs"]
+mod decided_save;
 use std::path::Path;
 
 use basecraft_ops::{
@@ -106,7 +108,10 @@ fn registered_other_folder_policies_preserve_original_and_pending_edits() {
                 assert_eq!(std::fs::read(&source).unwrap(), ORIGINAL);
                 recoverable(&mut session, doc, &root.join(format!("recovered-{index}")));
                 if policy == SavePolicy::Cancel {
-                    conflict(session.save_with_evidence(doc, None, policy).unwrap_err());
+                    conflict(
+                        decided_save::save_with_policy(&mut session, doc, None, policy)
+                            .unwrap_err(),
+                    );
                     assert_eq!(std::fs::read(&source).unwrap(), ORIGINAL);
                     assert_eq!(
                         input_evidence::read_input(run.directory()).unwrap().state,
@@ -114,7 +119,7 @@ fn registered_other_folder_policies_preserve_original_and_pending_edits() {
                     );
                     continue;
                 }
-                session.save_with_evidence(doc, None, policy).unwrap();
+                decided_save::save_with_policy(&mut session, doc, None, policy).unwrap();
                 assert!(std::fs::read_to_string(&source).unwrap().contains("ATGT"));
                 let input = input_evidence::read_input(run.directory()).unwrap();
                 if policy == SavePolicy::PreserveCopy {
@@ -173,9 +178,13 @@ fn session_save_as_aliases_cannot_bypass_registered_input_guard() {
                 assert!(session.document_record(doc).unwrap().unsaved);
             }
             recoverable(&mut session, doc, &root.join("recovered"));
-            session
-                .save_with_evidence(doc, Some(&hard), SavePolicy::PreserveCopy)
-                .unwrap();
+            decided_save::save_with_policy(
+                &mut session,
+                doc,
+                Some(&hard),
+                SavePolicy::PreserveCopy,
+            )
+            .unwrap();
             assert_eq!(
                 std::fs::read(run.directory().join("preserved-input")).unwrap(),
                 ORIGINAL
@@ -250,17 +259,25 @@ fn lexical_old_path_still_guards_missing_or_replaced_source() {
                 assert_eq!(found.analyses[0].run, run.directory());
                 assert!(!found.options.contains(&SavePolicy::PreserveCopy));
                 assert!(
-                    session
-                        .save_with_evidence(doc, Some(&source), SavePolicy::PreserveCopy)
-                        .is_err()
+                    decided_save::save_with_policy(
+                        &mut session,
+                        doc,
+                        Some(&source),
+                        SavePolicy::PreserveCopy
+                    )
+                    .is_err()
                 );
                 assert_eq!(std::fs::read(&source).ok(), before);
                 assert_eq!(std::fs::read(&moved).unwrap(), ORIGINAL);
                 // Recovery to a new path is not blocked by the missing source.
                 recoverable(&mut session, doc, &data.join("recovered"));
-                session
-                    .save_with_evidence(doc, Some(&source), SavePolicy::BreakEvidence)
-                    .unwrap();
+                decided_save::save_with_policy(
+                    &mut session,
+                    doc,
+                    Some(&source),
+                    SavePolicy::BreakEvidence,
+                )
+                .unwrap();
                 assert_eq!(
                     input_evidence::read_input(run.directory()).unwrap().state,
                     basecraft_protocol::input_records::EvidenceState::Broken
@@ -309,8 +326,7 @@ fn registered_transitive_dependencies_are_included_in_session_conflict() {
             }
             assert_eq!(std::fs::read(&source).unwrap(), ORIGINAL);
             recoverable(&mut session, doc, &root.join("recovered"));
-            session
-                .save_with_evidence(doc, None, SavePolicy::PreserveCopy)
+            decided_save::save_with_policy(&mut session, doc, None, SavePolicy::PreserveCopy)
                 .unwrap();
             assert_eq!(
                 std::fs::read(parent.directory().join("preserved-input")).unwrap(),

@@ -32,7 +32,7 @@ mod publish;
 #[cfg(test)]
 mod retention_tests;
 mod save;
-pub(crate) mod save_authority;
+pub(crate) mod save_consent;
 mod save_decision;
 #[cfg(test)]
 mod save_failure_tests;
@@ -65,7 +65,7 @@ struct Slot {
     key: String,
     content: Loaded,
     generation: u64,
-    save_authority: save_authority::PendingSaveAuthority,
+    pending_check: save_consent::PendingSaveCheck,
     undo: Vec<Applied>,
     redo: Vec<Applied>,
     baseline: Option<LogEntry>,

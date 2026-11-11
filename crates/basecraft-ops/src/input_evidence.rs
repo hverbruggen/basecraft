@@ -438,7 +438,7 @@ pub fn relative(base: &Path, target: &Path) -> Result<String> {
 
 pub fn read_input(run: &Path) -> Result<SubmittedInput> {
     if let Some(held) = HELD_LOCKS.with(|slot| slot.borrow().upgrade()) {
-        Locks(held).record(run)?;
+        Locks(held).record(run, false)?;
     }
     let bytes = crate::records::provenance::read_record(&run.join("input.json"))?;
     validate_input(run, &bytes)
@@ -539,13 +539,22 @@ fn open_lock(path: &Path) -> Result<std::fs::File> {
         .open(path)?)
 }
 
-type HeldLocks = std::rc::Rc<std::cell::RefCell<BTreeMap<PathBuf, std::fs::File>>>;
-thread_local! {
-    static HELD_LOCKS: std::cell::RefCell<std::rc::Weak<std::cell::RefCell<BTreeMap<PathBuf, std::fs::File>>>> = const { std::cell::RefCell::new(std::rc::Weak::new()) };
+/// Reserved keys, each with whether it is held exclusively. A save scope waits
+/// briefly for a reservation; other scopes return Busy at once.
+#[derive(Default)]
+struct Scope {
+    held: std::cell::RefCell<BTreeMap<PathBuf, (std::fs::File, bool)>>,
+    wait: std::cell::Cell<bool>,
 }
+type HeldLocks = std::rc::Rc<Scope>;
+thread_local! {
+    static HELD_LOCKS: std::cell::RefCell<std::rc::Weak<Scope>> = const { std::cell::RefCell::new(std::rc::Weak::new()) };
+}
+const SAVE_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// A thread-confined mutation scope. Resources are reserved before each write;
-/// nested operations reuse the scope. Contention returns Busy, never deadlocks.
+/// A thread-confined mutation scope. Readers reserve shared, writers exclusive;
+/// nested operations reuse the scope. Waits are bounded, so contention ends in
+/// Busy, never deadlock.
 pub struct Locks(HeldLocks);
 
 pub fn lock() -> Result<Locks> {
@@ -558,7 +567,7 @@ pub fn lock() -> Result<Locks> {
 }
 
 impl Locks {
-    fn record(&self, directory: &Path) -> Result<()> {
+    fn record(&self, directory: &Path, exclusive: bool) -> Result<()> {
         let directory = lexical(&std::path::absolute(directory)?);
         self.reserve(
             std::iter::once(directory.clone()).chain(
@@ -567,6 +576,7 @@ impl Locks {
                     .find(|p| p.file_name().is_some_and(|n| n == "analyses-v1"))
                     .map(Path::to_path_buf),
             ),
+            exclusive,
         )
     }
     fn input(
@@ -576,7 +586,7 @@ impl Locks {
         seen: &mut std::collections::BTreeSet<PathBuf>,
         sources: &mut Option<std::collections::BTreeSet<PathBuf>>,
     ) -> Result<()> {
-        self.record(directory)?;
+        self.record(directory, true)?;
         if !seen.insert(directory.into()) {
             return Ok(());
         }
@@ -591,12 +601,13 @@ impl Locks {
                 .ancestors()
                 .find(|p| p.file_name().is_some_and(|n| n == "analyses-v1"))
                 .map(Path::to_path_buf),
+            true,
         )?;
         if let Some(source) = &input.source {
             let path = lexical(&directory.join(&source.path));
             self.source(&path)?;
             if let Some(sources) = sources {
-                sources.insert(path);
+                sources.extend(index::spellings(&path));
             }
         }
         let mut dependencies = Vec::new();
@@ -618,6 +629,7 @@ impl Locks {
                 path.ancestors()
                     .find(|p| p.file_name().is_some_and(|n| n == "analyses-v1"))
                     .map(Path::to_path_buf),
+                true,
             )?;
             match read_input(&path) {
                 Ok(input) => self.input(&path, &input, seen, sources)?,
@@ -627,15 +639,19 @@ impl Locks {
         }
         Ok(())
     }
-    fn reserve(&self, paths: impl IntoIterator<Item = PathBuf>) -> Result<()> {
-        let mut held = self.0.borrow_mut();
+    fn reserve(&self, paths: impl IntoIterator<Item = PathBuf>, exclusive: bool) -> Result<()> {
+        let mut held = self.0.held.borrow_mut();
         for path in paths.into_iter().collect::<std::collections::BTreeSet<_>>() {
             let path = if path.is_absolute() {
                 path.canonicalize().unwrap_or(path)
             } else {
                 path
             };
-            if held.contains_key(&path) {
+            if let Some((file, held_exclusive)) = held.get_mut(&path) {
+                if exclusive && !*held_exclusive {
+                    self.acquire(file, true)?;
+                    *held_exclusive = true;
+                }
                 continue;
             }
             let key = basecraft_io::hash_bytes(path.as_os_str().as_encoded_bytes());
@@ -644,14 +660,29 @@ impl Locks {
                     .with_file_name("analysis-locks")
                     .join(key.trim_start_matches("b3:")),
             )?;
-            if !file.try_lock_exclusive()? {
+            self.acquire(&file, exclusive)?;
+            held.insert(path, (file, exclusive));
+        }
+        Ok(())
+    }
+    fn acquire(&self, file: &std::fs::File, exclusive: bool) -> Result<()> {
+        let started = std::time::Instant::now();
+        loop {
+            let acquired = if exclusive {
+                file.try_lock_exclusive()?
+            } else {
+                FileExt::try_lock_shared(file)?
+            };
+            if acquired {
+                return Ok(());
+            }
+            if !self.0.wait.get() || started.elapsed() > SAVE_WAIT {
                 return Err(crate::Error::Busy(
                     "an analysis or save is using this input; retry shortly".into(),
                 ));
             }
-            held.insert(path, file);
+            std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        Ok(())
     }
     pub(crate) fn source(&self, path: &Path) -> Result<()> {
         let absolute = lexical(&std::path::absolute(path)?);
@@ -664,7 +695,7 @@ impl Locks {
         {
             keys.push(PathBuf::from(format!("inode:{dev}:{ino}")));
         }
-        self.reserve(keys)
+        self.reserve(keys, true)
     }
 }
 
@@ -688,12 +719,15 @@ impl SaveLock {
 
 /// Select and reserve under the short catalogue lock, then retain only resources
 /// belonging to this target. A lookup is carried into the save unchanged.
-pub(crate) fn lock_save(target: &Path) -> Result<SaveLock> {
+pub(crate) fn lock_save(target: &Path, changes_stores: bool) -> Result<SaveLock> {
     let locks = lock()?;
-    let catalogue = registry_lock()?;
+    locks.0.wait.set(true);
+    // Lookups share the catalogue; only index changes take it exclusively.
+    let catalogue = open_lock(&registry()?.with_file_name("analysis-registry.lock"))?;
+    FileExt::lock_shared(&catalogue).map_err(|e| crate::Error::Busy(e.to_string()))?;
     locks.source(target)?;
     let (canonical, selected, inspection) = selection(target)?;
-    locks.reserve(selected.iter().cloned())?;
+    locks.reserve(selected.iter().cloned(), changes_stores)?;
     drop(catalogue);
     let check = inspect_in(&canonical, &selected, inspection)?;
     Ok(SaveLock {
@@ -795,7 +829,7 @@ pub fn register(run: &ArtifactRun) -> Result<()> {
         .parent()
         .and_then(Path::parent)
         .ok_or_else(|| invalid("run has no store"))?;
-    locks.reserve([store.to_path_buf()])?;
+    locks.reserve([store.to_path_buf()], true)?;
     let mut all = stores()?;
     if !all.iter().any(|p| p == store) {
         if all.len() >= 4096 {

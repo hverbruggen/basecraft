@@ -284,11 +284,8 @@ fn save_as_rechecks_and_save_new_never_overwrites() {
         ));
         assert_eq!(std::fs::read(&new).unwrap(), b"keep me");
         std::fs::remove_file(&new).unwrap();
-        let check = required(session.save_new(doc, Some(&new)).unwrap_err());
-        let outcome = session
-            .save_new_with_decision(doc, Some(&new), check.decide(SavePolicy::Cancel, true))
-            .unwrap();
-        assert_eq!(outcome.warnings.len(), 1);
+        // A new file holds no recorded bytes: the unchecked store only warns.
+        session.save_new(doc, Some(&new)).unwrap();
         assert_eq!(std::fs::read(&file).unwrap(), ORIGINAL);
         assert_eq!(std::fs::read(&new).unwrap(), b">gene\nATGT\n");
     });

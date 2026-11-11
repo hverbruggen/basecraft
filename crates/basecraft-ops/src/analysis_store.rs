@@ -11,10 +11,6 @@ use basecraft_protocol::records::{StoreFormat, StoreMarker};
 
 use crate::{Result, error::invalid};
 
-// Deliberately unwired: producer evidence is not save/completion authority.
-#[allow(dead_code)]
-#[cfg(test)]
-pub(crate) mod publication_observation;
 #[cfg(test)]
 mod publication_tests;
 

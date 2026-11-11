@@ -2,6 +2,8 @@
 //! without numerical mocks masquerading as scientific validation. Real
 //! scientific tools have separate tests.
 mod common;
+#[path = "../../basecraft-ops/tests/support/decided_save.rs"]
+mod decided_save;
 #[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
 mod isolated_profile;
 
@@ -143,9 +145,7 @@ fn common_save_route_preserves_actual_original_and_dirty_submitted_input() {
         .save(doc, Some(&dir.path().join("new.fasta")))
         .unwrap();
     assert_eq!(std::fs::read(&source).unwrap(), old);
-    session
-        .save_with_evidence(doc, None, SavePolicy::PreserveCopy)
-        .unwrap();
+    decided_save::save_with_policy(&mut session, doc, None, SavePolicy::PreserveCopy).unwrap();
     let run = ArtifactRun::for_result(&output).unwrap().unwrap();
     assert_eq!(std::fs::read(common::verified_input(&run)).unwrap(), old);
     assert_eq!(

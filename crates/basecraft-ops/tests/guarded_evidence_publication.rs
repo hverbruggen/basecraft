@@ -1,5 +1,7 @@
 //! Same-profile cooperating processes, ordered by socket barriers, never sleeps.
 #![cfg(unix)]
+#[path = "support/decided_save.rs"]
+mod decided_save;
 use basecraft_ops::{
     Session,
     analysis_store::ArtifactRun,
@@ -243,17 +245,17 @@ fn publication_worker() {
             basecraft_ops::records::recover(session.recovery_root(), &root.join("recovered"))
                 .unwrap();
         assert_eq!(std::fs::read(&recovered[0]).unwrap(), b">gene\nATGT\n");
-        session
-            .save_with_evidence(
-                doc,
-                None,
-                if mode == "preserve" || mode == "interrupted" {
-                    SavePolicy::PreserveCopy
-                } else {
-                    SavePolicy::Cancel
-                },
-            )
-            .unwrap();
+        decided_save::save_with_policy(
+            &mut session,
+            doc,
+            None,
+            if mode == "preserve" || mode == "interrupted" {
+                SavePolicy::PreserveCopy
+            } else {
+                SavePolicy::Cancel
+            },
+        )
+        .unwrap();
         if mode != "save-first" {
             let ledger = PathBuf::from(std::fs::read_to_string(root.join("ledger-path")).unwrap());
             let input = input_evidence::read_input(&ledger).unwrap();
@@ -466,17 +468,17 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
             basecraft_ops::records::recover(session.recovery_root(), &root.join("recovered"))
                 .unwrap();
         assert_eq!(std::fs::read(&recovered[0]).unwrap(), b">gene\nATGT\n");
-        session
-            .save_with_evidence(
-                doc,
-                None,
-                match mode {
-                    "retain-break" => SavePolicy::BreakEvidence,
-                    "retain-remove" => SavePolicy::RemoveAnalysis,
-                    _ => SavePolicy::PreserveCopy,
-                },
-            )
-            .unwrap();
+        decided_save::save_with_policy(
+            &mut session,
+            doc,
+            None,
+            match mode {
+                "retain-break" => SavePolicy::BreakEvidence,
+                "retain-remove" => SavePolicy::RemoveAnalysis,
+                _ => SavePolicy::PreserveCopy,
+            },
+        )
+        .unwrap();
         barrier.send("saved");
     }
 }

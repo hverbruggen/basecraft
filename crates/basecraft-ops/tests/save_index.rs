@@ -365,12 +365,16 @@ fn measure_save(root: &Path, label: &str, residue: &str, interactive: bool) {
             },
         )
         .unwrap();
+    // Recovery sessions retain the original by hard link at the first edit,
+    // so the save also covers the multi-link lookup.
+    let links = basecraft_platform::files::link_count(&root.join("unrelated.fasta")).unwrap();
     basecraft_io::counters::reset();
     let started = std::time::Instant::now();
     session.save(doc, None).unwrap();
     let elapsed = started.elapsed();
     let counts = basecraft_io::counters::snapshot();
     assert!(counts.store_inspections.is_empty());
+    // Includes index shards and, for a multi-link target, the catalogue.
     assert!(counts.reads.values().map(|r| r.bytes).sum::<u64>() < 100_000);
     assert!(counts.reads.keys().all(|p| {
         !p.strip_prefix(root)
@@ -379,7 +383,7 @@ fn measure_save(root: &Path, label: &str, residue: &str, interactive: bool) {
             .is_some_and(|c| c.as_os_str().to_string_lossy().starts_with("store-"))
     }));
     eprintln!(
-        "200 stores x 50 runs {label} Session save: {:?}; complete reads: {}; bytes: {}",
+        "200 stores x 50 runs {label} Session save: {:?}; links: {links}; complete reads: {}; bytes: {}",
         elapsed,
         counts.reads.values().map(|r| r.full_reads).sum::<u64>(),
         counts.reads.values().map(|r| r.bytes).sum::<u64>()
@@ -445,4 +449,28 @@ fn completed_registration_needs_no_unrelated_ledger_reads() {
     > = serde_json::from_slice(&std::fs::read(cache).unwrap()).unwrap();
     assert_eq!(restored.value.sources, record.value.sources);
     assert_eq!(restored.value.stores, record.value.stores);
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_folder_spelling_and_new_inode_are_still_detected() {
+    let Some(root) =
+        isolated_profile::enter("symlinked_folder_spelling_and_new_inode_are_still_detected")
+    else {
+        return;
+    };
+    let real = root.join("disk/data");
+    std::fs::create_dir_all(&real).unwrap();
+    std::os::unix::fs::symlink(&real, root.join("data")).unwrap();
+    let recorded = root.join("data/source.fasta");
+    std::fs::write(&recorded, b">a\nACGT\n").unwrap();
+    let run = reference(&root.join("analysis"), &recorded);
+    // A sync tool restores the same bytes as a new file.
+    let real_file = real.join("source.fasta");
+    let copy = real.join("restored.tmp");
+    std::fs::copy(&real_file, &copy).unwrap();
+    std::fs::rename(&copy, &real_file).unwrap();
+    let check = evidence::check(&real_file).unwrap();
+    assert_eq!(check.conflict.analyses.len(), 1);
+    assert_eq!(check.conflict.analyses[0].run, run.directory());
 }

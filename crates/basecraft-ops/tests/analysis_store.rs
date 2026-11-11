@@ -1,3 +1,5 @@
+#[path = "support/decided_save.rs"]
+mod decided_save;
 #[path = "support/isolated_profile.rs"]
 mod isolated_profile;
 
@@ -247,18 +249,18 @@ fn session_save_policies_and_copy_failure_leave_source_safe() {
             .unwrap();
         if policy == SavePolicy::Cancel {
             assert!(matches!(
-                session.save_with_evidence(doc, None, policy),
+                decided_save::save_with_policy(&mut session, doc, None, policy),
                 Err(basecraft_ops::Error::EvidenceConflict(_))
             ));
             assert_eq!(std::fs::read_to_string(&source).unwrap(), original);
         } else {
             if policy == SavePolicy::PreserveCopy {
                 std::fs::create_dir(run.directory().join("preserved-input")).unwrap();
-                assert!(session.save_with_evidence(doc, None, policy).is_err());
+                assert!(decided_save::save_with_policy(&mut session, doc, None, policy).is_err());
                 assert_eq!(std::fs::read_to_string(&source).unwrap(), original);
                 std::fs::remove_dir(run.directory().join("preserved-input")).unwrap();
             }
-            session.save_with_evidence(doc, None, policy).unwrap();
+            decided_save::save_with_policy(&mut session, doc, None, policy).unwrap();
             assert!(std::fs::read_to_string(&source).unwrap().contains("TAAA"));
             match policy {
                 SavePolicy::PreserveCopy => assert_eq!(

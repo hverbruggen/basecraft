@@ -1,6 +1,6 @@
 //! One transient save receipt owner and the common authorization implementation.
 //!
-//! Each live document owns exactly one non-cloning `PendingSaveAuthority`. Advisory
+//! Each live document owns exactly one non-cloning `PendingSaveCheck`. Advisory
 //! checks may be cloned/serialized, but cannot recreate its pending cell. The
 //! caller resolves the origin in its existing document collection and consumes
 //! before validation, locks or IO. Foreign owners and older tokens cannot spend
@@ -9,7 +9,7 @@
 //! Callers construct the complete fresh scope under their existing guards and
 //! retain ownership of source validation, document writes, logs and publication.
 //! Authorization resolves known evidence through the existing evidence owner;
-//! it returns only advisory observations/warnings, never a reusable permit.
+//! it returns only advisory warnings, never a reusable permit.
 //! Finalization authorizes evidence effects without invoking a document writer.
 //! The diagnostic shape (including full tagged object identities) is unchanged.
 use std::path::{Path, PathBuf};
@@ -22,7 +22,7 @@ use crate::input_evidence::{EvidenceCheck, InspectionIssue, SavePolicy};
 use crate::{Result, error::invalid};
 
 /// A fresh advisory check, or the fresh scope returned after refusing stale
-/// consent. Fields cannot be changed to manufacture authority.
+/// consent. Fields cannot be changed to manufacture consent.
 #[derive(Clone, Debug, Serialize)]
 pub struct SaveCheck {
     pub(super) token: String,
@@ -65,8 +65,8 @@ pub(crate) struct TargetRevision {
 }
 
 impl SaveCheck {
-    /// Builds an observation from the caller's complete guarded context, without
-    /// publishing a receipt. Only the live owner can publish authority for it.
+    /// Builds an check from the caller's complete guarded context, without
+    /// publishing a receipt. Only the live owner can publish consent for it.
     pub(crate) fn from_scope(scope: SaveScope) -> Result<Self> {
         let scope_revision = scope.revision()?;
         Ok(Self {
@@ -159,8 +159,8 @@ impl SaveCheck {
         Ok(())
     }
 
-    /// A post-write observation may describe newly discovered issues. It must
-    /// force finalization consent, never grant authority from that observation.
+    /// A post-write check may describe newly discovered issues. It must
+    /// force finalization consent, never grant consent from that check.
     pub(crate) fn require_final_decision(&mut self) {
         self.scope_revision.clear();
     }
@@ -197,10 +197,10 @@ pub struct SaveDecision {
     pub(super) acknowledge_incomplete: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Default, Serialize)]
 pub struct SaveOutcome {
     #[serde(skip)]
-    pub(crate) recovery_observation: Option<Result<SaveCheck>>,
+    pub(crate) recovery_check: Option<Result<SaveCheck>>,
     pub warnings: Vec<SaveWarning>,
 }
 
@@ -210,14 +210,14 @@ pub enum SaveWarning {
     EvidenceNotChecked { issues: Vec<InspectionIssue> },
 }
 
-/// The single pending cell. Moving the owner retains authority; cloning or
+/// The single pending cell. Moving the owner retains consent; cloning or
 /// deserializing advisory checks never creates another owner.
 #[derive(Default)]
-pub(crate) struct PendingSaveAuthority {
+pub(crate) struct PendingSaveCheck {
     pending: Mutex<Option<SaveCheck>>,
 }
 
-impl PendingSaveAuthority {
+impl PendingSaveCheck {
     pub(crate) fn publish(&self, mut check: SaveCheck) -> Result<SaveCheck> {
         check.token = ulid::Ulid::generate().to_string();
         *self
@@ -284,7 +284,7 @@ impl PendingSaveAuthority {
 
     /// Called under the target/evidence guards. Nonwaivable source validation
     /// runs after consent checks but before any known-evidence effect.
-    pub(crate) fn authorize_write(
+    pub(crate) fn consent(
         &self,
         fresh: &SaveCheck,
         decision: Option<(SaveDecision, bool)>,
@@ -315,7 +315,7 @@ impl PendingSaveAuthority {
         })
     }
 
-    /// A matching post-write observation needs no new decision. Changed scope
+    /// A matching post-write check needs no new decision. Changed scope
     /// requires a fresh receipt; explicit decisions authorize evidence only.
     pub(crate) fn authorize_finalization(
         &self,

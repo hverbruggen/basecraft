@@ -320,7 +320,10 @@ fn provenance_regeneration_and_partial_writes() {
         let before = snapshot(&reports);
         let error = records::write_reports(folder.path(), &publication).unwrap_err();
         // Reports stage together; an obstructed name stops the renames there.
-        assert!(matches!(error, basecraft_ops::Error::Damaged { .. }), "{error}");
+        assert!(
+            matches!(error, basecraft_ops::Error::Damaged { .. }),
+            "{error}"
+        );
         let after = snapshot(&reports);
         for (i, name) in generated.iter().enumerate() {
             assert_eq!(

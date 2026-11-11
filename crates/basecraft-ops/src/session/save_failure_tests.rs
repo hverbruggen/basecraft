@@ -132,7 +132,7 @@ pub(super) fn inject(step: WriteStep) {
     FAILURE.with(|failure| failure.set(Some(step)));
 }
 
-// One test-only failure seam, with no observations, callbacks or alternate writer.
+// One test-only failure seam, with no checks, callbacks or alternate writer.
 pub(super) fn fail_write(step: WriteStep) -> Result<()> {
     if FAILURE.with(|failure| failure.get() == Some(step)) {
         FAILURE.with(|failure| failure.set(None));

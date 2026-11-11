@@ -20,7 +20,9 @@ pub(crate) struct Decision {
 
 #[derive(Clone, Copy, Default, clap::Args)]
 pub(crate) struct Options {
-    /// For this invocation's saves only; independent of the known-analysis policy.
+    /// Save anyway when some analyses could not be checked. Applies to every
+    /// save this command makes; the unchecked locations are reported as
+    /// warnings afterwards. Independent of the known-analysis policy.
     #[arg(long, global = true)]
     pub acknowledge_incomplete_evidence: bool,
     /// Known affected analyses still require their own explicit policy.

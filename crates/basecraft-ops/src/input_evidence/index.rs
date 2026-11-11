@@ -21,6 +21,8 @@ fn shard(kind: &str, path: &Path) -> Result<PathBuf> {
 }
 fn read<T: serde::de::DeserializeOwned + serde::Serialize>(path: &Path) -> Result<T> {
     let bytes = crate::records::provenance::read_record(path)?;
+    #[cfg(feature = "test-counters")]
+    basecraft_io::counters::record_read(path, bytes.len() as u64);
     let record: IndexFile<T> =
         serde_json::from_slice(&bytes).map_err(|e| crate::Error::Damaged {
             path: path.into(),
@@ -75,6 +77,19 @@ fn load() -> Result<AnalysisInputIndex> {
     Ok(index)
 }
 
+/// The recorded spelling and, when it resolves, the canonical path. A folder
+/// reached through a symbolic link is then found by either spelling.
+pub(super) fn spellings(path: &Path) -> Vec<PathBuf> {
+    let recorded = lexical(path);
+    let mut all = vec![recorded.clone()];
+    if let Ok(canonical) = recorded.canonicalize()
+        && canonical != recorded
+    {
+        all.push(canonical);
+    }
+    all
+}
+
 fn snapshot(store: &Path) -> Result<IndexedAnalysisStore> {
     ArtifactRun::validate_store(store)?;
     let identity = std::fs::read_to_string(store.join("identity"))?;
@@ -116,17 +131,17 @@ fn snapshot(store: &Path) -> Result<IndexedAnalysisStore> {
             && input.proposal_target != Some(true)
             && let Some(source) = &input.source
         {
-            index.sources.push(lexical(&run.join(&source.path)));
+            index.sources.extend(spellings(&run.join(&source.path)));
         }
         if let Some(owner) = &input.analysis_run {
-            index.dependencies.push(lexical(&run.join(owner)));
+            index.dependencies.extend(spellings(&run.join(owner)));
         }
         if let Some(value) = input.extra.get("origin_run") {
             let path = value.as_str().ok_or_else(|| crate::Error::Damaged {
                 path: run.clone(),
                 detail: "invalid origin_run".into(),
             })?;
-            index.dependencies.push(lexical(&run.join(path)));
+            index.dependencies.extend(spellings(&run.join(path)));
         }
         {
             for parent in &input.upstream {
@@ -135,7 +150,7 @@ fn snapshot(store: &Path) -> Result<IndexedAnalysisStore> {
                 let mut path = lexical(&run.join(path));
                 let mut seen = BTreeSet::new();
                 loop {
-                    index.dependencies.push(path.clone());
+                    index.dependencies.extend(spellings(&path));
                     if !seen.insert(path.clone()) || seen.len() > 32 {
                         return Err(crate::Error::Limit {
                             what: "input ancestry".into(),
@@ -449,7 +464,7 @@ mod tests {
         )
         .unwrap();
         let locks = super::super::lock().unwrap();
-        locks.record(run.directory()).unwrap();
+        locks.record(run.directory(), true).unwrap();
         super::changing(
             &run.directory().join("input.json"),
             Some([introduced.clone()].into()),
@@ -504,7 +519,7 @@ mod tests {
         std::fs::write(&target, b">a\nACGT\n").unwrap();
         std::fs::write(&other, b">b\nACGT\n").unwrap();
         std::fs::hard_link(&target, &alias).unwrap();
-        let _first = super::super::lock_save(&target).unwrap();
+        let _first = super::super::lock_save(&target, false).unwrap();
         std::thread::spawn(move || {
             let mut session = crate::Session::new(other.parent().unwrap());
             let id = session.open(&other).unwrap();
@@ -532,5 +547,65 @@ mod tests {
         })
         .join()
         .unwrap();
+    }
+
+    #[test]
+    fn saves_share_a_store_and_wait_for_a_writer() {
+        crate::isolated_profile::isolate!();
+        let root = tempfile::tempdir().unwrap();
+        // An ancestor store the index does not cover is read by every save here.
+        let run = crate::analysis_store::ArtifactRun::create(&root.path().join("result.txt"), "x")
+            .unwrap();
+        let store = run
+            .directory()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        for name in ["a/a.fasta", "b/b.fasta"] {
+            let file = root.path().join(name);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, b">a\nACGT\n").unwrap();
+        }
+        let (held, ready) = std::sync::mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            let locks = super::super::lock().unwrap();
+            locks.reserve([store], true).unwrap();
+            held.send(()).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        });
+        ready.recv().unwrap();
+        let savers: Vec<_> = ["a/a.fasta", "b/b.fasta"]
+            .into_iter()
+            .map(|name| {
+                let file = root.path().join(name);
+                std::thread::spawn(move || {
+                    let mut session = crate::Session::new(file.parent().unwrap());
+                    let doc = session.open(&file).unwrap();
+                    session
+                        .apply(
+                            doc,
+                            basecraft_protocol::Op::SeqReplace {
+                                start: 0,
+                                end: 1,
+                                residues: "T".into(),
+                            },
+                        )
+                        .unwrap();
+                    session.save(doc, None).unwrap();
+                })
+            })
+            .collect();
+        for saver in savers {
+            saver.join().unwrap();
+        }
+        writer.join().unwrap();
+        for name in ["a/a.fasta", "b/b.fasta"] {
+            assert_eq!(
+                std::fs::read(root.path().join(name)).unwrap(),
+                b">a\nTCGT\n"
+            );
+        }
     }
 }
