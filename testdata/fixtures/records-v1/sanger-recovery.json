@@ -1,0 +1,14 @@
+{
+  "diagnostics": "36 unresolved columns; recoverable review, not accepted consensus",
+  "id": "01M74NQQNAX9HV0VAPN4156BDT",
+  "operation": "Sanger review recovery",
+  "outputs": {},
+  "owner_instance": "45:2026-11-11T06:46:43.595Z",
+  "primary_output": "/work/lanes/lane-records/profile/state/jobs/01M74NQQNAX9HV0VAPN4156BDT/review.sanger-review.json",
+  "schema_version": 1,
+  "source": {
+    "path": "/work/tmp/.tmp6prljk/source.ab1"
+  },
+  "started": "2026-11-11T06:46:43.628Z",
+  "status": "review_requires_attention"
+}
