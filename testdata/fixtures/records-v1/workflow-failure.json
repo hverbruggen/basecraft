@@ -1,0 +1,11 @@
+{
+  "job": {
+    "diagnostics": [
+      "GMYC unavailable: fewer than two retained haplotypes; no tree or fit was invented"
+    ],
+    "status": "unavailable"
+  },
+  "metrics": {},
+  "version": 1,
+  "workspace": null
+}

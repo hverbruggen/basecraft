@@ -1,0 +1,171 @@
+[
+  {
+    "schema": 1,
+    "operation": "basecraft.delimitation/haplotypes@1",
+    "run_id": "01M74PZXFVNKXMGV7G3FSZPTQ1",
+    "state": "completed",
+    "pins": {
+      "generation": "b3:eb58f430bad30dd2f9d1916cdf68dfe705b6dcae761f67ab5f1cea2297df5095",
+      "package_digest": "b3:f90ecc3eccf156f1d326fffe5293de2bb3734d11f6afe5e1d4fc363cd3640a65",
+      "descriptor_digest": "b3:a0028e96c96c8d3440c690e0b7650b45a011f93e30992ee9b154ed27914ff746"
+    },
+    "requested_parameters": {
+      "min_overlap": 1,
+      "model": "p",
+      "rooted": false,
+      "seed": 1,
+      "tree_index": 0,
+      "workers": 4
+    },
+    "effective_parameters": {
+      "deduplicate": false,
+      "min_overlap": 1,
+      "model": "p",
+      "rooted": false,
+      "seed": 1,
+      "tree_index": 0,
+      "workers": 4
+    },
+    "data": null,
+    "artifacts": [
+      {
+        "role": "artifacts",
+        "path": "/work/tmp/.tmpIySvI4/.basecraft/analyses-v1/runs/01M74PZXDBK2A22824AQNXJG9C/stages/.basecraft/analyses-v1/runs/01M74PZXFVNKXMGV7G3FSZPTQ1/artifacts/result.json",
+        "digest": "b3:b33888c13ebed63680185a46d0c2880be89d870219da7e62f488380cc6658c32"
+      },
+      {
+        "role": "artifacts",
+        "path": "/work/tmp/.tmpIySvI4/.basecraft/analyses-v1/runs/01M74PZXDBK2A22824AQNXJG9C/stages/.basecraft/analyses-v1/runs/01M74PZXFVNKXMGV7G3FSZPTQ1/artifacts/result.json.haplotypes.json",
+        "digest": "b3:710f4c9ae6869c161ef942b2fc51c043b9f2e3a94d6cadb9231a65045ac0b8ea"
+      },
+      {
+        "role": "artifacts",
+        "path": "/work/tmp/.tmpIySvI4/.basecraft/analyses-v1/runs/01M74PZXDBK2A22824AQNXJG9C/stages/.basecraft/analyses-v1/runs/01M74PZXFVNKXMGV7G3FSZPTQ1/artifacts/result.json.run.json",
+        "digest": "b3:892550372f09060e7862e3605fafa9c0bfc5671e0b0920d2fcd96237035bc95f"
+      },
+      {
+        "role": "artifacts",
+        "path": "/work/tmp/.tmpIySvI4/.basecraft/analyses-v1/runs/01M74PZXDBK2A22824AQNXJG9C/stages/.basecraft/analyses-v1/runs/01M74PZXFVNKXMGV7G3FSZPTQ1/artifacts/result.json.unique.fasta",
+        "digest": "b3:e6e8256fd44d28d9b8f4d5bf848f44067ce21714f736ee342a3178e209fba3b0"
+      }
+    ],
+    "proposals": null,
+    "warnings": [],
+    "errors": [],
+    "evidence": "/work/tmp/.tmpIySvI4/.basecraft/analyses-v1/runs/01M74PZXDBK2A22824AQNXJG9C/stages/.basecraft/analyses-v1/runs/01M74PZXFVNKXMGV7G3FSZPTQ1"
+  },
+  {
+    "schema": 1,
+    "operation": "basecraft.distance/tree@1",
+    "run_id": "01M74PZXVT5XHA4MNCEF64AR76",
+    "state": "completed",
+    "pins": {
+      "generation": "b3:eb58f430bad30dd2f9d1916cdf68dfe705b6dcae761f67ab5f1cea2297df5095",
+      "package_digest": "b3:c65a8bb767f9a86eb64d06fa369e0cba76e3eaa277545faa19cf3b232b466f92",
+      "descriptor_digest": "b3:147e0b58a1870fbafd31ace2173d3e106c7b8034b4477194ba7d10e147bd6572"
+    },
+    "requested_parameters": {
+      "method": "upgma",
+      "min_overlap": 1,
+      "model": "p",
+      "seed": 1
+    },
+    "effective_parameters": {
+      "bootstrap": 0,
+      "bootstrap_destination": "metadata",
+      "method": "upgma",
+      "min_overlap": 1,
+      "model": "p",
+      "seed": 1,
+      "threads": 4,
+      "tree_role": "phylogenetic inference",
+      "tree_threads": 4
+    },
+    "data": null,
+    "artifacts": [
+      {
+        "role": "artifacts",
+        "path": "/work/tmp/.tmpIySvI4/.basecraft/analyses-v1/runs/01M74PZXDBK2A22824AQNXJG9C/stages/.basecraft/analyses-v1/runs/01M74PZXVT5XHA4MNCEF64AR76/artifacts/tree.nwk",
+        "digest": "b3:c704db9dc97df3a1131d710e032a86e8b5d827a9dfba85daf9d1ffedd98c1d73"
+      },
+      {
+        "role": "artifacts",
+        "path": "/work/tmp/.tmpIySvI4/.basecraft/analyses-v1/runs/01M74PZXDBK2A22824AQNXJG9C/stages/.basecraft/analyses-v1/runs/01M74PZXVT5XHA4MNCEF64AR76/artifacts/tree.nwk.distances.bin",
+        "digest": "b3:ab488547c75f7e305812d7f5683984d0d6f3fb8ce617c5eaac95d4efc0276e98"
+      },
+      {
+        "role": "artifacts",
+        "path": "/work/tmp/.tmpIySvI4/.basecraft/analyses-v1/runs/01M74PZXDBK2A22824AQNXJG9C/stages/.basecraft/analyses-v1/runs/01M74PZXVT5XHA4MNCEF64AR76/artifacts/tree.nwk.run.json",
+        "digest": "b3:4fa722036a4d1540bdf98415ee79408d9b74c5b191d3394520c18d81b47336c8"
+      }
+    ],
+    "proposals": null,
+    "warnings": [],
+    "errors": [],
+    "evidence": "/work/tmp/.tmpIySvI4/.basecraft/analyses-v1/runs/01M74PZXDBK2A22824AQNXJG9C/stages/.basecraft/analyses-v1/runs/01M74PZXVT5XHA4MNCEF64AR76"
+  },
+  {
+    "schema": 1,
+    "operation": "basecraft.delimitation/gmyc_single@1",
+    "run_id": "01M74PZY5C0Q09P61R9DK6NG30",
+    "state": "completed",
+    "pins": {
+      "generation": "b3:eb58f430bad30dd2f9d1916cdf68dfe705b6dcae761f67ab5f1cea2297df5095",
+      "package_digest": "b3:f90ecc3eccf156f1d326fffe5293de2bb3734d11f6afe5e1d4fc363cd3640a65",
+      "descriptor_digest": "b3:a4adff8ebe14c7bda34131677c13ba7db92085a2543e7f7288347c12325e55a7"
+    },
+    "requested_parameters": {
+      "deduplicate": false,
+      "original_count": 5,
+      "reference_age_clamp": false,
+      "retained_count": 5,
+      "rooted": true,
+      "seed": 1,
+      "sequence_sampling": "all specimens",
+      "tree_index": 0,
+      "tree_inference": "UPGMA equal-rate clustering from retained aligned sequences",
+      "units": "relative time from equal-rate UPGMA distances; uncalibrated",
+      "workers": 4
+    },
+    "effective_parameters": {
+      "deduplicate": false,
+      "original_count": 5,
+      "reference_age_clamp": false,
+      "retained_count": 5,
+      "rooted": true,
+      "seed": 1,
+      "sequence_sampling": "all specimens",
+      "tree_index": 0,
+      "tree_inference": "UPGMA equal-rate clustering from retained aligned sequences",
+      "units": "relative time from equal-rate UPGMA distances; uncalibrated",
+      "workers": 4
+    },
+    "data": null,
+    "artifacts": [
+      {
+        "role": "artifacts",
+        "path": "/work/tmp/.tmpIySvI4/.basecraft/analyses-v1/runs/01M74PZXDBK2A22824AQNXJG9C/stages/.basecraft/analyses-v1/runs/01M74PZY5C0Q09P61R9DK6NG30/artifacts/result.json",
+        "digest": "b3:abbd9d267fa5a847b3fbad79a711ae6328203dfaea9060866364067fe8c96fe6"
+      },
+      {
+        "role": "artifacts",
+        "path": "/work/tmp/.tmpIySvI4/.basecraft/analyses-v1/runs/01M74PZXDBK2A22824AQNXJG9C/stages/.basecraft/analyses-v1/runs/01M74PZY5C0Q09P61R9DK6NG30/artifacts/result.json.run.json",
+        "digest": "b3:1641737578b64839bfc32c52f42621f8cb2d7359e296cca216edf56521a36c7c"
+      },
+      {
+        "role": "artifacts",
+        "path": "/work/tmp/.tmpIySvI4/.basecraft/analyses-v1/runs/01M74PZXDBK2A22824AQNXJG9C/stages/.basecraft/analyses-v1/runs/01M74PZY5C0Q09P61R9DK6NG30/artifacts/result.json.spart",
+        "digest": "b3:0c04e8b2c674fa28d7c519f6ef997aa63ac047eac046bf082b09a57d9de05baa"
+      },
+      {
+        "role": "artifacts",
+        "path": "/work/tmp/.tmpIySvI4/.basecraft/analyses-v1/runs/01M74PZXDBK2A22824AQNXJG9C/stages/.basecraft/analyses-v1/runs/01M74PZY5C0Q09P61R9DK6NG30/artifacts/result.json.spart.basecraft.json",
+        "digest": "b3:1969233a4b319013f0e67939ba049e41b8a2d54ac6b45410e99b72e179d1ba6a"
+      }
+    ],
+    "proposals": null,
+    "warnings": [],
+    "errors": [],
+    "evidence": "/work/tmp/.tmpIySvI4/.basecraft/analyses-v1/runs/01M74PZXDBK2A22824AQNXJG9C/stages/.basecraft/analyses-v1/runs/01M74PZY5C0Q09P61R9DK6NG30"
+  }
+]
