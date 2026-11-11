@@ -68,7 +68,10 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut ReplayReport)
                 .problems
                 .push(format!("{} {} {}: {msg}", e.id, e.op.name(), e.doc));
         };
-        if matches!(e.op, Op::CreateSangerReview { .. } | Op::CreateSequence { .. }) {
+        if matches!(
+            e.op,
+            Op::CreateSangerReview { .. } | Op::CreateSequence { .. }
+        ) {
             replaced.remove(e.doc.as_str());
             rebased.remove(e.doc.as_str());
         }
@@ -581,12 +584,7 @@ fn recover_entries(
                         return Err(damaged("unsafe or inconsistent recovery baseline".into()));
                     }
                     let local = staging.path().join(scratch_key(path).map_err(damaged)?);
-                    match materialise(
-                        root,
-                        &source_root,
-                        staging.path(),
-                        &entry.result.hashes,
-                    ) {
+                    match materialise(root, &source_root, staging.path(), &entry.result.hashes) {
                         Ok(()) => session.open(&local).and_then(|doc| {
                             let source = entry.source.as_ref().ok_or_else(|| {
                                 damaged("Recovery baseline has no source record".into())

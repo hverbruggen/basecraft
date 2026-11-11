@@ -512,8 +512,7 @@ fn captured_companion_refusals_preserve_baseline_undo_and_journal() {
 #[test]
 fn captured_multirecord_writer_and_replay_inputs_match_legacy() {
     crate::isolated_profile::isolate!();
-    if !isolated_capture_test("captured_multirecord_writer_and_replay_inputs_match_legacy")
-    {
+    if !isolated_capture_test("captured_multirecord_writer_and_replay_inputs_match_legacy") {
         return;
     }
     let dir = tempfile::tempdir().unwrap();

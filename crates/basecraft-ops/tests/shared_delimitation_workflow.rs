@@ -297,9 +297,7 @@ fn repeated_combine_and_refused_save_preserve_retained_objects_and_recover() {
     // Checkpoints live in objects/.
     let snapshot = || {
         let mut found = std::collections::BTreeMap::new();
-        let mut pending = vec![
-            dir.path().join(".basecraft/objects"),
-        ];
+        let mut pending = vec![dir.path().join(".basecraft/objects")];
         while let Some(directory) = pending.pop() {
             for entry in std::fs::read_dir(&directory).into_iter().flatten() {
                 let path = entry.unwrap().path();
