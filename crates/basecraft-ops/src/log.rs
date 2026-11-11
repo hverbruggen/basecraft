@@ -90,9 +90,10 @@ impl LogWriter {
             serde_json::to_writer(&mut line, &value)?;
             line.push(b'\n');
             if line.len() > 8 << 20 {
-                return Err(crate::error::invalid(
-                    "operation journal batch exceeds 8 MiB limit",
-                ));
+                return Err(crate::Error::Limit {
+                    what: "operation journal batch".into(),
+                    limit: 8 << 20,
+                });
             }
         }
         if let Some((_, f)) = &mut self.open {
@@ -187,9 +188,14 @@ fn read_entries(root: &Path, lenient: bool) -> Result<(Vec<LogEntry>, usize)> {
                 let bytes = fs::metadata(&file)?.len();
                 total_bytes = total_bytes.saturating_add(bytes);
                 if bytes > 16 << 20 || total_bytes > 128 << 20 {
-                    return Err(crate::error::invalid(
-                        "journal exceeds 16 MiB segment or 128 MiB session reading limit",
-                    ));
+                    return Err(crate::Error::Limit {
+                        what: "journal reading".into(),
+                        limit: if bytes > 16 << 20 {
+                            16 << 20
+                        } else {
+                            128 << 20
+                        },
+                    });
                 }
                 for line in BufReader::new(File::open(&file)?).lines() {
                     let line = line?;
@@ -241,9 +247,10 @@ fn verified_segment(
 ) -> Result<VerifiedPrefix> {
     let file = File::open(path)?;
     if file.metadata()?.len() > 16 << 20 {
-        return Err(crate::error::invalid(
-            "journal segment exceeds 16 MiB reading limit",
-        ));
+        return Err(crate::Error::Limit {
+            what: "journal segment reading".into(),
+            limit: 16 << 20,
+        });
     }
     let mut reader = BufReader::new(file);
     let mut prefix = VerifiedPrefix {

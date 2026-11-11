@@ -745,16 +745,15 @@ fn outcome_schema() -> Result<Value> {
     Ok(schema)
 }
 
-// Preserve the existing wire taxonomy while keeping checked document failures
-// typed. Dedicated wire codes belong to the shared error-schema migration.
+// Keep core error kinds intact instead of classifying their display text.
 fn core_error_code(
     error: &(dyn std::error::Error + 'static),
 ) -> basecraft_protocol::operation::OperationErrorCode {
-    if matches!(
-        error.downcast_ref::<basecraft_ops::Error>(),
-        Some(basecraft_ops::Error::UnknownDocument { .. } | basecraft_ops::Error::WrongKind { .. })
-    ) {
-        return basecraft_protocol::operation::OperationErrorCode::InvalidArguments;
+    if let Some(error) = error.downcast_ref::<basecraft_ops::Error>() {
+        return basecraft_plugin_host::jobs::ops_error_code(error);
+    }
+    if let Some(error) = error.downcast_ref::<basecraft_plugin_host::Error>() {
+        return basecraft_plugin_host::jobs::error_code(error);
     }
     basecraft_plugin_host::jobs::error_code(&basecraft_plugin_host::Error::Protocol(
         error.to_string(),

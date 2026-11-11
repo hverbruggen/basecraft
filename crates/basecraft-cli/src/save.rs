@@ -66,6 +66,12 @@ impl Options {
 /// Typed errors stay typed through CLI, MCP and Python, including the fresh check.
 pub(crate) fn error_value(error: &Error) -> Value {
     let code = match error {
+        Error::ChangedOnDisk { .. }
+        | Error::NotFound { .. }
+        | Error::Damaged { .. }
+        | Error::Limit { .. }
+        | Error::Unsupported(_)
+        | Error::Busy(_) => error.code(),
         Error::Access(AccessError::Denied(_)) => "permission_denied",
         Error::Access(AccessError::DestinationExists) => "output_conflict",
         Error::Access(AccessError::Io(e))
@@ -292,5 +298,61 @@ mod tests {
         let ordinary = error_value(&std::io::Error::other("write failed").into());
         assert_eq!(ordinary["state"], "failed");
         assert!(ordinary.get("completion").is_none());
+    }
+}
+
+#[cfg(test)]
+mod typed_error_tests {
+    use super::*;
+
+    #[test]
+    fn core_error_codes_survive_structured_adapters() {
+        let cases = [
+            (
+                Error::ChangedOnDisk {
+                    path: "input.fa".into(),
+                },
+                "changed_on_disk",
+            ),
+            (
+                Error::WrongKind {
+                    id: basecraft_ops::DocId(1),
+                    expected: basecraft_ops::files::Kind::Tree,
+                },
+                "wrong_document_kind",
+            ),
+            (
+                Error::Limit {
+                    what: "journal".into(),
+                    limit: 1024,
+                },
+                "limit",
+            ),
+            (
+                Error::NotFound {
+                    path: "input.fa".into(),
+                },
+                "not_found",
+            ),
+            (
+                Error::Damaged {
+                    path: "input.fa".into(),
+                    detail: "invalid contents".into(),
+                },
+                "damaged",
+            ),
+            (Error::Unsupported("future format".into()), "unsupported"),
+            (Error::Busy("writer active".into()), "busy"),
+        ];
+        for (error, code) in cases {
+            assert_eq!(error.code(), code);
+            assert_eq!(error_value(&error)["errors"][0]["code"], code);
+            let outcome = basecraft_plugin_host::jobs::error_value(
+                "test",
+                basecraft_plugin_host::jobs::ops_error_code(&error),
+                error.to_string(),
+            );
+            assert_eq!(outcome["errors"][0]["code"], code);
+        }
     }
 }
