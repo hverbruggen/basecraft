@@ -13,7 +13,7 @@ mod ffi {
     }
 }
 
-/// Called synchronously from QQmlApplicationEngine::objectCreated. Qt owns the
+/// Called synchronously from `QQmlApplicationEngine::objectCreated`. Qt owns the
 /// object. The signal closure owns only the thread-safe recorder, never a pointer.
 pub unsafe fn attach(object: *mut cxx_qt::QObject, trace: super::Trace) {
     // SAFETY: the engine's creation callback supplies a live object for this call.

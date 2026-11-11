@@ -1131,7 +1131,6 @@ pub fn ops_error_code(error: &basecraft_ops::Error) -> OperationErrorCode {
         Core::WrongKind { .. } => OperationErrorCode::WrongDocumentKind,
         Core::UnknownDocument { .. } => OperationErrorCode::UnknownDocument,
         Core::NotFound { .. } => OperationErrorCode::NotFound,
-        Core::Damaged { .. } => OperationErrorCode::Damaged,
         Core::Limit { .. } => OperationErrorCode::Limit,
         Core::Unsupported(_) | Core::UnknownFormat(_) => OperationErrorCode::Unsupported,
         Core::Busy(_) => OperationErrorCode::Busy,
@@ -1153,7 +1152,7 @@ pub fn ops_error_code(error: &basecraft_ops::Error) -> OperationErrorCode {
             std::io::ErrorKind::PermissionDenied => OperationErrorCode::PermissionDenied,
             _ => OperationErrorCode::ToolFailure,
         },
-        Core::Json(_) | Core::Format(_) => OperationErrorCode::Damaged,
+        Core::Damaged { .. } | Core::Json(_) | Core::Format(_) => OperationErrorCode::Damaged,
         Core::Empty(_) | Core::Invalid(_) | Core::NothingTo(_) => {
             OperationErrorCode::InvalidArguments
         }
