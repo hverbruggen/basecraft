@@ -9,19 +9,15 @@ fn load(root: &Path, host: &HostServices) -> basecraft_plugin_host::Result<Regis
     std::fs::create_dir_all(&source).unwrap();
     std::fs::write(source.join("plugin.toml"), "schema=2\ncontract='operations.json'\nid='org.example.services'\nname='Service fixture'\nversion='1.0.0'\n[entry]\noperation='python:plugin.py'\n").unwrap();
     std::fs::write(source.join("plugin.py"), "").unwrap();
-    let descriptor = json!({"name":"call","version":"1.0.0","implementation":"call","title":"Call","description":"Third-party host service fixture","family":"file_analysis",
+    let contract = json!({"schema":1,"operations":[{"name":"call","version":"1.0.0","implementation":"call","title":"Call","description":"Third-party host service fixture","family":"file_analysis",
         "parameters":{"type":"object","additionalProperties":false,"properties":{}},
         "result":{"type":"object"},
         "inputs":{"reads":{"view":"bytes","media_type":"application/octet-stream","min":1,"max":1}},
         "outputs":{"output":{"media_type":"application/json","min":1,"max":1,"visibility":"result"}},
         "effects":{"document_write":false,"artifact_write":true},
         "credentials":{"access":"BASECRAFT_EXAMPLE_TOKEN"},
-        "required_features":["operation-contract-v1"],"host":host});
-    std::fs::write(
-        source.join("operations.json"),
-        json!({"schema":1,"operations":[descriptor]}).to_string(),
-    )
-    .unwrap();
+        "required_features":["operation-contract-v1"],"host":host}]});
+    std::fs::write(source.join("operations.json"), contract.to_string()).unwrap();
     let config = RegistryConfig {
         bundled: root.join("bundle"),
         packages: root.join("packages"),
