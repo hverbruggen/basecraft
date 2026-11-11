@@ -107,20 +107,6 @@ struct Slot {
 #[derive(Clone, PartialEq, Eq)]
 struct SavedMark(Option<String>);
 
-impl Slot {
-    fn mark(&self) -> SavedMark {
-        SavedMark(self.undo.last().map(|entry| entry.entry_id.clone()))
-    }
-
-    fn is_clean(&self) -> bool {
-        self.saved_at.as_ref() == Some(&self.mark())
-    }
-
-    fn content_mut(&mut self) -> &mut Loaded {
-        &mut self.content
-    }
-}
-
 /// A merged typing burst whose log entry hasn't been written yet.
 struct Pending {
     doc: DocId,
@@ -148,6 +134,7 @@ enum ReplayMode {
 
 pub struct Session {
     root: PathBuf,
+    cache_root: Option<PathBuf>,
     storage_root: PathBuf,
     provenance_policy: basecraft_platform::settings::ProvenancePolicy,
     local_provenance_root: PathBuf,
@@ -157,6 +144,7 @@ pub struct Session {
     replay_mode: ReplayMode,
     memory_objects: Mutex<std::collections::HashMap<String, Vec<u8>>>,
     events: Vec<LogEntry>,
+    pending_baselines: Vec<LogEntry>,
     id: String,
     host: String,
     actor: Actor,
@@ -182,6 +170,9 @@ impl Session {
         let log = Some(LogWriter::new(&root, &host));
         Self {
             storage_root: root.clone(),
+            cache_root: basecraft_platform::paths::AppPaths::discover()
+                .ok()
+                .map(|paths| paths.cache),
             provenance_policy: basecraft_platform::settings::ProvenancePolicy::Portable,
             local_provenance_root: root.join(".basecraft/provenance"),
             tracked: true,
@@ -190,6 +181,7 @@ impl Session {
             replay_mode: ReplayMode::Live,
             memory_objects: Mutex::new(std::collections::HashMap::new()),
             events: Vec::new(),
+            pending_baselines: Vec::new(),
             root,
             id: ulid::Ulid::generate().to_string(),
             host,
@@ -224,6 +216,7 @@ impl Session {
             .map_err(|e| invalid(e.to_string()))?;
         let mut session = Self::new(root);
         session.storage_root = paths.state.join("recovery").join(&session.id);
+        session.cache_root = Some(paths.cache.clone());
         session.local_provenance_root = paths.state.join("provenance");
         session.provenance_policy = preferences.files.provenance;
         session.log = preferences

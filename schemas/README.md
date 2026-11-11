@@ -658,3 +658,9 @@ The writer still encodes through `serde_json::Value`; protocol tests compare the
 actual frozen v1/v2 writer bytes, and existing ops tests replay captured histories
 and compare checkpoints. These data-only declarations do not authorize source
 access, introduce an operation, or complete common Session integration.
+
+RP01 `RecoveryManifest` also accepts an optional `references` map of existing
+`InputReference` records for originals above the copy threshold. Empty maps are
+omitted, preserving small-file writer bytes. Paths are relative to recovery.json;
+the reader verifies content hashes. See `provenance-format.md` for the large-file
+recovery and pre-overwrite hard-link policy.

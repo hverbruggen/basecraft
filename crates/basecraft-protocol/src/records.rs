@@ -35,6 +35,9 @@ pub struct RecoveryManifest {
     #[schemars(with = "crate::LogEntry")]
     pub baseline: Value,
     pub object_policy_limit: u64,
+    /// Large originals, keyed by content hash; paths are relative to recovery.json.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub references: BTreeMap<String, crate::provenance::InputReference>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }

@@ -13,6 +13,13 @@
       "format": "uint64",
       "minimum": 0
     },
+    "references": {
+      "description": "Large originals, keyed by content hash; paths are relative to recovery.json.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/InputReference"
+      }
+    },
     "schema_version": {
       "type": "integer",
       "format": "uint32",

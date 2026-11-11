@@ -117,8 +117,8 @@ impl Session {
         let path = path.filter(|p| !self.is_own_file(id, p));
         let target = path.map_or_else(|| self.resolve(&self.docs[id.0].key), Path::to_path_buf);
         hooks.at(SaveSite::CleanHashes);
-        let clean = (history_only || (self.log.is_some() && path.is_none()))
-            && self.docs[id.0].is_clean();
+        let clean =
+            (history_only || (self.log.is_some() && path.is_none())) && self.docs[id.0].is_clean();
         if history_only && !clean {
             return Err(invalid("history publication requires a saved document"));
         }
@@ -355,6 +355,7 @@ impl Session {
         if target == self.resolve(&self.docs[id.0].key) {
             hooks.at(SaveSite::SourceCheck);
             self.check_save_source(id)?;
+            self.preserve_references(&target)?;
         }
         hooks.at(SaveSite::Format);
         let format = files::Format::from_path(&target)?;

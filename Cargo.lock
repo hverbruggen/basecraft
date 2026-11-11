@@ -330,7 +330,6 @@ dependencies = [
  "blake3",
  "calamine",
  "memchr",
- "memmap2",
  "roxmltree 0.21.1",
  "sha2",
  "tempfile",

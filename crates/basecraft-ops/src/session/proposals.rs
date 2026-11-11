@@ -149,14 +149,9 @@ impl Session {
         self.track(doc)?;
         self.events.reserve(entries.len());
         self.docs[doc.0].undo.reserve(applied.len());
-        if let Some(log) = &mut self.log {
-            log.append_batch(&entries)?;
-        }
+        self.write_entries(&entries)?;
         // All fallible preparation precedes the durable batch. Installing the
         // already checked payload requires no post-append downcast or I/O.
-        if self.tracked {
-            self.events.extend(entries);
-        }
         let slot = &mut self.docs[doc.0];
         *slot.content_mut() = candidate;
         slot.generation = next_generation;

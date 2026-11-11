@@ -40,6 +40,12 @@ fn key(path: &Path) -> Result<String> {
     h.update(&meta.len().to_le_bytes());
     h.update(&mtime.to_le_bytes());
     h.update(&inode.to_le_bytes());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        h.update(&meta.ctime().to_le_bytes());
+        h.update(&meta.ctime_nsec().to_le_bytes());
+    }
     Ok(h.finalize().to_hex()[..32].to_string())
 }
 
@@ -127,31 +133,63 @@ pub fn index_fasta_in(path: &Path, source: Source, cache: &Path) -> Result<Index
 fn valid_index(index: &FastaIndex, data: &[u8]) -> bool {
     use crate::fasta::Layout;
     let size = data.len() as u64;
-    if index.records.len() > data.len() / 2 { return false; }
+    if index.records.len() > data.len() / 2 {
+        return false;
+    }
     for (i, record) in index.records.iter().enumerate() {
         let end = index.records.get(i + 1).map_or(size, |r| r.header_offset);
-        if record.header_offset >= end || end > size
-            || data.get(record.header_offset as usize) != Some(&b'>')
-            || (record.header_offset > 0 && data[record.header_offset as usize - 1] != b'\n')
-        { return false; }
-        if record.len == 0 { continue; }
-        if record.seq_offset <= record.header_offset || record.seq_offset >= end { return false; }
+        let Ok(header_offset) = usize::try_from(record.header_offset) else {
+            return false;
+        };
+        if record.header_offset >= end
+            || end > size
+            || data.get(header_offset) != Some(&b'>')
+            || (record.header_offset > 0 && data[header_offset - 1] != b'\n')
+        {
+            return false;
+        }
+        let header = record.header(data);
+        let name_end = header
+            .iter()
+            .position(u8::is_ascii_whitespace)
+            .unwrap_or(header.len());
+        if header[..name_end] != *record.name.as_bytes() {
+            return false;
+        }
+        if record.len == 0 {
+            continue;
+        }
+        if record.seq_offset <= record.header_offset || record.seq_offset >= end {
+            return false;
+        }
         match &record.layout {
             Layout::Uniform { residues, bytes } => {
-                if *residues == 0 || bytes < residues { return false; }
+                if *residues == 0 || bytes < residues {
+                    return false;
+                }
                 let last = record.len - 1;
-                let offset = (last / residues).checked_mul(*bytes)
+                let offset = (last / residues)
+                    .checked_mul(*bytes)
                     .and_then(|n| n.checked_add(record.seq_offset))
                     .and_then(|n| n.checked_add(last % residues));
-                if offset.is_none_or(|n| n >= end) { return false; }
+                if offset.is_none_or(|n| n >= end) {
+                    return false;
+                }
             }
             Layout::Ragged(lines) => {
-                if lines.first() != Some(&(0, record.seq_offset)) { return false; }
+                if lines.first() != Some(&(0, record.seq_offset)) {
+                    return false;
+                }
                 for (j, &(first, offset)) in lines.iter().enumerate() {
                     let (next, limit) = lines.get(j + 1).copied().unwrap_or((record.len, end));
-                    if first >= next || next > record.len || offset < record.seq_offset
-                        || limit > end || offset.checked_add(next - first).is_none_or(|n| n > limit)
-                    { return false; }
+                    if first >= next
+                        || next > record.len
+                        || offset < record.seq_offset
+                        || limit > end
+                        || offset.checked_add(next - first).is_none_or(|n| n > limit)
+                    {
+                        return false;
+                    }
                 }
             }
         }
@@ -162,6 +200,41 @@ fn valid_index(index: &FastaIndex, data: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn damaged_offsets_are_rebuilt_before_reading() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sequence.fa");
+        let cache = dir.path().join("cache");
+        fs::write(&path, b">a\nACGT\n").unwrap();
+        let original = open_fasta_in(&path, &cache).unwrap();
+        let entry = cache
+            .join("index")
+            .join(format!("{}.fai2", key(&path).unwrap()));
+        for layout in [
+            crate::fasta::Layout::Uniform {
+                residues: 0,
+                bytes: 5,
+            },
+            crate::fasta::Layout::Uniform {
+                residues: 1,
+                bytes: u64::MAX,
+            },
+            crate::fasta::Layout::Ragged(vec![(1, 3)]),
+        ] {
+            let mut broken = original.index.clone();
+            broken.records[0].layout = layout;
+            fs::write(&entry, broken.to_bytes()).unwrap();
+            let rebuilt = open_fasta_in(&path, &cache).unwrap();
+            assert!(!rebuilt.cached);
+            assert_eq!(
+                rebuilt.index.records[0]
+                    .read(rebuilt.bytes(), 0, 4)
+                    .unwrap(),
+                b"ACGT"
+            );
+        }
+    }
 
     #[test]
     fn second_open_uses_cache_and_edit_invalidates() {

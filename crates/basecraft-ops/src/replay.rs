@@ -183,7 +183,9 @@ fn recorded_source_root(root: &Path) -> Result<std::path::PathBuf> {
     let value: serde_json::Value =
         serde_json::from_slice(&crate::provenance::read_record(&manifest)?)?;
     if value["schema_version"] != 1 {
-        return Err(crate::Error::Unsupported("Unsupported recovery metadata".into()));
+        return Err(crate::Error::Unsupported(
+            "Unsupported recovery metadata".into(),
+        ));
     }
     value["source_root"]
         .as_str()
@@ -211,7 +213,23 @@ fn materialise(
             return Err("invalid input hash".into());
         }
         let stored = objects_dir(root).join(hash.trim_start_matches("b3:"));
-        let original = root.join(rel);
+        let references = root.join("recovery.json");
+        let reference = if references.exists() {
+            let manifest: basecraft_protocol::records::RecoveryManifest =
+                serde_json::from_slice(&std::fs::read(&references).map_err(|e| e.to_string())?)
+                    .map_err(|e| e.to_string())?;
+            manifest
+                .references
+                .get(hash)
+                .map(|reference| root.join(&reference.path))
+        } else {
+            None
+        };
+        let original = reference.unwrap_or(
+            recorded_source_root(root)
+                .map_err(|e| e.to_string())?
+                .join(rel),
+        );
         let source = if stored.exists() {
             stored
         } else if basecraft_io::cache::content_hash(&original).ok().as_deref() == Some(hash) {
@@ -221,11 +239,10 @@ fn materialise(
         {
             retained
         } else {
-            return Err(format!("input {rel} changed and no stored copy exists"));
+            return Err(format!(
+                "input {rel} changed or is missing and no stored copy exists; recovery of large files requires the unchanged original"
+            ));
         };
-        if basecraft_io::hash_file(&source).map_err(|e| e.to_string())? != *hash {
-            return Err(format!("retained input {rel} hash differs"));
-        }
         let mut dest = work.join(rel);
         if let Some((main, _)) = inputs.first()
             && crate::files::Format::from_path(Path::new(main)).ok()
@@ -248,8 +265,24 @@ fn materialise(
         // alias a retained input (or contain bytes from an earlier baseline).
         // Copying onto it in place would truncate the immutable source.
         basecraft_io::write_atomic(&dest, |writer| {
+            use std::io::Read;
             let mut input = std::fs::File::open(&source)?;
-            std::io::copy(&mut input, writer)?;
+            let mut hasher = basecraft_io::Hasher::new();
+            let mut buffer = [0_u8; 16 * 1024];
+            loop {
+                let count = input.read(&mut buffer)?;
+                if count == 0 {
+                    break;
+                }
+                hasher.update(&buffer[..count]);
+                writer.write_all(&buffer[..count])?;
+            }
+            if hasher.finish() != *hash {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "retained input hash differs during recovery copy",
+                ));
+            }
             Ok(())
         })
         .map_err(|e| e.to_string())?;

@@ -1,4 +1,4 @@
-//! Format readers and writers, indexes and memory mapping.
+//! Format readers and writers, indexes and immutable file sources.
 
 pub mod abif;
 pub mod archive;
@@ -46,7 +46,7 @@ pub fn write_atomic_observed(
     let dir = path.parent().unwrap_or(Path::new("."));
     let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
     {
-        let mut w = std::io::BufWriter::with_capacity(1 << 20, tmp.as_file_mut());
+        let mut w = std::io::BufWriter::new(tmp.as_file_mut());
         f(&mut w)?;
         w.flush()?;
     }

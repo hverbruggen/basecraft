@@ -272,6 +272,59 @@ impl Session {
                 && matches!(e.op, Op::Open { .. })
         }) {
             for (key, hash) in &event.result.hashes {
+                let original = self.resolve(key);
+                if let Some((_, Some(metadata))) = self.docs[id.0]
+                    .source_stamps
+                    .iter()
+                    .find(|(path, _)| *path == original)
+                    && metadata.len() > super::OBJECT_STORE_LIMIT
+                {
+                    let saved_reference = std::fs::read(self.storage_root.join("recovery.json"))
+                        .ok()
+                        .and_then(|bytes| {
+                            serde_json::from_slice::<basecraft_protocol::records::RecoveryManifest>(
+                                &bytes,
+                            )
+                            .ok()
+                        })
+                        .and_then(|manifest| manifest.references.get(hash).cloned());
+                    let original = saved_reference.as_ref().map_or(original, |reference| {
+                        self.storage_root.join(&reference.path)
+                    });
+                    let stamp = basecraft_protocol::provenance::FileStamp {
+                        size: metadata.len(),
+                        modified_seconds: metadata
+                            .modified()?
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs(),
+                        modified_nanos: metadata
+                            .modified()?
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .subsec_nanos(),
+                        device: None,
+                        inode: None,
+                    };
+                    inputs.push(ArtifactRevision {
+                        id: format!("{}:input:{}", event.id, inputs.len()),
+                        logical_name: Path::new(key)
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into_owned(),
+                        hash: hash.clone(),
+                        size: metadata.len(),
+                        retained: None,
+                        reference: Some(basecraft_protocol::provenance::InputReference {
+                            path: crate::input_evidence::relative(&bundle, &original)?,
+                            stamp,
+                            hash: hash.clone(),
+                            extra: std::collections::BTreeMap::new(),
+                        }),
+                    });
+                    continue;
+                }
                 let mut source =
                     objects_dir(&self.storage_root).join(hash.trim_start_matches("b3:"));
                 if !self.store_objects {
@@ -500,7 +553,10 @@ impl Session {
             effective_edits,
             completeness: Completeness {
                 ancestry_known: false,
-                input_bytes_available: true,
+                input_bytes_available: self.docs[id.0].source_stamps.iter().all(|(_, m)| {
+                    m.as_ref()
+                        .is_none_or(|m| m.len() <= super::OBJECT_STORE_LIMIT)
+                }),
                 execution_specification_available: false,
                 replay_verified: false,
             },

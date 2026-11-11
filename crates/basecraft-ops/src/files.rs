@@ -229,8 +229,8 @@ pub fn load_from(path: &Path, source: Source) -> Result<Loaded> {
         Format::Tree => load_tree_from(path, &source, false).map(Loaded::Tree),
         Format::Fasta => {
             let gff = read_optional(&gff_sidecar(path))?;
-            load_fasta_from(path, source, gff.as_ref())
-        },
+            load_fasta_from(path, source, gff.as_ref(), None)
+        }
         Format::GenBank => open_from(path, source).map(Loaded::Sequence),
         _ => Err(crate::error::invalid(
             "this format does not support loading an owned source",
@@ -260,7 +260,12 @@ pub(crate) struct CapturedLoad {
     pub stamps: Vec<(PathBuf, Option<std::fs::Metadata>)>,
 }
 
-pub(crate) fn capture_load(path: &Path, format: Format, verified: bool) -> Result<CapturedLoad> {
+pub(crate) fn capture_load(
+    path: &Path,
+    format: Format,
+    verified: bool,
+    cache_root: Option<&Path>,
+) -> Result<CapturedLoad> {
     let companions = match format {
         Format::Metadata => crate::metadata::files(path).split_off(1),
         Format::Tree | Format::Delimitation => vec![tree_sidecar(path)],
@@ -284,14 +289,21 @@ pub(crate) fn capture_load(path: &Path, format: Format, verified: bool) -> Resul
     let main = files[0].1.clone();
     let companion = files.get(1).map(|(_, source, _)| source);
     let content = match format {
-        Format::Fasta => load_fasta_from(path, main, companion)?,
+        Format::Fasta => load_fasta_from(path, main, companion, cache_root)?,
         Format::GenBank => Loaded::Sequence(open_from(path, main)?),
         Format::Tree => Loaded::Tree(load_tree_bytes(path, &main, verified, companion)?),
-        Format::Delimitation => Loaded::Delimitation(load_delimitation_bytes(path, main.bytes(), companion)?),
+        Format::Delimitation => {
+            Loaded::Delimitation(load_delimitation_bytes(path, main.bytes(), companion)?)
+        }
         Format::Submission => Loaded::Submission(crate::submission::load_from(path, main.bytes())?),
         Format::Metadata => Loaded::Metadata(crate::metadata::load_with(path, &mut |file| {
-            files.iter().find(|(p, _, _)| p == file).map(|(_, source, _)| source.clone())
-                .ok_or_else(|| crate::error::invalid("metadata table is missing"))
+            files
+                .iter()
+                .find(|(p, _, _)| p == file)
+                .map(|(_, source, _)| source.clone())
+                .ok_or_else(|| Error::NotFound {
+                    path: file.to_path_buf(),
+                })
         })?),
     };
     for (file, before) in &stamps {
@@ -301,10 +313,14 @@ pub(crate) fn capture_load(path: &Path, format: Format, verified: bool) -> Resul
             Err(error) => return Err(error.into()),
         };
         if !same_metadata(before.as_ref(), after.as_ref()) {
-            return Err(crate::error::invalid("source or sidecar changed while opening; retry with stable files"));
+            return Err(Error::ChangedOnDisk { path: file.clone() });
         }
     }
-    Ok(CapturedLoad { content, files, stamps })
+    Ok(CapturedLoad {
+        content,
+        files,
+        stamps,
+    })
 }
 
 fn read_optional(path: &Path) -> Result<Option<Source>> {
@@ -319,22 +335,42 @@ pub(crate) fn same_metadata(a: Option<&std::fs::Metadata>, b: Option<&std::fs::M
     match (a, b) {
         (None, None) => true,
         (Some(a), Some(b)) => {
-            let same = a.is_file() && b.is_file() && a.len() == b.len() && a.modified().ok() == b.modified().ok();
+            let same = a.is_file()
+                && b.is_file()
+                && a.len() == b.len()
+                && a.modified().ok() == b.modified().ok();
             #[cfg(unix)]
             {
                 use std::os::unix::fs::MetadataExt;
-                same && a.dev() == b.dev() && a.ino() == b.ino()
-                    && a.ctime() == b.ctime() && a.ctime_nsec() == b.ctime_nsec()
+                same && a.dev() == b.dev()
+                    && a.ino() == b.ino()
+                    && a.ctime() == b.ctime()
+                    && a.ctime_nsec() == b.ctime_nsec()
             }
             #[cfg(not(unix))]
-            { same }
+            {
+                same
+            }
         }
         _ => false,
     }
 }
 
-fn load_fasta_from(path: &Path, source: Source, captured_gff: Option<&Source>) -> Result<Loaded> {
-    let file = Arc::new(index_fasta(path, source)?);
+fn load_fasta_from(
+    path: &Path,
+    source: Source,
+    captured_gff: Option<&Source>,
+    cache_root: Option<&Path>,
+) -> Result<Loaded> {
+    let file = Arc::new(
+        if let Some(cache) = cache_root
+            && source.bytes().len() >= 4 << 20
+        {
+            cache::index_fasta_in(path, source, cache)?
+        } else {
+            index_fasta(path, source)?
+        },
+    );
     if file.index.records.is_empty() {
         return Err(Error::Empty(path.to_path_buf()));
     }
@@ -460,7 +496,12 @@ pub(crate) fn load_tree_from(
     load_tree_bytes(path, source, verified_snapshot, side.as_ref())
 }
 
-fn load_tree_bytes(path: &Path, source: &Source, verified_snapshot: bool, captured_side: Option<&Source>) -> Result<OpenedTree> {
+fn load_tree_bytes(
+    path: &Path,
+    source: &Source,
+    verified_snapshot: bool,
+    captured_side: Option<&Source>,
+) -> Result<OpenedTree> {
     let text = std::str::from_utf8(source.bytes())
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     let nexus = newick::is_nexus(text);
@@ -1174,12 +1215,17 @@ pub fn load_delimitation(
     load_delimitation_bytes(path, source.bytes(), side.as_ref())
 }
 
-fn load_delimitation_bytes(path: &Path, bytes: &[u8], captured_side: Option<&Source>) -> Result<basecraft_protocol::delimitation::DelimitationWorkspace> {
-    let text = std::str::from_utf8(bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+fn load_delimitation_bytes(
+    path: &Path,
+    bytes: &[u8],
+    captured_side: Option<&Source>,
+) -> Result<basecraft_protocol::delimitation::DelimitationWorkspace> {
+    let text =
+        std::str::from_utf8(bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     let mut work = if text.trim_start().starts_with('<') {
-        basecraft_io::spart::parse_xml(&text)?
+        basecraft_io::spart::parse_xml(text)?
     } else {
-        basecraft_io::spart::parse_text(&text)?
+        basecraft_io::spart::parse_text(text)?
     };
     // A damaged hidden binding must never silently select stale legacy data.
     let hidden = crate::analysis_store::ArtifactRun::for_result(path)?;

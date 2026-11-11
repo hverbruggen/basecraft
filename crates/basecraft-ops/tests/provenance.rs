@@ -118,12 +118,9 @@ fn changed_source_refused_before_mutation_and_before_save() {
     let mut session = Session::new(dir.path());
     let doc = session.open(&file).unwrap();
     std::fs::write(&file, ">gene\nGGGG\n").unwrap();
-    assert!(
-        session
-            .apply(doc, edit())
-            .unwrap_err()
-            .to_string()
-            .contains("source changed")
+    assert_eq!(
+        session.apply(doc, edit()).unwrap_err().code(),
+        "changed_on_disk"
     );
     assert_eq!(session.generation(doc), 0);
     assert!(!dir.path().join(".basecraft").exists());

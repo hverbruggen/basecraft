@@ -32,11 +32,18 @@ impl Session {
     }
 
     pub(super) fn write(&mut self, entry: &LogEntry) -> Result<()> {
+        self.write_entries(std::slice::from_ref(entry))
+    }
+
+    pub(super) fn write_entries(&mut self, entries: &[LogEntry]) -> Result<()> {
+        let mut batch = self.pending_baselines.clone();
+        batch.extend_from_slice(entries);
         if let Some(log) = &mut self.log {
-            log.append(entry)?;
+            log.append_batch(&batch)?;
         }
+        self.pending_baselines.clear();
         if self.tracked {
-            self.events.push(entry.clone());
+            self.events.extend(batch);
         }
         Ok(())
     }

@@ -34,24 +34,20 @@ fn scenario(
     assert_eq!(AppPaths::discover().unwrap().state, paths.state);
     let original_size = file.metadata().unwrap().len();
     counters::reset();
-    // Main.qml openPath resolves file_kind once and reuses it for routing
-    // and the tab row. Its FASTA probe remains a separate read; Session now
-    // hashes and parses one owned main-file read when companions are absent.
-    basecraft_ops::files::kind(&file).unwrap();
     let mut session = Session::recoverable_with_paths(&root, &paths).unwrap();
-    let doc = session.open(&file).unwrap();
+    let (doc, _) = session.open_classified(&file).unwrap();
     record(
         name,
         "open",
         &file,
-        (open_reads, open_reads * original_size, 0, 0),
+        (open_reads, open_reads * original_size, 0, 2),
     );
     for i in 0..3 {
         counters::reset();
         session.apply(doc, edit(i)).unwrap();
         let expected = if i == 0 {
-            // One fresh owned read now both verifies and retains cold originals.
-            (1, original_size, 2, 2)
+            // Recovery bytes and manifest were staged by the open worker.
+            (0, 0, 1, 0)
         } else {
             (0, 0, 1, 0)
         };
@@ -112,7 +108,7 @@ fn fasta() {
     scenario(
         "fasta",
         "alignment-editing/ambiguous-gappy.afa",
-        2,
+        1,
         1,
         12,
         |i| Op::AlnReplace {
@@ -175,4 +171,119 @@ fn child_profile(name: &str) -> Option<std::path::PathBuf> {
     Some(std::path::PathBuf::from(
         std::env::var_os("BASECRAFT_BUDGET_ROOT").unwrap(),
     ))
+}
+
+#[test]
+fn companions_are_read_once() {
+    let Some(root) = child_profile("companions_are_read_once") else {
+        return;
+    };
+    let fasta = root.join("sequence.fa");
+    std::fs::write(&fasta, b">sequence\nACGT\n").unwrap();
+    std::fs::write(
+        fasta.with_extension("gff3"),
+        b"##gff-version 3\nsequence\t.\tgene\t1\t3\t.\t+\t.\tID=g\n",
+    )
+    .unwrap();
+    let metadata = basecraft_ops::metadata::create(&root).unwrap();
+    let alignment = root.join("source.afa");
+    std::fs::write(&alignment, b">a\nACGT\n>b\nACGA\n").unwrap();
+    let submission = root.join("review.submission.json");
+    basecraft_ops::submission::create(&mut Session::unlogged(&root), &submission, &alignment)
+        .unwrap();
+    let tree = root.join("tree.nwk");
+    std::fs::write(&tree, b"(a:1,b:2);\n").unwrap();
+    let mut writer = Session::unlogged(&root);
+    let doc = writer.open(&tree).unwrap();
+    writer.save(doc, None).unwrap();
+    let spart = root.join("species.spart");
+    std::fs::write(
+        &spart,
+        include_bytes!("../../../testdata/fixtures/delimitation/manual.spart"),
+    )
+    .unwrap();
+    let doc = writer.open(&spart).unwrap();
+    writer.save(doc, None).unwrap();
+    for path in [&fasta, &metadata, &submission, &tree, &spart] {
+        counters::reset();
+        let mut session = Session::unlogged(&root);
+        let doc = session.open(path).unwrap();
+        assert!(!session.document_record(doc).unwrap().unsaved);
+        for (file, reads) in counters::snapshot().reads {
+            assert_eq!(
+                reads.full_reads,
+                1,
+                "{} while opening {}",
+                file.display(),
+                path.display()
+            );
+            assert_eq!(reads.bytes, file.metadata().unwrap().len());
+        }
+    }
+}
+
+#[test]
+fn large_file_edits_and_recovery_require_original() {
+    use std::io::Write;
+    let Some(root) = child_profile("large_file_edits_and_recovery_require_original") else {
+        return;
+    };
+    let file = root.join("large.fa");
+    let mut output = std::fs::File::create(&file).unwrap();
+    output.write_all(b">large\n").unwrap();
+    let chunk = vec![b'A'; 1 << 20];
+    for _ in 0..101 {
+        output.write_all(&chunk).unwrap();
+    }
+    drop(output);
+    let mut session = Session::recoverable(&root).unwrap();
+    let doc = session.open(&file).unwrap();
+    let recovery = session.recovery_root().to_path_buf();
+    counters::reset();
+    session
+        .apply(
+            doc,
+            Op::SeqReplace {
+                start: 0,
+                end: 1,
+                residues: "C".into(),
+            },
+        )
+        .unwrap();
+    assert!(counters::snapshot().reads.is_empty());
+    assert_eq!(counters::snapshot().sync_all, 0);
+    assert_eq!(counters::snapshot().sync_data, 1);
+    drop(session);
+    let recovered = basecraft_ops::replay::recover(&recovery, &root.join("recovered")).unwrap();
+    let mut reopened = Session::unlogged(&root);
+    let doc = reopened.open(&recovered[0]).unwrap();
+    assert_eq!(reopened.doc(doc).unwrap().read(0, 4), b"CAAA");
+    // Saving over the original keeps its inode as a reference, without copying
+    // the file; later undo and new edits still recover through the same journal.
+    let mut saving = Session::recoverable(&root).unwrap();
+    let current = saving.open(&file).unwrap();
+    saving
+        .apply(
+            current,
+            Op::SeqReplace {
+                start: 0,
+                end: 1,
+                residues: "G".into(),
+            },
+        )
+        .unwrap();
+    saving.save(current, None).unwrap();
+    saving.undo(current).unwrap();
+    let saved_recovery = saving.recovery_root().to_path_buf();
+    drop(saving);
+    let saved = basecraft_ops::replay::recover(&saved_recovery, &root.join("after-save")).unwrap();
+    let mut verify = Session::unlogged(&root);
+    let current = verify.open(&saved[0]).unwrap();
+    assert_eq!(verify.doc(current).unwrap().read(0, 4), b"AAAA");
+    std::fs::write(&file, b">large\nTTTT\n").unwrap();
+    let error = basecraft_ops::replay::recover(&recovery, &root.join("changed")).unwrap_err();
+    assert!(error.to_string().contains("unchanged original"));
+    assert!(!root.join("changed").exists());
+    std::fs::remove_file(&file).unwrap();
+    assert!(basecraft_ops::replay::recover(&recovery, &root.join("missing")).is_err());
 }
