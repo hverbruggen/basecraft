@@ -20,6 +20,22 @@ Main {
     property string middlePage: ""
     property bool completed: false
     GenomeController { id: verification }
+    property var verifiedFiles: ({})
+    function checkFile(path, page) {
+        if (verifiedFiles[path] !== undefined) {
+            check(verifiedFiles[path] === page, "saved wrong bytes at " + path)
+            return true
+        }
+        const opened = function(ok) {
+            verification.opened.disconnect(opened)
+            check(ok, "saved file could not open: " + path)
+            verifiedFiles[path] = verification.accessible_page(0)
+            Qt.callLater(verify)
+        }
+        verification.opened.connect(opened)
+        check(verification.open_file(path), "saved file open rejected: " + path)
+        return false
+    }
     function check(ok, message) {
         if (!ok) { console.error("OPEN_CONSENT " + scenario + ": " + message); Qt.exit(2); throw new Error(message) }
     }
@@ -107,6 +123,11 @@ Main {
     }
     property bool completedSave: false
     function verify() {
+        if (b && b.busy) {
+            const ready = function(ok) { b.opened.disconnect(ready); check(ok, "Save As reopen failed"); verify() }
+            b.opened.connect(ready)
+            return
+        }
         const ci = targetIndex(ownerC)
         check(ci >= 0 && documentAt(ci).controller === c && c.dirty, "consent discarded or saved dirty C")
         check(c.accessible_page(0) === pageC && c.document_record() === recordC && c.record_revision() === revisionC, "consent changed C contents/records/revision")
@@ -116,24 +137,22 @@ Main {
         } else if (scenario.includes("close")) {
             check(targetIndex(ownerB) === -1 && ci === 0, "close did not remove only B")
             if (scenario.includes("save")) {
-                check(verification.open_file(folder + "/B.gb"), "B save missing")
-                check(verification.accessible_page(0) === pageB, "saved wrong B bytes")
+                if (!checkFile(folder + "/B.gb", pageB)) return
             }
         } else if (scenario.includes("saveas") || scenario.includes("evidence")) {
             check(b.file_path === folder + "/chosen.gb" && !b.dirty, "chosen path did not belong to B")
             check(documentAt(0).path === folder + "/chosen.gb" && documentAt(1).path === folder + "/C.gb", "wrong list path association")
-            check(verification.open_file(folder + "/chosen.gb"), "chosen file missing")
-            check(verification.accessible_page(0) === pageB, "chosen bytes not B")
+            if (!checkFile(folder + "/chosen.gb", pageB)) return
             openPath(folder + "/chosen.gb")
             check(current === b && documentAt(2) === null, "path_changed associated wrong token")
         } else if (scenario.includes("quit")) {
             check(quitConsent.visible && quitConsent.unsaved.some(owner => owner.controller === c), "quit did not request fresh consent for unrelated dirty owner")
             if (scenario.includes("save") || scenario === "quit-batch") {
-                check(!b.dirty && verification.open_file(folder + "/B.gb"), "quit did not save B")
-                check(verification.accessible_page(0) === pageB, "quit saved wrong bytes")
+                check(!b.dirty, "quit did not save B")
+                if (!checkFile(folder + "/B.gb", pageB)) return
                 if (scenario === "quit-batch") {
                     check(!middle.dirty && documentAt(1).controller === middle, "quit continuation lost second captured owner")
-                    check(verification.open_file(folder + "/C.gb") && verification.accessible_page(0) === middlePage, "quit second save used wrong bytes")
+                    if (!checkFile(folder + "/C.gb", middlePage)) return
                 }
             } else check(b.dirty, "quit discard unexpectedly saved B")
         }

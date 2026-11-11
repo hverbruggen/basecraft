@@ -12,6 +12,32 @@ use std::{
 
 use crate::{alignment_bridge, bridge, editor_core, sanger_bridge, tree_bridge};
 
+trait Fixture: Sized {
+    fn load(self: std::pin::Pin<&mut Self>, path: &std::path::Path);
+}
+macro_rules! owned_fixture {
+    ($controller:ty) => {
+        impl Fixture for $controller {
+            fn load(self: std::pin::Pin<&mut Self>, path: &std::path::Path) {
+                let candidate = crate::document_open::Candidate::acquire(
+                    path.to_str().unwrap(),
+                    &std::sync::atomic::AtomicBool::new(false),
+                )
+                .unwrap();
+                self.install_fresh(candidate).unwrap();
+            }
+        }
+    };
+}
+owned_fixture!(bridge::qobject::GenomeController);
+owned_fixture!(alignment_bridge::qobject::AlignmentController);
+owned_fixture!(tree_bridge::qobject::TreeController);
+impl Fixture for sanger_bridge::qobject::SangerController {
+    fn load(self: std::pin::Pin<&mut Self>, path: &std::path::Path) {
+        assert!(self.open_file(&QString::from(path.to_str().unwrap())));
+    }
+}
+
 pub(crate) fn run() {
     // Only the dedicated temporary bootstrap profile may be written. The
     // provider itself never mutates global environment or desktop settings.
@@ -41,11 +67,7 @@ pub(crate) fn run() {
                     let folder = tempfile::tempdir_in(&profile).unwrap();
                     let path = folder.path().join($file);
                     std::fs::write(&path, $bytes).unwrap();
-                    assert!(
-                        controller
-                            .as_mut()
-                            .open_file(&QString::from(path.to_str().unwrap()))
-                    );
+                    controller.as_mut().load(&path);
                     controller.as_mut().resize(800.0, 500.0);
                     $select(controller.as_mut());
                     controller.as_mut().find_query(&QString::from("A"), false);

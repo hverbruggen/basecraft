@@ -57,6 +57,8 @@ fn main() {
                 .on_object_created(move |_, object, url| {
                     if *url == QUrl::from(startup_trace::MAIN_QML_URL) && !object.is_null() {
                         root_trace.record(startup_trace::Event::QmlRootCreated);
+                        // SAFETY: objectCreated supplies a live Qt-owned object.
+                        unsafe { startup_trace::frame_bridge::attach(object, root_trace.clone()) };
                     }
                 })
                 .release();

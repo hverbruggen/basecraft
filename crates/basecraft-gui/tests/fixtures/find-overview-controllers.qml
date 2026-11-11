@@ -5,7 +5,8 @@ Item {
     property bool completed: false
     property string folder: FIND_TEST_FOLDER
     property int index: 0
-    property int phase: 0
+    property int phase: -1
+    property bool refusalChecked: false
     property var beforeFind: ({})
     property int originalCount: 0
     readonly property bool hasOverview: index !== 4
@@ -40,8 +41,17 @@ Item {
     function require(value, message) {
         if (!value) { console.error("Find/overview controller " + index + ": " + message); Qt.exit(2) }
     }
+    function open(controller, file, finished) {
+        if (controller === findTrace) { finished(controller.open_file(file)); return }
+        const completed = function(success) { controller.opened.disconnect(completed); finished(success) }
+        controller.opened.connect(completed)
+        require(controller.open_file(file), "open request refused")
+    }
     function startCase() {
-        require(current.open_file(folder + cases[index].file), "fixture open failed")
+        phase = -1
+        refusalChecked = false
+        open(current, folder + cases[index].file, function(success) {
+        require(success, "fixture open failed")
         if (index === 3) current.cancel_calls()
         if (hasOverview) current.resize(160, 100)
         if (index === 0 || index === 1) current.key(Qt.Key_A, "", Qt.ControlModifier)
@@ -53,6 +63,7 @@ Item {
         realFind.query = cases[index].query
         realFind.openFind()
         phase = 0
+        })
     }
     function finishCase() {
         realFind.closeFind()
@@ -68,6 +79,7 @@ Item {
     Timer {
         interval: 20; repeat: true; running: !findFlow.completed
         onTriggered: {
+            if (findFlow.phase === -1) return
             if (findFlow.phase === 0) {
                 if (realFind.result.busy || realFind.result.count === 0) return
                 const marks = realOverview.matchMarks
@@ -75,16 +87,22 @@ Item {
                 for (const mark of marks) {
                     findFlow.require(isFinite(mark.x) && isFinite(mark.y) && mark.x >= 0 && mark.y >= 0 && mark.x + mark.width <= 1.000001 && mark.y + mark.height <= 1.000001, "mark outside normalized data")
                 }
-                if (findFlow.index !== 3) {
+                if (findFlow.index !== 3 && !findFlow.refusalChecked) {
                     const controller = findFlow.current
                     const identity = controller.file_path
                     const revision = controller.record_revision()
                     const marksBefore = findFlow.hasOverview ? controller.overview_matches : JSON.stringify(realFind.result.rows)
                     const wrongFile = findFlow.index === 0 ? "/alignment.afa" : "/sequence.fasta"
-                    findFlow.require(!controller.open_file(findFlow.folder + wrongFile), "wrong-kind open reported success")
+                    findFlow.phase = -1
+                    findFlow.open(controller, findFlow.folder + wrongFile, function(success) {
+                    findFlow.require(!success, "wrong-kind open reported success")
                     findFlow.require(controller.message.length > 0, "wrong-kind refusal has no explanation")
                     findFlow.require(controller.file_path === identity && controller.record_revision() === revision, "refusal replaced document identity or revision")
                     findFlow.require((findFlow.hasOverview ? controller.overview_matches : JSON.stringify(realFind.result.rows)) === marksBefore, "refusal cleared Find selection")
+                    findFlow.refusalChecked = true
+                    findFlow.phase = 0
+                    })
+                    return
                 }
                 if (!findFlow.hasOverview) {
                     findFlow.require(JSON.stringify(realFind.result.rows) === "[0,1,2,3,4,5,6,7]", "workspace specimen order changed")
@@ -113,11 +131,14 @@ Item {
                 realFind.closeFind()
                 findFlow.require(!findFlow.hasOverview || JSON.parse(findFlow.current.overview_matches).length === 0, "closing Find retained markers")
                 // Reopen the same path: a fresh Session must be accepted at the same revision.
-                findFlow.require(findFlow.current.open_file(findFlow.folder + findFlow.cases[findFlow.index].file), "same-path replacement failed")
+                findFlow.phase = -1
+                findFlow.open(findFlow.current, findFlow.folder + findFlow.cases[findFlow.index].file, function(success) {
+                findFlow.require(success, "same-path replacement failed")
                 if (findFlow.index === 3) findFlow.current.cancel_calls()
                 realFind.query = findFlow.cases[findFlow.index].query
                 realFind.openFind()
                 findFlow.phase = 2
+                })
             } else if (findFlow.phase === 2) {
                 if (realFind.result.busy || realFind.result.count === 0) return
                 findFlow.require(realFind.result.current === 1, "replacement retained old result position")

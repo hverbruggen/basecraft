@@ -15,12 +15,13 @@ use basecraft_protocol::metadata::{
     ChangeSet, ColumnKind, FieldTarget, HeaderPattern, Identification, MetadataEdit, MissingReason,
     ProjectMetadata, SpreadsheetMapping, Taxon,
 };
-use cxx_qt::CxxQtType;
+use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::QString;
 use serde_json::{Value, json};
 
 #[cxx_qt::bridge]
 pub mod qobject {
+    impl cxx_qt::Threading for MetadataController {}
     unsafe extern "C++" {
         include!("cxx-qt-lib/qstring.h");
         type QString = cxx_qt_lib::QString;
@@ -30,6 +31,7 @@ pub mod qobject {
         #[qml_element]
         #[qproperty(QString, project_dir)]
         #[qproperty(bool, available)]
+        #[qproperty(bool, busy)]
         #[qproperty(QString, table)]
         #[qproperty(QString, plan)]
         #[qproperty(QString, message)]
@@ -40,6 +42,8 @@ pub mod qobject {
         type MetadataController = super::MetadataRust;
         #[qinvokable]
         fn use_project(self: Pin<&mut MetadataController>, path: &QString);
+        #[qsignal]
+        fn opened(self: Pin<&mut MetadataController>, success: bool);
         #[qinvokable]
         fn create(self: Pin<&mut MetadataController>) -> bool;
         #[qinvokable]
@@ -120,6 +124,8 @@ enum PlanSource {
 pub struct MetadataRust {
     project_dir: QString,
     available: bool,
+    busy: bool,
+    open_epoch: u64,
     table: QString,
     plan: QString,
     message: QString,
@@ -137,6 +143,8 @@ impl Default for MetadataRust {
         Self {
             project_dir: QString::default(),
             available: false,
+            busy: false,
+            open_epoch: 0,
             table: QString::from(table_json(None, &[]).to_string().as_str()),
             plan: QString::default(),
             message: QString::default(),
@@ -362,6 +370,8 @@ impl qobject::MetadataController {
     }
 
     pub fn use_project(mut self: Pin<&mut Self>, path: &QString) {
+        self.as_mut().rust_mut().open_epoch += 1;
+        self.as_mut().set_busy(false);
         self.as_mut().set_project_dir(path.clone());
         {
             let mut rust = self.as_mut().rust_mut();
@@ -377,22 +387,39 @@ impl qobject::MetadataController {
             self.refresh();
             return;
         }
-        match Session::recoverable(&project).and_then(|mut session| {
-            let doc = metadata::open(&mut session, false)?;
-            Ok((session, doc))
-        }) {
-            Ok((session, doc)) => {
-                let mut rust = self.as_mut().rust_mut();
-                rust.session = Some(session);
-                rust.doc = doc;
-                self.as_mut().report("", "");
-            }
-            Err(error) => self.as_mut().report(
-                "error",
-                &format!("Specimen table could not be opened: {error}"),
-            ),
+        let epoch = self.rust().open_epoch;
+        self.as_mut().set_busy(true);
+        self.as_mut().refresh();
+        let thread = self.qt_thread();
+        let path = metadata::manifest_path(&project)
+            .to_string_lossy()
+            .into_owned();
+        if let Err(error) =
+            crate::document_open::start(path, Some(project.clone()), move |result| {
+                let _ = thread.queue(move |mut this| {
+                    if this.rust().open_epoch != epoch || this.rust().project() != project {
+                        return;
+                    }
+                    let ok = result.is_ok();
+                    match result {
+                        Ok(candidate) => {
+                            let mut state = this.as_mut().rust_mut();
+                            state.session = Some(candidate.session);
+                            state.doc = Some(candidate.doc);
+                            this.as_mut().report("", "");
+                        }
+                        Err(error) => this.as_mut().report("error", &error.to_string()),
+                    }
+                    this.as_mut().refresh();
+                    this.as_mut().set_busy(false);
+                    this.opened(ok);
+                });
+            })
+        {
+            self.as_mut().set_busy(false);
+            self.as_mut().report("error", &error.to_string());
+            self.opened(false);
         }
-        self.refresh();
     }
 
     /// Create empty tables in the project's `metadata/` folder and open them.
@@ -402,17 +429,30 @@ impl qobject::MetadataController {
             self.report("error", "Choose a project folder first");
             return false;
         }
-        if let Err(error) = metadata::create(&project) {
-            self.report("error", &error.to_string());
-            return false;
-        }
-        let dir = self.rust().project_dir.clone();
-        self.as_mut().use_project(&dir);
-        if self.rust().available {
-            self.report("ok", "Created the project's specimen table");
-            true
-        } else {
-            false
+        // Creation has a fixed-size empty payload; callers can immediately
+        // import into it. Existing project documents use the worker above.
+        let result = metadata::create(&project).and_then(|path| {
+            let mut session = Session::recoverable(&project)?;
+            let doc = session.open(&path)?;
+            Ok((session, doc))
+        });
+        match result {
+            Ok((session, doc)) => {
+                let mut state = self.as_mut().rust_mut();
+                state.open_epoch += 1;
+                state.session = Some(session);
+                state.doc = Some(doc);
+                state.pending = None;
+                self.as_mut().set_busy(false);
+                self.as_mut()
+                    .report("ok", "Created the project's specimen table");
+                self.refresh();
+                true
+            }
+            Err(error) => {
+                self.report("error", &error.to_string());
+                false
+            }
         }
     }
 

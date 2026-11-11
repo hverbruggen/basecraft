@@ -389,16 +389,11 @@ ApplicationWindow {
         }
         documentOpens.revoke_focus()
         const kind = shell.file_kind(path)
-        // The specimen table is project data, edited on the Export tab.
-        if (kind === "metadata") {
+        // Project documents are edited on the Export tab.
+        if (kind === "metadata" || kind === "submission") {
             ribbonTabName = "Export"
-            specimenTable.open()
-            return
-        }
-        // Submissions are project documents edited on the Export tab.
-        if (kind === "submission") {
-            ribbonTabName = "Export"
-            window.openSubmission(path)
+            if (kind === "metadata") specimenTable.open()
+            else submissions.open(path)
             return
         }
         focusOpenedDocument = true
@@ -950,7 +945,7 @@ ApplicationWindow {
         standardButtons: Dialog.Close
         property var sessions: []
         initialFocusItem: recoveryChoice
-        Label { text: "Recovery creates copies in a new directory. It preserves your originals and the recovery journal."; wrapMode: Text.Wrap; Layout.fillWidth: true }
+        Label { text: "Recovery creates copies in a new directory. Files over 100 MiB require the unchanged original; smaller files use a private recovery copy. Originals and journals are preserved."; wrapMode: Text.Wrap; Layout.fillWidth: true }
         Label { visible: !recoveryPicker.sessions.length; text: provenance.message.startsWith("fail:") ? provenance.message : "No recovery sessions are available."; wrapMode: Text.Wrap; Layout.fillWidth: true }
         AppComboBox {
             id: recoveryChoice
@@ -1845,7 +1840,7 @@ ApplicationWindow {
     }
     // GenBank marker submissions (Export tab). table2asn runs as a
     // registered operation on its own job runner, like BLAST.
-    SubmissionController { id: submissions }
+    SubmissionController { id: submissions; onOpened: success => { if (success) window.showSubmission() } }
     Connections {
         target: specimenMetadata
         function onTableChanged() { if (submissions.available) submissions.refresh_review() }
@@ -1865,7 +1860,6 @@ ApplicationWindow {
             return ""
         })
     }
-    function openSubmission(path) { if (submissions.open(path)) showSubmission() }
     function showSubmission() {
         submissions.refresh_review()
         submissionDialog.open()
@@ -1930,7 +1924,7 @@ ApplicationWindow {
         currentFolder: window.activeFolder()
         onVisibleChanged: if (visible) currentFolder = window.activeFolder()
         nameFilters: ["Submissions (*.submission.json)"]
-        onAccepted: window.openSubmission(window.localPath(selectedFile))
+        onAccepted: submissions.open(window.localPath(selectedFile))
     }
     FileDialog {
         id: accessionTableDestination
@@ -2118,19 +2112,22 @@ ApplicationWindow {
         const perform = function() {
             const row = targetIndex(owner)
             if (row < 0) { if (continuation) continuation(false); return }
-            let success
-            if (path) {
-                success = owner.controller.save_as(path)
-                if (success) {
-                    const savedRow = targetIndex(owner)
-                    if (savedRow < 0) { if (continuation) continuation(false); return }
+            const finish = function(success) {
+                const savedRow = targetIndex(owner)
+                if (success && path && savedRow >= 0) {
                     openFiles.setProperty(savedRow, "path", path)
                     documentOpens.path_changed(owner.token, path, owner.controller.file_path)
                     owner.path = path
                     Qt.callLater(window.refreshCurrent)
                 }
-            } else { owner.controller.save(); success = !owner.controller.dirty }
-            if (continuation) continuation(success)
+                if (continuation) continuation(success && savedRow >= 0)
+            }
+            if (!path) { owner.controller.save(); finish(!owner.controller.dirty); return }
+            const success = owner.controller.save_as(path)
+            if (success && owner.controller.busy && owner.controller.opened) {
+                const completed = function(ok) { owner.controller.opened.disconnect(completed); finish(ok) }
+                owner.controller.opened.connect(completed)
+            } else finish(success)
         }
         if ((conflict.analyses || []).length) {
             pendingEvidenceSave = {owner: owner, target: target, perform: perform}

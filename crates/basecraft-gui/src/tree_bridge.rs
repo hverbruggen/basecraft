@@ -95,6 +95,8 @@ pub mod qobject {
         fn workspace_created(self: Pin<&mut TreeController>, path: QString);
         #[qinvokable]
         fn open_file(self: Pin<&mut TreeController>, path: &QString) -> bool;
+        #[qsignal]
+        fn opened(self: Pin<&mut TreeController>, success: bool);
         #[qinvokable]
         fn highlight_taxa(self: Pin<&mut TreeController>, names: &QString);
         #[qsignal]
@@ -1008,34 +1010,7 @@ impl qobject::TreeController {
         true
     }
     pub fn open_file(mut self: Pin<&mut Self>, path: &QString) -> bool {
-        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
-            crate::bridge::checked_document!(sync self, session.tree(doc));
-        }
-        if self.rust().busy {
-            self.fail("Wait for the running operation before replacing this document");
-            return false;
-        }
-        let path = PathBuf::from(path.to_string());
-        let root = project_root(&path);
-        let result: Result<(), crate::document_open::OpenError> = (|| {
-            let mut session = Session::recoverable(&root)?;
-            let doc = session.open(&path)?;
-            let candidate = crate::document_open::Candidate::prepare(
-                session,
-                doc,
-                basecraft_ops::files::Kind::Tree,
-                path,
-                root,
-            )?;
-            self.as_mut().install_opened(candidate)
-        })();
-        match result {
-            Ok(()) => true,
-            Err(error) => {
-                self.fail(&error.to_string());
-                false
-            }
-        }
+        crate::document_open::open_file!(self, path)
     }
 
     pub(crate) fn install_fresh(

@@ -25,11 +25,12 @@ pub(crate) fn run(mut controller: Pin<&mut qobject::AlignmentController>) {
     let content = ">A\nMELK\n>B\nMELR\n>C\nMELW\n>D\nMELF\n";
     std::fs::write(&path, content).unwrap();
     std::fs::write(&sequence, ">sequence\nACGT\n").unwrap();
-    assert!(
-        controller
-            .as_mut()
-            .open_file(&QString::from(path.to_str().unwrap()))
-    );
+    let candidate = crate::document_open::Candidate::acquire(
+        path.to_str().unwrap(),
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .unwrap();
+    controller.as_mut().install_fresh(candidate).unwrap();
     let original = controller.rust().doc.unwrap();
     assert!(
         controller

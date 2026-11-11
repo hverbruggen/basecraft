@@ -55,6 +55,10 @@ FocusScope {
         function onFileCreated(path) { doc.openFile(path) }
     }
 
+    Connections { target: ctl; ignoreUnknownSignals: true
+        function onOpened(success) { if (success && doc.lifetimeAlive) doc.initializationCompleted() }
+    }
+
     // Open once the view has its real size.
     Component.onCompleted: {
         const owner = ctl
@@ -62,7 +66,7 @@ FocusScope {
             if (!doc.lifetimeAlive || ctl !== owner) return
             ctl.resize(view.width, view.height)
             if (!doc.adopted) ctl.open_file(doc.path)
-            doc.initializationCompleted()
+            else doc.initializationCompleted()
         })
     }
 

@@ -56,6 +56,15 @@ FocusScope {
 
     GenomeController { id: localController }
 
+    function finishOpening(success) {
+        if (!success || !doc.lifetimeAlive) return
+        if (doc.defaultLayout !== "wrapped") { ctl.switch_view(doc.defaultLayout); ctl.fit() }
+        doc.initializationCompleted()
+    }
+    Connections { target: ctl; ignoreUnknownSignals: true
+        function onOpened(success) { doc.finishOpening(success) }
+    }
+
     // Open once the view has its real size, so the fitted zoom is right.
     Component.onCompleted: {
         const owner = ctl
@@ -65,11 +74,7 @@ FocusScope {
             ctl.set_show_gc(doc.showGc)
             if (doc.path.startsWith("untitled:")) doc.initializeNew()
             else if (!doc.adopted) ctl.open_file(doc.path)
-            if (doc.defaultLayout !== "wrapped") {
-                ctl.switch_view(doc.defaultLayout)
-                ctl.fit()
-            }
-            doc.initializationCompleted()
+            if (doc.adopted || doc.path.startsWith("untitled:")) doc.finishOpening(true)
         })
     }
 
