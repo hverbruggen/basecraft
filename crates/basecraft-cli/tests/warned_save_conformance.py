@@ -97,7 +97,7 @@ with Session(root, writes=True) as session:
     refuses(lambda: session.save(doc, decision=decision(check)), "save_decision_stale")
     assert path.read_bytes() == b">gene\nGGGG\n"
     check = session.save_check(doc)
-    refuses(lambda: session.save(doc, decision=decision(check)), "invalid_arguments")
+    refuses(lambda: session.save(doc, decision=decision(check)), "changed_on_disk")
     assert path.read_bytes() == b">gene\nGGGG\n"
 
     # Same bytes in a replacement file still have a different target identity.
@@ -234,8 +234,9 @@ if os.geteuid() != 0:
     finally:
         root.chmod(0o755)
 
-# Repair only the deliberately damaged ledger; complete checks have no warning.
+# Repair the deliberately damaged ledger and missing source; checks are complete.
 Path(fixture["ledger"]).write_text(fixture["good"])
+Path(fixture["source"]).write_bytes(original)
 with Session(root, writes=True) as session:
     path = source("complete")
     doc = open_edit(session, path)

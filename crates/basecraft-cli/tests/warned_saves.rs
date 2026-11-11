@@ -49,10 +49,13 @@ fn headless_save_conformance() {
     let ledger = damaged.artifact("input.json").unwrap();
     let good = std::fs::read(&ledger).unwrap();
     std::fs::write(&ledger, b"damaged ledger").unwrap();
+    // A missing indexed source plus damaged ledger has unknown relevance.
+    // An intact unrelated source is now correctly excluded by the index.
+    std::fs::remove_file(&unrelated).unwrap();
     let config = root.join("fixture.json");
     std::fs::write(
         &config,
-        json!({"known":known,"ledger":ledger,"good":String::from_utf8(good).unwrap()}).to_string(),
+        json!({"known":known,"ledger":ledger,"source":unrelated,"good":String::from_utf8(good).unwrap()}).to_string(),
     )
     .unwrap();
     let output = Command::new("python3")
