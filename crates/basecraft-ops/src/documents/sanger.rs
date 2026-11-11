@@ -20,11 +20,6 @@ impl Document for SangerReview {
     fn kind(&self) -> Kind {
         Kind::SangerReview
     }
-    fn initial_history(
-        &self,
-    ) -> Result<(Vec<crate::session::Applied>, Vec<crate::session::Applied>)> {
-        self.session_history()
-    }
     fn revision(&self, generation: u64) -> u64 {
         generation
     }
@@ -52,15 +47,12 @@ impl Document for SangerReview {
         self.apply_session_edit(call_set, edit)
             .map(|inverse| (inverse, None))
     }
-    fn revert(&mut self, inverse: &Inverse, record: bool) -> Result<()> {
+    fn revert(&mut self, inverse: &Inverse) -> Result<()> {
         if let Inverse::SangerUpdate(before) = inverse {
             *self = (**before).clone();
             return Ok(());
         }
-        self.revert_session_edit(inverse, record)
-    }
-    fn reapply(&mut self, op: &Op, inverse: &Inverse, record: bool) -> Result<Inverse> {
-        self.reapply_session_edit(op, inverse, record)
+        self.revert_session_edit(inverse)
     }
     fn proposal_candidate(&self) -> Result<crate::files::Loaded> {
         Ok(crate::files::Loaded::SangerReview(Box::new(self.clone())))
@@ -105,7 +97,7 @@ mod tests {
         };
         let review = SangerReview::load(
             &Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../testdata/fixtures/sanger-legacy/multi.json"),
+                .join("../../testdata/fixtures/sanger-review/multi.json"),
         )
         .unwrap();
         let target = root.join("review.json");

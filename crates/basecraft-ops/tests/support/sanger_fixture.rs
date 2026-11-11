@@ -14,7 +14,7 @@ pub fn copy_to(destination: &Path, name: &str) -> PathBuf {
         }
     }
     copy(
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/sanger-legacy"),
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/sanger-review"),
         destination,
     );
     destination.join(name)

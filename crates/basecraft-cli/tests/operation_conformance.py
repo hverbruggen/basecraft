@@ -172,14 +172,12 @@ def main():
 
     if not args.only_linked_alignment and not args.only_delimitation:
         reviews = project / "reviews"
-        shutil.copytree(Path(__file__).resolve().parents[3] / "testdata/fixtures/sanger-legacy", reviews)
+        shutil.copytree(Path(__file__).resolve().parents[3] / "testdata/fixtures/sanger-review", reviews)
         review = reviews / "multi.json"
         selected = json.loads(review.read_text())["selected"]
         operation = {"op": "sanger.review", "params": {"call_set": selected,
                      "edit": {"op": "set", "columns": [0], "choice": {"choice": "edit", "base": "N"}}}}
         subprocess.run([str(binary), "edit", str(review), json.dumps(operation)], env=env, check=True, timeout=45, capture_output=True)
-        for action in ("undo", "redo"):
-            subprocess.run([str(binary), "edit", str(review), json.dumps({"op": action, "params": {"of": ""}})], env=env, check=True, timeout=45, capture_output=True)
         history, _ = cli("history", str(review), "--json")
         assert any("Sanger review " in row["summary"] for row in history["history"]), history
         client = Mcp(binary, project, env)

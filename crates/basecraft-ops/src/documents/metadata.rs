@@ -48,7 +48,7 @@ impl Document for OpenedMetadata {
         Ok((Inverse::Metadata(before), None))
     }
 
-    fn revert(&mut self, inverse: &Inverse, _record: bool) -> Result<()> {
+    fn revert(&mut self, inverse: &Inverse) -> Result<()> {
         let Inverse::Metadata(before) = inverse else {
             return Err(invalid("undo of the wrong kind of edit"));
         };

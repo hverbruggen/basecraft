@@ -69,7 +69,7 @@ impl Document for Submission {
         Ok((Inverse::Submission(before), None))
     }
 
-    fn revert(&mut self, inverse: &Inverse, _record: bool) -> Result<()> {
+    fn revert(&mut self, inverse: &Inverse) -> Result<()> {
         let Inverse::Submission(before) = inverse else {
             return Err(invalid("undo of the wrong kind of edit"));
         };

@@ -136,6 +136,19 @@ fn resolve_bundle(
             steps,
         )
     {
+        // A support-only binding retains input evidence, while LocalOnly history
+        // is deliberately published in the private profile.
+        if read_record(&hidden.join("manifest.json"))
+            .ok().and_then(|bytes| serde_json::from_slice::<Publication>(&bytes).ok())
+            .is_some_and(|record| record.origin == "Saved Sanger review support")
+            && let Ok(paths) = basecraft_platform::paths::AppPaths::discover()
+            && basecraft_platform::settings::SettingsStore::new(paths.preferences()).load()
+                .is_ok_and(|settings| settings.files.provenance == basecraft_platform::settings::ProvenancePolicy::LocalOnly)
+            && let Ok(absolute) = result.canonicalize()
+        {
+            let local = paths.state.join("provenance").join(basecraft_io::hash_bytes(absolute.as_os_str().as_encoded_bytes()).trim_start_matches("b3:"));
+            if local.join("manifest.json").is_file() { return (local, BundleSelection::Local); }
+        }
         return (hidden, BundleSelection::Binding);
     }
     let standalone = companion(result);

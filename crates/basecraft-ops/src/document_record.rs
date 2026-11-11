@@ -157,9 +157,8 @@ impl DocumentRecord {
                 path: path.into(),
                 detail,
             })?;
-            // A checkpoint recovered from application state is unsaved work.
             let mut report = review
-                .document_report(review.recovery_path().is_some())
+                .document_report(false)
                 .map_err(crate::error::invalid)?;
             // Keep the older biological audit and include new shared-journal decisions.
             let mut shared_record = Self::from_file(path)?;

@@ -52,13 +52,6 @@ pub(crate) trait Document {
             "this document kind does not support proposals".into(),
         ))
     }
-    /// Older self-contained formats can restore saved undo history. Ordinary
-    /// documents start empty. Entries must have deterministic identities for replay.
-    fn initial_history(
-        &self,
-    ) -> Result<(Vec<crate::session::Applied>, Vec<crate::session::Applied>)> {
-        Ok((Vec::new(), Vec::new()))
-    }
     fn revision(&self, generation: u64) -> u64;
     fn fingerprint(&self) -> DocState;
     /// Apply transactionally: an error must leave the payload unchanged.
@@ -79,10 +72,10 @@ pub(crate) trait Document {
         self.apply(op)
     }
     fn apply(&mut self, op: &Op) -> Result<(Inverse, Option<FeatureId>)>;
-    fn revert(&mut self, inverse: &Inverse, _record: bool) -> Result<()>;
+    fn revert(&mut self, inverse: &Inverse) -> Result<()>;
     /// Redo using the original inverse when an edit allocated stable identities.
     /// Session still owns stacks and the journal; payloads only restore the edit.
-    fn reapply(&mut self, op: &Op, _inverse: &Inverse, _record: bool) -> Result<Inverse> {
+    fn reapply(&mut self, op: &Op, _inverse: &Inverse) -> Result<Inverse> {
         self.apply(op).map(|(inverse, _)| inverse)
     }
 

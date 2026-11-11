@@ -96,12 +96,12 @@ impl Session {
             || self.docs[id.0].origin_bundle.clone(),
             |(path, _)| path.clone(),
         );
-        let previous_bundle = if bundle.join("manifest.json").exists() {
+        let mut previous_bundle = if bundle.join("manifest.json").exists() {
             &bundle
         } else {
             &source_bundle
         };
-        let previous = if snapshot.is_some() {
+        let mut previous = if snapshot.is_some() {
             snapshot
                 .and_then(|r| r.origins.first())
                 .map(|(_, p)| p.clone())
@@ -116,6 +116,26 @@ impl Session {
         } else {
             None
         };
+        // A newly allocated output-support record is not the accepted document
+        // history. Prefer the opened origin when the writer has just bound one.
+        if snapshot.is_none()
+            && previous_bundle != &source_bundle
+            && previous
+                .as_ref()
+                .is_some_and(|p| p.events.is_empty() && p.effective_edits.is_empty())
+            && source_bundle.join("manifest.json").is_file()
+        {
+            previous_bundle = &source_bundle;
+            let publication: Publication = serde_json::from_slice(
+                &crate::provenance::read_record(&source_bundle.join("manifest.json"))?,
+            )?;
+            if publication.schema_version != 1 {
+                return Err(crate::Error::Unsupported(
+                    "unsupported parent provenance version".into(),
+                ));
+            }
+            previous = Some(publication);
+        }
         let baseline_hash = self
             .events
             .iter()

@@ -70,10 +70,7 @@
   "minimum_identity": 0.8,
   "minimum_overlap": 1,
   "mode": "basecall",
-  "opaque_extension": {
-    "keep": "original whitespace and this unknown field"
-  },
   "overlaps": [],
   "status": "draft_requires_review",
-  "version_output": "alternative synthetic caller version"
+  "version_output": "synthetic caller 1"
 }

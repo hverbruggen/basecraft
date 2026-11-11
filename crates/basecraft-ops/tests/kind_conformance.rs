@@ -68,9 +68,7 @@ fn scenario<T: Debug + PartialEq>(
     let doc = session.open(&path).unwrap();
     let (ops, expected) = plan(&session, doc);
     assert_eq!(snapshot(&session, doc), expected[0]);
-    if !name.starts_with("sanger_review") {
-        assert!(!session.can_undo(doc));
-    }
+    assert!(!session.can_undo(doc));
     assert!(!session.can_redo(doc));
     let first = session.apply(doc, ops[0].clone()).unwrap();
     session.flush().unwrap(); // Distinct undo steps even for mergeable typing.

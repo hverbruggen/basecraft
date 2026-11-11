@@ -51,10 +51,10 @@ impl Document for Opened {
     fn apply(&mut self, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {
         execute_sequence(&mut self.doc, op)
     }
-    fn revert(&mut self, inverse: &Inverse, _record: bool) -> Result<()> {
+    fn revert(&mut self, inverse: &Inverse) -> Result<()> {
         undo_sequence(&mut self.doc, inverse)
     }
-    fn reapply(&mut self, op: &Op, inverse: &Inverse, _record: bool) -> Result<Inverse> {
+    fn reapply(&mut self, op: &Op, inverse: &Inverse) -> Result<Inverse> {
         if let (Op::FeatureAdd { feature }, Inverse::Feature { id, .. }) = (op, inverse) {
             self.doc.restore_feature(*id, Some(feature.clone()));
             Ok(Inverse::Feature {
@@ -337,11 +337,7 @@ mod tests {
             );
             assert_eq!(document.revision(99), revision);
         }
-        assert!(
-            document
-                .revert(&Inverse::Alignment(Vec::new()), true)
-                .is_err()
-        );
+        assert!(document.revert(&Inverse::Alignment(Vec::new())).is_err());
         let target = root.path().join("wrong.gb");
         assert!(
             document
@@ -407,7 +403,7 @@ mod tests {
                     .unwrap(),
                 initial
             );
-            document.revert(&inverse, true).unwrap();
+            document.revert(&inverse).unwrap();
             assert_eq!(
                 document
                     .saved_hashes(&source, &super::super::WritePublication::Immediate)

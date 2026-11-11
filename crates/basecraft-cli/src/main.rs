@@ -65,7 +65,7 @@ enum Command {
     },
     /// Print the validated shared preferences as JSON without creating files.
     Preferences,
-    /// Reconstruct an unsaved session, or a Sanger review recovery checkpoint
+    /// Reconstruct an unsaved session
     /// with all its call sets, into a new directory; never overwrites inputs.
     Recover {
         session: PathBuf,
@@ -273,18 +273,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             output,
             verified_prefix,
         } => {
-            if basecraft_ops::sanger_review::evidence_kind(&session)
-                == Some(basecraft_ops::sanger_review::EvidenceKind::Review)
-            {
-                if verified_prefix {
-                    return Err(
-                        "--verified-prefix applies to session journals, not Sanger reviews".into(),
-                    );
-                }
-                let restored = basecraft_ops::sanger_review::recover(&session, &output)?;
-                println!("{}", restored.display());
-                return Ok(());
-            }
             let restored = if verified_prefix {
                 let (restored, problem) =
                     basecraft_ops::replay::recover_verified_prefix(&session, &output)?;

@@ -109,15 +109,14 @@ impl Session {
             );
         }
         let kind = content.kind();
-        let (undo, redo) = content.as_document().initial_history()?;
         self.docs.push(Slot {
             key: key.clone(),
             content,
             current_saved_hashes: std::sync::OnceLock::new(),
             generation: 0,
             save_authority: save_authority::PendingSaveAuthority::default(),
-            undo,
-            redo,
+            undo: vec![],
+            redo: vec![],
             baseline: None,
             baseline_logged: false,
             accepted_hashes: hashes.clone(),

@@ -38,7 +38,7 @@ mod tests {
     #[test]
     fn prepared_review_edit_does_not_touch_history_or_inactive_call_sets() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../testdata/fixtures/sanger-legacy/multi.json");
+            .join("../../testdata/fixtures/sanger-review/multi.json");
         let mut review = SangerReview::load(&path).unwrap();
         let before = review.document_report(false).unwrap().raw;
         let events = review.events.clone();
@@ -72,7 +72,7 @@ mod tests {
     #[test]
     fn invalid_preparation_preserves_the_existing_redo_and_decisions() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../testdata/fixtures/sanger-legacy/single.json");
+            .join("../../testdata/fixtures/sanger-review/single.json");
         let mut review = SangerReview::load(&path).unwrap();
         review
             .apply(ReviewOp::Set {
@@ -80,7 +80,6 @@ mod tests {
                 choice: ReviewChoice::Edit('N'),
             })
             .unwrap();
-        review.apply(ReviewOp::Undo).unwrap();
         let before = review.document_report(false).unwrap().raw;
         for edit in [
             ReviewOp::Set {
@@ -100,7 +99,6 @@ mod tests {
             assert!(review.prepare_change(&edit).is_err());
             assert_eq!(review.document_report(false).unwrap().raw, before);
         }
-        review.apply(ReviewOp::Redo).unwrap();
         assert_eq!(review.decisions[0], ReviewChoice::Edit('N'));
     }
 }
@@ -122,7 +120,7 @@ impl SangerReview {
         op: &ReviewOp,
     ) -> crate::Result<crate::session::Inverse> {
         use crate::Error::Unsupported;
-        // Legacy control events remain readable, but live history belongs to Session.
+        // Live history belongs to Session.
         if matches!(
             op,
             ReviewOp::Undo | ReviewOp::Redo | ReviewOp::Export { .. }
@@ -134,28 +132,23 @@ impl SangerReview {
         let set = self.call_set_mut(id)?;
         let change = set.prepare_change(op).map_err(Unsupported)?;
         let events = set.events.len();
-        let legacy_undo = !(matches!(op, ReviewOp::AutoAccept { .. })
-            || events == 0 && matches!(op, ReviewOp::Evaluate { .. }));
         set.install_change(&change, true).map_err(Unsupported)?;
         set.events.push(op.clone());
         Ok(crate::session::Inverse::SangerReview {
             call_set: id.into(),
             change: Box::new(change),
             events,
-            legacy_undo,
         })
     }
 
     pub(crate) fn revert_session_edit(
         &mut self,
         inverse: &crate::session::Inverse,
-        record: bool,
     ) -> crate::Result<()> {
         let crate::session::Inverse::SangerReview {
             call_set,
             change,
             events,
-            legacy_undo,
         } = inverse
         else {
             return Err(crate::Error::Unsupported(
@@ -165,125 +158,7 @@ impl SangerReview {
         let set = self.call_set_mut(call_set)?;
         set.install_change(change, false)
             .map_err(crate::Error::Unsupported)?;
-        if record && *legacy_undo {
-            set.events.push(ReviewOp::Undo);
-        } else {
-            set.events.truncate(*events);
-        }
+        set.events.truncate(*events);
         Ok(())
-    }
-}
-
-impl SangerReview {
-    pub(crate) fn reapply_session_edit(
-        &mut self,
-        op: &basecraft_protocol::Op,
-        inverse: &crate::session::Inverse,
-        record: bool,
-    ) -> crate::Result<crate::session::Inverse> {
-        let crate::session::Inverse::SangerReview {
-            call_set,
-            change,
-            events,
-            legacy_undo,
-        } = inverse
-        else {
-            return crate::documents::Document::apply(self, op).map(|(inverse, _)| inverse);
-        };
-        if !*legacy_undo {
-            return crate::documents::Document::apply(self, op).map(|(inverse, _)| inverse);
-        }
-        let set = self.call_set_mut(call_set)?;
-        let before = set.events.len();
-        let can_record_redo = record && set.session_history()?.1.last().is_some_and(|entry| &entry.op == op && matches!(&entry.inverse, crate::session::Inverse::SangerReview { change: prior, .. } if prior == change));
-        set.install_change(change, true)
-            .map_err(crate::Error::Unsupported)?;
-        if can_record_redo {
-            set.events.push(ReviewOp::Redo);
-        } else if record {
-            let basecraft_protocol::Op::SangerReview { edit, .. } = op else {
-                return Err(crate::Error::Unsupported(
-                    "redo requires a review decision".into(),
-                ));
-            };
-            set.events.push((**edit).clone());
-        } else {
-            set.events.pop();
-        }
-        Ok(crate::session::Inverse::SangerReview {
-            call_set: call_set.clone(),
-            change: change.clone(),
-            events: if record { before } else { *events },
-            legacy_undo: true,
-        })
-    }
-}
-
-impl SangerReview {
-    pub(crate) fn session_history(
-        &self,
-    ) -> crate::Result<(Vec<crate::session::Applied>, Vec<crate::session::Applied>)> {
-        use crate::{
-            Error,
-            session::{Applied, Inverse},
-        };
-        let mut state = Self::from_draft(self.draft.clone(), self.storage_anchor())
-            .map_err(Error::Unsupported)?;
-        let mut undo: Vec<Applied> = Vec::new();
-        let mut redo: Vec<Applied> = Vec::new();
-        for (index, event) in self.events.iter().enumerate() {
-            match event {
-                ReviewOp::Undo => {
-                    let edit = undo.pop().ok_or_else(|| {
-                        Error::Unsupported("Saved review undo has no decision".into())
-                    })?;
-                    if let Inverse::SangerReview { change, .. } = &edit.inverse {
-                        state
-                            .install_change(change, false)
-                            .map_err(Error::Unsupported)?;
-                    }
-                    redo.push(edit);
-                }
-                ReviewOp::Redo => {
-                    let edit = redo.pop().ok_or_else(|| {
-                        Error::Unsupported("Saved review redo has no decision".into())
-                    })?;
-                    if let Inverse::SangerReview { change, .. } = &edit.inverse {
-                        state
-                            .install_change(change, true)
-                            .map_err(Error::Unsupported)?;
-                    }
-                    undo.push(edit);
-                }
-                ReviewOp::Export { .. } => {}
-                event => {
-                    let change = state.prepare_change(event).map_err(Error::Unsupported)?;
-                    state
-                        .install_change(&change, true)
-                        .map_err(Error::Unsupported)?;
-                    if !matches!(event, ReviewOp::AutoAccept { .. }) {
-                        if index != 0 || !matches!(event, ReviewOp::Evaluate { .. }) {
-                            undo.push(Applied {
-                                entry_id: format!("sanger-legacy:{}:{index}", self.draft_sha256),
-                                op: basecraft_protocol::Op::SangerReview {
-                                    call_set: self.draft_sha256.clone(),
-                                    edit: Box::new(event.clone()),
-                                },
-                                inverse: Inverse::SangerReview {
-                                    call_set: self.draft_sha256.clone(),
-                                    change: Box::new(change),
-                                    events: index,
-                                    legacy_undo: true,
-                                },
-                                group: None,
-                            });
-                        }
-                        redo.clear();
-                    }
-                }
-            }
-            state.events.push(event.clone());
-        }
-        Ok((undo, redo))
     }
 }

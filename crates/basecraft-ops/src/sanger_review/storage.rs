@@ -69,7 +69,6 @@ fn source(path: &Path, sha256: &str, anchor: &Path) -> crate::Result<Source> {
     }
     let reference = inputs::read_input(ledger.directory())?.source;
     Ok(Source {
-        extra: BTreeMap::new(),
         original: path.clone(),
         path,
         sha256: sha256.into(),
@@ -410,60 +409,6 @@ impl SangerReview {
         Ok(())
     }
 
-    pub fn recovery_path(&self) -> Option<&Path> {
-        self.recovery.as_deref()
-    }
-
-    pub(super) fn resume_recovery(&mut self, path: &Path) -> Result<(), String> {
-        let paths = basecraft_platform::paths::AppPaths::discover().map_err(|e| e.to_string())?;
-        let absolute = std::path::absolute(path).map_err(|e| e.to_string())?;
-        if !absolute.starts_with(paths.state.join("jobs")) {
-            return Ok(());
-        }
-        // State recovery is an unsaved document. Its suggested Save/Export
-        // location must remain in the working folder, never in application state.
-        let mut folder = None;
-        for run in self.evidence.runs.iter().chain(
-            self.evidence
-                .sources
-                .iter()
-                .filter_map(|s| s.ledger.as_ref()),
-        ) {
-            let Ok(run) = run.canonicalize() else {
-                continue;
-            };
-            let candidate = if let Some(store) = run
-                .parent()
-                .and_then(Path::parent)
-                .filter(|p| p.file_name().is_some_and(|n| n == "analyses-v1"))
-            {
-                if ArtifactRun::validate_store(store).is_err() {
-                    continue;
-                }
-                store.parent().and_then(Path::parent)
-            } else if run
-                .file_name()
-                .is_some_and(|n| n.to_string_lossy().ends_with(".provenance"))
-            {
-                run.parent()
-            } else {
-                None
-            };
-            if let Some(candidate) = candidate.filter(|p| !p.starts_with(&paths.state)) {
-                folder = Some(candidate.to_path_buf());
-                break;
-            }
-        }
-        let folder = match folder {
-            Some(folder) => folder,
-            None => std::env::current_dir().map_err(|e| e.to_string())?,
-        };
-        self.anchor = folder.join("recovered-review.sanger-review.json");
-        self.accepted = None;
-        self.recovery = Some(absolute);
-        Ok(())
-    }
-
     pub fn storage_anchor(&self) -> &Path {
         &self.anchor
     }
@@ -482,12 +427,10 @@ impl SangerReview {
     /// Prepare a detached analysis result; Session journals it on acceptance.
     #[must_use]
     pub fn fork_for_operation(&self) -> Self {
-        let mut copy = self.clone();
-        copy.recovery = None;
-        copy
+        self.clone()
     }
 
-    /// Carry already validated review ancestry, including pre-registry reviews.
+    /// Carry already validated review ancestry, for the current call sets.
     /// New analyses still attach through `attach_operation_run`.
     pub fn inherit_review_ancestry(&mut self, previous: &Self) {
         self.evidence.runs.clone_from(&previous.evidence.runs);
@@ -510,7 +453,6 @@ impl SangerReview {
         .map_err(|e| e.to_string())?;
         self.evidence.sources.push(context);
         self.evidence.placement = Some(Support {
-            extra: BTreeMap::new(),
             path: path.into(),
             hash: basecraft_io::hash_file(path).map_err(|e| e.to_string())?,
         });
@@ -566,7 +508,6 @@ impl SangerReview {
                 base(&self.anchor)?.join(&read.path)
             };
             self.evidence.sources.push(Source {
-                extra: BTreeMap::new(),
                 original: read.path.clone(),
                 path: candidate,
                 sha256: read.sha256.clone(),
@@ -588,8 +529,9 @@ impl SangerReview {
                     .is_ok_and(|h| h.eq_ignore_ascii_case(&input.sha256))
             {
                 let original = input.original.clone();
-                *input = source(&input.path, &input.sha256, anchor)?;
-                input.original = original;
+                let mut registered = source(&input.path, &input.sha256, anchor)?;
+                registered.original = original;
+                *input = registered;
             }
         }
         Ok(())
@@ -609,7 +551,6 @@ impl SangerReview {
         self.evidence.sources.push(context.clone());
         self.evidence.runs.extend(run.evidence.runs.clone());
         self.evidence.placement = Some(Support {
-            extra: BTreeMap::new(),
             path: path.into(),
             hash: basecraft_io::hash_file(path).map_err(|e| e.to_string())?,
         });
@@ -650,19 +591,12 @@ impl SangerReview {
         let parent = base(path)?;
         evidence.map_paths(|p| Ok(PathBuf::from(inputs::relative(&parent, p)?)))?;
         Ok(StoredReview {
-            version: 1,
             draft_path: self.draft_path.clone(),
             draft_sha256: self.draft_sha256.clone(),
             draft_json: self.draft_json.clone(),
             events: self.events.clone(),
             evidence,
-            extra: self.stored_extra.clone(),
         })
-    }
-
-    #[cfg(test)]
-    fn stored_at(&self, path: &Path) -> crate::Result<serde_json::Value> {
-        self.stored_with_evidence(path, &self.evidence)
     }
 
     fn stored_with_evidence(
@@ -670,25 +604,14 @@ impl SangerReview {
         path: &Path,
         evidence: &ReviewEvidence,
     ) -> crate::Result<serde_json::Value> {
-        if self.retained.is_empty() {
-            return Ok(serde_json::to_value(
-                self.stored_single_with_evidence(path, evidence)?,
-            )?);
-        }
-        let mut sets = vec![self.stored_single_with_evidence(path, evidence)?];
-        for set in &self.retained {
-            sets.push(set.stored_single_at(path)?);
-        }
-        Ok(serde_json::to_value(super::StoredCallSets {
-            version: 2,
-            selected: self.draft_sha256.clone(),
-            sets,
-        })?)
+        let mut snapshot = self.session_snapshot(path)?;
+        snapshot.sets[0] = self.stored_single_with_evidence(path, evidence)?;
+        Ok(serde_json::to_value(snapshot)?)
     }
 
     fn write_embedded(&self, path: &Path) -> crate::Result<()> {
         let mut bytes = self.encoded_at(path, &self.evidence)?;
-        // Embedded recovery/support JSON historically includes a final newline.
+        // Embedded support JSON ends with a newline.
         bytes.push(b'\n');
         basecraft_io::write_atomic(path, |w| w.write_all(&bytes))?;
         Ok(())
@@ -764,21 +687,16 @@ pub(crate) fn relocate_package(
 ) -> crate::Result<()> {
     let bytes = crate::provenance::read_record(copied)?;
     let value: serde_json::Value = serde_json::from_slice(&bytes)?;
-    let value = match value["version"].as_u64() {
-        Some(1) => {
-            let mut stored: StoredReview = serde_json::from_value(value)?;
-            relocate_stored(&mut stored, original, copied, bundle, paths)?;
-            serde_json::to_value(stored)?
-        }
-        Some(2) => {
-            let mut stored: super::StoredCallSets = serde_json::from_value(value)?;
-            for set in &mut stored.sets {
-                relocate_stored(set, original, copied, bundle, paths)?;
-            }
-            serde_json::to_value(stored)?
-        }
-        _ => return Err(invalid("Unsupported Sanger review version")),
-    };
+    let mut stored: super::StoredCallSets = serde_json::from_value(value)?;
+    if stored.version != 3 {
+        return Err(crate::Error::Unsupported(
+            "Unsupported Sanger review version".into(),
+        ));
+    }
+    for set in &mut stored.sets {
+        relocate_stored(set, original, copied, bundle, paths)?;
+    }
+    let value = serde_json::to_value(stored)?;
     inputs::write_json(copied, &value)
 }
 
@@ -1058,7 +976,7 @@ mod tests {
         let moved = tmp.path().join("moved");
         std::fs::rename(&folder, &moved).unwrap();
         let path = moved.join("specimen.sanger-review.json");
-        let mut reopened = SangerReview::load(&path).unwrap();
+        let reopened = SangerReview::load(&path).unwrap();
         assert_eq!(reopened.draft_json, exact);
         assert_eq!(
             reopened.working_draft().unwrap().inputs[0]
@@ -1071,9 +989,6 @@ mod tests {
                 .unwrap()
         );
         assert_eq!(reopened.decision(0), Some(&ReviewChoice::Edit('G')));
-        reopened.apply(ReviewOp::Undo).unwrap();
-        assert_eq!(reopened.decision(0), Some(&ReviewChoice::Pending));
-        reopened.apply(ReviewOp::Redo).unwrap();
         assert_eq!(reopened.decision(0), Some(&ReviewChoice::Edit('G')));
         assert_eq!(
             crate::provenance::verify(&path).unwrap(),
@@ -1426,10 +1341,6 @@ mod tests {
     }
 }
 
-#[cfg(test)]
-#[path = "legacy_fixtures.rs"]
-mod legacy_fixtures;
-
 impl SangerReview {
     pub(crate) fn session_bytes(&self, target: &Path) -> crate::Result<Vec<u8>> {
         self.encoded_at(target, &self.evidence)
@@ -1508,6 +1419,23 @@ impl SangerReview {
         )?;
         carry_authored(&dependencies, &run)?;
         let bytes = self.session_bytes(logical)?;
+        // Support must be complete even when public history is disabled or this
+        // is an unlogged recovery write. Session may add its history afterward.
+        let mut support = publication(&run, "Saved Sanger review support", vec![]);
+        unavailable_sources(&self.evidence, &mut support);
+        support.outputs.push(ArtifactRevision {
+            id: format!("{}:review", run.id()),
+            logical_name: target
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned(),
+            hash: basecraft_io::hash_bytes(&bytes),
+            size: bytes.len() as u64,
+            retained: None,
+            reference: None,
+        });
+        crate::provenance::publish(run.directory(), &support)?;
         if matches!(
             publication_context,
             crate::documents::WritePublication::Create
@@ -1546,7 +1474,7 @@ impl SangerReview {
 impl SangerReview {
     pub(crate) fn session_snapshot(&self, target: &Path) -> crate::Result<super::StoredCallSets> {
         Ok(super::StoredCallSets {
-            version: 2,
+            version: 3,
             selected: self.draft_sha256.clone(),
             sets: std::iter::once(self)
                 .chain(self.retained.iter())
@@ -1558,12 +1486,7 @@ impl SangerReview {
         snapshot: &super::StoredCallSets,
         target: &Path,
     ) -> crate::Result<Self> {
-        let review =
-            if snapshot.sets.len() == 1 && snapshot.sets[0].draft_sha256 == snapshot.selected {
-                Self::from_stored(snapshot.sets[0].clone(), target)
-            } else {
-                Self::decode_value(serde_json::to_value(snapshot)?, target)
-            };
+        let review = Self::decode_value(serde_json::to_value(snapshot)?, target);
         review.map_err(|detail| crate::Error::Damaged {
             path: target.into(),
             detail,

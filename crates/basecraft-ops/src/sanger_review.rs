@@ -75,27 +75,6 @@ pub fn saved_review(path: &Path) -> Option<Result<SangerReview, String>> {
     Some(read())
 }
 
-/// Write a review recovered from application state to `destination`, a new
-/// folder, with every retained call set. The original checkpoint is unchanged.
-/// Failed saves leave the destination and any partial output in place.
-pub fn recover(checkpoint: &Path, destination: &Path) -> crate::Result<PathBuf> {
-    let review = SangerReview::load(checkpoint).map_err(|detail| crate::Error::Damaged {
-        path: checkpoint.into(),
-        detail,
-    })?;
-    let name = review
-        .recovery_path()
-        .and(review.storage_anchor().file_name())
-        .ok_or_else(|| crate::Error::Unsupported("not a Sanger review recovery checkpoint".into()))?
-        .to_owned();
-    std::fs::create_dir(destination)?;
-    let target = destination.join(name);
-    let mut session = crate::Session::recoverable(destination)?;
-    let id = session.create_sanger_review(&review)?;
-    session.save_new(id, Some(&target))?;
-    Ok(target)
-}
-
 pub use basecraft_protocol::sanger::{MaskSettings, ReviewChoice, ReviewOp};
 
 use basecraft_docs::sanger::review::ReviewChange as Change;
@@ -121,9 +100,7 @@ pub struct SangerReview {
     events: Vec<ReviewOp>,
     evidence: storage::ReviewEvidence,
     anchor: PathBuf,
-    recovery: Option<PathBuf>,
     accepted: Option<crate::save_guard::Revision>,
-    stored_extra: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 impl SangerReview {
@@ -288,9 +265,7 @@ impl SangerReview {
             events: Vec::new(),
             evidence: storage::ReviewEvidence::default(),
             anchor: std::path::absolute(draft_path).map_err(|e| e.to_string())?,
-            recovery: None,
             accepted: None,
-            stored_extra: std::collections::BTreeMap::new(),
         })
     }
 
@@ -303,11 +278,8 @@ impl SangerReview {
     }
 
     fn accept_loaded(mut self, path: &Path, bytes: &[u8]) -> Result<Self, String> {
-        if self.recovery.is_none() {
-            self.accepted = Some(
-                crate::save_guard::Revision::accepted(path, bytes).map_err(|e| e.to_string())?,
-            );
-        }
+        self.accepted =
+            Some(crate::save_guard::Revision::accepted(path, bytes).map_err(|e| e.to_string())?);
         Ok(self)
     }
 
@@ -317,53 +289,41 @@ impl SangerReview {
     }
 
     fn decode_value(value: serde_json::Value, path: &Path) -> Result<Self, String> {
-        match value["version"].as_u64() {
-            Some(1) => Self::from_stored(
-                serde_json::from_value(value).map_err(|e| e.to_string())?,
-                path,
-            ),
-            Some(2) => {
-                let stored: StoredCallSets =
-                    serde_json::from_value(value).map_err(|e| e.to_string())?;
-                if stored.sets.is_empty() || stored.sets.len() > 32 {
-                    return Err("Invalid number of retained Sanger call sets".into());
-                }
-                let mut sets = Vec::new();
-                let mut ids = std::collections::BTreeSet::new();
-                for set in stored.sets {
-                    let session = Self::from_stored(set, path)?;
-                    if !ids.insert(session.draft_sha256.clone()) {
-                        return Err("Duplicate retained Sanger call set".into());
-                    }
-                    sets.push(session);
-                }
-                let selected = sets
-                    .iter()
-                    .position(|set| set.draft_sha256 == stored.selected)
-                    .ok_or("Selected Sanger call set is missing")?;
-                let mut session = sets.remove(selected);
-                if session.draft.inputs.len() != 1
-                    || sets.iter().any(|set| {
-                        set.draft.inputs.len() != 1
-                            || set.draft.inputs[0].sha256 != session.draft.inputs[0].sha256
-                    })
-                {
-                    return Err("Retained call sets refer to different Sanger sources".into());
-                }
-                for set in &mut sets {
-                    set.recovery = None;
-                }
-                session.retained = sets;
-                Ok(session)
-            }
-            _ => Err("Unsupported Sanger review version".into()),
+        let stored: StoredCallSets = serde_json::from_value(value).map_err(|e| e.to_string())?;
+        if stored.version != 3 {
+            return Err("Unsupported Sanger review version".into());
         }
+        if stored.sets.is_empty() || stored.sets.len() > 32 {
+            return Err("Invalid number of Sanger call sets".into());
+        }
+        let mut sets = Vec::new();
+        let mut ids = std::collections::BTreeSet::new();
+        for set in stored.sets {
+            let review = Self::from_stored(set, path)?;
+            if !ids.insert(review.draft_sha256.clone()) {
+                return Err("Duplicate Sanger call set".into());
+            }
+            sets.push(review);
+        }
+        let selected = sets
+            .iter()
+            .position(|set| set.draft_sha256 == stored.selected)
+            .ok_or("Selected Sanger call set is missing")?;
+        let mut review = sets.remove(selected);
+        if !sets.is_empty()
+            && (review.draft.inputs.len() != 1
+                || sets.iter().any(|set| {
+                    set.draft.inputs.len() != 1
+                        || set.draft.inputs[0].sha256 != review.draft.inputs[0].sha256
+                }))
+        {
+            return Err("Retained call sets refer to different Sanger sources".into());
+        }
+        review.retained = sets;
+        Ok(review)
     }
 
     fn from_stored(stored: StoredReview, path: &Path) -> Result<Self, String> {
-        if stored.version != 1 {
-            return Err("Unsupported Sanger review version".into());
-        }
         if basecraft_io::sha256_bytes(stored.draft_json.as_bytes()) != stored.draft_sha256 {
             return Err("Embedded source draft changed since review".into());
         }
@@ -398,9 +358,7 @@ impl SangerReview {
             events: Vec::new(),
             evidence,
             anchor: std::path::absolute(path).map_err(|e| e.to_string())?,
-            recovery: None,
             accepted: None,
-            stored_extra: stored.extra,
         };
         for event in stored.events {
             if let ReviewOp::Export { sha256, .. } = &event {
@@ -415,7 +373,6 @@ impl SangerReview {
                 session.apply(event)?;
             }
         }
-        session.resume_recovery(path)?;
         Ok(session)
     }
 
@@ -467,7 +424,6 @@ impl SangerReview {
         let mut selected = retained.remove(index);
         std::mem::swap(self, &mut selected);
         // Recovery and save destination belong to the whole review document.
-        std::mem::swap(&mut self.recovery, &mut selected.recovery);
         std::mem::swap(&mut self.anchor, &mut selected.anchor);
         std::mem::swap(&mut self.accepted, &mut selected.accepted);
         retained.push(selected);
@@ -485,7 +441,7 @@ impl SangerReview {
         path: &Path,
         policy: crate::input_evidence::SavePolicy,
     ) -> Result<(), String> {
-        // Compatibility convenience for payload callers. Session owns the write.
+        // Convenience for headless payload callers. Session owns the write.
         (|| -> crate::Result<()> {
             let mut session = crate::Session::recoverable(
                 path.parent()
@@ -555,19 +511,7 @@ impl SangerReview {
 
     pub fn apply(&mut self, op: ReviewOp) -> Result<(), String> {
         match &op {
-            ReviewOp::Undo | ReviewOp::Redo => {
-                // Legacy event interpretation is transient. Live editors use Session's stacks.
-                let (mut undo, mut redo) = self.session_history().map_err(|e| e.to_string())?;
-                let applied = if matches!(op, ReviewOp::Undo) {
-                    undo.pop()
-                } else {
-                    redo.pop()
-                }
-                .ok_or("Nothing to undo or redo")?;
-                if let crate::session::Inverse::SangerReview { change, .. } = applied.inverse {
-                    self.install_change(&change, matches!(op, ReviewOp::Redo))?;
-                }
-            }
+            ReviewOp::Undo | ReviewOp::Redo => return Err("Use Session history".into()),
             ReviewOp::Export { path, sha256 } => {
                 let actual = basecraft_io::sha256_file(path).map_err(|e| e.to_string())?;
                 if actual != *sha256 {
@@ -646,300 +590,6 @@ impl SangerReview {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn terminal_mask_excludes_pending_bases_and_replays_with_undo() {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("source.json");
-        let columns: Vec<_> = "ACGT".chars().enumerate().map(|(i,b)| serde_json::json!({"column": i+1,"consensus":b,"support":[{"read":1,"base":b,"kind":"call"}],"conflict":false,"review":true})).collect();
-        let data = serde_json::json!({"status":"draft_requires_review","engine":"Tracy","version_output":"test","engine_sha256":"a".repeat(64),"mode":"basecall","inputs":[{"read":1,"path":"x.ab1","sha256":"b".repeat(64),"orientation":"forward"}],"consensus":"ACGT","consensus_length":4,"minimum_overlap":1,"minimum_identity":0.8,"overlaps":[],"aligned_columns":4,"conflict_columns":0,"columns":columns});
-        std::fs::write(&path, serde_json::to_vec(&data).unwrap()).unwrap();
-        let mut session = SangerReview::new(&path).unwrap();
-        session
-            .apply(ReviewOp::Set {
-                columns: vec![1, 2],
-                choice: ReviewChoice::Accept,
-            })
-            .unwrap();
-        let mut settings = session.mask.clone();
-        settings.start = 1;
-        settings.end = 3;
-        settings.forward = "ACGTACGTACGT".into();
-        settings.evidence = "primer candidate coordinates".into();
-        session
-            .apply(ReviewOp::Mask {
-                settings: settings.clone(),
-            })
-            .unwrap();
-        assert_eq!(session.unresolved(), 0);
-        assert_eq!(session.resolved_sequence().as_deref(), Some("CG"));
-        session.apply(ReviewOp::Undo).unwrap();
-        assert_eq!(session.unresolved(), 2);
-        session.apply(ReviewOp::Redo).unwrap();
-        assert_eq!(session.mask, settings);
-        let review = tmp.path().join("review.json");
-        session.save(&review).unwrap();
-        std::fs::remove_file(path).unwrap();
-        let mut replayed = SangerReview::load(&review).unwrap();
-        assert_eq!(replayed.mask, settings);
-        assert_eq!(replayed.events(), session.events());
-        let output = tmp.path().join("masked.fa");
-        replayed.export_consensus(&output, "specimen").unwrap();
-        assert_eq!(std::fs::read_to_string(&output).unwrap(), ">specimen\nCG\n");
-        // Historical exports are not live review dependencies. Reopening must
-        // preserve the manual decisions and undo stack after a folder move or
-        // loss/change of an exported FASTA, without rewriting the recorded path.
-        replayed.save(&review).unwrap();
-        std::fs::write(&output, ">changed\nA\n").unwrap();
-        let changed = SangerReview::load(&review).unwrap();
-        assert_eq!(changed.events(), replayed.events());
-        assert_eq!(changed.resolved_sequence(), replayed.resolved_sequence());
-        let export = replayed.events().last().unwrap().clone();
-        assert!(replayed.apply(export).is_err(), "live exports verify bytes");
-        std::fs::remove_file(&output).unwrap();
-        let moved = tmp.path().join("moved");
-        std::fs::create_dir(&moved).unwrap();
-        let relocated = moved.join("review.json");
-        std::fs::rename(&review, &relocated).unwrap();
-        let mut recovered = SangerReview::load(&relocated).unwrap();
-        assert_eq!(recovered.events(), replayed.events());
-        recovered.apply(ReviewOp::Undo).unwrap();
-        assert_eq!(recovered.unresolved(), 2);
-        recovered.apply(ReviewOp::Redo).unwrap();
-        assert_eq!(recovered.resolved_sequence().as_deref(), Some("CG"));
-        let mut damaged: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&relocated).unwrap()).unwrap();
-        let events = damaged["events"].as_array_mut().unwrap();
-        events.last_mut().unwrap()["sha256"] = "not-a-sha256".into();
-        std::fs::write(&relocated, serde_json::to_vec(&damaged).unwrap()).unwrap();
-        assert!(SangerReview::load(&relocated).is_err());
-        let before = replayed.mask.clone();
-        let mut invalid = before.clone();
-        invalid.start = invalid.end;
-        assert!(
-            replayed
-                .apply(ReviewOp::Mask { settings: invalid })
-                .is_err()
-        );
-        assert_eq!(replayed.mask, before);
-    }
-
-    #[test]
-    fn thresholds_replay_preserve_manual_decisions_and_masks_and_undo_atomically() {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("source.json");
-        let columns: Vec<_> = "ACGT".chars().enumerate().map(|(i,b)| serde_json::json!({"column": i+1,"consensus":b,"support":[{"read":1,"base":b,"kind":"call"}],"conflict":false,"review":true})).collect();
-        let data = serde_json::json!({"status":"draft_requires_review","engine":"Tracy","version_output":"test","engine_sha256":"a".repeat(64),"mode":"basecall","inputs":[{"read":1,"path":"x.ab1","sha256":"b".repeat(64),"orientation":"forward"}],"consensus":"ACGT","consensus_length":4,"minimum_overlap":1,"minimum_identity":0.8,"overlaps":[],"aligned_columns":4,"conflict_columns":0,"columns":columns});
-        std::fs::write(&path, serde_json::to_vec(&data).unwrap()).unwrap();
-        let mut session = SangerReview::new(&path).unwrap();
-        let defaults = ReviewSettings::default();
-        session
-            .apply(ReviewOp::Evaluate {
-                version: 2,
-                settings: defaults.clone(),
-                calls: vec![Some('A'), Some('C'), None, Some('T')],
-                reference: None,
-            })
-            .unwrap();
-        assert!(
-            session.automatic_only(),
-            "initial Evaluate must allow orientation and placement"
-        );
-        session
-            .apply(ReviewOp::Set {
-                columns: vec![1],
-                choice: ReviewChoice::Edit('G'),
-            })
-            .unwrap();
-        assert!(
-            !session.automatic_only(),
-            "explicit review decisions must protect orientation"
-        );
-        let mut mask = session.mask.clone();
-        mask.start = 1;
-        mask.end = 3;
-        session
-            .apply(ReviewOp::Mask {
-                settings: mask.clone(),
-            })
-            .unwrap();
-        let strict = ReviewSettings {
-            strong_score: 40,
-            reference_percent: 10,
-            ..defaults.clone()
-        };
-        let reference = ReviewReference {
-            source_path: "frozen.afa".into(),
-            source_sha256: "c".repeat(64),
-            counts: vec![Some([1, 2, 3, 4]); 4],
-        };
-        let evaluate = ReviewOp::Evaluate {
-            version: 2,
-            settings: strict.clone(),
-            calls: vec![None, Some('T'), Some('A'), None],
-            reference: Some(reference.clone()),
-        };
-        session.apply(evaluate.clone()).unwrap();
-        assert_eq!(session.decision(1), Some(&ReviewChoice::Edit('G')));
-        assert_eq!(session.decision(2), Some(&ReviewChoice::Auto('A')));
-        assert_eq!(session.resolved_sequence().as_deref(), Some("GA"));
-        assert_eq!(session.mask, mask);
-        session.apply(ReviewOp::Undo).unwrap();
-        assert_eq!(session.settings, defaults);
-        assert_eq!(session.reference, None);
-        assert_eq!(session.decision(2), Some(&ReviewChoice::Pending));
-        session.apply(ReviewOp::Redo).unwrap();
-        assert_eq!(session.settings, strict);
-        assert_eq!(session.reference, Some(reference.clone()));
-        // Undoing a manual edit restores automatic ownership for later evaluation.
-        session
-            .apply(ReviewOp::Set {
-                columns: vec![2],
-                choice: ReviewChoice::Edit('C'),
-            })
-            .unwrap();
-        session.apply(ReviewOp::Undo).unwrap();
-        session.apply(evaluate).unwrap();
-        assert_eq!(session.decision(2), Some(&ReviewChoice::Auto('A')));
-        let before = session.events().len();
-        let invalid = ReviewSettings {
-            paired_score: 99,
-            ..strict.clone()
-        };
-        assert!(
-            session
-                .apply(ReviewOp::Evaluate {
-                    version: 2,
-                    settings: invalid,
-                    calls: vec![None; 4],
-                    reference: None
-                })
-                .is_err()
-        );
-        assert_eq!(session.events().len(), before);
-        assert_eq!(session.settings, strict);
-        let review = tmp.path().join("review.json");
-        session.save(&review).unwrap();
-        std::fs::remove_file(&path).unwrap();
-        let mut loaded = SangerReview::load(&review).unwrap();
-        assert_eq!(loaded.settings, strict);
-        assert_eq!(loaded.reference, Some(reference));
-        assert_eq!(loaded.mask, mask);
-        assert_eq!(loaded.decision(1), Some(&ReviewChoice::Edit('G')));
-        let output = tmp.path().join("consensus.fa");
-        loaded.export_consensus(&output, "sample").unwrap();
-        assert_eq!(std::fs::read_to_string(output).unwrap(), ">sample\nGA\n");
-    }
-
-    #[test]
-    fn automatic_triage_and_manual_edits_replay_portably() {
-        let tmp = tempfile::tempdir().unwrap();
-        let source = tmp.path().join("draft.json");
-        let draft = serde_json::json!({
-            "status":"draft_requires_review", "engine":"Tracy", "version_output":"test",
-            "engine_sha256":"a".repeat(64), "mode":"basecall",
-            "inputs":[{"read":1,"path":"read.ab1","sha256":"b".repeat(64),"orientation":"forward"}],
-            "consensus":"AC", "consensus_length":2, "minimum_overlap":1, "minimum_identity":0.8,
-            "overlaps":[], "aligned_columns":2, "conflict_columns":0, "limitations":[],
-            "columns":[
-                {"column":1,"consensus":"A","support":[{"read":1,"base":"A","kind":"call"}],"conflict":false,"review":true},
-                {"column":2,"consensus":"C","support":[{"read":1,"base":"C","kind":"call"}],"conflict":false,"review":true}
-            ]
-        });
-        std::fs::write(&source, serde_json::to_vec(&draft).unwrap()).unwrap();
-        let mut review = SangerReview::new(&source).unwrap();
-        review
-            .apply(ReviewOp::AutoAccept { columns: vec![0] })
-            .unwrap();
-        assert_eq!(review.unresolved(), 1);
-        assert!(review.apply(ReviewOp::Undo).is_err());
-        review
-            .apply(ReviewOp::Set {
-                columns: vec![1],
-                choice: ReviewChoice::Edit('T'),
-            })
-            .unwrap();
-        assert_eq!(review.resolved_sequence().as_deref(), Some("AT"));
-        review.apply(ReviewOp::Undo).unwrap();
-        assert_eq!(review.unresolved(), 1);
-        review.apply(ReviewOp::Redo).unwrap();
-        let store = tmp.path().join("review.json");
-        review.save(&store).unwrap();
-        std::fs::remove_file(&source).unwrap();
-        let mut replayed = SangerReview::load(&store).unwrap();
-        assert_eq!(replayed.events(), review.events());
-        assert_eq!(replayed.resolved_sequence().as_deref(), Some("AT"));
-        let output = tmp.path().join("edited.fa");
-        replayed.export_consensus(&output, "sample").unwrap();
-        assert_eq!(std::fs::read_to_string(output).unwrap(), ">sample\nAT\n");
-        replayed
-            .apply(ReviewOp::Set {
-                columns: vec![0],
-                choice: ReviewChoice::Pending,
-            })
-            .unwrap();
-        assert!(
-            replayed
-                .apply(ReviewOp::AutoAccept { columns: vec![0] })
-                .is_err()
-        );
-        assert_eq!(replayed.unresolved(), 1);
-    }
-
-    #[test]
-    fn sanger_review_ops_replay_batch_undo_and_redo() {
-        let path = Path::new("/tmp/basecraft-sanger-review-real-evidence.json");
-        if !path.exists() {
-            return;
-        }
-        let mut review = SangerReview::new(path).unwrap();
-        let issue = review.draft.columns.iter().position(|c| c.review).unwrap();
-        let original = review.decision(issue).unwrap().clone();
-        review
-            .apply(ReviewOp::Set {
-                columns: vec![issue],
-                choice: ReviewChoice::Edit('N'),
-            })
-            .unwrap();
-        assert_eq!(review.decision(issue), Some(&ReviewChoice::Edit('N')));
-        review.apply(ReviewOp::Undo).unwrap();
-        assert_eq!(review.decision(issue), Some(&original));
-        review.apply(ReviewOp::Redo).unwrap();
-        assert_eq!(review.decision(issue), Some(&ReviewChoice::Edit('N')));
-        let store = tempfile::NamedTempFile::new().unwrap().into_temp_path();
-        std::fs::remove_file(&store).unwrap();
-        review.save(&store).unwrap();
-        let replayed = SangerReview::load(&store).unwrap();
-        assert_eq!(replayed.events(), review.events());
-        assert_eq!(replayed.decision(issue), review.decision(issue));
-        assert_eq!(replayed.unresolved(), review.unresolved());
-        let temporary = tempfile::tempdir().unwrap();
-        let source = temporary.path().join("draft.json");
-        std::fs::copy(path, &source).unwrap();
-        let mut complete = SangerReview::new(&source).unwrap();
-        let issues = (0..complete.draft.columns.len()).collect();
-        complete
-            .apply(ReviewOp::Set {
-                columns: issues,
-                choice: ReviewChoice::Accept,
-            })
-            .unwrap();
-        assert_eq!(complete.unresolved(), 0);
-        let fasta = temporary.path().join("specimen.fa");
-        complete.export_consensus(&fasta, "specimen").unwrap();
-        let portable = tempfile::NamedTempFile::new().unwrap();
-        complete.save(portable.path()).unwrap();
-        std::fs::remove_file(source).unwrap();
-        let loaded = SangerReview::load(portable.path()).unwrap();
-        assert_eq!(loaded.resolved_sequence(), complete.resolved_sequence());
-        assert!(std::fs::read_to_string(fasta).unwrap().contains('\n'));
-    }
-}
-
-/// Open instrument evidence immediately, without requiring writable metadata storage.
 pub fn instrument_review(path: &Path) -> Result<SangerReview, String> {
     use basecraft_docs::sanger::{
         DraftColumn, InputRead, Orientation, ReadSupport, SupportKind, TraceCalls,
@@ -1025,8 +675,6 @@ mod call_set_tests {
         assert_eq!(session.draft_sha256, instrument_id);
         session.select_call_set(&computed_id).unwrap();
         assert_eq!(session.decision(0), Some(&ReviewChoice::Edit('C')));
-        session.apply(ReviewOp::Undo).unwrap();
-        session.apply(ReviewOp::Redo).unwrap();
         let mut mask = session.mask.clone();
         mask.start = 1;
         session.apply(ReviewOp::Mask { settings: mask }).unwrap();
@@ -1037,7 +685,7 @@ mod call_set_tests {
         let bytes = std::fs::read(&saved).unwrap();
         assert!(
             serde_json::from_slice::<StoredReview>(&bytes).is_err(),
-            "legacy reader must refuse v2"
+            "an individual call set is not a saved envelope"
         );
         assert_eq!(evidence_kind(&saved), Some(EvidenceKind::Review));
         let mut reopened = SangerReview::load(&saved).unwrap();
@@ -1064,16 +712,16 @@ mod call_set_tests {
     }
 
     #[test]
-    fn all_retained_drafts_and_versions_are_checked_and_v1_still_loads() {
+    fn all_retained_drafts_and_current_version_are_checked() {
         let tmp = tempfile::tempdir().unwrap();
         let mut session = instrument(tmp.path());
-        let legacy = tmp.path().join("legacy.json");
-        session.save(&legacy).unwrap();
-        assert!(SangerReview::load(&legacy).is_ok());
+        let single = tmp.path().join("single.json");
+        session.save(&single).unwrap();
+        assert!(SangerReview::load(&single).is_ok());
         assert_eq!(
-            serde_json::from_slice::<serde_json::Value>(&std::fs::read(&legacy).unwrap()).unwrap()
+            serde_json::from_slice::<serde_json::Value>(&std::fs::read(&single).unwrap()).unwrap()
                 ["version"],
-            1
+            3
         );
         session
             .retain_call_set(alternative(&session, "caller 1"))

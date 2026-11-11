@@ -12,7 +12,6 @@ pub(crate) enum Inverse {
         call_set: String,
         change: Box<basecraft_docs::sanger::review::ReviewChange>,
         events: usize,
-        legacy_undo: bool,
     },
     Residues {
         inserted: u64,
@@ -305,7 +304,7 @@ impl Session {
         self.docs[id.0]
             .content_mut()
             .as_document_mut()
-            .revert(&applied.inverse, true)?;
+            .revert(&applied.inverse)?;
         self.docs[id.0].generation += 1;
         let of = applied.entry_id.clone();
         let entry = self.entry(
@@ -315,7 +314,7 @@ impl Session {
             OpResult::default(),
         );
         if let Err(error) = self.write(&entry) {
-            let inverse = self.reexecute(id, &applied, false)?;
+            let inverse = self.reexecute(id, &applied)?;
             self.docs[id.0].generation -= 1;
             self.docs[id.0].undo.push(Applied { inverse, ..applied });
             return Err(error);
@@ -328,7 +327,7 @@ impl Session {
         self.track(id)?;
         self.flush()?;
         let applied = self.docs[id.0].redo.pop().ok_or(Error::NothingTo("redo"))?;
-        let inverse = self.reexecute(id, &applied, true)?;
+        let inverse = self.reexecute(id, &applied)?;
         self.docs[id.0].generation += 1;
         let of = applied.entry_id.clone();
         let entry = self.entry(
@@ -347,16 +346,10 @@ impl Session {
         Ok(of)
     }
 
-    pub(super) fn reexecute(
-        &mut self,
-        id: DocId,
-        applied: &Applied,
-        record: bool,
-    ) -> Result<Inverse> {
-        self.docs[id.0].content_mut().as_document_mut().reapply(
-            &applied.op,
-            &applied.inverse,
-            record,
-        )
+    pub(super) fn reexecute(&mut self, id: DocId, applied: &Applied) -> Result<Inverse> {
+        self.docs[id.0]
+            .content_mut()
+            .as_document_mut()
+            .reapply(&applied.op, &applied.inverse)
     }
 }

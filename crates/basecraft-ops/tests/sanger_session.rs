@@ -14,7 +14,7 @@ mod isolated_profile;
 fn fixture() -> SangerReview {
     SangerReview::load(
         &Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../testdata/fixtures/sanger-legacy/multi.json"),
+            .join("../../testdata/fixtures/sanger-review/multi.json"),
     )
     .unwrap()
 }
@@ -161,34 +161,6 @@ fn instrument_review_moves_with_its_sources_and_shared_saved_checkpoint() {
 }
 
 #[test]
-fn opening_legacy_review_restores_selected_undo_and_replays_it() {
-    let Some(root) =
-        isolated_profile::enter("opening_legacy_review_restores_selected_undo_and_replays_it")
-    else {
-        return;
-    };
-    let path = sanger_fixture::copy_to(&root, "single.json");
-    let mut legacy = SangerReview::load(&path).unwrap();
-    legacy.apply(ReviewOp::Undo).unwrap();
-    let mut session = Session::new(&root);
-    let id = session.open(&path).unwrap();
-    assert!(session.can_undo(id));
-    session.undo(id).unwrap();
-    assert_eq!(
-        session
-            .sanger_review(id)
-            .unwrap()
-            .document_report(false)
-            .unwrap()
-            .raw,
-        legacy.document_report(false).unwrap().raw
-    );
-    session.redo(id).unwrap();
-    session.save(id, None).unwrap();
-    assert!(replay::replay(&root).unwrap().ok());
-}
-
-#[test]
 fn stale_and_failed_saves_keep_decisions_recoverable() {
     let Some(root) = isolated_profile::enter("stale_and_failed_saves_keep_decisions_recoverable")
     else {
@@ -218,9 +190,8 @@ fn stale_and_failed_saves_keep_decisions_recoverable() {
 }
 
 #[test]
-fn structural_redo_keeps_legacy_audit_readable_and_shared_ancestry() {
-    let Some(root) =
-        isolated_profile::enter("structural_redo_keeps_legacy_audit_readable_and_shared_ancestry")
+fn structural_redo_keeps_decisions_and_shared_ancestry() {
+    let Some(root) = isolated_profile::enter("structural_redo_keeps_decisions_and_shared_ancestry")
     else {
         return;
     };
@@ -272,4 +243,52 @@ fn structural_redo_keeps_legacy_audit_readable_and_shared_ancestry() {
         SangerReview::load(&path).unwrap().decision(0),
         Some(&ReviewChoice::Edit('A'))
     );
+}
+
+#[test]
+fn support_survives_private_history_and_recovery_publication() {
+    let Some(root) =
+        isolated_profile::enter("support_survives_private_history_and_recovery_publication")
+    else {
+        return;
+    };
+    use basecraft_platform::settings::{Change, ProvenancePolicy, SettingsStore};
+    let settings = SettingsStore::new(
+        basecraft_platform::paths::AppPaths::discover()
+            .unwrap()
+            .preferences(),
+    );
+    for (name, policy) in [
+        ("local", ProvenancePolicy::LocalOnly),
+        ("none", ProvenancePolicy::None),
+    ] {
+        settings.update(Change::Provenance(policy)).unwrap();
+        let folder = root.join(name);
+        std::fs::create_dir(&folder).unwrap();
+        let mut session = Session::recoverable(&folder).unwrap();
+        let id = session.create_sanger_review(&fixture()).unwrap();
+        let target = folder.join("review.json");
+        edit(&mut session, id, 'N');
+        session.save_new(id, Some(&target)).unwrap();
+        edit(&mut session, id, 'A');
+        session.save_new(id, Some(&target)).unwrap();
+        assert_eq!(
+            SangerReview::load(&target).unwrap().decision(0),
+            Some(&ReviewChoice::Edit('A'))
+        );
+        if policy == ProvenancePolicy::LocalOnly {
+            let record = basecraft_ops::document_record::DocumentRecord::from_file(&target).unwrap();
+            assert!(record.events.iter().any(|event| matches!(event.op, Op::SangerReview { .. })));
+        }
+        edit(&mut session, id, 'T');
+        let output = replay::recover(session.recovery_root(), &folder.join("recovered")).unwrap();
+        let mut recovered = Session::recoverable(output[0].parent().unwrap()).unwrap();
+        let id = recovered.open(&output[0]).unwrap();
+        edit(&mut recovered, id, 'G');
+        recovered.save(id, None).unwrap();
+        assert_eq!(
+            SangerReview::load(&output[0]).unwrap().decision(0),
+            Some(&ReviewChoice::Edit('G'))
+        );
+    }
 }

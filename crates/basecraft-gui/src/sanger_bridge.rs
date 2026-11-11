@@ -220,7 +220,7 @@ pub mod qobject {
 
 use std::path::{Path, PathBuf};
 
-use basecraft_io::abif::{self, Trace};
+use basecraft_io::abif::Trace;
 use basecraft_ops::sanger_review::{MaskSettings, ReviewChoice, ReviewOp, SangerReview};
 use basecraft_viewmodel::sanger::SangerView;
 use basecraft_viewmodel::sanger_review::SangerReviewView;
@@ -1001,24 +1001,24 @@ impl qobject::SangerController {
         self.as_mut().set_calling(false);
         let path = PathBuf::from(path.to_string());
         let result = (|| -> Result<_, String> {
-            let (session, recovered) = work::ReviewDocument::open(&path)?;
+            let session = work::ReviewDocument::open(&path)?;
             let view = session_view(session.review().ok_or("No review is open")?)?;
-            Ok((view, session, recovered))
+            Ok((view, session))
         })();
         match result {
-            Ok((mut review, session, recovered)) => {
+            Ok((mut review, session)) => {
                 self.as_mut().cancel_calls();
                 {
                     let mut r = self.as_mut().rust_mut();
                     review.resize(r.view.width, r.view.height);
                     r.review = Some(review);
                     r.review_session = Some(session);
-                    r.review_path = if recovered { None } else { Some(path.clone()) };
+                    r.review_path = Some(path.clone());
 
                     r.overview_cache = basecraft_viewmodel::overview::Cache::default();
                     r.trace = None;
                 }
-                self.as_mut().set_dirty(recovered);
+                self.as_mut().set_dirty(false);
                 self.as_mut()
                     .set_file_path(QString::from(path.to_string_lossy().as_ref()));
                 self.as_mut().set_message(QString::default());

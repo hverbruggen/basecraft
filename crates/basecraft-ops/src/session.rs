@@ -607,7 +607,7 @@ fn redact_operation_paths(operation: &mut Op) {
 }
 
 fn restore_inverse(content: &mut Loaded, inverse: &Inverse) -> Result<()> {
-    content.as_document_mut().revert(inverse, false)
+    content.as_document_mut().revert(inverse)
 }
 
 /// Edits whose log entries can grow into a burst.

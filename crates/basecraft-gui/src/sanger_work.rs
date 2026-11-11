@@ -201,7 +201,7 @@ fn execute(
 ) -> Result<Completion, String> {
     let mut jobs = JobManager::default().with_task_cancellation();
     let mut payload = String::new();
-    let (mut session, path) = match request {
+    let (session, path) = match request {
         Request::Prepare(paths, threshold) => {
             let first = paths.first().ok_or("Choose two or three AB1 reads")?;
             let root = first.parent().ok_or("AB1 has no parent directory")?;
@@ -467,16 +467,13 @@ impl ReviewDocument {
             .map_err(|e| e.to_string())?;
         Ok(Self { session, id })
     }
-    pub fn open(path: &Path) -> Result<(Self, bool), String> {
+    pub fn open(path: &Path) -> Result<Self, String> {
         let mut session =
             basecraft_ops::Session::recoverable(path.parent().ok_or("Review has no parent")?)
                 .map_err(|e| e.to_string())?;
         let id = session.open(path).map_err(|e| e.to_string())?;
-        let review = session.sanger_review(id).map_err(|e| e.to_string())?;
-        if review.recovery_path().is_some() {
-            return Ok((Self::new(review.clone())?, true));
-        }
-        Ok((Self { session, id }, false))
+        session.sanger_review(id).map_err(|e| e.to_string())?;
+        Ok(Self { session, id })
     }
     pub fn report(&self, dirty: bool) -> Result<basecraft_ops::document_record::Report, String> {
         let mut report = self

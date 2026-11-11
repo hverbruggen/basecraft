@@ -106,7 +106,9 @@ pub enum ReviewOp {
     Mask {
         settings: MaskSettings,
     },
+    #[serde(skip)]
     Undo,
+    #[serde(skip)]
     Redo,
     Export {
         path: PathBuf,

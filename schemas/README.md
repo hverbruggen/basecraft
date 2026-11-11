@@ -58,12 +58,12 @@ are described below; their readers and fresh-write behavior remain distinct.
 | **DS06** `metadata.basecraft.json`: table names/hashes/columns, import settings, partitions | Project metadata folder | [metadata.rs](../crates/basecraft-ops/src/metadata.rs) `encode`, `write` | `metadata::load` | `format`, `version: 1` | ops `Manifest`, `Tables`, `TableEntry`; protocol `ProjectMetadata` / [project-metadata.schema.json](project-metadata.schema.json) covers model, not disk manifest | Manifest top-level extra kept; nested table wrappers drop extras; unknown TSV columns retained by model |
 | **DS07** `specimens.tsv`, `taxa.tsv`, `identifications.tsv`, `records.tsv` | Same metadata folder | `metadata::encode`, `create`, session save | `metadata::load` | Via metadata manifest | protocol metadata row/column types; standard TSV | Header/column handling preserves extra data; no JSON schema for TSV bytes |
 | **DS08** `*.submission.json` | Project / chosen document path | [submission.rs](../crates/basecraft-ops/src/submission.rs) `encode`, `create`; session save | `submission::load` | `version: 1` | protocol `Submission` / [submission.schema.json](submission.schema.json) | Extra maps on Submission and selected nested types kept; other nested structs have their own rules |
-| **DS09** Saved `*.sanger-review.json` / recovery `review.sanger-review.json` / immutable retained review snapshots | Document / R / A | [sanger_review/storage.rs](../crates/basecraft-ops/src/sanger_review/storage.rs) `write_embedded`, `save_durable`, checkpoint | [sanger_review.rs](../crates/basecraft-ops/src/sanger_review.rs) `decode`, `from_stored`, `load`, `recover` | `StoredReview.version: 1`; `StoredCallSets.version: 2`; embedded `ReviewEvidence.schema_version: 1` | protocol `sanger_records::{SavedReview, SavedCallSets, ReviewEvidence, ReviewSource, ReviewSupport}`; generated `sanger-saved-*.schema.json` and `sanger-review-{evidence,source,support}.schema.json`; docs specialized draft payload retained | StoredReview/ReviewEvidence extras kept; call-set envelope rejects unknowns; nested payload rules differ |
+| **DS09** Saved Sanger review | User-selected JSON | shared Session save, Sanger Document writer | SangerReview current envelope | version 3 | protocol SavedCallSets and SavedReview | Current forward scientific decisions; shared Session owns undo/recovery |
 | **DS10** `draft.json` and embedded `draft_json`: automatic Sanger draft, trace evidence | A / embedded review | The Sanger Document writer retains exact draft bytes produced by plugin | `SangerReview::from_draft`, `basecraft_docs::sanger::SangerDraft` | No schema version; `version_output` is tool output, not format version | docs `SangerDraft`; no protocol schema | Existing typed draft fields drop unknowns on typed reserialization; original JSON retained in review |
 | **DS11** Sanger placement artifact (retained JSON) | A / plugin output | Registered plugin produces it; Sanger storage retains/copies it | storage placement verification, docs `SangerPlacement` | Existing producer format; tool `version` is not a schema version | docs `SangerPlacement`; no schema | Existing typed payload behavior; no migration here |
 | **DS12** Sanger `request.json`, `parameters.json` | A | storage `SangerRun::prepare_with_dependencies`, `parameters` | Sanger provenance/Methods and retained evidence readers | Request has no version; parameters are operation-specific | `Value`; request is **not** registered `OperationRequest` | Raw parameters retained; not rewritten through a common schema |
 | **DS13** Sanger `execution.json` and J `manifest.json`: status, owner, source, result/diagnostic, run path | A / J | storage `SangerRun::status` | `document_record::jobs`, Sanger resume/storage readers | `schema_version: 1` | `Value`; no schema | Selective reads; status updates build fresh record |
-| **DS14** Sanger recovery `manifest.json`: owner, source, unresolved diagnostic, checkpoint path | R (job recovery) | storage `checkpoint` | job/history inspection and explicit Sanger recovery | `schema_version: 1` | `Value`; no schema | Selective reads; regenerated at checkpoint |
+| **DS14** Retired Sanger job checkpoint | — | — | Removed; recovery uses RP01 session journals | — | — | No legacy reader |
 
 ## Registered operations, jobs and exports
 
@@ -339,7 +339,7 @@ engine `main` writes version 1, wrapper `invoke` recalculates exchange hashes an
 rewrites that wrapper from selected fields after publishing SPART. Version 2 is
 used by ops path-base-aware writes. These are not interchangeable byte formats.
 DS12/DS13's concrete owner is `SangerRun::prepare_with_dependencies`, `parameters`,
-`status` (not a type named `ReviewRun`). DS14 is a legacy checkpoint read by `SangerReview`; new recovery uses the shared
+`status` (not a type named `ReviewRun`). DS14 is retired; recovery uses the shared
 Session journal. `decode` accepts version 1 or 2 and rejects
 other review versions. Nested draft/tool versions do not replace that check.
 
@@ -420,7 +420,7 @@ rather than a fabricated common JSON golden.
 | DS03 | Five `records-v1/link-*.json`; ops `tests/link_record_formats.rs` | Both versions captured; unknown extra cases are share/update captures, not fresh-create merge guarantees |
 | DS04–DS05 | `links` partial-publication/recovery tests | No committed repair-snapshot/guard golden, including absent/file/symlink prior entry variants |
 | DS06–DS08 | Metadata/submission workflow, unknown-field and replay tests; `fixtures/metadata` and `fixtures/submission` contain import/source inputs | Import spreadsheets/alignments are not output manifest/TSV/submission goldens; nested rewrite preservation remains incomplete |
-| DS09–DS11 | Frozen original-writer v1/v2 review and checkpoint bytes in `sanger-legacy`; protocol envelope round trips plus legacy storage replay tests; compact AB1/reference inputs | DS09 envelopes/evidence are typed; DS10 opaque draft bytes remain unchanged; no separate placement-writer golden |
+| DS09–DS11 | Current single/multi review fixtures in sanger-review; protocol round trips and Session lifecycle/replay tests | Current envelope only; embedded draft hashes and scientific evidence remain exact |
 | DS12–DS14 | `SangerRun`, review checkpoint, history/job and recovery behavioral tests | No committed legacy request/status/recovery-manifest golden; do not conflate with EX02/EX03/EX06 |
 | EX01–EX02, EX05, EX07–EX10 | operation-contract/registered-jobs/runner tests use real writes and synthetic plugin fixtures | Protocol schemas and registry-plugin request data are not original-writer descriptor/request/outcome/validated/tuple/stages/query-plan goldens |
 | EX03–EX04, EX06 | `records-v1/execution-*.json`, nine `job-index-*.json`; host `runner/record_format_tests.rs` | Synthetic test workflow and index states, not nine actual transitions; fixture substitutions/oracle exceptions documented above |
@@ -484,7 +484,7 @@ and legacy `jobs/<id>/review.sanger-review.json` checkpoints. The writer remains
 identity, or undo behavior changed. The enclosing records are not yet owned by
 protocol, and these payload schemas are not complete saved-review schemas.
 
-Compatibility fixtures in `testdata/fixtures/sanger-legacy` retain actual legacy
+Compatibility fixtures in `testdata/fixtures/sanger-review` retain actual legacy
 writer bytes, embedded draft hashes, support closure and checkpoint metadata.
 V1 outer/evidence/source/support extras survive; v2 outer extras are rejected.
 Nested known operation/settings/reference/choice extras are currently dropped,

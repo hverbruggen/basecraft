@@ -56,9 +56,6 @@ fn secondary_evidence_survives_call_set_selection_save_and_replay() {
         evidence["inputs"][0]["calls"]["secondary_sequence"],
         secondary
     );
-    reopened.apply(ReviewOp::Undo).unwrap();
-    assert_eq!(reopened.mask.start, 0);
-    reopened.apply(ReviewOp::Redo).unwrap();
     assert_eq!(reopened.mask.start, 1);
     reopened.select_call_set(&instrument_id).unwrap();
     assert_eq!(reopened.decision(0), Some(&ReviewChoice::Edit('G')));

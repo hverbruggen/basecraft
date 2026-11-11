@@ -132,14 +132,13 @@ impl Session {
             snapshot,
             &self.resolve(key),
         )?;
-        let (undo, redo) = review.session_history()?;
         self.docs.push(Slot {
             key: key.into(),
             content: Loaded::SangerReview(Box::new(review)),
             generation: 0,
             save_authority: super::save_authority::PendingSaveAuthority::default(),
-            undo,
-            redo,
+            undo: vec![],
+            redo: vec![],
             baseline: None,
             baseline_logged: false,
             accepted_hashes: vec![],
@@ -201,6 +200,11 @@ impl Session {
         id: DocId,
         target: &std::path::Path,
     ) -> Result<bool> {
+        if self.docs.iter().enumerate().any(|(index, slot)| {
+            index != id.0 && crate::save_guard::same_target(&self.resolve(&slot.key), target)
+        }) {
+            return Ok(false);
+        }
         let Some(entry) = self.events.iter().rev().find(|entry| entry.doc == self.docs[id.0].key
             && matches!(&entry.op, Op::Save { path } if crate::save_guard::same_target(&self.resolve(path), target))) else { return Ok(false); };
         for (path, hash) in &entry.result.hashes {

@@ -84,7 +84,7 @@ impl Document for OpenedTree {
         execute_tree(&mut self.doc, op).map(|before| (Inverse::Tree(before), None))
     }
 
-    fn revert(&mut self, inverse: &Inverse, _record: bool) -> Result<()> {
+    fn revert(&mut self, inverse: &Inverse) -> Result<()> {
         let Inverse::Tree(before) = inverse else {
             return Err(invalid("undo of the wrong kind of edit"));
         };
@@ -279,11 +279,7 @@ mod tests {
             );
             assert_eq!(document.revision(0), revision);
         }
-        assert!(
-            document
-                .revert(&Inverse::Alignment(Vec::new()), true)
-                .is_err()
-        );
+        assert!(document.revert(&Inverse::Alignment(Vec::new())).is_err());
         let target = root.path().join("wrong.afa");
         assert!(
             document
@@ -335,7 +331,7 @@ mod tests {
                 .saved_hashes(&source, &super::super::WritePublication::Immediate)
                 .unwrap();
             assert_ne!(edited, initial);
-            document.revert(&inverse, true).unwrap();
+            document.revert(&inverse).unwrap();
             assert_eq!(document.revision(0), revision);
             assert_eq!(
                 document

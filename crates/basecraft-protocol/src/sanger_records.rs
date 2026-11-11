@@ -1,21 +1,17 @@
-//! Existing saved Sanger review envelopes and embedded evidence.
-//! Data only: legacy versions, field order and unknown-field handling are unchanged.
+//! Current saved Sanger review envelope and embedded evidence.
 use crate::{provenance::InputReference, sanger::ReviewOp};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, path::PathBuf};
+use std::path::PathBuf;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SavedReview {
-    pub version: u32,
     pub draft_path: PathBuf,
     pub draft_sha256: String,
     pub draft_json: String,
     pub events: Vec<ReviewOp>,
-    #[serde(default)]
     pub evidence: ReviewEvidence,
-    #[serde(flatten)]
-    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -27,13 +23,10 @@ pub struct SavedCallSets {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ReviewEvidence {
     pub schema_version: u32,
-    #[serde(flatten)]
-    pub extra: BTreeMap<String, serde_json::Value>,
-    #[serde(default)]
     pub runs: Vec<PathBuf>,
-    #[serde(default)]
     pub sources: Vec<ReviewSource>,
     pub placement: Option<ReviewSupport>,
 }
@@ -42,7 +35,6 @@ impl Default for ReviewEvidence {
     fn default() -> Self {
         Self {
             schema_version: 1,
-            extra: BTreeMap::new(),
             runs: vec![],
             sources: vec![],
             placement: None,
@@ -51,9 +43,8 @@ impl Default for ReviewEvidence {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ReviewSource {
-    #[serde(flatten)]
-    pub extra: BTreeMap<String, serde_json::Value>,
     // Identity in the immutable draft/placement, never rebased.
     pub original: PathBuf,
     pub sha256: String,
@@ -64,9 +55,8 @@ pub struct ReviewSource {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ReviewSupport {
-    #[serde(flatten)]
-    pub extra: BTreeMap<String, serde_json::Value>,
     pub path: PathBuf,
     pub hash: String,
 }
@@ -75,46 +65,18 @@ pub struct ReviewSupport {
 mod tests {
     use super::*;
 
-    fn writer_bytes<T: Serialize>(record: &T) -> Vec<u8> {
-        // The existing storage writer serializes through Value, whose map order
-        // is part of the captured pretty-JSON byte contract.
-        serde_json::to_vec_pretty(&serde_json::to_value(record).unwrap()).unwrap()
-    }
-
     #[test]
-    fn captured_saved_reviews_keep_the_exact_writer_bytes() {
-        let single = include_bytes!("../../../testdata/fixtures/sanger-legacy/single.json");
-        let multi = include_bytes!("../../../testdata/fixtures/sanger-legacy/multi.json");
-        let one: SavedReview = serde_json::from_slice(single).unwrap();
-        let many: SavedCallSets = serde_json::from_slice(multi).unwrap();
-        assert_eq!(writer_bytes(&one), single);
-        assert_eq!(writer_bytes(&many), multi);
-        assert_eq!(one.version, 1);
-        assert_eq!(many.version, 2);
-        assert_eq!(many.sets.len(), 2);
-        assert!(
-            many.sets
-                .iter()
-                .any(|set| set.draft_sha256 == many.selected)
-        );
-    }
-
-    #[test]
-    fn extension_fields_and_call_set_rejection_keep_legacy_contracts() {
-        let mut one: serde_json::Value = serde_json::from_slice(include_bytes!(
-            "../../../testdata/fixtures/sanger-legacy/single.json"
-        ))
-        .unwrap();
-        one["future-review"] = serde_json::json!({"retain": [1, 2]});
-        one["evidence"]["future-evidence"] = serde_json::json!({"retain": true});
-        let typed: SavedReview = serde_json::from_value(one.clone()).unwrap();
-        assert_eq!(serde_json::to_value(typed).unwrap(), one);
-
-        let mut many: serde_json::Value = serde_json::from_slice(include_bytes!(
-            "../../../testdata/fixtures/sanger-legacy/multi.json"
-        ))
-        .unwrap();
-        many["future-envelope"] = serde_json::json!(true);
-        assert!(serde_json::from_value::<SavedCallSets>(many).is_err());
+    fn current_envelopes_round_trip() {
+        for bytes in [
+            include_str!("../../../testdata/fixtures/sanger-review/single.json"),
+            include_str!("../../../testdata/fixtures/sanger-review/multi.json"),
+        ] {
+            let record: SavedCallSets = serde_json::from_str(bytes).unwrap();
+            assert_eq!(record.version, 3);
+            assert_eq!(
+                serde_json::to_value(record).unwrap(),
+                serde_json::from_str::<serde_json::Value>(bytes).unwrap()
+            );
+        }
     }
 }

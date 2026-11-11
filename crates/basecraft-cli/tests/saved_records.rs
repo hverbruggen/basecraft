@@ -71,7 +71,7 @@ fn edit(review: &mut SangerReview, column: usize, base: char) {
         .unwrap();
 }
 
-/// A legacy single-set (v1) review and a multi-call-set (v2) review of the
+/// A single-set review and a multi-call-set review of the
 /// same instrument trace, the second under a generic `.json` name.
 fn reviews(project: &Path) -> (PathBuf, PathBuf) {
     std::fs::create_dir_all(project).unwrap();
@@ -315,83 +315,6 @@ fn damaged_unknown_future_and_draft_files_are_refused_without_records() {
 }
 
 /// Recovery writes every retained call set to a new destination only.
-#[test]
-fn review_recovery_restores_all_call_sets_into_a_new_folder() {
-    if isolated_profile::enter("review_recovery_restores_all_call_sets_into_a_new_folder").is_none()
-    {
-        return;
-    }
-    // The isolated child and its CLI share the checkpoint in application state.
-    let temp = tempfile::tempdir().unwrap();
-    let project = temp.path().join("project");
-    std::fs::create_dir_all(&project).unwrap();
-    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/fixtures/sanger-legacy")
-        .canonicalize()
-        .unwrap();
-    let index: Value =
-        serde_json::from_slice(&std::fs::read(fixture.join("capture-index.json")).unwrap())
-            .unwrap();
-    let captured = fixture.join(index["checkpoint"].as_str().unwrap());
-    let mut bytes: Value = serde_json::from_slice(&std::fs::read(&captured).unwrap()).unwrap();
-    for set in bytes["sets"].as_array_mut().unwrap() {
-        let evidence = &mut set["evidence"];
-        for run in evidence["runs"].as_array_mut().unwrap() {
-            *run = json!(captured.parent().unwrap().join(run.as_str().unwrap()));
-        }
-        for source in evidence["sources"].as_array_mut().unwrap() {
-            for field in ["path", "ledger"] {
-                if let Some(path) = source[field].as_str() {
-                    source[field] = json!(captured.parent().unwrap().join(path));
-                }
-            }
-        }
-    }
-    let checkpoint = basecraft_platform::paths::AppPaths::discover()
-        .unwrap()
-        .state
-        .join("jobs/legacy-review/review.sanger-review.json");
-    std::fs::create_dir_all(checkpoint.parent().unwrap()).unwrap();
-    std::fs::write(&checkpoint, serde_json::to_vec(&bytes).unwrap()).unwrap();
-    let run = |args: &[&str]| {
-        Command::new(env!("CARGO_BIN_EXE_basecraft"))
-            .args(args)
-            .current_dir(&project)
-            .output()
-            .unwrap()
-    };
-    let history: Value = serde_json::from_str(&ok(&run(&[
-        "history",
-        checkpoint.to_str().unwrap(),
-        "--json",
-    ])))
-    .unwrap();
-    assert_eq!(history["unsaved"], true);
-    assert_eq!(history, gui_report(&checkpoint));
-
-    let output = temp.path().join("recovered");
-    let restored = ok(&run(&[
-        "recover",
-        checkpoint.to_str().unwrap(),
-        "--output",
-        output.to_str().unwrap(),
-    ]));
-    let restored = PathBuf::from(restored.trim());
-    assert!(restored.starts_with(&output), "{}", restored.display());
-    let reopened = SangerReview::load(&restored).unwrap();
-    assert_eq!(reopened.call_sets().len(), 2);
-    assert_eq!(reopened.decision(1), Some(&ReviewChoice::Edit('T')));
-    assert!(reopened.recovery_path().is_none());
-    // The checkpoint stays; an existing destination is never replaced.
-    assert!(checkpoint.is_file());
-    let error = failure(&run(&[
-        "recover",
-        checkpoint.to_str().unwrap(),
-        "--output",
-        output.to_str().unwrap(),
-    ]));
-    assert!(error.contains("exists"), "{error}");
-}
 
 fn trees(project: &Path) -> (PathBuf, PathBuf) {
     std::fs::create_dir_all(project).unwrap();

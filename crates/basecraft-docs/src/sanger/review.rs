@@ -55,7 +55,7 @@ impl ReviewState<'_> {
                 reference,
             } => {
                 settings.validate()?;
-                if ![1, 2].contains(version)
+                if *version != 2
                     || calls.len() != self.decisions.len()
                     || calls.iter().flatten().any(|b| !"ACGT".contains(*b))
                     || reference.as_ref().is_some_and(|r| {

@@ -158,7 +158,7 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
                     session.redo_single(doc)
                 };
                 match r {
-                    Ok(replayed) if ids.get(&replayed) == Some(of) || replayed == *of => {}
+                    Ok(replayed) if ids.get(&replayed) == Some(of) => {}
                     Ok(replayed) => {
                         problem(format!("targets {:?}, expected {of}", ids.get(&replayed)));
                     }
