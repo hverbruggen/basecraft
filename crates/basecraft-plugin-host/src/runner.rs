@@ -5,7 +5,6 @@ mod captures;
 mod execute;
 mod finalize;
 mod prepare;
-
 pub use prepare::recorded_request;
 
 use basecraft_ops::records::AlignmentLinkExt;
@@ -750,8 +749,7 @@ impl PreparedOperation {
         Ok((actor, params))
     }
 
-    /// A path from the invocation context: relative to the run folder, or
-    /// absolute for an input outside it.
+    /// A context path: relative to the run folder, or absolute outside it.
     pub fn run_path(&self, path: &str) -> PathBuf {
         self.run.directory().join(path)
     }
