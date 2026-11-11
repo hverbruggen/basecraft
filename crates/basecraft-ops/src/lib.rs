@@ -10,7 +10,6 @@ pub mod log;
 pub mod metadata;
 pub mod records;
 pub mod sanger_review;
-pub mod service_reads;
 pub mod session;
 pub mod submission;
 

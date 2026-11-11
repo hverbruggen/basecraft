@@ -44,8 +44,7 @@ fn store(root: &Path, name: &str) -> PathBuf {
         .to_path_buf()
 }
 
-// Exact counts captured at 7c36aef before adding assertions. These preserve
-// existing global-scan scaling; they are not the desired indexed-save target.
+// Count actual scanner visits; unrelated stores are excluded by the index.
 fn record(stage: &str, stores: &[PathBuf], visits: u64) {
     let counts = counters::snapshot();
     let expected: BTreeMap<_, _> = stores.iter().cloned().map(|s| (s, visits)).collect();
@@ -75,7 +74,7 @@ fn default_and_unrelated_scaling() {
     session.save(doc, None).unwrap();
     record("default save without stores", &[], 0);
     // Ordinary provenance publication does not create an analysis store. Each
-    // additional unrelated registered store adds exactly one visit per save.
+    // additional unrelated registered store must add no scanner visit per save.
     let mut stores = Vec::new();
     for index in 0..3 {
         stores.push(store(&root, &format!("unrelated-{index}")));
@@ -91,7 +90,7 @@ fn default_and_unrelated_scaling() {
             .unwrap();
         counters::reset();
         session.save(doc, None).unwrap();
-        record("save with unrelated stores", &stores, 1);
+        record("save with unrelated stores", &[], 0);
         assert_ne!(std::fs::read(&source).unwrap(), ORIGINAL);
     }
     counters::reset();
@@ -108,11 +107,23 @@ fn incomplete_decision_and_recheck() {
         return;
     };
     let (mut session, doc, source) = setup(&root);
+    // A deleted unrelated store is never visited. A store whose index refresh
+    // fails has unknown relevance and is visited by every save.
     let missing = store(&root, "missing");
     std::fs::remove_dir_all(&missing).unwrap();
-    let corrupt = store(&root, "corrupt");
+    std::fs::create_dir(root.join("corrupt")).unwrap();
+    let run = ArtifactRun::create(&root.join("corrupt/result.txt"), "reserved").unwrap();
+    input_evidence::register(&run).unwrap();
+    let corrupt = run
+        .directory()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
     std::fs::write(corrupt.join("store.json"), b"damaged").unwrap();
-    let stores = [missing, corrupt];
+    input_evidence::register(&run).unwrap();
+    let stores = [corrupt];
     counters::reset();
     let check = match session.save(doc, None).unwrap_err() {
         basecraft_ops::Error::SaveCheckRequired(check) => check,
@@ -142,8 +153,9 @@ fn incomplete_decision_and_recheck() {
 }
 
 #[test]
-fn changed_inventory_and_known_preserve() {
-    let Some(root) = super::child_profile("store_budgets::changed_inventory_and_known_preserve")
+fn unrelated_registration_and_known_preserve() {
+    let Some(root) =
+        super::child_profile("store_budgets::unrelated_registration_and_known_preserve")
     else {
         return;
     };
@@ -162,23 +174,12 @@ fn changed_inventory_and_known_preserve() {
     assert!(check.evidence().is_complete());
     assert!(!check.evidence().conflict.analyses.is_empty());
     record("known advisory", std::slice::from_ref(&nearby), 1);
-    let unrelated = store(&root, "new-store");
-    let stores = [nearby, unrelated];
-    counters::reset();
-    let fresh = match session
-        .save_with_decision(doc, None, check.decide(SavePolicy::PreserveCopy, false))
-        .unwrap_err()
-    {
-        basecraft_ops::Error::SaveDecisionStale(check) => check,
-        other => panic!("unexpected save error: {other}"),
-    };
-    record("changed inventory refused", &stores, 1);
-    assert_eq!(std::fs::read(&source).unwrap(), ORIGINAL);
+    store(&root, "new-store");
     counters::reset();
     session
-        .save_with_decision(doc, None, fresh.decide(SavePolicy::PreserveCopy, false))
+        .save_with_decision(doc, None, check.decide(SavePolicy::PreserveCopy, false))
         .unwrap();
-    record("known preserve save", &stores, 1);
+    record("unrelated registration preserves consent", &[nearby], 1);
     assert_eq!(
         std::fs::read(run.directory().join("preserved-input")).unwrap(),
         ORIGINAL

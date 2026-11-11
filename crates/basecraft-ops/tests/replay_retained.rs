@@ -1,4 +1,7 @@
 //! Repeated baselines must never mutate retained inputs or original sources.
+#[path = "support/isolated_profile.rs"]
+mod isolated_profile;
+
 use std::{collections::BTreeMap, path::Path};
 
 use basecraft_ops::{Session, delimitation, records};
@@ -57,6 +60,7 @@ fn qualify(root: &Path, recovered: &Path) {
 
 #[test]
 fn repeated_open_with_edits_preserves_inputs_in_replay_and_recovery() {
+    crate::isolated_profile::isolate!();
     // Successful recovery registers its final store. Keep each fixture alive
     // until the other cases finish inspecting that shared test profile.
     let mut retained = Vec::new();
@@ -107,6 +111,7 @@ fn repeated_open_with_edits_preserves_inputs_in_replay_and_recovery() {
 
 #[test]
 fn repeated_combine_save_and_refused_save_share_one_session() {
+    crate::isolated_profile::isolate!();
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().join("project");
     std::fs::create_dir(&root).unwrap();

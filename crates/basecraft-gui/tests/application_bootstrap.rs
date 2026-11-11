@@ -33,6 +33,8 @@ mod document_open;
 #[path = "../src/editor_core.rs"]
 #[allow(unused_imports, dead_code)] // harness=false omits pure #[test] bodies.
 mod editor_core;
+#[path = "../src/editor_save.rs"]
+mod editor_save;
 #[path = "../src/figure_png.rs"]
 #[allow(unused_imports, dead_code)] // harness=false omits the included module's test bodies.
 mod figure_png;
@@ -747,9 +749,11 @@ fn main() {
             .unwrap();
             let trace = folder.path().join("trace.ab1");
             std::fs::copy(fixtures.join("sanger-review/forward.ab1"), &trace).unwrap();
-            basecraft_ops::sanger_review::instrument_review(&trace)
-                .unwrap()
-                .save(&folder.path().join("trace.submission.json"))
+            let review = basecraft_ops::sanger_review::instrument_review(&trace).unwrap();
+            let mut session = basecraft_ops::Session::new(folder.path());
+            let id = session.create_sanger_review(&review).unwrap();
+            session
+                .save(id, Some(&folder.path().join("trace.submission.json")))
                 .unwrap();
             std::fs::write(folder.path().join("unknown.data"), "unsupported").unwrap();
         }

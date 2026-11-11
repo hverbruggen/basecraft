@@ -1,3 +1,5 @@
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_ops::{files, metadata, submission};
 use basecraft_protocol::metadata::{
     Cell, Column, ColumnKind, Identification, ProjectMetadata, RecordLink, Row, Table, Taxon,
@@ -29,6 +31,7 @@ fn golden(format: &str, variant: &str, path: &Path, bytes: Vec<u8>) {
 
 #[test]
 fn document_writer_bytes_require_a_version_bump() {
+    crate::isolated_profile::isolate!();
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/compact");
     for (file, format) in [
         ("sequences-annotations/locus.fasta", "fasta"),
@@ -209,6 +212,7 @@ fn document_writer_bytes_require_a_version_bump() {
 fn replay_checks_saved_bytes_and_document_fingerprints() {
     use basecraft_ops::{Session, log, records};
     use basecraft_protocol::Op;
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let mut session = Session::new(root.path());
     let doc = session.create_sequence("sample", "ACGT").unwrap();
@@ -261,6 +265,7 @@ fn companion_record_types_round_trip_original_writer_bytes() {
         }
         assert_eq!(encoded, original);
     }
+    crate::isolated_profile::isolate!();
     check::<basecraft_protocol::companion_records::TreeSidecar>("tree-sidecar-tree-v1.bin");
     check::<basecraft_protocol::companion_records::DelimitationSidecar>(
         "delimitation-sidecar-current-v1.bin",

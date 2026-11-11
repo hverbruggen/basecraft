@@ -2,6 +2,8 @@
 // Preserve the independently reviewed assertions verbatim.
 #![allow(clippy::assert_is_empty)]
 mod common;
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 
 use basecraft_ops::{Session, analysis_store::ArtifactRun, input_evidence, records};
 use basecraft_plugin_host::registry::Registry;
@@ -31,6 +33,7 @@ fn save_as(session: &mut Session, first: &Path, copied: &Path) {
 
 #[test]
 fn dependencies_follow_save_as_delegation() {
+    crate::isolated_profile::isolate!();
     let (dir, mut session, registry, source, first) = setup();
     let copied = dir.path().join("copy.afa");
     save_as(&mut session, &first, &copied);
@@ -46,6 +49,7 @@ fn dependencies_follow_save_as_delegation() {
 
 #[test]
 fn relinking_saved_copy_repairs_the_effective_reference() {
+    crate::isolated_profile::isolate!();
     let (dir, mut session, _, source, first) = setup();
     let copied = dir.path().join("copy.afa");
     save_as(&mut session, &first, &copied);
@@ -62,6 +66,7 @@ fn relinking_saved_copy_repairs_the_effective_reference() {
 
 #[test]
 fn complete_export_of_saved_copy_is_independent() {
+    crate::isolated_profile::isolate!();
     let (dir, mut session, _, source, first) = setup();
     let copied = dir.path().join("copy.afa");
     save_as(&mut session, &first, &copied);
@@ -77,6 +82,7 @@ fn complete_export_of_saved_copy_is_independent() {
 
 #[test]
 fn complete_export_after_in_place_edit_keeps_history() {
+    crate::isolated_profile::isolate!();
     let (dir, mut session, _, source, first) = setup();
     let doc = session.open(&first).unwrap();
     session
@@ -105,6 +111,7 @@ fn complete_export_after_in_place_edit_keeps_history() {
 
 #[test]
 fn repeated_preserve_decision_never_replaces_verified_old_bytes() {
+    crate::isolated_profile::isolate!();
     let (_dir, _session, _, source, first) = setup();
     let old = std::fs::read(&source).unwrap();
     let conflict = input_evidence::conflicts(&source).unwrap();
@@ -120,6 +127,7 @@ fn repeated_preserve_decision_never_replaces_verified_old_bytes() {
 
 #[test]
 fn overwrite_conflict_identifies_the_completed_result() {
+    crate::isolated_profile::isolate!();
     let (_dir, _session, _, source, _first) = setup();
     let conflict = input_evidence::conflicts(&source).unwrap();
     let analyses = common::analyses(&conflict);

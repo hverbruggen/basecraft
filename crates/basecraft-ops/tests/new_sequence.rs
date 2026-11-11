@@ -1,8 +1,11 @@
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_ops::{Session, records};
 use basecraft_protocol::{Feature, Location, Op, Strand};
 
 #[test]
 fn new_sequence_validates_before_creating_and_replays_unsaved_edits() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let profile = tempfile::tempdir().unwrap();
     let paths = basecraft_platform::paths::AppPaths::from_environment(|key| {

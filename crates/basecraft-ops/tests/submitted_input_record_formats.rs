@@ -1,8 +1,11 @@
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_ops::{analysis_store::ArtifactRun, input_evidence as evidence};
 use basecraft_protocol::input_records::EvidenceState;
 
 #[test]
 fn submitted_input_ancestry_and_source_identity() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source.fa");
     std::fs::write(&source, b">a\nACGT\n").unwrap();

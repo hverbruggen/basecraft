@@ -1,3 +1,5 @@
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_ops::records::ReportExt;
 use basecraft_ops::{blast, metadata, records::DocumentRecord};
 use serde_json::json;
@@ -16,6 +18,7 @@ fn golden(name: &str, bytes: &[u8]) {
 
 #[test]
 fn metadata_report_and_query_original_writers() {
+    crate::isolated_profile::isolate!();
     let bytes =
         metadata::encode(&basecraft_protocol::metadata::ProjectMetadata::default()).unwrap();
     golden("metadata-manifest.json", &bytes[0]);
@@ -46,6 +49,7 @@ fn metadata_report_and_query_original_writers() {
 
 #[test]
 fn provenance_lookup_returns_existing_bundle_then_nearest_project_then_fallback() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let result = root.path().join("result.fa");
     std::fs::write(&result, ">sample\nACGT\n").unwrap();
@@ -71,6 +75,7 @@ fn provenance_lookup_returns_existing_bundle_then_nearest_project_then_fallback(
 
 #[test]
 fn journal_writer_original_bytes() {
+    crate::isolated_profile::isolate!();
     // The writer adds the checksum and sequence; the entry is the rest.
     let mut fixture: serde_json::Value = serde_json::from_slice(include_bytes!(
         "../../../testdata/fixtures/records-v1/journal-entry.jsonl"
@@ -100,6 +105,7 @@ fn journal_writer_original_bytes() {
 
 #[test]
 fn sanger_invocation_original_records() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source.ab1");
     std::fs::copy(
@@ -132,6 +138,7 @@ fn sanger_invocation_original_records() {
 fn embedded_activity_original_records() {
     use basecraft_ops::Session;
     use basecraft_protocol::Op;
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("support.nwk");
     let target = root.path().join("target.nwk");

@@ -1,10 +1,9 @@
 //! Transient save decisions. No consent is written to disk or deserialised.
 use std::path::{Path, PathBuf};
 
-pub use super::save_authority::{
-    EvidenceAction, SaveCheck, SaveDecision, SaveOutcome, SaveWarning,
-};
-use super::save_authority::{PendingSaveAuthority, SaveScope, target_revision};
+use super::save::SaveMode;
+pub use super::save_consent::{EvidenceAction, SaveCheck, SaveDecision, SaveOutcome, SaveWarning};
+use super::save_consent::{PendingSaveCheck, SaveScope, target_revision};
 use super::{DocId, Session};
 use crate::input_evidence::{EvidenceCheck, SavePolicy};
 use crate::{Result, error::invalid};
@@ -23,13 +22,13 @@ impl Session {
         }
         let target = path.map_or_else(|| self.resolve(&self.docs[id.0].key), Path::to_path_buf);
         let evidence = crate::input_evidence::check(&target)?;
-        let check = self.save_check_scope(id, &target, evidence)?;
+        let check = self.save_check_scope(id, &target, evidence, target_revision(&target)?)?;
         self.publish_save_check(id, check)
     }
 
     /// Bind a wire acknowledgement to the Session's one pending check for this
     /// document. This does not rescan. `save_with_decision`/`save_new_with_decision`
-    /// consume its authority on entry and recheck under the normal guard.
+    /// consume its consent on entry and recheck under the normal guard.
     pub fn decide_save(
         &self,
         id: DocId,
@@ -43,7 +42,7 @@ impl Session {
             .get(id.0)
             .ok_or_else(|| invalid("save document is not open"))?;
         if let Some(decision) = slot
-            .save_authority
+            .pending_check
             .decide(token, known, acknowledge_incomplete)?
         {
             return Ok(decision);
@@ -54,18 +53,18 @@ impl Session {
     }
 
     pub(super) fn publish_save_check(&self, id: DocId, check: SaveCheck) -> Result<SaveCheck> {
-        self.docs[id.0].save_authority.publish(check)
+        self.docs[id.0].pending_check.publish(check)
     }
 
     pub(super) fn consume_save_check(&self, decision: &SaveDecision) -> Result<bool> {
         // Resolve the origin, not the requested document, before validation/IO.
-        let Some(origin) = PendingSaveAuthority::origin(&self.id, decision) else {
+        let Some(origin) = PendingSaveCheck::origin(&self.id, decision) else {
             return Ok(false);
         };
         let Some(slot) = self.docs.get(origin) else {
             return Ok(false);
         };
-        slot.save_authority.consume(decision)
+        slot.pending_check.consume(decision)
     }
 
     pub(super) fn save_check_scope(
@@ -73,9 +72,9 @@ impl Session {
         id: DocId,
         target: &Path,
         evidence: EvidenceCheck,
+        target_revision: Option<super::save_consent::TargetRevision>,
     ) -> Result<SaveCheck> {
         let target = crate::save_guard::target_path(target)?;
-        let target_revision = target_revision(&target)?;
         let publication = match &self.write_publication {
             crate::documents::WritePublication::Immediate
             | crate::documents::WritePublication::Create => None,
@@ -109,7 +108,7 @@ impl Session {
             target_revision,
         };
         // The digest includes all typed evidence and document/target context.
-        // It is private authority, never reconstructed from a wire snapshot.
+        // It is private consent, never reconstructed from a wire snapshot.
         SaveCheck::from_scope(scope)
     }
 
@@ -121,7 +120,7 @@ impl Session {
         path: Option<&Path>,
         decision: SaveDecision,
     ) -> Result<SaveOutcome> {
-        self.save_attempt(id, path, decision.known, true, false, Some(decision))
+        self.save_attempt(id, path, decision.known, SaveMode::Replace, Some(decision))
     }
 
     /// The same decision boundary while retaining `save_new`'s no-overwrite rule.
@@ -131,7 +130,13 @@ impl Session {
         path: Option<&Path>,
         decision: SaveDecision,
     ) -> Result<SaveOutcome> {
-        self.save_attempt(id, path, decision.known, false, false, Some(decision))
+        self.save_attempt(
+            id,
+            path,
+            decision.known,
+            SaveMode::NewDestination,
+            Some(decision),
+        )
     }
 }
 
@@ -144,12 +149,16 @@ impl Session {
         };
     }
 
-    /// Observation only, not receipt authority. Called under the evidence guard
+    /// Check only, not consent. Called under the evidence guard
     /// immediately after a successful write or authorized finalization.
     pub(crate) fn recovery_snapshot(&self, id: DocId) -> Result<SaveCheck> {
         let target = self.resolve(&self.docs[id.0].key);
-        let mut check =
-            self.save_check_scope(id, &target, crate::input_evidence::check(&target)?)?;
+        let mut check = self.save_check_scope(
+            id,
+            &target,
+            crate::input_evidence::check(&target)?,
+            target_revision(&target)?,
+        )?;
         check.scope.finalization = true;
         check.scope_revision = check.scope.revision()?;
         Ok(check)
@@ -176,10 +185,10 @@ impl Session {
             .map(|d| self.consume_save_check(d))
             .transpose()?
             .unwrap_or(false);
-        self.check_save_source(id)?;
+        self.check_save_source(id, None)?;
         let fresh = self.recovery_snapshot(id)?;
         let decided = decision.is_some();
-        self.docs[id.0].save_authority.authorize_finalization(
+        self.docs[id.0].pending_check.authorize_finalization(
             &fresh,
             expected,
             decision.map(|decision| (decision, valid)),
@@ -215,7 +224,13 @@ impl Session {
 impl Session {
     pub(crate) fn save_recovery(&mut self, id: DocId) -> Result<SaveOutcome> {
         let target = self.resolve(&self.docs[id.0].key);
-        self.save_attempt(id, Some(&target), SavePolicy::Cancel, true, false, None)
+        self.save_attempt(
+            id,
+            Some(&target),
+            SavePolicy::Cancel,
+            SaveMode::Replace,
+            None,
+        )
     }
 }
 

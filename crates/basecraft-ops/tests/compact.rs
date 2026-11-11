@@ -1,8 +1,11 @@
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_ops::{Session, records};
 use basecraft_protocol::Op;
 
 #[test]
 fn compact_alignment_unicode_path_edit_undo_save_reopen_replay() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("homologues α copy.afa");
     std::fs::write(

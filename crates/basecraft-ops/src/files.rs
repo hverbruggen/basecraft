@@ -468,13 +468,23 @@ fn load_fasta_from(
 }
 
 /// Residues of an alignment row, gaps excluded.
+/// Reads the row in chunks, so a long row is never held whole.
 pub(crate) fn ungapped_len(doc: &AlignmentDoc, row: usize) -> u64 {
+    let chunk = 60 * 16_384;
     let mut residues = Vec::new();
-    doc.read_into(row, 0, doc.width(), &mut residues);
-    residues
-        .iter()
-        .filter(|&&byte| !basecraft_docs::alignment::is_gap(byte))
-        .count() as u64
+    let mut count = 0;
+    let mut pos = 0;
+    while pos < doc.width() {
+        let end = (pos + chunk).min(doc.width());
+        residues.clear();
+        doc.read_into(row, pos, end, &mut residues);
+        count += residues
+            .iter()
+            .filter(|&&byte| !basecraft_docs::alignment::is_gap(byte))
+            .count() as u64;
+        pos = end;
+    }
+    count
 }
 
 /// The rows a companion annotates. An unreadable companion counts every row.
@@ -500,6 +510,8 @@ fn annotated_rows(doc: &AlignmentDoc, gff: Option<&Source>) -> Vec<(String, u64)
 /// Write explicit alignment contents as FASTA, 60 columns a line.
 /// Synthetic suffix padding used to display ragged input is never materialised.
 pub fn write_alignment(doc: &AlignmentDoc, w: &mut dyn Write) -> io::Result<()> {
+    #[cfg(feature = "test-counters")]
+    basecraft_io::counters::record_serialization("alignment");
     let mut buf = Vec::new();
     let chunk = 60 * 16_384;
     for (i, row) in doc.rows().enumerate() {
@@ -855,10 +867,20 @@ fn open_fasta_with_gff(
 
 /// Serialise the main file of a document.
 pub fn write_main(opened: &Opened, w: &mut dyn Write) -> io::Result<()> {
+    #[cfg(feature = "test-counters")]
+    basecraft_io::counters::record_serialization("sequence");
     let doc = &opened.doc;
     match opened.format {
         Format::GenBank => {
-            genbank::write(w, &doc.to_genbank())?;
+            genbank::write_stream(
+                w,
+                &doc.genbank_metadata(),
+                doc.len(),
+                doc.features().map(|(_, feature)| feature),
+                (0..doc.len())
+                    .step_by(60 * 1024)
+                    .map(|start| doc.read(start, (start + 60 * 1024).min(doc.len()))),
+            )?;
             w.write_all(&opened.others.genbank)
         }
         Format::SangerReview => Err(io::Error::other(

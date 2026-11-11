@@ -1,3 +1,5 @@
+#[path = "support/decided_save.rs"]
+mod decided_save;
 #[path = "support/isolated_profile.rs"]
 mod isolated_profile;
 
@@ -5,11 +7,7 @@ use basecraft_ops::analysis_store::{ArtifactDestination, ArtifactRun};
 
 #[test]
 fn hidden_runs_reserve_stage_and_publish_without_replacing_files() {
-    if isolated_profile::enter("hidden_runs_reserve_stage_and_publish_without_replacing_files")
-        .is_none()
-    {
-        return;
-    }
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let output = temp.path().join("result.nwk");
     let run = ArtifactRun::create(&output, "run-1").unwrap();
@@ -39,9 +37,7 @@ fn hidden_runs_reserve_stage_and_publish_without_replacing_files() {
 
 #[test]
 fn foreign_namespace_is_never_adopted_or_migrated() {
-    if isolated_profile::enter("foreign_namespace_is_never_adopted_or_migrated").is_none() {
-        return;
-    }
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let namespace = temp.path().join(".basecraft/analyses-v1");
     std::fs::create_dir_all(&namespace).unwrap();
@@ -57,9 +53,7 @@ fn foreign_namespace_is_never_adopted_or_migrated() {
 #[cfg(unix)]
 #[test]
 fn symlink_namespace_and_staged_symlinks_are_rejected() {
-    if isolated_profile::enter("symlink_namespace_and_staged_symlinks_are_rejected").is_none() {
-        return;
-    }
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let elsewhere = tempfile::tempdir().unwrap();
     std::os::unix::fs::symlink(elsewhere.path(), temp.path().join(".basecraft")).unwrap();
@@ -109,13 +103,7 @@ fn reference_run(root: &std::path::Path, source: &std::path::Path, id: &str) -> 
 #[test]
 fn reference_lifecycle_multiple_analyses_preserve_break_trash_and_cancel() {
     use basecraft_ops::input_evidence::{self, SavePolicy};
-    if isolated_profile::enter(
-        "reference_lifecycle_multiple_analyses_preserve_break_trash_and_cancel",
-    )
-    .is_none()
-    {
-        return;
-    }
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("source.fasta");
     let old = ">a\nAAAA\n>b\nAAAT\n";
@@ -165,11 +153,7 @@ fn reference_lifecycle_multiple_analyses_preserve_break_trash_and_cancel() {
 #[test]
 fn changed_missing_and_failed_copy_cannot_claim_preserved_evidence() {
     use basecraft_ops::input_evidence::{self, SavePolicy};
-    if isolated_profile::enter("changed_missing_and_failed_copy_cannot_claim_preserved_evidence")
-        .is_none()
-    {
-        return;
-    }
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("source.fasta");
     std::fs::write(&source, ">a\nAAAA\n>b\nAAAT\n").unwrap();
@@ -204,11 +188,7 @@ fn changed_missing_and_failed_copy_cannot_claim_preserved_evidence() {
 #[test]
 fn symlink_and_hardlink_aliases_are_detected_without_content_reads() {
     use basecraft_ops::input_evidence;
-    if isolated_profile::enter("symlink_and_hardlink_aliases_are_detected_without_content_reads")
-        .is_none()
-    {
-        return;
-    }
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("source.fasta");
     std::fs::write(&source, ">a\nAAAA\n>b\nAAAT\n").unwrap();
@@ -240,10 +220,8 @@ fn session_save_policies_and_copy_failure_leave_source_safe() {
         Session,
         input_evidence::{self, SavePolicy},
     };
-    if isolated_profile::enter("session_save_policies_and_copy_failure_leave_source_safe").is_none()
-    {
-        return;
-    }
+    crate::isolated_profile::isolate!();
+    let mut fixtures = Vec::new();
     for policy in [
         SavePolicy::Cancel,
         SavePolicy::PreserveCopy,
@@ -251,6 +229,8 @@ fn session_save_policies_and_copy_failure_leave_source_safe() {
         SavePolicy::BreakEvidence,
     ] {
         let dir = tempfile::tempdir().unwrap();
+        fixtures.push(dir);
+        let dir = fixtures.last().unwrap();
         let source = dir.path().join("source.afa");
         let original = ">a\nAAAA\n>b\nAAAT\n";
         std::fs::write(&source, original).unwrap();
@@ -270,18 +250,18 @@ fn session_save_policies_and_copy_failure_leave_source_safe() {
             .unwrap();
         if policy == SavePolicy::Cancel {
             assert!(matches!(
-                session.save_with_evidence(doc, None, policy),
+                decided_save::save_with_policy(&mut session, doc, None, policy),
                 Err(basecraft_ops::Error::EvidenceConflict(_))
             ));
             assert_eq!(std::fs::read_to_string(&source).unwrap(), original);
         } else {
             if policy == SavePolicy::PreserveCopy {
                 std::fs::create_dir(run.directory().join("preserved-input")).unwrap();
-                assert!(session.save_with_evidence(doc, None, policy).is_err());
+                assert!(decided_save::save_with_policy(&mut session, doc, None, policy).is_err());
                 assert_eq!(std::fs::read_to_string(&source).unwrap(), original);
                 std::fs::remove_dir(run.directory().join("preserved-input")).unwrap();
             }
-            session.save_with_evidence(doc, None, policy).unwrap();
+            decided_save::save_with_policy(&mut session, doc, None, policy).unwrap();
             assert!(std::fs::read_to_string(&source).unwrap().contains("TAAA"));
             match policy {
                 SavePolicy::PreserveCopy => assert_eq!(
@@ -301,9 +281,7 @@ fn session_save_policies_and_copy_failure_leave_source_safe() {
 
 #[test]
 fn export_and_extraction_cannot_bypass_known_input_guard() {
-    if isolated_profile::enter("export_and_extraction_cannot_bypass_known_input_guard").is_none() {
-        return;
-    }
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("sequence.fasta");
     let original = ">example\nACGTACGT\n";
@@ -331,13 +309,7 @@ fn export_and_extraction_cannot_bypass_known_input_guard() {
 #[test]
 fn preserve_retries_and_failed_candidates_never_replace_retained_bytes() {
     use basecraft_ops::input_evidence::{self, SavePolicy};
-    if isolated_profile::enter(
-        "preserve_retries_and_failed_candidates_never_replace_retained_bytes",
-    )
-    .is_none()
-    {
-        return;
-    }
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("source.afa");
     let original = b">a\nAAAA\n>b\nAAAT\n";
@@ -370,13 +342,7 @@ fn preserve_retries_and_failed_candidates_never_replace_retained_bytes() {
 
 #[test]
 fn nested_collection_bindings_reopen_without_changing_sibling_bindings() {
-    if isolated_profile::enter(
-        "nested_collection_bindings_reopen_without_changing_sibling_bindings",
-    )
-    .is_none()
-    {
-        return;
-    }
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let output = temp.path().join("single.txt");
     let run = ArtifactRun::create(&output, "nested").unwrap();
@@ -410,13 +376,7 @@ fn nested_collection_bindings_reopen_without_changing_sibling_bindings() {
 #[test]
 fn multi_input_verification_uses_only_declared_owners_and_never_bypasses_breaks() {
     use basecraft_ops::input_evidence;
-    if isolated_profile::enter(
-        "multi_input_verification_uses_only_declared_owners_and_never_bypasses_breaks",
-    )
-    .is_none()
-    {
-        return;
-    }
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let source_a = temp.path().join("a.txt");
     let source_b = temp.path().join("b.txt");
@@ -505,13 +465,7 @@ fn multi_input_verification_uses_only_declared_owners_and_never_bypasses_breaks(
 #[test]
 fn preserved_primary_is_not_replaced_by_a_matching_ancestor_with_missing_original() {
     use basecraft_ops::input_evidence;
-    if isolated_profile::enter(
-        "preserved_primary_is_not_replaced_by_a_matching_ancestor_with_missing_original",
-    )
-    .is_none()
-    {
-        return;
-    }
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let source = temp.path().join("original.txt");
     let bytes = b"retained primary bytes";

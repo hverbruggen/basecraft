@@ -1,5 +1,7 @@
 //! Independent correction review: recovery evidence must be usable, not merely present.
 #![cfg(unix)]
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_ops::records::AlignmentLinkExt;
 
 use basecraft_ops::{Session, files, records, records::AlignmentLink};
@@ -12,6 +14,7 @@ fn alignment(path: &Path, bases: &str) {
 
 #[test]
 fn guarded_partial_save_supports_retry_and_manual_intended_recovery() {
+    crate::isolated_profile::isolate!();
     // No association, inference only, and inference plus an explicit view.
     for mode in 0..3 {
         for manual in [false, true] {

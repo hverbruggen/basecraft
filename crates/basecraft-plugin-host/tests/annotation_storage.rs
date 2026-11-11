@@ -1,5 +1,7 @@
 //! The GUI annotation route: a registered sequence operation run against an
 //! open document through the shared job runner, skipping known features.
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_ops::{Session, records};
 use basecraft_plugin_host::{
     jobs::JobManager,
@@ -48,6 +50,7 @@ fn run(
 
 #[test]
 fn gui_annotation_keeps_its_invocation_in_the_hidden_store_and_skips_known_features() {
+    crate::isolated_profile::isolate!();
     if !python_ready() {
         return;
     }

@@ -13,7 +13,6 @@ AppContentDialog {
     property string editRevision: ""
 
     title: annotation.exists ? "Edit clade annotation" : "Annotate clade"
-    modal: true
     padding: 16
 
     function openSelected() {

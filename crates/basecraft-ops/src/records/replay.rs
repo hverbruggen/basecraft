@@ -961,7 +961,7 @@ impl RecoveryAttempt {
             self.documents[document].written = true;
             self.artifacts = artifacts(self.stage_path()?)?;
             outcome
-                .recovery_observation
+                .recovery_check
                 .ok_or_else(|| crate::error::invalid("recovery write observation missing"))??
         };
         if finalizing && !observed.complete() {

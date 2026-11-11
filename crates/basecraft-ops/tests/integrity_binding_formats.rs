@@ -1,9 +1,12 @@
 //! Original-literal byte oracles, executed before writer substitution.
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_ops::analysis_store::ArtifactRun;
 use serde_json::json;
 
 #[test]
 fn result_binding_writer_bytes_and_selective_reader() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let output = root.path().join("result.txt");
     let run = ArtifactRun::create(&output, "binding-probe").unwrap();
@@ -75,6 +78,7 @@ fn result_binding_writer_bytes_and_selective_reader() {
 
 #[test]
 fn poison_presence_refuses_both_recovery_routes_without_parsing() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let destination = root.path().join("recovered");
     for bytes in [b"".as_slice(), b"{broken", b"{\"schema_version\":999}"] {
@@ -116,6 +120,7 @@ fn integrity_and_binding_examples_round_trip_with_unknown_fields() {
         let parsed: T = serde_json::from_value(extended.clone()).unwrap();
         assert_eq!(serde_json::to_value(parsed).unwrap(), extended);
     }
+    crate::isolated_profile::isolate!();
     for name in ["integrity-empty.json", "integrity-nonempty.json"] {
         check::<RecoveryIntegrityError>(name, false);
     }

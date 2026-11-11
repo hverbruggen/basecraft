@@ -12,6 +12,106 @@ use crate::Result;
 use crate::files::Format;
 use crate::session::Inverse;
 
+/// Serialized candidates live beside their destinations until the pending-save
+/// record is durable. Keeping these files avoids a second serialization.
+#[derive(Default)]
+pub(crate) struct PreparedWrite {
+    files: Vec<(PathBuf, String, tempfile::NamedTempFile)>,
+    intent: Option<(PathBuf, tempfile::NamedTempFile)>,
+    pub run: Option<crate::analysis_store::ArtifactRun>,
+    pub reverse: bool,
+    /// The owner accepted an absent main file: never replace another writer's.
+    pub create: bool,
+}
+
+impl PreparedWrite {
+    pub fn pending(&mut self, path: &Path, bytes: &[u8]) -> Result<()> {
+        use std::io::Write;
+        let mut file = tempfile::NamedTempFile::new_in(path.parent().unwrap())?;
+        file.write_all(bytes)?;
+        self.intent = Some((path.into(), file));
+        Ok(())
+    }
+    pub fn push(
+        &mut self,
+        path: &Path,
+        write: impl FnOnce(&mut dyn std::io::Write) -> std::io::Result<()>,
+    ) -> Result<String> {
+        use std::io::Write;
+        let mut file = tempfile::NamedTempFile::new_in(path.parent().unwrap_or(Path::new(".")))?;
+        let mut writer = crate::files::HashingWriter::new(std::io::BufWriter::with_capacity(
+            1 << 20,
+            file.as_file_mut(),
+        ));
+        write(&mut writer)?;
+        writer.flush()?;
+        let hash = writer.hash();
+        drop(writer);
+        self.files.push((path.into(), hash.clone(), file));
+        Ok(hash)
+    }
+    pub fn hashes(&self) -> Vec<(PathBuf, String)> {
+        self.files
+            .iter()
+            .map(|(path, hash, _)| (path.clone(), hash.clone()))
+            .collect()
+    }
+    pub(crate) fn publish(self) -> Result<Vec<(PathBuf, String)>> {
+        self.publish_with(|| Ok(()))
+    }
+    pub(crate) fn publish_with(
+        mut self,
+        before_publish: impl FnOnce() -> Result<()>,
+    ) -> Result<Vec<(PathBuf, String)>> {
+        // Independent candidates may share a disk flush. Every file is durable
+        // before any destination is replaced; errors leave originals untouched.
+        std::thread::scope(|scope| -> Result<()> {
+            let jobs: Vec<_> = self
+                .files
+                .iter()
+                .map(|(_, _, file)| file)
+                .chain(self.intent.iter().map(|(_, file)| file))
+                .map(|file| {
+                    scope.spawn(move || {
+                        #[cfg(feature = "test-counters")]
+                        basecraft_io::counters::record_sync_all();
+                        file.as_file().sync_all()
+                    })
+                })
+                .collect();
+            let result = before_publish();
+            for job in jobs {
+                job.join().expect("file sync worker panicked")?;
+            }
+            result
+        })?;
+        // Publish the durable recovery intent before replacing any user file.
+        if let Some((path, file)) = self.intent.take() {
+            file.persist(path).map_err(|error| error.error)?;
+        }
+        let hashes = self.hashes();
+        // Only the main file is new to the owner; companions may be replaced.
+        let main = self.files.first().map(|(path, _, _)| path.clone());
+        if self.reverse {
+            self.files.reverse();
+        }
+        let mut replaced = Vec::new();
+        for (path, _, file) in self.files {
+            let persisted = if self.create && main.as_ref() == Some(&path) {
+                file.persist_noclobber(&path)
+            } else {
+                file.persist(&path)
+            };
+            persisted.map_err(|error| crate::Error::Damaged {
+                path: path.clone(),
+                detail: format!("partial save: replaced {}; file replacement failed: {}. Keep the open document and retry saving", replaced.join(", "), error.error),
+            })?;
+            replaced.push(path.display().to_string());
+        }
+        Ok(hashes)
+    }
+}
+
 mod alignment;
 mod delimitation;
 mod metadata;
@@ -79,13 +179,46 @@ pub(crate) trait Document {
     ) -> Result<Option<crate::records::links::PreparedLinks>> {
         Ok(None)
     }
+    #[allow(dead_code)] // Recovery checkpoints in lane open use this immediate writer.
     fn write(
         &self,
         target: &Path,
         format: Format,
         recovery_root: &Path,
         publication: &WritePublication,
-    ) -> Result<Vec<(PathBuf, String)>>;
+    ) -> Result<Vec<(PathBuf, String)>> {
+        let prepared = self.prepare_write(target, format, recovery_root, publication)?;
+        self.publish_write(prepared, target, publication)
+    }
+    fn prepare_write(
+        &self,
+        target: &Path,
+        format: Format,
+        recovery_root: &Path,
+        publication: &WritePublication,
+    ) -> Result<PreparedWrite>;
+    fn publish_write(
+        &self,
+        prepared: PreparedWrite,
+        target: &Path,
+        publication: &WritePublication,
+    ) -> Result<Vec<(PathBuf, String)>> {
+        let run = prepared.run.clone();
+        let mut prepared = prepared;
+        prepared.create = matches!(publication, WritePublication::Create);
+        let hashes = prepared.publish()?;
+        self.finish_write(target, &hashes, run.as_ref(), publication)?;
+        Ok(hashes)
+    }
+    fn finish_write(
+        &self,
+        _target: &Path,
+        _hashes: &[(PathBuf, String)],
+        _run: Option<&crate::analysis_store::ArtifactRun>,
+        _publication: &WritePublication,
+    ) -> Result<()> {
+        Ok(())
+    }
     /// Files replaced independently before the primary file. Recovery accepts
     /// each matching expected hash even when the primary replacement failed.
     /// Ordering matches `saved_hashes` (metadata includes its manifest here).

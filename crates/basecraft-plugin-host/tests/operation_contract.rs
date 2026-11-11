@@ -1,3 +1,5 @@
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use std::path::Path;
 
 use basecraft_plugin_host::{
@@ -17,6 +19,7 @@ fn fixture() -> Manifest {
 
 #[test]
 fn schemas_and_defaults_are_strict_and_shared() {
+    crate::isolated_profile::isolate!();
     let manifest = fixture();
     let mut descriptor = manifest
         .operation_contract()
@@ -77,6 +80,7 @@ fn schemas_and_defaults_are_strict_and_shared() {
 
 #[test]
 fn rejects_remote_recursive_unknown_and_expensive_schemas() {
+    crate::isolated_profile::isolate!();
     for bad in [
         json!({"$ref":"https://example.invalid/schema"}),
         json!({"$ref":"file:///etc/passwd"}),
@@ -97,6 +101,7 @@ fn rejects_remote_recursive_unknown_and_expensive_schemas() {
 
 #[test]
 fn contract_identity_effects_and_defaults_are_checked() {
+    crate::isolated_profile::isolate!();
     let manifest = fixture();
     let contract = manifest.operation_contract().unwrap().unwrap();
     let mut bad = contract.clone();
@@ -117,6 +122,7 @@ fn contract_identity_effects_and_defaults_are_checked() {
 
 #[test]
 fn schema_two_negotiation_refuses_false_or_legacy_runtime() {
+    crate::isolated_profile::isolate!();
     let manifest = fixture();
     let mut info = PluginInfo {
         protocol: 1,
@@ -145,6 +151,7 @@ fn negotiated_sdk_context_runs_and_legacy_call_is_refused() {
     use basecraft_plugin_host::PluginProcess;
     use basecraft_protocol::operation::InvocationContext;
     use std::collections::BTreeMap;
+    crate::isolated_profile::isolate!();
     let manifest = fixture();
     let python = std::env::var_os("BASECRAFT_PYTHON").map_or_else(
         || std::path::PathBuf::from("python3"),
@@ -187,6 +194,7 @@ fn negotiated_sdk_context_runs_and_legacy_call_is_refused() {
 
 #[test]
 fn embedding_distinguishes_property_names_and_literal_data_from_schema_keywords() {
+    crate::isolated_profile::isolate!();
     let schema = json!({
         "type":"object", "$defs":{"text":{"type":"string"}},
         "properties":{
@@ -204,6 +212,7 @@ fn embedding_distinguishes_property_names_and_literal_data_from_schema_keywords(
 
 #[test]
 fn completed_data_schema_embeds_local_references_at_its_actual_envelope_location() {
+    crate::isolated_profile::isolate!();
     let result = json!({"type":"object", "$defs":{"count":{"type":"integer","minimum":0}},
         "properties":{"bytes":{"$ref":"#/$defs/count"}},"required":["bytes"],"additionalProperties":false});
     let embedded = contract::embedded_schema(&result, "#/allOf/1/then/properties/data").unwrap();
@@ -219,6 +228,7 @@ fn completed_data_schema_embeds_local_references_at_its_actual_envelope_location
 
 #[test]
 fn live_process_keeps_its_contract_snapshot_and_still_validates_declared_operations() {
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let original =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/registry-plugin");
@@ -252,6 +262,7 @@ fn live_process_keeps_its_contract_snapshot_and_still_validates_declared_operati
 
 #[test]
 fn unique_diagnostics_do_not_square_unrelated_scientific_parameter_text() {
+    crate::isolated_profile::isolate!();
     let schema = BoundedSchema::compile(&json!({"type":"object","properties":{
         "units":{"type":"string"},"diagnostics":{"type":"array","items":{"type":"string"},"uniqueItems":true}}})).unwrap();
     schema

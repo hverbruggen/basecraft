@@ -87,19 +87,28 @@ impl Document for SangerReview {
     fn rebase_replay_paths(&mut self, from: &Path, to: &Path) {
         self.rebase_session_paths(from, to);
     }
-    fn write(
+    fn prepare_write(
         &self,
         target: &Path,
         format: Format,
         _recovery: &Path,
         publication: &WritePublication,
-    ) -> Result<Vec<(PathBuf, String)>> {
+    ) -> Result<super::PreparedWrite> {
         if format != Format::SangerReview {
             return Err(Error::Unsupported(
                 "a Sanger review is saved as JSON".into(),
             ));
         }
-        self.write_session_review(target, &publication.logical(target)?, publication)
+        self.prepare_session_review(target, &publication.logical(target)?, publication)
+    }
+    fn finish_write(
+        &self,
+        target: &Path,
+        _hashes: &[(PathBuf, String)],
+        run: Option<&crate::analysis_store::ArtifactRun>,
+        _publication: &WritePublication,
+    ) -> Result<()> {
+        run.map_or(Ok(()), |run| SangerReview::bind_session_review(target, run))
     }
     fn saved_hashes(&self, target: &Path, publication: &WritePublication) -> Result<Vec<String>> {
         Ok(vec![basecraft_io::hash_bytes(

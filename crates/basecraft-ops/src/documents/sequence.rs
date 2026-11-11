@@ -87,40 +87,28 @@ impl Document for Opened {
         Some(files::gff_sidecar(target))
     }
 
-    fn write(
+    fn prepare_write(
         &self,
         target: &Path,
         format: Format,
         _recovery_root: &Path,
         _publication: &super::WritePublication,
-    ) -> Result<Vec<(PathBuf, String)>> {
+    ) -> Result<super::PreparedWrite> {
         if format != self.format {
             return Err(invalid("saving to a different format isn't supported yet"));
         }
-        let mut main_hash = String::new();
-        basecraft_io::write_atomic(target, |w| {
-            let mut hw = HashingWriter::new(w);
-            files::write_main(self, &mut hw)?;
-            main_hash = hw.hash();
-            Ok(())
-        })?;
-        let mut hashes = vec![(target.to_path_buf(), main_hash)];
+        let mut prepared = super::PreparedWrite::default();
+        prepared.push(target, |w| files::write_main(self, w))?;
         let sidecar = files::gff_sidecar(target);
-        let mut side_hash = None;
         if format == Format::Fasta {
-            basecraft_io::write_atomic(&sidecar, |w| {
-                let mut hw = HashingWriter::new(w);
-                if let Some(r) = files::write_sidecar(self, &mut hw) {
+            prepared.push(&sidecar, |w| {
+                if let Some(r) = files::write_sidecar(self, w) {
                     r?;
                 }
-                side_hash = Some(hw.hash());
                 Ok(())
             })?;
         }
-        if let Some(h) = side_hash {
-            hashes.push((sidecar, h));
-        }
-        Ok(hashes)
+        Ok(prepared)
     }
     fn saved_hashes(
         &self,
@@ -317,6 +305,7 @@ mod tests {
 
     #[test]
     fn sequence_interface_rejects_wrong_ops_inverses_and_formats_without_mutation() {
+        crate::isolated_profile::isolate!();
         let root = tempfile::tempdir().unwrap();
         let source = root.path().join("sequence.fasta");
         std::fs::write(&source, b">sequence\nACGT\n").unwrap();
@@ -377,6 +366,7 @@ mod tests {
 
     #[test]
     fn sequence_interface_preserves_writer_bytes_features_topology_and_fasta_records() {
+        crate::isolated_profile::isolate!();
         for (name, bytes) in [
             ("sequence.fasta", b">first\nACGTACGT\n".to_vec()),
             (
@@ -455,6 +445,7 @@ mod tests {
 
     #[test]
     fn sequence_typing_burst_keeps_feature_undo_and_journals_each_keystroke() {
+        crate::isolated_profile::isolate!();
         let root = tempfile::tempdir().unwrap();
         let source = root.path().join("sequence.gb");
         std::fs::write(

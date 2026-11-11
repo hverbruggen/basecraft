@@ -3,6 +3,8 @@
 //! wrapper to hold execution without relying on scientific workload duration.
 use basecraft_ops::records::AlignmentLinkExt;
 mod common;
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 
 use basecraft_ops::{Session, input_evidence, records};
 use basecraft_plugin_host::jobs::JobManager;
@@ -53,6 +55,7 @@ fn finished(session: &Session, doc: basecraft_ops::DocId) -> Vec<(String, JobSta
 
 #[test]
 fn snapshots_and_terminal_outcomes_survive_success_and_failure() {
+    isolated_profile::isolate!();
     require_engine();
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("tree.nwk");
@@ -102,6 +105,7 @@ fn snapshots_and_terminal_outcomes_survive_success_and_failure() {
 
 #[test]
 fn exact_identity_precedes_public_tree_inference_and_restores_specimens() {
+    isolated_profile::isolate!();
     require_engine();
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("aligned.fasta");
@@ -245,6 +249,7 @@ fn exact_identity_precedes_public_tree_inference_and_restores_specimens() {
 
 #[test]
 fn asap_sampling_restores_roster_and_replays() {
+    isolated_profile::isolate!();
     require_engine();
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("input.fa");
@@ -328,6 +333,7 @@ fn asap_sampling_restores_roster_and_replays() {
 
 #[test]
 fn tree_methods_update_one_canonical_spart_and_export_without_sources() {
+    isolated_profile::isolate!();
     require_engine();
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().join("working");
@@ -468,6 +474,7 @@ fn tree_methods_update_one_canonical_spart_and_export_without_sources() {
 
 #[test]
 fn dirty_tree_submission_retains_generated_bytes_without_stale_original_claim() {
+    isolated_profile::isolate!();
     require_engine();
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source.nwk");
@@ -544,6 +551,7 @@ fn dirty_tree_submission_retains_generated_bytes_without_stale_original_claim() 
 
 #[test]
 fn ptp_and_mptp_keep_upstream_directories_hidden_and_preserve_imported_groups() {
+    isolated_profile::isolate!();
     // The plugin finds mPTP through the environment, so the cases run in a
     // child process that names this storage fixture as mPTP.
     if std::env::var_os("BASECRAFT_MPTP_FIXTURE_CHILD").is_some() {
@@ -627,6 +635,7 @@ fn ptp_cases() {
 
 #[test]
 fn concurrent_species_publication_never_replaces_another_run() {
+    isolated_profile::isolate!();
     require_engine();
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source.nwk");
@@ -689,6 +698,7 @@ fn concurrent_species_publication_never_replaces_another_run() {
 
 #[test]
 fn optional_display_tree_uses_hidden_reference_first_companions() {
+    isolated_profile::isolate!();
     require_engine();
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source.afa");
@@ -763,6 +773,7 @@ fn optional_display_tree_uses_hidden_reference_first_companions() {
 
 #[test]
 fn alignment_workflows_use_frozen_unsaved_inputs() {
+    isolated_profile::isolate!();
     require_engine();
     for (operation, dirty) in [
         ("asap_alignment", true),
@@ -834,6 +845,7 @@ fn alignment_workflows_use_frozen_unsaved_inputs() {
 
 #[test]
 fn parent_cancellation_interrupts_registered_fit_and_retains_every_stage_receipt() {
+    isolated_profile::isolate!();
     require_engine();
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("input.fa");
@@ -964,6 +976,7 @@ os.execv({real_engine}, [{real_engine}, *sys.argv[1:]])
 
 #[test]
 fn workflow_repairs_publication_and_applies_all_hypotheses_in_one_undo_group() {
+    isolated_profile::isolate!();
     require_engine();
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("input.fa"), ">a\nAAAAAAAAAAAAAAAAAAAA\n>b\nAAAAAAAAAAAAAAAAAAAT\n>c\nAAAAACAAAAAAAAAAAAAT\n>d\nAAAAACAAAAAGAAAAAAAT\n>e\nAAAAACAAAAAGAAAAAATT\n").unwrap();
@@ -1025,6 +1038,7 @@ fn workflow_repairs_publication_and_applies_all_hypotheses_in_one_undo_group() {
 #[test]
 fn workflow_save_decision_covers_nested_stages_and_original_ancestry() {
     use basecraft_ops::input_evidence::{SavePolicy, conflicts, resolve};
+    isolated_profile::isolate!();
     require_engine();
     for policy in [
         SavePolicy::PreserveCopy,

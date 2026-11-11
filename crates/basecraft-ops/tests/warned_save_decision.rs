@@ -65,6 +65,9 @@ fn damage(root: &Path, source: &Path) -> ArtifactRun {
     let original = std::fs::read(run.artifact("input.json").unwrap()).unwrap();
     std::fs::write(run.directory().join("test-original-input"), original).unwrap();
     std::fs::write(run.artifact("input.json").unwrap(), b"damaged a").unwrap();
+    // The index refresh cannot read the damaged ledger, so the store's coverage
+    // becomes unknown for every save until the ledger is repaired.
+    input_evidence::register(&run).unwrap();
     run
 }
 
@@ -105,11 +108,10 @@ fn assert_recovery(session: &mut Session, root: &Path) {
     let runs = root.join("distant/.basecraft/analyses-v1/runs");
     for entry in std::fs::read_dir(runs).unwrap() {
         let run = entry.unwrap().path();
-        std::fs::write(
-            run.join("input.json"),
-            std::fs::read(run.join("test-original-input")).unwrap(),
-        )
-        .unwrap();
+        let input: input_evidence::SubmittedInput =
+            serde_json::from_slice(&std::fs::read(run.join("test-original-input")).unwrap())
+                .unwrap();
+        input_evidence::write_json(&run.join("input.json"), &input).unwrap();
     }
     let outputs = records::recover(session.recovery_root(), &root.join("recovered")).unwrap();
     assert_eq!(std::fs::read(&outputs[0]).unwrap(), b">gene\nATGT\n");
@@ -281,11 +283,8 @@ fn save_as_rechecks_and_save_new_never_overwrites() {
         ));
         assert_eq!(std::fs::read(&new).unwrap(), b"keep me");
         std::fs::remove_file(&new).unwrap();
-        let check = required(session.save_new(doc, Some(&new)).unwrap_err());
-        let outcome = session
-            .save_new_with_decision(doc, Some(&new), check.decide(SavePolicy::Cancel, true))
-            .unwrap();
-        assert_eq!(outcome.warnings.len(), 1);
+        // A new file holds no recorded bytes: the unchecked store only warns.
+        session.save_new(doc, Some(&new)).unwrap();
         assert_eq!(std::fs::read(&file).unwrap(), ORIGINAL);
         assert_eq!(std::fs::read(&new).unwrap(), b">gene\nATGT\n");
     });
@@ -593,7 +592,8 @@ fn damaged_display_and_registry_entries_do_not_hide_known_conflicts() {
             std::fs::write(&registry, serde_json::to_vec(&value).unwrap()).unwrap();
             let check = required(session.save(doc, None).unwrap_err());
             assert_eq!(check.evidence().conflict.analyses.len(), 1);
-            assert!(check.evidence().issues.len() >= 2);
+            // The damaged registry entry is not read by saves; it hides nothing.
+            assert_ne!(check.evidence().issues.len(), 0);
             assert_eq!(check.evidence().conflict.analyses[0].run, known.directory());
             assert_eq!(std::fs::read(&file).unwrap(), ORIGINAL);
             assert!(session.can_undo(doc).unwrap());
@@ -640,7 +640,7 @@ fn invalid_document_attempt_consumes_originating_receipt() {
                 None,
                 check.decide(SavePolicy::Cancel, true),
             );
-            assert!(matches!(invalid, Err(Error::Invalid(_))));
+            assert!(matches!(invalid, Err(Error::UnknownDocument { .. })));
             assert_eq!(std::fs::read(&file).unwrap(), ORIGINAL);
             assert!(session.can_undo(doc).unwrap());
             assert!(matches!(
@@ -679,7 +679,7 @@ fn invalid_document_attempt_does_not_consume_newer_receipt() {
                     None,
                     old.decide(SavePolicy::Cancel, true)
                 ),
-                Err(Error::Invalid(_))
+                Err(Error::UnknownDocument { .. })
             ));
             assert_eq!(std::fs::read(&file).unwrap(), ORIGINAL);
             let outcome = session
@@ -717,7 +717,7 @@ fn foreign_receipt_cannot_consume_local_or_originating_session_authority() {
                     None,
                     check.decide(SavePolicy::Cancel, true)
                 ),
-                Err(Error::Invalid(_))
+                Err(Error::UnknownDocument { .. })
             ));
             assert_eq!(std::fs::read(&file).unwrap(), ORIGINAL);
             assert_eq!(std::fs::read(&other_file).unwrap(), ORIGINAL);

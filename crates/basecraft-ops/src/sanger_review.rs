@@ -931,11 +931,11 @@ mod moved_and_failed_recovery_tests {
                 // Failed preservation must not publish new visible review bytes.
                 let preserved = ledger.directory().join("preserved-input");
                 std::fs::write(&preserved, b"damaged preservation").unwrap();
-                assert!(review.save_with_evidence(&path, policy).is_err());
+                assert!(review.save_with_policy(&path, policy).is_err());
                 assert_eq!(std::fs::read(&path).unwrap(), before);
                 std::fs::remove_file(&preserved).unwrap();
             }
-            review.save_with_evidence(&path, policy).unwrap();
+            review.save_with_policy(&path, policy).unwrap();
             let input = inputs::read_input(ledger.directory()).unwrap();
             if policy == SavePolicy::PreserveCopy {
                 assert_eq!(

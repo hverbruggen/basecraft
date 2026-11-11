@@ -1,5 +1,8 @@
 //! Independent review regressions. These assert the safe
 //! contract, adapted to confirmed selection and retained registered-run evidence.
+#[path = "support/isolated_profile.rs"]
+mod isolated_profile;
+
 #[path = "support/submission_run.rs"]
 mod submission_run;
 use std::path::{Path, PathBuf};
@@ -57,6 +60,7 @@ fn outcome(root: &Path, package: &Path, exit_code: i32) -> Value {
 
 #[test]
 fn review_nonzero_tool_exit_cannot_pass_with_warning_report() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let package = package(dir.path(), "batch");
     let outcome = outcome(dir.path(), &package, 1);
@@ -68,6 +72,7 @@ fn review_nonzero_tool_exit_cannot_pass_with_warning_report() {
 
 #[test]
 fn review_old_outcome_cannot_validate_regenerated_inputs() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let package = package(root, "batch");
@@ -96,6 +101,7 @@ fn review_old_outcome_cannot_validate_regenerated_inputs() {
 
 #[test]
 fn review_accession_uses_export_identity_despite_original_name_collision() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     package(dir.path(), "batch");
     let mut session = Session::unlogged(dir.path());
@@ -119,6 +125,7 @@ fn review_accession_uses_export_identity_despite_original_name_collision() {
 
 #[test]
 fn review_metadata_partial_write_reports_completed_table_replacements() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let manifest = metadata::create(root).unwrap();
@@ -154,6 +161,7 @@ fn review_metadata_partial_write_reports_completed_table_replacements() {
 
 #[test]
 fn unrelated_package_and_modified_artifacts_are_refused() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let a = package(dir.path(), "a");
     let b = package(dir.path(), "b");
@@ -167,6 +175,8 @@ fn unrelated_package_and_modified_artifacts_are_refused() {
 
 #[test]
 fn incomplete_and_unknown_reports_fail_but_quiet_complete_run_passes() {
+    crate::isolated_profile::isolate!();
+    let mut fixtures = Vec::new();
     for (preview, report, expected) in [
         (
             false,
@@ -180,7 +190,8 @@ fn incomplete_and_unknown_reports_fail_but_quiet_complete_run_passes() {
         ),
         (true, None, "passed"),
     ] {
-        let dir = tempfile::tempdir().unwrap();
+        fixtures.push(tempfile::tempdir().unwrap());
+        let dir = fixtures.last().unwrap();
         let package = package(dir.path(), "batch");
         let request = submission::validation_request(dir.path(), &package).unwrap();
         let reports = dir
@@ -209,6 +220,7 @@ fn incomplete_and_unknown_reports_fail_but_quiet_complete_run_passes() {
 #[test]
 fn returned_ids_survive_selection_save_reopen_and_refuse_ambiguous_lines() {
     use basecraft_protocol::submission::{Decision, RowDecision, SubmissionEdit};
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     package(dir.path(), "batch");
     let mut session = Session::unlogged(dir.path());
@@ -246,6 +258,7 @@ fn returned_ids_survive_selection_save_reopen_and_refuse_ambiguous_lines() {
 #[test]
 fn reexported_seqid_with_two_record_meanings_is_ambiguous() {
     use basecraft_protocol::submission::{Decision, RowDecision, SubmissionEdit};
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let folder = package(dir.path(), "batch");
     let mut session = Session::unlogged(dir.path());
@@ -283,6 +296,7 @@ fn reexported_seqid_with_two_record_meanings_is_ambiguous() {
 #[test]
 fn accession_shaped_submitted_id_is_identity_and_multiple_returns_are_ambiguous() {
     use basecraft_protocol::submission::{Decision, RowDecision, SubmissionEdit};
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     std::fs::write(root.join("batch.afa"), ">AB123456\nACGT\n>a@b\nACGT\n").unwrap();

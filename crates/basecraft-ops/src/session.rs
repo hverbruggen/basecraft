@@ -9,12 +9,6 @@
 //! one after another, a block slid step by step. A cursor jump, another
 //! command, another document, undo or redo ends the burst.
 
-pub(crate) mod save_attempt_observation;
-use save_attempt_observation::{
-    Disposition as SaveDisposition, Hooks as SaveHooks, Legacy as LegacySave,
-    Milestone as SaveMilestone, Site as SaveSite,
-};
-
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -39,8 +33,10 @@ mod publish;
 #[cfg(test)]
 mod retention_tests;
 mod save;
-pub(crate) mod save_authority;
+pub(crate) mod save_consent;
 mod save_decision;
+#[cfg(test)]
+mod save_failure_tests;
 #[cfg(test)]
 mod saved_mark_tests;
 mod tool_runs;
@@ -70,7 +66,7 @@ struct Slot {
     key: String,
     content: Loaded,
     generation: u64,
-    save_authority: save_authority::PendingSaveAuthority,
+    pending_check: save_consent::PendingSaveCheck,
     undo: Vec<Applied>,
     redo: Vec<Applied>,
     baseline: Option<LogEntry>,
@@ -108,8 +104,7 @@ pub struct Outcome {
 
 /// Target-save and evidence locks held while writing an export or extract.
 struct DerivedTarget {
-    _target: Option<std::fs::File>,
-    _evidence: std::fs::File,
+    _evidence: crate::input_evidence::SaveLock,
 }
 
 enum ReplayMode {

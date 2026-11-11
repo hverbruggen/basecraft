@@ -1,5 +1,7 @@
 //! Clade selection uses the same generated/document input and publication path
 //! as the GUI and headless registered operation routes.
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_ops::{Session, records};
 use basecraft_plugin_host::{
     jobs::JobManager,
@@ -15,6 +17,7 @@ use std::path::Path;
 
 #[test]
 fn unsaved_clade_tree_with_referenced_alignment_retains_both_inputs_and_selection() {
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
     let alignment = root.join("source.afa");

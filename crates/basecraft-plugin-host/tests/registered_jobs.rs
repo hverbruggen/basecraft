@@ -1,4 +1,6 @@
 //! Installed external-package conformance, without application dispatch on its ID.
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_plugin_host::{
     jobs::JobManager,
     policy::SessionPolicy,
@@ -66,6 +68,7 @@ fn wait(manager: &JobManager, id: &str) -> basecraft_protocol::operation::Operat
 }
 #[test]
 fn installed_multi_input_job_uses_common_storage_and_frozen_identity() {
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     std::fs::write(temp.path().join("a.txt"), b"abc\n").unwrap();
     std::fs::write(temp.path().join("b.txt"), b"xy\n").unwrap();
@@ -110,6 +113,7 @@ fn installed_multi_input_job_uses_common_storage_and_frozen_identity() {
 
 #[test]
 fn registered_newick_inputs_keep_verifiable_identity_evidence() {
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/registry-plugin");
@@ -159,6 +163,7 @@ fn registered_newick_inputs_keep_verifiable_identity_evidence() {
 
 #[test]
 fn invalid_data_does_not_publish_and_slow_job_cancels_without_extra_grants() {
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     for name in ["a.txt", "b.txt"] {
         std::fs::write(temp.path().join(name), b"a").unwrap();
@@ -189,6 +194,7 @@ fn invalid_data_does_not_publish_and_slow_job_cancels_without_extra_grants() {
 }
 #[test]
 fn denial_and_request_key_reuse_do_not_spawn_again() {
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     for name in ["a.txt", "b.txt"] {
         std::fs::write(temp.path().join(name), b"a").unwrap();
@@ -240,6 +246,7 @@ fn denial_and_request_key_reuse_do_not_spawn_again() {
 #[test]
 fn installed_snapshot_proposals_commit_in_owner_and_stale_jobs_preserve_edits() {
     use basecraft_ops::Session;
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let source = temp.path().join("sequence.fa");
     std::fs::write(&source, b">sequence\nACGTACGT\n").unwrap();
@@ -328,6 +335,7 @@ fn installed_snapshot_proposals_commit_in_owner_and_stale_jobs_preserve_edits() 
 
 #[test]
 fn hostile_processes_and_unallocated_outputs_never_publish_success() {
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     for name in ["a.txt", "b.txt"] {
         std::fs::write(temp.path().join(name), b"a").unwrap();
@@ -352,6 +360,7 @@ fn hostile_processes_and_unallocated_outputs_never_publish_success() {
 
 #[test]
 fn uncooperative_running_process_is_cancelled_and_reaped() {
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     for name in ["a.txt", "b.txt"] {
         std::fs::write(temp.path().join(name), b"a").unwrap();
@@ -381,6 +390,7 @@ fn uncooperative_running_process_is_cancelled_and_reaped() {
 
 #[test]
 fn submitted_views_remain_frozen_when_both_originals_change_during_execution() {
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     std::fs::write(temp.path().join("a.txt"), b"abc\n").unwrap();
     std::fs::write(temp.path().join("b.txt"), b"xy\n").unwrap();
@@ -407,6 +417,7 @@ fn submitted_views_remain_frozen_when_both_originals_change_during_execution() {
 
 #[test]
 fn late_collision_preserves_foreign_bytes_and_repairs_without_reexecuting() {
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     std::fs::write(temp.path().join("a.txt"), b"abc\n").unwrap();
     std::fs::write(temp.path().join("b.txt"), b"xy\n").unwrap();
@@ -448,6 +459,7 @@ fn late_collision_preserves_foreign_bytes_and_repairs_without_reexecuting() {
 
 #[test]
 fn committed_proposals_stay_partial_and_repair_requires_recorded_session_activity() {
+    crate::isolated_profile::isolate!();
     for missing_activity in [false, true] {
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("sequence.fa");
@@ -644,6 +656,7 @@ fn run_in_session(
 #[test]
 fn document_inputs_read_the_session_revision_and_record_history() {
     use basecraft_ops::Session;
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let registry = alignment_registry(temp.path());
     let source = temp.path().join("input.afa");
@@ -775,6 +788,7 @@ fn document_inputs_read_the_session_revision_and_record_history() {
 #[test]
 fn document_repair_waits_for_owner_history_and_does_not_repeat_activity() {
     use basecraft_ops::Session;
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let registry = alignment_registry(root.path());
     let source = root.path().join("input.afa");
@@ -832,6 +846,7 @@ fn document_repair_waits_for_owner_history_and_does_not_repeat_activity() {
 
 #[test]
 fn canonical_alignment_evidence_preserves_order_headers_and_residues() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let registry = alignment_registry(root.path());
     let source = root.path().join("input.afa");
@@ -891,6 +906,7 @@ fn canonical_alignment_evidence_preserves_order_headers_and_residues() {
 
 #[test]
 fn unequal_alignment_inputs_are_refused_before_execution_for_files_and_documents() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let registry = alignment_registry(root.path());
     let source = root.path().join("input.afa");
@@ -952,6 +968,7 @@ fn unequal_alignment_inputs_are_refused_before_execution_for_files_and_documents
 
 #[test]
 fn ungapped_alignment_input_accepts_unequal_lengths_without_padding() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let registry = fasta_registry(root.path(), "ungapped_fasta");
     let source = root.path().join("input.afa");
@@ -1008,6 +1025,7 @@ fn ungapped_alignment_input_accepts_unequal_lengths_without_padding() {
 fn tasks_cancel_registered_document_run_through_owner_without_success_history() {
     use basecraft_plugin_host::file_tool::{can_cancel_run, cancel_run};
     use basecraft_protocol::records::JobStatus;
+    crate::isolated_profile::isolate!();
     for mode in ["slow", "hang"] {
         let temp = tempfile::tempdir().unwrap();
         let registry = alignment_registry(temp.path());
@@ -1078,6 +1096,7 @@ fn tasks_cancel_registered_document_run_through_owner_without_success_history() 
 #[test]
 fn tasks_refuse_headless_completed_and_dropped_owners() {
     use basecraft_plugin_host::file_tool::{can_cancel_run, cancel_run};
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     for name in ["a.txt", "b.txt"] {
         std::fs::write(temp.path().join(name), "a").unwrap();
@@ -1116,6 +1135,7 @@ fn tasks_refuse_headless_completed_and_dropped_owners() {
 #[test]
 fn tasks_refuse_document_publication_awaiting_owner_finalization() {
     use basecraft_plugin_host::file_tool::{can_cancel_run, cancel_run};
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let registry = alignment_registry(temp.path());
     let source = temp.path().join("input.afa");
@@ -1165,6 +1185,7 @@ fn tasks_refuse_document_publication_awaiting_owner_finalization() {
 
 #[test]
 fn retained_inputs_survive_job_drop_and_temporary_source_removal() {
+    crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     std::fs::write(temp.path().join("a.txt"), b"abc\n").unwrap();
     std::fs::write(temp.path().join("b.txt"), b"xy\n").unwrap();
@@ -1210,6 +1231,7 @@ fn retained_inputs_survive_job_drop_and_temporary_source_removal() {
 #[test]
 fn equal_content_retention_keeps_exact_primary_owner_and_leaf_lifecycles() {
     use basecraft_ops::input_evidence::{self, AffectedAnalysis, EvidenceConflict, SavePolicy};
+    crate::isolated_profile::isolate!();
     for retain_primary in [false, true] {
         for reverse_paths in [false, true] {
             for policy in [SavePolicy::BreakEvidence, SavePolicy::RemoveAnalysis] {
@@ -1376,6 +1398,7 @@ fn equal_content_retention_keeps_exact_primary_owner_and_leaf_lifecycles() {
 
 #[test]
 fn gui_scientific_calls_cannot_reintroduce_direct_plugin_invocation() {
+    crate::isolated_profile::isolate!();
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../basecraft-gui/src");
     for entry in std::fs::read_dir(root).unwrap() {
         let path = entry.unwrap().path();
@@ -1410,6 +1433,7 @@ fn gui_scientific_calls_cannot_reintroduce_direct_plugin_invocation() {
 #[test]
 fn registered_target_preparation_preserves_permissions_and_session_identity() {
     use basecraft_plugin_host::runner::PreparedOperation;
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("a.txt"), b"a").unwrap();
     std::fs::write(root.path().join("b.txt"), b"b").unwrap();

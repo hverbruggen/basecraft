@@ -7,8 +7,6 @@ import QtQuick.Layouts
 AppDialog {
     id: dialog
     title: first.length && first !== "Help" ? first + " shortcuts" : "Keyboard shortcuts"
-    modal: true
-    anchors.centerIn: Overlay.overlay
     implicitWidth: 560
     implicitHeight: 620
     standardButtons: Dialog.Close

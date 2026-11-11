@@ -11,10 +11,8 @@ use basecraft_protocol::records::{StoreFormat, StoreMarker};
 
 use crate::{Result, error::invalid};
 
-// Deliberately unwired: producer evidence is not save/completion authority.
-#[allow(dead_code)]
-pub(crate) mod publication_observation;
-use publication_observation::{ProducerPhase, SecondaryHooks};
+#[cfg(test)]
+mod publication_tests;
 
 #[derive(Clone, Debug)]
 pub struct ArtifactRun {
@@ -128,6 +126,9 @@ impl ArtifactRun {
                 let mut bytes = serde_json::to_vec(&serde_json::to_value(marker)?)?;
                 bytes.push(b'\n');
                 basecraft_io::write_atomic(&store.join("store.json"), |w| w.write_all(&bytes))?;
+                basecraft_io::write_atomic(&store.join("identity"), |w| {
+                    w.write_all(ulid::Ulid::generate().to_string().as_bytes())
+                })?;
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 Self::validate_store(&store)?;
@@ -216,24 +217,6 @@ impl ArtifactRun {
     /// chosen filesystem and never replace a destination created by another writer.
     /// The caller owns destination preflight and records the declared export.
     pub fn publish_secondary(&self, name: &str, destination: &Path) -> Result<()> {
-        self.publish_secondary_with(name, destination, &mut publication_observation::Unobserved)
-    }
-
-    #[allow(dead_code)] // No production caller until separately reviewed adoption.
-    pub(crate) fn publish_secondary_observed(
-        &self,
-        name: &str,
-        destination: &Path,
-    ) -> publication_observation::ObservedSecondaryPublication {
-        publication_observation::observe(self, name, destination)
-    }
-
-    fn publish_secondary_with(
-        &self,
-        name: &str,
-        destination: &Path,
-        hooks: &mut impl SecondaryHooks,
-    ) -> Result<()> {
         let source = self.artifact(name)?;
         let metadata = std::fs::symlink_metadata(&source)?;
         if !metadata.is_file() || metadata.file_type().is_symlink() {
@@ -243,37 +226,27 @@ impl ArtifactRun {
             .parent()
             .ok_or_else(|| invalid("secondary output has no parent"))?;
         let mut candidate = tempfile::NamedTempFile::new_in(parent)?;
-        hooks.usable_target(destination);
-        hooks.phase(ProducerPhase::CopyAndSync);
+
         let mut hashing = crate::files::HashingWriter::new(candidate.as_file_mut());
         let size = std::io::copy(&mut std::fs::File::open(&source)?, &mut hashing)?;
         if size != metadata.len() {
             return Err(invalid("secondary artifact changed during export"));
         }
-        let hash = hashing.hash();
-        if hash != basecraft_io::hash_file(&source)? {
+        if hashing.hash() != basecraft_io::hash_file(&source)? {
             return Err(invalid("secondary artifact changed during export"));
         }
         candidate.as_file().sync_all()?;
-        hooks.phase(ProducerPhase::StagedIdentity);
-        hooks.staged(candidate.as_file(), hash, size)?;
-        hooks.phase(ProducerPhase::BeforePersist);
-        hooks.before_persist(destination)?;
-        hooks.phase(ProducerPhase::Persist);
-        hooks.attempting();
-        hooks.persist(candidate, destination)?;
-        hooks.persisted();
-        hooks.phase(ProducerPhase::ParentSync);
-        hooks.sync_parent(parent)?;
-        hooks.synced();
-        hooks.phase(ProducerPhase::Complete);
+        candidate
+            .persist_noclobber(destination)
+            .map_err(|e| e.error)?;
+        basecraft_platform::files::sync_directory(parent)?;
+
         Ok(())
     }
 }
 
 impl ArtifactRun {
-    /// Bounded, read-only discovery beside a result. Hidden bindings take
-    /// precedence; legacy companions remain readable when no binding exists.
+    /// Bounded, read-only discovery of current hidden bindings beside a result.
     pub fn for_result(result: &Path) -> Result<Option<PathBuf>> {
         Self::resolve_result(result, false, None)
     }
@@ -496,15 +469,20 @@ pub(crate) fn retained_source(root: &Path, hash: &str) -> Result<Option<PathBuf>
             continue;
         }
         let input = crate::input_evidence::read_input(&run)?;
-        if input.state == basecraft_protocol::input_records::EvidenceState::Preserved
+        // A delegating ledger is also Preserved but holds no bytes; keep looking.
+        let retained = if input.state == basecraft_protocol::input_records::EvidenceState::Preserved
             && input.source.as_ref().is_some_and(|r| r.hash == hash)
         {
-            return Ok(Some(run.join("preserved-input")));
-        }
-        if input.state == basecraft_protocol::input_records::EvidenceState::Generated
+            run.join("preserved-input")
+        } else if input.state == basecraft_protocol::input_records::EvidenceState::Generated
             && input.submitted_hash == hash
         {
-            return Ok(Some(run.join("submitted.fasta")));
+            run.join("submitted.fasta")
+        } else {
+            continue;
+        };
+        if retained.is_file() {
+            return Ok(Some(retained));
         }
     }
     Ok(None)

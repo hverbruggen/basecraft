@@ -1,4 +1,6 @@
 //! Byte oracles run against original writers before their typed substitution.
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_ops::{analysis_store::ArtifactRun, input_evidence};
 use basecraft_platform::paths::AppPaths;
 use serde_json::{Value, json};
@@ -19,6 +21,7 @@ fn capture(name: &str, bytes: &[u8]) {
 
 #[test]
 fn store_writer_bytes_and_validation() {
+    crate::isolated_profile::isolate!();
     if std::env::var_os("BASECRAFT_STORE_CHILD").is_none() {
         let root = tempfile::tempdir().unwrap();
         let status = Command::new(std::env::current_exe().unwrap())
@@ -158,6 +161,7 @@ fn store_writer_bytes_and_validation() {
 #[test]
 fn committed_store_examples_round_trip() {
     use basecraft_protocol::records::{StoreMarker, StoreRegistry};
+    crate::isolated_profile::isolate!();
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/records-v1");
     for name in ["store.json", "store-extended.json"] {
         let bytes = std::fs::read(fixtures.join(name)).unwrap();

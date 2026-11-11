@@ -59,53 +59,31 @@ impl Document for OpenedMetadata {
         crate::metadata::files(target)
     }
 
-    fn write(
+    fn prepare_write(
         &self,
         target: &Path,
         format: Format,
-        recovery_root: &Path,
+        _recovery_root: &Path,
         _publication: &super::WritePublication,
-    ) -> Result<Vec<(PathBuf, String)>> {
+    ) -> Result<super::PreparedWrite> {
         if format != Format::Metadata {
             return Err(crate::Error::Unsupported(format!(
                 "project metadata is saved as {}",
                 crate::metadata::MANIFEST
             )));
         }
-        let encoded = crate::metadata::encode(&self.metadata)?;
-        let paths = crate::metadata::files(target);
-        if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        // Tables first, manifest last. Keep every completed file on failure so
-        // the shared save owner can accept matching hashes and safely retry.
-        for index in (0..paths.len()).rev() {
-            if let Err(error) = basecraft_io::write_atomic(&paths[index], |writer| {
-                writer.write_all(&encoded[index])
-            }) {
-                if index + 1 == paths.len() {
-                    return Err(error.into());
-                }
-                let replaced = paths[index + 1..]
-                    .iter()
-                    .rev()
-                    .map(|path| path.display().to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                return Err(crate::Error::Damaged {
-                    path: target.into(),
-                    detail: format!(
-                        "partial metadata save: replaced {replaced}; failed at {}: {error}. Metadata generation is incomplete. Keep the open document and retry saving after fixing the destination, or save to a new folder. Temporary recovery, when enabled, is at {}",
-                        paths[index].display(),
-                        recovery_root.display()
-                    ),
-                });
-            }
-        }
-        Ok(paths
+        std::fs::create_dir_all(target.parent().unwrap_or(Path::new(".")))?;
+        let mut prepared = super::PreparedWrite {
+            reverse: true,
+            ..Default::default()
+        };
+        for (path, bytes) in crate::metadata::files(target)
             .into_iter()
-            .zip(encoded.iter().map(|bytes| basecraft_io::hash_bytes(bytes)))
-            .collect())
+            .zip(crate::metadata::encode(&self.metadata)?)
+        {
+            prepared.push(&path, |w| w.write_all(&bytes))?;
+        }
+        Ok(prepared)
     }
 
     fn saved_hashes(
@@ -119,6 +97,3 @@ impl Document for OpenedMetadata {
             .collect())
     }
 }
-
-#[cfg(test)]
-mod publication_tests;

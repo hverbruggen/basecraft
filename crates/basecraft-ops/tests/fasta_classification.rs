@@ -1,3 +1,5 @@
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use std::path::Path;
 
 use basecraft_io::fasta;
@@ -54,6 +56,7 @@ fn all_fasta_fixtures_agree_with_index() {
             }
         }
     }
+    crate::isolated_profile::isolate!();
     let mut count = 0;
     visit(
         &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures"),
@@ -65,6 +68,7 @@ fn all_fasta_fixtures_agree_with_index() {
 
 #[test]
 fn generated_classification_and_errors() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let mut cases = vec![
         (Vec::new(), Some(Kind::Sequence)),
@@ -153,6 +157,7 @@ fn generated_classification_and_errors() {
 
 #[test]
 fn summary_facts_match_index() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("rows.fa");
     let data = b">a\nAA\nA\nAAA\n>b\nT\n>empty";
@@ -184,6 +189,7 @@ fn summary_facts_match_index() {
 #[test]
 fn bounded_classifier_heap() {
     use std::io::Write;
+    crate::isolated_profile::isolate!();
 
     // Instrumentation is process-wide: isolate from the other test threads.
     if std::env::var_os("BASECRAFT_CLASSIFIER_HEAP_CHILD").is_none() {

@@ -1,4 +1,6 @@
 //! Project specimen metadata: storage, import plans, typed edits and replay.
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use std::collections::BTreeMap;
 
 use basecraft_ops::metadata::{self, ImportOptions};
@@ -31,6 +33,7 @@ fn headers(root: &std::path::Path) -> Vec<(String, String)> {
 
 #[test]
 fn opening_a_project_creates_nothing() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let mut s = Session::unlogged(dir.path());
     assert!(metadata::open(&mut s, false).unwrap().is_none());
@@ -39,6 +42,7 @@ fn opening_a_project_creates_nothing() {
 
 #[test]
 fn header_import_links_identifies_saves_and_replays() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     std::fs::write(root.join("rbcL.fasta"), FASTA).unwrap();
@@ -170,6 +174,7 @@ fn header_import_links_identifies_saves_and_replays() {
 
 #[test]
 fn spreadsheet_import_flags_conflicts_duplicates_and_bad_values() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     std::fs::write(root.join("rbcL.fasta"), FASTA).unwrap();
@@ -254,6 +259,7 @@ fn spreadsheet_import_flags_conflicts_duplicates_and_bad_values() {
 
 #[test]
 fn template_round_trips_through_import() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     std::fs::write(root.join("rbcL.fasta"), FASTA).unwrap();
@@ -305,6 +311,7 @@ fn template_round_trips_through_import() {
 
 #[test]
 fn outside_edits_future_versions_and_unknown_fields() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let manifest = metadata::create(root).unwrap();
@@ -371,6 +378,7 @@ fn outside_edits_future_versions_and_unknown_fields() {
 
 #[test]
 fn saved_metadata_and_submission_reports_use_their_document_readers() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let mut session = Session::new(dir.path());
     let metadata = metadata::open(&mut session, true).unwrap().unwrap();
@@ -409,6 +417,7 @@ fn saved_metadata_and_submission_reports_use_their_document_readers() {
 
 #[test]
 fn document_interface_preserves_metadata_bytes_and_rejections() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let manifest = metadata::create(root).unwrap();
@@ -511,6 +520,7 @@ fn document_interface_preserves_metadata_bytes_and_rejections() {
 
 #[test]
 fn metadata_partial_writer_failure_retains_payload_and_allows_retry() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let mut s = Session::new(root);
@@ -535,7 +545,7 @@ fn metadata_partial_writer_failure_retains_payload_and_allows_retry() {
     std::fs::create_dir_all(blocked).unwrap();
     let error = s.save(doc, Some(&target)).unwrap_err();
     assert!(
-        matches!(error, basecraft_ops::Error::Damaged { ref detail, .. } if detail.starts_with("partial metadata save: replaced ")),
+        matches!(error, basecraft_ops::Error::Damaged { ref detail, .. } if detail.starts_with("partial") && detail.contains("save: replaced ")),
         "{error}"
     );
     assert_eq!(s.metadata(doc).unwrap(), &expected);

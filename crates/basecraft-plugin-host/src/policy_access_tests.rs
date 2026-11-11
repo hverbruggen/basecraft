@@ -1,5 +1,4 @@
 use super::*;
-use basecraft_ops::access::{ServiceAction, TrustedLegacy};
 
 fn denied_as(result: basecraft_ops::access::Result<PathBuf>, expected: Denial) {
     assert!(
@@ -152,37 +151,6 @@ fn root_cannot_be_removed_or_renamed_and_ancestor_probe_stops() {
             &mut |_| panic!("no ancestor opens"),
         ),
         Denial::OutsideRoot,
-    );
-}
-
-#[test]
-fn services_fail_closed_without_discovery_or_caller_paths() {
-    let project = tempfile::tempdir().unwrap();
-    let policy = SessionPolicy::new(project.path(), true).unwrap();
-    for action in [
-        ServiceAction::ReadPreferences,
-        ServiceAction::ReadAnalysisRegistry,
-        ServiceAction::LockAnalysisEvidence,
-        ServiceAction::ReserveSaveTarget,
-        ServiceAction::RegisterFinalStore,
-    ] {
-        assert!(matches!(
-            policy.service(action),
-            Err(AccessError::Denied(Denial::ServiceUnavailable))
-        ));
-    }
-    assert_eq!(std::fs::read_dir(project.path()).unwrap().count(), 0);
-    // Legacy bypass must be explicitly selected and still grants no service here.
-    assert_eq!(TrustedLegacy.boundary(), None);
-    assert!(
-        TrustedLegacy
-            .resource(Path::new("../legacy"), ResourceAction::ReadFile)
-            .is_ok()
-    );
-    assert!(
-        TrustedLegacy
-            .service(ServiceAction::ReadAnalysisRegistry)
-            .is_err()
     );
 }
 

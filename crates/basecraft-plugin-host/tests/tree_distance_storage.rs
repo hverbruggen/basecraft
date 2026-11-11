@@ -1,4 +1,6 @@
 //! Real engines and real directory listings for registered tree and matrix runs.
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_ops::records::AlignmentLinkExt;
 mod common;
 
@@ -25,6 +27,7 @@ fn matrix(session: &Session, doc: basecraft_ops::DocId, model: &str, output: &st
 
 #[test]
 fn matrix_reference_generated_failure_move_and_export_use_the_common_store() {
+    crate::isolated_profile::isolate!();
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().join("working");
     std::fs::create_dir(&root).unwrap();
@@ -138,6 +141,7 @@ fn matrix_reference_generated_failure_move_and_export_use_the_common_store() {
 
 #[test]
 fn ordinary_tree_and_forest_routes_keep_only_scientific_results_visible() {
+    crate::isolated_profile::isolate!();
     let registry = common::bundled();
     for (plugin, method, alignment, expected) in [
         ("distance", "sorted", ALIGNMENT, vec!["result.nwk"]),

@@ -1,4 +1,6 @@
 //! Known producer shapes only; no strict production guard/repair decoder is added.
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_ops::{
     records,
     records::{AlignmentLink, AlignmentLinkExt},
@@ -13,6 +15,7 @@ fn sorted_bytes(record: &impl Serialize) -> Vec<u8> {
 
 #[test]
 fn original_repair_and_guard_goldens_roundtrip() {
+    crate::isolated_profile::isolate!();
     let root =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/records-v1");
     for label in ["absent", "file", "symlink"] {
@@ -45,6 +48,7 @@ fn original_repair_and_guard_goldens_roundtrip() {
 
 #[test]
 fn selected_guard_fields_keep_existing_acceptance_and_view_refusal() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let tree = dir.path().join("tree.nwk");
     std::fs::write(&tree, "(a,b);").unwrap();

@@ -70,13 +70,13 @@ impl Document for Submission {
         Ok(())
     }
 
-    fn write(
+    fn prepare_write(
         &self,
         target: &Path,
         format: Format,
         _recovery_root: &Path,
         _publication: &super::WritePublication,
-    ) -> Result<Vec<(PathBuf, String)>> {
+    ) -> Result<super::PreparedWrite> {
         if format != Format::Submission {
             return Err(invalid(format!(
                 "a submission is saved as *{}",
@@ -84,11 +84,9 @@ impl Document for Submission {
             )));
         }
         let bytes = crate::submission::encode(self)?;
-        basecraft_io::write_atomic(target, |w| w.write_all(&bytes))?;
-        Ok(vec![(
-            target.to_path_buf(),
-            basecraft_io::hash_bytes(&bytes),
-        )])
+        let mut prepared = super::PreparedWrite::default();
+        prepared.push(target, |w| w.write_all(&bytes))?;
+        Ok(prepared)
     }
 
     fn saved_hashes(

@@ -171,12 +171,6 @@ fn recovery_retains_replaced_sources_and_checkpoints_external_edits_and_undo() {
 #[test]
 fn cross_device_recovery_after_save_as_and_interrupted_save() {
     use std::os::unix::fs::MetadataExt;
-    struct Crash(SaveSite);
-    impl SaveHooks for Crash {
-        fn at(&mut self, site: SaveSite) {
-            assert_ne!(site, self.0, "simulated process loss during real save");
-        }
-    }
     let Some(root) = crate::isolated_profile::enter(
         "session::retention_tests::cross_device_recovery_after_save_as_and_interrupted_save",
     ) else {
@@ -212,24 +206,20 @@ fn cross_device_recovery_after_save_as_and_interrupted_save() {
         };
         session.apply(doc, edit(0, "T")).unwrap();
         let expected = if scenario.ends_with("rename") {
-            let site = if scenario == "before-rename" {
-                SaveSite::Recheck
+            // Process loss before the data rename, or after it but before the
+            // Save record: the pending intent stays for recovery.
+            super::save_failure_tests::inject(if scenario == "before-rename" {
+                super::save_failure_tests::WriteStep::Replace
             } else {
-                SaveSite::SaveRecord
-            };
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                session.save_attempt_with(
-                    doc,
-                    None,
-                    crate::input_evidence::SavePolicy::Cancel,
-                    false,
-                    false,
-                    None,
-                    &mut Crash(site),
-                )
-            }));
-            assert!(result.is_err());
-            assert!(session.recovery_root().join("pending-save.json").is_file());
+                super::save_failure_tests::WriteStep::Journal
+            });
+            assert!(session.save(doc, None).is_err());
+            // The pending intent is published together with the data, so a
+            // loss before the rename leaves only the journal to recover from.
+            assert_eq!(
+                session.recovery_root().join("pending-save.json").is_file(),
+                scenario == "after-rename"
+            );
             b"TAAA"
         } else {
             let saved = source.join(if scenario == "new-save-as" {

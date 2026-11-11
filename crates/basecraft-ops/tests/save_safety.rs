@@ -41,10 +41,7 @@ fn listing(folder: &Path) -> Vec<PathBuf> {
 
 #[test]
 fn save_as_alias_of_own_file_keeps_stale_source_protection() {
-    if isolated_profile::enter("save_as_alias_of_own_file_keeps_stale_source_protection").is_none()
-    {
-        return;
-    }
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("gene.fasta");
     std::fs::write(&file, ">gene\nACGT\n").unwrap();
@@ -89,9 +86,7 @@ fn save_as_alias_of_own_file_keeps_stale_source_protection() {
 
 #[test]
 fn export_and_extract_refuse_an_open_documents_own_file() {
-    if isolated_profile::enter("export_and_extract_refuse_an_open_documents_own_file").is_none() {
-        return;
-    }
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("gene.fasta");
     std::fs::write(&file, ">gene\nACGTACGT\n").unwrap();
@@ -127,13 +122,7 @@ fn export_and_extract_refuse_an_open_documents_own_file() {
 
 #[test]
 fn failed_export_stream_keeps_previous_destination_and_records_nothing() {
-    if isolated_profile::enter(
-        "failed_export_stream_keeps_previous_destination_and_records_nothing",
-    )
-    .is_none()
-    {
-        return;
-    }
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let data = dir.path().join("data");
     std::fs::create_dir(&data).unwrap();
@@ -169,11 +158,7 @@ fn failed_export_stream_keeps_previous_destination_and_records_nothing() {
 #[test]
 fn read_only_folder_refuses_save_and_keeps_original_and_edits() {
     use std::os::unix::fs::PermissionsExt;
-    if isolated_profile::enter("read_only_folder_refuses_save_and_keeps_original_and_edits")
-        .is_none()
-    {
-        return;
-    }
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let data = dir.path().join("data");
     std::fs::create_dir(&data).unwrap();
@@ -230,11 +215,7 @@ fn full_disk_folder(name: &str) -> Option<PathBuf> {
 
 #[test]
 fn full_disk_save_keeps_original_and_retries_after_space_returns() {
-    if isolated_profile::enter("full_disk_save_keeps_original_and_retries_after_space_returns")
-        .is_none()
-    {
-        return;
-    }
+    crate::isolated_profile::isolate!();
     let _turn = FULL_DISK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -264,11 +245,7 @@ fn full_disk_save_keeps_original_and_retries_after_space_returns() {
 
 #[test]
 fn full_disk_journal_append_rolls_back_and_keeps_a_recoverable_prefix() {
-    if isolated_profile::enter("full_disk_journal_append_rolls_back_and_keeps_a_recoverable_prefix")
-        .is_none()
-    {
-        return;
-    }
+    crate::isolated_profile::isolate!();
     let _turn = FULL_DISK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -325,11 +302,7 @@ fn journal(root: &Path) -> PathBuf {
 
 #[test]
 fn damaged_journal_recovery_names_the_salvage_and_never_skips_events() {
-    if isolated_profile::enter("damaged_journal_recovery_names_the_salvage_and_never_skips_events")
-        .is_none()
-    {
-        return;
-    }
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let data = dir.path().join("data");
     std::fs::create_dir(&data).unwrap();
@@ -392,10 +365,7 @@ fn open_species(dir: &Path) -> (Session, basecraft_ops::DocId) {
 
 #[test]
 fn analysis_result_hypotheses_and_columns_undo_as_one_step() {
-    if isolated_profile::enter("analysis_result_hypotheses_and_columns_undo_as_one_step").is_none()
-    {
-        return;
-    }
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let (mut session, doc) = open_species(dir.path());
     let initial = session.delimitation(doc).unwrap().clone();
@@ -435,13 +405,7 @@ fn analysis_result_hypotheses_and_columns_undo_as_one_step() {
 
 #[test]
 fn species_view_columns_and_tree_flips_survive_save_reopen_undo_and_replay() {
-    if isolated_profile::enter(
-        "species_view_columns_and_tree_flips_survive_save_reopen_undo_and_replay",
-    )
-    .is_none()
-    {
-        return;
-    }
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let (mut session, doc) = open_species(dir.path());
     let path = dir.path().join("input.spart");
@@ -492,13 +456,7 @@ fn species_view_columns_and_tree_flips_survive_save_reopen_undo_and_replay() {
 
 #[test]
 fn report_export_refreshes_its_own_files_but_never_replaces_unrelated_ones() {
-    if isolated_profile::enter(
-        "report_export_refreshes_its_own_files_but_never_replaces_unrelated_ones",
-    )
-    .is_none()
-    {
-        return;
-    }
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("gene.fasta");
     std::fs::write(&file, ">gene\nACGT\n").unwrap();
@@ -531,13 +489,7 @@ fn report_export_refreshes_its_own_files_but_never_replaces_unrelated_ones() {
 
 #[test]
 fn interrupted_result_group_resumes_after_journal_failure_as_one_undo_step() {
-    if isolated_profile::enter(
-        "interrupted_result_group_resumes_after_journal_failure_as_one_undo_step",
-    )
-    .is_none()
-    {
-        return;
-    }
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let (mut session, doc) = open_species(dir.path());
     let initial = session.delimitation(doc).unwrap().clone();

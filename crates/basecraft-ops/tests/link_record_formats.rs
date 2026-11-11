@@ -1,4 +1,6 @@
 //! Public link behavior; the protocol registry checks the serialized goldens.
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_ops::{
     files, input_evidence,
     records::{self, AlignmentLink, AlignmentLinkExt},
@@ -6,6 +8,7 @@ use basecraft_ops::{
 
 #[test]
 fn snapshot_and_view_associations_remain_distinct() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source.afa");
     let tree = root.path().join("tree.nwk");
@@ -24,6 +27,7 @@ fn snapshot_and_view_associations_remain_distinct() {
 
 #[test]
 fn shared_reference_verifies_the_same_input() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source.afa");
     let tree = root.path().join("tree.nwk");
@@ -55,6 +59,7 @@ fn shared_reference_verifies_the_same_input() {
 
 #[test]
 fn reader_keeps_extensions_and_existing_version_and_missing_field_checks() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let tree = root.path().join("tree.nwk");
     std::fs::write(&tree, "(a,b);").unwrap();

@@ -1,5 +1,7 @@
 //! Same-profile cooperating processes, ordered by socket barriers, never sleeps.
 #![cfg(unix)]
+#[path = "support/decided_save.rs"]
+mod decided_save;
 use basecraft_ops::{
     Session,
     analysis_store::ArtifactRun,
@@ -33,8 +35,7 @@ impl Barrier {
         assert_eq!(line.trim(), expected);
     }
 }
-// Timeouts diagnose deadlocks; only a successful OS lock probe establishes
-// exclusion. Reap our children on failure so a broken guard cannot hang Cargo.
+// Timeouts diagnose deadlocks; a failed real save establishes exclusion. Reap our children on failure so a broken guard cannot hang Cargo.
 struct Worker(Child);
 impl Drop for Worker {
     fn drop(&mut self) {
@@ -79,6 +80,7 @@ fn scenario(mode: &str) {
         "published"
     });
     if mode != "save-first" {
+        saving.send("resume");
         saving.expect("saved");
     }
     assert!(registrar.0.wait().unwrap().success());
@@ -184,10 +186,10 @@ fn publication_worker() {
         mutation.write_input(ledger.directory(), &input).unwrap();
         input.source.as_mut().unwrap().path =
             input_evidence::relative(owner.directory(), &source).unwrap();
-        input.upstream = serde_json::from_value(json!([{
+        input.extra.insert("upstream".into(), json!([{
             "bundle":input_evidence::relative(owner.directory(), ledger.directory()).unwrap(),
             "id":ledger.id(), "hash":basecraft_io::hash_file(&ledger.artifact("manifest.json").unwrap()).unwrap()
-        }])).unwrap();
+        }]));
         mutation.write_input(owner.directory(), &input).unwrap();
         input_evidence::write_json(
             &owner.artifact("run.json").unwrap(),
@@ -216,16 +218,12 @@ fn publication_worker() {
             )
             .unwrap();
         if mode != "save-first" {
-            let paths = basecraft_platform::paths::AppPaths::discover().unwrap();
-            let file = std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(paths.state.join("analysis-evidence.lock"))
-                .unwrap();
-            // A real second process probes the actual OS lock. No timeout or
-            // absence-of-message is used as evidence of exclusion.
-            assert!(!fs4::fs_std::FileExt::try_lock_exclusive(&file).unwrap());
+            assert!(matches!(
+                session.save(doc, None),
+                Err(basecraft_ops::Error::Busy(_))
+            ));
             barrier.send("locked");
+            barrier.expect("resume");
         }
         if mode != "save-first" {
             let mutation = Mutation::begin().unwrap();
@@ -246,32 +244,26 @@ fn publication_worker() {
             basecraft_ops::records::recover(session.recovery_root(), &root.join("recovered"))
                 .unwrap();
         assert_eq!(std::fs::read(&recovered[0]).unwrap(), b">gene\nATGT\n");
-        session
-            .save_with_evidence(
-                doc,
-                None,
-                if mode == "preserve" || mode == "interrupted" {
-                    SavePolicy::PreserveCopy
-                } else {
-                    SavePolicy::Cancel
-                },
-            )
-            .unwrap();
+        decided_save::save_with_policy(
+            &mut session,
+            doc,
+            None,
+            if mode == "preserve" || mode == "interrupted" {
+                SavePolicy::PreserveCopy
+            } else {
+                SavePolicy::Cancel
+            },
+        )
+        .unwrap();
         if mode != "save-first" {
             let ledger = PathBuf::from(std::fs::read_to_string(root.join("ledger-path")).unwrap());
             let input = input_evidence::read_input(&ledger).unwrap();
             assert_eq!(input.analysis_run.is_some(), mode != "interrupted");
             if mode == "proposal" {
                 assert_eq!(input.proposal_target, Some(true));
-                assert_eq!(
-                    input.state,
-                    basecraft_protocol::input_records::EvidenceState::Referenced
-                );
+                assert_eq!(input.state, "referenced".into());
             } else {
-                assert_eq!(
-                    input.state,
-                    basecraft_protocol::input_records::EvidenceState::Preserved
-                );
+                assert_eq!(input.state, "preserved".into());
                 // The mutable record must retain the preservation performed by
                 // the save, rather than a later stale post-helper rewrite.
                 assert_eq!(
@@ -297,6 +289,7 @@ fn retention_scenario(mode: &str) {
     retaining.send("commit");
     retaining.expect(if save_first { "refused" } else { "published" });
     if !save_first {
+        saving.send("resume");
         saving.expect("saved");
         retaining.send("verify");
     }
@@ -344,15 +337,17 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
         input.analysis_run =
             Some(input_evidence::relative(leaf.directory(), owner.directory()).unwrap());
         mutation.write_input(leaf.directory(), &input).unwrap();
-        input.analysis_run = None;
+        input.extra.remove("analysis_run");
         input.source.as_mut().unwrap().path =
             input_evidence::relative(owner.directory(), &source).unwrap();
-        input.upstream = serde_json::from_value(json!([{
-            "bundle":input_evidence::relative(owner.directory(), leaf.directory()).unwrap(),
-            "id":leaf.id(),
-            "hash":basecraft_io::hash_file(&leaf.artifact("manifest.json").unwrap()).unwrap()
-        }]))
-        .unwrap();
+        input.extra.insert(
+            "upstream".into(),
+            json!([{
+                "bundle":input_evidence::relative(owner.directory(), leaf.directory()).unwrap(),
+                "id":leaf.id(),
+                "hash":basecraft_io::hash_file(&leaf.artifact("manifest.json").unwrap()).unwrap()
+            }]),
+        );
         mutation.write_input(owner.directory(), &input).unwrap();
         input_evidence::write_json(
             &owner.artifact("run.json").unwrap(),
@@ -370,11 +365,11 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
             if mode == "retain-break" {
                 assert_eq!(
                     mutation.read_input(owner.directory()).unwrap().state,
-                    basecraft_protocol::input_records::EvidenceState::Broken
+                    "broken".into()
                 );
                 assert_eq!(
                     mutation.read_input(leaf.directory()).unwrap().state,
-                    basecraft_protocol::input_records::EvidenceState::Broken
+                    "broken".into()
                 );
             } else {
                 assert!(!owner.directory().exists());
@@ -387,10 +382,7 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
         mutation.preserve_input(leaf.directory()).unwrap();
         mutation.preserve_input(leaf.directory()).unwrap();
         let mut primary = mutation.read_input(owner.directory()).unwrap();
-        assert_eq!(
-            primary.state,
-            basecraft_protocol::input_records::EvidenceState::Referenced
-        );
+        assert_eq!(primary.state, "referenced".into());
         barrier.send("prepared");
         barrier.expect("commit");
         if mode == "retain-failure" {
@@ -415,10 +407,7 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
             ORIGINAL
         );
         let primary = input_evidence::read_input(owner.directory()).unwrap();
-        assert_eq!(
-            primary.state,
-            basecraft_protocol::input_records::EvidenceState::Preserved
-        );
+        assert_eq!(primary.state, "preserved".into());
         if mode == "retain-preserve" {
             assert_eq!(
                 primary.origin_run,
@@ -441,14 +430,12 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
             .unwrap();
         let save_first = mode == "retain-break" || mode == "retain-remove";
         if !save_first {
-            let paths = basecraft_platform::paths::AppPaths::discover().unwrap();
-            let lock = std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(paths.state.join("analysis-evidence.lock"))
-                .unwrap();
-            assert!(!fs4::fs_std::FileExt::try_lock_exclusive(&lock).unwrap());
+            assert!(matches!(
+                session.save(doc, None),
+                Err(basecraft_ops::Error::Busy(_))
+            ));
             barrier.send("locked");
+            barrier.expect("resume");
             let mutation = Mutation::begin().unwrap();
             if mode == "retain-preserve" {
                 assert!(
@@ -469,7 +456,7 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
                         )
                         .unwrap()
                         .state,
-                    basecraft_protocol::input_records::EvidenceState::Referenced
+                    "referenced".into()
                 );
             }
         }
@@ -477,17 +464,17 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
             basecraft_ops::records::recover(session.recovery_root(), &root.join("recovered"))
                 .unwrap();
         assert_eq!(std::fs::read(&recovered[0]).unwrap(), b">gene\nATGT\n");
-        session
-            .save_with_evidence(
-                doc,
-                None,
-                match mode {
-                    "retain-break" => SavePolicy::BreakEvidence,
-                    "retain-remove" => SavePolicy::RemoveAnalysis,
-                    _ => SavePolicy::PreserveCopy,
-                },
-            )
-            .unwrap();
+        decided_save::save_with_policy(
+            &mut session,
+            doc,
+            None,
+            match mode {
+                "retain-break" => SavePolicy::BreakEvidence,
+                "retain-remove" => SavePolicy::RemoveAnalysis,
+                _ => SavePolicy::PreserveCopy,
+            },
+        )
+        .unwrap();
         barrier.send("saved");
     }
 }

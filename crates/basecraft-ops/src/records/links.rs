@@ -705,6 +705,7 @@ mod tests {
     use super::*;
     #[test]
     fn tree_save_as_carries_snapshot_and_replays() {
+        crate::isolated_profile::isolate!();
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("a.afa");
         let tree_path = dir.path().join("a.nwk");
@@ -725,6 +726,7 @@ mod tests {
 
     #[test]
     fn linkage_checks_labels_snapshot_and_changed_source() {
+        crate::isolated_profile::isolate!();
         let d = tempfile::tempdir().unwrap();
         let source = d.path().join("a.afa");
         let tree_path = d.path().join("a.nwk");

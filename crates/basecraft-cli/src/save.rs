@@ -20,7 +20,9 @@ pub(crate) struct Decision {
 
 #[derive(Clone, Copy, Default, clap::Args)]
 pub(crate) struct Options {
-    /// For this invocation's saves only; independent of the known-analysis policy.
+    /// Save anyway when some analyses could not be checked. Applies to every
+    /// save this command makes; the unchecked locations are reported as
+    /// warnings afterwards. Independent of the known-analysis policy.
     #[arg(long, global = true)]
     pub acknowledge_incomplete_evidence: bool,
     /// Known affected analyses still require their own explicit policy.
@@ -77,7 +79,6 @@ pub(crate) fn error_value(error: &Error) -> Value {
                 Denial::Hardlink => "hardlink",
                 Denial::ResourceType => "resource_type",
                 Denial::RootMutation => "root_mutation",
-                Denial::ServiceUnavailable => "service_unavailable",
             };
             value["access"] = json!({"kind":"policy_denied", "reason":reason});
         }
@@ -153,7 +154,7 @@ mod tests {
             serde_json::from_slice(&serde_json::to_vec(&value).unwrap()).unwrap();
         assert_eq!(transported, value);
         for cause in [
-            AccessError::Denied(Denial::ServiceUnavailable),
+            AccessError::Denied(Denial::ReadOnly),
             AccessError::Io(std::io::Error::from_raw_os_error(13)),
             AccessError::DestinationExists,
         ] {
@@ -183,7 +184,6 @@ mod tests {
             (Denial::Hardlink, "hardlink"),
             (Denial::ResourceType, "resource_type"),
             (Denial::RootMutation, "root_mutation"),
-            (Denial::ServiceUnavailable, "service_unavailable"),
         ] {
             let value = error_value(&AccessError::Denied(reason).into());
             let value: Value =

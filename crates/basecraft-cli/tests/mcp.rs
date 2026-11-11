@@ -1,3 +1,5 @@
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_ops::records::AlignmentLinkExt;
 use serde_json::{Value, json};
 use std::{
@@ -13,6 +15,7 @@ fn request(id: u32, name: &str, args: Value) -> Value {
 
 #[test]
 fn stdio_edits_are_version_checked_logged_and_project_scoped() {
+    crate::isolated_profile::isolate!();
     let d = tempfile::tempdir().unwrap();
     std::fs::write(d.path().join("input.afa"), ">a\nACGT\n>b\nACGT\n").unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_basecraft"))
@@ -99,6 +102,7 @@ fn stdio_edits_are_version_checked_logged_and_project_scoped() {
 #[test]
 fn script_clients_record_script_edits() {
     use basecraft_protocol::Actor;
+    crate::isolated_profile::isolate!();
     let d = tempfile::tempdir().unwrap();
     let file = d.path().join("input.afa");
     std::fs::write(&file, ">a\nACGT\n>b\nACGT\n").unwrap();
@@ -215,6 +219,7 @@ fn script_clients_record_script_edits() {
 
 #[test]
 fn mcp_defaults_to_read_only() {
+    crate::isolated_profile::isolate!();
     let d = tempfile::tempdir().unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_basecraft"))
         .args(["mcp", d.path().to_str().unwrap()])
@@ -297,6 +302,7 @@ fn mcp_defaults_to_read_only() {
 
 #[test]
 fn document_record_describes_unsaved_headless_edits_and_undo() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("gene.fasta"), ">gene\nACGT\n").unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_basecraft"))
@@ -424,6 +430,7 @@ impl Client {
 
 #[test]
 fn species_mcp_uses_the_canonical_workspace_contract() {
+    crate::isolated_profile::isolate!();
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().join("working");
     std::fs::create_dir(&root).unwrap();
@@ -466,6 +473,7 @@ fn species_mcp_uses_the_canonical_workspace_contract() {
 
 #[test]
 fn tree_mcp_routes_share_hidden_storage() {
+    crate::isolated_profile::isolate!();
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().join("working");
     std::fs::create_dir(&root).unwrap();
@@ -581,6 +589,7 @@ fn tree_mcp_routes_share_hidden_storage() {
 
 #[test]
 fn agent_save_as_never_replaces_an_existing_other_file() {
+    crate::isolated_profile::isolate!();
     let d = tempfile::tempdir().unwrap();
     std::fs::write(d.path().join("input.afa"), ">a\nACGT\n>b\nACGT\n").unwrap();
     std::fs::write(d.path().join("other.afa"), ">user\nGGGG\n").unwrap();
@@ -673,6 +682,7 @@ fn session(dir: &std::path::Path, writes: bool, messages: &[Value]) -> Vec<Value
 
 #[test]
 fn metadata_tools_respect_write_permission_and_plan_before_applying() {
+    crate::isolated_profile::isolate!();
     let d = tempfile::tempdir().unwrap();
     std::fs::write(d.path().join("rbcL.fasta"), ">HV1|Codium_fragile\nACGT\n").unwrap();
     let readonly = session(
@@ -724,6 +734,7 @@ fn metadata_tools_respect_write_permission_and_plan_before_applying() {
 
 #[test]
 fn submission_tools_respect_write_permission_and_edit_through_apply() {
+    crate::isolated_profile::isolate!();
     let d = tempfile::tempdir().unwrap();
     std::fs::write(d.path().join("its.afa"), ">a\nACGTACGT\n>b\nACGTAC--\n").unwrap();
     let readonly = session(
@@ -790,6 +801,7 @@ fn submission_tools_respect_write_permission_and_edit_through_apply() {
 
 #[test]
 fn submission_selection_confirmation_is_shared_by_mcp_export_and_apply() {
+    crate::isolated_profile::isolate!();
     let d = tempfile::tempdir().unwrap();
     std::fs::write(d.path().join("a.afa"), ">local\nACGT\n>MZ123456.1\nACGT\n").unwrap();
     let replies = session(
@@ -846,6 +858,7 @@ fn submission_selection_confirmation_is_shared_by_mcp_export_and_apply() {
 
 #[test]
 fn wrong_kind_requests_fail_without_mutation_and_the_server_remains_usable() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("input.afa");
     let original = b">a\nACGT\n>b\nACGT\n";
@@ -912,6 +925,7 @@ fn wrong_kind_requests_fail_without_mutation_and_the_server_remains_usable() {
 
 #[test]
 fn cli_submission_show_rejects_an_alignment_without_success_output() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("input.afa");
     let original = b">a\nACGT\n>b\nACGT\n";

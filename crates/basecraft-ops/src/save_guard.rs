@@ -2,9 +2,35 @@
 //! recovery remain with their document owners. Lock order: target, then evidence.
 use std::path::{Path, PathBuf};
 
-use fs4::fs_std::FileExt;
-
 use crate::{Result, error::invalid};
+
+pub(crate) type ChangeStamp = (basecraft_protocol::provenance::FileStamp, i64, i64);
+
+pub(crate) fn change_stamp(path: &Path) -> Result<Option<ChangeStamp>> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    if !metadata.is_file() && !metadata.file_type().is_symlink() {
+        return Err(crate::Error::Unsupported(
+            "save target must be an ordinary file".into(),
+        ));
+    }
+    #[cfg(unix)]
+    let changed = {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = std::fs::metadata(path)?;
+        (metadata.ctime(), metadata.ctime_nsec())
+    };
+    #[cfg(not(unix))]
+    let changed = (0, 0);
+    Ok(Some((
+        crate::input_evidence::stamp(path)?,
+        changed.0,
+        changed.1,
+    )))
+}
 
 pub(crate) fn target_path(path: &Path) -> Result<PathBuf> {
     let absolute = std::path::absolute(path)?;
@@ -24,64 +50,41 @@ pub(crate) fn same_target(a: &Path, b: &Path) -> bool {
     a == b || matches!((target_path(a), target_path(b)), (Ok(a), Ok(b)) if a == b)
 }
 
-/// Cooperating processes hold this through data, binding and provenance writes.
-/// The evidence lock must be acquired afterwards; neither locks external editors.
-pub(crate) fn lock(target: &Path) -> Result<std::fs::File> {
-    let root = lock_root();
-    std::fs::create_dir_all(&root)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))?;
-    }
-    let canonical = target.canonicalize().or_else(|_| target_path(target))?;
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(lock_path(&root, &canonical))?;
-    require_reservation(file.try_lock_exclusive()?)?;
-    Ok(file)
+/// Reserve a save target in this thread's mutation scope. Other threads and
+/// processes get Busy until the scope ends; it does not lock external editors.
+pub(crate) fn lock(target: &Path) -> Result<crate::input_evidence::Locks> {
+    let locks = crate::input_evidence::lock()?;
+    locks.source(target)?;
+    Ok(locks)
 }
 
-pub(crate) fn lock_root() -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "basecraft-save-locks-{}",
-        basecraft_io::hash_bytes(basecraft_platform::username().as_bytes())
-            .trim_start_matches("b3:")
-    ))
-}
-pub(crate) fn lock_path(root: &Path, canonical: &Path) -> PathBuf {
-    let digest = basecraft_io::hash_bytes(canonical.as_os_str().as_encoded_bytes());
-    root.join(format!("{}.lock", digest.trim_start_matches("b3:")))
-}
-pub(crate) fn require_reservation(acquired: bool) -> Result<()> {
-    if acquired {
-        Ok(())
-    } else {
-        Err(invalid(
-            "another Basecraft process is saving this target; retry shortly",
-        ))
-    }
+/// Test helper: another thread holds `target` until the value is dropped.
+#[cfg(test)]
+pub(crate) struct HeldElsewhere(
+    Option<std::sync::mpsc::Sender<()>>,
+    Option<std::thread::JoinHandle<()>>,
+);
+
+#[cfg(test)]
+pub(crate) fn hold_elsewhere(target: &Path) -> HeldElsewhere {
+    let target = target.to_path_buf();
+    let (ready_tx, ready) = std::sync::mpsc::channel();
+    let (release, wait) = std::sync::mpsc::channel::<()>();
+    let thread = std::thread::spawn(move || {
+        let _held = lock(&target).unwrap();
+        ready_tx.send(()).unwrap();
+        let _ = wait.recv();
+    });
+    ready.recv().unwrap();
+    HeldElsewhere(Some(release), Some(thread))
 }
 
-#[allow(dead_code)]
-pub struct Reservation(crate::service_reads::ServiceLockGuard);
-#[allow(dead_code)]
-impl Reservation {
-    pub fn reauthorize(&self, access: &dyn crate::access::Access) -> Result<()> {
-        self.0.reauthorize(access)
+#[cfg(test)]
+impl Drop for HeldElsewhere {
+    fn drop(&mut self) {
+        drop(self.0.take());
+        self.1.take().unwrap().join().unwrap();
     }
-}
-#[allow(dead_code)]
-pub(crate) fn lock_with_access(
-    context: std::sync::Arc<crate::service_reads::ServiceContext>,
-    access: &dyn crate::access::Access,
-    target: &Path,
-    purpose: crate::service_reads::SaveTargetPurpose,
-) -> Result<Reservation> {
-    crate::service_reads::acquire_lock(context, access, Some((target, purpose))).map(Reservation)
 }
 
 pub(crate) fn check_hash(path: &Path, expected: &str) -> Result<()> {
@@ -127,6 +130,7 @@ mod tests {
 
     #[test]
     fn hard_link_destination_is_rejected_on_every_platform() {
+        crate::isolated_profile::isolate!();
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("source");
         let alias = directory.path().join("alias");
@@ -139,6 +143,7 @@ mod tests {
 
     #[test]
     fn concurrent_saver_is_refused_and_edits_remain_saveable() {
+        crate::isolated_profile::isolate!();
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("gene.fasta");
         std::fs::write(&file, ">gene\nACGT\n").unwrap();
@@ -150,20 +155,19 @@ mod tests {
             residues: "T".into(),
         };
         session.apply(doc, edit).unwrap();
-        // Another Basecraft process holds the target through its whole save.
-        let held = super::lock(&dir.path().join("./gene.fasta")).unwrap();
+        // Another saver holds the target through its whole save.
+        let held = super::hold_elsewhere(&dir.path().join("./gene.fasta"));
         for target in [None, Some(file.as_path())] {
-            let error = session.save(doc, target).unwrap_err().to_string();
-            assert!(error.contains("another Basecraft process"), "{error}");
+            let error = session.save(doc, target).unwrap_err();
+            assert!(matches!(error, crate::Error::Busy(_)), "{error}");
         }
-        let figure = super::lock(&dir.path().join("figure.svg")).unwrap();
+        let figure = super::hold_elsewhere(&dir.path().join("figure.svg"));
         let error = session
             .export(doc, &dir.path().join("figure.svg"), "svg", |w| {
                 w.write_all(b"")
             })
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("another Basecraft process"), "{error}");
+            .unwrap_err();
+        assert!(matches!(error, crate::Error::Busy(_)), "{error}");
         assert!(!dir.path().join("figure.svg").exists());
         assert_eq!(std::fs::read_to_string(&file).unwrap(), ">gene\nACGT\n");
         assert!(session.can_undo(doc).unwrap());

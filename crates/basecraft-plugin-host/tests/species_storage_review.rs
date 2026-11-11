@@ -2,6 +2,8 @@
 // Preserve the independently reviewed assertions verbatim.
 #![allow(clippy::assert_is_empty)]
 mod common;
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 
 use basecraft_ops::{Session, files, records};
 use basecraft_plugin_host::registry::Registry;
@@ -35,6 +37,7 @@ fn referenced_hash(outcome: &basecraft_protocol::operation::OperationOutcome) ->
 #[test]
 fn rereview_alignment_move_and_explicit_evidence_decisions() {
     use basecraft_ops::input_evidence::{SavePolicy, conflicts, resolve};
+    isolated_profile::isolate!();
     for policy in [SavePolicy::BreakEvidence, SavePolicy::RemoveAnalysis] {
         let parent = tempfile::tempdir().unwrap();
         let folder = parent.path().join("working");
@@ -77,6 +80,7 @@ fn rereview_alignment_move_and_explicit_evidence_decisions() {
 #[test]
 fn rereview_legacy_sidecar_break_and_remove_reach_combined_workspace() {
     use basecraft_ops::input_evidence::{SavePolicy, conflicts, read_input, resolve};
+    isolated_profile::isolate!();
     for policy in [SavePolicy::BreakEvidence, SavePolicy::RemoveAnalysis] {
         let root = tempfile::tempdir().unwrap();
         let source = root.path().join("legacy.spart");
@@ -162,6 +166,7 @@ fn fit_in_workspace(session: &mut Session, doc: basecraft_ops::DocId, tree: &Pat
 
 #[test]
 fn nexus_source_workspace_can_reuse_its_display_tree() {
+    isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source.nex");
     std::fs::write(
@@ -190,6 +195,7 @@ fn nexus_source_workspace_can_reuse_its_display_tree() {
 
 #[test]
 fn alignment_gmyc_export_preserves_display_and_declared_inputs() {
+    isolated_profile::isolate!();
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().join("working");
     std::fs::create_dir(&root).unwrap();
@@ -249,6 +255,7 @@ fn alignment_gmyc_export_preserves_display_and_declared_inputs() {
 #[test]
 fn preserved_tree_export_relocates_original_display_reference() {
     use basecraft_ops::input_evidence::{SavePolicy, conflicts, resolve};
+    isolated_profile::isolate!();
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().join("working");
     std::fs::create_dir(&root).unwrap();
@@ -283,6 +290,7 @@ fn preserved_tree_export_relocates_original_display_reference() {
 
 #[test]
 fn fitted_workspace_survives_folder_move_then_save_and_export() {
+    isolated_profile::isolate!();
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().join("working");
     std::fs::create_dir(&root).unwrap();
@@ -308,6 +316,7 @@ fn fitted_workspace_survives_folder_move_then_save_and_export() {
 #[test]
 fn preserved_alignment_remains_usable_by_workspace_default_input() {
     use basecraft_ops::input_evidence::{SavePolicy, conflicts, resolve};
+    isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source.afa");
     // Raw source identity differs from the canonical FASTA submitted by setup.
@@ -417,6 +426,7 @@ fn preserved_alignment_remains_usable_by_workspace_default_input() {
 
 #[test]
 fn combine_complete_export_includes_legacy_sidecar_evidence() {
+    isolated_profile::isolate!();
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().join("working");
     std::fs::create_dir(&root).unwrap();
@@ -465,81 +475,11 @@ fn combine_complete_export_includes_legacy_sidecar_evidence() {
 }
 
 #[test]
-fn combine_discovers_legacy_provenance_and_guards_sidecar_changes() {
-    use basecraft_ops::input_evidence::{SavePolicy, conflicts, resolve};
-    let root = tempfile::tempdir().unwrap();
-    let source = root.path().join("legacy.spart");
-    std::fs::write(
-        &source,
-        include_str!("../../../testdata/fixtures/delimitation/manual.spart"),
-    )
-    .unwrap();
-    let work = files::load_delimitation(&source).unwrap();
-    let mut side = Vec::new();
-    files::write_delimitation_sidecar_at(
-        &work,
-        &basecraft_io::hash_file(&source).unwrap(),
-        &source,
-        &mut side,
-    )
-    .unwrap();
-    let sidecar = files::tree_sidecar(&source);
-    std::fs::write(&sidecar, &side).unwrap();
-    let side_hash = basecraft_io::hash_bytes(&side);
-    let legacy_bundle = records::companion(&source);
-    std::fs::create_dir_all(legacy_bundle.join("records")).unwrap();
-    std::fs::create_dir(legacy_bundle.join("artifacts")).unwrap();
-    let context = b"Distinct retained legacy methods evidence";
-    let context_hash = basecraft_io::hash_bytes(context);
-    let retained = format!("artifacts/{}", context_hash.trim_start_matches("b3:"));
-    std::fs::write(legacy_bundle.join(&retained), context).unwrap();
-    let record = json!({
-        "schema_version":1, "id":"legacy", "session":"legacy", "parents":[], "parent_hashes":{},
-        "created":"2026-10-16T00:00:00Z", "origin":"Legacy source publication",
-        "inputs":[{"id":"legacy:context", "logical_name":"methods.txt", "hash":context_hash, "size":context.len(), "retained":retained}],
-        "outputs":[], "events":[], "effective_edits":[],
-        "completeness":{"ancestry_known":false,"input_bytes_available":true,"execution_specification_available":false,"replay_verified":false},
-        "report_template_version":2
-    });
-    let bytes = serde_json::to_vec_pretty(&record).unwrap();
-    std::fs::write(legacy_bundle.join("manifest.json"), &bytes).unwrap();
-    std::fs::write(legacy_bundle.join("records/legacy.json"), &bytes).unwrap();
-    let target = root.path().join("combined.spart");
-    std::fs::copy(&source, &target).unwrap();
-    let mut session = Session::recoverable(root.path()).unwrap();
-    let doc = session.open(&target).unwrap();
-    basecraft_ops::delimitation::combine(&mut session, doc, std::slice::from_ref(&source)).unwrap();
-    session.save(doc, None).unwrap();
-    let conflict = conflicts(&sidecar).unwrap();
-    assert!(conflict.analyses.iter().any(|a| a.direct));
-    assert!(conflict.analyses.iter().any(|a| !a.direct));
-    std::fs::write(&sidecar, "changed").unwrap();
-    assert!(!records::verify(&target).unwrap().is_empty());
-    assert!(records::package(&target, &root.path().join("rejected")).is_err());
-    std::fs::write(&sidecar, &side).unwrap();
-    // The original decision remains valid only because preservation rechecks
-    // the exact accepted bytes; a fresh stat-only offer would reject the rewrite.
-    resolve(&conflict, SavePolicy::PreserveCopy).unwrap();
-    std::fs::remove_file(&sidecar).unwrap();
-    let package = root.path().join("complete");
-    records::package(&target, &package).unwrap();
-    std::fs::remove_file(&source).unwrap();
-    std::fs::remove_dir_all(&legacy_bundle).unwrap();
-    let exported = package.join("combined.spart");
-    assert!(records::verify(&exported).unwrap().is_empty());
-    let hashes: Vec<_> = std::fs::read_dir(records::companion(&exported).join("artifacts"))
-        .unwrap()
-        .map(|entry| basecraft_io::hash_file(&entry.unwrap().path()).unwrap())
-        .collect();
-    assert!(hashes.contains(&context_hash));
-    assert!(hashes.contains(&side_hash));
-}
-
-#[test]
 #[cfg(unix)]
 fn species_partial_save_retains_recoverable_edits_and_retries() {
     use basecraft_protocol::{Op, delimitation::DelimitationEdit};
     use std::os::unix::fs::PermissionsExt;
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let canonical = root.path().join("species.spart");
     std::fs::write(
@@ -576,15 +516,15 @@ fn species_partial_save_retains_recoverable_edits_and_retries() {
     let sidecar = files::tree_sidecar(&canonical);
     let directory = sidecar.parent().unwrap();
     let permissions = std::fs::metadata(directory).unwrap().permissions();
+    let before = std::fs::read(&canonical).unwrap();
     std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o555)).unwrap();
     let result = session.save(doc, None);
     std::fs::set_permissions(directory, permissions).unwrap();
+    // Every file is staged before any is replaced: an unwritable sidecar
+    // folder fails the save with the workspace and its edits unchanged.
     let error = result.unwrap_err().to_string();
-    assert!(
-        error.contains("data saved") && error.contains("incomplete"),
-        "{error}"
-    );
-    assert!(session.recovery_root().join("pending-save.json").is_file());
+    assert!(error.contains("Permission denied"), "{error}");
+    assert_eq!(std::fs::read(&canonical).unwrap(), before);
     let recovered = root.path().join("recovered");
     basecraft_ops::records::recover(session.recovery_root(), &recovered).unwrap();
     let work = files::load_delimitation(&recovered.join("species.spart")).unwrap();

@@ -4,6 +4,8 @@
 #[path = "support/sanger_fixture.rs"]
 mod sanger_fixture;
 
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 use std::{
     collections::BTreeMap,
     fmt::Debug,
@@ -169,6 +171,7 @@ fn replace_fixture_log(root: &Path, entries: &[basecraft_protocol::LogEntry]) {
 
 #[test]
 fn sequence() {
+    crate::isolated_profile::isolate!();
     let snapshot = |s: &Session, d| {
         let seq = s.checked_sequence(d).unwrap();
         (
@@ -226,6 +229,7 @@ fn sequence() {
 
 #[test]
 fn alignment() {
+    crate::isolated_profile::isolate!();
     let snapshot = |s: &Session, d| {
         assert!(s.is_alignment(d));
         let a = s.alignment(d).unwrap();
@@ -267,6 +271,7 @@ fn alignment() {
 
 #[test]
 fn tree() {
+    crate::isolated_profile::isolate!();
     let snapshot = |s: &Session, d| {
         assert!(s.is_tree(d));
         let tree = s.tree(d).unwrap();
@@ -317,6 +322,7 @@ fn tree() {
 
 #[test]
 fn delimitation() {
+    crate::isolated_profile::isolate!();
     let snapshot = |s: &Session, d| {
         assert!(s.is_delimitation(d));
         s.delimitation(d).unwrap().clone()
@@ -353,6 +359,7 @@ fn delimitation() {
 
 #[test]
 fn metadata() {
+    crate::isolated_profile::isolate!();
     let snapshot = |s: &Session, d| {
         assert!(s.is_metadata(d));
         s.metadata(d).unwrap().clone()
@@ -388,6 +395,7 @@ fn metadata() {
 
 #[test]
 fn submission() {
+    crate::isolated_profile::isolate!();
     let snapshot = |s: &Session, d| {
         assert!(s.is_submission(d));
         s.submission(d).unwrap().clone()
@@ -553,6 +561,7 @@ fn assert_checked_access(session: &Session, doc: DocId, actual_kind: basecraft_o
 
 #[test]
 fn getters_reject_an_empty_session() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let session = Session::unlogged(dir.path());
     let id = DocId(0);
@@ -579,6 +588,7 @@ fn getters_reject_an_empty_session() {
 
 #[test]
 fn wrong_kind_extraction_does_not_begin_tracking_or_publish_output() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let tree = fixture(dir.path(), "tree.nwk", b"(A:1,B:1);");
     let mut session = Session::new(dir.path());
@@ -606,11 +616,13 @@ fn wrong_kind_extraction_does_not_begin_tracking_or_publish_output() {
 
 #[test]
 fn sanger_review() {
+    crate::isolated_profile::isolate!();
     sanger_scenario("sanger_review", "single.json");
 }
 
 #[test]
 fn sanger_review_multiple_call_sets() {
+    crate::isolated_profile::isolate!();
     sanger_scenario("sanger_review_multiple_call_sets", "multi.json");
 }
 

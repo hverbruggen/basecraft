@@ -1,5 +1,7 @@
 //! GenBank marker submissions: the document, review, package, validation
 //! records, accessions, undo and replay.
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
 #[path = "support/submission_run.rs"]
 mod submission_run;
 use std::path::{Path, PathBuf};
@@ -144,6 +146,7 @@ fn rbcl(s: &mut Session) -> DocId {
 
 #[test]
 fn coding_review_frames_undo_save_reload_and_replay() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     project(root);
@@ -222,6 +225,7 @@ fn coding_review_frames_undo_save_reload_and_replay() {
 
 #[test]
 fn changed_source_is_refused_until_chosen_again() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     project(root);
@@ -245,6 +249,7 @@ fn changed_source_is_refused_until_chosen_again() {
 
 #[test]
 fn package_is_deterministic_and_validation_is_tied_to_its_inputs() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     project(root);
@@ -429,6 +434,7 @@ fn package_is_deterministic_and_validation_is_tied_to_its_inputs() {
 
 #[test]
 fn accessions_import_and_table() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     project(root);
@@ -458,6 +464,7 @@ fn accessions_import_and_table() {
 
 #[test]
 fn rrna_its_and_coi_batches() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     project(root);
@@ -583,6 +590,7 @@ fn rrna_its_and_coi_batches() {
 
 #[test]
 fn selection_confirmation_blocks_export_and_survives_undo_reload_and_replay() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     std::fs::write(
@@ -718,6 +726,7 @@ fn selection_confirmation_blocks_export_and_survives_undo_reload_and_replay() {
 #[test]
 fn stored_accession_changes_invalidate_confirmation_but_preserve_explicit_choices() {
     use basecraft_protocol::metadata::{Cell, CellChange, ChangeSet};
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     project(root);
@@ -799,6 +808,7 @@ fn inclusion_rule() -> basecraft_protocol::submission::InclusionRule {
 
 #[test]
 fn inclusion_preview_is_atomic_stale_safe_undoable_and_replayable() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let fasta = root.path().join("names.fas");
     std::fs::write(
@@ -896,6 +906,7 @@ fn inclusion_preview_is_atomic_stale_safe_undoable_and_replayable() {
 
 #[test]
 fn inclusion_rejects_metadata_changes_and_preserves_manual_origins() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     project(root.path());
     let mut session = Session::new(root.path());
@@ -949,6 +960,7 @@ fn inclusion_rejects_metadata_changes_and_preserves_manual_origins() {
 
 #[test]
 fn cached_review_invalidates_source_metadata_and_relevant_settings() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     project(root.path());
     let mut session = Session::new(root.path());
@@ -1026,6 +1038,7 @@ fn cached_review_invalidates_source_metadata_and_relevant_settings() {
 
 #[test]
 fn distinct_details_export_undo_replay_and_save_failure_keep_memory_recoverable() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     project(root.path());
     let mut session = Session::new(root.path());
@@ -1096,6 +1109,7 @@ fn distinct_details_export_undo_replay_and_save_failure_keep_memory_recoverable(
 
 #[test]
 fn inclusion_presets_reuse_the_open_metadata_owner_and_preserve_pending_edits() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let mut session = Session::new(root.path());
     let doc = metadata::open(&mut session, true).unwrap().unwrap();
@@ -1136,6 +1150,7 @@ fn inclusion_presets_reuse_the_open_metadata_owner_and_preserve_pending_edits() 
 
 #[test]
 fn parsed_full_middle_names_and_initials_reach_distinct_export_citations() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     project(root.path());
     let mut session = Session::new(root.path());
@@ -1197,6 +1212,7 @@ fn parsed_full_middle_names_and_initials_reach_distinct_export_citations() {
 
 #[test]
 fn rejected_edit_and_wrong_save_format_preserve_submission_undo_redo() {
+    crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     project(root.path());
     let mut session = Session::new(root.path());
