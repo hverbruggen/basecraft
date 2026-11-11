@@ -116,6 +116,11 @@ impl Slot {
         }));
     }
 
+    /// The undo stack, or the redo stack.
+    fn stack(&mut self, undo: bool) -> &mut Vec<Applied> {
+        if undo { &mut self.undo } else { &mut self.redo }
+    }
+
     /// Every edit in effect, oldest first.
     fn effective(&self) -> Result<Vec<basecraft_protocol::provenance::EditActivity>> {
         let mut effective = self.settled.matching(|_| true)?;
