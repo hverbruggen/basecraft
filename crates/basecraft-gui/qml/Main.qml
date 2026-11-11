@@ -48,12 +48,8 @@ ApplicationWindow {
         quitDialog.ask(unsaved)
     }
     function unsavedTabs() {
-        const out = []
-        for (let i = 0; i < openFiles.count; i++) {
-            const d = window.documentAt(i)
-            if (d && d.controller.dirty) out.push(documentTarget(i))
-        }
-        return out
+        return Array.from({length: openFiles.count}, (_, i) => documentTarget(i))
+            .filter(target => target && target.controller.dirty)
     }
 
     palette.window: shell.background
@@ -68,7 +64,7 @@ ApplicationWindow {
     // Theme, font and project folder, whether or not a file is open.
     GenomeController { id: shell }
 
-    property alias ribbonNavigation: ribbonHints
+    readonly property var ribbonNavigation: ribbonHints
     RibbonKeyHints {
         id: ribbonHints
         parent: window.contentItem
@@ -235,31 +231,17 @@ ApplicationWindow {
     property bool preferencesReady: false
     AppSettings {
         id: preferences
-        onSnapshotChanged: {
-            if (!window.preferencesReady) return
-            const prefs = JSON.parse(snapshot)
-            window.preferencesReady = false
-            window.showGc = prefs.ui.show_gc
-            window.sidebarOpen = prefs.ui.sidebar_open
-            window.orfMinCodons = prefs.ui.orf_min_codons
-            window.alignmentInsert = prefs.ui.alignment_insert
-            window.localCpuThreads = Math.min(window.availableCpuThreads, prefs.compute.local_cpu_threads)
-            window.preferencesReady = true
-        }
+        onSnapshotChanged: if (window.preferencesReady) window.applyPreferences()
         onErrorChanged: if (error.length && window.preferencesReady) {
             preferencesError.open()
         }
     }
-    // Read the original QSettings store only for one-time import. No aliases
-    // or assignments write back into it.
-    Settings { id: legacyPreferences; category: "ui" }
     function persistPreference(key, value) {
         if (preferencesReady) preferences.update(key, JSON.stringify(value))
     }
     AppContentDialog {
         id: preferencesError
         title: "Preferences could not be loaded or saved"
-        modal: true
         standardButtons: Dialog.Close
         body: ColumnLayout {
             AppErrorLabel {
@@ -279,10 +261,10 @@ ApplicationWindow {
     function loadPreferences() {
         preferencesReady = false
         if (!preferences.reload()) return
-        const legacy = {}
-        for (const key of ["showGc", "sidebarOpen", "orfMinCodons", "alignmentInsert", "localCpuThreads"])
-            legacy[key] = legacyPreferences.value(key, null)
-        if (!preferences.import_legacy(JSON.stringify(legacy))) return
+        applyPreferences()
+    }
+    function applyPreferences() {
+        preferencesReady = false
         const prefs = JSON.parse(preferences.snapshot)
         showGc = prefs.ui.show_gc
         sidebarOpen = prefs.ui.sidebar_open
@@ -299,7 +281,7 @@ ApplicationWindow {
         return path.length ? shell.parent_folder_url(path) : shell.local_file_url(shell.project_dir)
     }
     function projectPickerFolder() {
-        const home = window.localPath(StandardPaths.writableLocation(StandardPaths.HomeLocation))
+        const home = shell.local_file_path(StandardPaths.writableLocation(StandardPaths.HomeLocation))
         return shell.local_file_url(preferences.project_picker_directory(home))
     }
     property var projectDialog: null
@@ -311,8 +293,6 @@ ApplicationWindow {
         if (projectDialog) projectDialog.open()
     }
 
-    function showActivity() { tasksDialog.open() }
-    function localPath(url) { return shell.local_file_path(url) }
 
     property bool focusOpenedDocument: false
 
@@ -505,9 +485,8 @@ ApplicationWindow {
         title: "Combine saved species hypotheses"
         fileMode: FileDialog.OpenFiles
         nameFilters: ["Species hypotheses (*.spart *.spartxml *.spart-xml *.xml)"]
-        currentFolder: window.activeFolder()
         onVisibleChanged: if (visible) currentFolder = window.activeFolder()
-        readonly property var paths: Array.from(selectedFiles, url => window.localPath(url))
+        readonly property var paths: Array.from(selectedFiles, url => shell.local_file_path(url))
         onAccepted: {
             if (selectedFiles.length < 2) { combineError.message = "Choose at least two species hypothesis files."; combineError.open(); return }
             const candidates = JSON.parse(combineController.combine_candidates(JSON.stringify(paths)))
@@ -535,7 +514,7 @@ ApplicationWindow {
         defaultSuffix: "spart"
         nameFilters: ["Species hypotheses (*.spart)"]
         onAccepted: {
-            const output = window.localPath(selectedFile)
+            const output = shell.local_file_path(selectedFile)
             if (combineController.combine_files(JSON.stringify(combinePicker.paths), output, combineChoice.selection)) window.openPath(output)
             else { combineError.message = combineController.message; combineError.open() }
         }
@@ -842,7 +821,7 @@ ApplicationWindow {
     FolderDialog {
         id: reportFolder
         title: "Export the selected revision's report"
-        onAccepted: { provenance.export_report(window.frozenReport, window.localPath(selectedFolder)); provenanceDialog.open() }
+        onAccepted: { provenance.export_report(window.frozenReport, shell.local_file_path(selectedFolder)); provenanceDialog.open() }
     }
     FileDialog {
         id: authoredFile
@@ -850,7 +829,7 @@ ApplicationWindow {
         fileMode: FileDialog.SaveFile
         nameFilters: ["Markdown (*.md)"]
         onAccepted: {
-            if (provenance.save_authored(window.localPath(selectedFile), window.frozenDraft, window.frozenDraftRevision))
+            if (provenance.save_authored(shell.local_file_path(selectedFile), window.frozenDraft, window.frozenDraftRevision))
                 documentRecord.markDraftSaved(window.frozenDraftKey, window.frozenDraft)
         }
     }
@@ -974,7 +953,7 @@ ApplicationWindow {
         id: provenanceFolder
         title: window.provenanceExport === "methods" ? "Choose the folder for generated reports" : window.provenanceExport === "recover" ? "Choose the parent folder for recovered copies" : "Choose the parent folder for a new reproduction package"
         onAccepted: {
-            let destination = window.localPath(selectedFolder)
+            let destination = shell.local_file_path(selectedFolder)
             if (window.provenanceExport === "package") destination += "/" + window.fileName(window.provenanceSource) + ".reproduction"
             if (window.provenanceExport === "recover") destination += "/" + window.fileName(window.provenanceSource) + ".recovered"
             provenanceDialog.open()
@@ -1784,7 +1763,7 @@ ApplicationWindow {
                 const doc = JSON.parse(submissions.document || "{}")
                 defaults = {title: (doc.publication || {}).title || "", creators: doc.publication_authors_text || ""}
             }
-            zenodoDialog.show(Array.from(selectedFiles, url => window.localPath(url)), shell.project_dir, defaults)
+            zenodoDialog.show(Array.from(selectedFiles, url => shell.local_file_path(url)), shell.project_dir, defaults)
         }
     }
 
@@ -1929,10 +1908,9 @@ ApplicationWindow {
     FileDialog {
         id: submissionPicker
         title: "Open a GenBank submission"
-        currentFolder: window.activeFolder()
         onVisibleChanged: if (visible) currentFolder = window.activeFolder()
         nameFilters: ["Submissions (*.submission.json)"]
-        onAccepted: window.openSubmission(window.localPath(selectedFile))
+        onAccepted: window.openSubmission(shell.local_file_path(selectedFile))
     }
     FileDialog {
         id: accessionTableDestination
@@ -1940,7 +1918,7 @@ ApplicationWindow {
         fileMode: FileDialog.SaveFile
         defaultSuffix: "tsv"
         nameFilters: ["Tab-separated table (*.tsv)"]
-        onAccepted: submissions.write_accession_table(window.localPath(selectedFile))
+        onAccepted: submissions.write_accession_table(shell.local_file_path(selectedFile))
     }
     MetadataReviewDialog {
         id: metadataReview
@@ -1950,10 +1928,9 @@ ApplicationWindow {
     FileDialog {
         id: metadataSheetPicker
         title: "Import specimen data from a spreadsheet"
-        currentFolder: window.activeFolder()
         onVisibleChanged: if (visible) currentFolder = window.activeFolder()
         nameFilters: ["Spreadsheets (*.ods *.xlsx *.xls *.csv *.tsv)", "All files (*)"]
-        onAccepted: window.beginMetadataImport("sheet", window.localPath(selectedFile))
+        onAccepted: window.beginMetadataImport("sheet", shell.local_file_path(selectedFile))
     }
     FileDialog {
         id: metadataTemplateDestination
@@ -1963,7 +1940,7 @@ ApplicationWindow {
         nameFilters: ["OpenDocument spreadsheet (*.ods)"]
         onAccepted: {
             if (!specimenMetadata.available) specimenMetadata.create()
-            specimenMetadata.write_template(window.metadataFasta, window.localPath(selectedFile))
+            specimenMetadata.write_template(window.metadataFasta, shell.local_file_path(selectedFile))
         }
     }
 
@@ -1981,7 +1958,6 @@ ApplicationWindow {
             open()
         }
         title: inSelection ? "Find open reading frames in the selection" : "Find open reading frames"
-        modal: true
         standardButtons: Dialog.Ok | Dialog.Cancel
         onOpened: codons.forceActiveFocus()
         onAccepted: {
@@ -2032,7 +2008,6 @@ ApplicationWindow {
             open()
         }
         title: inSelection ? "Predict genes in the selection" : "Predict genes"
-        modal: true
         standardButtons: Dialog.Ok | Dialog.Cancel
         onOpened: codeBox.forceActiveFocus()
         onAccepted: if (source && source.file_path === sourcePath && !source.busy) source.predict_genes(geneticCodes.get(codeBox.currentIndex).code, inSelection)
@@ -2094,95 +2069,46 @@ ApplicationWindow {
     FileDialog {
         id: openDialog
         title: "Open a sequence, alignment, trace, review or tree"
-        currentFolder: window.activeFolder()
         onVisibleChanged: if (visible) currentFolder = window.activeFolder()
         nameFilters: ["Sequences, alignments, traces and trees (*.gb *.gbk *.genbank *.gbff *.fasta *.fa *.fna *.fas *.ffn *.faa *.afa *.ab1 *.abi *.json *.nwk *.newick *.tre *.tree *.trees *.treefile *.contree *.nex *.nexus *.nxs)", "All files (*)"]
-        onAccepted: window.openPath(window.localPath(selectedFile))
+        onAccepted: window.openPath(shell.local_file_path(selectedFile))
     }
 
-    property var pendingEvidenceSave: null
     function saveTarget(owner, path, continuation) {
-        if (targetIndex(owner) < 0) { if (continuation) continuation(false); return }
-        if (!path && owner.path.startsWith("untitled:")) {
-            saveDialog.target = owner
-            saveDialog.continuation = continuation
-            saveDialog.selectedFile = shell.local_file_url(owner.path.split("/").pop())
-            saveDialog.open()
-            return
-        }
-        const target = path || owner.path
-        const inspected = JSON.parse(owner.controller.check_save(path || ""))
-        if (inspected.error) { provenance.notification(target, inspected.error, "fail"); return }
-        const check = inspected.check
-        const perform = function(policy, acknowledge) {
-            const row = targetIndex(owner)
-            if (row < 0) { if (continuation) continuation(false); return }
-            const success = owner.controller.save_confirmed(path || "", check.token, policy || "cancel", acknowledge || false)
-            if (success && path) {
-                openFiles.setProperty(row, "path", path)
-                documentOpens.path_changed(owner.token, path, owner.controller.file_path)
-                owner.path = path
+        evidenceSave.request = {owner: owner, continuation: continuation}
+        evidenceSave.owner = null
+        evidenceSave.target = path || ""
+        if (!path && owner && owner.path.startsWith("untitled:")) evidenceSave.chooseDestination()
+        else evidenceSave.inspect(true)
+    }
+    AutoSaveEvidence {
+        id: evidenceSave
+        property var request: null
+        controller: request && request.owner ? request.owner.controller : null
+        evidenceService: provenance
+        fileUrls: shell
+        automatic: false
+        dialogName: "evidenceSaveDialog"
+        valid: () => request && window.targetIndex(request.owner) >= 0
+        chooseDestination: () => window.saveAs(request.owner, request.continuation)
+        onFailed: message => provenance.notification(target || request.owner.path, message, "fail")
+        onFinished: success => {
+            const owner = request.owner
+            if (success && target) {
+                openFiles.setProperty(window.targetIndex(owner), "path", target)
+                documentOpens.path_changed(owner.token, target, owner.controller.file_path)
+                owner.path = target
                 Qt.callLater(window.refreshCurrent)
             }
-            if (!success) {
-                const refreshed = JSON.parse(owner.controller.check_save(path || ""))
-                if (refreshed.check && (refreshed.check.evidence.issues.length || refreshed.check.evidence.conflict.analyses.length)) showEvidence(refreshed.check)
-            }
-            if (continuation) continuation(success)
-        }
-        const showEvidence = function(fresh) {
-            pendingEvidenceSave = {owner: owner, target: target, retry: function() { window.saveTarget(owner, path, continuation) },
-                saveAs: function() { saveDialog.target = owner; saveDialog.continuation = continuation; saveDialog.open() },
-                perform: function(policy, acknowledge) {
-                    // The callback captures precisely the displayed receipt.
-                    check.token = fresh.token
-                    perform(policy, acknowledge)
-                }}
-            evidenceSaveDialog.check = fresh
-            evidenceSaveDialog.errorText = ""
-            evidenceSaveDialog.open()
-        }
-        if ((check.evidence.conflict.analyses || []).length || (check.evidence.issues || []).length) showEvidence(check)
-        else perform("cancel", false)
-    }
-    function validEvidenceSave() {
-        const pending = pendingEvidenceSave
-        if (pending && targetIndex(pending.owner) >= 0) return pending
-        pendingEvidenceSave = null
-        evidenceSaveDialog.close()
-        return null
-    }
-    AnalysisEvidenceDialog {
-        id: evidenceSaveDialog
-        objectName: "evidenceSaveDialog"
-        onRejected: window.pendingEvidenceSave = null
-        onRetry: { const pending = window.validEvidenceSave(); if (pending) { close(); pending.retry() } }
-        onSaveAs: { const pending = window.validEvidenceSave(); if (pending) { close(); pending.saveAs() } }
-        onRelinkOriginal: function(path) {
-            const pending = window.validEvidenceSave()
-            if (!pending) return
-            for (const analysis of conflict.analyses || []) {
-                if (analysis.direct === false) continue
-                if (!provenance.relink_run(analysis.run, path)) { errorText = provenance.message; return }
-            }
-            close()
-            pending.retry()
-        }
-        onChoice: function(policy) {
-            const pending = window.validEvidenceSave()
-            if (!pending) return
-            window.pendingEvidenceSave = null
-            close()
-            pending.perform(policy, acknowledgeIncomplete)
+            request.continuation && request.continuation(success)
         }
     }
     function saveBeforeQuit(targets, offset) {
         if (offset >= targets.length) {
             const left = window.unsavedTabs()
             if (left.length) {
-                quitDialog.unsaved = left
+                quitDialog.ask(left)
                 quitError.text = "Some files could not be saved. Review their notifications and retry."
-                quitDialog.open()
             } else { window.closeConfirmed = true; window.close() }
             return
         }
@@ -2197,12 +2123,12 @@ ApplicationWindow {
     }
 
     // Save the active tab under a new name; the tab then shows the new file.
-    function saveAs() {
-        if (!window.current) return
-        if (window.traceOpen) { window.traceDocument.saveReview(); return }
-        saveDialog.target = documentTarget(tabs.currentIndex)
-        saveDialog.continuation = null
-        saveDialog.selectedFile = shell.local_file_url(window.currentPath.startsWith("untitled:") ? window.fileName(window.currentPath) : window.currentPath)
+    function saveAs(owner = documentTarget(tabs.currentIndex), continuation = null) {
+        if (!owner) return
+        if (owner.controller === window.current && window.traceOpen) { window.traceDocument.saveReview(); return }
+        saveDialog.target = owner
+        saveDialog.continuation = continuation
+        saveDialog.selectedFile = shell.local_file_url(owner.path.startsWith("untitled:") ? window.fileName(owner.path) : owner.path)
         saveDialog.open()
     }
 
@@ -2221,11 +2147,10 @@ ApplicationWindow {
         property var continuation: null
         title: "Save as"
         fileMode: FileDialog.SaveFile
-        currentFolder: window.activeFolder()
         onVisibleChanged: if (visible) currentFolder = window.activeFolder()
         onAccepted: {
             const owner = target
-            const path = window.localPath(selectedFile)
+            const path = shell.local_file_path(selectedFile)
             const next = continuation
             target = null
             continuation = null
@@ -2239,7 +2164,7 @@ ApplicationWindow {
             parentWindow: window
             title: "Open or create a project folder"
             onAccepted: {
-                window.selectProject(window.localPath(selectedFolder))
+                window.selectProject(shell.local_file_path(selectedFolder))
                 window.projectDialog = null
                 destroy()
             }
@@ -2717,7 +2642,6 @@ ApplicationWindow {
         initialFocusItem: rootShare
         property var info: ({ side: "", other: "", length: 0, share: 0.5 })
         title: "Root position"
-        modal: true
         standardButtons: Dialog.Ok | Dialog.Cancel
         function ask() {
             if (!window.treeOpen) return
@@ -2778,12 +2702,11 @@ ApplicationWindow {
     FileDialog {
         id: supportFile
         title: "Add support values from another tree"
-        currentFolder: window.activeFolder()
         onVisibleChanged: if (visible) currentFolder = window.activeFolder()
         nameFilters: ["Trees (*.nwk *.newick *.tre *.tree *.trees *.treefile *.contree *.nex *.nexus *.nxs)", "All files (*)"]
         onAccepted: {
             supportName.controller = window.current
-            supportName.path = window.localPath(selectedFile)
+            supportName.path = shell.local_file_path(selectedFile)
             supportName.metadata = JSON.parse(supportName.controller.support_import_json(supportName.path))
             supportName.open()
         }
@@ -2795,7 +2718,6 @@ ApplicationWindow {
         property var controller: null
         property var metadata: ({sets: []})
         title: "Name the support values"
-        modal: true
         standardButtons: Dialog.Ok | Dialog.Cancel
         onOpened: { supportNameField.text = metadata.sets.length === 1 ? metadata.sets[0].name : ""; supportNameField.forceActiveFocus() }
         onAccepted: if (controller && !metadata.error) controller.add_support_from(path, supportNameField.text)
@@ -2834,7 +2756,6 @@ ApplicationWindow {
             editRevision = target.record_revision()
             open()
         }
-        currentFolder: window.activeFolder()
         onVisibleChanged: if (visible) currentFolder = window.activeFolder()
         title: "Link an alignment to this tree"
         nameFilters: ["FASTA alignments (*.fasta *.fa *.fas *.afa)"]
@@ -2845,7 +2766,7 @@ ApplicationWindow {
                 editController.message = "The tree changed. Choose the linked alignment again."
                 return
             }
-            editController.link_alignment(window.localPath(selectedFile))
+            editController.link_alignment(shell.local_file_path(selectedFile))
         }
     }
 
@@ -2866,7 +2787,6 @@ ApplicationWindow {
         property string format: "svg"
         property bool alignment: false
         title: format === "png" ? "Export PNG" : "Export editable SVG"
-        modal: true
         standardButtons: Dialog.Ok | Dialog.Cancel
         body: ColumnLayout {
             Label { id: svgScopeLabel; text: "Region" }
@@ -2902,7 +2822,6 @@ ApplicationWindow {
     }
     FileDialog {
         id: svgDialog
-        currentFolder: window.activeFolder()
         onVisibleChanged: if (visible) currentFolder = window.activeFolder()
         property var controller: null
         property string sourcePath: ""
@@ -2917,10 +2836,10 @@ ApplicationWindow {
         nameFilters: format === "png" ? ["PNG images (*.png)"] : ["SVG figures (*.svg)"]
         onAccepted: {
             if (!controller) return
-            if (alignment && format === "png") controller.export_figure_png_selection(window.localPath(selectedFile), scope, publication, rasterWidth, includeSelection)
-            else if (alignment) controller.export_figure_selection(window.localPath(selectedFile), scope, publication, includeSelection)
-            else if (format === "png") controller.export_figure_png(window.localPath(selectedFile), scope, publication, rasterWidth)
-            else controller.export_figure(window.localPath(selectedFile), scope, publication)
+            if (alignment && format === "png") controller.export_figure_png_selection(shell.local_file_path(selectedFile), scope, publication, rasterWidth, includeSelection)
+            else if (alignment) controller.export_figure_selection(shell.local_file_path(selectedFile), scope, publication, includeSelection)
+            else if (format === "png") controller.export_figure_png(shell.local_file_path(selectedFile), scope, publication, rasterWidth)
+            else controller.export_figure(shell.local_file_path(selectedFile), scope, publication)
         }
     }
 
@@ -2950,8 +2869,6 @@ ApplicationWindow {
         onRejected: window.discardAuthoredOnQuit = false
         property var unsaved: []
         title: "Save changes before closing?"
-        modal: true
-        anchors.centerIn: Overlay.overlay
         standardButtons: Dialog.Save | Dialog.Discard | Dialog.Cancel
         function ask(targets) {
             unsaved = targets
@@ -2998,8 +2915,6 @@ ApplicationWindow {
         property var target: null
         property string saveError: ""
         title: "Save changes?"
-        modal: true
-        anchors.centerIn: Overlay.overlay
         standardButtons: Dialog.Save | Dialog.Discard | Dialog.Cancel
         AppErrorLabel {
             Accessible.role: confirmClose.saveError.length ? Accessible.AlertMessage : Accessible.StaticText

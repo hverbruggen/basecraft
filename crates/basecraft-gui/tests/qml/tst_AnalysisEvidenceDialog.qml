@@ -14,6 +14,10 @@ TestCase {
     SignalSpy { id: choiceSpy; signalName: "choice" }
     SignalSpy { id: rejectSpy; signalName: "rejected" }
     function clickButton(button) { waitForRendering(button); mouseClick(button, button.width / 2, button.height / 2) }
+    function action(dialog, name) {
+        tryVerify(() => findChild(dialog, name) !== null)
+        return findChild(dialog, name)
+    }
     function test_choices_and_escape() {
         const dialog = createTemporaryObject(dialogComponent, testCase)
         dialog.conflict = {analyses: [{result: "genes.mafft.fasta"}, {result: "genes.nwk"}], options: ["cancel", "preserve_copy", "remove_analysis", "break_evidence"]}
@@ -21,7 +25,7 @@ TestCase {
         rejectSpy.target = dialog
         dialog.open()
         tryCompare(dialog, "opened", true)
-        const preserve = findChild(dialog, "preserveInput")
+        const preserve = action(dialog, "preserveInput")
         tryCompare(preserve, "visible", true)
         verify(preserve.enabled)
         clickButton(preserve)
@@ -31,7 +35,7 @@ TestCase {
         clickButton(findChild(dialog, "breakEvidence"))
         compare(choiceSpy.signalArguments[2][0], "break_evidence")
         dialog.conflict = {analyses: [{result: "missing.nwk"}], options: ["cancel", "remove_analysis", "break_evidence"]}
-        verify(!preserve.enabled)
+        verify(!action(dialog, "preserveInput").enabled)
         dialog.forceActiveFocus()
         keyClick(Qt.Key_Escape)
         tryCompare(dialog, "visible", false)
@@ -72,7 +76,7 @@ TestCase {
         dialog.open()
         tryCompare(dialog, "opened", true)
         verify(!findChild(dialog, "saveUnchecked").visible)
-        verify(!findChild(dialog, "preserveInput").enabled)
+        verify(!action(dialog, "preserveInput").enabled)
         verify(!findChild(dialog, "breakEvidence").enabled)
         clickButton(findChild(dialog, "acknowledgeIncompleteEvidence"))
         verify(findChild(dialog, "preserveInput").enabled)

@@ -34,14 +34,14 @@ pub struct Mutation {
 }
 
 enum EvidenceLock {
-    Legacy { _file: std::fs::File },
+    Resources { _locks: Locks },
     Checked(Box<crate::service_reads::ServiceLockGuard>),
 }
 
 impl Mutation {
     pub fn begin() -> Result<Self> {
         Ok(Self {
-            lock: EvidenceLock::Legacy { _file: lock()? },
+            lock: EvidenceLock::Resources { _locks: lock()? },
         })
     }
 
@@ -54,13 +54,12 @@ impl Mutation {
             lock: EvidenceLock::Checked(Box::new(guard)),
         })
     }
-    /// Checks the retained guard only; never reacquires or authorizes legacy
-    /// write/register methods. Those remain outside confined activation.
+    /// Checks the retained confined guard. Ordinary mutations use resource locks.
     #[allow(dead_code)]
     pub fn reauthorize(&self, access: &dyn crate::access::Access) -> Result<()> {
         match &self.lock {
             EvidenceLock::Checked(guard) => guard.reauthorize(access),
-            EvidenceLock::Legacy { .. } => Err(crate::access::AccessError::Denied(
+            EvidenceLock::Resources { .. } => Err(crate::access::AccessError::Denied(
                 crate::access::Denial::ServiceUnavailable,
             )
             .into()),
@@ -121,8 +120,10 @@ fn reference_input_locked(
     let run =
         crate::analysis_store::ArtifactRun::create(anchor, &ulid::Ulid::generate().to_string())?;
     let source = source.canonicalize()?;
+    let reservation = lock()?;
+    reservation.source(&source)?;
     if basecraft_io::hash_file(&source)? != hash {
-        return Err(invalid("Input changed while registering its evidence"));
+        return Err(crate::Error::ChangedOnDisk { path: source });
     }
     let reference = InputReference {
         path: crate::input_evidence::relative(run.directory(), &source)?,
@@ -203,7 +204,7 @@ fn reference_input_locked(
     };
     crate::provenance::publish(run.directory(), &publication)?;
     // Publication can refresh the input ledger after its initial registration.
-    index::register(run.directory().parent().unwrap().parent().unwrap());
+    index::register(run.directory().parent().unwrap().parent().unwrap())?;
     Ok(run)
 }
 
@@ -448,6 +449,9 @@ pub fn relative(base: &Path, target: &Path) -> Result<String> {
 }
 
 pub fn read_input(run: &Path) -> Result<SubmittedInput> {
+    if let Some(held) = HELD_LOCKS.with(|slot| slot.borrow().upgrade()) {
+        Locks(held).record(run)?;
+    }
     let bytes = crate::provenance::read_record(&run.join("input.json"))?;
     validate_input(run, &bytes)
 }
@@ -487,7 +491,27 @@ fn validate_input(run: &Path, bytes: &[u8]) -> Result<SubmittedInput> {
 pub fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
     let mut bytes = serde_json::to_vec_pretty(value)?;
     bytes.push(b'\n');
-    basecraft_io::write_atomic(path, |w| w.write_all(&bytes))?;
+    if path.file_name().is_some_and(|name| name == "input.json") {
+        let locks = lock()?;
+        let guard = registry_lock()?;
+        if let Ok(input) = serde_json::from_slice::<SubmittedInput>(&bytes) {
+            locks.input(
+                path.parent().unwrap(),
+                &input,
+                &mut std::collections::BTreeSet::new(),
+            )?;
+        }
+        let store = index::changing(path)?;
+        drop(guard);
+        basecraft_io::write_atomic(path, |w| w.write_all(&bytes))?;
+        if let Some(store) = store {
+            // A damaged sibling must not prevent an explicitly acknowledged
+            // evidence decision. The durable dirty marker keeps coverage unknown.
+            let _ = index::register(&store);
+        }
+    } else {
+        basecraft_io::write_atomic(path, |w| w.write_all(&bytes))?;
+    }
     Ok(())
 }
 
@@ -519,11 +543,128 @@ fn open_lock(path: &Path) -> Result<std::fs::File> {
         .open(path)?)
 }
 
-pub fn lock() -> Result<std::fs::File> {
-    let lock = open_lock(&registry()?.with_file_name("analysis-evidence.lock"))?;
-    lock.lock_exclusive()
-        .map_err(|e| crate::Error::Busy(e.to_string()))?;
-    Ok(lock)
+type HeldLocks = std::rc::Rc<std::cell::RefCell<BTreeMap<PathBuf, std::fs::File>>>;
+thread_local! {
+    static HELD_LOCKS: std::cell::RefCell<std::rc::Weak<std::cell::RefCell<BTreeMap<PathBuf, std::fs::File>>>> = const { std::cell::RefCell::new(std::rc::Weak::new()) };
+}
+
+/// A thread-confined mutation scope. Resources are reserved before each write;
+/// nested operations reuse the scope. Contention returns Busy, never deadlocks.
+pub struct Locks(HeldLocks);
+
+pub fn lock() -> Result<Locks> {
+    Ok(HELD_LOCKS.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let held = slot.upgrade().unwrap_or_default();
+        *slot = std::rc::Rc::downgrade(&held);
+        Locks(held)
+    }))
+}
+
+impl Locks {
+    fn record(&self, directory: &Path) -> Result<()> {
+        let directory = lexical(&std::path::absolute(directory)?);
+        self.reserve(
+            std::iter::once(directory.clone()).chain(
+                directory
+                    .ancestors()
+                    .find(|p| p.file_name().is_some_and(|n| n == "analyses-v1"))
+                    .map(Path::to_path_buf),
+            ),
+        )
+    }
+    fn input(
+        &self,
+        directory: &Path,
+        input: &SubmittedInput,
+        seen: &mut std::collections::BTreeSet<PathBuf>,
+    ) -> Result<()> {
+        self.record(directory)?;
+        if !seen.insert(directory.into()) {
+            return Ok(());
+        }
+        if seen.len() > 32 {
+            return Err(crate::Error::Limit {
+                what: "input ancestry".into(),
+                limit: 32,
+            });
+        }
+        self.reserve(
+            directory
+                .ancestors()
+                .find(|p| p.file_name().is_some_and(|n| n == "analyses-v1"))
+                .map(Path::to_path_buf),
+        )?;
+        if let Some(source) = &input.source {
+            self.source(&lexical(&directory.join(&source.path)))?;
+        }
+        let mut dependencies = Vec::new();
+        for field in ["origin_run", "analysis_run"] {
+            if let Some(path) = input.extra.get(field).and_then(serde_json::Value::as_str) {
+                dependencies.push(path);
+            }
+        }
+        if let Some(upstream) = input
+            .extra
+            .get("upstream")
+            .and_then(serde_json::Value::as_array)
+        {
+            dependencies.extend(upstream.iter().filter_map(|p| p["bundle"].as_str()));
+        }
+        for relative in dependencies {
+            let path = lexical(&directory.join(relative));
+            self.reserve(
+                path.ancestors()
+                    .find(|p| p.file_name().is_some_and(|n| n == "analyses-v1"))
+                    .map(Path::to_path_buf),
+            )?;
+            match read_input(&path) {
+                Ok(input) => self.input(&path, &input, seen)?,
+                Err(error @ crate::Error::Busy(_)) => return Err(error),
+                Err(_) => {}
+            }
+        }
+        Ok(())
+    }
+    fn reserve(&self, paths: impl IntoIterator<Item = PathBuf>) -> Result<()> {
+        let mut held = self.0.borrow_mut();
+        for path in paths.into_iter().collect::<std::collections::BTreeSet<_>>() {
+            let path = if path.is_absolute() {
+                path.canonicalize().unwrap_or(path)
+            } else {
+                path
+            };
+            if held.contains_key(&path) {
+                continue;
+            }
+            let key = basecraft_io::hash_bytes(path.as_os_str().as_encoded_bytes());
+            let file = open_lock(
+                &registry()?
+                    .with_file_name("analysis-locks")
+                    .join(key.trim_start_matches("b3:")),
+            )?;
+            if !file.try_lock_exclusive()? {
+                return Err(crate::Error::Busy(
+                    "an analysis or save is using this input; retry shortly".into(),
+                ));
+            }
+            held.insert(path, file);
+        }
+        Ok(())
+    }
+    fn source(&self, path: &Path) -> Result<()> {
+        let absolute = lexical(&std::path::absolute(path)?);
+        let mut keys = vec![absolute.clone()];
+        if let Ok(canonical) = absolute.canonicalize() {
+            keys.push(canonical);
+        }
+        if let Ok(meta) = stamp(path)
+            && let (Some(dev), Some(ino)) = (meta.device, meta.inode)
+        {
+            keys.push(PathBuf::from(format!("inode:{dev}:{ino}")));
+        }
+        self.reserve(keys)
+    }
 }
 
 fn registry_lock() -> Result<std::fs::File> {
@@ -534,62 +675,30 @@ fn registry_lock() -> Result<std::fs::File> {
 }
 
 pub(crate) struct SaveLock {
-    _gate: std::fs::File,
-    _stores: Vec<std::fs::File>,
+    _locks: Locks,
+    check: Option<EvidenceCheck>,
 }
 
-/// Old writers still take the exclusive gate. Ordinary saves share it, then
-/// serialize only stores they can change. No new dependency may be registered
-/// through this shared route; analysis-producing saves retain the exclusive gate.
-pub(crate) fn lock_save(target: &Path, creates_dependencies: bool) -> Result<SaveLock> {
-    if creates_dependencies {
-        return Ok(SaveLock {
-            _gate: lock()?,
-            _stores: Vec::new(),
-        });
+impl SaveLock {
+    pub(crate) fn check(&mut self, target: &Path) -> Result<EvidenceCheck> {
+        self.check.take().map_or_else(|| check(target), Ok)
     }
-    let gate = open_lock(&registry()?.with_file_name("analysis-evidence.lock"))?;
-    fs4::fs_std::FileExt::lock_shared(&gate)?;
-    let Ok(mut all) = stores() else {
-        drop(gate);
-        return lock_save(target, true); // An unreadable registry needs full exclusion.
-    };
-    let target = target
-        .canonicalize()
-        .unwrap_or(crate::save_guard::target_path(target)?);
-    for parent in target.ancestors().skip(1) {
-        let store = parent.join(".basecraft/analyses-v1");
-        if store.is_dir() && !all.contains(&store) {
-            all.push(store);
-        }
-    }
-    loop {
-        let mut selected = index::select(&target, &all, false);
-        selected.sort();
-        selected.dedup();
-        let mut held = Vec::new();
-        for store in &selected {
-            let key = basecraft_io::hash_bytes(store.as_os_str().as_encoded_bytes());
-            let lock = open_lock(
-                &registry()?
-                    .with_file_name("analysis-store-locks")
-                    .join(key.trim_start_matches("b3:")),
-            )?;
-            lock.lock_exclusive()?;
-            held.push(lock);
-        }
-        if index::select(&target, &all, false)
-            .iter()
-            .all(|store| selected.contains(store))
-        {
-            return Ok(SaveLock {
-                _gate: gate,
-                _stores: held,
-            });
-        }
-        // A preceding saver changed the selected closure while we waited.
-        // Release in full before acquiring the new sorted set.
-    }
+}
+
+/// Select and reserve under the short catalogue lock, then retain only resources
+/// belonging to this target. A lookup is carried into the save unchanged.
+pub(crate) fn lock_save(target: &Path) -> Result<SaveLock> {
+    let locks = lock()?;
+    let catalogue = registry_lock()?;
+    locks.source(target)?;
+    let (canonical, selected, inspection) = selection(target)?;
+    locks.reserve(selected.iter().cloned())?;
+    drop(catalogue);
+    let check = inspect_in(&canonical, &selected, inspection)?;
+    Ok(SaveLock {
+        _locks: locks,
+        check: Some(check),
+    })
 }
 
 fn empty_registry() -> StoreRegistry {
@@ -609,7 +718,8 @@ fn parse_store_registry(bytes: &[u8]) -> Result<StoreRegistry> {
 }
 
 fn store_registry() -> Result<StoreRegistry> {
-    match std::fs::File::open(registry()?) {
+    let path = registry()?;
+    match std::fs::File::open(&path) {
         Ok(file) => {
             let length = file.metadata()?.len();
             let bytes = crate::provenance::read_record_from_open(
@@ -619,6 +729,8 @@ fn store_registry() -> Result<StoreRegistry> {
                 1 << 20,
                 crate::provenance::RecordLimit::Registry,
             )?;
+            #[cfg(feature = "test-counters")]
+            basecraft_io::counters::record_read(&path, bytes.len() as u64);
             parse_store_registry(&bytes)
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(empty_registry()),
@@ -675,12 +787,14 @@ pub(crate) fn registered_run(id: &str, expected: &str) -> Result<PathBuf> {
 
 /// Caller holds `lock`. Only explicit analysis execution registers a store.
 pub fn register(run: &ArtifactRun) -> Result<()> {
+    let locks = lock()?;
     let registry_guard = registry_lock()?;
     let store = run
         .directory()
         .parent()
         .and_then(Path::parent)
         .ok_or_else(|| invalid("run has no store"))?;
+    locks.reserve([store.to_path_buf()])?;
     let mut all = stores()?;
     if !all.iter().any(|p| p == store) {
         if all.len() >= 4096 {
@@ -689,11 +803,10 @@ pub fn register(run: &ArtifactRun) -> Result<()> {
         all.push(store.into());
         let mut value = store_registry()?;
         value.stores = all;
-        // The legacy Value builder sorted nested extension keys as well.
         write_json(&registry()?, &serde_json::to_value(value)?)?;
     }
     drop(registry_guard);
-    index::register(store);
+    index::register(store)?;
     Ok(())
 }
 
@@ -738,15 +851,11 @@ fn conservative(check: EvidenceCheck) -> Result<EvidenceConflict> {
 /// Side-effect-free full inspection; callers must recheck under `lock` before
 /// acting. Failure of the lock or of an actual write is never an inspection issue.
 pub fn check(target: &Path) -> Result<EvidenceCheck> {
-    check_impl(target, false)
+    let (canonical, selected, inspection) = selection(target)?;
+    inspect_in(&canonical, &selected, inspection)
 }
 
-/// Refresh the private cache only while the caller holds the mutation lock.
-pub(crate) fn check_locked(target: &Path) -> Result<EvidenceCheck> {
-    check_impl(target, true)
-}
-
-fn check_impl(target: &Path, persist_index: bool) -> Result<EvidenceCheck> {
+fn selection(target: &Path) -> Result<(PathBuf, Vec<PathBuf>, Inspection)> {
     let mut inspection = Inspection::default();
     let path = registry()?;
     let result = inspection.record_bounded(&path, 1 << 20);
@@ -770,8 +879,14 @@ fn check_impl(target: &Path, persist_index: bool) -> Result<EvidenceCheck> {
             _ => {}
         }
     }
-    let selected = index::select(&canonical, &all, persist_index);
-    inspect_in(&canonical, &selected, inspection)
+    let selected = match index::select(&canonical, &all, &mut inspection) {
+        Ok(selected) => selected,
+        Err(error) => {
+            inspection.issue(InspectionCode::RegistryUnavailable, &path, error);
+            Vec::new()
+        }
+    };
+    Ok((canonical, selected, inspection))
 }
 
 impl Inspection {
@@ -1280,6 +1395,7 @@ pub(crate) fn resolve_group(
 /// Apply explicit decisions before overwrite. A partial decision failure aborts
 /// the save; earlier preserved copies/removed metadata remain recoverable.
 pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
+    let _locks = lock()?;
     if conflict.analyses.is_empty() {
         return Ok(());
     }
@@ -1412,7 +1528,11 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
                             .to_string_lossy(),
                         ulid::Ulid::generate()
                     ));
+                    let catalogue = registry_lock()?;
+                    index::changing(&affected.run.join("input.json"))?;
                     std::fs::rename(&affected.run, destination)?;
+                    drop(catalogue);
+                    index::register(store)?;
                 }
                 SavePolicy::Cancel => return Err(invalid("save cancelled")),
             }
@@ -1525,7 +1645,8 @@ pub fn verified_source(bundle: &Path, reference: &InputReference) -> Result<Path
 
 /// Honest repair: only a byte-verified original may replace a missing/changed reference.
 pub fn relink(bundle: &Path, original: &Path) -> Result<()> {
-    let _lock = lock()?;
+    let locks = lock()?;
+    locks.source(original)?;
     let local = read_input(bundle)?;
     let (owner, mut input) = owning_ledger(bundle)?;
     if local.source.as_ref().map(|r| &r.hash) != input.source.as_ref().map(|r| &r.hash) {

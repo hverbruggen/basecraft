@@ -1,4 +1,6 @@
 //! Failure and overwrite coverage supplementing the unchanged REV-0004 probes.
+#[path = "support/isolated_profile.rs"]
+mod isolated_profile;
 use basecraft_ops::links::AlignmentLinkExt;
 use basecraft_ops::{Session, files, links, links::AlignmentLink};
 use std::path::{Path, PathBuf};
@@ -24,6 +26,7 @@ fn snapshots(root: &Path) -> Vec<PathBuf> {
 
 #[test]
 fn failed_relink_retains_old_bytes_without_the_old_source_and_supports_legacy_snapshot_names() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let source = root.join("source.afa");
@@ -67,6 +70,7 @@ fn failed_relink_retains_old_bytes_without_the_old_source_and_supports_legacy_sn
 
 #[test]
 fn save_as_unlinked_document_clears_both_destination_associations_and_keeps_evidence() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let source = root.join("source.afa");
@@ -97,6 +101,7 @@ fn save_as_unlinked_document_clears_both_destination_associations_and_keeps_evid
 
 #[test]
 fn publication_error_after_main_write_disables_extraction_and_keeps_previous_association_record() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let source = root.join("source.afa");
@@ -141,6 +146,7 @@ fn publication_error_after_main_write_disables_extraction_and_keeps_previous_ass
 
 #[test]
 fn damaged_explicit_view_is_checked_before_overwriting_an_existing_destination() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let source = root.join("source.afa");
@@ -176,6 +182,7 @@ fn damaged_explicit_view_is_checked_before_overwriting_an_existing_destination()
 #[cfg(unix)]
 #[test]
 fn dangling_explicit_metadata_blocks_save_as_and_is_reported_without_changes() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let source = root.join("source.afa");
@@ -198,6 +205,7 @@ fn dangling_explicit_metadata_blocks_save_as_and_is_reported_without_changes() {
 
 #[test]
 fn save_as_with_explicit_view_remains_portable_and_preserves_source_hashes() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let folder = root.join("project");
@@ -239,6 +247,7 @@ fn save_as_with_explicit_view_remains_portable_and_preserves_source_hashes() {
 #[cfg(unix)]
 #[test]
 fn save_as_over_symlink_to_original_replaces_alias_associations() {
+    crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let source = root.join("source.afa");

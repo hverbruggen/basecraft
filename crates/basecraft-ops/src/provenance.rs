@@ -392,10 +392,8 @@ pub fn verify(result: &Path) -> Result<Vec<String>> {
                 bundle.as_path()
             } else if hidden {
                 bundle
-                    .parent()
-                    .and_then(Path::parent)
-                    .and_then(Path::parent)
-                    .and_then(Path::parent)
+                    .ancestors()
+                    .nth(4)
                     .ok_or_else(|| invalid("invalid hidden publication path"))?
             } else {
                 result.parent().unwrap_or(Path::new("."))
@@ -531,18 +529,6 @@ pub(crate) fn verify_records(bundle: &Path, current: &Publication) -> Result<Vec
         }
     }
     Ok(issues)
-}
-
-fn atomic_json(path: &Path, value: &impl serde::Serialize) -> Result<()> {
-    let mut bytes = serde_json::to_vec_pretty(value)?;
-    bytes.push(b'\n');
-    if bytes.len() > 64 << 20 {
-        return Err(invalid(
-            "provenance record exceeds 64 MiB publication limit",
-        ));
-    }
-    basecraft_io::write_atomic(path, |w| w.write_all(&bytes))?;
-    Ok(())
 }
 
 // Carry explicitly selected input runs into ordinary saved ancestry: a Sanger
@@ -723,23 +709,45 @@ pub fn publish_operation(bundle: &Path, publication: &Publication) -> Result<()>
 pub(crate) fn publish(bundle: &Path, publication: &Publication) -> Result<()> {
     std::fs::create_dir_all(bundle.join("records"))?;
     link_selected_inputs(bundle, publication)?;
-    atomic_json(
+    let mut prepared = crate::documents::PreparedWrite::default();
+    let mut bytes = serde_json::to_vec_pretty(publication)?;
+    bytes.push(b'\n');
+    if bytes.len() > 64 << 20 {
+        return Err(crate::Error::Limit {
+            what: "provenance record bytes".into(),
+            limit: 64 << 20,
+        });
+    }
+    prepared.push(
         &bundle
             .join("records")
             .join(format!("{}.json", publication.id)),
-        publication,
+        |w| w.write_all(&bytes),
     )?;
-    write_reports(bundle, publication)?;
-    basecraft_io::write_atomic(&bundle.join("README.md"), |w| {
+    prepare_reports(bundle, publication, &mut prepared)?;
+    prepared.push(&bundle.join("README.md"), |w| {
         w.write_all(
-        b"# Basecraft provenance v1\n\nmanifest.json selects the latest publication. records/ holds immutable publication records; artifacts/ holds BLAKE3-addressed original and saved bytes. Reports are generated descriptions, not inferred laboratory protocols. Imported history before Basecraft is unknown. Checksums detect changes; they are not signatures. No file in this bundle should be executed to inspect or verify it.\n"
+        b"# Basecraft provenance v1\n\nmanifest.json selects the latest publication. records/ holds immutable publication records; artifacts/ holds BLAKE3-addressed analysis inputs. Reports are generated descriptions, not inferred laboratory protocols. Imported history before Basecraft is unknown. Checksums detect changes; they are not signatures. No file in this bundle should be executed to inspect or verify it.\n"
     )
     })?;
-    atomic_json(&bundle.join("manifest.json"), publication)
+    prepared.push(&bundle.join("manifest.json"), |w| w.write_all(&bytes))?;
+    prepared.publish()?;
+    Ok(())
 }
 
 /// Deterministic evidence-based reports. User-authored methods.md is untouched.
 pub fn write_reports(output: &Path, publication: &Publication) -> Result<()> {
+    let mut prepared = crate::documents::PreparedWrite::default();
+    prepare_reports(output, publication, &mut prepared)?;
+    prepared.publish()?;
+    Ok(())
+}
+
+fn prepare_reports(
+    output: &Path,
+    publication: &Publication,
+    prepared: &mut crate::documents::PreparedWrite,
+) -> Result<()> {
     std::fs::create_dir_all(output.join("reports"))?;
     let report = crate::document_record::DocumentRecord::from_publication(publication).report()?;
     let history = report.history_text;
@@ -770,22 +778,29 @@ pub fn write_reports(output: &Path, publication: &Publication) -> Result<()> {
         ("methods.generated.md", methods.as_bytes()),
         ("parameters.tsv", params.as_bytes()),
     ] {
-        basecraft_io::write_atomic(&output.join("reports").join(name), |w| w.write_all(bytes))?;
+        prepared.push(&output.join("reports").join(name), |w| w.write_all(bytes))?;
     }
-    atomic_json(&output.join("reports/source-map.json"), &mappings)?;
-    atomic_json(
-        &output.join("reports/manifest.json"),
-        &serde_json::to_value(
-            basecraft_protocol::report_records::ProvenanceReportManifest {
-                schema_version: 1,
-                publication: publication.id.clone(),
-                template_version: 2,
-                output_hashes: publication.outputs.iter().map(|a| a.hash.clone()).collect(),
-                redactions: vec!["machine-local paths".into(), "host".into(), "user".into()],
-                citations: report.citations,
-            },
-        )?,
-    )
+    prepared.push(&output.join("reports/source-map.json"), |w| {
+        serde_json::to_writer_pretty(&mut *w, &mappings)?;
+        w.write_all(b"\n")
+    })?;
+    prepared.push(&output.join("reports/manifest.json"), |w| {
+        serde_json::to_writer_pretty(
+            &mut *w,
+            &serde_json::to_value(
+                basecraft_protocol::report_records::ProvenanceReportManifest {
+                    schema_version: 1,
+                    publication: publication.id.clone(),
+                    template_version: 2,
+                    output_hashes: publication.outputs.iter().map(|a| a.hash.clone()).collect(),
+                    redactions: vec!["machine-local paths".into(), "host".into(), "user".into()],
+                    citations: report.citations,
+                },
+            )?,
+        )?;
+        w.write_all(b"\n")
+    })?;
+    Ok(())
 }
 
 fn copy_tree(source: &Path, target: &Path) -> Result<()> {

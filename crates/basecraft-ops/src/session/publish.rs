@@ -243,16 +243,22 @@ impl Session {
         }
         let retain =
             |path: &Path, hash: &str, revision: String, name: String| -> Result<ArtifactRevision> {
-                let bytes = std::fs::read(path)?;
-                #[cfg(feature = "test-counters")]
-                basecraft_io::counters::record_read(path, bytes.len() as u64);
-                if basecraft_io::hash_bytes(&bytes) != hash {
-                    return Err(invalid("artifact changed during provenance publication"));
-                }
                 let relative = format!("artifacts/{}", hash.trim_start_matches("b3:"));
                 let dest = bundle.join(&relative);
+                let size = std::fs::metadata(path)?.len();
                 if !dest.exists() {
-                    basecraft_io::write_atomic(&dest, |w| w.write_all(&bytes))?;
+                    basecraft_io::write_atomic(&dest, |w| {
+                        let mut writer = files::HashingWriter::new(w);
+                        let copied = std::io::copy(&mut std::fs::File::open(path)?, &mut writer)?;
+                        #[cfg(feature = "test-counters")]
+                        basecraft_io::counters::record_read(path, copied);
+                        if writer.hash() != hash || copied != size {
+                            return Err(std::io::Error::other(
+                                "analysis input changed during retention",
+                            ));
+                        }
+                        Ok(())
+                    })?;
                 } else if basecraft_io::hash_file(&dest)? != hash {
                     return Err(invalid("retained artifact is corrupt"));
                 }
@@ -260,46 +266,50 @@ impl Session {
                     id: revision,
                     logical_name: name,
                     hash: hash.into(),
-                    size: bytes.len() as u64,
+                    size,
                     retained: Some(relative),
                     reference: None,
                 })
             };
         let mut inputs = Vec::new();
-        for event in self.events.iter().filter(|e| {
-            snapshot.is_none_or(|r| r.document == self.docs[id.0].key)
-                && e.doc == self.docs[id.0].key
-                && matches!(e.op, Op::Open { .. })
-        }) {
-            for (key, hash) in &event.result.hashes {
-                let mut source =
-                    objects_dir(&self.storage_root).join(hash.trim_start_matches("b3:"));
-                if !self.store_objects {
-                    let objects = self
-                        .memory_objects
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    let bytes = objects
-                        .get(hash)
-                        .ok_or_else(|| invalid("original input snapshot unavailable"))?;
-                    source = bundle
-                        .join("artifacts")
-                        .join(hash.trim_start_matches("b3:"));
-                    basecraft_io::write_atomic(&source, |w| w.write_all(bytes))?;
+        for (key, hash) in analysis_inputs {
+            // Analysis runs already own their submitted bytes. A history record
+            // points at that retained input instead of making another copy.
+            let retained = crate::input_evidence::read_input(&bundle)
+                .ok()
+                .and_then(|input| {
+                    if input.submitted_hash == *hash && bundle.join("submitted.fasta").is_file() {
+                        Some("submitted.fasta")
+                    } else if input
+                        .source
+                        .as_ref()
+                        .is_some_and(|source| source.hash == *hash)
+                        && bundle.join("preserved-input").is_file()
+                    {
+                        Some("preserved-input")
+                    } else {
+                        None
+                    }
+                });
+            if let Some(retained) = retained {
+                let path = bundle.join(retained);
+                if basecraft_io::hash_file(&path)? != *hash {
+                    return Err(crate::Error::ChangedOnDisk { path });
                 }
-                inputs.push(retain(
-                    &source,
-                    hash,
-                    format!("{}:input:{}", event.id, inputs.len()),
-                    Path::new(key)
+                inputs.push(ArtifactRevision {
+                    id: format!("{}:submitted:{}", save.id, inputs.len()),
+                    logical_name: Path::new(key)
                         .file_name()
                         .unwrap_or_default()
                         .to_string_lossy()
                         .into_owned(),
-                )?);
+                    hash: hash.clone(),
+                    size: std::fs::metadata(path)?.len(),
+                    retained: Some(retained.into()),
+                    reference: None,
+                });
+                continue;
             }
-        }
-        for (key, hash) in analysis_inputs {
             let mut source = objects_dir(&self.storage_root).join(hash.trim_start_matches("b3:"));
             if !self.store_objects {
                 let objects = self
@@ -327,25 +337,30 @@ impl Session {
         }
         let mut outputs = Vec::new();
         for (key, hash) in &save.result.hashes {
-            let logical_name = if crate::analysis_store::ArtifactRun::for_result(target)?.is_some()
-            {
-                crate::input_evidence::relative(
-                    &target.parent().unwrap_or(Path::new(".")).canonicalize()?,
-                    &self.resolve(key).canonicalize()?,
-                )?
-            } else {
-                Path::new(key)
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into_owned()
-            };
-            outputs.push(retain(
-                &self.resolve(key),
-                hash,
-                format!("{}:output:{}", save.id, outputs.len()),
+            let logical_name =
+                if let Some(run) = crate::analysis_store::ArtifactRun::for_result(target)? {
+                    crate::input_evidence::relative(
+                        run.ancestors()
+                            .nth(4)
+                            .ok_or_else(|| invalid("invalid hidden publication path"))?,
+                        &self.resolve(key).canonicalize()?,
+                    )?
+                } else {
+                    Path::new(key)
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned()
+                };
+            let path = self.resolve(key);
+            outputs.push(ArtifactRevision {
+                id: format!("{}:output:{}", save.id, outputs.len()),
                 logical_name,
-            )?);
+                hash: hash.clone(),
+                size: std::fs::metadata(&path)?.len(),
+                retained: None,
+                reference: None,
+            });
         }
         // Public reports use logical names and anonymous agents. Original local
         // journals retain exact paths for recovery; those paths are not portable.
@@ -500,7 +515,7 @@ impl Session {
             effective_edits,
             completeness: Completeness {
                 ancestry_known: false,
-                input_bytes_available: true,
+                input_bytes_available: !analysis_inputs.is_empty(),
                 execution_specification_available: false,
                 replay_verified: false,
             },

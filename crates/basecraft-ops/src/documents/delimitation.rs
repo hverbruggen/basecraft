@@ -18,14 +18,6 @@ impl Document for DelimitationWorkspace {
     fn rebase_replay_paths(&mut self, from: &Path, to: &Path) {
         files::rebase_delimitation_paths(self, from, to);
     }
-    fn legacy_hashes(&self, target: &Path) -> Result<Option<Vec<String>>> {
-        let mut main = HashingWriter::new(std::io::sink());
-        files::write_delimitation(self, files::delimitation_xml(target), &mut main)?;
-        let hash = main.hash();
-        let mut side = HashingWriter::new(std::io::sink());
-        files::write_delimitation_sidecar(self, &hash, &mut side)?;
-        Ok(Some(vec![hash, side.hash()]))
-    }
     fn proposal_candidate(&self) -> Result<files::Loaded> {
         Ok(files::Loaded::Delimitation(self.clone()))
     }
@@ -61,13 +53,13 @@ impl Document for DelimitationWorkspace {
         Some(files::tree_sidecar(target))
     }
 
-    fn write(
+    fn prepare_write(
         &self,
         target: &Path,
         format: files::Format,
         _recovery_root: &Path,
         publication: &super::WritePublication,
-    ) -> Result<Vec<(PathBuf, String)>> {
+    ) -> Result<super::PreparedWrite> {
         if format != files::Format::Delimitation {
             return Err(invalid(
                 "a delimitation workspace requires SPART or SPART-XML",
@@ -81,14 +73,9 @@ impl Document for DelimitationWorkspace {
         } else {
             None
         };
-        let mut main_hash = String::new();
+        let mut prepared = super::PreparedWrite::default();
         let xml = files::delimitation_xml(target);
-        basecraft_io::write_atomic(target, |w| {
-            let mut hw = HashingWriter::new(w);
-            files::write_delimitation(self, xml, &mut hw)?;
-            main_hash = hw.hash();
-            Ok(())
-        })?;
+        let main_hash = prepared.push(target, |w| files::write_delimitation(self, xml, w))?;
         let sidecar = if let Some(run) = &new_run {
             run.artifact(&format!(
                 "{}.basecraft.json",
@@ -100,29 +87,26 @@ impl Document for DelimitationWorkspace {
         } else {
             files::tree_sidecar(target)
         };
-        let mut side_hash = String::new();
-        basecraft_io::write_atomic(&sidecar, |w| {
-            let mut hw = HashingWriter::new(w);
+        prepared.push(&sidecar, |w| {
             files::write_delimitation_sidecar_at(
                 self,
                 &main_hash,
                 &publication.logical(target).map_err(std::io::Error::other)?,
-                &mut hw,
+                w,
             )?;
-            side_hash = hw.hash();
             Ok(())
         })?;
-        crate::analysis_store::publish_delimitation(
-            self,
-            target,
-            &main_hash,
-            new_run.as_ref(),
-            publication,
-        )?;
-        Ok(vec![
-            (target.to_path_buf(), main_hash),
-            (sidecar, side_hash),
-        ])
+        prepared.run = new_run;
+        Ok(prepared)
+    }
+    fn finish_write(
+        &self,
+        target: &Path,
+        hashes: &[(PathBuf, String)],
+        run: Option<&crate::analysis_store::ArtifactRun>,
+        publication: &super::WritePublication,
+    ) -> Result<()> {
+        crate::analysis_store::publish_delimitation(self, target, &hashes[0].1, run, publication)
     }
     fn saved_hashes(
         &self,
@@ -175,6 +159,7 @@ mod tests {
 
     #[test]
     fn dispatch_rejects_wrong_operations_and_restores_snapshot() {
+        crate::isolated_profile::isolate!();
         let initial = basecraft_io::spart::parse_text(SPART).unwrap();
         let mut loaded = files::Loaded::Delimitation(initial.clone());
         let doc = loaded.as_document_mut();
@@ -292,6 +277,7 @@ mod tests {
     }
     #[test]
     fn companion_failure_preserves_main_and_reports_error() {
+        crate::isolated_profile::isolate!();
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("partial.spart");
         let work = basecraft_io::spart::parse_text(SPART).unwrap();

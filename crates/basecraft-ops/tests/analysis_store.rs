@@ -209,6 +209,7 @@ fn session_save_policies_and_copy_failure_leave_source_safe() {
         input_evidence::{self, SavePolicy},
     };
     crate::isolated_profile::isolate!();
+    let mut fixtures = Vec::new();
     for policy in [
         SavePolicy::Cancel,
         SavePolicy::PreserveCopy,
@@ -216,6 +217,8 @@ fn session_save_policies_and_copy_failure_leave_source_safe() {
         SavePolicy::BreakEvidence,
     ] {
         let dir = tempfile::tempdir().unwrap();
+        fixtures.push(dir);
+        let dir = fixtures.last().unwrap();
         let source = dir.path().join("source.afa");
         let original = ">a\nAAAA\n>b\nAAAT\n";
         std::fs::write(&source, original).unwrap();

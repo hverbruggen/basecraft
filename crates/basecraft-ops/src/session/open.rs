@@ -125,6 +125,7 @@ impl Session {
             baseline_logged: false,
             accepted_hashes: hashes.clone(),
             saved_state_hashes: Vec::new(),
+            saved_edit: None,
             absent_sidecars,
             origin,
             origin_issue,

@@ -110,7 +110,7 @@ fn formats_queries_and_explicit_save_windows() {
         let changed = check(&s, id, 1);
         assert_ne!(changed, baseline);
         assert!(s.saved_source(id).unwrap().is_none());
-        count(2, || s.save(id, None).unwrap());
+        count(0, || s.save(id, None).unwrap());
         assert_eq!(s.docs[id.0].saved_state_hashes, changed);
         check(&s, id, 0);
         s.undo(id).unwrap();

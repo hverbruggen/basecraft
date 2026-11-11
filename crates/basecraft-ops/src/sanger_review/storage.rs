@@ -784,7 +784,7 @@ impl SangerReviewSession {
         self.ensure_sources(path)?;
         self.ensure_recovery().map_err(invalid)?;
         // Registration above acquires evidence locks itself. Never nest them.
-        let _evidence_lock = inputs::lock()?;
+        let _evidence_lock = inputs::lock_save(path)?;
         crate::save_guard::Revision::check(self.accepted.as_ref(), path)?;
         let warnings = self.authorize_save(
             path,

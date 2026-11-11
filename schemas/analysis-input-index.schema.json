@@ -1,110 +1,47 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "AnalysisInputIndex",
-  "description": "Rebuildable private lookup cache beside the version-one store registry.",
+  "title": "IndexFile",
+  "description": "Current source catalogue. Per-source shards hold the affected store closure.",
   "type": "object",
   "properties": {
-    "schema_version": {
-      "type": "integer",
-      "format": "uint32",
-      "minimum": 0
+    "checksum": {
+      "type": "string"
     },
-    "stores": {
-      "type": "object",
-      "additionalProperties": {
-        "$ref": "#/$defs/IndexedAnalysisStore"
-      }
+    "value": {
+      "$ref": "#/$defs/AnalysisInputIndex"
     }
   },
-  "additionalProperties": true,
   "required": [
-    "schema_version",
-    "stores"
+    "checksum",
+    "value"
   ],
   "$defs": {
-    "IndexFileStamp": {
+    "AnalysisInputIndex": {
+      "description": "Local source and store locations, without unrelated run records.",
       "type": "object",
       "properties": {
-        "changed_nanos": {
-          "type": "integer",
-          "format": "int64"
-        },
-        "changed_seconds": {
-          "type": "integer",
-          "format": "int64"
-        },
-        "identity": {
-          "type": "string"
-        },
-        "modified_nanos": {
+        "schema_version": {
           "type": "integer",
           "format": "uint32",
           "minimum": 0
-        },
-        "modified_seconds": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "size": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        }
-      },
-      "required": [
-        "identity",
-        "size",
-        "modified_seconds",
-        "modified_nanos",
-        "changed_seconds",
-        "changed_nanos"
-      ]
-    },
-    "IndexedAnalysisStore": {
-      "type": "object",
-      "properties": {
-        "checksum": {
-          "type": "string"
-        },
-        "dependencies": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "files": {
-          "description": "Metadata for directories and input ledgers, including expected absences.",
-          "type": "object",
-          "additionalProperties": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/IndexFileStamp"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "identity": {
-          "description": "Digest of the full platform directory identity; recognizes a moved store.",
-          "type": "string"
         },
         "sources": {
           "type": "array",
           "items": {
             "type": "string"
           }
+        },
+        "stores": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       },
-      "additionalProperties": true,
       "required": [
-        "identity",
-        "checksum",
-        "files",
-        "sources",
-        "dependencies"
+        "schema_version",
+        "stores",
+        "sources"
       ]
     }
   }

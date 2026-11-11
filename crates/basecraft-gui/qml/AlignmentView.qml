@@ -99,7 +99,6 @@ FocusScope {
         id: tooManyReads
         title: "Select one to three reads"
         implicitWidth: 480
-        modal: true
         standardButtons: Dialog.Ok
         Label { Layout.fillWidth: true; text: "Review one specimen and amplicon at a time, using up to three reads."; wrapMode: Text.Wrap }
     }

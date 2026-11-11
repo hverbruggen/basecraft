@@ -24,7 +24,7 @@ impl Session {
         }
         let target = path.map_or_else(|| self.resolve(&self.docs[id.0].key), Path::to_path_buf);
         let evidence = crate::input_evidence::check(&target)?;
-        let check = self.save_check_scope(id, &target, evidence)?;
+        let check = self.save_check_scope(id, &target, evidence, target_revision(&target)?)?;
         self.publish_save_check(id, check)
     }
 
@@ -74,9 +74,9 @@ impl Session {
         id: DocId,
         target: &Path,
         evidence: EvidenceCheck,
+        target_revision: Option<super::save_authority::TargetRevision>,
     ) -> Result<SaveCheck> {
         let target = crate::save_guard::target_path(target)?;
-        let target_revision = target_revision(&target)?;
         let publication = match &self.write_publication {
             crate::documents::WritePublication::Immediate => None,
             crate::documents::WritePublication::Recovery { destination, .. } => Some((
@@ -154,8 +154,12 @@ impl Session {
     /// immediately after a successful write or authorized finalization.
     pub(crate) fn recovery_snapshot(&self, id: DocId) -> Result<SaveCheck> {
         let target = self.resolve(&self.docs[id.0].key);
-        let mut check =
-            self.save_check_scope(id, &target, crate::input_evidence::check(&target)?)?;
+        let mut check = self.save_check_scope(
+            id,
+            &target,
+            crate::input_evidence::check(&target)?,
+            target_revision(&target)?,
+        )?;
         check.scope.finalization = true;
         check.scope_revision = check.scope.revision()?;
         Ok(check)
@@ -182,7 +186,7 @@ impl Session {
             .map(|d| self.consume_save_check(d))
             .transpose()?
             .unwrap_or(false);
-        self.check_save_source(id)?;
+        self.check_save_source(id, None)?;
         let fresh = self.recovery_snapshot(id)?;
         let decided = decision.is_some();
         self.docs[id.0].save_authority.authorize_finalization(

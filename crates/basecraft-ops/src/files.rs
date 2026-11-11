@@ -115,7 +115,7 @@ pub struct OpenedAlignment {
 pub struct OpenedTree {
     pub doc: TreeDoc,
     pub nexus: bool,
-    /// Unverifiable legacy metadata remains on disk and was not applied.
+    /// Missing bound metadata is reported without inventing presentation semantics.
     pub metadata_warning: Option<String>,
     /// Other forest members are preserved when the first tree is edited.
     pub remaining: Vec<newick::ParsedTree>,
@@ -209,20 +209,10 @@ impl Loaded {
 pub(crate) fn load_snapshot(
     path: &Path,
     source: Option<Source>,
-    format: Format,
-    verified: bool,
+    _format: Format,
+    _verified: bool,
 ) -> Result<Loaded> {
-    if let Some(source) = source {
-        if verified && format == Format::Tree {
-            load_tree_from(path, &source, true).map(Loaded::Tree)
-        } else {
-            load_from(path, source)
-        }
-    } else if verified && format == Format::Tree {
-        load_tree_from_verified_snapshot(path).map(Loaded::Tree)
-    } else {
-        load(path)
-    }
+    source.map_or_else(|| load(path), |source| load_from(path, source))
 }
 
 /// Open a file as whatever it holds: see [`kind`].
@@ -246,7 +236,7 @@ pub fn load(path: &Path) -> Result<Loaded> {
 /// Other formats require their existing loaders and are rejected here.
 pub fn load_from(path: &Path, source: Source) -> Result<Loaded> {
     match Format::from_path(path)? {
-        Format::Tree => load_tree_from(path, &source, false).map(Loaded::Tree),
+        Format::Tree => load_tree_from(path, &source).map(Loaded::Tree),
         Format::Fasta => load_fasta_from(path, source, None),
         Format::GenBank => open_from(path, source).map(Loaded::Sequence),
         _ => Err(crate::error::invalid(
@@ -311,6 +301,8 @@ pub(crate) mod admission_tests;
 /// Write explicit alignment contents as FASTA, 60 columns a line.
 /// Synthetic suffix padding used to display ragged input is never materialised.
 pub fn write_alignment(doc: &AlignmentDoc, w: &mut dyn Write) -> io::Result<()> {
+    #[cfg(feature = "test-counters")]
+    basecraft_io::counters::record_serialization("alignment");
     let mut buf = Vec::new();
     let chunk = 60 * 16_384;
     for (i, row) in doc.rows().enumerate() {
@@ -396,24 +388,10 @@ struct SupportName {
 
 /// Read the first tree of a Newick or NEXUS file, with its sidecar.
 pub fn load_tree(path: &Path) -> Result<OpenedTree> {
-    load_tree_metadata(path, false)
+    load_tree_from(path, &open_source(path, Format::Tree)?)
 }
 
-/// Replay has verified the journal's exact tree AND sidecar hashes before this
-/// call. This does not grant trust to an unbound live adjacent sidecar.
-pub(crate) fn load_tree_from_verified_snapshot(path: &Path) -> Result<OpenedTree> {
-    load_tree_metadata(path, true)
-}
-
-fn load_tree_metadata(path: &Path, verified_snapshot: bool) -> Result<OpenedTree> {
-    load_tree_from(path, &open_source(path, Format::Tree)?, verified_snapshot)
-}
-
-pub(crate) fn load_tree_from(
-    path: &Path,
-    source: &Source,
-    verified_snapshot: bool,
-) -> Result<OpenedTree> {
+pub(crate) fn load_tree_from(path: &Path, source: &Source) -> Result<OpenedTree> {
     let text = std::str::from_utf8(source.bytes())
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     let nexus = newick::is_nexus(text);
@@ -444,72 +422,34 @@ pub(crate) fn load_tree_from(
     );
     if sidecar.exists() {
         let side: TreeSidecar = serde_json::from_slice(&std::fs::read(&sidecar)?)?;
-        if side.schema_version == 0 && !verified_snapshot {
-            metadata_warning = Some(format!(
-                "Unverified legacy tree metadata at {} was left unapplied; the exchange tree is open and the original metadata bytes are preserved.",
-                sidecar.display()
-            ));
-        } else if side.schema_version > 1 {
-            return Err(crate::error::invalid(
-                "Unsupported future tree metadata version; bytes were preserved",
-            ));
-        } else {
-            if side.schema_version == 1
-                && (side.tree_hash != basecraft_io::hash_bytes(doc.to_newick().as_bytes())
-                    || side
-                        .exchange_hash
-                        .as_ref()
-                        .is_some_and(|hash| *hash != basecraft_io::hash_bytes(text.as_bytes())))
-            {
-                return Err(crate::error::invalid(
-                    "Tree metadata describes different exchange contents; bytes were preserved and metadata was not applied",
-                ));
-            }
-            let kinds: Vec<_> = side
-                .supports
-                .iter()
-                .map(|s| (s.name.clone(), s.kind))
-                .collect();
-            let names: Vec<(String, String)> = side
-                .supports
-                .into_iter()
-                .map(|s| (s.name, s.source))
-                .collect();
-            doc.restore(&names, side.annotations, side.style);
-            for (name, kind) in kinds {
-                doc.set_support_kind(&name, kind);
-            }
+        if side.schema_version != 1 {
+            return Err(Error::Unsupported("tree metadata version".into()));
+        }
+        if side.tree_hash != basecraft_io::hash_bytes(doc.to_newick().as_bytes())
+            || side
+                .exchange_hash
+                .as_ref()
+                .is_some_and(|hash| *hash != basecraft_io::hash_bytes(text.as_bytes()))
+        {
+            return Err(Error::Damaged { path: sidecar.clone(), detail: "Tree metadata describes different exchange contents; bytes were preserved and metadata was not applied".into() });
+        }
+        let kinds: Vec<_> = side
+            .supports
+            .iter()
+            .map(|s| (s.name.clone(), s.kind))
+            .collect();
+        let names: Vec<(String, String)> = side
+            .supports
+            .into_iter()
+            .map(|s| (s.name, s.source))
+            .collect();
+        doc.restore(&names, side.annotations, side.style);
+        for (name, kind) in kinds {
+            doc.set_support_kind(&name, kind);
         }
     }
     if bound && !sidecar.exists() {
         metadata_warning = Some("Bound tree metadata is unavailable; exchange values remain open with unknown support meaning and default presentation.".into());
-    }
-    // Legacy Basecraft distance runs carry explicit bootstrap metadata. Require
-    // an exact matching result, so stale adjacent reports cannot relabel imports.
-    let report_path = PathBuf::from(format!("{}.run.json", path.display()));
-    if let Ok(report) = std::fs::read(&report_path)
-        && let Ok(report) = serde_json::from_slice::<serde_json::Value>(&report)
-        && report["tool"] == "basecraft-distance"
-        && report["bootstrap"]["support_withheld"] == false
-        && report["bootstrap"]["completed"]
-            .as_u64()
-            .is_some_and(|n| n > 0)
-        && report["tree"]["trees"].as_array().is_some_and(|trees| {
-            trees.iter().any(|tree| {
-                tree.as_str()
-                    .and_then(|text| TreeDoc::from_newick("", text).ok())
-                    .is_some_and(|tree| tree.to_newick() == doc.to_newick())
-            })
-        })
-        && doc.supports().len() == 1
-        && doc.supports()[0].kind == basecraft_protocol::SupportKind::Unknown
-    {
-        let name = doc.supports()[0].name.clone();
-        if name == "Support" {
-            doc.rename_support(&name, "Bootstrap");
-        }
-        let name = doc.supports()[0].name.clone();
-        doc.set_support_kind(&name, basecraft_protocol::SupportKind::Bootstrap);
     }
     Ok(OpenedTree {
         doc,
@@ -546,19 +486,6 @@ pub fn write_tree(tree: &OpenedTree, w: &mut dyn Write) -> io::Result<()> {
     Ok(())
 }
 
-/// Historical serializer used only when verifying old journal save hashes.
-pub(crate) fn write_legacy_tree(tree: &OpenedTree, w: &mut dyn Write) -> io::Result<()> {
-    let newick = tree.doc.to_newick();
-    if tree.nexus {
-        writeln!(
-            w,
-            "#NEXUS\nbegin trees;\n\ttree tree1 = [&R] {newick}\nend;"
-        )
-    } else {
-        writeln!(w, "{newick}")
-    }
-}
-
 pub fn write_tree_sidecar(doc: &TreeDoc, w: &mut dyn Write) -> io::Result<()> {
     write_tree_metadata(doc, None, w)
 }
@@ -579,25 +506,6 @@ fn write_tree_metadata(
 ) -> io::Result<()> {
     let side = tree_metadata(doc, exchange_hash);
     serde_json::to_writer_pretty(&mut *w, &side)?;
-    writeln!(w)
-}
-
-pub(crate) fn write_legacy_tree_sidecar(doc: &TreeDoc, w: &mut dyn Write) -> io::Result<()> {
-    #[derive(Serialize)]
-    struct Legacy<'a> {
-        supports: &'a [SupportName],
-        annotations: &'a BTreeMap<u32, CladeAnnotation>,
-        style: &'a TreeStyle,
-    }
-    let side = tree_metadata(doc, None);
-    serde_json::to_writer_pretty(
-        &mut *w,
-        &Legacy {
-            supports: &side.supports,
-            annotations: &side.annotations,
-            style: &side.style,
-        },
-    )?;
     writeln!(w)
 }
 
@@ -712,9 +620,19 @@ fn open_fasta_with_gff(
 
 /// Serialise the main file of a document.
 pub fn write_main(opened: &Opened, w: &mut dyn Write) -> io::Result<()> {
+    #[cfg(feature = "test-counters")]
+    basecraft_io::counters::record_serialization("sequence");
     let doc = &opened.doc;
     match opened.format {
-        Format::GenBank => genbank::write(w, &doc.to_genbank()),
+        Format::GenBank => genbank::write_stream(
+            w,
+            &doc.genbank_metadata(),
+            doc.len(),
+            doc.features().map(|(_, feature)| feature),
+            (0..doc.len())
+                .step_by(60 * 1024)
+                .map(|start| doc.read(start, (start + 60 * 1024).min(doc.len()))),
+        ),
         Format::Delimitation => Err(io::Error::other("this is a delimitation workspace")),
         Format::Metadata => Err(io::Error::other("a sequence can't be written as metadata")),
         Format::Submission => Err(io::Error::other(
@@ -1114,8 +1032,7 @@ fn extract_range(doc: &SequenceDoc, start: u64, end: u64) -> genbank::Record {
 struct DelimitationSidecar {
     version: u32,
     exchange_hash: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    path_base: Option<PathBuf>,
+    path_base: PathBuf,
     workspace: basecraft_protocol::delimitation::DelimitationWorkspace,
 }
 
@@ -1138,19 +1055,14 @@ pub fn load_delimitation(
     }
     if sidecar.exists() {
         let side: DelimitationSidecar = serde_json::from_slice(&std::fs::read(sidecar)?)?;
-        if !matches!(side.version, 1 | 2) || side.exchange_hash != cache::content_hash(path)? {
+        if side.version != 2 || side.exchange_hash != cache::content_hash(path)? {
             return Err(crate::error::invalid(
                 "SPART sidecar version or exchange hash differs",
             ));
         }
         work = side.workspace;
-        if side.version == 2 {
-            let old = side
-                .path_base
-                .ok_or_else(|| crate::error::invalid("Species metadata has no path base"))?;
-            let new = path.parent().unwrap_or(Path::new(".")).canonicalize()?;
-            rebase_delimitation_paths(&mut work, &old, &new);
-        }
+        let new = path.parent().unwrap_or(Path::new(".")).canonicalize()?;
+        rebase_delimitation_paths(&mut work, &side.path_base, &new);
     }
     basecraft_docs::delimitation::validate(&work).map_err(|e| crate::error::invalid(e.0))?;
     Ok(work)
@@ -1167,21 +1079,6 @@ pub fn write_delimitation(
         basecraft_io::spart::write_text(work).0
     };
     w.write_all(text.as_bytes())
-}
-
-pub fn write_delimitation_sidecar(
-    work: &basecraft_protocol::delimitation::DelimitationWorkspace,
-    hash: &str,
-    w: &mut dyn Write,
-) -> io::Result<()> {
-    let side = DelimitationSidecar {
-        version: 1,
-        exchange_hash: hash.into(),
-        path_base: None,
-        workspace: work.clone(),
-    };
-    serde_json::to_writer_pretty(&mut *w, &side)?;
-    writeln!(w)
 }
 
 pub fn write_delimitation_sidecar_at(
@@ -1209,7 +1106,7 @@ pub(crate) fn write_delimitation_sidecar_in(
     let side = DelimitationSidecar {
         version: 2,
         exchange_hash: hash.into(),
-        path_base: Some(base.to_path_buf()),
+        path_base: base.to_path_buf(),
         workspace: work.clone(),
     };
     serde_json::to_writer_pretty(&mut *w, &side)?;

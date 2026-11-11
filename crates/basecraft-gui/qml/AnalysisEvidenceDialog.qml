@@ -17,6 +17,15 @@ AppContentDialog {
     signal relinkOriginal(string path)
     standardButtons: Dialog.Cancel
     initialFocusItem: standardButton(Dialog.Cancel)
+    component Message: Label { Layout.fillWidth: true; wrapMode: Text.Wrap }
+    component Policy: AppButton {
+        required property string policy
+        visible: (dialog.conflict.analyses || []).length > 0
+        enabled: (!dialog.issues.length || acknowledgement.checked) && (policy !== "preserve_copy" || (dialog.conflict.options || []).includes("preserve_copy"))
+        Layout.fillWidth: true
+        onClicked: dialog.choice(policy)
+    }
+    component Explanation: Message { visible: (dialog.conflict.analyses || []).length > 0 }
     Shortcut {
         sequences: ["Return", "Enter"]
         enabled: dialog.opened && dialog.standardButton(Dialog.Cancel).activeFocus
@@ -24,19 +33,15 @@ AppContentDialog {
     }
     body: ColumnLayout {
         spacing: 10
-        Label {
+        Message {
             visible: dialog.issues.length > 0
             text: "Basecraft could not check all analyses that may use this file. Saving may make their original input unavailable. This save has not replaced the file."
-            Layout.fillWidth: true
-            wrapMode: Text.Wrap
         }
         Repeater {
             model: dialog.issues
-            Label {
+            Message {
                 required property var modelData
                 text: modelData.location + ": " + modelData.reason
-                Layout.fillWidth: true
-                wrapMode: Text.Wrap
             }
         }
         RowLayout {
@@ -58,69 +63,27 @@ AppContentDialog {
             enabled: acknowledgement.checked
             onClicked: dialog.choice("cancel")
         }
-        Label {
+        Message {
             visible: (dialog.conflict.analyses || []).length > 0
             text: "Saving this file would replace input used by these analyses:"
-            Layout.fillWidth: true
-            wrapMode: Text.Wrap
         }
         Repeater {
             model: dialog.conflict.analyses || []
-            Label {
+            Message {
                 required property var modelData
                 text: modelData.result || "Unpublished analysis"
-                Layout.fillWidth: true
-                wrapMode: Text.Wrap
                 font.bold: true
             }
         }
-        AppButton {
-            objectName: "preserveInput"
-            visible: (dialog.conflict.analyses || []).length > 0
-            text: "Preserve original copy and save"
-            enabled: (dialog.conflict.options || []).includes("preserve_copy") && (!dialog.issues.length || acknowledgement.checked)
-            Layout.fillWidth: true
-            onClicked: dialog.choice("preserve_copy")
-        }
-        Label {
-            visible: (dialog.conflict.analyses || []).length > 0
-            text: "Copies the verified old input into hidden analysis metadata before saving. Unavailable originals cannot be repaired by copying changed bytes."
-            Layout.fillWidth: true
-            wrapMode: Text.Wrap
-        }
-        AppButton {
-            objectName: "removeAnalysis"
-            visible: (dialog.conflict.analyses || []).length > 0
-            enabled: !dialog.issues.length || acknowledgement.checked
-            text: "Remove analysis records and save"
-            Layout.fillWidth: true
-            onClicked: dialog.choice("remove_analysis")
-        }
-        Label {
-            visible: (dialog.conflict.analyses || []).length > 0
-            text: "Moves only affected hidden analysis records to the store's trash. Result files and source files remain."
-            Layout.fillWidth: true
-            wrapMode: Text.Wrap
-        }
-        AppButton {
-            objectName: "breakEvidence"
-            visible: (dialog.conflict.analyses || []).length > 0
-            enabled: !dialog.issues.length || acknowledgement.checked
-            text: "Break evidence chain and save"
-            Layout.fillWidth: true
-            onClicked: dialog.choice("break_evidence")
-        }
-        Label {
-            visible: (dialog.conflict.analyses || []).length > 0
-            text: "Keeps results and records, marking the original input evidence explicitly unavailable."
-            Layout.fillWidth: true
-            wrapMode: Text.Wrap
-        }
-        Label {
+        Policy { objectName: "preserveInput"; policy: "preserve_copy"; text: "Preserve original copy and save" }
+        Explanation { text: "Copies the verified old input into hidden analysis metadata before saving. Unavailable originals cannot be repaired by copying changed bytes." }
+        Policy { objectName: "removeAnalysis"; policy: "remove_analysis"; text: "Remove analysis records and save" }
+        Explanation { text: "Moves only affected hidden analysis records to the store's trash. Result files and source files remain." }
+        Policy { objectName: "breakEvidence"; policy: "break_evidence"; text: "Break evidence chain and save" }
+        Explanation { text: "Keeps results and records, marking the original input evidence explicitly unavailable." }
+        Message {
             visible: (dialog.conflict.analyses || []).length > 0
             text: "If the input changed elsewhere, relink a file containing the verified original bytes:"
-            Layout.fillWidth: true
-            wrapMode: Text.Wrap
         }
         TextField {
             id: originalPath

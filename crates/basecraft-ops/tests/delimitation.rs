@@ -633,27 +633,10 @@ fn application_state_replay_handles_hidden_baseline_and_missing_original_folder(
     let report = replay::replay(&recovery).unwrap();
     assert!(report.ok(), "{:?}", report.problems);
     let recovered = parent.path().join("recovered");
-    assert!(matches!(
-        replay::recover(&recovery, &recovered),
-        Err(basecraft_ops::Error::SaveCheckRequired(_))
-    ));
-    assert!(!recovered.exists());
     let journal_before = basecraft_ops::log::read_all(&recovery).unwrap();
-    let mut attempt =
-        replay::prepare_recovery(&recovery, &recovered, replay::RecoveryMode::Strict).unwrap();
-    let check = attempt.check(0).unwrap();
-    assert_ne!(
-        check.evidence().issues,
-        [] as [basecraft_ops::input_evidence::InspectionIssue; 0]
-    );
-    attempt
-        .advance(
-            0,
-            Some(check.decide(basecraft_ops::input_evidence::SavePolicy::Cancel, true)),
-        )
-        .unwrap();
-    let completed = attempt.publish().unwrap();
-    assert!(!completed.warnings.is_empty());
+    // The current index proves this run owns retained input, so an unavailable
+    // old location does not make unrelated recovery incomplete.
+    replay::recover(&recovery, &recovered).unwrap();
     assert_eq!(
         serde_json::to_vec(&basecraft_ops::log::read_all(&recovery).unwrap()).unwrap(),
         serde_json::to_vec(&journal_before).unwrap()
@@ -663,7 +646,7 @@ fn application_state_replay_handles_hidden_baseline_and_missing_original_folder(
 }
 
 #[test]
-fn legacy_visible_workspace_metadata_remains_read_only() {
+fn standalone_current_workspace_metadata_remains_read_only() {
     crate::isolated_profile::isolate!();
     use std::io::Write;
     let root = tempfile::tempdir().unwrap();
@@ -673,7 +656,7 @@ fn legacy_visible_workspace_metadata_remains_read_only() {
     let hash = basecraft_io::hash_file(&path).unwrap();
     let sidecar = basecraft_ops::files::tree_sidecar(&path);
     let mut bytes = Vec::new();
-    basecraft_ops::files::write_delimitation_sidecar(&work, &hash, &mut bytes).unwrap();
+    basecraft_ops::files::write_delimitation_sidecar_at(&work, &hash, &path, &mut bytes).unwrap();
     std::fs::File::create(&sidecar)
         .unwrap()
         .write_all(&bytes)

@@ -43,6 +43,7 @@ fn inspection_and_naming_are_read_only_and_keep_stable_order() {
         &work,
         &hash,
         &paths[0],
+        &path,
         &mut std::fs::File::create(files::tree_sidecar(&paths[0])).unwrap(),
     )
     .unwrap();
@@ -361,9 +362,10 @@ fn hint_workspace(
     std::fs::write(&path, SPART).unwrap();
     let mut work = files::load_delimitation(&path).unwrap();
     change(&mut work);
-    files::write_delimitation_sidecar(
+    files::write_delimitation_sidecar_at(
         &work,
         &basecraft_io::hash_file(&path).unwrap(),
+        &path,
         &mut std::fs::File::create(files::tree_sidecar(&path)).unwrap(),
     )
     .unwrap();

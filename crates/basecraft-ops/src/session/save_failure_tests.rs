@@ -60,6 +60,45 @@ fn failed_provenance_keeps_recovery_and_retry_accepts_written_data() {
 }
 
 #[test]
+fn crash_before_and_after_replacement_recovers_the_edits() {
+    crate::isolated_profile::isolate!();
+    let root = tempfile::tempdir().unwrap();
+    for after in [false, true] {
+        let folder = root.path().join(if after { "after" } else { "before" });
+        fs::create_dir(&folder).unwrap();
+        let (mut session, id, target) = fixture(&folder);
+        let recovery = session.recovery_root().to_path_buf();
+        let obstruction = if after {
+            crate::provenance::companion(&target)
+        } else {
+            recovery.join("pending-save.json")
+        };
+        if after {
+            fs::write(&obstruction, b"blocked").unwrap();
+        } else {
+            fs::create_dir(&obstruction).unwrap();
+        }
+        assert!(session.save(id, None).is_err());
+        assert_eq!(
+            fs::read(&target).unwrap(),
+            if after {
+                b">source\nTCGT\n"
+            } else {
+                b">source\nACGT\n"
+            }
+        );
+        if after {
+            fs::remove_file(obstruction).unwrap();
+        } else {
+            fs::remove_dir(obstruction).unwrap();
+        }
+        drop(session);
+        let restored = crate::replay::recover(&recovery, &folder.join("restored")).unwrap();
+        assert_eq!(fs::read(&restored[0]).unwrap(), b">source\nTCGT\n");
+    }
+}
+
+#[test]
 fn new_destination_and_history_preserve_existing_bytes() {
     let Some(root) = crate::isolated_profile::enter(
         "session::save_failure_tests::new_destination_and_history_preserve_existing_bytes",

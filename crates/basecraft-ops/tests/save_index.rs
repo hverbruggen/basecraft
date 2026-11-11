@@ -37,8 +37,88 @@ fn external_replacement_and_new_alias_are_still_detected() {
 }
 
 #[test]
-fn old_writer_ledger_replacement_is_reconciled() {
-    let Some(root) = isolated_profile::enter("old_writer_ledger_replacement_is_reconciled") else {
+fn copied_identity_does_not_retire_the_live_original_store() {
+    let Some(root) =
+        isolated_profile::enter("copied_identity_does_not_retire_the_live_original_store")
+    else {
+        return;
+    };
+    let source = root.join("original.fasta");
+    let other = root.join("copy.fasta");
+    std::fs::write(&source, b">a\nACGT\n").unwrap();
+    std::fs::write(&other, b">b\nTTTT\n").unwrap();
+    let original = reference(&root.join("original"), &source);
+    let copied = reference(&root.join("copied"), &other);
+    let original_store = original.directory().parent().unwrap().parent().unwrap();
+    let copied_store = copied.directory().parent().unwrap().parent().unwrap();
+    std::fs::copy(
+        original_store.join("identity"),
+        copied_store.join("identity"),
+    )
+    .unwrap();
+    evidence::register(&copied).unwrap();
+    for path in [source, other] {
+        let check = evidence::check(&path).unwrap();
+        assert!(check.is_complete());
+        assert_eq!(check.conflict.analyses.len(), 1);
+    }
+}
+
+#[test]
+fn corrupt_alias_shard_keeps_other_known_conflicts() {
+    let Some(root) = isolated_profile::enter("corrupt_alias_shard_keeps_other_known_conflicts")
+    else {
+        return;
+    };
+    let source = root.join("source.fasta");
+    let alias = root.join("alias.fasta");
+    std::fs::write(&source, b">a\nACGT\n").unwrap();
+    std::fs::hard_link(&source, &alias).unwrap();
+    let known = reference(&root.join("known"), &source);
+    reference(&root.join("other"), &alias);
+    let state = basecraft_platform::paths::AppPaths::discover()
+        .unwrap()
+        .state;
+    let key = basecraft_io::hash_bytes(alias.as_os_str().as_encoded_bytes());
+    std::fs::write(
+        state
+            .join("analysis-inputs/sources")
+            .join(key.trim_start_matches("b3:")),
+        b"damaged",
+    )
+    .unwrap();
+    let check = evidence::check(&source).unwrap();
+    assert!(!check.is_complete());
+    assert!(
+        check
+            .conflict
+            .analyses
+            .iter()
+            .any(|analysis| analysis.run == known.directory())
+    );
+    let mut session = basecraft_ops::Session::new(&root);
+    let doc = session.open(&source).unwrap();
+    session
+        .apply(
+            doc,
+            basecraft_protocol::Op::SeqReplace {
+                start: 0,
+                end: 1,
+                residues: "T".into(),
+            },
+        )
+        .unwrap();
+    let decision = session
+        .check_save(doc, None)
+        .unwrap()
+        .decide(evidence::SavePolicy::Cancel, true);
+    assert!(session.save_with_decision(doc, None, decision).is_err());
+    assert_eq!(std::fs::read(source).unwrap(), b">a\nACGT\n");
+}
+
+#[test]
+fn current_writer_updates_source_index() {
+    let Some(root) = isolated_profile::enter("current_writer_updates_source_index") else {
         return;
     };
     let source = root.join("source1.fasta");
@@ -53,23 +133,14 @@ fn old_writer_ledger_replacement_is_reconciled() {
             .analyses
             .is_empty()
     );
-    let ledger = run.artifact("input.json").unwrap();
-    let before = std::fs::metadata(&ledger).unwrap();
     let mut input = evidence::read_input(run.directory()).unwrap();
     let reference = input.source.as_mut().unwrap();
     reference.path = evidence::relative(run.directory(), &other).unwrap();
     reference.stamp = evidence::stamp(&other).unwrap();
     reference.hash = basecraft_io::hash_file(&other).unwrap();
-    // Old in-place writer restores mtime and keeps size: ctime still changes.
-    let mut bytes = serde_json::to_vec_pretty(&input).unwrap();
-    bytes.push(b'\n');
-    assert_eq!(bytes.len() as u64, before.len());
-    std::fs::write(&ledger, bytes).unwrap();
-    std::fs::File::options()
-        .write(true)
-        .open(&ledger)
+    evidence::Mutation::begin()
         .unwrap()
-        .set_times(std::fs::FileTimes::new().set_modified(before.modified().unwrap()))
+        .write_input(run.directory(), &input)
         .unwrap();
     let check = evidence::check(&other).unwrap();
     assert!(check.is_complete());
@@ -89,7 +160,7 @@ fn corrupt_cache_cannot_hide_a_reference() {
         .state
         .join("analysis-input-index.json");
     std::fs::write(cache, b"broken cache").unwrap();
-    assert_eq!(evidence::check(&source).unwrap().conflict.analyses.len(), 1);
+    assert!(!evidence::check(&source).unwrap().is_complete());
 }
 
 #[cfg(feature = "test-counters")]
@@ -100,6 +171,10 @@ fn two_hundred_stores_fifty_runs_open_no_unrelated_ledgers() {
     else {
         return;
     };
+    if std::env::var_os("BASECRAFT_INDEX_COLD").is_some() {
+        measure_save(&root, "cold", "G");
+        return;
+    }
     for store in 0..200 {
         let folder = root.join(format!("store-{store}"));
         std::fs::create_dir(&folder).unwrap();
@@ -111,7 +186,12 @@ fn two_hundred_stores_fifty_runs_open_no_unrelated_ledgers() {
         for run in 0..49 {
             let run =
                 ArtifactRun::create(&folder.join("result.txt"), &format!("run-{run}")).unwrap();
-            evidence::write_json(&run.artifact("input.json").unwrap(), &input).unwrap();
+            // Build a complete current-format fixture, then publish its index once.
+            std::fs::write(
+                run.artifact("input.json").unwrap(),
+                serde_json::to_vec(&input).unwrap(),
+            )
+            .unwrap();
         }
         evidence::register(&first).unwrap();
     }
@@ -142,15 +222,53 @@ fn two_hundred_stores_fifty_runs_open_no_unrelated_ledgers() {
         counts.reads.values().map(|r| r.full_reads).sum::<u64>(),
         counts.reads.values().map(|r| r.bytes).sum::<u64>()
     );
-    let mut session = basecraft_ops::Session::new(&root);
-    let doc = session.open(&target).unwrap();
+    measure_save(&root, "warm", "T");
+    // Minimal metadata-only work, with paths already decoded in memory.
+    let cache = basecraft_platform::paths::AppPaths::discover()
+        .unwrap()
+        .state
+        .join("analysis-input-index.json");
+    let index: basecraft_protocol::records::IndexFile<
+        basecraft_protocol::records::AnalysisInputIndex,
+    > = serde_json::from_slice(&std::fs::read(cache).unwrap()).unwrap();
+    let paths: Vec<_> = index.value.sources.iter().collect();
+    let started = std::time::Instant::now();
+    for path in &paths {
+        let _ = std::fs::symlink_metadata(path);
+    }
+    eprintln!(
+        "{} cached metadata paths, stat only: {:?}",
+        paths.len(),
+        started.elapsed()
+    );
+    let cold = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "two_hundred_stores_fifty_runs_open_no_unrelated_ledgers",
+            "--nocapture",
+        ])
+        .env("BASECRAFT_INDEX_COLD", "1")
+        .output()
+        .unwrap();
+    eprint!(
+        "{}{}",
+        String::from_utf8_lossy(&cold.stdout),
+        String::from_utf8_lossy(&cold.stderr)
+    );
+    assert!(cold.status.success());
+}
+
+#[cfg(feature = "test-counters")]
+fn measure_save(root: &Path, label: &str, residue: &str) {
+    let mut session = basecraft_ops::Session::new(root);
+    let doc = session.open(&root.join("unrelated.fasta")).unwrap();
     session
         .apply(
             doc,
             basecraft_protocol::Op::SeqReplace {
                 start: 0,
                 end: 1,
-                residues: "T".into(),
+                residues: residue.into(),
             },
         )
         .unwrap();
@@ -160,13 +278,13 @@ fn two_hundred_stores_fifty_runs_open_no_unrelated_ledgers() {
     let counts = basecraft_io::counters::snapshot();
     assert!(counts.store_inspections.is_empty());
     assert!(counts.reads.keys().all(|p| {
-        !p.strip_prefix(&root)
+        !p.strip_prefix(root)
             .ok()
             .and_then(|p| p.components().next())
             .is_some_and(|c| c.as_os_str().to_string_lossy().starts_with("store-"))
     }));
     eprintln!(
-        "200 stores x 50 runs Session save: {:?}; complete reads: {}; bytes: {}",
+        "200 stores x 50 runs {label} Session save: {:?}; complete reads: {}; bytes: {}",
         started.elapsed(),
         counts.reads.values().map(|r| r.full_reads).sum::<u64>(),
         counts.reads.values().map(|r| r.bytes).sum::<u64>()
@@ -189,12 +307,9 @@ fn parseable_but_modified_cache_cannot_hide_a_reference() {
         .join("analysis-input-index.json");
     let mut value: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&cache).unwrap()).unwrap();
-    for store in value["stores"].as_object_mut().unwrap().values_mut() {
-        store["sources"] = serde_json::Value::Array(Vec::new());
-        store["files"] = serde_json::Value::Object(Default::default());
-    }
+    value["value"]["sources"] = serde_json::Value::Array(Vec::new());
     std::fs::write(cache, serde_json::to_vec(&value).unwrap()).unwrap();
-    assert_eq!(evidence::check(&source).unwrap().conflict.analyses.len(), 1);
+    assert!(!evidence::check(&source).unwrap().is_complete());
 }
 
 #[test]
@@ -222,9 +337,9 @@ fn stray_regular_file_does_not_make_an_unrelated_store_incomplete() {
 
 #[cfg(feature = "test-counters")]
 #[test]
-fn completed_registration_is_warm_and_cache_extensions_survive() {
+fn completed_registration_needs_no_unrelated_ledger_reads() {
     let Some(root) =
-        isolated_profile::enter("completed_registration_is_warm_and_cache_extensions_survive")
+        isolated_profile::enter("completed_registration_needs_no_unrelated_ledger_reads")
     else {
         return;
     };
@@ -246,22 +361,14 @@ fn completed_registration_is_warm_and_cache_extensions_survive() {
         .state
         .join("analysis-input-index.json");
     let bytes = std::fs::read(&cache).unwrap();
-    let mut record: basecraft_protocol::records::AnalysisInputIndex =
-        serde_json::from_slice(&bytes).unwrap();
-    record.extra.insert("extension".into(), true.into());
-    for entry in record.stores.values_mut() {
-        entry.extra.insert("extension".into(), true.into());
-    }
-    evidence::write_json(&cache, &record).unwrap();
+    let record: basecraft_protocol::records::IndexFile<
+        basecraft_protocol::records::AnalysisInputIndex,
+    > = serde_json::from_slice(&bytes).unwrap();
     let _lock = evidence::lock().unwrap();
     evidence::register(&run).unwrap();
-    let restored: basecraft_protocol::records::AnalysisInputIndex =
-        serde_json::from_slice(&std::fs::read(cache).unwrap()).unwrap();
-    assert_eq!(restored.extra, record.extra);
-    assert!(
-        restored
-            .stores
-            .values()
-            .all(|s| s.extra.get("extension") == Some(&true.into()))
-    );
+    let restored: basecraft_protocol::records::IndexFile<
+        basecraft_protocol::records::AnalysisInputIndex,
+    > = serde_json::from_slice(&std::fs::read(cache).unwrap()).unwrap();
+    assert_eq!(restored.value.sources, record.value.sources);
+    assert_eq!(restored.value.stores, record.value.stores);
 }

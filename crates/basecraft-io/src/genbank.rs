@@ -344,21 +344,34 @@ const WIDTH: usize = 79;
 const INDENT: &str = "                     ";
 
 pub fn write(w: &mut dyn Write, rec: &Record) -> io::Result<()> {
+    write_stream(
+        w,
+        rec,
+        rec.sequence.len() as u64,
+        &rec.features,
+        rec.sequence.chunks(60 * 1024),
+    )
+}
+
+/// Sequence chunks must end on a 60-base line, except the final chunk.
+pub fn write_stream<'a>(
+    w: &mut dyn Write,
+    rec: &Record,
+    length: u64,
+    features: impl IntoIterator<Item = &'a Feature>,
+    chunks: impl IntoIterator<Item = impl AsRef<[u8]>>,
+) -> io::Result<()> {
     let topology = if rec.circular { "circular" } else { "linear" };
     writeln!(
         w,
         "LOCUS       {:<16} {:>11} bp    {:<7} {topology:<8} {} {}",
-        rec.name,
-        rec.sequence.len(),
-        rec.molecule,
-        rec.division,
-        rec.date
+        rec.name, length, rec.molecule, rec.division, rec.date
     )?;
     for l in &rec.header {
         writeln!(w, "{l}")?;
     }
     writeln!(w, "FEATURES             Location/Qualifiers")?;
-    for f in &rec.features {
+    for f in features {
         write_wrapped(
             w,
             &format!("     {:<16}", f.kind),
@@ -375,13 +388,17 @@ pub fn write(w: &mut dyn Write, rec: &Record) -> io::Result<()> {
         }
     }
     writeln!(w, "ORIGIN")?;
-    for (i, line) in rec.sequence.chunks(60).enumerate() {
-        write!(w, "{:>9}", i * 60 + 1)?;
-        for block in line.chunks(10) {
-            w.write_all(b" ")?;
-            w.write_all(&block.to_ascii_lowercase())?;
+    let mut position = 1;
+    for chunk in chunks {
+        for line in chunk.as_ref().chunks(60) {
+            write!(w, "{position:>9}")?;
+            for block in line.chunks(10) {
+                w.write_all(b" ")?;
+                w.write_all(&block.to_ascii_lowercase())?;
+            }
+            w.write_all(b"\n")?;
+            position += line.len();
         }
-        w.write_all(b"\n")?;
     }
     writeln!(w, "//")
 }

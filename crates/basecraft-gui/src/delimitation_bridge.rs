@@ -2531,9 +2531,10 @@ pub(crate) mod inspection_tests {
             "basecraft_alignment_snapshot".into(),
             "Missing/Original.FA".into(),
         );
-        basecraft_ops::files::write_delimitation_sidecar(
+        basecraft_ops::files::write_delimitation_sidecar_at(
             &work,
             &basecraft_io::hash_file(&path).unwrap(),
+            &path,
             &mut std::fs::File::create(basecraft_ops::files::tree_sidecar(&path)).unwrap(),
         )
         .unwrap();

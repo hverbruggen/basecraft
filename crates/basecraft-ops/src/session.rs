@@ -93,6 +93,7 @@ struct Slot {
     baseline_logged: bool,
     accepted_hashes: Vec<(String, String)>,
     saved_state_hashes: Vec<String>,
+    saved_edit: Option<String>,
     absent_sidecars: Vec<String>,
     origin: Option<basecraft_protocol::provenance::Publication>,
     origin_issue: Option<String>,
@@ -125,7 +126,7 @@ pub struct Outcome {
 /// Target-save and evidence locks held while writing an export or extract.
 struct DerivedTarget {
     _target: Option<std::fs::File>,
-    _evidence: std::fs::File,
+    _evidence: crate::input_evidence::SaveLock,
 }
 
 enum ReplayMode {
@@ -359,14 +360,6 @@ impl Session {
             .content_mut()
             .as_document_mut()
             .rebase_replay_paths(from, to);
-    }
-
-    pub(crate) fn legacy_delimitation_hashes(
-        &self,
-        id: DocId,
-        target: &Path,
-    ) -> Result<Option<Vec<String>>> {
-        self.docs[id.0].content.as_document().legacy_hashes(target)
     }
 
     pub fn is_tree(&self, id: DocId) -> bool {

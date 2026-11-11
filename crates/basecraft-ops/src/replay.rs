@@ -105,13 +105,7 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
                 Ok(got) => {
                     let want: Vec<&String> = e.result.hashes.iter().map(|(_, h)| h).collect();
                     if got.iter().collect::<Vec<_>>() != want {
-                        let legacy = session.legacy_delimitation_hashes(doc, Path::new(path))?;
-                        if legacy
-                            .as_ref()
-                            .is_none_or(|hashes| hashes.iter().collect::<Vec<_>>() != want)
-                        {
-                            problem(format!("saved content differs: {got:?} vs {want:?}"));
-                        }
+                        problem(format!("saved content differs: {got:?} vs {want:?}"));
                     }
                 }
                 Err(err) => problem(err.to_string()),

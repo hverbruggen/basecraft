@@ -304,9 +304,7 @@ fn bound_tree_errors_never_fall_back_to_an_unbound_payload() {
     let mut session = Session::unlogged(dir.path());
     assert!(session.open_classified(&path).is_err());
     std::fs::write(&path, b"(a,b);\n").unwrap();
-    let (id, kind) = session.open_classified(&path).unwrap();
-    assert_eq!((id, kind), (DocId(0), files::Kind::Tree));
-    assert!(session.tree_metadata_warning(id).unwrap().is_some());
+    assert!(session.open_classified(&path).is_err());
 }
 
 #[cfg(feature = "test-counters")]

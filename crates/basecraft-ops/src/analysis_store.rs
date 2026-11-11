@@ -130,6 +130,9 @@ impl ArtifactRun {
                 let mut bytes = serde_json::to_vec(&serde_json::to_value(marker)?)?;
                 bytes.push(b'\n');
                 basecraft_io::write_atomic(&store.join("store.json"), |w| w.write_all(&bytes))?;
+                basecraft_io::write_atomic(&store.join("identity"), |w| {
+                    w.write_all(ulid::Ulid::generate().to_string().as_bytes())
+                })?;
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 Self::validate_store(&store)?;
@@ -247,8 +250,7 @@ impl ArtifactRun {
 }
 
 impl ArtifactRun {
-    /// Bounded, read-only discovery beside a result. Hidden bindings take
-    /// precedence; legacy companions remain readable when no binding exists.
+    /// Bounded, read-only discovery of current hidden bindings beside a result.
     pub fn for_result(result: &Path) -> Result<Option<PathBuf>> {
         Self::resolve_result(result, false, None)
     }

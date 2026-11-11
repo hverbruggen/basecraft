@@ -681,7 +681,21 @@ pub(super) mod locks {
                 stream.write_all(b"B").unwrap();
                 return;
             }
-            "evidence-hold" => crate::input_evidence::lock().unwrap(),
+            "evidence-hold" => {
+                let state = basecraft_platform::paths::AppPaths::discover()
+                    .unwrap()
+                    .state;
+                std::fs::create_dir_all(&state).unwrap();
+                let file = std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create(true)
+                    .truncate(false)
+                    .open(crate::input_evidence::evidence_lock_path(&state))
+                    .unwrap();
+                fs4::fs_std::FileExt::lock_exclusive(&file).unwrap();
+                file
+            }
             _ => panic!("unknown peer mode"),
         };
         stream.write_all(b"H").unwrap();

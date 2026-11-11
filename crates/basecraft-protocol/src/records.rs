@@ -255,34 +255,26 @@ pub struct AlignmentLink {
     pub extra: BTreeMap<String, serde_json::Value>,
 }
 
-/// Rebuildable private lookup cache beside the version-one store registry.
+/// Current source catalogue. Per-source shards hold the affected store closure.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct IndexFile<T> {
+    pub checksum: String,
+    pub value: T,
+}
+
+/// Local source and store locations, without unrelated run records.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct AnalysisInputIndex {
     pub schema_version: u32,
-    pub stores: BTreeMap<PathBuf, IndexedAnalysisStore>,
-    #[serde(flatten)]
-    pub extra: BTreeMap<String, Value>,
+    pub stores: BTreeMap<PathBuf, String>,
+    pub sources: Vec<PathBuf>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct IndexedAnalysisStore {
-    /// Digest of the full platform directory identity; recognizes a moved store.
     pub identity: String,
-    pub checksum: String,
-    /// Metadata for directories and input ledgers, including expected absences.
-    pub files: BTreeMap<PathBuf, Option<IndexFileStamp>>,
     pub sources: Vec<PathBuf>,
     pub dependencies: Vec<PathBuf>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct IndexFileStamp {
-    pub identity: String,
-    pub size: u64,
-    pub modified_seconds: u64,
-    pub modified_nanos: u32,
-    pub changed_seconds: i64,
-    pub changed_nanos: i64,
 }

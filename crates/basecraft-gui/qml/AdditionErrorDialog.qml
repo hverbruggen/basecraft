@@ -8,7 +8,6 @@ AppContentDialog {
     property string message: ""
     signal copyMessage(string text)
     title: "Cannot add sequences"
-    modal: true
     closePolicy: Popup.CloseOnEscape
     onOpened: Qt.callLater(() => closeButton.forceActiveFocus())
     function show(message) { dialog.message = message; open() }

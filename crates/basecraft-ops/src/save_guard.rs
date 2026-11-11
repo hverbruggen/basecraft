@@ -6,6 +6,34 @@ use fs4::fs_std::FileExt;
 
 use crate::{Result, error::invalid};
 
+pub(crate) type ChangeStamp = (basecraft_protocol::provenance::FileStamp, i64, i64);
+
+pub(crate) fn change_stamp(path: &Path) -> Result<Option<ChangeStamp>> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    if !metadata.is_file() && !metadata.file_type().is_symlink() {
+        return Err(crate::Error::Unsupported(
+            "save target must be an ordinary file".into(),
+        ));
+    }
+    #[cfg(unix)]
+    let changed = {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = std::fs::metadata(path)?;
+        (metadata.ctime(), metadata.ctime_nsec())
+    };
+    #[cfg(not(unix))]
+    let changed = (0, 0);
+    Ok(Some((
+        crate::input_evidence::stamp(path)?,
+        changed.0,
+        changed.1,
+    )))
+}
+
 pub(crate) fn target_path(path: &Path) -> Result<PathBuf> {
     let absolute = std::path::absolute(path)?;
     let parent = absolute

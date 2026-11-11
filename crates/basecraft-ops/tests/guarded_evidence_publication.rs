@@ -33,8 +33,7 @@ impl Barrier {
         assert_eq!(line.trim(), expected);
     }
 }
-// Timeouts diagnose deadlocks; only a successful OS lock probe establishes
-// exclusion. Reap our children on failure so a broken guard cannot hang Cargo.
+// Timeouts diagnose deadlocks; a failed real save establishes exclusion. Reap our children on failure so a broken guard cannot hang Cargo.
 struct Worker(Child);
 impl Drop for Worker {
     fn drop(&mut self) {
@@ -79,6 +78,7 @@ fn scenario(mode: &str) {
         "published"
     });
     if mode != "save-first" {
+        saving.send("resume");
         saving.expect("saved");
     }
     assert!(registrar.0.wait().unwrap().success());
@@ -221,16 +221,12 @@ fn publication_worker() {
             .unwrap();
         session.flush().unwrap();
         if mode != "save-first" {
-            let paths = basecraft_platform::paths::AppPaths::discover().unwrap();
-            let file = std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(paths.state.join("analysis-evidence.lock"))
-                .unwrap();
-            // A real second process probes the actual OS lock. No timeout or
-            // absence-of-message is used as evidence of exclusion.
-            assert!(!fs4::fs_std::FileExt::try_lock_exclusive(&file).unwrap());
+            assert!(matches!(
+                session.save(doc, None),
+                Err(basecraft_ops::Error::Busy(_))
+            ));
             barrier.send("locked");
+            barrier.expect("resume");
         }
         if mode != "save-first" {
             let mutation = Mutation::begin().unwrap();
@@ -299,6 +295,7 @@ fn retention_scenario(mode: &str) {
     retaining.send("commit");
     retaining.expect(if save_first { "refused" } else { "published" });
     if !save_first {
+        saving.send("resume");
         saving.expect("saved");
         retaining.send("verify");
     }
@@ -444,14 +441,12 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
         session.flush().unwrap();
         let save_first = mode == "retain-break" || mode == "retain-remove";
         if !save_first {
-            let paths = basecraft_platform::paths::AppPaths::discover().unwrap();
-            let lock = std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(paths.state.join("analysis-evidence.lock"))
-                .unwrap();
-            assert!(!fs4::fs_std::FileExt::try_lock_exclusive(&lock).unwrap());
+            assert!(matches!(
+                session.save(doc, None),
+                Err(basecraft_ops::Error::Busy(_))
+            ));
             barrier.send("locked");
+            barrier.expect("resume");
             let mutation = Mutation::begin().unwrap();
             if mode == "retain-preserve" {
                 assert!(

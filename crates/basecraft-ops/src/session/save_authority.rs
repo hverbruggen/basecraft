@@ -58,8 +58,8 @@ impl SaveScope {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct TargetRevision {
-    hash: String,
-    stamp: basecraft_protocol::provenance::FileStamp,
+    pub(super) hash: String,
+    stamp: crate::save_guard::ChangeStamp,
 }
 
 impl SaveCheck {
@@ -184,8 +184,12 @@ impl SaveCheck {
     }
 
     pub(super) fn target_is_current(&self, target: &Path) -> Result<bool> {
-        Ok(crate::save_guard::target_path(target)? == self.scope.target
-            && target_revision(target)? == self.scope.target_revision)
+        let same = crate::save_guard::target_path(target)? == self.scope.target
+            && crate::save_guard::change_stamp(target)?
+                == self.scope.target_revision.as_ref().map(|r| r.stamp.clone());
+        #[cfg(not(unix))]
+        let same = same && target_revision(target)? == self.scope.target_revision;
+        Ok(same)
     }
 
     /// Consumes this advisory snapshot. `acknowledge_incomplete` is independent
@@ -362,13 +366,23 @@ impl PendingSaveAuthority {
 pub(crate) fn target_revision(target: &Path) -> Result<Option<TargetRevision>> {
     Ok(match std::fs::symlink_metadata(target) {
         Ok(metadata) => {
-            if !metadata.is_file() || metadata.file_type().is_symlink() {
-                return Err(invalid("save target must be an ordinary file"));
+            if !metadata.is_file() && !metadata.file_type().is_symlink() {
+                return Err(crate::Error::Unsupported(
+                    "save target must be an ordinary file".into(),
+                ));
             }
-            Some(TargetRevision {
-                hash: basecraft_io::hash_file(target)?,
-                stamp: crate::input_evidence::stamp(target)?,
-            })
+            let stamp = crate::save_guard::change_stamp(target)?.ok_or_else(|| {
+                crate::Error::ChangedOnDisk {
+                    path: target.into(),
+                }
+            })?;
+            let hash = basecraft_io::hash_file(target)?;
+            if crate::save_guard::change_stamp(target)?.as_ref() != Some(&stamp) {
+                return Err(crate::Error::ChangedOnDisk {
+                    path: target.into(),
+                });
+            }
+            Some(TargetRevision { hash, stamp })
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => return Err(error.into()),

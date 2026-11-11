@@ -91,7 +91,8 @@ impl Session {
         let target = path.map_or_else(|| self.resolve(&self.docs[id.0].key), Path::to_path_buf);
 
         let clean = (history_only || (self.log.is_some() && path.is_none()))
-            && self.save_hashes(id)? == self.docs[id.0].saved_state_hashes;
+            && self.docs[id.0].undo.last().map(|edit| &edit.entry_id)
+                == self.docs[id.0].saved_edit.as_ref();
         if history_only && !clean {
             return Err(invalid("history publication requires a saved document"));
         }
@@ -123,33 +124,33 @@ impl Session {
             crate::save_guard::Revision::check(None, &target)?;
         }
 
-        let creates_dependencies = || {
-            path.is_some()
-                || !matches!(
-                    self.write_publication,
-                    crate::documents::WritePublication::Immediate
-                )
-                || self.docs[id.0].origin_bundle.join("input.json").exists()
-                || self.docs[id.0]
-                    .content
-                    .as_document()
-                    .writes_analysis_dependencies()
-                || !matches!(
-                    crate::analysis_store::ArtifactRun::for_result(&target),
-                    Ok(None)
-                )
-        };
-        let exclusive = creates_dependencies();
-        let guard = crate::input_evidence::lock_save(&target, exclusive)?;
-        // A registrar may have published a binding while we waited for the gate.
-        let _evidence_lock = if !exclusive && creates_dependencies() {
-            drop(guard);
-            crate::input_evidence::lock_save(&target, true)?
-        } else {
-            guard
-        };
+        let mut evidence_lock = crate::input_evidence::lock_save(&target)?;
+        let evidence = evidence_lock.check(&target)?;
+        if !history_only
+            && decision.is_none()
+            && evidence.is_complete()
+            && policy == crate::input_evidence::SavePolicy::Cancel
+        {
+            crate::input_evidence::resolve(&evidence.conflict, policy)?;
+        }
+        let mut source_stamps = Vec::new();
+        for source in std::iter::once(target.clone()).chain(
+            path.is_none()
+                .then_some(&self.docs[id.0])
+                .into_iter()
+                .flat_map(|slot| {
+                    slot.accepted_hashes
+                        .iter()
+                        .map(|(key, _)| self.resolve(key))
+                        .chain(slot.absent_sidecars.iter().map(|key| self.resolve(key)))
+                }),
+        ) {
+            source_stamps.push((source.clone(), crate::save_guard::change_stamp(&source)?));
+        }
+        let revision = super::save_authority::target_revision(&target)?;
+        let before = revision.as_ref().map(|r| r.hash.clone());
+        let checked_target = before.as_deref().map(|hash| (target.as_path(), hash));
         if !history_only {
-            let evidence = crate::input_evidence::check_locked(&target)?;
             if decision.is_some()
                 || !evidence.is_complete()
                 || matches!(
@@ -157,7 +158,7 @@ impl Session {
                     crate::documents::WritePublication::Recovery { .. }
                 )
             {
-                let fresh = self.save_check_scope(id, &target, evidence)?;
+                let fresh = self.save_check_scope(id, &target, evidence, revision)?;
                 warnings = self.docs[id.0].save_authority.authorize_write(
                     &fresh,
                     decision.map(|decision| (decision, valid_consent)),
@@ -165,7 +166,7 @@ impl Session {
                     || {
                         // Changed original/sidecar acceptance is not waivable.
                         if path.is_none() {
-                            self.check_save_source(id)?;
+                            self.check_save_source(id, checked_target)?;
                         }
                         Ok(())
                     },
@@ -177,19 +178,39 @@ impl Session {
                 )?;
                 target_check = Some(fresh);
             } else {
+                if path.is_none() {
+                    self.check_save_source(id, checked_target)?;
+                }
                 crate::input_evidence::resolve(&evidence.conflict, policy)?;
             }
         }
         if history_only {
-            self.check_save_source(id)?;
+            self.check_save_source(id, checked_target)?;
         }
 
         self.track(id)?;
 
         self.flush()?;
-        let before = basecraft_io::hash_file(&target).ok();
-
-        let expected = self.save_hashes_at(id, &target)?;
+        let mut prepared = if history_only {
+            None
+        } else {
+            Some(self.docs[id.0].content.as_document().prepare_write(
+                &target,
+                files::Format::from_path(&target)?,
+                &self.storage_root,
+                &self.write_publication,
+            )?)
+        };
+        let expected: Vec<_> = prepared.as_ref().map_or_else(
+            || {
+                self.docs[id.0]
+                    .accepted_hashes
+                    .iter()
+                    .map(|(_, hash)| hash.clone())
+                    .collect()
+            },
+            |p| p.hashes().into_iter().map(|(_, hash)| hash).collect(),
+        );
         if self.log.is_some() {
             let intent = serde_json::to_vec_pretty(&serde_json::to_value(
                 basecraft_protocol::records::PendingSave {
@@ -206,9 +227,12 @@ impl Session {
 
             std::fs::create_dir_all(&self.storage_root)?;
 
-            basecraft_io::write_atomic(&self.storage_root.join("pending-save.json"), |w| {
-                w.write_all(&intent)
-            })?;
+            let path = self.storage_root.join("pending-save.json");
+            if let Some(prepared) = &mut prepared {
+                prepared.pending(&path, &intent)?;
+            } else {
+                basecraft_io::write_atomic(&path, |w| w.write_all(&intent))?;
+            }
         }
         // Preservation and pending-intent publication can take time. A decision
         // cannot authorize an externally replaced destination during that work.
@@ -220,17 +244,39 @@ impl Session {
                 self.check_save(id, Some(&target))?,
             )));
         }
+        for (source, stamp) in source_stamps {
+            if crate::save_guard::change_stamp(&source)? != stamp {
+                return Err(Error::ChangedOnDisk { path: source });
+            }
+        }
         if new_sequence || (mode == SaveMode::NewDestination && path.is_some()) {
             crate::save_guard::Revision::check(None, &target)?;
+        }
+        #[cfg(not(unix))]
+        {
+            // Without change time, stamps cannot detect a same-size rewrite
+            // whose mtime was restored. Recheck content on these platforms.
+            if path.is_none() {
+                self.check_save_source(id, None)?;
+            }
+            if let Some(hash) = &before {
+                crate::save_guard::check_hash(&target, hash)?;
+            }
         }
         let outcome = if history_only {
             self.log_save(id, &target, self.docs[id.0].accepted_hashes.clone())
         } else {
-            self.save_inner(id, path)
+            self.save_inner(id, path, prepared.unwrap())
         };
         if outcome.is_ok() {
             if target == self.resolve(&self.docs[id.0].key) {
-                self.docs[id.0].saved_state_hashes = self.save_hashes_at(id, &target)?;
+                self.docs[id.0].saved_state_hashes.clone_from(&expected);
+                self.docs[id.0].saved_edit = self.docs[id.0]
+                    .undo
+                    .last()
+                    .map(|edit| edit.entry_id.clone());
+                self.docs[id.0].current_saved_hashes.take();
+                let _ = self.docs[id.0].current_saved_hashes.set(expected.clone());
 
                 self.docs[id.0].disk_stamp = crate::input_evidence::stamp(&target)?;
             }
@@ -325,7 +371,11 @@ impl Session {
         })
     }
 
-    pub(super) fn check_save_source(&self, id: DocId) -> Result<()> {
+    pub(super) fn check_save_source(
+        &self,
+        id: DocId,
+        checked: Option<(&Path, &str)>,
+    ) -> Result<()> {
         for key in &self.docs[id.0].absent_sidecars {
             if self.resolve(key).exists() {
                 return Err(Error::ChangedOnDisk {
@@ -334,26 +384,37 @@ impl Session {
             }
         }
         for (key, hash) in &self.docs[id.0].accepted_hashes {
-            crate::save_guard::check_hash(&self.resolve(key), hash)?;
+            let source = self.resolve(key);
+            if let Some((_, actual)) =
+                checked.filter(|(path, _)| crate::save_guard::same_target(path, &source))
+            {
+                if actual != hash {
+                    return Err(Error::ChangedOnDisk { path: source });
+                }
+            } else {
+                crate::save_guard::check_hash(&source, hash)?;
+            }
         }
         Ok(())
     }
 
-    pub(super) fn save_inner(&mut self, id: DocId, path: Option<&Path>) -> Result<()> {
+    pub(super) fn save_inner(
+        &mut self,
+        id: DocId,
+        path: Option<&Path>,
+        prepared: crate::documents::PreparedWrite,
+    ) -> Result<()> {
         self.flush()?;
         let target = path.map_or_else(|| self.resolve(&self.docs[id.0].key), Path::to_path_buf);
         // An unchanged ordinary save neither rewrites data nor creates history.
 
         self.track(id)?;
-        if target == self.resolve(&self.docs[id.0].key) {
-            self.check_save_source(id)?;
-        }
 
         let format = files::Format::from_path(&target)?;
         let original = self.resolve(&self.docs[id.0].key);
         let document = self.docs[id.0].content.as_document();
         let links = document.prepare_links(&original, &target, format)?;
-        let write = || document.write(&target, format, &self.storage_root, &self.write_publication);
+        let write = || document.publish_write(prepared, &target, &self.write_publication);
         let (hashes, outputs) = if let Some(links) = links {
             links.publish(write)?
         } else {
@@ -428,11 +489,12 @@ impl Session {
         } else {
             None
         };
-        let evidence = crate::input_evidence::lock()?;
-        crate::input_evidence::resolve(
-            &crate::input_evidence::conflicts(path)?,
-            crate::input_evidence::SavePolicy::Cancel,
-        )?;
+        let mut evidence = crate::input_evidence::lock_save(path)?;
+        let check = evidence.check(path)?;
+        if !check.is_complete() {
+            return Err(Error::EvidenceCheckIncomplete(Box::new(check)));
+        }
+        crate::input_evidence::resolve(&check.conflict, crate::input_evidence::SavePolicy::Cancel)?;
         if self
             .docs
             .iter()

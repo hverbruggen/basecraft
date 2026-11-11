@@ -456,17 +456,10 @@ fn bound_tree_snapshot_verification_keeps_binding_run_namespace_and_metadata_gua
             }
             _ => {}
         }
-        if fault == "metadata-legacy" {
-            let files::Loaded::Tree(tree) = files::load_from(&path, source).unwrap() else {
-                panic!("expected tree");
-            };
-            assert!(tree.metadata_warning.is_some());
-        } else {
-            assert!(
-                files::load_from(&path, source).is_err(),
-                "guard was bypassed: {fault}"
-            );
-        }
+        assert!(
+            files::load_from(&path, source).is_err(),
+            "guard was bypassed: {fault}"
+        );
     }
 }
 

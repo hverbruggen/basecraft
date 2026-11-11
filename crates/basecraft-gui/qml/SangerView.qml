@@ -61,37 +61,15 @@ FocusScope {
         saveReviewDialog.selectedFile = fileUrls.local_file_url(ctl.export_path.replace(/_consensus_from_basecraft\.fasta$/, ".sanger-review.json"))
         saveReviewDialog.open()
     }
-    function saveReviewTarget(path) {
-        const inspected = JSON.parse(ctl.check_save(path))
-        if (inspected.error) { if (notificationSink) notificationSink.notification(path, inspected.error, "fail"); return }
-        reviewEvidence.target = path
-        reviewEvidence.check = inspected.check
-        if (inspected.check.evidence.issues.length || inspected.check.evidence.conflict.analyses.length) reviewEvidence.open()
-        else if (!ctl.save_confirmed(path, inspected.check.token, "cancel", false)) {
-            const fresh = JSON.parse(ctl.check_save(path))
-            if (fresh.check && (fresh.check.evidence.issues.length || fresh.check.evidence.conflict.analyses.length)) { reviewEvidence.check = fresh.check; reviewEvidence.open() }
-        }
-    }
     AppProvenance { id: reviewProvenance }
-    AnalysisEvidenceDialog {
+    AutoSaveEvidence {
         id: reviewEvidence
-        property string target: ""
-        onRelinkOriginal: function(path) {
-            for (const analysis of conflict.analyses || []) {
-                if (analysis.direct !== false && !reviewProvenance.relink_run(analysis.run, path)) { errorText = reviewProvenance.message; return }
-            }
-            close(); doc.saveReviewTarget(target)
-        }
-        onRetry: { close(); doc.saveReviewTarget(target) }
-        onSaveAs: { close(); doc.saveReview() }
-        onChoice: function(policy) {
-            if (ctl.save_confirmed(target, check.token, policy, acknowledgeIncomplete)) close()
-            else {
-                errorText = ctl.message
-                const fresh = JSON.parse(ctl.check_save(target))
-                if (fresh.check) check = fresh.check
-            }
-        }
+        controller: ctl
+        evidenceService: reviewProvenance
+        fileUrls: doc.fileUrls
+        automatic: false
+        chooseDestination: () => doc.saveReview()
+        onFailed: message => { if (notificationSink) notificationSink.notification(target, message, "fail") }
     }
     function alignmentContext() { if (!working) alignmentDialog.open() }
     function draftReads() { if (!working) additionalDialog.open() }
@@ -116,7 +94,6 @@ FocusScope {
         initialFocusItem: exportId
         property string target: "fasta"
         title: target === "clipboard" ? "Copy trace consensus" : "Export trace consensus"
-        modal: true
         onOpened: { ctl.message = ""; exportId.forceActiveFocus(); exportId.selectAll() }
         body: ColumnLayout {
             spacing: 8
@@ -257,7 +234,6 @@ FocusScope {
         property string reference: ""
         property var target: null
         title: "Draft signal cutoff"
-        modal: true
         body: ColumnLayout {
             spacing: 10
             Label {
@@ -316,7 +292,6 @@ FocusScope {
         id: maskDialog
         initialFocusItem: keepStart
         title: "Mask consensus ends"
-        modal: true
         body: ColumnLayout {
             spacing: 8
             Label { text: "Keep the following consensus columns; masked ends stay visible and are excluded from every export."; wrapMode: Text.Wrap; Layout.fillWidth: true }
@@ -347,7 +322,6 @@ FocusScope {
         initialFocusItem: forwardPrimer
         property string proposal: ""
         title: "Set primers"
-        modal: true
         onClosed: {
             if (doc.primerPending) { doc.primerPending = false; ctl.cancel_stage() }
         }
@@ -398,49 +372,44 @@ FocusScope {
     Component.onDestruction: { ctl.cancel_stage(); ctl.cancel_calls() }
     Timer { interval: 200; repeat: true; running: ctl.calling; onTriggered: ctl.poll_calls() }
     Shortcut { sequence: "F2"; enabled: doc.visible && !doc.working && ctl.review_mode; onActivated: doc.beginExport("fasta") }
-    function localPath(url) { return fileUrls.local_file_path(url) }
     FileDialog {
-        currentFolder: doc.activeFolder()
         onVisibleChanged: if (visible) currentFolder = doc.activeFolder()
         id: saveReviewDialog
         title: "Save Sanger review"
         fileMode: FileDialog.SaveFile
         defaultSuffix: "json"
         nameFilters: ["Sanger review (*.sanger-review.json)"]
-        onAccepted: doc.saveReviewTarget(doc.localPath(selectedFile))
+        onAccepted: { reviewEvidence.owner = null; reviewEvidence.target = fileUrls.local_file_path(selectedFile); reviewEvidence.inspect(true) }
     }
     FileDialog {
-        currentFolder: doc.activeFolder()
         onVisibleChanged: if (visible) currentFolder = doc.activeFolder()
         id: alignmentDialog
         title: "Choose frozen source alignment"
         nameFilters: ["Aligned FASTA (*.afa *.fasta *.fa *.fas *.fna)"]
         onAccepted: {
-            const path = doc.localPath(selectedFile)
+            const path = fileUrls.local_file_path(selectedFile)
             if (doc.working) return
             doc.pendingReview = {paths: JSON.parse(ctl.input_paths), reference: path, target: doc.returnAlignment, cutoff: ctl.signal_threshold, stage: "", cancelled: false}
             doc.submitReviewStage("orient")
         }
     }
     FileDialog {
-        currentFolder: doc.activeFolder()
         onVisibleChanged: if (visible) currentFolder = doc.activeFolder()
         id: exportConsensusDialog
         title: "Export reviewed consensus"
         fileMode: FileDialog.SaveFile
         defaultSuffix: "fasta"
         nameFilters: ["FASTA sequence (*.fa *.fasta)"]
-        onAccepted: ctl.export_consensus(doc.localPath(selectedFile), doc.specimenId)
+        onAccepted: ctl.export_consensus(fileUrls.local_file_path(selectedFile), doc.specimenId)
     }
     FileDialog {
-        currentFolder: doc.activeFolder()
         onVisibleChanged: if (visible) currentFolder = doc.activeFolder()
         id: additionalDialog
         title: "Select one or two more reads from the same specimen and amplicon"
         fileMode: FileDialog.OpenFiles
         nameFilters: ["Sanger traces (*.ab1 *.abi)"]
         onAccepted: {
-            const paths = selectedFiles.map(url => doc.localPath(url))
+            const paths = selectedFiles.map(url => fileUrls.local_file_path(url))
             doc.startReview([doc.path].concat(paths), "", null)
         }
     }

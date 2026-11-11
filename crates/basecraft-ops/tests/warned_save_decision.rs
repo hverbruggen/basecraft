@@ -62,6 +62,9 @@ fn damage(root: &Path, source: &Path) -> ArtifactRun {
     std::fs::write(&unrelated, ORIGINAL).unwrap();
     let run = reference(&folder(root, "distant"), &unrelated);
     assert_ne!(unrelated, source);
+    // The indexed source can no longer be statted, so alias coverage is unknown.
+    // A damaged ledger whose live source is provably unrelated must not warn.
+    std::fs::remove_file(&unrelated).unwrap();
     let original = std::fs::read(run.artifact("input.json").unwrap()).unwrap();
     std::fs::write(run.directory().join("test-original-input"), original).unwrap();
     std::fs::write(run.artifact("input.json").unwrap(), b"damaged a").unwrap();
@@ -112,6 +115,7 @@ fn assert_recovery(session: &mut Session, root: &Path) {
         )
         .unwrap();
     }
+    std::fs::write(root.join("unrelated.fasta"), ORIGINAL).unwrap();
     let outputs = replay::recover(session.recovery_root(), &root.join("recovered")).unwrap();
     assert_eq!(std::fs::read(&outputs[0]).unwrap(), b">gene\nATGT\n");
 }

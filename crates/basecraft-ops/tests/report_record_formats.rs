@@ -433,10 +433,7 @@ fn provenance_regeneration_and_partial_writes() {
         std::fs::create_dir(reports.join(obstructed)).unwrap();
         let before = snapshot(&reports);
         let error = provenance::write_reports(folder.path(), &publication).unwrap_err();
-        assert!(matches!(
-            error,
-            basecraft_ops::Error::Format(basecraft_io::Error::Io(_))
-        ));
+        assert!(matches!(error, basecraft_ops::Error::Damaged { .. }));
         let after = snapshot(&reports);
         for (i, name) in generated.iter().enumerate() {
             assert_eq!(

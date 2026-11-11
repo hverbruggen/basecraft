@@ -1,99 +1,88 @@
-//! Private lookup cache. Live source stats retain external-alias detection;
-//! ledger and directory stats detect changes by writers that know no index.
+//! Current-format source index. Saves stat source paths for external aliases,
+//! then open only the matching source shards. Writers replace the index explicitly.
 use super::{
     ArtifactRun, BTreeMap, PROPOSAL_TARGET, Path, PathBuf, Result, lexical, read_input, registry,
-    registry_lock, stamp, validate_input, write_json,
+    registry_lock, stamp, validate_input,
 };
-use basecraft_protocol::records::{AnalysisInputIndex, IndexFileStamp, IndexedAnalysisStore};
+use basecraft_protocol::records::{AnalysisInputIndex, IndexFile, IndexedAnalysisStore};
 use std::collections::BTreeSet;
 
 fn location() -> Result<PathBuf> {
     Ok(registry()?.with_file_name("analysis-input-index.json"))
 }
-
-fn load() -> AnalysisInputIndex {
-    location()
-        .and_then(|path| {
-            let bytes = crate::provenance::read_record(&path)?;
-            let index: AnalysisInputIndex = serde_json::from_slice(&bytes)?;
-            if index.schema_version != 1 {
-                return Err(crate::Error::Unsupported(
-                    "unknown analysis input index".into(),
-                ));
-            }
-            Ok(index)
-        })
-        .unwrap_or_else(|_| AnalysisInputIndex {
-            schema_version: 1,
-            stores: BTreeMap::new(),
-            extra: BTreeMap::new(),
-        })
+fn shard(kind: &str, path: &Path) -> Result<PathBuf> {
+    let key = basecraft_io::hash_bytes(path.as_os_str().as_encoded_bytes());
+    Ok(registry()?
+        .with_file_name("analysis-inputs")
+        .join(kind)
+        .join(key.trim_start_matches("b3:")))
 }
-
-fn metadata(path: &Path) -> Result<Option<IndexFileStamp>> {
-    let meta = match std::fs::symlink_metadata(path) {
-        Ok(meta) => meta,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e.into()),
-    };
-    if meta.file_type().is_symlink() || !(meta.is_file() || meta.is_dir()) {
+fn read<T: serde::de::DeserializeOwned + serde::Serialize>(path: &Path) -> Result<T> {
+    let bytes = crate::provenance::read_record(path)?;
+    let record: IndexFile<T> =
+        serde_json::from_slice(&bytes).map_err(|e| crate::Error::Damaged {
+            path: path.into(),
+            detail: format!("{e}; revision {}", basecraft_io::hash_bytes(&bytes)),
+        })?;
+    if basecraft_io::hash_bytes(&serde_json::to_vec(&record.value)?) != record.checksum {
         return Err(crate::Error::Damaged {
             path: path.into(),
-            detail: "unsafe index metadata entry".into(),
+            detail: format!(
+                "analysis index checksum differs; revision {}",
+                basecraft_io::hash_bytes(&bytes)
+            ),
         });
     }
-    let (identity, changed_seconds, changed_nanos) = metadata_identity(&meta)?;
-    let modified = meta
-        .modified()?
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| crate::Error::Damaged {
-            path: path.into(),
-            detail: e.to_string(),
-        })?;
-    Ok(Some(IndexFileStamp {
-        identity,
-        size: meta.len(),
-        modified_seconds: modified.as_secs(),
-        modified_nanos: modified.subsec_nanos(),
-        changed_seconds,
-        changed_nanos,
-    }))
+    Ok(record.value)
 }
-
-#[cfg(unix)]
-fn metadata_identity(meta: &std::fs::Metadata) -> Result<(String, i64, i64)> {
-    use std::os::unix::fs::MetadataExt;
-    let identity = basecraft_io::hash_bytes(&serde_json::to_vec(&(meta.dev(), meta.ino()))?);
-    Ok((identity, meta.ctime(), meta.ctime_nsec()))
-}
-#[cfg(not(unix))]
-fn metadata_identity(_: &std::fs::Metadata) -> Result<(String, i64, i64)> {
-    Err(crate::Error::Unsupported(
-        "analysis index requires reliable change metadata; using full inspection".into(),
-    ))
-}
-
-fn remember(index: &mut IndexedAnalysisStore, path: &Path) -> Result<()> {
-    index.files.insert(path.into(), metadata(path)?);
+fn write(path: &Path, value: &impl serde::Serialize) -> Result<()> {
+    std::fs::create_dir_all(path.parent().unwrap())?;
+    let bytes = serde_json::to_vec(&IndexFile {
+        checksum: basecraft_io::hash_bytes(&serde_json::to_vec(value)?),
+        value,
+    })?;
+    basecraft_io::write_atomic(path, |w| w.write_all(&bytes))?;
+    // A durable marker must precede the ledger change; a durable index must
+    // precede clearing that marker. Include newly created shard directories.
+    let state = registry()?.parent().unwrap().to_path_buf();
+    for directory in path
+        .parent()
+        .unwrap()
+        .ancestors()
+        .take_while(|p| p.starts_with(&state))
+    {
+        basecraft_platform::files::sync_directory(directory)?;
+    }
     Ok(())
+}
+fn load() -> Result<AnalysisInputIndex> {
+    let path = location()?;
+    if !path.try_exists()? {
+        return Ok(AnalysisInputIndex {
+            schema_version: 2,
+            stores: BTreeMap::new(),
+            sources: Vec::new(),
+        });
+    }
+    let index: AnalysisInputIndex = read(&path)?;
+    if index.schema_version != 2 {
+        return Err(crate::Error::Unsupported(
+            "analysis input index version".into(),
+        ));
+    }
+    Ok(index)
 }
 
 fn snapshot(store: &Path) -> Result<IndexedAnalysisStore> {
     ArtifactRun::validate_store(store)?;
-    let identity = metadata(store)?
-        .ok_or_else(|| crate::Error::NotFound { path: store.into() })?
-        .identity;
+    let identity = std::fs::read_to_string(store.join("identity"))?;
     let mut index = IndexedAnalysisStore {
         identity,
-        checksum: String::new(),
-        files: BTreeMap::new(),
         sources: Vec::new(),
         dependencies: Vec::new(),
         extra: BTreeMap::new(),
     };
-    remember(&mut index, store)?;
-    remember(&mut index, &store.join("store.json"))?;
-    remember(&mut index, &store.join("runs"))?;
+
     let mut budget = 64 << 20;
     for (count, entry) in std::fs::read_dir(store.join("runs"))?.enumerate() {
         if count >= 4096 {
@@ -115,10 +104,8 @@ fn snapshot(store: &Path) -> Result<IndexedAnalysisStore> {
                 detail: "unsafe entry in analysis store".into(),
             });
         }
-        remember(&mut index, &run)?;
         let path = run.join("input.json");
-        remember(&mut index, &path)?;
-        if index.files[&path].is_none() {
+        if !path.try_exists()? {
             continue;
         }
         let bytes = crate::provenance::read_record_with_budget(&path, &mut budget)?;
@@ -150,8 +137,7 @@ fn snapshot(store: &Path) -> Result<IndexedAnalysisStore> {
                         path: run.clone(),
                         detail: "ancestor location is missing".into(),
                     })?;
-                // Match the scanner's delegation walk; retain each intermediate
-                // input's metadata so changing an external companion invalidates us.
+                // Resolve current ownership while publishing the index.
                 let mut path = lexical(&run.join(path));
                 let mut seen = BTreeSet::new();
                 loop {
@@ -162,7 +148,6 @@ fn snapshot(store: &Path) -> Result<IndexedAnalysisStore> {
                             limit: 32,
                         });
                     }
-                    remember(&mut index, &path.join("input.json"))?;
                     let ancestor = read_input(&path)?;
                     let Some(origin) = ancestor.extra.get("origin_run") else {
                         break;
@@ -180,199 +165,208 @@ fn snapshot(store: &Path) -> Result<IndexedAnalysisStore> {
     index.sources.dedup();
     index.dependencies.sort();
     index.dependencies.dedup();
-    index.checksum = checksum(&index)?;
     Ok(index)
 }
 
-fn checksum(index: &IndexedAnalysisStore) -> Result<String> {
-    Ok(basecraft_io::hash_bytes(&serde_json::to_vec(&(
-        &index.identity,
-        &index.files,
-        &index.sources,
-        &index.dependencies,
-    ))?))
-}
-
-fn current(index: &IndexedAnalysisStore) -> bool {
-    if checksum(index).ok().as_ref() != Some(&index.checksum) {
-        return false;
-    }
-    index
-        .files
-        .iter()
-        .all(|(path, expected)| metadata(path).is_ok_and(|actual| &actual == expected))
-}
-
-/// Registration already holds the evidence mutation lock. Cache failures never
-/// undo a durable registration: the next lookup performs the conservative scan.
-pub(super) fn register(store: &Path) {
-    let entry = snapshot(store);
-    let Ok(_guard) = registry_lock() else {
-        return;
+/// Input writes publish a durable dirty marker before touching their ledger.
+/// A failed update stays incomplete, including lookups for newly added sources.
+pub(super) fn changing(path: &Path) -> Result<Option<PathBuf>> {
+    let Some(run) = path.parent() else {
+        return Ok(None);
     };
-    let mut index = load();
-    if let Ok(mut entry) = entry {
-        if let Some(old) = index.stores.remove(store) {
-            entry.extra = old.extra;
-        }
-        index.stores.insert(store.into(), entry);
-    } else {
-        index.stores.remove(store);
-    }
-    if let Ok(path) = location() {
-        let _ = write_json(&path, &index);
-    }
+    let Some(runs) = run
+        .parent()
+        .filter(|p| p.file_name().is_some_and(|n| n == "runs"))
+    else {
+        return Ok(None);
+    };
+    let Some(store) = runs
+        .parent()
+        .filter(|p| p.file_name().is_some_and(|n| n == "analyses-v1"))
+    else {
+        return Ok(None);
+    };
+    write(&shard("dirty", store)?, &store)?;
+    Ok(Some(store.into()))
 }
 
-pub(super) fn select(target: &Path, stores: &[PathBuf], persist: bool) -> Vec<PathBuf> {
-    let mut index = load();
-    let mut unknown = BTreeSet::new();
-    let mut changed = false;
-    for store in stores {
-        if index.stores.get(store).is_some_and(current) {
-            continue;
+pub(super) fn register(store: &Path) -> Result<()> {
+    let entry = match snapshot(store) {
+        Ok(entry) => entry,
+        Err(error @ crate::Error::Busy(_)) => return Err(error),
+        Err(_) => {
+            let _guard = registry_lock()?;
+            write(&shard("dirty", store)?, &store)?;
+            return Ok(());
         }
-        match snapshot(store) {
-            Ok(mut entry) => {
-                if let Some(old) = index.stores.remove(store) {
-                    entry.extra = old.extra;
-                }
-                index.stores.insert(store.clone(), entry);
-                changed = true;
-            }
-            Err(_) => {
-                unknown.insert(store.clone());
-            }
+    };
+    let _guard = registry_lock()?;
+    publish(store, &entry)
+}
+
+fn publish(store: &Path, entry: &IndexedAnalysisStore) -> Result<()> {
+    let mut index = load()?;
+    // Registration of the current location retires its old index location.
+    let retired: BTreeSet<_> = index
+        .stores
+        .iter()
+        .filter(|(path, identity)| {
+            path.as_path() != store
+                && *identity == &entry.identity
+                && path.try_exists().ok() == Some(false)
+        })
+        .map(|(path, _)| path.clone())
+        .collect();
+    index.stores.retain(|path, _| !retired.contains(path));
+    if !retired.is_empty() {
+        let mut registry_record = super::store_registry()?;
+        registry_record
+            .stores
+            .retain(|path| !retired.contains(path));
+        if !registry_record.stores.contains(&store.to_path_buf()) {
+            registry_record.stores.push(store.into());
         }
+        super::write_json(&registry()?, &registry_record)?;
     }
-    // A recorded identity can prove that an old missing location moved to an
-    // ancestor store. An unexplained missing/inaccessible store stays unknown.
-    let mut moved = BTreeSet::new();
-    unknown.retain(|store| {
-        if !matches!(std::fs::symlink_metadata(store), Err(e) if e.kind() == std::io::ErrorKind::NotFound) { return true; }
-        let Some(old) = index.stores.get(store) else { return true; };
-        let relocated = stores.iter().any(|other| other != store && !unknown_location(other) && index.stores.get(other).is_some_and(|entry| same_store(store, old, other, entry)));
-        if relocated { moved.insert(store.clone()); }
-        !relocated
-    });
-    let mut selected = unknown;
-    let target_stamp = stamp(target).ok();
-    let mut sources = BTreeMap::new();
-    for store in stores {
-        if moved.contains(store) {
-            continue;
-        }
-        let Some(entry) = index.stores.get(store) else {
-            selected.insert(store.clone());
-            continue;
-        };
+    write(&shard("stores", store)?, entry)?;
+    index.stores.insert(store.into(), entry.identity.clone());
+    let mut entries = BTreeMap::new();
+    for path in index.stores.keys() {
+        entries.insert(
+            path.clone(),
+            read::<IndexedAnalysisStore>(&shard("stores", path)?)?,
+        );
+    }
+    // Compute connected ownership once when records change, never on each save.
+    let mut sources: BTreeMap<PathBuf, BTreeSet<PathBuf>> = BTreeMap::new();
+    for (path, entry) in &entries {
         for source in &entry.sources {
-            let matches = *sources.entry(source.clone()).or_insert_with(|| {
-                if lexical(source) == lexical(target)
-                    || source.canonicalize().ok().as_deref() == Some(target)
-                {
-                    return true;
-                }
-                match (stamp(source), &target_stamp) {
-                    (Ok(a), Some(b)) => {
-                        a.device.is_some() && a.device == b.device && a.inode == b.inode
-                    }
-                    (Ok(_), None) => false,
-                    (Err(_), _) => true, // unknown alias coverage is never unrelated
-                }
-            });
-            if matches {
-                selected.insert(store.clone());
-            }
+            sources
+                .entry(source.clone())
+                .or_default()
+                .insert(path.clone());
         }
     }
-    // Include reverse descendants AND all backing owners. Undirected store
-    // closure is conservative and keeps multi-input ownership decisions intact.
-    loop {
-        let before = selected.len();
-        for store in stores {
-            if let Some(entry) = index.stores.get(store) {
+    for selected in sources.values_mut() {
+        loop {
+            let before = selected.len();
+            for (path, entry) in &entries {
                 for dependency in &entry.dependencies {
-                    for other in stores.iter().filter(|other| dependency.starts_with(other)) {
-                        if selected.contains(store) || selected.contains(other) {
-                            selected.insert(store.clone());
+                    for other in entries.keys().filter(|other| dependency.starts_with(other)) {
+                        if selected.contains(path) || selected.contains(other) {
+                            selected.insert(path.clone());
                             selected.insert(other.clone());
                         }
                     }
                 }
             }
-        }
-        if before == selected.len() {
-            break;
+            if before == selected.len() {
+                break;
+            }
         }
     }
-    if persist
-        && changed
-        && let (Ok(_guard), Ok(path)) = (registry_lock(), location())
-    {
-        let _ = write_json(&path, &index);
+    for (source, stores) in &sources {
+        let path = shard("sources", source)?;
+        if read::<BTreeSet<PathBuf>>(&path).ok().as_ref() != Some(stores) {
+            write(&path, stores)?;
+        }
     }
-    stores
-        .iter()
-        .filter(|store| selected.contains(*store))
-        .cloned()
-        .collect()
+    index.sources = sources.into_keys().collect();
+    write(&location()?, &index)?;
+    let dirty = shard("dirty", store)?;
+    if dirty.try_exists()? {
+        std::fs::remove_file(&dirty)?;
+        basecraft_platform::files::sync_directory(dirty.parent().unwrap())?;
+    }
+    Ok(())
 }
 
-// Directory identifiers can be recycled after deletion. A matching, uniquely
-// named retained run must survive too; directory identity alone proves no move.
-fn same_store(
-    old_path: &Path,
-    old: &IndexedAnalysisStore,
-    new_path: &Path,
-    new: &IndexedAnalysisStore,
-) -> bool {
-    checksum(old).ok().as_ref() == Some(&old.checksum)
-        && checksum(new).ok().as_ref() == Some(&new.checksum)
-        && old.identity == new.identity
-        && old.files.iter().any(|(path, before)| {
-            let Ok(relative) = path.strip_prefix(old_path.join("runs")) else {
-                return false;
+pub(super) fn select(
+    target: &Path,
+    stores: &[PathBuf],
+    inspection: &mut super::Inspection,
+) -> Result<Vec<PathBuf>> {
+    let index = load()?;
+    let mut selected = BTreeSet::new();
+    let mut relocated = BTreeSet::new();
+    let dirty = registry()?.with_file_name("analysis-inputs/dirty");
+    let dirty_result = (|| -> Result<()> {
+        if dirty.try_exists()? {
+            for entry in std::fs::read_dir(&dirty)? {
+                let path = entry?.path();
+                inspection.record(&path)?;
+                let store: PathBuf = read(&path)?;
+                inspection.issue(
+                    super::InspectionCode::RegistryUnavailable,
+                    &path,
+                    "analysis index update is incomplete",
+                );
+                selected.insert(store);
+            }
+        }
+        Ok(())
+    })();
+    if let Err(error) = dirty_result {
+        inspection.issue(super::InspectionCode::RegistryUnavailable, &dirty, error);
+    }
+    for store in stores {
+        if index.stores.contains_key(store) {
+            continue;
+        }
+        selected.insert(store.clone());
+        if let Ok(identity) = std::fs::read_to_string(store.join("identity")) {
+            // Moved current-format stores retain their immutable identity.
+            for (old, known) in &index.stores {
+                if *known == identity && old.try_exists().ok() == Some(false) {
+                    relocated.insert(old.clone());
+                }
+            }
+        }
+    }
+    selected.retain(|path| !relocated.contains(path));
+    let target_stamp = stamp(target).ok();
+    for source in &index.sources {
+        let matches = lexical(source) == lexical(target)
+            || source.canonicalize().ok().as_deref() == Some(target)
+            || match (stamp(source), &target_stamp) {
+                (Ok(a), Some(b)) => {
+                    a.device.is_some() && a.device == b.device && a.inode == b.inode
+                }
+                (Ok(_), None) => false,
+                (Err(_), _) => true,
             };
-            relative.components().count() == 2
-                && relative
-                    .file_name()
-                    .is_some_and(|name| name == "input.json")
-                && before.as_ref().is_some_and(|before| {
-                    new.files
-                        .get(&new_path.join("runs").join(relative))
-                        .and_then(Option::as_ref)
-                        .is_some_and(|after| before == after)
-                })
-        })
-}
-
-fn unknown_location(path: &Path) -> bool {
-    !path.is_dir()
+        if matches {
+            let path = shard("sources", source)?;
+            match read::<Vec<PathBuf>>(&path) {
+                Ok(stores) => {
+                    selected.extend(stores.into_iter().filter(|p| !relocated.contains(p)));
+                }
+                Err(error) => {
+                    inspection.issue(super::InspectionCode::RegistryUnavailable, &path, error);
+                }
+            }
+        }
+    }
+    Ok(selected.into_iter().collect())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::input_evidence::{lock, lock_save};
-    use std::{sync::mpsc, time::Duration};
 
     #[test]
-    fn unrelated_saves_share_gate_but_registration_waits() {
-        let Some(root) = crate::isolated_profile::enter(
-            "input_evidence::index::tests::unrelated_saves_share_gate_but_registration_waits",
-        ) else {
-            return;
-        };
-        let a = root.join("a.fasta");
-        let b = root.join("b.fasta");
-        std::fs::write(&a, b">a\nACGT\n").unwrap();
-        std::fs::write(&b, b">b\nACGT\n").unwrap();
-        let first = lock_save(&a, false).unwrap();
-        let (sent, received) = mpsc::channel();
-        let save = std::thread::spawn(move || {
-            let mut session = crate::Session::new(b.parent().unwrap());
-            let id = session.open(&b).unwrap();
+    fn independent_save_overlaps_but_new_reference_and_alias_wait() {
+        crate::isolated_profile::isolate!();
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("first.fasta");
+        let other = root.path().join("second.fasta");
+        let alias = root.path().join("alias.fasta");
+        std::fs::write(&target, b">a\nACGT\n").unwrap();
+        std::fs::write(&other, b">b\nACGT\n").unwrap();
+        std::fs::hard_link(&target, &alias).unwrap();
+        let _first = super::super::lock_save(&target).unwrap();
+        std::thread::spawn(move || {
+            let mut session = crate::Session::new(other.parent().unwrap());
+            let id = session.open(&other).unwrap();
             session
                 .apply(
                     id,
@@ -384,20 +378,18 @@ mod tests {
                 )
                 .unwrap();
             session.save(id, None).unwrap();
-            sent.send(()).unwrap();
-        });
-        received
-            .recv_timeout(Duration::from_secs(3))
-            .expect("unrelated save must not wait for the other save");
-        save.join().unwrap();
-        let (sent, received) = mpsc::channel();
-        let registrar = std::thread::spawn(move || {
-            let _lock = lock().unwrap();
-            sent.send(()).unwrap();
-        });
-        assert!(received.recv_timeout(Duration::from_millis(100)).is_err());
-        drop(first);
-        received.recv_timeout(Duration::from_secs(3)).unwrap();
-        registrar.join().unwrap();
+            for source in [target, alias] {
+                let result = super::super::reference_input_with_dependencies(
+                    &other,
+                    &source,
+                    &basecraft_io::hash_file(&source).unwrap(),
+                    &[],
+                    "concurrent reference",
+                );
+                assert!(matches!(result, Err(crate::Error::Busy(_))));
+            }
+        })
+        .join()
+        .unwrap();
     }
 }

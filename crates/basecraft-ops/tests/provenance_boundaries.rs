@@ -59,45 +59,18 @@ fn paths(root: &std::path::Path) -> basecraft_platform::paths::AppPaths {
 }
 
 #[test]
-fn legacy_metadata_opens_with_warning_and_survives_explicit_save() {
+fn unversioned_tree_metadata_is_rejected_without_changes() {
     crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("tree.nwk");
-    std::fs::write(&path, "((a,b)90,c);\n").unwrap();
+    let bytes = b"((a,b)90,c);\n";
+    std::fs::write(&path, bytes).unwrap();
     let side = files::tree_sidecar(&path);
-    // Use the complete default style serializer to keep this a real old format.
-    let mut value = serde_json::to_value(basecraft_protocol::TreeStyle::default()).unwrap();
-    let style = value.take();
-    let bytes = serde_json::to_vec(&serde_json::json!({"supports":[{"name":"Do not apply","source":"old"}],"annotations":{},"style":style})).unwrap();
-    std::fs::write(&side, &bytes).unwrap();
-    let opened = files::load_tree(&path).unwrap();
-    assert!(opened.metadata_warning.is_some());
-    assert_eq!(opened.doc.supports()[0].name, "Support");
-    assert_eq!(std::fs::read(&side).unwrap(), bytes);
-    let mut session = Session::new(dir.path());
-    let doc = session.open(&path).unwrap();
-    assert!(
-        session
-            .document_record(doc)
-            .unwrap()
-            .report()
-            .unwrap()
-            .warnings
-            .iter()
-            .any(|w| w.contains("Unverified legacy"))
-    );
-    session
-        .apply(doc, Op::TreeLadderize { small_first: true })
-        .unwrap();
-    session.save(doc, None).unwrap();
-    assert!(
-        std::fs::read_dir(dir.path()).unwrap().flatten().any(|e| e
-            .file_name()
-            .to_string_lossy()
-            .contains("unverified-")
-            && std::fs::read(e.path()).ok().as_deref() == Some(bytes.as_slice()))
-    );
-    assert!(files::load_tree(&path).unwrap().metadata_warning.is_none());
+    let metadata = serde_json::to_vec(&serde_json::json!({"supports":[], "annotations":{}, "style":basecraft_protocol::TreeStyle::default()})).unwrap();
+    std::fs::write(&side, &metadata).unwrap();
+    assert!(files::load_tree(&path).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    assert_eq!(std::fs::read(&side).unwrap(), metadata);
 }
 
 #[test]
@@ -459,6 +432,7 @@ fn saving_a_forest_preserves_other_members_and_refreshes_bound_identity() {
         )
         .unwrap();
     session.save(doc, None).unwrap();
+    assert!(basecraft_ops::provenance::verify(&file).unwrap().is_empty());
     assert!(ArtifactRun::for_result_checked(&file).unwrap().is_some());
     let opened = files::load_tree(&file).unwrap();
     assert_eq!(opened.remaining.len(), 1);
@@ -471,6 +445,7 @@ fn saving_a_forest_preserves_other_members_and_refreshes_bound_identity() {
     assert!(opened.doc.to_newick().contains("renamed-a"));
     session.undo(doc).unwrap();
     session.save(doc, None).unwrap();
+    assert!(basecraft_ops::provenance::verify(&file).unwrap().is_empty());
     assert!(
         !files::load_tree(&file)
             .unwrap()
@@ -540,7 +515,7 @@ fn interrupted_tree_metadata_save_is_explicit_and_never_reuses_old_semantics() {
     let target = dir.path().join("partial.nwk");
     std::fs::create_dir(files::tree_sidecar(&target)).unwrap();
     let error = session.save(doc, Some(&target)).unwrap_err().to_string();
-    assert!(error.contains("metadata incomplete"), "{error}");
+    assert!(error.contains("sidecar incomplete"), "{error}");
     assert!(target.is_file());
     assert!(files::load_tree(&target).is_err());
     assert_eq!(

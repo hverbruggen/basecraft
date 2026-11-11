@@ -6,7 +6,6 @@ import QtQuick.Layouts
 AppContentDialog {
     id: dialog
     title: "About Basecraft"
-    modal: true
     property string version: ""
     property color backgroundColor: palette.window
     readonly property string projectUrl: "https://github.com/hverbruggen/basecraft"

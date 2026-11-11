@@ -16,7 +16,6 @@ AppContentDialog {
     signal inputError(string message)
     title: newDocument ? "New sequence" : inputKind === "fasta" ? "Add sequences from FASTA" : inputKind === "reviewed" ? "Add reviewed consensus" : "Add sequence from text"
     implicitWidth: 600
-    modal: true
     onOpened: {
         if (inputKind === "fasta") sequenceInput.forceActiveFocus()
         else { sequenceName.forceActiveFocus(); sequenceName.selectAll() }

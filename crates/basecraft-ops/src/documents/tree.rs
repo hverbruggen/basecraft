@@ -22,13 +22,6 @@ impl Document for OpenedTree {
     fn opening_warning(&self) -> Option<&str> {
         self.metadata_warning.as_deref()
     }
-    fn legacy_hashes(&self, _target: &Path) -> Result<Option<Vec<String>>> {
-        let mut main = HashingWriter::new(std::io::sink());
-        files::write_legacy_tree(self, &mut main)?;
-        let mut side = HashingWriter::new(std::io::sink());
-        files::write_legacy_tree_sidecar(&self.doc, &mut side)?;
-        Ok(Some(vec![main.hash(), side.hash()]))
-    }
     fn revision(&self, _generation: u64) -> u64 {
         self.doc.version()
     }
@@ -105,65 +98,33 @@ impl Document for OpenedTree {
         Some(files::tree_sidecar(target))
     }
 
-    fn write(
+    fn prepare_write(
         &self,
         target: &Path,
         format: Format,
         _recovery_root: &Path,
         _publication: &super::WritePublication,
-    ) -> Result<Vec<(PathBuf, String)>> {
+    ) -> Result<super::PreparedWrite> {
         if format != Format::Tree {
             return Err(invalid("a tree can only be saved as a tree file"));
         }
-        let mut hashes = Vec::new();
+        let mut prepared = super::PreparedWrite::default();
         let sidecar = files::tree_sidecar(target);
-        if sidecar.is_file() {
-            let bytes = std::fs::read(&sidecar)?;
-            let metadata: serde_json::Value = serde_json::from_slice(&bytes)?;
-            if metadata.get("schema_version").is_none() || metadata["schema_version"] == 0 {
-                let backup = sidecar.with_file_name(format!(
-                    "{}.unverified-{}",
-                    sidecar.file_name().unwrap_or_default().to_string_lossy(),
-                    basecraft_io::hash_bytes(&bytes).trim_start_matches("b3:")
-                ));
-                if backup.try_exists()? {
-                    if std::fs::read(&backup)? != bytes {
-                        return Err(invalid(
-                            "legacy metadata backup differs; original was not replaced",
-                        ));
-                    }
-                } else {
-                    let mut staged = tempfile::NamedTempFile::new_in(
-                        sidecar.parent().unwrap_or(Path::new(".")),
-                    )?;
-                    std::io::Write::write_all(&mut staged, &bytes)?;
-                    staged.as_file().sync_all()?;
-                    staged.persist_noclobber(&backup).map_err(|e| e.error)?;
-                }
-            }
-        }
-        for (path, sidecar_file) in [(target, false), (sidecar.as_path(), true)] {
-            let mut hash = String::new();
-            basecraft_io::write_atomic(path, |w| {
-                let mut hw = HashingWriter::new(w);
-                if sidecar_file {
-                    files::write_tree_sidecar_at(
-                        &self.doc,
-                        &basecraft_io::hash_file(target).map_err(std::io::Error::other)?,
-                        &mut hw,
-                    )?;
-                } else {
-                    files::write_tree(self, &mut hw)?;
-                }
-                hash = hw.hash();
-                Ok(())
-            }).map_err(|error| if sidecar_file {
-                invalid(format!("tree data saved; metadata incomplete: {error}. Keep the open document or temporary recovery and retry saving"))
-            } else { error.into() })?;
-            hashes.push((path.to_path_buf(), hash));
-        }
-        crate::analysis_store::ArtifactRun::refresh_binding(target).map_err(|error| invalid(format!("tree and metadata saved; binding publication incomplete: {error}. Keep the open document and retry saving")))?;
-        Ok(hashes)
+        let hash = prepared.push(target, |w| files::write_tree(self, w))?;
+        prepared.push(&sidecar, |w| {
+            files::write_tree_sidecar_at(&self.doc, &hash, w)
+        })?;
+        Ok(prepared)
+    }
+
+    fn finish_write(
+        &self,
+        target: &Path,
+        _: &[(PathBuf, String)],
+        _: Option<&crate::analysis_store::ArtifactRun>,
+        _: &super::WritePublication,
+    ) -> Result<()> {
+        crate::analysis_store::ArtifactRun::refresh_binding(target)
     }
 
     fn saved_hashes_are_content_only(&self) -> bool {

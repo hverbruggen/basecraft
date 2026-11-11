@@ -70,6 +70,7 @@ impl Session {
             baseline_logged: false,
             accepted_hashes: vec![],
             saved_state_hashes: vec![],
+            saved_edit: None,
             current_saved_hashes: std::sync::OnceLock::new(),
             absent_sidecars: vec![],
             origin: None,

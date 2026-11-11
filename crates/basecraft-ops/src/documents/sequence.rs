@@ -10,10 +10,6 @@ use crate::files::{self, Format, HashingWriter, Opened};
 use crate::session::{Inverse, normalise};
 
 impl Document for Opened {
-    fn writes_analysis_dependencies(&self) -> bool {
-        false
-    }
-
     fn kind(&self) -> crate::files::Kind {
         crate::files::Kind::Sequence
     }
@@ -69,40 +65,28 @@ impl Document for Opened {
         Some(files::gff_sidecar(target))
     }
 
-    fn write(
+    fn prepare_write(
         &self,
         target: &Path,
         format: Format,
         _recovery_root: &Path,
         _publication: &super::WritePublication,
-    ) -> Result<Vec<(PathBuf, String)>> {
+    ) -> Result<super::PreparedWrite> {
         if format != self.format {
             return Err(invalid("saving to a different format isn't supported yet"));
         }
-        let mut main_hash = String::new();
-        basecraft_io::write_atomic(target, |w| {
-            let mut hw = HashingWriter::new(w);
-            files::write_main(self, &mut hw)?;
-            main_hash = hw.hash();
-            Ok(())
-        })?;
-        let mut hashes = vec![(target.to_path_buf(), main_hash)];
+        let mut prepared = super::PreparedWrite::default();
+        prepared.push(target, |w| files::write_main(self, w))?;
         let sidecar = files::gff_sidecar(target);
-        let mut side_hash = None;
         if format == Format::Fasta {
-            basecraft_io::write_atomic(&sidecar, |w| {
-                let mut hw = HashingWriter::new(w);
-                if let Some(r) = files::write_sidecar(self, &mut hw) {
+            prepared.push(&sidecar, |w| {
+                if let Some(r) = files::write_sidecar(self, w) {
                     r?;
                 }
-                side_hash = Some(hw.hash());
                 Ok(())
             })?;
         }
-        if let Some(h) = side_hash {
-            hashes.push((sidecar, h));
-        }
-        Ok(hashes)
+        Ok(prepared)
     }
     fn saved_hashes_are_content_only(&self) -> bool {
         true
