@@ -131,6 +131,7 @@ pub fn describe(edit: &SubmissionEdit) -> String {
     match edit {
         SubmissionEdit::SetAccessionPolicy { .. } => "Submission accession evidence source".into(),
         SubmissionEdit::SetSource { source } => format!("Submission source {}", source.document),
+        SubmissionEdit::RenameRecord { from, to } => format!("Submission row {from} renamed {to}"),
         SubmissionEdit::SetRows { rows } => format!("Submission decisions for {} rows", rows.len()),
         SubmissionEdit::ConfirmSelection { .. } => "Confirmed submission row selection".into(),
         SubmissionEdit::SetBatch { .. } | SubmissionEdit::SetBatchDraft { .. } => {

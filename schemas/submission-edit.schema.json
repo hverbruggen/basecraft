@@ -243,6 +243,27 @@
         "action",
         "accessions"
       ]
+    },
+    {
+      "description": "A source row was renamed: its decision, frame, rule and accession follow it.",
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "const": "rename_record"
+        },
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "from",
+        "to"
+      ]
     }
   ],
   "$defs": {

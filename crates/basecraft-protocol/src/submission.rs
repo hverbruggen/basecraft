@@ -411,6 +411,11 @@ pub enum SubmissionEdit {
     SetAccessions {
         accessions: Vec<AccessionEntry>,
     },
+    /// A source row was renamed: its decision, frame, rule and accession follow it.
+    RenameRecord {
+        from: String,
+        to: String,
+    },
 }
 
 /// Legacy suggestions are retained on old documents. Configured sources prevent

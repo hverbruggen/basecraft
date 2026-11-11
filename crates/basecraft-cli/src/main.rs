@@ -364,7 +364,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 ) {
                     session.apply_history(doc, &operation)?;
                 } else {
-                    session.apply(doc, operation)?;
+                    basecraft_ops::renames::apply_op(&mut session, doc, operation)?;
                 }
             }
             save_options.save(&mut session, doc, None, false)?;

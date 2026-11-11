@@ -423,6 +423,18 @@ pub fn apply(sub: &mut Submission, edit: &SubmissionEdit) -> Result<(), EditErro
                 &a.record
             });
         }
+        SubmissionEdit::RenameRecord { from, to } => {
+            let records = next.rows.iter_mut().map(|r| &mut r.record);
+            let records = records.chain(next.frames.iter_mut().map(|f| &mut f.record));
+            for record in records.chain(next.accessions.iter_mut().map(|a| &mut a.record)) {
+                if record == from {
+                    record.clone_from(to);
+                }
+            }
+            if let Some(rule) = next.row_rules.remove(from) {
+                next.row_rules.insert(to.clone(), rule);
+            }
+        }
     }
     if next.source != sub.source
         || next.rows != sub.rows

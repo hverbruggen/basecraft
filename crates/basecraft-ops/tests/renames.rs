@@ -226,3 +226,78 @@ fn a_new_workspace_links_specimens_through_record_links() {
     // Workspace ids stay as the SPART file has them.
     assert_eq!(work.specimens[0].id, "a");
 }
+
+#[test]
+fn submission_rows_follow_a_renamed_alignment_row() {
+    use basecraft_protocol::submission::{Decision, RowDecision, SubmissionEdit};
+    crate::isolated_profile::isolate!();
+    let dir = tempfile::tempdir().unwrap();
+    let (mut session, aln, _) = project(dir.path());
+    let submission = basecraft_ops::submission::create(
+        &mut session,
+        &dir.path().join("aln.submission.json"),
+        &dir.path().join("aln.fasta"),
+    )
+    .unwrap();
+    session
+        .apply(
+            submission,
+            Op::SubmissionEdit {
+                edit: Box::new(SubmissionEdit::SetRows {
+                    rows: vec![RowDecision {
+                        record: "a".into(),
+                        decision: Decision::Existing {
+                            accession: "AB123456".into(),
+                        },
+                    }],
+                }),
+            },
+        )
+        .unwrap();
+    let rows = |s: &Session| -> Vec<String> {
+        s.submission(submission)
+            .unwrap()
+            .rows
+            .iter()
+            .map(|r| r.record.clone())
+            .collect()
+    };
+    let plan = renames::plan(&session, aln, "a", "a2").unwrap().unwrap();
+    assert_eq!(plan.submissions, [submission]);
+    renames::apply(&mut session, plan).unwrap();
+    assert_eq!(rows(&session), ["a2"]);
+    session.undo(aln).unwrap();
+    assert_eq!(rows(&session), ["a"]);
+}
+
+#[test]
+fn duplicate_records_in_a_file_get_numbered_names_and_nothing_else_changes() {
+    crate::isolated_profile::isolate!();
+    let dir = tempfile::tempdir().unwrap();
+    let fasta = dir.path().join("reads.fasta");
+    std::fs::write(&fasta, ">x first read\nAC\n>x\nAG\n>y\nAT\n").unwrap();
+    let found = renames::duplicate_records(&fasta).unwrap().unwrap();
+    assert_eq!(found.names, ["x"]);
+    // An open copy would write the old names back, so numbering waits.
+    let mut session = Session::new(dir.path());
+    session.open(&fasta).unwrap();
+    assert!(renames::number_records(&session, &fasta, &found).is_err());
+    let closed = Session::new(dir.path());
+    renames::number_records(&closed, &fasta, &found).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&fasta).unwrap(),
+        ">x.1 first read\nAC\n>x.2\nAG\n>y\nAT\n"
+    );
+    assert!(renames::duplicate_records(&fasta).unwrap().is_none());
+
+    let genbank = dir.path().join("two.gb");
+    let record = "LOCUS       ABC          4 bp    DNA\nORIGIN\n        1 acgt\n//\n";
+    std::fs::write(&genbank, record.repeat(2)).unwrap();
+    let found = renames::duplicate_records(&genbank).unwrap().unwrap();
+    renames::number_records(&closed, &genbank, &found).unwrap();
+    // The longer name takes two of the spaces after it, so columns stay put.
+    assert_eq!(
+        std::fs::read_to_string(&genbank).unwrap(),
+        record.replace("ABC   ", "ABC.1 ") + &record.replace("ABC   ", "ABC.2 ")
+    );
+}

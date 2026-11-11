@@ -1,12 +1,21 @@
 //! Rows, tips and records are known by name. A rename changes the name and
 //! every stored link to it in one undo step, and names stay unique within a
 //! document.
+//!
+//! What stores a row, tip or record name, and what a rename does to it:
+//! project metadata record links (moved), open submissions drawn from the
+//! alignment (rows, frames, rules and accessions moved), clade labels and
+//! tip labels in the tree itself (moved by the tree). Workspace specimen
+//! `sources` are provenance and keep the name they were made from; the
+//! roster id is the identity. Sanger reviews refer to files by path and
+//! hash, never by record name. Submission export mappings are history.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use basecraft_protocol::Op;
 use basecraft_protocol::metadata::{ChangeSet, MetadataEdit, RecordLink};
+use basecraft_protocol::submission::SubmissionEdit;
 
 use crate::session::Session;
 use crate::{DocId, Result, metadata};
@@ -50,6 +59,8 @@ pub struct RenamePlan {
     edits: Vec<(DocId, Op)>,
     /// Specimen links that will follow the new name.
     pub links: Vec<RecordLink>,
+    /// Open submissions whose row decisions will follow the new name.
+    pub submissions: Vec<DocId>,
 }
 
 /// Plan renaming the row or tip `old` of `doc` to `new`.
@@ -126,7 +137,59 @@ pub fn plan(
             },
         ));
     }
-    Ok(Ok(RenamePlan { edits, links }))
+    // Open submissions drawn from this alignment keep their row decisions.
+    let mut submissions = Vec::new();
+    for other in (0..).map(DocId).take_while(|d| session.is_open(*d)) {
+        if !session.is_submission(other) {
+            continue;
+        }
+        let submission = session.submission(other)?;
+        let uses = submission
+            .source
+            .as_ref()
+            .is_some_and(|source| source.document == document);
+        let names_old = submission.rows.iter().any(|r| r.record == old)
+            || submission.frames.iter().any(|f| f.record == old)
+            || submission.accessions.iter().any(|a| a.record == old)
+            || submission.row_rules.contains_key(old);
+        if uses && names_old {
+            submissions.push(other);
+            edits.push((
+                other,
+                Op::SubmissionEdit {
+                    edit: Box::new(SubmissionEdit::RenameRecord {
+                        from: old.into(),
+                        to: new.into(),
+                    }),
+                },
+            ));
+        }
+    }
+    Ok(Ok(RenamePlan {
+        edits,
+        links,
+        submissions,
+    }))
+}
+
+/// Apply an edit from a script or an agent. A row or tip rename takes its
+/// links along, as it does in the window; anything else applies as it is.
+pub fn apply_op(session: &mut Session, doc: DocId, op: Op) -> Result<()> {
+    let (old, new) = match &op {
+        Op::TreeRenameTip { from, to } => (from.clone(), to.clone()),
+        Op::AlnRenameRow { row, name } if session.is_alignment(doc) => {
+            let names = names(session, doc)?;
+            let old = names
+                .get(*row as usize)
+                .ok_or_else(|| crate::error::invalid(format!("no row {row}")))?;
+            (old.clone(), name.clone())
+        }
+        _ => return session.apply(doc, op).map(|_| ()),
+    };
+    match plan(session, doc, &old, &new)? {
+        Ok(plan) => apply(session, plan),
+        Err(refusal) => Err(crate::error::invalid(refusal.to_string())),
+    }
 }
 
 /// Apply a plan as one undo step. If any edit fails, the ones already made
@@ -253,4 +316,89 @@ fn names(session: &Session, doc: DocId) -> Result<Vec<String>> {
         .rows()
         .map(|row| row.name.clone())
         .collect())
+}
+
+/// Duplicate record names in a multi-record FASTA or GenBank file, for a
+/// warning that offers numbered names or editing by hand.
+pub fn duplicate_records(path: &Path) -> Result<Option<DuplicateNames>> {
+    let bytes = std::fs::read(path)?;
+    let names = record_names(path, &bytes)?
+        .into_iter()
+        .map(|(_, name)| name)
+        .collect::<Vec<_>>();
+    Ok(duplicate_names(&names))
+}
+
+/// Give each duplicated record its number in the file itself. Only the names
+/// change; every other byte stays as it was. Refused while the file is open,
+/// because saving the open copy would undo it.
+pub fn number_records(session: &Session, path: &Path, duplicates: &DuplicateNames) -> Result<()> {
+    let target = path.canonicalize()?;
+    for doc in (0..).map(DocId).take_while(|d| session.is_open(*d)) {
+        if session
+            .root()
+            .join(session.doc_key(doc)?)
+            .canonicalize()
+            .ok()
+            == Some(target.clone())
+        {
+            return Err(crate::Error::Busy(format!(
+                "close {} before numbering its records",
+                path.display()
+            )));
+        }
+    }
+    let bytes = std::fs::read(path)?;
+    let mut queue = BTreeMap::<&str, std::collections::VecDeque<&str>>::new();
+    for (from, to) in &duplicates.renames {
+        queue.entry(from).or_default().push_back(to);
+    }
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut copied = 0;
+    for (start, name) in record_names(path, &bytes)? {
+        let Some(to) = queue.get_mut(name.as_str()).and_then(std::collections::VecDeque::pop_front) else {
+            continue;
+        };
+        let end = start + name.len();
+        out.extend_from_slice(&bytes[copied..start]);
+        out.extend_from_slice(to.as_bytes());
+        // A GenBank LOCUS line keeps its columns when the name grows into
+        // the spaces after it; one space always stays.
+        let spaces = bytes[end..].iter().take_while(|&&b| b == b' ').count();
+        let grow = to.len().saturating_sub(name.len());
+        copied = end + if spaces > 1 { grow.min(spaces - 1) } else { 0 };
+    }
+    out.extend_from_slice(&bytes[copied..]);
+    basecraft_io::write_atomic(path, |w| w.write_all(&out))?;
+    Ok(())
+}
+
+/// Each record's name and the byte offset where it is written.
+fn record_names(path: &Path, bytes: &[u8]) -> Result<Vec<(usize, String)>> {
+    let mut names = Vec::new();
+    let mut offset = 0;
+    let genbank = crate::files::Format::from_path(path)? == crate::files::Format::GenBank;
+    for line in bytes.split_inclusive(|&b| b == b'\n') {
+        let name_at = if genbank {
+            line.strip_prefix(b"LOCUS")
+                .filter(|rest| rest.first().is_some_and(u8::is_ascii_whitespace))
+                .map(|rest| 5 + rest.iter().take_while(|b| b.is_ascii_whitespace()).count())
+        } else {
+            line.starts_with(b">").then_some(1)
+        };
+        if let Some(at) = name_at {
+            let name: Vec<u8> = line[at..]
+                .iter()
+                .take_while(|b| !b.is_ascii_whitespace())
+                .copied()
+                .collect();
+            names.push((
+                offset + at,
+                String::from_utf8(name)
+                    .map_err(|_| crate::error::invalid("record names must be UTF-8"))?,
+            ));
+        }
+        offset += line.len();
+    }
+    Ok(names)
 }
