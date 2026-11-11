@@ -581,7 +581,7 @@ fn referenced_display_preserve_copy_is_idempotent_and_never_uses_changed_bytes()
 }
 
 #[test]
-fn application_state_replay_handles_hidden_baseline_and_missing_original_folder() {
+fn application_state_replay_handles_hidden_baseline_and_moved_original_folder() {
     crate::isolated_profile::isolate!();
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().join("working");
@@ -634,9 +634,13 @@ fn application_state_replay_handles_hidden_baseline_and_missing_original_folder(
     std::fs::rename(&root, parent.path().join("unavailable")).unwrap();
     let report = records::replay(&recovery).unwrap();
     assert!(report.ok(), "{:?}", report.problems);
+    assert_ne!(report.unchecked, 0);
     let recovered = parent.path().join("recovered");
-    // A missing folder alone does not concern a new destination. An unreadable
-    // pending index update leaves relevance unknown and needs consent.
+    // Recovery needs the unchanged original.
+    assert!(records::recover(&recovery, &recovered).is_err());
+    assert!(!recovered.exists());
+    std::fs::rename(parent.path().join("unavailable"), &root).unwrap();
+    // An unreadable pending index update leaves relevance unknown and needs consent.
     let dirty = basecraft_platform::paths::AppPaths::discover()
         .unwrap()
         .state

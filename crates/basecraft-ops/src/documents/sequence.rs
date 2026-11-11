@@ -483,7 +483,7 @@ mod tests {
         assert!(!session.can_undo(id).unwrap());
         session.redo(id).unwrap();
         assert_eq!(session.save_hashes(id).unwrap(), edited);
-        // Replay from the open needs the unchanged original, so nothing is saved over it.
+        session.save(id, None).unwrap();
         drop(session);
         let entries = crate::log::read_all(root.path()).unwrap();
         let replacements: Vec<_> = entries

@@ -433,9 +433,10 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 println!("problem: {p}");
             }
             println!(
-                "{} sessions, {} entries, {} problems",
+                "{} sessions, {} entries, {} not checkable (original replaced), {} problems",
                 report.sessions,
                 report.entries,
+                report.unchecked,
                 report.problems.len()
             );
             if !report.ok() {

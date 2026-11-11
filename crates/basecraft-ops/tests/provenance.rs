@@ -323,7 +323,7 @@ fn journal_checksum_and_torn_tail_expose_only_verified_prefix() {
 }
 
 #[test]
-fn unsaved_recovery_reconstructs_exact_state_without_source_or_cache() {
+fn unsaved_recovery_reconstructs_exact_state_without_cache() {
     crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("gene.fasta");
@@ -347,7 +347,6 @@ fn unsaved_recovery_reconstructs_exact_state_without_source_or_cache() {
         session.undo(doc).unwrap();
     }
     assert!(recovery.is_dir());
-    std::fs::remove_file(&file).unwrap();
     let destination = dir.path().join("restored");
     let restored = basecraft_ops::records::recover(&recovery, &destination).unwrap();
     assert_eq!(restored, vec![destination.join("gene.fasta")]);
@@ -355,7 +354,6 @@ fn unsaved_recovery_reconstructs_exact_state_without_source_or_cache() {
         std::fs::read_to_string(&restored[0]).unwrap(),
         ">gene\nATGT\n"
     );
-    assert!(!file.exists());
     assert!(basecraft_ops::records::recover(&recovery, &destination).is_err());
 }
 

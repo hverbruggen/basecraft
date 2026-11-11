@@ -84,6 +84,38 @@ impl Session {
         mode: SaveMode,
         decision: Option<SaveDecision>,
     ) -> Result<SaveOutcome> {
+        let saved = self.save_checked(id, path, policy, mode, decision);
+        if saved.is_err() {
+            self.checkpoint_if_original_changed(id)?;
+        }
+        saved
+    }
+
+    /// A save refused after another program changed the original leaves the
+    /// unsaved edits recoverable only from a checkpoint of the live document.
+    fn checkpoint_if_original_changed(&mut self, id: DocId) -> Result<()> {
+        if self.log.is_none()
+            // A baseline still held back means nothing was edited yet.
+            || self.docs.get(id.0).is_none_or(|slot| slot.baseline.is_some())
+            || !self.source_changed(id)
+        {
+            return Ok(());
+        }
+        if let Some(entry) = self.recovery_checkpoint(id)? {
+            self.docs[id.0].recovery_boundary = Some(entry.id.clone());
+            self.write_entries(&[entry])?;
+        }
+        Ok(())
+    }
+
+    fn save_checked(
+        &mut self,
+        id: DocId,
+        path: Option<&Path>,
+        policy: SavePolicy,
+        mode: SaveMode,
+        decision: Option<SaveDecision>,
+    ) -> Result<SaveOutcome> {
         if mode == SaveMode::History {
             return self
                 .save_history_record(id)

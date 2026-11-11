@@ -18,6 +18,9 @@ use crate::{Error, Result, log};
 pub struct ReplayReport {
     pub sessions: usize,
     pub entries: usize,
+    /// Entries that could not be checked because their original was replaced
+    /// and no later baseline of that document was available yet.
+    pub unchecked: usize,
     pub problems: Vec<String>,
 }
 
@@ -51,6 +54,11 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut ReplayReport)
     let mut session = Session::replay_session(work.path());
     let source_root = recorded_source_root(root, entries.iter().copied());
     let mut docs: HashMap<&str, DocId> = HashMap::new();
+    // Documents whose original was replaced: their entries are not checkable
+    // until a later Save or checkpoint whose inputs are still available.
+    let mut replaced: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    // Documents restarted at such a baseline: undo cannot reach before it.
+    let mut rebased: std::collections::HashSet<&str> = std::collections::HashSet::new();
     // Replay entry id -> logged entry id, to check undo and redo targets.
     let mut ids: HashMap<String, String> = HashMap::new();
     for e in entries {
@@ -60,6 +68,10 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut ReplayReport)
                 .problems
                 .push(format!("{} {} {}: {msg}", e.id, e.op.name(), e.doc));
         };
+        if matches!(e.op, Op::CreateSangerReview { .. } | Op::CreateSequence { .. }) {
+            replaced.remove(e.doc.as_str());
+            rebased.remove(e.doc.as_str());
+        }
         if let Op::CreateSangerReview { review } = &e.op {
             docs.remove(e.doc.as_str());
             if !safe_key(&e.doc) {
@@ -91,41 +103,67 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut ReplayReport)
             }
             continue;
         }
-        if let Op::Open { path } = &e.op {
-            if e.source.as_ref().is_some_and(|source| source.checkpoint) {
-                if docs.get(e.doc.as_str()).is_none_or(|doc| {
-                    !session
-                        .state(*doc)
-                        .is_ok_and(|state| state.matches_recorded(&e.state))
-                }) {
-                    let replayed = docs.get(e.doc.as_str()).map(|doc| session.state(*doc));
-                    problem(format!(
-                        "checkpoint state differs: recorded {:?}, replayed {replayed:?}",
-                        e.state
-                    ));
-                }
-                continue;
-            }
+        let checkpoint = e.source.as_ref().is_some_and(|source| source.checkpoint);
+        let baseline = match &e.op {
+            Op::Open { path } if !checkpoint || replaced.contains(e.doc.as_str()) => Some(path),
+            Op::Save { path } if replaced.contains(e.doc.as_str()) => Some(path),
+            _ => None,
+        };
+        if let Some(path) = baseline {
+            let restart = !matches!(e.op, Op::Open { .. }) || checkpoint;
             // A refused baseline must not leave later edits targeting an older document.
             docs.remove(e.doc.as_str());
-            if !safe_key(path) || !safe_key(&e.doc) || path != &e.doc {
+            if !safe_key(path) || !safe_key(&e.doc) || (!restart && path != &e.doc) {
                 problem("unsafe or inconsistent document identity".into());
                 continue;
             }
-            match materialise(
-                root,
-                &source_root,
-                work.path(),
-                &e.result.hashes,
-            ) {
+            match materialise(root, &source_root, work.path(), &e.result.hashes) {
                 Ok(()) => match session.open(&work.path().join(path)) {
                     Ok(id) => {
                         session.restore_replay_paths(id, work.path(), &source_root);
+                        if restart {
+                            if let Some(source) = &e.source
+                                && let Err(err) = session.restore_recovery_ids(id, source)
+                            {
+                                problem(err.to_string());
+                                continue;
+                            }
+                            if !session.state(id)?.matches_recorded(&e.state) {
+                                problem("baseline state differs".into());
+                                continue;
+                            }
+                            rebased.insert(&e.doc);
+                        } else {
+                            rebased.remove(e.doc.as_str());
+                        }
+                        replaced.remove(e.doc.as_str());
                         docs.insert(&e.doc, id);
                     }
                     Err(err) => problem(format!("can't open: {err}")),
                 },
-                Err(msg) => problem(msg),
+                Err(InputFailure::Replaced(_)) => {
+                    replaced.insert(&e.doc);
+                    report.unchecked += 1;
+                }
+                Err(InputFailure::Invalid(msg)) => problem(msg),
+            }
+            continue;
+        }
+        if replaced.contains(e.doc.as_str()) {
+            report.unchecked += 1;
+            continue;
+        }
+        if let Op::Open { .. } = &e.op {
+            if docs.get(e.doc.as_str()).is_none_or(|doc| {
+                !session
+                    .state(*doc)
+                    .is_ok_and(|state| state.matches_recorded(&e.state))
+            }) {
+                let replayed = docs.get(e.doc.as_str()).map(|doc| session.state(*doc));
+                problem(format!(
+                    "checkpoint state differs: recorded {:?}, replayed {replayed:?}",
+                    e.state
+                ));
             }
             continue;
         }
@@ -172,6 +210,13 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut ReplayReport)
                 };
                 match r {
                     Ok(replayed) if ids.get(&replayed) == Some(of) => {}
+                    // Undo or redo reaching before a restart is not checkable.
+                    _ if rebased.contains(e.doc.as_str()) => {
+                        docs.remove(e.doc.as_str());
+                        replaced.insert(&e.doc);
+                        report.unchecked += 1;
+                        continue;
+                    }
                     Ok(replayed) => {
                         problem(format!("targets {:?}, expected {of}", ids.get(&replayed)));
                     }
@@ -216,13 +261,40 @@ fn recorded_source_root<'a>(
         .map_or_else(|| root.to_path_buf(), |source| root.join(&source.root))
 }
 
+/// Why recorded inputs could not be put in place.
+#[derive(Debug)]
+enum InputFailure {
+    /// No unchanged copy of an input exists any more.
+    Replaced(String),
+    Invalid(String),
+}
+
+impl std::fmt::Display for InputFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (Self::Replaced(message) | Self::Invalid(message)) = self;
+        f.write_str(message)
+    }
+}
+
+impl From<String> for InputFailure {
+    fn from(message: String) -> Self {
+        Self::Invalid(message)
+    }
+}
+
+impl From<&str> for InputFailure {
+    fn from(message: &str) -> Self {
+        Self::Invalid(message.into())
+    }
+}
+
 /// Put each recorded input into `work` under its project-relative path.
 fn materialise(
     root: &Path,
     source_root: &Path,
     work: &Path,
     inputs: &[(String, String)],
-) -> std::result::Result<(), String> {
+) -> std::result::Result<(), InputFailure> {
     let stage = tempfile::tempdir_in(work).map_err(|e| e.to_string())?;
     let mut written = Vec::new();
     for (rel, hash) in inputs {
@@ -291,9 +363,9 @@ fn materialise(
             }
         }
         if !verified {
-            return Err(format!(
+            return Err(InputFailure::Replaced(format!(
                 "input {rel} changed or is missing (hash differs or unavailable); recovery requires the unchanged original or a verified retained copy"
-            ));
+            )));
         }
         written.push((destination, work.join(local)));
     }
@@ -528,7 +600,7 @@ fn recover_entries(
                             );
                             Ok(doc)
                         }),
-                        Err(detail) => Err(damaged(detail)),
+                        Err(detail) => Err(damaged(detail.to_string())),
                     }
                 }
                 _ => unreachable!("baseline operation"),
@@ -1196,11 +1268,18 @@ mod tests {
         for attempt in attempts {
             let mut report = ReplayReport::default();
             replay_session(root.path(), &[baseline, &attempt, edit], &mut report).unwrap();
-            assert_eq!(report.problems.len(), 2, "{report:#?}");
-            assert!(
-                report.problems[1].contains("document wasn't opened"),
-                "{report:#?}"
-            );
+            if attempt.id == baseline.id && attempt.op == baseline.op {
+                // A missing original is not a problem: the baseline and the
+                // edit after it are not checkable.
+                assert!(report.ok(), "{report:#?}");
+                assert_eq!(report.unchecked, 2, "{report:#?}");
+            } else {
+                assert_eq!(report.problems.len(), 2, "{report:#?}");
+                assert!(
+                    report.problems[1].contains("document wasn't opened"),
+                    "{report:#?}"
+                );
+            }
             let destination = root.path().join("recovered");
             let escapes = matches!(&attempt.op, Op::Open { path } if path.starts_with(".."));
             let recovered = recover_entries(
