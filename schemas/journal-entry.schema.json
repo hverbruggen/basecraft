@@ -4413,12 +4413,6 @@
             "$ref": "#/$defs/InputReference"
           }
         },
-        "links": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
-        },
         "node_ids": {
           "type": "array",
           "items": {
@@ -4432,7 +4426,6 @@
         }
       },
       "required": [
-        "links",
         "checkpoint",
         "feature_slots",
         "node_ids",

@@ -59,8 +59,8 @@ impl SaveScope {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct TargetRevision {
     pub(super) hash: String,
-    /// Size, modification time and identity. Change time is left out: our own
-    /// recovery hard links change it, and the hash already binds the content.
+    /// Size, modification time and identity. Change time is left out: the hash
+    /// already binds the content.
     stamp: basecraft_protocol::provenance::FileStamp,
 }
 

@@ -200,7 +200,6 @@ impl Session {
             )
             .then(|| basecraft_protocol::ops::SourceRecord {
                 checkpoint: false,
-                links: std::collections::BTreeMap::new(),
                 feature_slots: self.docs[doc.0]
                     .content
                     .sequence()

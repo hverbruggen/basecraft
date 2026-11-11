@@ -294,12 +294,11 @@ fn repeated_combine_and_refused_save_preserve_retained_objects_and_recover() {
     assert!(
         workflow::combine_to(&mut session, &paths, &dir.path().join("refused.fa"), None).is_err()
     );
-    // Checkpoints live in objects/, recovery links in originals/<entry>/.
+    // Checkpoints live in objects/.
     let snapshot = || {
         let mut found = std::collections::BTreeMap::new();
         let mut pending = vec![
             dir.path().join(".basecraft/objects"),
-            dir.path().join(".basecraft/originals"),
         ];
         while let Some(directory) = pending.pop() {
             for entry in std::fs::read_dir(&directory).into_iter().flatten() {

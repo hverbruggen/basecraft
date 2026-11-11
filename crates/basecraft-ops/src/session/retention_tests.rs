@@ -54,9 +54,9 @@ fn recovery_starts_at_completed_save() {
 }
 
 #[test]
-fn recovery_retains_replaced_sources_and_checkpoints_external_edits_and_undo() {
+fn recovery_checkpoints_external_edits_and_undo_and_needs_replaced_originals() {
     let Some(root) = crate::isolated_profile::enter(
-        "session::retention_tests::recovery_retains_replaced_sources_and_checkpoints_external_edits_and_undo",
+        "session::retention_tests::recovery_checkpoints_external_edits_and_undo_and_needs_replaced_originals",
     ) else {
         return;
     };
@@ -93,31 +93,12 @@ fn recovery_retains_replaced_sources_and_checkpoints_external_edits_and_undo() {
                 residues: residue.into(),
             };
             session.apply(doc, replace(0, "T")).unwrap();
-            let entries = crate::log::read_all(session.recovery_root()).unwrap();
-            let retained = session.recovery_root().join(
-                entries[0]
-                    .source
-                    .as_ref()
-                    .unwrap()
-                    .links
-                    .values()
-                    .next()
-                    .unwrap(),
-            );
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::MetadataExt;
-                assert_eq!(
-                    path.metadata().unwrap().ino(),
-                    retained.metadata().unwrap().ino()
-                );
-            }
-            let expected = match scenario {
+            let expected: &[u8] = match scenario {
                 "replace" => {
                     let new = source.join("replacement");
                     std::fs::write(&new, b">outside\nCCCC\n").unwrap();
                     std::fs::rename(new, &path).unwrap();
-                    b"TAAA"
+                    b""
                 }
                 "save-edit-replace" => {
                     session.save(doc, None).unwrap();
@@ -125,7 +106,7 @@ fn recovery_retains_replaced_sources_and_checkpoints_external_edits_and_undo() {
                     let new = source.join("replacement");
                     std::fs::write(&new, b">outside\nCCCC\n").unwrap();
                     std::fs::rename(new, &path).unwrap();
-                    b"GAAA"
+                    b""
                 }
                 "rewrite-edit" => {
                     std::fs::write(&path, b">outside\nCCCC\n").unwrap();
@@ -153,8 +134,17 @@ fn recovery_retains_replaced_sources_and_checkpoints_external_edits_and_undo() {
             };
             let recovery = session.recovery_root().to_path_buf();
             std::mem::forget(session);
-            let outputs =
-                crate::records::replay::recover(&recovery, &source.join("recovered")).unwrap();
+            let outputs = crate::records::replay::recover(&recovery, &source.join("recovered"));
+            if expected.is_empty() {
+                // Replaced after the last edit: recovery needs the unchanged original.
+                assert!(
+                    outputs.map_or(true, |outputs| outputs.is_empty()),
+                    "{scenario} {size}"
+                );
+                assert_ne!(crate::log::read_all(&recovery).unwrap().len(), 0);
+                continue;
+            }
+            let outputs = outputs.unwrap();
             let mut check = Session::unlogged(outputs[0].parent().unwrap());
             let doc = check.open(&outputs[0]).unwrap();
             assert_eq!(
@@ -248,9 +238,9 @@ fn cross_device_recovery_after_save_as_and_interrupted_save() {
 }
 
 #[test]
-fn recovery_links_do_not_replace_immutable_objects_or_reject_metadata_changes() {
+fn recovery_uses_an_immutable_object_after_the_original_changes() {
     let Some(root) = crate::isolated_profile::enter(
-        "session::retention_tests::recovery_links_do_not_replace_immutable_objects_or_reject_metadata_changes",
+        "session::retention_tests::recovery_uses_an_immutable_object_after_the_original_changes",
     ) else {
         return;
     };
@@ -263,7 +253,6 @@ fn recovery_links_do_not_replace_immutable_objects_or_reject_metadata_changes() 
     std::fs::create_dir_all(&objects).unwrap();
     let object = objects.join(basecraft_io::hash_bytes(original).trim_start_matches("b3:"));
     std::fs::write(&object, original).unwrap();
-    std::fs::hard_link(&path, root.join("another-session-link")).unwrap();
     session
         .apply(
             doc,

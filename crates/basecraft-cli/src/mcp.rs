@@ -190,7 +190,7 @@ impl Server {
             "replay" => {
                 let report = basecraft_ops::records::replay(self.session.root())?;
                 Ok(
-                    json!({"sessions":report.sessions,"entries":report.entries,"problems":report.problems}),
+                    json!({"sessions":report.sessions,"entries":report.entries,"unchecked":report.unchecked,"problems":report.problems}),
                 )
             }
             "read" => {
