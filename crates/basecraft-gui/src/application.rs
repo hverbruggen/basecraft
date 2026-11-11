@@ -40,7 +40,7 @@ pub fn new(args: &[String], gui_test: bool) -> cxx::UniquePtr<QApplication> {
     // even when the QML FileDialog requests OpenFiles (QTBUG-92585).
     // The supported binding retains argc/argv for the application's lifetime.
     let mut app = QApplication::new();
-    // Retain the legacy QSettings identity for one-time preferences migration.
+    // Organisation and application names place Qt's standard paths.
     if let Some(mut app) = app.as_mut() {
         app.as_mut()
             .set_organization_name(&QString::from("Basecraft"));
