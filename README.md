@@ -11,7 +11,7 @@
 
 | Edit and align sequences | Annotate trees with clade labels, support values and species groups |
 |---|---|
-| <picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/hero-alignment-dark.svg"><img src="assets/readme/hero-alignment-light.svg" alt="Placeholder for a screenshot of a large alignment in the editor"></picture> | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/hero-tree-dark.svg"><img src="assets/readme/hero-tree-light.svg" alt="Placeholder for a screenshot of a richly annotated tree"></picture> |
+| <a href="assets/readme/hero-alignment-light.svg"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/hero-alignment-dark.svg"><img src="assets/readme/hero-alignment-light.svg" alt="A large alignment in the basecraft editor"></picture></a> | <a href="assets/readme/hero-tree-light.svg"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/hero-tree-dark.svg"><img src="assets/readme/hero-tree-light.svg" alt="An annotated tree in basecraft with clade labels, support values and species groups"></picture></a> |
 
 ## Status
 
