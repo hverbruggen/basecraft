@@ -124,5 +124,5 @@ fn large_alignment_context_still_registers_as_streamed_evidence() {
     let request = run.artifact("request.json").unwrap();
     assert!(request.is_file());
     let input = basecraft_ops::records::read_input(run.directory()).unwrap();
-    assert!(!input.submitted_hash.is_empty());
+    assert_ne!(input.submitted_hash, "");
 }
