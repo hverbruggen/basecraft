@@ -64,9 +64,7 @@ first release, we plan to add:
 - **Review annotated genomes.** Check and correct what annotation tools produced
   for organelle genomes and other large sequences from high-throughput
   sequencing.
-- **ENA submissions for plastid genomes,** next to the GenBank workflow.
-- **Reference-assisted Sanger calling.** Base calls checked against a reference
-  alignment, tested on real traces before we rely on it.
+- **ENA submissions for plastid genomes.**
 - **Checks for questionable sequences.** Spot likely chimeras, contaminants,
   pseudogenes and misaligned stretches before they end up in your tree or your
   species hypotheses.
