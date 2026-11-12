@@ -1,5 +1,4 @@
 //! Shared presentation adapter; document controllers supply snapshots/geometry.
-use basecraft_viewmodel::find::{Row, Session};
 
 pub fn document_key(session: &basecraft_ops::Session, doc: basecraft_ops::DocId) -> String {
     format!(
@@ -12,64 +11,6 @@ pub fn document_key(session: &basecraft_ops::Session, doc: basecraft_ops::DocId)
     )
 }
 
-pub fn rows_key(rows: &[Row], identity: &str) -> String {
-    let mut bytes = identity.as_bytes().to_vec();
-    for row in rows {
-        bytes.extend_from_slice(&row.id.to_le_bytes());
-        bytes.extend_from_slice(&row.name.len().to_le_bytes());
-        bytes.extend_from_slice(row.name.as_bytes());
-        bytes.extend_from_slice(&row.bases.len().to_le_bytes());
-        bytes.extend_from_slice(&row.bases);
-    }
-    basecraft_io::hash_bytes(&bytes)
-}
-
-/// The find bar's status line for an active query.
-pub fn status_text(find: &Session) -> String {
-    if find.busy() {
-        return "Finding…".into();
-    }
-    let results = &find.results;
-    let mut text = find.hit().map_or_else(
-        || "No matches".to_owned(),
-        |hit| {
-            let limited = if results.limited {
-                " (limit reached; narrow query)"
-            } else {
-                ""
-            };
-            let start = if hit.kind == basecraft_viewmodel::find::Kind::Name {
-                String::new()
-            } else {
-                format!(" · {}", hit.start + 1)
-            };
-            let reverse = if hit.reverse { " · reverse" } else { "" };
-            format!(
-                "{} of {}{limited} · {}{start}{reverse}",
-                find.current + 1,
-                results.hits.len(),
-                hit.label
-            )
-        },
-    );
-    if !results.explanation.is_empty() {
-        text.push_str(" · ");
-        text.push_str(&results.explanation);
-    }
-    text
-}
-
-/// Rows of text-only name matches (species lists), as a JSON array.
-pub fn name_rows(find: &Session) -> String {
-    let rows: Vec<_> = find
-        .results
-        .hits
-        .iter()
-        .filter(|h| h.kind == basecraft_viewmodel::find::Kind::Name)
-        .map(|h| h.row)
-        .collect();
-    serde_json::to_string(&rows).unwrap_or_else(|_| "[]".into())
-}
 
 /// Find for a document controller. A scan runs as a job; when it finishes the
 /// controller reveals the first hit and publishes the find properties.
@@ -140,8 +81,8 @@ macro_rules! controller_find {
             /// current hit.
             fn find_publish(mut self: std::pin::Pin<&mut Self>, reveal: bool) {
                 let find = &self.rust().find;
-                let text = crate::find_bridge::status_text(find);
-                let rows = crate::find_bridge::name_rows(find);
+                let text = basecraft_viewmodel::find::status_text(find);
+                let rows = basecraft_viewmodel::find::name_rows(find);
                 let count = i32::try_from(find.results.hits.len()).unwrap_or(i32::MAX);
                 let row = find
                     .hit()
@@ -200,90 +141,3 @@ macro_rules! controller_find {
     };
 }
 pub(crate) use controller_find;
-
-/// Keep miniature payloads bounded while always including the current result.
-pub fn overview_marks(
-    find: &Session,
-    mut project: impl FnMut(
-        &basecraft_viewmodel::find::Hit,
-    ) -> Option<basecraft_viewmodel::overview::MatchMark>,
-) -> String {
-    if !find.active() {
-        return "[]".into();
-    }
-    let stride = find.results.hits.len().div_ceil(4096).max(1);
-    let marks: Vec<_> = find
-        .results
-        .hits
-        .iter()
-        .step_by(stride)
-        .chain(find.hit())
-        .filter_map(&mut project)
-        .collect();
-    serde_json::to_string(&marks).unwrap_or_else(|_| "[]".into())
-}
-
-#[cfg(test)]
-mod overview_tests {
-    use super::*;
-    use basecraft_viewmodel::{
-        find::{Hit, Kind},
-        overview::MatchMark,
-    };
-
-    #[test]
-    fn find_overview_bounds_payload_and_keeps_current_hit() {
-        let mut find = Session::default();
-        find.set_query("A".into(), false);
-        find.results.hits = (0..100_000)
-            .map(|i| Hit {
-                row: i,
-                start: 1,
-                end: 2,
-                kind: Kind::Sequence,
-                reverse: false,
-                label: "row".into(),
-            })
-            .collect();
-        find.current = 99_999;
-        let json = overview_marks(&find, |hit| {
-            Some(MatchMark {
-                x: 0.0,
-                y: f64::from(u32::try_from(hit.row).unwrap()) / 100_000.0,
-                width: 1.0,
-                height: 0.00001,
-            })
-        });
-        let marks: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
-        assert!(marks.len() <= 4097);
-        assert_eq!(marks.last().unwrap()["y"], serde_json::json!(0.99999));
-        find.set_query(String::new(), false);
-        assert_eq!(
-            overview_marks(&find, |_| panic!("closed search must not project hits")),
-            "[]"
-        );
-    }
-
-    #[test]
-    fn status_line_reads_busy_hits_and_explanations() {
-        let mut find = Session::default();
-        find.set_query("A".into(), false);
-        assert_eq!(status_text(&find), "Finding…");
-        let scan = find.update("doc".into(), || {
-            basecraft_viewmodel::find::Input::Rows(vec![basecraft_viewmodel::find::Row {
-                id: 0,
-                name: "Row".into(),
-                bases: b"CACC".to_vec(),
-            }])
-        });
-        assert!(find.finish(scan.unwrap().run()));
-        assert_eq!(status_text(&find), "1 of 1 · Row · 2");
-        assert_eq!(name_rows(&find), "[]");
-        find.results.hits.clear();
-        find.results.explanation = "Protein symbols match literally".into();
-        assert_eq!(
-            status_text(&find),
-            "No matches · Protein symbols match literally"
-        );
-    }
-}

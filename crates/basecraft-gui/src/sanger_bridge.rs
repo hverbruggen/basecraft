@@ -64,7 +64,30 @@ pub mod qobject {
         #[qproperty(QString, selected_call_set)]
         #[qproperty(bool, calling)]
         #[qproperty(QString, review_settings)]
+        /// A review is being prepared from reads (see `sanger_flow`).
+        #[qproperty(bool, preparing)]
+        #[qproperty(QString, preparation_error)]
+        /// The reads of a failed preparation, one per line, or "".
+        #[qproperty(QString, failed_reads)]
         type SangerController = super::SangerRust;
+
+        /// Prepare a review from `paths` (JSON list), oriented against
+        /// `reference` when it is not empty. False when one is already running.
+        #[qinvokable]
+        fn start_review(self: Pin<&mut SangerController>, paths: &QString, reference: &QString, cutoff: i32) -> bool;
+        /// Orient the open review against another reference alignment.
+        #[qinvokable]
+        fn review_context(self: Pin<&mut SangerController>, reference: &QString);
+        #[qinvokable]
+        fn retry_review(self: Pin<&mut SangerController>);
+        #[qinvokable]
+        fn dismiss_failure(self: Pin<&mut SangerController>);
+        /// Stop the running stage and any background calling.
+        #[qinvokable]
+        fn cancel_work(self: Pin<&mut SangerController>);
+        #[qsignal]
+        #[cxx_name = "reviewReady"]
+        fn review_ready(self: Pin<&mut SangerController>, reference: QString);
 
         #[qinvokable]
         fn find_query(self: Pin<&mut SangerController>, query: &QString, reverse: bool);
@@ -220,6 +243,7 @@ pub mod qobject {
     }
 }
 
+use basecraft_viewmodel::sanger_flow::{Stage, Step};
 use std::path::{Path, PathBuf};
 
 use basecraft_io::abif::Trace;
@@ -295,6 +319,10 @@ pub struct SangerRust {
     view: SangerView,
     theme: Theme,
     scratch: Frame,
+    flow: basecraft_viewmodel::sanger_flow::Flow,
+    preparing: bool,
+    preparation_error: QString,
+    failed_reads: QString,
 }
 
 impl Default for SangerRust {
@@ -362,6 +390,10 @@ impl Default for SangerRust {
             view: SangerView::default(),
             theme: Theme::default(),
             scratch: Frame::new(),
+            flow: basecraft_viewmodel::sanger_flow::Flow::default(),
+            preparing: false,
+            preparation_error: QString::default(),
+            failed_reads: QString::default(),
         }
     }
 }
@@ -495,7 +527,126 @@ impl qobject::SangerController {
                 (false, String::new())
             }
         };
-        self.stage_finished(QString::from(name), success, QString::from(payload));
+        self.as_mut()
+            .stage_finished(QString::from(name), success, QString::from(payload));
+        if let Some(step) = self.as_mut().rust_mut().flow.finished(name, success) {
+            self.run_step(step);
+        }
+    }
+
+    pub fn start_review(
+        mut self: std::pin::Pin<&mut Self>,
+        paths: &QString,
+        reference: &QString,
+        cutoff: i32,
+    ) -> bool {
+        let paths: Vec<String> = serde_json::from_str(&paths.to_string()).unwrap_or_default();
+        let first = paths.first().cloned().unwrap_or_default();
+        if self.rust().busy {
+            return false;
+        }
+        let Some(start) = self.as_mut().rust_mut().flow.start(paths, reference.to_string(), cutoff)
+        else {
+            return false;
+        };
+        if self.rust().calling {
+            self.as_mut().cancel_calls();
+        }
+        // The reference is frozen before any stage runs, so a retry reads
+        // the same bytes.
+        if !reference.is_empty() {
+            let retained = self.as_mut().retain_reference(&QString::from(&first), reference);
+            if retained.is_empty() {
+                self.run_step(Step::Fail);
+                return true;
+            }
+            self.as_mut().rust_mut().flow.retain(retained.to_string());
+        }
+        if let Some(path) = start.open {
+            if !self.as_mut().open_file(&QString::from(&path)) {
+                self.run_step(Step::Fail);
+                return true;
+            }
+            if self.rust().calling {
+                self.as_mut().cancel_calls();
+            }
+        }
+        self.run_step(start.then);
+        true
+    }
+
+    pub fn review_context(mut self: std::pin::Pin<&mut Self>, reference: &QString) {
+        if self.rust().busy || self.rust().calling {
+            return;
+        }
+        let paths = serde_json::from_str(&self.rust().input_paths.to_string()).unwrap_or_default();
+        let cutoff = self.rust().signal_threshold;
+        if let Some(step) = self.as_mut().rust_mut().flow.context(paths, reference.to_string(), cutoff) {
+            self.run_step(step);
+        }
+    }
+
+    pub fn retry_review(mut self: std::pin::Pin<&mut Self>) {
+        if let Some((paths, reference, cutoff)) = self.as_mut().rust_mut().flow.retry() {
+            let paths = serde_json::to_string(&paths).unwrap_or_default();
+            self.start_review(&QString::from(&paths), &QString::from(&reference), cutoff);
+        }
+    }
+
+    pub fn dismiss_failure(mut self: std::pin::Pin<&mut Self>) {
+        self.as_mut().rust_mut().flow.finish();
+        self.publish_flow();
+    }
+
+    pub fn cancel_work(mut self: std::pin::Pin<&mut Self>) {
+        self.as_mut().rust_mut().flow.cancel();
+        if self.rust().busy {
+            self.as_mut().cancel_stage();
+        }
+        if self.rust().calling {
+            self.cancel_calls();
+        }
+    }
+
+    fn run_step(mut self: std::pin::Pin<&mut Self>, step: Step) {
+        match step {
+            Step::Submit(stage) => {
+                let Some(request) = self.as_mut().rust_mut().flow.submitting(stage).cloned() else {
+                    return;
+                };
+                let reference = QString::from(&request.reference);
+                let accepted = match stage {
+                    Stage::Prepare => {
+                        let paths = serde_json::to_string(&request.paths).unwrap_or_default();
+                        self.as_mut().prepare_reads(&QString::from(&paths), request.cutoff)
+                    }
+                    Stage::Single => self.as_mut().single_review(request.cutoff),
+                    Stage::Orient => self.as_mut().orient_review(&reference),
+                    Stage::Place => self.as_mut().place_alignment(&reference),
+                };
+                if !accepted {
+                    self.as_mut().run_step(Step::Fail);
+                }
+            }
+            Step::Finish { reference } => {
+                self.as_mut().rust_mut().flow.finish();
+                self.as_mut().review_ready(QString::from(&reference));
+            }
+            Step::Fail => {
+                let message = self.rust().message.to_string();
+                self.as_mut().rust_mut().flow.fail(message);
+            }
+        }
+        self.publish_flow();
+    }
+
+    fn publish_flow(mut self: std::pin::Pin<&mut Self>) {
+        let preparing = self.rust().flow.pending();
+        let failed = QString::from(&self.rust().flow.failed_paths().join("\n"));
+        let error = QString::from(&self.rust().flow.error);
+        self.as_mut().set_preparing(preparing);
+        self.as_mut().set_failed_reads(failed);
+        self.set_preparation_error(error);
     }
 
     pub fn compute_calls(self: std::pin::Pin<&mut Self>) {
@@ -776,7 +927,7 @@ impl qobject::SangerController {
                 .map(|v| (v.find_key(), v.content_height().to_bits()));
             let key = format!("{}:{}:{geometry:?}", r.find_source_key, r.find.revision());
             r.overview_match_cache.get_json(key, || {
-                crate::find_bridge::overview_marks(&r.find, |hit| {
+                basecraft_viewmodel::find::overview_marks(&r.find, |hit| {
                     if let Some(review) = &r.review {
                         review.overview_match_at(
                             hit.start,
@@ -1959,7 +2110,7 @@ impl SangerRust {
                 })
                 .unwrap_or_default()
         };
-        let key = crate::find_bridge::rows_key(&rows, &self.file_path.to_string());
+        let key = basecraft_viewmodel::find::rows_key(&rows, &self.file_path.to_string());
         (key, basecraft_viewmodel::find::Input::Rows(rows))
     }
 }

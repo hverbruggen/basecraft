@@ -91,7 +91,10 @@ Main {
         return found
     }
     function dialog(name) {
-        for (const item of walk.contentData) if (item && item.objectName === name) return item
+        for (const item of walk.contentData) {
+            if (item && item.objectName === name) return item
+            if (item && item.item && item.item.objectName === name) return item.item
+        }
         fail("no dialog " + name)
     }
     function hint(key) {
@@ -107,12 +110,20 @@ Main {
         list.push(() => {
             const welcome = dialog("firstLaunch").item
             check(welcome && welcome.opened, "first launch did not ask its questions")
-            const theme = find(welcome.contentItem, i => i.objectName === "firstTheme")
+            const theme = find(welcome.contentItem, i => i.objectName === "theme")
             check(theme, "first launch lost the theme question")
             theme.activated(2)
             check(preferenceValues.ui.theme === "dark", "theme answer not saved")
-            const notices = find(welcome.contentItem, i => i.objectName === "firstReleaseNotices")
+            const family = find(welcome.contentItem, i => i.objectName === "fontFamily")
+            check(family && family.currentIndex === 0 && family.count > 1, "first launch lost the font question")
+            family.activated(1)
+            check(preferenceValues.ui.font_family === family.families[0], "font answer not saved")
+            family.activated(0)
+            check(preferenceValues.ui.font_family === null, "desktop font not restored")
+            const notices = find(welcome.contentItem, i => i.objectName === "releaseNotices")
             check(notices && !notices.checked, "release notices must start off")
+            const cpu = find(welcome.contentItem, i => i.objectName === "localCpuThreads")
+            check(cpu && !cpu.visible, "first launch asks more than appearance")
             theme.activated(0)
             welcome.close()
         })
@@ -235,6 +246,53 @@ Main {
                 open[0].item.close()
             })
         }
+        // Ctrl+A belongs to the canvas only while it can draw (offscreen runs
+        // use the software renderer, so it passes keys on); a text field
+        // always selects its own text and leaves the sequence alone.
+        list.push(() => { show(0); currentView.forceActiveFocus() })
+        list.push(() => {
+            currentView.pressKey(Qt.Key_A, Qt.ControlModifier, "a")
+            check((current.selection_text().length > 0) === currentView.renderingAvailable, "Ctrl+A in the canvas went to the wrong place")
+            documentAt(0).openFind()
+        })
+        list.push(() => {
+            const query = find(documentAt(0), i => i.objectName === "findQuery")
+            check(query && query.activeFocus, "the find field did not take focus")
+            query.text = "entry text"
+            currentView.pressKey(Qt.Key_A, Qt.ControlModifier, "a")
+            check(query.selectedText === "entry text", "Ctrl+A in a text field did not select its text")
+            query.text = ""
+            currentView.pressKey(Qt.Key_Escape, 0, "")
+        })
+        // The trace review's coordinate box moves to a column in the chosen
+        // system, refuses a bad one in place, and the evidence panel folds.
+        list.push(() => { show(4) })
+        list.push(() => {
+            const trace = documentAt(4)
+            const input = find(trace, i => i.objectName === "reviewCoordinateInput")
+            const panel = find(trace, i => i.objectName === "reviewNavigation")
+            check(input && panel && panel.visible, "the trace review lost its coordinate box")
+            input.forceActiveFocus()
+            input.text = "outside"
+            trace.goToColumn()
+            check(input.activeFocus, "a bad coordinate left the coordinate box")
+            find(trace, i => i.objectName === "reviewCoordinateSystem").currentIndex = 1
+            input.text = "1"
+            input.accepted()
+            check(currentView.activeFocus, "going to a draft column did not return to the canvas")
+            const toggle = find(trace, i => i.objectName === "reviewEvidenceToggle")
+            const evidence = find(trace, i => i.objectName === "reviewEvidence")
+            check(evidence.visible, "site evidence hidden by default")
+            toggle.checked = false
+            check(!evidence.visible, "site evidence did not fold")
+            toggle.checked = true
+        })
+        // Every dialog built on demand builds without a QML warning.
+        list.push(() => {
+            const loaders = walk.contentData.filter(item => item && item.sourceComponent !== undefined && typeof item.dialog === "function")
+            check(loaders.length >= 50, "only " + loaders.length + " dialogs load on demand")
+            for (const loader of loaders) check(loader.dialog(), "a dialog failed to build")
+        })
         list.push(() => { console.log("RIBBON_WALK passed"); Qt.quit() })
         return list
     }

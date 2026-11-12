@@ -13,7 +13,8 @@ Item {
             return JSON.stringify({
                 sets: [{name: "Bootstrap", source: "", decimals: 0, automatic_decimals: 0, proportions: false}],
                 style: {support_shown: [], support_min: 0, support_decimals: {}, support_proportions: {},
-                    symbols: null, branch_width: 1, vertical_bar_labels: true, scale_bar: true}
+                    symbols: null, branch_width: 1, vertical_bar_labels: true, scale_bar: true},
+                rows: [{name: "Bootstrap", source: "", shown: true, decimals: 0, autoDefault: 0, scale: 0, minimum: 0, autoDecimals: true}]
             })
         }
     }

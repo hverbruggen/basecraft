@@ -13,6 +13,20 @@ mod ffi {
     }
 }
 
+unsafe extern "C" {
+    fn basecraft_startup_object_count(root: *mut cxx_qt::QObject) -> i32;
+}
+
+/// Print how many objects the window built at startup.
+///
+/// # Safety
+/// `object` is the live root object `objectCreated` supplied.
+pub unsafe fn report_objects(object: *mut cxx_qt::QObject) {
+    // SAFETY: the caller passes the live root object on its own thread.
+    let count = unsafe { basecraft_startup_object_count(object) };
+    eprintln!("basecraft-gui-startup-objects {count}");
+}
+
 /// Called synchronously from `QQmlApplicationEngine::objectCreated`. Qt owns the
 /// object. The signal closure owns only the thread-safe recorder, never a pointer.
 pub unsafe fn attach(object: *mut cxx_qt::QObject, trace: super::Trace) {

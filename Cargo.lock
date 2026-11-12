@@ -422,6 +422,7 @@ dependencies = [
  "basecraft-protocol",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

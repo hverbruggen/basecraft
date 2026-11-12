@@ -731,7 +731,7 @@ impl qobject::GenomeController {
             let matches =
                 r.overview_match_cache
                     .get_json(format!("{key}:{}", r.find.revision()), || {
-                        crate::find_bridge::overview_marks(&r.find, |hit| {
+                        basecraft_viewmodel::find::overview_marks(&r.find, |hit| {
                             basecraft_viewmodel::genome::GenomeView::overview_match(
                                 hit.start,
                                 hit.end,

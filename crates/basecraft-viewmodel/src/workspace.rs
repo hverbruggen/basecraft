@@ -468,9 +468,30 @@ pub fn species_request_allowed(
     fits && !busy && asap
 }
 
+/// Whether an open sequence or alignment at `path` is a FASTA file.
+pub fn fasta_source(kind: &str, path: &str) -> bool {
+    matches!(kind, "sequence" | "alignment")
+        && std::path::Path::new(path)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                ["fa", "fasta", "fna", "fas", "ffn", "faa", "afa"]
+                    .contains(&extension.to_ascii_lowercase().as_str())
+            })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_open_fasta_sequences_and_alignments_are_metadata_sources() {
+        assert!(fasta_source("alignment", "/p/coi.AFA"));
+        assert!(fasta_source("sequence", "/p/reads.fasta"));
+        assert!(!fasta_source("sequence", "/p/locus.gb"));
+        assert!(!fasta_source("tree", "/p/coi.fa"));
+        assert!(!fasta_source("alignment", ""));
+    }
 
     fn workspace(rows: &[(&str, Kind, bool)]) -> Workspace {
         let mut w = Workspace::default();

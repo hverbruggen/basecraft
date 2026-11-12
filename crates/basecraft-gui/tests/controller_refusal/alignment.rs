@@ -11,7 +11,7 @@ fn state(controller: &qobject::AlignmentController, original: DocId) -> serde_js
         "undo": session.can_undo(original).unwrap(), "redo": session.can_redo(original).unwrap(),
         "record": session.document_record(original).unwrap(),
         "view": format!("{:?}", r.view),
-        "find": crate::find_bridge::status_text(&r.find),
+        "find": basecraft_viewmodel::find::status_text(&r.find),
         "find_revision": r.find.revision(),
         "find_pending": r.find.busy(), "busy": r.busy, "dirty": r.dirty,
         "tool_pending": r.tool_job.is_some(), "snapshot_pending": r.review_snapshot_dir.is_some(),

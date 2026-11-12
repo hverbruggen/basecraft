@@ -73,46 +73,6 @@ impl Drop for OperationsRust {
         }
     }
 }
-// Keep recursion bounded and reject forms we cannot represent faithfully.
-fn supported_parameters(schema: &Value, depth: usize) -> bool {
-    if depth > 8 {
-        return false;
-    }
-    if schema["enum"].is_array() {
-        return true;
-    }
-    match schema["type"].as_str() {
-        Some("boolean" | "integer" | "number" | "string") => true,
-        Some("array") => supported_parameters(&schema["items"], depth + 1),
-        Some("object") => schema["properties"].as_object().is_some_and(|properties| {
-            properties
-                .values()
-                .all(|field| supported_parameters(field, depth + 1))
-                && schema.get("oneOf").is_none_or(|choices| {
-                    choices.as_array().is_some_and(|choices| {
-                        let mut names = std::collections::BTreeSet::new();
-                        choices.iter().all(|choice| {
-                            choice.as_object().is_some_and(|fields| {
-                                fields
-                                    .keys()
-                                    .all(|name| matches!(name.as_str(), "required" | "title"))
-                                    && choice["required"].as_array().is_some_and(|required| {
-                                        !required.is_empty()
-                                            && required.iter().all(|name| {
-                                                name.as_str().is_some_and(|name| {
-                                                    properties.contains_key(name)
-                                                        && names.insert(name.to_owned())
-                                                })
-                                            })
-                                    })
-                            })
-                        })
-                    })
-                })
-        }),
-        _ => false,
-    }
-}
 fn catalog() -> basecraft_plugin_host::Result<Value> {
     use basecraft_protocol::operation::ExecutionFamily;
     let registry = Registry::load(&RegistryConfig::discover()?)?;
@@ -136,7 +96,7 @@ fn catalog() -> basecraft_plugin_host::Result<Value> {
             .any(|binding| binding.min > 1 || binding.max != 1)
         {
             Some("File lists are available through CLI/Python/MCP")
-        } else if !supported_parameters(&descriptor.parameters, 0) {
+        } else if !basecraft_viewmodel::parameters::supported(&descriptor.parameters, 0) {
             Some("This settings schema is available through CLI/Python/MCP")
         } else {
             None
@@ -457,24 +417,4 @@ fn run_request(
         }
         work.cancelled()
     })
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn supports_nested_calibrations_and_exclusive_smoothing() {
-        use super::*;
-        let contract: Value =
-            serde_json::from_str(include_str!("../../../plugins/sanderson/operations.json"))
-                .unwrap();
-        assert!(supported_parameters(
-            &contract["operations"][0]["parameters"],
-            0
-        ));
-        assert!(!supported_parameters(&json!({"type":"null"}), 0));
-        assert!(!supported_parameters(
-            &json!({"type":"object","properties":{"x":{"type":"number"}},"oneOf":[{"required":["x"]},{"required":["x"]}]}),
-            0
-        ));
-    }
 }

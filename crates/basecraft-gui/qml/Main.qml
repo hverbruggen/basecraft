@@ -34,7 +34,7 @@ ApplicationWindow {
     property bool discardAuthoredOnQuit: false
     onClosing: (close) => {
         if (closeConfirmed) { documentOpens.shutdown(); return }
-        const step = JSON.parse(documentOpens.quit(!discardAuthoredOnQuit && documentRecord.unsavedDrafts().length > 0))
+        const step = JSON.parse(documentOpens.quit(!discardAuthoredOnQuit && !!documentRecord.item && documentRecord.item.unsavedDrafts().length > 0))
         if (step.leave) { leave(step.leave); documentOpens.shutdown(); return }
         close.accepted = false
         quitStep(step)
@@ -47,8 +47,8 @@ ApplicationWindow {
         }
     }
     function quitStep(step) {
-        if (step.drafts) draftQuitDialog.open()
-        else if (step.ask) { quitDialog.ask(step.ask); quitError.text = step.error }
+        if (step.drafts) draftQuitDialog.dialog().open()
+        else if (step.ask) quitDialog.dialog().ask(step.ask, step.error)
         else if (step.save) saveTarget(documentTarget(documentOpens.target_index(step.save.token, step.save.path)), "",
             success => quitStep(JSON.parse(documentOpens.quit_saved(success))))
         else if (step.leave) { leave(step.leave); closeConfirmed = true; window.close() }
@@ -121,8 +121,8 @@ ApplicationWindow {
             window.focusOpenedDocument = true
             window.refreshCurrent()
             if (review && window.current === document.controller && window.currentPath === document.path
-                    && documentRecord.controller === document.controller && documentRecord.documentPath === document.path)
-                documentRecord.showPage(2)
+                    && documentRecord.dialog().controller === document.controller && documentRecord.dialog().documentPath === document.path)
+                documentRecord.dialog().showPage(2)
             window.applyingOpenFocus = false
         }
     }
@@ -194,14 +194,14 @@ ApplicationWindow {
         objectName: "preferences"
         onSnapshotChanged: if (window.preferencesReady) window.loadPreferences()
         onErrorChanged: if (error.length && window.preferencesReady) {
-            preferencesError.open()
+            preferencesError.dialog().open()
         }
     }
     function persistPreference(key, value) {
         if (preferencesReady) preferences.update(key, JSON.stringify(value))
     }
-    AppContentDialog {
-        id: preferencesError
+    OnDemand { id: preferencesError; sourceComponent: Component { AppContentDialog {
+        id: preferencesErrorItem
         title: "Preferences could not be loaded or saved"
         standardButtons: Dialog.Close
         body: ColumnLayout {
@@ -214,11 +214,11 @@ ApplicationWindow {
                 text: "Retry loading preferences"
                 onClicked: {
                     window.loadPreferences()
-                    if (!preferences.error.length) preferencesError.close()
+                    if (!preferences.error.length) preferencesErrorItem.close()
                 }
             }
         }
-    }
+    } } }
     function loadPreferences() {
         preferencesReady = false
         if (!preferences.reload()) return
@@ -272,10 +272,10 @@ ApplicationWindow {
     function openTextRepresentation() {
         const source = current
         if (!currentView || !source || typeof source.accessible_page !== "function") return
-        textRepresentation.source = source
-        textRepresentation.open()
+        textRepresentation.dialog().source = source
+        textRepresentation.dialog().open()
     }
-    TextRepresentationDialog { id: textRepresentation }
+    OnDemand { id: textRepresentation; sourceComponent: Component { TextRepresentationDialog { id: textRepresentationItem } } }
 
     function focusRegion(backward) {
         const regions = [ribbonTabBar, tree, tabs, delimitationOpen ? window.documentAt(tabs.currentIndex) : currentView].filter(item => item && item.visible && item.enabled)
@@ -304,7 +304,7 @@ ApplicationWindow {
             // Project documents are edited on the Export tab.
             documentOpens.revoke_focus()
             ribbonTabName = "Export"
-            if (step.project === "metadata") specimenTable.open()
+            if (step.project === "metadata") specimenTable.dialog().open()
             else submissions.open(path)
             return
         }
@@ -344,8 +344,8 @@ ApplicationWindow {
         if (!current || !documentOpens.species_request_allowed(currentKind, current.busy, method, !!current.linked_alignment)) return
         delimitationSource = current
         documentOpens.begin_delimitation(tabs.currentIndex)
-        speciesDialog.engineProblems = method === "ptp" ? JSON.parse(shell.delimitation_engines()) : ({})
-        speciesDialog.show(method, alignmentOpen ? current.file_path : current.linked_alignment || "",
+        speciesDialog.dialog().engineProblems = method === "ptp" ? JSON.parse(shell.delimitation_engines()) : ({})
+        speciesDialog.dialog().show(method, alignmentOpen ? current.file_path : current.linked_alignment || "",
             treeOpen ? current.file_path : delimitationOpen ? current.display_path : "")
     }
     function requestDelimitation(method, input, rooted, settings, displayMethod) {
@@ -369,60 +369,63 @@ ApplicationWindow {
             })
         }
     }
-    DelimitationAnalysisDialog {
-        id: speciesDialog
+    OnDemand { id: speciesDialog; sourceComponent: Component { DelimitationAnalysisDialog {
+        id: speciesDialogItem
         pathResolver: shell
         workers: window.localCpuThreads
         onRequested: (method, input, rooted, settings, displayMethod) =>
             window.requestDelimitation(method, input, rooted, settings, displayMethod)
-    }
+    } } }
     DelimitationController { id: combineController }
-    FileDialog {
-        id: combinePicker
+    OnDemand { id: combinePicker; sourceComponent: Component { FileDialog {
+        id: combinePickerItem
         title: "Combine saved species hypotheses"
         fileMode: FileDialog.OpenFiles
         nameFilters: ["Species hypotheses (*.spart *.spartxml *.spart-xml *.xml)"]
         onVisibleChanged: if (visible) currentFolder = window.activeFolder()
         readonly property var paths: Array.from(selectedFiles, url => shell.local_file_path(url))
         onAccepted: {
-            if (selectedFiles.length < 2) { combineError.message = "Choose at least two species hypothesis files."; combineError.open(); return }
+            if (selectedFiles.length < 2) { combineError.dialog().message = "Choose at least two species hypothesis files."; combineError.dialog().open(); return }
             const candidates = JSON.parse(combineController.combine_candidates(JSON.stringify(paths)))
-            if (!candidates.length) { combineError.message = combineController.message; combineError.open(); return }
-            combineChoice.show(candidates)
+            if (!candidates.length) { combineError.dialog().message = combineController.message; combineError.dialog().open(); return }
+            combineChoice.dialog().show(candidates)
         }
-    }
-    CombineHypothesesDialog {
-        id: combineChoice
+    } } }
+
+    OnDemand { id: combineChoice; sourceComponent: Component { CombineHypothesesDialog {
+        id: combineChoiceItem
         property string selection: ""
         onChosenHypotheses: chosen => {
             selection = chosen
             // Suggest <shared root>.combinedNN.spart beside the files just chosen.
-            const paths = combinePicker.paths
+            const paths = combinePicker.dialog().paths
             const suggested = combineController.combine_name(JSON.stringify(paths))
-            combinedDestination.currentFolder = shell.parent_folder_url(suggested.length ? suggested : paths[paths.length - 1])
-            if (suggested.length) combinedDestination.selectedFile = shell.local_file_url(suggested)
-            combinedDestination.open()
+            combinedDestination.dialog().currentFolder = shell.parent_folder_url(suggested.length ? suggested : paths[paths.length - 1])
+            if (suggested.length) combinedDestination.dialog().selectedFile = shell.local_file_url(suggested)
+            combinedDestination.dialog().open()
         }
-    }
-    FileDialog {
-        id: combinedDestination
+    } } }
+
+    OnDemand { id: combinedDestination; sourceComponent: Component { FileDialog {
+        id: combinedDestinationItem
         title: "Save combined species hypotheses as a new file"
         fileMode: FileDialog.SaveFile
         defaultSuffix: "spart"
         nameFilters: ["Species hypotheses (*.spart)"]
         onAccepted: {
             const output = shell.local_file_path(selectedFile)
-            if (combineController.combine_files(JSON.stringify(combinePicker.paths), output, combineChoice.selection)) window.openPath(output)
-            else { combineError.message = combineController.message; combineError.open() }
+            if (combineController.combine_files(JSON.stringify(combinePicker.dialog().paths), output, combineChoice.dialog().selection)) window.openPath(output)
+            else { combineError.dialog().message = combineController.message; combineError.dialog().open() }
         }
-    }
-    AppContentDialog {
-        id: combineError
+    } } }
+
+    OnDemand { id: combineError; sourceComponent: Component { AppContentDialog {
+        id: combineErrorItem
         property string message: ""
         title: "Could not combine hypotheses"
         standardButtons: Dialog.Close
-        body: AppErrorLabel { text: combineError.message; wrapMode: Text.Wrap }
-    }
+        body: AppErrorLabel { text: combineErrorItem.message; wrapMode: Text.Wrap }
+    } } }
 
     function startTraceReview(paths, reference, target, cutoff = 20, forceNew = false) {
         const tab = documentOpens.trace_review(paths[0], forceNew)
@@ -450,7 +453,7 @@ ApplicationWindow {
     function closeTab(i) {
         documentOpens.revoke_focus()
         const step = JSON.parse(documentOpens.close(i))
-        if (step.ask) { confirmClose.target = documentTarget(i); confirmClose.saveError = ""; confirmClose.open(); return }
+        if (step.ask) { confirmClose.dialog().target = documentTarget(i); confirmClose.dialog().saveError = ""; confirmClose.dialog().open(); return }
         if (step.draft) window.documentAt(i).controller.discard_empty_workspace()
         window.removeDocument(i)
         Qt.callLater(refreshCurrent)
@@ -475,7 +478,7 @@ ApplicationWindow {
         commandId: "file.new-sequence"
         iconName: "new-file"
         defaultShortcut: "Ctrl+N"
-        onTriggered: newSequenceDialog.prepare("", "")
+        onTriggered: newSequenceDialog.dialog().prepare("", "")
     }
     Command {
         id: addAnnotationCommand
@@ -487,8 +490,8 @@ ApplicationWindow {
         onTriggered: editor.openNew()
     }
     property var pendingSequence: null
-    AddSequenceDialog {
-        id: newSequenceDialog
+    OnDemand { id: newSequenceDialog; sourceComponent: Component { AddSequenceDialog {
+        id: newSequenceDialogItem
         controller: shell
         newDocument: true
         onInputError: message => validationMessage = message
@@ -508,7 +511,7 @@ ApplicationWindow {
             window.pendingSequence = {path: documentOpens.path_at(index), name: name, sequence: sequence, previous: tabs.currentIndex, token: documentOpens.token_at(index)}
             tabs.currentIndex = index
         }
-    }
+    } } }
     function initializeSequence(document) {
         const pending = window.pendingSequence
         if (!pending || pending.path !== document.path) return
@@ -517,10 +520,10 @@ ApplicationWindow {
         if (error.length) {
             window.removeDocument(document.index)
             tabs.currentIndex = pending.previous
-            newSequenceDialog.validationMessage = error
+            newSequenceDialog.dialog().validationMessage = error
             return
         }
-        newSequenceDialog.accept()
+        newSequenceDialog.dialog().accept()
         Qt.callLater(() => { window.refreshCurrent(); document.view.forceActiveFocus() })
     }
     Command {
@@ -528,7 +531,7 @@ ApplicationWindow {
         commandId: "file.open"
         iconName: "open"
         defaultShortcut: "Ctrl+O"
-        onTriggered: openDialog.open()
+        onTriggered: openDialog.dialog().open()
     }
     Command {
         id: saveCommand
@@ -562,7 +565,7 @@ ApplicationWindow {
         id: aboutCommand
         commandId: "help.about"
         iconName: "info"
-        onTriggered: about.open()
+        onTriggered: about.dialog().open()
     }
 
     Command {
@@ -624,33 +627,35 @@ ApplicationWindow {
     property string frozenDraft: ""
     property string frozenDraftRevision: ""
     property string frozenDraftKey: ""
-    DocumentRecordDialog {
-        id: documentRecord
+    OnDemand { id: documentRecord; sourceComponent: Component { DocumentRecordDialog {
+        id: documentRecordItem
         service: provenance
         documentPath: window.currentPath
         controller: window.current
         onCopyText: text => clipboard.put(text)
-        onExportReport: snapshot => { window.frozenReport = snapshot; reportFolder.open() }
-        onSaveDraft: (text, revision) => { window.frozenDraft = text; window.frozenDraftRevision = revision; window.frozenDraftKey = documentRecord.draftKey; authoredFile.open() }
+        onExportReport: snapshot => { window.frozenReport = snapshot; reportFolder.dialog().open() }
+        onSaveDraft: (text, revision) => { window.frozenDraft = text; window.frozenDraftRevision = revision; window.frozenDraftKey = documentRecordItem.draftKey; authoredFile.dialog().open() }
         onVerify: verifyProvenanceCommand.trigger()
         onPackageRecord: packageCommand.trigger()
         onOpenRecordFolder: showProvenanceCommand.trigger()
-    }
-    FolderDialog {
-        id: reportFolder
+    } } }
+
+    OnDemand { id: reportFolder; sourceComponent: Component { FolderDialog {
+        id: reportFolderItem
         title: "Export the selected revision's report"
-        onAccepted: { provenance.export_report(window.frozenReport, shell.local_file_path(selectedFolder)); provenanceDialog.open() }
-    }
-    FileDialog {
-        id: authoredFile
+        onAccepted: { provenance.export_report(window.frozenReport, shell.local_file_path(selectedFolder)); provenanceDialog.dialog().open() }
+    } } }
+
+    OnDemand { id: authoredFile; sourceComponent: Component { FileDialog {
+        id: authoredFileItem
         title: "Save authored methods draft"
         fileMode: FileDialog.SaveFile
         nameFilters: ["Markdown (*.md)"]
         onAccepted: {
             if (provenance.save_authored(shell.local_file_path(selectedFile), window.frozenDraft, window.frozenDraftRevision))
-                documentRecord.markDraftSaved(window.frozenDraftKey, window.frozenDraft)
+                documentRecord.dialog().markDraftSaved(window.frozenDraftKey, window.frozenDraft)
         }
-    }
+    } } }
     OnDemand {
         id: tasksWindow
         sourceComponent: Component {
@@ -668,20 +673,20 @@ ApplicationWindow {
     property string provenanceExport: ""
     function inspectProvenance(operation) {
         provenanceExport = ""
-        provenanceDialog.open()
+        provenanceDialog.dialog().open()
         provenance.start(operation, window.savedRecordPath, "")
     }
     function exportProvenance(operation) {
         provenanceSource = window.savedRecordPath
         provenanceExport = operation
-        provenanceFolder.open()
+        provenanceFolder.dialog().open()
     }
     Command {
         id: historyCommand
         commandId: "provenance.history"
         iconName: "history"
         enabled: window.current !== null && !provenance.busy
-        onTriggered: documentRecord.showPage(0)
+        onTriggered: documentRecord.dialog().showPage(0)
     }
     Command {
         id: methodsCommand
@@ -690,7 +695,7 @@ ApplicationWindow {
         iconName: "methods-export"
         tooltip: window.current === null ? "Open a document to read its methods" : provenance.busy ? "Wait for the current provenance operation" : "Read methods for the current document, including unsaved changes"
         enabled: window.current !== null && !provenance.busy
-        onTriggered: { documentRecord.savedRevision = false; documentRecord.showPage(1) }
+        onTriggered: { documentRecord.dialog().savedRevision = false; documentRecord.dialog().showPage(1) }
     }
     Command {
         id: showProvenanceCommand
@@ -700,7 +705,7 @@ ApplicationWindow {
         onTriggered: {
             const folder = provenance.bundle_path(window.savedRecordPath)
             if (folder.length) Qt.openUrlExternally(shell.local_file_url(folder))
-            else provenanceDialog.open()
+            else provenanceDialog.dialog().open()
         }
     }
     Command {
@@ -721,49 +726,51 @@ ApplicationWindow {
         iconName: "open"
         enabled: !provenance.busy
         onTriggered: {
-            recoveryPicker.sessions = JSON.parse(provenance.recovery_sessions())
-            recoveryPicker.open()
+            recoveryPicker.dialog().sessions = JSON.parse(provenance.recovery_sessions())
+            recoveryPicker.dialog().open()
         }
     }
-    AppFormDialog {
-        id: recoveryPicker
+    OnDemand { id: recoveryPicker; sourceComponent: Component { AppFormDialog {
+        id: recoveryPickerItem
         title: "Recover unsaved work"
         standardButtons: Dialog.Close
         property var sessions: []
         initialFocusItem: recoveryChoice
         Label { text: "Recovery creates copies in a new directory using the unchanged original or a retained recovery file. Originals and journals are preserved."; wrapMode: Text.Wrap; Layout.fillWidth: true }
-        Label { visible: !recoveryPicker.sessions.length; text: provenance.message.startsWith("fail:") ? provenance.message : "No recovery sessions are available."; wrapMode: Text.Wrap; Layout.fillWidth: true }
+        Label { visible: !recoveryPickerItem.sessions.length; text: provenance.message.startsWith("fail:") ? provenance.message : "No recovery sessions are available."; wrapMode: Text.Wrap; Layout.fillWidth: true }
         AppComboBox {
             id: recoveryChoice
             Kirigami.FormData.label: "Session:"
             Layout.fillWidth: true
-            model: recoveryPicker.sessions.map(session => session.name + " — " + session.id)
+            model: recoveryPickerItem.sessions.map(session => session.name + " — " + session.id)
             enabled: model.length > 0
         }
         AppButton {
             text: "Choose recovery destination…"
-            enabled: recoveryChoice.currentIndex >= 0 && recoveryPicker.sessions.length > 0
+            enabled: recoveryChoice.currentIndex >= 0 && recoveryPickerItem.sessions.length > 0
             onClicked: {
-                window.provenanceSource = recoveryPicker.sessions[recoveryChoice.currentIndex].path
+                window.provenanceSource = recoveryPickerItem.sessions[recoveryChoice.currentIndex].path
                 window.provenanceExport = "recover"
-                recoveryPicker.close()
-                provenanceFolder.open()
+                recoveryPickerItem.close()
+                provenanceFolder.dialog().open()
             }
         }
-    }
-    FolderDialog {
-        id: provenanceFolder
+    } } }
+
+    OnDemand { id: provenanceFolder; sourceComponent: Component { FolderDialog {
+        id: provenanceFolderItem
         title: window.provenanceExport === "methods" ? "Choose the folder for generated reports" : window.provenanceExport === "recover" ? "Choose the parent folder for recovered copies" : "Choose the parent folder for a new reproduction package"
         onAccepted: {
             let destination = shell.local_file_path(selectedFolder)
             if (window.provenanceExport === "package") destination += "/" + window.fileName(window.provenanceSource) + ".reproduction"
             if (window.provenanceExport === "recover") destination += "/" + window.fileName(window.provenanceSource) + ".recovered"
-            provenanceDialog.open()
+            provenanceDialog.dialog().open()
             provenance.start(window.provenanceExport, window.provenanceSource, destination)
         }
-    }
-    AppDialog {
-        id: provenanceDialog
+    } } }
+
+    OnDemand { id: provenanceDialog; sourceComponent: Component { AppDialog {
+        id: provenanceDialogItem
         title: window.provenanceExport === "recover" ? "Recovered work" : "Saved files and exports"
         implicitWidth: 860
         implicitHeight: 600
@@ -785,7 +792,7 @@ ApplicationWindow {
                 TextArea { id: provenanceText; text: provenance.text; readOnly: true; selectByMouse: true; wrapMode: TextEdit.Wrap; Accessible.name: "Recorded provenance and verification results" }
             }
         }
-    }
+    } } }
     OnDemand { id: preferencesWindow; sourceComponent: Component { PreferencesDialog { id: preferencesDialog; settings: preferences; commands: window.applicationCommands; defaultFontSizePoints: window.defaultFontSizePoints; onContactDetailsRequested: window.showContacts() } } }
 
     // The one list of commands: keys, scopes, icons and why one is unavailable.
@@ -846,7 +853,7 @@ ApplicationWindow {
         RibbonButton { commandId: "species.asap-" + speciesMethods.commandSuffix; iconName: "matrix-asap"; enabled: (window.alignmentOpen || (window.delimitationOpen && window.current && window.current.linked_alignment.length > 0)) && speciesMethods.canRun; onInvoked: window.beginDelimitation("asap") }
         RibbonButton { commandId: "species.ptp-" + speciesMethods.commandSuffix; iconName: "phylogram-ptp"; enabled: speciesMethods.canRun; onInvoked: window.beginDelimitation("ptp") }
         RibbonButton { commandId: "species.manual-" + speciesMethods.commandSuffix; iconName: "hypothesis-manual"; enabled: speciesMethods.canRun; onInvoked: window.beginDelimitation("manual") }
-        RibbonButton { commandId: "species.combine-" + speciesMethods.commandSuffix; iconName: "hypothesis-combine"; onInvoked: combinePicker.open() }
+        RibbonButton { commandId: "species.combine-" + speciesMethods.commandSuffix; iconName: "hypothesis-combine"; onInvoked: combinePicker.dialog().open() }
     }
     component HelpGroup: RibbonHelpGroup {
         methodsAction: methodsCommand
@@ -869,7 +876,7 @@ ApplicationWindow {
                 wrapMode: Text.Wrap
                 Accessible.role: Accessible.AlertMessage
             }
-            AppButton { text: "Details…"; onClicked: preferencesError.open() }
+            AppButton { text: "Details…"; onClicked: preferencesError.dialog().open() }
         }
         Label {
             visible: preferences.project_error.length > 0
@@ -989,7 +996,7 @@ ApplicationWindow {
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
                         title: "Species workspaces"
-                        RibbonButton { commandId: "species.combine-project"; iconName: "hypothesis-combine"; enabled: true; onInvoked: combinePicker.open() }
+                        RibbonButton { commandId: "species.combine-project"; iconName: "hypothesis-combine"; enabled: true; onInvoked: combinePicker.dialog().open() }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup { title: "Document record"; actions: [historyCommand, methodsCommand] }
@@ -1134,13 +1141,13 @@ ApplicationWindow {
                             text: "ORFs"
                             tip: "Annotate open reading frames"
                             enabled: window.current && !window.current.busy
-                            onInvoked: orfDialog.search(false)
+                            onInvoked: orfDialog.dialog().search(false)
                         }
                         RibbonButton { commandId: "ribbon.annotate-protein-coding-genes-with-prodigal";
                             text: "Prodigal"
                             tip: "Annotate protein-coding genes with Prodigal"
                             enabled: window.current && !window.current.busy
-                            onInvoked: genesDialog.predict(false)
+                            onInvoked: genesDialog.dialog().predict(false)
                         }
                     }
                     Item { Layout.fillWidth: true }
@@ -1192,7 +1199,7 @@ ApplicationWindow {
                         title: "Rows"
                         RibbonButton { commandId: "ribbon.move-the-selected-rows-up"; iconName: "up"; keys: "Alt+↑"; onInvoked: window.current.move_rows(true) }
                         RibbonButton { commandId: "ribbon.move-the-selected-rows-down"; iconName: "down"; keys: "Alt+↓"; onInvoked: window.current.move_rows(false) }
-                        RibbonButton { commandId: "ribbon.rename-the-cursor-s-row"; Accessible.name: tip; keys: "F2"; onInvoked: renameDialog.askRow() }
+                        RibbonButton { commandId: "ribbon.rename-the-cursor-s-row"; Accessible.name: tip; keys: "F2"; onInvoked: renameDialog.dialog().askRow() }
                         RibbonButton { commandId: "ribbon.delete-the-selected-rows"; iconName: "delete"; onInvoked: window.current.remove_rows() }
                     }
                     ToolSeparator { Layout.fillHeight: true }
@@ -1270,8 +1277,8 @@ ApplicationWindow {
                     TreeStyleGroup {
                         controller: window.treeOpen ? window.current : null
                         customization: window.customization
-                        onExtraRequested: treeStyle.openStyle("extra")
-                        onLabelsRequested: metadataTipLabels.show(window.current, window.currentPath)
+                        onExtraRequested: treeStyle.dialog().openStyle("extra")
+                        onLabelsRequested: metadataTipLabels.dialog().show(window.current, window.currentPath)
                         Component.onCompleted: commands.forEach(command => window.registerRibbonCommand(command))
                     }
                     ToolSeparator { Layout.fillHeight: true }
@@ -1282,7 +1289,7 @@ ApplicationWindow {
                         id: supportGroup
                         title: "Support"
                         readonly property bool hasSupport: window.treeOpen && window.current !== null && window.current.has_support === true
-                        RibbonButton { commandId: "ribbon.add-support-values-from-another-analysis-of-the-same"; onInvoked: supportFile.open() }
+                        RibbonButton { commandId: "ribbon.add-support-values-from-another-analysis-of-the-same"; onInvoked: supportFile.dialog().open() }
                         RibbonNumberField {
                             objectName: "supportFont"
                             label: "Size"
@@ -1293,14 +1300,14 @@ ApplicationWindow {
                             enabled: supportGroup.hasSupport
                             onEdited: value => window.current.set_sizes(0, value, 0)
                         }
-                        RibbonButton { commandId: "ribbon.which-support-values-show-circles-at-nodes-sizes"; iconName: "support-style"; enabled: supportGroup.hasSupport; onInvoked: treeStyle.openStyle("support") }
+                        RibbonButton { commandId: "ribbon.which-support-values-show-circles-at-nodes-sizes"; iconName: "support-style"; enabled: supportGroup.hasSupport; onInvoked: treeStyle.dialog().openStyle("support") }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     TreeAlignmentGroup {
                         controller: window.treeOpen ? window.current : null
                         captions: commandList
                         customization: window.customization
-                        onLinkRequested: (target) => linkAlignmentFile.ask(target)
+                        onLinkRequested: (target) => linkAlignmentFile.dialog().ask(target)
                         Component.onCompleted: commands.forEach(command => window.registerRibbonCommand(command))
                     }
                     Item { Layout.fillWidth: true }
@@ -1322,7 +1329,7 @@ ApplicationWindow {
                                 text: modelData.label
                                 enabled: window.current !== null && !window.current.busy
                                 tip: modelData.value === "matrix" ? "Save observed distances as TSV and a reusable cache" : modelData.value === "upgma" ? "Build a rooted, equal-rate UPGMA tree" : "Build a neighbor-joining tree"
-                                onInvoked: toolSettings.show(window.current, "distance", modelData.value)
+                                onInvoked: toolSettings.dialog().show(window.current, "distance", modelData.value)
                             }
                         }
                     }
@@ -1336,14 +1343,14 @@ ApplicationWindow {
                             text: window.current && window.current.busy ? "Running" : "FastTree"
                             enabled: window.current !== null && !window.current.busy
                             tip: "Infer a tree with FastTree: choose the model, rate variation and support values"
-                            onInvoked: toolSettings.show(window.current, "fasttree", "tree")
+                            onInvoked: toolSettings.dialog().show(window.current, "fasttree", "tree")
                         }
                         RibbonButton { commandId: "ribbon.select-a-model-and-infer-a-maximum-likelihood-tree";
                             iconName: "tree-infer"
                             text: "IQ-TREE"
                             enabled: window.current !== null && !window.current.busy
                             tip: "Infer a maximum-likelihood tree: choose the model, rate variation and branch support"
-                            onInvoked: toolSettings.show(window.current, "iqtree", "tree")
+                            onInvoked: toolSettings.dialog().show(window.current, "iqtree", "tree")
                         }
                     }
                     Item { Layout.fillWidth: true }
@@ -1353,7 +1360,7 @@ ApplicationWindow {
                     SpeciesMethodsGroup { commandSuffix: "workspace" }
                     RibbonGroup {
                         title: "Specimens"
-                        RibbonButton { commandId: "species.roster-links"; iconName: "matrix"; enabled: window.speciesView !== null && specimenMetadata.available; onInvoked: rosterConsumer.show(window.current, window.currentPath) }
+                        RibbonButton { commandId: "species.roster-links"; iconName: "matrix"; enabled: window.speciesView !== null && specimenMetadata.available; onInvoked: rosterConsumer.dialog().show(window.current, window.currentPath) }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
@@ -1369,9 +1376,9 @@ ApplicationWindow {
                         scope: "species"
                         controller: window.speciesTree
                         customization: window.customization
-                        onExtraRequested: treeStyle.openStyle("extra")
+                        onExtraRequested: treeStyle.dialog().openStyle("extra")
                         Component.onCompleted: commands.forEach(command => window.registerRibbonCommand(command))
-                        RibbonButton { commandId: "species.support-style"; iconName: "support-style"; enabled: window.speciesTree !== null && window.speciesTree.has_support; onInvoked: treeStyle.openStyle("support") }
+                        RibbonButton { commandId: "species.support-style"; iconName: "support-style"; enabled: window.speciesTree !== null && window.speciesTree.has_support; onInvoked: treeStyle.dialog().openStyle("support") }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
@@ -1457,23 +1464,23 @@ ApplicationWindow {
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
                         title: "Zenodo"
-                        RibbonButton { commandId: "export.zenodo"; iconName: "save-as"; tip: shell.project_dir.length ? "Prepare selected saved files for a Zenodo draft" : "Choose a project folder first"; enabled: shell.project_dir.length > 0; onInvoked: { const zenodo = zenodoWindow.item; if (zenodo && (zenodo.ready || zenodoJobs.busy || zenodo.attempted)) zenodo.open(); else zenodoPicker.open() } }
+                        RibbonButton { commandId: "export.zenodo"; iconName: "save-as"; tip: shell.project_dir.length ? "Prepare selected saved files for a Zenodo draft" : "Choose a project folder first"; enabled: shell.project_dir.length > 0; onInvoked: { const zenodo = zenodoWindow.item; if (zenodo && (zenodo.ready || zenodoJobs.busy || zenodo.attempted)) zenodo.open(); else zenodoPicker.dialog().open() } }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
                         title: "Specimens"
-                        RibbonButton { commandId: "metadata.table"; iconName: "matrix"; tip: shell.project_dir.length ? "The project's specimens, identifications and collection data" : "Choose a project folder first"; enabled: shell.project_dir.length > 0; onInvoked: specimenTable.open() }
+                        RibbonButton { commandId: "metadata.table"; iconName: "matrix"; tip: shell.project_dir.length ? "The project's specimens, identifications and collection data" : "Choose a project folder first"; enabled: shell.project_dir.length > 0; onInvoked: specimenTable.dialog().open() }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
                         title: "Import"
                         RibbonButton { commandId: "metadata.import-headers"; iconName: "text-representation"; tip: window.metadataFasta.length ? "Read specimen IDs, taxa and values from this file's FASTA headers" : "Open a FASTA file first"; enabled: shell.project_dir.length > 0 && window.metadataFasta.length > 0; onInvoked: window.beginMetadataImport("headers", window.metadataFasta) }
-                        RibbonButton { commandId: "metadata.import-sheet"; iconName: "add-file"; enabled: shell.project_dir.length > 0; onInvoked: metadataSheetPicker.open() }
+                        RibbonButton { commandId: "metadata.import-sheet"; iconName: "add-file"; enabled: shell.project_dir.length > 0; onInvoked: metadataSheetPicker.dialog().open() }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
                         title: "Records"
-                        RibbonButton { commandId: "metadata.template"; iconName: "new-file"; tip: window.metadataFasta.length ? "Save an .ods sheet with a row per record of this file, to fill in" : "Open a FASTA file first"; enabled: shell.project_dir.length > 0 && window.metadataFasta.length > 0; onInvoked: metadataTemplateDestination.open() }
+                        RibbonButton { commandId: "metadata.template"; iconName: "new-file"; tip: window.metadataFasta.length ? "Save an .ods sheet with a row per record of this file, to fill in" : "Open a FASTA file first"; enabled: shell.project_dir.length > 0 && window.metadataFasta.length > 0; onInvoked: metadataTemplateDestination.dialog().open() }
                         Label {
                             objectName: "metadataLinkStatus"
                             visible: window.metadataLinks.records !== undefined
@@ -1487,7 +1494,7 @@ ApplicationWindow {
                     RibbonGroup {
                         title: "GenBank"
                         RibbonButton { commandId: "submission.new"; iconName: "new-file"; tip: window.submissionAlignment.length ? "Prepare a GenBank submission from this alignment" : "Open the marker alignment first"; enabled: shell.project_dir.length > 0 && window.submissionAlignment.length > 0; onInvoked: window.startSubmission() }
-                        RibbonButton { commandId: "submission.open"; iconName: "open"; enabled: shell.project_dir.length > 0; onInvoked: submissionPicker.open() }
+                        RibbonButton { commandId: "submission.open"; iconName: "open"; enabled: shell.project_dir.length > 0; onInvoked: submissionPicker.dialog().open() }
                         RibbonButton { commandId: "submission.prepare"; iconName: "edit"; tip: submissions.available ? "Rows, batch settings, reading frames, issues, package and accessions" : "Start or open a submission first"; enabled: submissions.available; onInvoked: window.showSubmission() }
                         RibbonButton { commandId: "submission.validate"; iconName: "accept"; enabled: submissions.available && !submissionJobs.busy; onInvoked: window.validateSubmission() }
                         RibbonButton { commandId: "submission.submitter"; iconName: "project"; onInvoked: window.showContacts() }
@@ -1499,15 +1506,15 @@ ApplicationWindow {
     }
 
     // Settings for every plugin run, drawn from the plugin's manifest.
-    ToolSettingsDialog { id: toolSettings }
+    OnDemand { id: toolSettings; sourceComponent: Component { ToolSettingsDialog { id: toolSettingsItem } } }
     OnDemand { id: operationWindow; sourceComponent: Component { OperationPickerDialog { id: operationPicker; onOpenResult: (path) => window.openPath(path) } } }
 
     OnDemand { id: shortcutsWindow; sourceComponent: Component { ShortcutsDialog { id: shortcuts; commands: window.applicationCommands } } }
 
     AppOperations { id: zenodoJobs; onBusyChanged: if (!busy && zenodoWindow.item) zenodoWindow.item.completed() }
-    OnDemand { id: zenodoWindow; sourceComponent: Component { ZenodoDialog { id: zenodoDialog; backend: zenodoJobs; onChooseFiles: zenodoPicker.open() } } }
-    FileDialog {
-        id: zenodoPicker
+    OnDemand { id: zenodoWindow; sourceComponent: Component { ZenodoDialog { id: zenodoDialog; backend: zenodoJobs; onChooseFiles: zenodoPicker.dialog().open() } } }
+    OnDemand { id: zenodoPicker; sourceComponent: Component { FileDialog {
+        id: zenodoPickerItem
         title: "Choose saved files for a Zenodo draft"
         fileMode: FileDialog.OpenFiles
         currentFolder: window.activeFolder()
@@ -1519,7 +1526,7 @@ ApplicationWindow {
             }
             zenodoWindow.dialog().show(Array.from(selectedFiles, url => shell.local_file_path(url)), shell.project_dir, defaults)
         }
-    }
+    } } }
 
     // The project's specimen metadata (Export tab). It follows the
     // project folder; opening a project never creates metadata files.
@@ -1542,14 +1549,14 @@ ApplicationWindow {
         return names
     }
     function beginMetadataImport(kind, path) {
-        if (!specimenMetadata.available && !specimenMetadata.create()) { specimenTable.open(); return }
+        if (!specimenMetadata.available && !specimenMetadata.create()) { specimenTable.dialog().open(); return }
         const data = kind === "headers" ? JSON.parse(specimenMetadata.header_preview(path, "|"))
             : JSON.parse(specimenMetadata.sheet_preview(path))
-        metadataImport.separator = "|"
-        metadataImport.show(kind, path, data, metadataColumns(), metadataTable.patterns)
+        metadataImport.dialog().separator = "|"
+        metadataImport.dialog().show(kind, path, data, metadataColumns(), metadataTable.patterns)
     }
-    SpecimenTableDialog {
-        id: specimenTable
+    OnDemand { id: specimenTable; sourceComponent: Component { SpecimenTableDialog {
+        id: specimenTableItem
         table: window.metadataTable
         canUndo: specimenMetadata.can_undo
         canRedo: specimenMetadata.can_redo
@@ -1563,19 +1570,20 @@ ApplicationWindow {
         onColumnAdded: name => specimenMetadata.add_column(name)
         onUndoRequested: specimenMetadata.undo()
         onRedoRequested: specimenMetadata.redo()
-    }
-    MetadataImportDialog {
-        id: metadataImport
-        onPreviewRequested: separator => metadataImport.setPreview(JSON.parse(specimenMetadata.header_preview(metadataImport.file, separator)))
+    } } }
+
+    OnDemand { id: metadataImport; sourceComponent: Component { MetadataImportDialog {
+        id: metadataImportItem
+        onPreviewRequested: separator => metadataImportItem.setPreview(JSON.parse(specimenMetadata.header_preview(metadataImportItem.file, separator)))
         onPlanRequested: (separator, roles, createSpecimens, overwrite) => {
-            const ok = metadataImport.mode === "headers"
-                ? specimenMetadata.plan_headers(metadataImport.file, separator, roles, createSpecimens, overwrite)
-                : specimenMetadata.plan_sheet(metadataImport.file, roles, metadataImport.preview.has_document ? "" : window.metadataFasta, createSpecimens, overwrite)
-            if (!ok) { metadataImport.message = specimenMetadata.message; return }
-            metadataImport.close()
-            metadataReview.show(JSON.parse(specimenMetadata.plan), metadataImport.mode === "headers" ? "pattern" : "mapping")
+            const ok = metadataImportItem.mode === "headers"
+                ? specimenMetadata.plan_headers(metadataImportItem.file, separator, roles, createSpecimens, overwrite)
+                : specimenMetadata.plan_sheet(metadataImportItem.file, roles, metadataImportItem.preview.has_document ? "" : window.metadataFasta, createSpecimens, overwrite)
+            if (!ok) { metadataImportItem.message = specimenMetadata.message; return }
+            metadataImportItem.close()
+            metadataReview.dialog().show(JSON.parse(specimenMetadata.plan), metadataImportItem.mode === "headers" ? "pattern" : "mapping")
         }
-    }
+    } } }
     // GenBank marker submissions (Export tab). table2asn runs as a
     // registered operation on its own job runner, like BLAST.
     SubmissionController { id: submissions; onOpened: success => { if (success) window.showSubmission() } }
@@ -1592,7 +1600,7 @@ ApplicationWindow {
     }
     function startSubmission() {
         const file = submissionAlignment.split("/").pop()
-        submissionName.ask("Start a GenBank submission", "Submission name", file.replace(/\.[^.]*$/, ""), name => {
+        submissionName.dialog().ask("Start a GenBank submission", "Submission name", file.replace(/\.[^.]*$/, ""), name => {
             if (!submissions.create(submissionAlignment, name)) return submissions.message
             showSubmission()
             return ""
@@ -1608,7 +1616,7 @@ ApplicationWindow {
         if (request.length) submissionJobs.submit(shell.project_dir, request)
         if (!submissionWindow.item || !submissionWindow.item.opened) showSubmission()
     }
-    TextPromptDialog { id: submissionName }
+    OnDemand { id: submissionName; sourceComponent: Component { TextPromptDialog { id: submissionNameItem } } }
     OnDemand {
         id: submissionWindow
         sourceComponent: Component {
@@ -1651,65 +1659,73 @@ ApplicationWindow {
                     submissionDialog.accessionPlan = plan.length ? JSON.parse(plan) : null
                 }
                 onAccessionsRecordRequested: accessions => submissions.record_accessions(accessions)
-                onAccessionTableRequested: accessionTableDestination.open()
+                onAccessionTableRequested: accessionTableDestination.dialog().open()
             }
         }
     }
-    OnDemand { id: firstLaunch; objectName: "firstLaunch"; sourceComponent: Component { FirstLaunchDialog { settings: preferences; defaultFontSizePoints: window.defaultFontSizePoints } } }
+    OnDemand { id: firstLaunch; objectName: "firstLaunch"; sourceComponent: Component { PreferencesDialog { welcome: true; settings: preferences; commands: []; defaultFontSizePoints: window.defaultFontSizePoints } } }
     // Opted in at first launch or in Preferences: ask GitHub for the latest
     // release once per start and say if it is newer.
     function checkRelease() {
+        const url = preferences.release_url()
+        if (!url.length) return
         const request = new XMLHttpRequest()
         request.onreadystatechange = () => {
             if (request.readyState !== XMLHttpRequest.DONE || request.status !== 200) return
             const notice = preferences.release_notice(request.responseText)
             if (notice.length) provenance.notification("", notice, "notify")
         }
-        request.open("GET", preferences.release_url())
+        request.timeout = 10000
+        request.open("GET", url)
         request.send()
     }
     // One contact-details dialog: the GenBank submitter, then other services.
     function showContacts() {
         const prefs = JSON.parse(preferences.snapshot || "{}")
-        submitterDialog.show(prefs.submitter, (prefs.contacts || {}).service_emails)
+        submitterDialog.dialog().show(prefs.submitter, (prefs.contacts || {}).service_emails)
     }
-    SubmitterDialog {
-        id: submitterDialog
+    OnDemand { id: submitterDialog; sourceComponent: Component { SubmitterDialog {
+        id: submitterDialogItem
         onSaved: (value, services) => {
             preferences.update("submitter", JSON.stringify(value))
             preferences.update("serviceEmail", JSON.stringify({service: "blast", email: services.blast}))
             if (submissions.available) submissions.refresh_review()
         }
-    }
-    FileDialog {
-        id: submissionPicker
+    } } }
+
+    OnDemand { id: submissionPicker; sourceComponent: Component { FileDialog {
+        id: submissionPickerItem
         title: "Open a GenBank submission"
         onVisibleChanged: if (visible) currentFolder = window.activeFolder()
         nameFilters: ["Submissions (*.submission.json)"]
         onAccepted: submissions.open(shell.local_file_path(selectedFile))
-    }
-    FileDialog {
-        id: accessionTableDestination
+    } } }
+
+    OnDemand { id: accessionTableDestination; sourceComponent: Component { FileDialog {
+        id: accessionTableDestinationItem
         title: "Save the accession table"
         fileMode: FileDialog.SaveFile
         defaultSuffix: "tsv"
         nameFilters: ["Tab-separated table (*.tsv)"]
         onAccepted: submissions.write_accession_table(shell.local_file_path(selectedFile))
-    }
-    MetadataReviewDialog {
-        id: metadataReview
+    } } }
+
+    OnDemand { id: metadataReview; sourceComponent: Component { MetadataReviewDialog {
+        id: metadataReviewItem
         onApplyRequested: remember => specimenMetadata.apply_plan(remember)
         onDropped: specimenMetadata.clear_plan()
-    }
-    FileDialog {
-        id: metadataSheetPicker
+    } } }
+
+    OnDemand { id: metadataSheetPicker; sourceComponent: Component { FileDialog {
+        id: metadataSheetPickerItem
         title: "Import specimen data from a spreadsheet"
         onVisibleChanged: if (visible) currentFolder = window.activeFolder()
         nameFilters: ["Spreadsheets (*.ods *.xlsx *.xls *.csv *.tsv)", "All files (*)"]
         onAccepted: window.beginMetadataImport("sheet", shell.local_file_path(selectedFile))
-    }
-    FileDialog {
-        id: metadataTemplateDestination
+    } } }
+
+    OnDemand { id: metadataTemplateDestination; sourceComponent: Component { FileDialog {
+        id: metadataTemplateDestinationItem
         title: "Save the specimen data template"
         fileMode: FileDialog.SaveFile
         defaultSuffix: "ods"
@@ -1718,10 +1734,10 @@ ApplicationWindow {
             if (!specimenMetadata.available) specimenMetadata.create()
             specimenMetadata.write_template(window.metadataFasta, shell.local_file_path(selectedFile))
         }
-    }
+    } } }
 
-    AppContentDialog {
-        id: orfDialog
+    OnDemand { id: orfDialog; sourceComponent: Component { AppContentDialog {
+        id: orfDialogItem
         initialFocusItem: codons
         property bool inSelection: false
         property var source: null
@@ -1738,7 +1754,7 @@ ApplicationWindow {
         onOpened: codons.forceActiveFocus()
         onAccepted: {
             window.orfMinCodons = codons.value
-            if (source && source.file_path === sourcePath && !source.busy) source.find_orfs(codons.value, orfDialog.inSelection)
+            if (source && source.file_path === sourcePath && !source.busy) source.find_orfs(codons.value, orfDialogItem.inSelection)
         }
         body: ColumnLayout {
             spacing: 8
@@ -1753,8 +1769,8 @@ ApplicationWindow {
                     stepSize: 10
                     editable: true
                     value: window.orfMinCodons
-                    Keys.onReturnPressed: orfDialog.accept()
-                    Keys.onEnterPressed: orfDialog.accept()
+                    Keys.onReturnPressed: orfDialogItem.accept()
+                    Keys.onEnterPressed: orfDialogItem.accept()
                 }
                 Label { text: "codons, start to stop" }
             }
@@ -1763,10 +1779,10 @@ ApplicationWindow {
                 opacity: 0.7
             }
         }
-    }
+    } } }
 
-    AppContentDialog {
-        id: genesDialog
+    OnDemand { id: genesDialog; sourceComponent: Component { AppContentDialog {
+        id: genesDialogItem
         initialFocusItem: codeBox
         property bool inSelection: false
         property var source: null
@@ -1796,8 +1812,8 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     model: geneticCodes
                     textRole: "label"
-                    Keys.onReturnPressed: genesDialog.accept()
-                    Keys.onEnterPressed: genesDialog.accept()
+                    Keys.onReturnPressed: genesDialogItem.accept()
+                    Keys.onEnterPressed: genesDialogItem.accept()
                 }
             }
             Label {
@@ -1833,22 +1849,22 @@ ApplicationWindow {
             ListElement { code: 32; label: "32  Balanophoraceae plastid" }
             ListElement { code: 33; label: "33  Cephalodiscidae mitochondrial" }
         }
-    }
+    } } }
 
-    AboutDialog {
-        id: about
+    OnDemand { id: about; sourceComponent: Component { AboutDialog {
+        id: aboutItem
         version: shell.version()
         backgroundColor: shell.background
         onShortcutsRequested: shortcutsCommand.trigger()
-    }
+    } } }
 
-    FileDialog {
-        id: openDialog
+    OnDemand { id: openDialog; sourceComponent: Component { FileDialog {
+        id: openDialogItem
         title: "Open a sequence, alignment, trace, review or tree"
         onVisibleChanged: if (visible) currentFolder = window.activeFolder()
         nameFilters: ["Sequences, alignments, traces and trees (*.gb *.gbk *.genbank *.gbff *.fasta *.fa *.fna *.fas *.ffn *.faa *.afa *.ab1 *.abi *.json *.nwk *.newick *.tre *.tree *.trees *.treefile *.contree *.nex *.nexus *.nxs)", "All files (*)"]
         onAccepted: window.openPath(shell.local_file_path(selectedFile))
-    }
+    } } }
 
     function saveTarget(owner, path, continuation) {
         evidenceSave.request = {owner: owner, continuation: continuation}
@@ -1884,10 +1900,10 @@ ApplicationWindow {
         if (!owner) return
         const index = documentOpens.target_index(owner.token, owner.path)
         if (documentOpens.save_step(index, true) === "trace") { window.documentAt(index).saveReview(); return }
-        saveDialog.target = owner
-        saveDialog.continuation = continuation
-        saveDialog.selectedFile = shell.local_file_url(owner.path.startsWith("untitled:") ? window.fileName(owner.path) : owner.path)
-        saveDialog.open()
+        saveDialog.dialog().target = owner
+        saveDialog.dialog().continuation = continuation
+        saveDialog.dialog().selectedFile = shell.local_file_url(owner.path.startsWith("untitled:") ? window.fileName(owner.path) : owner.path)
+        saveDialog.dialog().open()
     }
 
     Shortcut { sequence: "Ctrl+Q"; onActivated: window.close() }
@@ -1897,8 +1913,8 @@ ApplicationWindow {
     // field being edited keeps its own. Trace review has its own undo.
     Shortcut { sequence: "Ctrl+Z"; enabled: !(submissionWindow.item && submissionWindow.item.opened) && window.current !== null && !window.traceOpen; onActivated: window.current.undo() }
     Shortcut { sequences: ["Ctrl+Shift+Z", "Ctrl+Y"]; enabled: !(submissionWindow.item && submissionWindow.item.opened) && window.current !== null && !window.traceOpen; onActivated: window.current.redo() }
-    FileDialog {
-        id: saveDialog
+    OnDemand { id: saveDialog; sourceComponent: Component { FileDialog {
+        id: saveDialogItem
         objectName: "saveDocumentDialog"
         onRejected: { target = null; continuation = null }
         property var target: null
@@ -1914,7 +1930,7 @@ ApplicationWindow {
             continuation = null
             window.saveTarget(owner, path, next)
         }
-    }
+    } } }
 
     Component {
         id: projectDialogComponent
@@ -2151,14 +2167,14 @@ ApplicationWindow {
                                     function onReviewTraces(paths, reference) { window.startTraceReview(paths, reference, canvasLoader.item) }
                                     function onToggleInsert() { window.alignmentInsert = !window.alignmentInsert }
                                     function onContextMenu(info) {
-                                        if (canvasLoader.item.kind === "tree") treeMenu.showFor(canvasSlot.admittedController, info)
+                                        if (canvasLoader.item.kind === "tree") treeMenu.dialog().showFor(canvasSlot.admittedController, info)
                                         else if (canvasLoader.item.kind === "alignment") { alnMenu.info = info; alnMenu.popup() }
                                         else { menu.info = info; menu.popup() }
                                     }
                                     function onCopyText(text) { clipboard.put(text) }
                                     function onToggleSidebar() { window.sidebarOpen = !window.sidebarOpen }
-                                    function onRenameRow() { renameDialog.askRow() }
-                                    function onRenameTip() { tipDialog.ask() }
+                                    function onRenameRow() { renameDialog.dialog().askRow() }
+                                    function onRenameTip() { tipDialog.dialog().ask() }
                                     function onAnnotate() { cladeEditor.openSelected() }
                                     function onEditFeature(id) { editor.openFeature(id) }
                                     function onEditSelected() { editor.openSelected() }
@@ -2200,7 +2216,7 @@ ApplicationWindow {
                                 onContextMenu: (info) => { alnMenu.info = info; alnMenu.popup() }
                                 onCopyText: (text) => clipboard.put(text)
                                 onToggleSidebar: window.sidebarOpen = !window.sidebarOpen
-                                onRenameRow: renameDialog.askRow()
+                                onRenameRow: renameDialog.dialog().askRow()
                             }
                         }
                         DelegateChoice {
@@ -2213,9 +2229,9 @@ ApplicationWindow {
                                 notificationSink: provenance
                                 onOpenFile: (path) => window.openPath(path)
                                 onDirtyChanged: documentOpens.set_dirty(index, dirty)
-                                onContextMenu: (info) => treeMenu.showFor(treeDocument.controller, info)
+                                onContextMenu: (info) => treeMenu.dialog().showFor(treeDocument.controller, info)
                                 onToggleSidebar: window.sidebarOpen = !window.sidebarOpen
-                                onRenameTip: tipDialog.ask()
+                                onRenameTip: tipDialog.dialog().ask()
                                 onAnnotate: cladeEditor.openSelected()
                             }
                         }
@@ -2351,8 +2367,8 @@ ApplicationWindow {
         Item { text: "Extract as new sequence"; visible: !menu.onAnnotation; enabled: menu.info.selection; onTriggered: window.current.extract_selection() }
         Item { text: "Zoom to selection"; visible: !menu.onAnnotation; enabled: menu.info.selection; onTriggered: window.current.zoom_to_selection() }
         Item { text: "BLAST selection at NCBI"; visible: !menu.onAnnotation; enabled: menu.info.selection; onTriggered: window.beginBlast("selection") }
-        Item { text: "Find ORFs in selection…"; visible: !menu.onAnnotation; enabled: menu.info.selection && window.current && !window.current.busy; onTriggered: orfDialog.search(true) }
-        Item { text: "Predict genes in selection…"; visible: !menu.onAnnotation; enabled: menu.info.selection && window.current && !window.current.busy; onTriggered: genesDialog.predict(true) }
+        Item { text: "Find ORFs in selection…"; visible: !menu.onAnnotation; enabled: menu.info.selection && window.current && !window.current.busy; onTriggered: orfDialog.dialog().search(true) }
+        Item { text: "Predict genes in selection…"; visible: !menu.onAnnotation; enabled: menu.info.selection && window.current && !window.current.busy; onTriggered: genesDialog.dialog().predict(true) }
     }
 
     // Alignment context menu: what applies to the cells, rows or columns
@@ -2368,7 +2384,7 @@ ApplicationWindow {
         AlnItem { text: "Insert gap"; visible: alnMenu.cells; onTriggered: window.current.insert_gap() }
         AlnItem { text: "Remove gap to the left"; visible: alnMenu.cells; onTriggered: window.current.remove_gap() }
         AlnItem { text: "Delete " + alnMenu.info.rows + " × " + alnMenu.info.columns + " bases"; visible: alnMenu.cells; onTriggered: window.current.delete_selection() }
-        AlnItem { text: "Rename “" + alnMenu.info.rowName + "”…"; visible: alnMenu.info.rows === 1 && !alnMenu.columns; onTriggered: renameDialog.askRow() }
+        AlnItem { text: "Rename “" + alnMenu.info.rowName + "”…"; visible: alnMenu.info.rows === 1 && !alnMenu.columns; onTriggered: renameDialog.dialog().askRow() }
         AlnItem { text: "Move to top"; visible: alnMenu.rows; onTriggered: window.current.rows_to_top() }
         AlnItem { text: alnMenu.info.rows === 1 ? "Delete row" : "Delete " + alnMenu.info.rows + " rows"; visible: alnMenu.rows; onTriggered: window.current.remove_rows() }
         AlnItem { text: "Insert gap column"; visible: alnMenu.columns; onTriggered: window.current.insert_column() }
@@ -2378,28 +2394,28 @@ ApplicationWindow {
         AlnItem { text: "Copy as FASTA"; onTriggered: clipboard.put(window.current.selection_text()) }
     }
 
-    TextPromptDialog {
-        id: renameDialog
+    OnDemand { id: renameDialog; sourceComponent: Component { TextPromptDialog {
+        id: renameDialogItem
         function askRow() {
             if (window.alignmentOpen)
                 ask("Rename row", "Row name", window.current.row_name(), value => window.current.rename_row(value))
         }
-    }
+    } } }
 
     // Tree context menu: what applies to the clade or tip under the pointer.
-    TreeContextMenu {
-        id: treeMenu
+    OnDemand { id: treeMenu; sourceComponent: Component { TreeContextMenu {
+        id: treeMenuItem
         onNameRequested: (target, annotation, revision) => cladeEditor.openCaptured(target, annotation, revision, true)
-        onRenameTipRequested: (target, name, revision) => tipDialog.openCaptured(target, name, revision)
-        onRootPositionRequested: rootDialog.ask()
-        onSupportRequested: supportFile.open()
-        onStyleRequested: treeStyle.openStyle("extra")
-    }
+        onRenameTipRequested: (target, name, revision) => tipDialog.dialog().openCaptured(target, name, revision)
+        onRootPositionRequested: rootDialog.dialog().ask()
+        onSupportRequested: supportFile.dialog().open()
+        onStyleRequested: treeStyle.dialog().openStyle("extra")
+    } } }
 
     // Where the root sits along its branch: a share of the branch on each
     // side. Halfway after rerooting.
-    AppContentDialog {
-        id: rootDialog
+    OnDemand { id: rootDialog; sourceComponent: Component { AppContentDialog {
+        id: rootDialogItem
         initialFocusItem: rootShare
         property var info: ({ side: "", other: "", length: 0, share: 0.5 })
         title: "Root position"
@@ -2424,56 +2440,59 @@ ApplicationWindow {
             GridLayout {
                 columns: width < 600 ? 1 : 3
                 Layout.fillWidth: true
-                Label { text: rootDialog.info.side; elide: Text.ElideMiddle; Layout.preferredWidth: 200; Layout.minimumWidth: 0; Layout.fillWidth: true; horizontalAlignment: Text.AlignRight }
+                Label { text: rootDialogItem.info.side; elide: Text.ElideMiddle; Layout.preferredWidth: 200; Layout.minimumWidth: 0; Layout.fillWidth: true; horizontalAlignment: Text.AlignRight }
                 Slider { id: rootShare; Accessible.labelledBy: rootShareLabel; Accessible.name: rootShareLabel.text + " (%)"; from: 0; to: 100; stepSize: 0.5; Layout.preferredWidth: 220; Layout.minimumWidth: 0; Layout.fillWidth: true }
-                Label { text: rootDialog.info.other; elide: Text.ElideMiddle; Layout.preferredWidth: 200; Layout.minimumWidth: 0; Layout.fillWidth: true }
+                Label { text: rootDialogItem.info.other; elide: Text.ElideMiddle; Layout.preferredWidth: 200; Layout.minimumWidth: 0; Layout.fillWidth: true }
             }
             GridLayout {
                 columns: width < 600 ? 1 : 3
                 Layout.fillWidth: true
                 Label {
-                    text: rootShare.value.toFixed(1) + " % · " + rootDialog.length(rootShare.value / 100)
+                    text: rootShare.value.toFixed(1) + " % · " + rootDialogItem.length(rootShare.value / 100)
                     Layout.preferredWidth: 200; Layout.minimumWidth: 0; Layout.fillWidth: true
                     horizontalAlignment: Text.AlignRight
                 }
                 AppButton { text: "Halfway"; flat: true; Layout.preferredWidth: 220; Layout.minimumWidth: 0; Layout.fillWidth: true; onClicked: rootShare.value = 50 }
-                Label { text: (100 - rootShare.value).toFixed(1) + " % · " + rootDialog.length(1 - rootShare.value / 100); Layout.preferredWidth: 200; Layout.minimumWidth: 0; Layout.fillWidth: true }
+                Label { text: (100 - rootShare.value).toFixed(1) + " % · " + rootDialogItem.length(1 - rootShare.value / 100); Layout.preferredWidth: 200; Layout.minimumWidth: 0; Layout.fillWidth: true }
             }
         }
-    }
+    } } }
 
-    SpecimenTreeLabelsDialog {
-        id: metadataTipLabels
+    OnDemand { id: metadataTipLabels; sourceComponent: Component { SpecimenTreeLabelsDialog {
+        id: metadataTipLabelsItem
         metadataController: specimenMetadata
         table: window.metadataTable
         projectDir: shell.project_dir
-    }
-    SpecimenRosterDialog {
-        id: rosterConsumer
+    } } }
+
+    OnDemand { id: rosterConsumer; sourceComponent: Component { SpecimenRosterDialog {
+        id: rosterConsumerItem
         metadataController: specimenMetadata
         table: window.metadataTable
         projectDir: shell.project_dir
-    }
-    TreeTipNameDialog {
-        id: tipDialog
+    } } }
+
+    OnDemand { id: tipDialog; sourceComponent: Component { TreeTipNameDialog {
+        id: tipDialogItem
         controller: window.treeOpen ? window.current : null
-    }
+    } } }
 
     // Support from another tree: pick the file, then name the values.
-    FileDialog {
-        id: supportFile
+    OnDemand { id: supportFile; sourceComponent: Component { FileDialog {
+        id: supportFileItem
         title: "Add support values from another tree"
         onVisibleChanged: if (visible) currentFolder = window.activeFolder()
         nameFilters: ["Trees (*.nwk *.newick *.tre *.tree *.trees *.treefile *.contree *.nex *.nexus *.nxs)", "All files (*)"]
         onAccepted: {
-            supportName.controller = window.current
-            supportName.path = shell.local_file_path(selectedFile)
-            supportName.metadata = JSON.parse(supportName.controller.support_import_json(supportName.path))
-            supportName.open()
+            supportName.dialog().controller = window.current
+            supportName.dialog().path = shell.local_file_path(selectedFile)
+            supportName.dialog().metadata = JSON.parse(supportName.dialog().controller.support_import_json(supportName.dialog().path))
+            supportName.dialog().open()
         }
-    }
-    AppContentDialog {
-        id: supportName
+    } } }
+
+    OnDemand { id: supportName; sourceComponent: Component { AppContentDialog {
+        id: supportNameItem
         initialFocusItem: supportNameField
         property string path
         property var controller: null
@@ -2484,32 +2503,32 @@ ApplicationWindow {
         onAccepted: if (controller && !metadata.error) controller.add_support_from(path, supportNameField.text)
         body: ColumnLayout {
             spacing: 6
-            Label { text: window.fileName(supportName.path) }
-            Label { text: supportName.metadata.error || supportName.metadata.sets.map(set => set.name).join(" / "); wrapMode: Text.Wrap; Layout.fillWidth: true }
-            Label { id: supportNameFieldLabel; text: supportName.metadata.sets.length > 1 ? "Optional prefix (individual names are retained)" : "Support values name" }
+            Label { text: window.fileName(supportNameItem.path) }
+            Label { text: supportNameItem.metadata.error || supportNameItem.metadata.sets.map(set => set.name).join(" / "); wrapMode: Text.Wrap; Layout.fillWidth: true }
+            Label { id: supportNameFieldLabel; text: supportNameItem.metadata.sets.length > 1 ? "Optional prefix (individual names are retained)" : "Support values name" }
             TextField {
                 Accessible.labelledBy: supportNameFieldLabel
                 Accessible.name: supportNameFieldLabel.text
                 id: supportNameField
                 Layout.preferredWidth: 320
                 placeholderText: "e.g. Bootstrap, PP, UFBoot; empty keeps the file's names"
-                Keys.onReturnPressed: supportName.accept()
-                Keys.onEnterPressed: supportName.accept()
+                Keys.onReturnPressed: supportNameItem.accept()
+                Keys.onEnterPressed: supportNameItem.accept()
             }
         }
-    }
+    } } }
 
     CladeEditor {
         id: cladeEditor
         controller: window.treeOpen ? window.current : null
     }
-    TreeStyleDialog {
-        id: treeStyle
+    OnDemand { id: treeStyle; sourceComponent: Component { TreeStyleDialog {
+        id: treeStyleItem
         controller: window.treeOpen ? window.current : window.speciesTree
-    }
+    } } }
 
-    FileDialog {
-        id: linkAlignmentFile
+    OnDemand { id: linkAlignmentFile; sourceComponent: Component { FileDialog {
+        id: linkAlignmentFileItem
         property var editController: null
         property string editRevision: ""
         function ask(target) {
@@ -2529,21 +2548,23 @@ ApplicationWindow {
             }
             editController.link_alignment(shell.local_file_path(selectedFile))
         }
-    }
+    } } }
 
     function exportSvg(format) {
-        svgOptions.format = format || "svg"
+        svgOptions.dialog().format = format || "svg"
         if (!window.current) return
-        svgDialog.controller = window.current
-        svgDialog.sourcePath = window.currentPath
-        svgScope.currentIndex = window.treeOpen ? 2 : 0
-        svgPublication.checked = false
-        svgSelection.checked = false
-        svgOptions.alignment = window.alignmentOpen
-        svgOptions.open()
+        svgDialog.dialog().controller = window.current
+        svgDialog.dialog().sourcePath = window.currentPath
+        svgOptions.dialog().alignment = window.alignmentOpen
+        svgOptions.dialog().open()
     }
-    AppContentDialog {
-        id: svgOptions
+    OnDemand { id: svgOptions; sourceComponent: Component { AppContentDialog {
+        id: svgOptionsItem
+        onAboutToShow: {
+            svgScope.currentIndex = window.treeOpen ? 2 : 0
+            svgPublication.checked = false
+            svgSelection.checked = false
+        }
         objectName: "figureExportOptions"
         initialFocusItem: svgScope
         property string format: "svg"
@@ -2554,14 +2575,14 @@ ApplicationWindow {
             Label { id: svgScopeLabel; text: "Region" }
             AppComboBox { id: svgScope; objectName: "svgScope"; Accessible.labelledBy: svgScopeLabel; Accessible.name: svgScopeLabel.text; model: ["Visible view", "Selection", "Complete figure"] }
             AppCheckBox { id: svgPublication; text: "Publication colours (white background)" }
-            AppCheckBox { id: svgSelection; objectName: "svgSelection"; text: "Include selection highlighting"; visible: svgOptions.alignment }
+            AppCheckBox { id: svgSelection; objectName: "svgSelection"; text: "Include selection highlighting"; visible: svgOptionsItem.alignment }
             RowLayout {
-                visible: svgOptions.format === "png"
-                Label { id: pngWidthLabel; text: "PNG width (pixels)"; visible: svgOptions.format === "png" }
+                visible: svgOptionsItem.format === "png"
+                Label { id: pngWidthLabel; text: "PNG width (pixels)"; visible: svgOptionsItem.format === "png" }
                 AppSpinBox {
                     id: pngWidth
                     objectName: "pngWidth"
-                    visible: svgOptions.format === "png"
+                    visible: svgOptionsItem.format === "png"
                     from: 1
                     to: 10000
                     value: 1500
@@ -2572,18 +2593,19 @@ ApplicationWindow {
             }
         }
         onAccepted: {
-            svgDialog.format = svgOptions.format
-            svgDialog.scope = svgScope.currentIndex
-            svgDialog.publication = svgPublication.checked
-            svgDialog.alignment = svgOptions.alignment
-            svgDialog.includeSelection = svgSelection.checked
-            svgDialog.rasterWidth = pngWidth.value
-            svgDialog.selectedFile = shell.local_file_url(svgDialog.sourcePath.replace(/\.[^./]*$/, "") + "." + svgDialog.format)
-            svgDialog.open()
+            svgDialog.dialog().format = svgOptionsItem.format
+            svgDialog.dialog().scope = svgScope.currentIndex
+            svgDialog.dialog().publication = svgPublication.checked
+            svgDialog.dialog().alignment = svgOptionsItem.alignment
+            svgDialog.dialog().includeSelection = svgSelection.checked
+            svgDialog.dialog().rasterWidth = pngWidth.value
+            svgDialog.dialog().selectedFile = shell.local_file_url(svgDialog.dialog().sourcePath.replace(/\.[^./]*$/, "") + "." + svgDialog.dialog().format)
+            svgDialog.dialog().open()
         }
-    }
-    FileDialog {
-        id: svgDialog
+    } } }
+
+    OnDemand { id: svgDialog; sourceComponent: Component { FileDialog {
+        id: svgDialogItem
         onVisibleChanged: if (visible) currentFolder = window.activeFolder()
         property var controller: null
         property string sourcePath: ""
@@ -2603,47 +2625,47 @@ ApplicationWindow {
             else if (format === "png") controller.export_figure_png(shell.local_file_path(selectedFile), scope, publication, rasterWidth)
             else controller.export_figure(shell.local_file_path(selectedFile), scope, publication)
         }
-    }
+    } } }
 
-    AppContentDialog {
-        id: draftQuitDialog
+    OnDemand { id: draftQuitDialog; sourceComponent: Component { AppContentDialog {
+        id: draftQuitDialogItem
         title: "Unsaved methods drafts"
         standardButtons: Dialog.Discard | Dialog.Cancel
         body: ColumnLayout {
             Label { text: "Save or copy your authored methods before quitting."; Layout.fillWidth: true; wrapMode: Text.Wrap }
             Repeater {
-                model: draftQuitDialog.visible ? documentRecord.unsavedDrafts() : []
+                model: draftQuitDialogItem.visible && documentRecord.item ? documentRecord.item.unsavedDrafts() : []
                 AppButton {
                     required property string modelData
                     text: "Review " + window.fileName(modelData)
-                    onClicked: { draftQuitDialog.close(); window.openPath(modelData, true) }
+                    onClicked: { draftQuitDialogItem.close(); window.openPath(modelData, true) }
                 }
             }
         }
         onDiscarded: { window.discardAuthoredOnQuit = true; window.close() }
-    }
+    } } }
 
     // Quitting with unsaved changes: save them all, throw them away, or
     // stay.
-    AppFormDialog {
-        id: quitDialog
+    OnDemand { id: quitDialog; sourceComponent: Component { AppFormDialog {
+        id: quitDialogItem
         objectName: "quitDocumentsDialog"
         onRejected: window.discardAuthoredOnQuit = false
         property var unsaved: []
         title: "Save changes before closing?"
         standardButtons: Dialog.Save | Dialog.Discard | Dialog.Cancel
-        function ask(targets) {
+        function ask(targets, error) {
             unsaved = targets
-            quitError.text = ""
+            quitError.text = error || ""
             open()
         }
         ColumnLayout {
             Kirigami.FormData.isSection: true
             Layout.fillWidth: true
             spacing: 6
-            Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: quitDialog.unsaved.length === 1 ? "This file has unsaved changes:" : "These files have unsaved changes:" }
+            Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: quitDialogItem.unsaved.length === 1 ? "This file has unsaved changes:" : "These files have unsaved changes:" }
             Repeater {
-                model: quitDialog.unsaved
+                model: quitDialogItem.unsaved
                 Label {
                     Layout.fillWidth: true
                     wrapMode: Text.Wrap
@@ -2656,21 +2678,21 @@ ApplicationWindow {
         }
         onAccepted: window.quitStep(JSON.parse(documentOpens.save_all(JSON.stringify(unsaved))))
         onDiscarded: { close(); window.quitStep(JSON.parse(documentOpens.discard_all(JSON.stringify(unsaved)))) }
-    }
+    } } }
 
-    AppFormDialog {
-        id: confirmClose
+    OnDemand { id: confirmClose; sourceComponent: Component { AppFormDialog {
+        id: confirmCloseItem
         objectName: "closeDocumentDialog"
         property var target: null
         property string saveError: ""
         title: "Save changes?"
         standardButtons: Dialog.Save | Dialog.Discard | Dialog.Cancel
         AppErrorLabel {
-            Accessible.role: confirmClose.saveError.length ? Accessible.AlertMessage : Accessible.StaticText
+            Accessible.role: confirmCloseItem.saveError.length ? Accessible.AlertMessage : Accessible.StaticText
             Kirigami.FormData.isSection: true
             Layout.fillWidth: true
             wrapMode: Text.Wrap
-            text: confirmClose.saveError.length ? confirmClose.saveError : "This file has unsaved changes."
+            text: confirmCloseItem.saveError.length ? confirmCloseItem.saveError : "This file has unsaved changes."
         }
         onAccepted: {
             const owner = target
@@ -2679,12 +2701,12 @@ ApplicationWindow {
                 const row = documentOpens.target_index(owner.token, owner.path)
                 if (row < 0) return
                 if (!success) {
-                    confirmClose.target = owner
-                    confirmClose.saveError = owner.controller.message || "Save the review to a file first"
-                    confirmClose.open()
+                    confirmCloseItem.target = owner
+                    confirmCloseItem.saveError = owner.controller.message || "Save the review to a file first"
+                    confirmCloseItem.open()
                     return
                 }
-                confirmClose.saveError = ""
+                confirmCloseItem.saveError = ""
                 window.removeDocument(row)
                 Qt.callLater(window.refreshCurrent)
             })
@@ -2696,7 +2718,7 @@ ApplicationWindow {
             window.removeDocument(row)
             Qt.callLater(window.refreshCurrent)
         }
-    }
+    } } }
 
     FeatureEditor {
         id: editor
@@ -2717,11 +2739,11 @@ ApplicationWindow {
         }
         loadPreferences()
         if (preferenceValues.ui && !preferenceValues.ui.welcomed && !arg("--screenshot")) firstLaunch.dialog().open()
-        if (preferenceValues.ui && preferenceValues.ui.release_notices) checkRelease()
+        checkRelease()
         computeReady = true
         localCpuThreads = Math.max(1, Math.min(availableCpuThreads, localCpuThreads))
         shell.configure_cpu_threads(localCpuThreads)
-        if (arg("--screenshot")) console.debug("PREFERENCES_AUDIT", JSON.stringify({error: preferences.error, modal: preferencesError.visible, ready: preferencesReady, font: font.family, fontPoints: font.pointSize, defaultFontPoints: defaultFontSizePoints}))
+        if (arg("--screenshot")) console.debug("PREFERENCES_AUDIT", JSON.stringify({error: preferences.error, modal: !!preferencesError.item && preferencesError.item.visible, ready: preferencesReady, font: font.family, fontPoints: font.pointSize, defaultFontPoints: defaultFontSizePoints}))
         const args = Qt.application.arguments
         for (let i = 1; i < args.length; i++) {
             if (args[i].startsWith("--")) { i++; continue }
@@ -2775,7 +2797,7 @@ ApplicationWindow {
             if (arg("--fit")) c.fit()
             if (arg("--ribbon")) window.ribbonTabName = window.ribbonTabs[Number(arg("--ribbon"))]
             if (arg("--species-dialog")) window.beginDelimitation(arg("--species-dialog"))
-            if (arg("--distance-dialog")) toolSettings.show(c, "distance", arg("--distance-dialog"))
+            if (arg("--distance-dialog")) toolSettings.dialog().show(c, "distance", arg("--distance-dialog"))
             shot.start()
         }
     }
@@ -2796,12 +2818,12 @@ ApplicationWindow {
                 results.editorReturned = view.activeFocus
                 view.pressKey(Qt.Key_T, Qt.ControlModifier | Qt.AltModifier, "t")
                 Qt.callLater(() => Qt.callLater(() => {
-                    results.textOpened = textRepresentation.opened
-                    results.textFocused = textRepresentation.initialFocusItem.activeFocus
-                    results.hasText = textRepresentation.snapshot.text.length > 0
+                    results.textOpened = textRepresentation.dialog().opened
+                    results.textFocused = textRepresentation.dialog().initialFocusItem.activeFocus
+                    results.hasText = textRepresentation.dialog().snapshot.text.length > 0
                     view.pressKey(Qt.Key_F6, 0, "")
-                    results.modalFocusKept = textRepresentation.initialFocusItem.activeFocus
-                    textRepresentation.close()
+                    results.modalFocusKept = textRepresentation.dialog().initialFocusItem.activeFocus
+                    textRepresentation.dialog().close()
                     Qt.callLater(() => {
                         results.focusRestored = view.activeFocus
                         console.log("ACCESSIBILITY_AUDIT", JSON.stringify(results))

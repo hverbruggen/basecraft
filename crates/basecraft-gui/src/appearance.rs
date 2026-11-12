@@ -47,16 +47,17 @@ impl Desktop {
     }
 }
 
-/// The colour-blind palette choice and the theme choice; unreadable
-/// preferences give the defaults.
-fn display_choices(preferences: &Path) -> (bool, ThemeChoice) {
+/// The display preferences: colour-blind palette, theme and chosen font
+/// family. Unreadable preferences give the defaults.
+fn display_choices(preferences: &Path) -> (bool, ThemeChoice, Option<String>) {
     basecraft_platform::settings::SettingsStore::new(preferences.to_owned())
         .load()
-        .map_or((false, ThemeChoice::FollowDesktop), |p| {
+        .map_or((false, ThemeChoice::FollowDesktop, None), |p| {
             (
                 p.ui.data_color_scheme
                     == basecraft_platform::settings::DataColorScheme::ColorBlindFriendly,
                 p.ui.theme,
+                p.ui.font_family,
             )
         })
 }
@@ -77,8 +78,8 @@ impl Appearance {
     /// Colours from the desktop theme file (absent: the default theme) and the
     /// preferences file (absent or damaged: no colour-blind palette).
     fn load(desktop_theme: Option<&Path>, preferences: Option<&Path>, font: String) -> Self {
-        let (color_blind, choice) =
-            preferences.map_or((false, ThemeChoice::FollowDesktop), display_choices);
+        let (color_blind, choice, family) =
+            preferences.map_or((false, ThemeChoice::FollowDesktop, None), display_choices);
         let theme = match choice {
             ThemeChoice::Light => Theme::default(),
             ThemeChoice::Dark => Theme::dark(),
@@ -96,7 +97,7 @@ impl Appearance {
             error: css(theme.nearest_hue(0.0)),
             theme,
             color_blind,
-            font,
+            font: family.unwrap_or(font),
         }
     }
 }

@@ -65,34 +65,20 @@ FocusScope {
     readonly property color foreground: tree.foreground
 
     function act(name, args) { ctl.action(name, JSON.stringify(args || {})) }
-    function nextSpeciesLabel() {
-        const used = new Set(((activeHypothesis || {}).groups || []).map(g => g.label))
-        let n = ((activeHypothesis || {}).groups || []).length + 1
-        while (used.has("Species " + n)) n++
-        return "Species " + n
-    }
     // Ribbon commands.
     function newHypothesis(source) { newDialog.show(source || "") }
-    function groupSelection() { if (selection.length) act("group", {label: nextSpeciesLabel()}) }
+    function groupSelection() { if (selection.length) act("group") }
     function unassign() { if (selection.length) act("unassign") }
-    // The species of the edited hypothesis that is exactly the selection, if any.
-    function selectedSpecies() {
-        const chosen = new Set(selection)
-        return ((activeHypothesis || {}).groups || []).find(g => g.members.length === chosen.size && g.members.every(m => chosen.has(m))) || null
-    }
     // Rename the selected species, or make the selection a species with this
     // name; either way the names show beside the bars.
     function nameSpecies(label) {
         if (!activeHypothesis || !selection.length) return
-        const existing = selectedSpecies()
-        if (existing) act("rename_group", {group: existing.id, label: label})
-        else act("group", {label: label})
+        act("name_species", {label: label})
         const style = (workspace.view.columns || {})[activeHypothesis.id] || {}
         if (!style.names) act("style", {hypothesis: activeHypothesis.id, names: true})
     }
     function askSpeciesName() {
-        const existing = selectedSpecies()
-        textDialog.ask("Name species", "Species name", existing ? existing.label : nextSpeciesLabel(), value => doc.nameSpecies(value))
+        textDialog.ask("Name species", "Species name", ctl.species_name_suggestion(), value => doc.nameSpecies(value))
     }
     function flipSubtree() { tree.rotate() }
     function setTool(name) {
@@ -490,7 +476,7 @@ FocusScope {
         }
         MenuSeparator {}
         TreeMenuItem { text: "Group selection"; objectName: "groupSelection"; enabled: treeMenu.canEdit; onTriggered: doc.groupSelection() }
-        TreeMenuItem { text: doc.selectedSpecies() ? "Rename species…" : "Name species…"; objectName: "nameSpecies"; enabled: treeMenu.canEdit; onTriggered: doc.askSpeciesName() }
+        TreeMenuItem { text: ctl.selection_is_species() ? "Rename species…" : "Name species…"; objectName: "nameSpecies"; enabled: treeMenu.canEdit; onTriggered: doc.askSpeciesName() }
         TreeMenuItem { text: "Unassign"; objectName: "unassign"; enabled: treeMenu.canEdit; onTriggered: doc.unassign() }
         TreeMenuItem { text: "Edit a copy…"; visible: doc.activeHypothesis !== null && !doc.activeEditable; onTriggered: doc.newHypothesis(doc.activeHypothesis.id) }
         MenuSeparator { visible: treeMenu.info.node === true; height: visible ? implicitHeight : 0 }

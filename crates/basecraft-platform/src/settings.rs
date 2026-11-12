@@ -67,6 +67,8 @@ pub struct Ui {
     pub alignment_insert: bool,
     /// None uses the compact platform-relative default; explicit values are points.
     pub font_size_points: Option<u32>,
+    /// None follows the desktop's monospace font.
+    pub font_family: Option<String>,
     /// Independent ribbon icon, text and layout scale, in percent.
     pub ribbon_size_percent: u32,
     /// Side of a tick box, in pixels.
@@ -97,6 +99,7 @@ impl Default for Ui {
             orf_min_codons: 100,
             alignment_insert: true,
             font_size_points: None,
+            font_family: None,
             ribbon_size_percent: 100,
             tick_box_size: 14,
             input_box_height: 20,
@@ -476,6 +479,7 @@ pub enum Change {
     OrfMinCodons(u32),
     AlignmentInsert(bool),
     FontSizePoints(Option<u32>),
+    FontFamily(Option<String>),
     RibbonSizePercent(u32),
     TickBoxSize(u32),
     InputBoxHeight(u32),
@@ -496,6 +500,11 @@ pub enum Change {
 }
 impl Change {
     fn validate(&self) -> Result<(), Error> {
+        if let Self::FontFamily(Some(family)) = self
+            && (family.trim().is_empty() || family.len() > 200 || family.chars().any(char::is_control))
+        {
+            return Err(Error::Invalid("invalid font family".into()));
+        }
         if let Self::ServiceEmail { service, email } = self {
             if service.is_empty() || service.len() > 32 || !service.chars().all(|c| c.is_ascii_lowercase() || c == '-') {
                 return Err(Error::Invalid("invalid service name".into()));
@@ -523,6 +532,7 @@ impl Change {
             Self::OrfMinCodons(v) => prefs.ui.orf_min_codons = v,
             Self::AlignmentInsert(v) => prefs.ui.alignment_insert = v,
             Self::FontSizePoints(v) => prefs.ui.font_size_points = v,
+            Self::FontFamily(v) => prefs.ui.font_family = v,
             Self::RibbonSizePercent(v) => prefs.ui.ribbon_size_percent = v,
             Self::TickBoxSize(v) => prefs.ui.tick_box_size = v,
             Self::InputBoxHeight(v) => prefs.ui.input_box_height = v,
@@ -644,10 +654,20 @@ impl SettingsStore {
             .ok_or_else(|| Error::Invalid("revision overflow".into()))?;
         let typed = toml::Value::try_from(&prefs).map_err(|e| Error::Invalid(e.to_string()))?;
         merge(&mut raw, typed);
-        if prefs.ui.font_size_points.is_none()
-            && let Some(ui) = raw.get_mut("ui").and_then(toml::Value::as_table_mut)
-        {
-            ui.remove("font_size_points");
+        if let Some(ui) = raw.get_mut("ui").and_then(toml::Value::as_table_mut) {
+            if prefs.ui.font_size_points.is_none() {
+                ui.remove("font_size_points");
+            }
+            if prefs.ui.font_family.is_none() {
+                ui.remove("font_family");
+            }
+        }
+        if let Some(contacts) = raw.get_mut("contacts").and_then(toml::Value::as_table_mut) {
+            contacts.insert(
+                "service_emails".into(),
+                toml::Value::try_from(&prefs.contacts.service_emails)
+                    .map_err(|e| Error::Invalid(e.to_string()))?,
+            );
         }
         // Map removals must be reflected, while unknown surrounding fields survive.
         if let Some(customization) = raw
@@ -842,7 +862,8 @@ mod tests {
             service: "blast".into(),
             email: None,
         };
-        assert_eq!(store.update(reset).unwrap().service_email("blast"), "jane@example.org");
+        store.update(reset).unwrap();
+        assert_eq!(store.load().unwrap().service_email("blast"), "jane@example.org");
     }
 
     #[test]
@@ -851,6 +872,12 @@ mod tests {
         let store = store(&temp);
         let first = store.load().unwrap();
         assert!(!first.ui.welcomed && !first.ui.release_notices);
+        assert_eq!(first.ui.font_family, None);
+        assert!(store.update(Change::FontFamily(Some(" ".into()))).is_err());
+        store.update(Change::FontFamily(Some("Iosevka".into()))).unwrap();
+        assert_eq!(store.load().unwrap().ui.font_family.as_deref(), Some("Iosevka"));
+        store.update(Change::FontFamily(None)).unwrap();
+        assert_eq!(store.load().unwrap().ui.font_family, None);
         assert_eq!(first.ui.theme, ThemeChoice::FollowDesktop);
         store.update(Change::Theme(ThemeChoice::Dark)).unwrap();
         store.update(Change::ReleaseNotices(true)).unwrap();
@@ -1040,6 +1067,10 @@ mod tests {
         let prefs: Preferences =
             toml::from_str(include_str!("../../../schemas/preferences.example.toml")).unwrap();
         prefs.validate().unwrap();
+        assert_eq!(prefs.ui.theme, ThemeChoice::FollowDesktop);
+        assert!(!prefs.ui.release_notices && !prefs.ui.welcomed);
+        assert_eq!(prefs.ui.font_family, None);
+        assert!(prefs.contacts.service_emails.is_empty());
     }
     #[test]
     fn passive_load_creates_nothing() {

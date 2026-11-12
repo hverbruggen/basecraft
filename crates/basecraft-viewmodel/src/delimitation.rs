@@ -306,9 +306,41 @@ pub fn comparison_svg(work: &DelimitationWorkspace, figure: &Figure, font: &str)
     svg
 }
 
+/// The first free "Species N" label for a new group of `hypothesis`.
+pub fn next_species_label(hypothesis: Option<&Hypothesis>) -> String {
+    let groups = hypothesis.map_or(&[][..], |h| &h.groups[..]);
+    // Among len + 1 candidates at least one is free.
+    (groups.len() + 1..=2 * groups.len() + 1)
+        .map(|n| format!("Species {n}"))
+        .find(|label| groups.iter().all(|g| &g.label != label))
+        .unwrap_or_default()
+}
+
+/// The group of `hypothesis` that is exactly `members`, if any.
+pub fn group_of<'a>(hypothesis: Option<&'a Hypothesis>, members: &BTreeSet<String>) -> Option<&'a Group> {
+    hypothesis?.groups.iter().find(|g| &g.members == members)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn species_labels_skip_used_ones_and_the_selection_finds_its_group() {
+        let mut h: Hypothesis = serde_json::from_value(serde_json::json!({
+            "id": "h", "name": "H", "origin": "manual", "parent": null, "unassigned": [],
+            "groups": [{"id": "g1", "label": "Species 2", "color": "", "members": ["a", "b"]}],
+            "provenance": {"method": "manual", "version": "", "analysis_tree": null, "seed": null, "workers": null, "status": null}
+        }))
+        .unwrap();
+        assert_eq!(next_species_label(None), "Species 1");
+        assert_eq!(next_species_label(Some(&h)), "Species 3");
+        h.groups[0].label = "Other".into();
+        assert_eq!(next_species_label(Some(&h)), "Species 2");
+        let ab: BTreeSet<String> = ["a", "b"].map(String::from).into();
+        assert_eq!(group_of(Some(&h), &ab).map(|g| g.id.as_str()), Some("g1"));
+        assert!(group_of(Some(&h), &["a".to_owned()].into()).is_none());
+    }
     use crate::tree::{TreeView, figure_with_columns};
     use basecraft_docs::TreeDoc;
 

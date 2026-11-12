@@ -1029,11 +1029,11 @@ AppDialog {
                         }))
                     }
                     Label {
-                        text: "The submitter's contact details are kept once for every submission."
+                        text: "Submitter contact details are independent; set them with Export > Submitter."
                         wrapMode: Text.Wrap
                         Layout.fillWidth: true
                     }
-                    AppButton { objectName: "submissionContactDetails"; text: "Contact details…"; onClicked: dialog.contactDetailsRequested() }
+                    AppButton { objectName: "submissionContactDetails"; text: "Submitter details…"; onClicked: dialog.contactDetailsRequested() }
                 }
             }
             ColumnLayout {

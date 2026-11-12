@@ -225,10 +225,13 @@ pub mod qobject {
         /// Replace the style from JSON. Returns an error message, or empty.
         #[qinvokable]
         fn set_style(self: Pin<&mut TreeController>, json: &QString) -> QString;
+        /// Save the style dialog: `json` is the style, `rows` its support
+        /// rows (`tree_style::SupportRow`) and `removed` the sets to forget.
         #[qinvokable]
         fn set_style_with_removals(
             self: Pin<&mut TreeController>,
             json: &QString,
+            rows: &QString,
             removed: &QString,
         ) -> QString;
         #[qinvokable]
@@ -627,7 +630,7 @@ impl qobject::TreeController {
             let matches =
                 r.overview_match_cache
                     .get_json(format!("{key}:{}", r.find.revision()), || {
-                        crate::find_bridge::overview_marks(&r.find, |hit| {
+                        basecraft_viewmodel::find::overview_marks(&r.find, |hit| {
                             r.view.overview_match(hit.row)
                         })
                     });
@@ -1783,6 +1786,13 @@ impl qobject::TreeController {
                         "kind": s.kind,
                     })).collect::<Vec<_>>(),
                     "style": d.style(),
+                    "rows": basecraft_viewmodel::tree_style::rows(&d.supports().iter().map(|s| basecraft_viewmodel::tree_style::SupportSet {
+                        name: &s.name,
+                        source: &s.source,
+                        decimals: s.decimals(d.style()),
+                        automatic_decimals: if s.uses_proportions(d.style()) { 2 } else { 0 },
+                        proportions: s.uses_proportions(d.style()),
+                    }).collect::<Vec<_>>(), d.style()),
                     "tips": d.nodes().iter().filter(|n| n.is_tip()).map(|n| &n.name).collect::<Vec<_>>(),
                 })
             }))
@@ -1791,22 +1801,31 @@ impl qobject::TreeController {
     }
 
     pub fn set_style(self: Pin<&mut Self>, json: &QString) -> QString {
-        self.set_style_with_removals(json, &QString::from("[]"))
+        self.set_style_with_removals(json, &QString::from("null"), &QString::from("[]"))
     }
 
     pub fn set_style_with_removals(
         mut self: Pin<&mut Self>,
         json: &QString,
+        rows: &QString,
         removed: &QString,
     ) -> QString {
         let remove_supports: Vec<String> = match serde_json::from_str(&removed.to_string()) {
             Ok(names) => names,
             Err(e) => return QString::from(&format!("Bad support removals: {e}")),
         };
-        let style: TreeStyle = match serde_json::from_str(&json.to_string()) {
+        let mut style: TreeStyle = match serde_json::from_str(&json.to_string()) {
             Ok(s) => s,
             Err(e) => return QString::from(&format!("Bad style: {e}")),
         };
+        let rows: Option<Vec<basecraft_viewmodel::tree_style::SupportRow>> =
+            match serde_json::from_str(&rows.to_string()) {
+                Ok(rows) => rows,
+                Err(e) => return QString::from(&format!("Bad support rows: {e}")),
+            };
+        if let Some(rows) = rows {
+            basecraft_viewmodel::tree_style::apply(&mut style, &rows, &remove_supports);
+        }
         if remove_supports.is_empty()
             && match self.with_doc(|d| *d.style() == style) {
                 Ok(value) => value,

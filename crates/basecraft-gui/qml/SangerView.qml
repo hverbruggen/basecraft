@@ -140,84 +140,15 @@ FocusScope {
 
     readonly property var traceRows: ctl.trace_lanes.length ? JSON.parse(ctl.trace_lanes) : []
     property var returnAlignment: null
-    // This is the failed command's input/context, separate from the installed
-    // document. Background messages cannot acknowledge a failed request.
-    property var failedReview: null
-    property string preparationError: ""
-    // Request context is kept here; execution and working state belong to ctl.
-    // Backend invalidates retired requests before emitting stageFinished.
-    property var pendingReview: null
+    // Where a finished review is added; the reads' request runs in ctl.
+    property var requestTarget: null
+    readonly property bool working: ctl.busy || ctl.calling || ctl.preparing
     property bool primerPending: false
-    readonly property bool working: ctl.busy || ctl.calling || pendingReview !== null
-    function retryReview() {
-        const request = failedReview
-        if (request) startReview(request.paths, request.reference, request.target, request.cutoff)
-    }
-    function failReview() {
-        if (!pendingReview) return
-        failedReview = pendingReview
-        preparationError = ctl.message
-        pendingReview = null
-    }
-    function finishReview() {
-        const request = pendingReview
-        if (!request) return
-        returnAlignment = request.target
-        reviewReference = request.reference
-        failedReview = null
-        preparationError = ""
-        pendingReview = null
-    }
-    function submitReviewStage(stage) {
-        const request = pendingReview
-        if (!request) return
-        request.stage = stage
-        const accepted = stage === "prepare" ? ctl.prepare_reads(JSON.stringify(request.paths), request.cutoff)
-            : stage === "single" ? ctl.single_review(request.cutoff)
-            : stage === "orient" ? ctl.orient_review(request.reference)
-            : ctl.place_alignment(request.reference)
-        if (!accepted) failReview()
-    }
-    function reviewStageFinished(stage, success, payload) {
-        if (stage === "primers") {
-            if (!primerPending) return
-            primerPending = false
-            if (success && primerDialog.visible) primerDialog.proposal = payload
-            return
-        }
-        const request = pendingReview
-        if (!request || request.stage !== stage) return
-        if (!success || request.cancelled) { failReview(); return }
-        if (stage === "orient") submitReviewStage("place")
-        else if (stage === "place" || !request.reference.length) finishReview()
-        else submitReviewStage("orient")
-    }
-    function cancelWork() {
-        if (pendingReview) pendingReview.cancelled = true
-        if (ctl.busy) ctl.cancel_stage()
-        if (ctl.calling) ctl.cancel_calls()
-    }
     function startReview(paths, reference, target, cutoff = 20) {
-        if (ctl.busy || pendingReview || !paths.length) return
+        if (ctl.busy || ctl.preparing || !paths.length) return
         sourceInitialized = true
-        if (ctl.calling) ctl.cancel_calls()
-        pendingReview = {paths: paths.slice(), reference: reference, target: target, cutoff: cutoff, stage: "", cancelled: false}
-        // Freeze through the backend's shared evidence owner before dispatch.
-        // Retain this path in failedReview too, so retries use the same bytes.
-        if (reference.length) {
-            const retained = ctl.retain_reference(paths[0], reference)
-            if (!retained.length) { failReview(); return }
-            pendingReview.reference = retained
-        }
-        if (paths.length > 1) { submitReviewStage("prepare"); return }
-        if (!ctl.open_file(paths[0])) { failReview(); return }
-        if (cutoff !== 20) {
-            if (ctl.calling) ctl.cancel_calls()
-            submitReviewStage("single")
-        } else if (reference.length) {
-            if (ctl.calling) ctl.cancel_calls()
-            submitReviewStage("orient")
-        } else finishReview()
+        requestTarget = target
+        ctl.start_review(JSON.stringify(paths), reference, cutoff)
     }
     function signalSettings() {
         if (working) return
@@ -367,7 +298,15 @@ FocusScope {
         }
     }
     SangerController { id: ctl }
-    Connections { target: ctl; function onStageFinished(stage, success, payload) { doc.reviewStageFinished(stage, success, payload) } }
+    Connections {
+        target: ctl
+        function onStageFinished(stage, success, payload) {
+            if (stage !== "primers" || !doc.primerPending) return
+            doc.primerPending = false
+            if (success && primerDialog.visible) primerDialog.proposal = payload
+        }
+        function onReviewReady(reference) { doc.returnAlignment = doc.requestTarget; doc.reviewReference = reference }
+    }
     Component.onDestruction: { ctl.cancel_stage(); ctl.cancel_calls() }
     Shortcut { sequence: "F2"; enabled: doc.visible && !doc.working && ctl.review_mode; onActivated: doc.beginExport("fasta") }
     FileDialog {
@@ -387,8 +326,8 @@ FocusScope {
         onAccepted: {
             const path = fileUrls.local_file_path(selectedFile)
             if (doc.working) return
-            doc.pendingReview = {paths: JSON.parse(ctl.input_paths), reference: path, target: doc.returnAlignment, cutoff: ctl.signal_threshold, stage: "", cancelled: false}
-            doc.submitReviewStage("orient")
+            doc.requestTarget = doc.returnAlignment
+            ctl.review_context(path)
         }
     }
     FileDialog {
@@ -440,7 +379,7 @@ FocusScope {
         objectName: "tracePreparationFailure"
         anchors.top: parent.top
         width: parent.width
-        visible: doc.failedReview !== null && !doc.working
+        visible: ctl.failed_reads.length > 0 && !doc.working
         height: visible ? failureContent.implicitHeight + topPadding + bottomPadding : 0
         ColumnLayout {
             id: failureContent
@@ -452,18 +391,18 @@ FocusScope {
             }
             AppErrorLabel {
                 Layout.fillWidth: true
-                text: doc.preparationError
+                text: ctl.preparation_error
                 wrapMode: Text.Wrap
             }
             Label {
                 Layout.fillWidth: true
-                text: doc.failedReview ? doc.failedReview.paths.join("\n") : ""
+                text: ctl.failed_reads
                 textFormat: Text.PlainText
                 wrapMode: Text.WrapAnywhere
             }
             RowLayout {
-                AppButton { objectName: "retryTraceReview"; text: "Retry selected reads"; onClicked: doc.retryReview() }
-                AppButton { objectName: "dismissTraceFailure"; text: "Dismiss"; onClicked: { doc.failedReview = null; doc.preparationError = "" } }
+                AppButton { objectName: "retryTraceReview"; text: "Retry selected reads"; onClicked: ctl.retry_review() }
+                AppButton { objectName: "dismissTraceFailure"; text: "Dismiss"; onClicked: ctl.dismiss_failure() }
             }
         }
     }
@@ -478,7 +417,7 @@ FocusScope {
         visible: busy
         workingText: ctl.message || (ctl.calling ? "Processing AB1 with Tracy" : "Preparing input")
         cancelText: "Cancel trace work"
-        onCancelRequested: doc.cancelWork()
+        onCancelRequested: ctl.cancel_work()
     }
 
     Pane {

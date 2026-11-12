@@ -10,15 +10,18 @@ Item {
         id: controller
         property var saved: null
         property var removed: []
+        property var rows: []
         function style_json() {
             return JSON.stringify({
                 sets: [{name: "Bootstrap", source: "", decimals: 0, automatic_decimals: 0, proportions: false}, {name: "BPP", source: "", decimals: 2, automatic_decimals: 2, proportions: true}],
                 style: {support_shown: [], support_min: 0, support_decimals: {}, support_proportions: {},
                     symbols: null, tip_font: 13, support_font: 10, branch_width: 1,
-                    vertical_bar_labels: true, scale_bar: true, future_option: {value: 42}}
+                    vertical_bar_labels: true, scale_bar: true, future_option: {value: 42}},
+                rows: [{name: "Bootstrap", source: "", shown: true, decimals: 0, autoDefault: 0, scale: 0, minimum: 0, autoDecimals: true},
+                    {name: "BPP", source: "", shown: true, decimals: 2, autoDefault: 2, scale: 1, minimum: 0, autoDecimals: true}]
             })
         }
-        function set_style_with_removals(value, names) { saved = JSON.parse(value); removed = JSON.parse(names); return "" }
+        function set_style_with_removals(value, sent, names) { saved = JSON.parse(value); rows = JSON.parse(sent); removed = JSON.parse(names); return "" }
     }
     TreeStyleDialog { id: dialog; controller: controller }
     TextField { id: invoker; text: "Document" }
@@ -46,8 +49,8 @@ Item {
             compare(bootstrap.value, 1)
             verify(bootstrap.width >= bootstrap.implicitWidth)
             dialog.save()
-            compare(controller.saved.support_decimals.Bootstrap, 1)
-            verify(!Object.prototype.hasOwnProperty.call(controller.saved.support_decimals, "BPP"))
+            compare(controller.rows[0].decimals, 1)
+            verify(!controller.rows[0].autoDecimals && controller.rows[1].autoDecimals)
             compare(controller.saved.future_option.value, 42)
         }
         function test_escape_discards_pending_changes() {
@@ -125,9 +128,9 @@ Item {
             const legend = findChild(dialog.contentItem, "supportLegend")
             legend.checked = false
             dialog.save()
-            compare(controller.saved.support_fraction.BPP, false)
-            compare(controller.saved.support_minimums.BPP, 90)
-            compare(controller.saved.support_minimums.Bootstrap, 0)
+            compare(controller.rows[1].scale, 0)
+            compare(controller.rows[1].minimum, 90)
+            compare(controller.rows[0].minimum, 0)
             compare(controller.saved.support_placement, "below")
             compare(controller.saved.support_legend, false)
             compare(controller.saved.tip_font, 13)
@@ -135,11 +138,10 @@ Item {
         }
         function test_auto_preserves_semantic_defaults() {
             dialog.save()
-            compare(Object.keys(controller.saved.support_decimals).length, 0)
+            verify(controller.rows.every(row => row.autoDecimals))
             compare(Object.keys(controller.saved.support_proportions).length, 0)
-            compare(controller.saved.support_fraction.Bootstrap, false)
-            compare(controller.saved.support_fraction.BPP, true)
-            compare(controller.saved.support_minimums.Bootstrap, 0)
+            compare(controller.rows.map(row => row.scale), [0, 1])
+            compare(controller.rows[0].minimum, 0)
             verify(controller.saved.support_legend)
         }
     }

@@ -10,7 +10,7 @@ import org.kde.kirigami as Kirigami
 AppFormDialog {
     id: dialog
     objectName: "submitterDialog"
-    title: "Contact details"
+    title: "Submitter"
     standardButtons: Dialog.Save | Dialog.Cancel
     initialFocusItem: firstName
     // Preferences.submitter, as stored.

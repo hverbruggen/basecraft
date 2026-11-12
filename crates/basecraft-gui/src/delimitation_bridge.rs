@@ -89,6 +89,12 @@ pub mod qobject {
         fn analysis_json(self: &DelimitationController) -> QString;
         #[qinvokable]
         fn action(self: Pin<&mut DelimitationController>, name: &QString, args: &QString);
+        /// The selected species' name, or the next free "Species N", and
+        /// whether the selection is exactly one species.
+        #[qinvokable]
+        fn species_name_suggestion(self: &DelimitationController) -> QString;
+        #[qinvokable]
+        fn selection_is_species(self: &DelimitationController) -> bool;
         #[qinvokable]
         fn select_group(
             self: Pin<&mut DelimitationController>,
@@ -804,6 +810,22 @@ impl qobject::DelimitationController {
         .unwrap_or_else(|| json!({}));
         QString::from(value.to_string())
     }
+    fn named_species(&self) -> (Option<String>, String) {
+        let r = self.rust();
+        let workspace = r.session.as_ref().zip(r.doc).and_then(|(s, doc)| s.delimitation(doc).ok());
+        let active = r.active_hypothesis.to_string();
+        let hypothesis = workspace.and_then(|w| w.hypotheses.iter().find(|h| h.id == active));
+        let existing = basecraft_viewmodel::delimitation::group_of(hypothesis, &r.selection.specimens);
+        (existing.map(|g| g.label.clone()), basecraft_viewmodel::delimitation::next_species_label(hypothesis))
+    }
+    pub fn species_name_suggestion(&self) -> QString {
+        let (existing, next) = self.named_species();
+        QString::from(&existing.unwrap_or(next))
+    }
+    pub fn selection_is_species(&self) -> bool {
+        self.named_species().0.is_some()
+    }
+
     pub fn action(mut self: Pin<&mut Self>, name: &QString, args: &QString) {
         if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
             crate::bridge::checked_document!(sync self, session.delimitation(doc));
@@ -830,7 +852,8 @@ impl qobject::DelimitationController {
                 .and_then(Value::as_str)
                 .map_or_else(|| r.active_hypothesis.to_string(), str::to_string);
             let members = r.selection.specimens.clone();
-            Ok(match name.to_string().as_str() {
+            let name = name.to_string();
+            Ok(match name.as_str() {
                 "roster_links" => DelimitationEdit::SetRosterLinks {
                     links: serde_json::from_value(args["links"].clone())
                         .map_err(|e| e.to_string())?,
@@ -871,13 +894,27 @@ impl qobject::DelimitationController {
                     group: text("group"),
                     label: text("label"),
                 },
-                "group" => {
+                // An empty label takes the next free "Species N"; naming the
+                // selection renames its group when it is exactly one.
+                "group" | "name_species" => {
                     if members.is_empty() {
                         return Err("Select specimens first".into());
                     }
-                    DelimitationEdit::Split {
-                        hypothesis: id,
-                        group: group(members, text("label")),
+                    let hypothesis = w.hypotheses.iter().find(|h| h.id == id);
+                    let mut label = text("label");
+                    if label.is_empty() {
+                        label = basecraft_viewmodel::delimitation::next_species_label(hypothesis);
+                    }
+                    match basecraft_viewmodel::delimitation::group_of(hypothesis, &members) {
+                        Some(existing) if name == "name_species" => DelimitationEdit::RenameGroup {
+                            hypothesis: id,
+                            group: existing.id.clone(),
+                            label,
+                        },
+                        _ => DelimitationEdit::Split {
+                            hypothesis: id,
+                            group: group(members, label),
+                        },
                     }
                 }
                 "merge" => DelimitationEdit::Merge {

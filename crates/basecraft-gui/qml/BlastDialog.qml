@@ -159,7 +159,7 @@ AppFormDialog {
             visible: contact.text.trim().indexOf("@") > 0 && contact.text.trim() !== dialog.configuredContact
             onClicked: { dialog.saveContact(contact.text.trim()); dialog.configuredContact = contact.text.trim() }
         }
-        AppButton { objectName: "blastContactDetails"; text: "Contact details…"; onClicked: dialog.contactDetailsRequested() }
+        AppButton { objectName: "blastContactDetails"; text: "Submitter details…"; onClicked: dialog.contactDetailsRequested() }
     }
     CheckBox { id: options; text: "Search options"; enabled: !backend.busy && !dialog.submitted }
     TextField {
