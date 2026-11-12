@@ -101,16 +101,20 @@ AppFormDialog {
     Label { visible: !dialog.welcome; text: "New tasks use this allocation, capped by available CPUs. Running tasks retain their allocation."; wrapMode: Text.Wrap; Layout.fillWidth: true }
     Label { visible: !dialog.welcome; text: "Ribbon and shortcuts"; font.bold: true }
     Label { visible: !dialog.welcome; text: "Use Ctrl, Alt, Shift or Meta with one key, or a function key. Canvas keys and F6 are reserved. Empty shortcuts disable the command's shortcut. Reset restores defaults. Unavailable command IDs remain stored for future availability."; wrapMode: Text.Wrap; Layout.fillWidth: true }
-    ColumnLayout {
+    // Not a Repeater in a layout: a hidden layout keeps pointers to removed
+    // rows until it next lays out, which crashed the window at a resize.
+    ListView {
+        objectName: "shortcutRows"
         visible: !dialog.welcome
         Layout.fillWidth: true
+        implicitHeight: contentHeight
+        interactive: false
         spacing: 4
-    Repeater {
         model: dialog.opened ? dialog.commands : []
         delegate: RowLayout {
             id: row
             required property var modelData
-            Layout.fillWidth: true
+            width: ListView.view.width
             Label { text: row.modelData.text; Layout.preferredWidth: 180; wrapMode: Text.Wrap }
             TextField {
                 objectName: "shortcut-" + row.modelData.commandId
@@ -161,7 +165,6 @@ AppFormDialog {
                 onToggled: dialog.change("ribbonCommandHidden", { id: row.modelData.commandId, hidden: !checked })
             }
         }
-    }
     }
     Label { visible: !dialog.welcome && (dialog.missingIds.length > 0); text: "Unavailable commands (retained): " + dialog.missingIds.join(", "); wrapMode: Text.Wrap; Layout.fillWidth: true }
     AppButton { visible: !dialog.welcome; text: "Reset ribbon and shortcuts"; onClicked: dialog.change("resetCustomization", null) }

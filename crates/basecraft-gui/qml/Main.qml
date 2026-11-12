@@ -1663,7 +1663,7 @@ ApplicationWindow {
             }
         }
     }
-    OnDemand { id: firstLaunch; objectName: "firstLaunch"; sourceComponent: Component { PreferencesDialog { welcome: true; settings: preferences; commands: []; defaultFontSizePoints: window.defaultFontSizePoints } } }
+    OnDemand { id: firstLaunch; objectName: "firstLaunch"; sourceComponent: Component { PreferencesDialog { welcome: true; settings: preferences; commands: window.applicationCommands; defaultFontSizePoints: window.defaultFontSizePoints } } }
     // Opted in at first launch or in Preferences: ask GitHub for the latest
     // release once per start and say if it is newer.
     function checkRelease() {

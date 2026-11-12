@@ -118,51 +118,50 @@ AppDialog {
     ScrollView {
         anchors.fill: parent
         clip: true
-        ColumnLayout {
-            width: dialog.availableWidth
+        // Not a Repeater in a layout; see the shortcut rows in PreferencesDialog.
+        ListView {
+            objectName: "shortcutGroups"
             spacing: dialog.font.pixelSize * 1.2
-            Repeater {
-                model: dialog.opened ? dialog.shown() : []
-                ColumnLayout {
-                    required property var modelData
+            model: dialog.opened ? dialog.shown() : []
+            delegate: ColumnLayout {
+                required property var modelData
+                width: ListView.view.width
+                spacing: 4
+                Label {
+                    text: modelData.name
+                    font.bold: true
+                    font.pixelSize: dialog.font.pixelSize * 1.12
+                    color: palette.windowText
+                }
+                GridLayout {
                     Layout.fillWidth: true
-                    spacing: 4
-                    Label {
-                        text: modelData.name
-                        font.bold: true
-                        font.pixelSize: dialog.font.pixelSize * 1.12
-                        color: palette.windowText
-                    }
-                    GridLayout {
-                        Layout.fillWidth: true
-                        Layout.leftMargin: dialog.font.pixelSize
-                        columns: 2
-                        columnSpacing: dialog.font.pixelSize * 1.3
-                        rowSpacing: dialog.font.pixelSize * 0.3
-                        Repeater {
-                            model: modelData.keys
-                            delegate: Label {
-                                required property var modelData
-                                required property int index
-                                // Keys and descriptions alternate across the two columns.
-                                Layout.row: Math.floor(index)
-                                Layout.column: 0
-                                text: modelData[0]
-                                font.bold: true
-                                opacity: 0.85
-                            }
+                    Layout.leftMargin: dialog.font.pixelSize
+                    columns: 2
+                    columnSpacing: dialog.font.pixelSize * 1.3
+                    rowSpacing: dialog.font.pixelSize * 0.3
+                    Repeater {
+                        model: modelData.keys
+                        delegate: Label {
+                            required property var modelData
+                            required property int index
+                            // Keys and descriptions alternate across the two columns.
+                            Layout.row: Math.floor(index)
+                            Layout.column: 0
+                            text: modelData[0]
+                            font.bold: true
+                            opacity: 0.85
                         }
-                        Repeater {
-                            model: modelData.keys
-                            delegate: Label {
-                                required property var modelData
-                                required property int index
-                                Layout.row: index
-                                Layout.column: 1
-                                Layout.fillWidth: true
-                                text: modelData[1]
-                                wrapMode: Text.Wrap
-                            }
+                    }
+                    Repeater {
+                        model: modelData.keys
+                        delegate: Label {
+                            required property var modelData
+                            required property int index
+                            Layout.row: index
+                            Layout.column: 1
+                            Layout.fillWidth: true
+                            text: modelData[1]
+                            wrapMode: Text.Wrap
                         }
                     }
                 }

@@ -128,6 +128,26 @@ Main {
             welcome.close()
         })
         list.push(() => check(preferenceValues.ui.welcomed, "first launch would ask again"))
+        // Preferences and the shortcut list opened and closed twice, then the
+        // window and ribbon resized: rows built and removed with the dialog
+        // must not outlive their layout (this crashed the window).
+        for (let pass = 0; pass < 2; ++pass) {
+            list.push(() => command("application.preferences").trigger())
+            list.push(() => {
+                const form = walk.contentData.find(i => i && i.item && i.item.title === "Preferences")
+                check(form && form.item.opened, "Preferences did not open")
+                check(find(form.item.contentItem, i => i.objectName === "shortcut-file.save"), "Preferences lost its shortcut rows")
+                form.item.close()
+            })
+            list.push(() => command("help.shortcuts").trigger())
+            list.push(() => {
+                const open = walk.contentData.filter(item => item && item.item && item.item.opened)
+                check(open.length === 1 && find(open[0].item.contentItem, i => i.objectName === "shortcutGroups"), "the shortcut list did not open")
+                open[0].item.close()
+            })
+        }
+        list.push(() => { walk.width = 320; persistPreference("ribbonSizePercent", 150) })
+        list.push(() => { walk.width = 1600; persistPreference("ribbonSizePercent", 100) })
         // One contact-details dialog: the submitter's email serves BLAST
         // until BLAST gets its own.
         list.push(() => { command("submission.submitter").trigger() })
