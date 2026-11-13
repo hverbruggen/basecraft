@@ -362,6 +362,18 @@ fn group(members: BTreeSet<String>, label: String) -> Group {
         attributes: BTreeMap::new(),
     }
 }
+impl crate::document_open::DocumentEditor for qobject::DelimitationController {
+    fn apply_edit(self: Pin<&mut Self>, op: Op) -> bool {
+        match op {
+            Op::DelimitationEdit { edit } => self.edit(*edit).is_ok(),
+            _ => false,
+        }
+    }
+    fn set_refused(self: Pin<&mut Self>, refused: QString) {
+        self.set_refused_edit(refused);
+    }
+}
+
 impl qobject::DelimitationController {
     pub fn close_session(mut self: Pin<&mut Self>) {
         self.as_mut().rust_mut().session = None;
@@ -491,9 +503,7 @@ impl qobject::DelimitationController {
                 crate::document_open::applying(s, doc, op, basecraft_ops::Session::apply);
             (result.map(|_| ()), refused)
         };
-        if let Some(refused) = refused_now {
-            self.as_mut().set_refused_edit(refused);
-        }
+        crate::document_open::offer_copy(self.as_mut(), refused_now);
         match &result {
             Ok(()) => {
                 self.as_mut().set_statistics_json(QString::from("{}"));
@@ -580,14 +590,7 @@ impl qobject::DelimitationController {
         let revision = self.rust().display_revision + 1;
         self.as_mut().set_display_revision(revision);
         self.as_mut().update_bar_columns();
-        if let Some(Op::DelimitationEdit { edit }) =
-            crate::document_open::take_refused(&candidate.path)
-        {
-            // After the install: opening never changes the document it opens.
-            let _ = self.qt_thread().queue(move |mut this| {
-                let _ = this.as_mut().edit(*edit);
-            });
-        }
+        crate::document_open::installed(self.as_mut(), &candidate.path);
         Ok(())
     }
     /// A free `<common root>.combinedNN.spart` beside the last file.

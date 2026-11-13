@@ -456,21 +456,55 @@ pub(crate) fn copy_for_editing(refused: &str, target: &Path) -> Result<(), Strin
     Ok(())
 }
 
-/// What a freshly installed document needs next: its alphabet question (D12)
-/// and the refused edit to redo on it (D13), which the caller queues so the
-/// install itself changes nothing. Redoing a stated alphabet answers the
-/// question, so it is not asked again.
-pub(crate) fn after_install(
-    path: &Path,
-    question: Option<String>,
-) -> (cxx_qt_lib::QString, Option<basecraft_protocol::Op>) {
+/// What every document editor does the same way for D12 and D13. Each editor
+/// supplies only its own edit and properties.
+pub(crate) trait DocumentEditor: cxx_qt::Threading + Sized + 'static {
+    /// Apply `op` as this editor's own edit and redraw; whether it applied.
+    fn apply_edit(self: std::pin::Pin<&mut Self>, op: basecraft_protocol::Op) -> bool;
+    /// Publish the copy offer for an edit a read-only folder refused.
+    fn set_refused(self: std::pin::Pin<&mut Self>, refused: cxx_qt_lib::QString);
+    /// What to ask about the document's alphabet, if anything.
+    fn alphabet_question(&self) -> Option<String> {
+        None
+    }
+    fn set_question(self: std::pin::Pin<&mut Self>, _question: cxx_qt_lib::QString) {}
+}
+
+/// After an editor installed the document at `path`: ask its alphabet
+/// question (D12), and redo the edit a read-only folder refused on the
+/// original (D13) on the next turn, so the install itself changes nothing.
+/// Redoing a stated alphabet answers the question.
+pub(crate) fn installed<T: DocumentEditor>(mut this: std::pin::Pin<&mut T>, path: &Path) {
     let redo = take_refused(path);
-    let question =
-        question.filter(|_| !matches!(redo, Some(basecraft_protocol::Op::SetAlphabet { .. })));
-    (
-        cxx_qt_lib::QString::from(&question.unwrap_or_default()),
-        redo,
-    )
+    let question = this
+        .alphabet_question()
+        .filter(|_| !matches!(redo, Some(basecraft_protocol::Op::SetAlphabet { .. })));
+    this.as_mut()
+        .set_question(cxx_qt_lib::QString::from(&question.unwrap_or_default()));
+    if let Some(op) = redo {
+        let _ = this.qt_thread().queue(move |this| {
+            this.apply_edit(op);
+        });
+    }
+}
+
+/// Offer a copy when [`applying`] reported a refusal for a read-only folder.
+pub(crate) fn offer_copy<T: DocumentEditor>(
+    this: std::pin::Pin<&mut T>,
+    refused: Option<cxx_qt_lib::QString>,
+) {
+    if let Some(refused) = refused {
+        this.set_refused(refused);
+    }
+}
+
+/// State the alphabet the user chose in the question (D12).
+pub(crate) fn state_alphabet<T: DocumentEditor>(
+    mut this: std::pin::Pin<&mut T>,
+    answer: &str,
+) -> bool {
+    this.as_mut().set_question(cxx_qt_lib::QString::default());
+    basecraft_viewmodel::alphabet::stated(answer).is_some_and(|op| this.apply_edit(op))
 }
 
 /// The refused edit to redo on `path` now that its copy is open; also drops

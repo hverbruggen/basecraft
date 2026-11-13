@@ -541,6 +541,15 @@ fn checked_annotation(
     Ok((id, annotation))
 }
 
+impl crate::document_open::DocumentEditor for qobject::TreeController {
+    fn apply_edit(self: Pin<&mut Self>, op: Op) -> bool {
+        self.edit(op).is_ok()
+    }
+    fn set_refused(self: Pin<&mut Self>, refused: QString) {
+        self.set_refused_edit(refused);
+    }
+}
+
 impl qobject::TreeController {
     pub fn close_session(mut self: Pin<&mut Self>) {
         self.as_mut().rust_mut().session = None;
@@ -764,9 +773,7 @@ impl qobject::TreeController {
             (result, refused)
         };
         self.as_mut().ask_labels();
-        if let Some(refused) = refused_now {
-            self.as_mut().set_refused_edit(refused);
-        }
+        crate::document_open::offer_copy(self.as_mut(), refused_now);
         match result {
             Ok(()) => {
                 if clears_selection {
@@ -1163,12 +1170,7 @@ impl qobject::TreeController {
         self.as_mut().refresh_link();
         self.as_mut().set_dirty(false);
         self.as_mut().notify(&warning);
-        if let Some(op) = crate::document_open::take_refused(&path) {
-            // After the install: opening never changes the document it opens.
-            let _ = self.qt_thread().queue(move |mut this| {
-                let _ = this.as_mut().edit(op);
-            });
-        }
+        crate::document_open::installed(self.as_mut(), &path);
         self.refresh();
         Ok(())
     }

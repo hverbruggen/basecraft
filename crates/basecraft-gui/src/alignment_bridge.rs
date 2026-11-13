@@ -508,6 +508,24 @@ fn f(v: f64) -> f32 {
     v as f32
 }
 
+impl crate::document_open::DocumentEditor for qobject::AlignmentController {
+    fn apply_edit(mut self: Pin<&mut Self>, op: Op) -> bool {
+        let a = self.as_mut().edit(op);
+        self.refresh();
+        a
+    }
+    fn set_refused(self: Pin<&mut Self>, refused: QString) {
+        self.set_refused_edit(refused);
+    }
+    fn alphabet_question(&self) -> Option<String> {
+        let (session, doc) = self.rust().session.as_ref().zip(self.rust().doc)?;
+        basecraft_viewmodel::alphabet::alignment_question(session.alignment(doc).ok()?)
+    }
+    fn set_question(self: Pin<&mut Self>, question: QString) {
+        self.set_alphabet_question(question);
+    }
+}
+
 impl qobject::AlignmentController {
     pub fn record_folder(&self) -> QString {
         let folder = self.rust().session.as_ref().map(|s| s.root().to_path_buf());
@@ -729,9 +747,7 @@ impl qobject::AlignmentController {
             ));
             (result, refused)
         };
-        if let Some(refused) = refused_now {
-            self.as_mut().set_refused_edit(refused);
-        }
+        crate::document_open::offer_copy(self.as_mut(), refused_now);
         match result {
             Ok(()) => {
                 self.as_mut().set_dirty(true);
@@ -1000,23 +1016,7 @@ impl qobject::AlignmentController {
             .set_file_path(QString::from(path.to_string_lossy().as_ref()));
         self.as_mut().set_dirty(false);
         self.as_mut().notify("");
-        let question =
-            self.rust()
-                .session
-                .as_ref()
-                .zip(self.rust().doc)
-                .and_then(|(session, doc)| {
-                    basecraft_viewmodel::alphabet::alignment_question(session.alignment(doc).ok()?)
-                });
-        let (question, redo) = crate::document_open::after_install(&path, question);
-        self.as_mut().set_alphabet_question(question);
-        if let Some(op) = redo {
-            // After the install: opening never changes the document it opens.
-            let _ = self.qt_thread().queue(move |mut this| {
-                this.as_mut().edit(op);
-                this.refresh();
-            });
-        }
+        crate::document_open::installed(self.as_mut(), &path);
         self.refresh();
         Ok(())
     }
@@ -1234,12 +1234,8 @@ impl qobject::AlignmentController {
         self.refresh();
     }
 
-    pub fn state_alphabet(mut self: Pin<&mut Self>, answer: &QString) -> bool {
-        self.as_mut().set_alphabet_question(QString::default());
-        let stated = basecraft_viewmodel::alphabet::stated(&answer.to_string())
-            .is_some_and(|op| self.as_mut().edit(op));
-        self.refresh();
-        stated
+    pub fn state_alphabet(self: Pin<&mut Self>, answer: &QString) -> bool {
+        crate::document_open::state_alphabet(self, &answer.to_string())
     }
 
     pub fn undo(self: Pin<&mut Self>) {
