@@ -155,10 +155,7 @@ fn plugin_command_runs_registered_sequence_operations() {
     let rejected = call(&["bogus=1"]);
     assert!(!rejected.status.success());
     let outcome: Value = serde_json::from_slice(&rejected.stdout).unwrap();
-    assert_eq!(
-        outcome["errors"][0]["code"], "unknown_setting",
-        "{outcome}"
-    );
+    assert_eq!(outcome["errors"][0]["code"], "unknown_setting", "{outcome}");
     assert_eq!(std::fs::read(&sequence).unwrap(), b">sequence\nACGTACGT\n");
 }
 
