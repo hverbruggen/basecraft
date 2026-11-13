@@ -5,11 +5,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use basecraft_ops::{DocId, Session};
-use basecraft_plugin_host::{
-    jobs::JobManager,
-    policy::SessionPolicy,
-    registry::{Registry, RegistryConfig},
-};
+use basecraft_plugin_host::{jobs::JobManager, policy::SessionPolicy};
 use basecraft_protocol::operation::{InputReference, OperationOutcome, OperationRequest};
 
 pub(crate) struct DocumentJob {
@@ -22,21 +18,10 @@ pub(crate) fn bundled(plugin: &str, operation: &str) -> String {
     format!("basecraft.{plugin}/{operation}@1")
 }
 
-fn registry() -> Result<Registry, String> {
-    RegistryConfig::discover()
-        .and_then(|config| Registry::load(&config))
-        .map_err(|error| error.to_string())
-}
-
 /// The collection member that holds an operation's main result, such as
 /// `tree.nwk`, as its descriptor declares it.
 pub(crate) fn primary_member(operation: &str) -> Result<String, String> {
-    let registry = registry()?;
-    let descriptor = &registry
-        .resolve(operation, None)
-        .map_err(|error| error.to_string())?
-        .descriptor;
-    descriptor
+    crate::plugins::descriptor(operation)?
         .outputs
         .iter()
         .find_map(|(role, output)| Some(format!("{role}/{}", output.primary.as_ref()?)))
@@ -69,11 +54,8 @@ impl DocumentJob {
         parameters: serde_json::Value,
         exports: &[(String, PathBuf)],
     ) -> Result<Self, String> {
-        let registry = registry()?;
-        let input = registry
-            .resolve(operation, None)
-            .map_err(|error| error.to_string())?
-            .descriptor
+        let registry = crate::plugins::registry().map_err(|error| error.to_string())?;
+        let input = crate::plugins::descriptor(operation)?
             .inputs
             .keys()
             .next()
@@ -123,7 +105,7 @@ impl DocumentJob {
         parameters: serde_json::Value,
         exports: &[(String, PathBuf)],
     ) -> Result<Self, String> {
-        let registry = registry()?;
+        let registry = crate::plugins::registry().map_err(|error| error.to_string())?;
         let policy = SessionPolicy::new(session.root(), true).map_err(|error| error.to_string())?;
         let root = policy.root.clone();
         let destinations = exports
@@ -213,12 +195,7 @@ impl DocumentJob {
 pub(crate) fn declared_parameters(
     operation: &str,
 ) -> Result<std::collections::BTreeSet<String>, String> {
-    let registry = registry()?;
-    let descriptor = &registry
-        .resolve(operation, None)
-        .map_err(|error| error.to_string())?
-        .descriptor;
-    Ok(descriptor
+    Ok(crate::plugins::descriptor(operation)?
         .parameters
         .get("properties")
         .and_then(serde_json::Value::as_object)
@@ -230,12 +207,7 @@ pub(crate) fn declared_parameters(
 /// whose view matches a tree or an alignment file.
 pub(crate) fn input_role(operation: &str, path: &Path) -> Result<String, String> {
     use basecraft_protocol::operation::InputView;
-    let registry = registry()?;
-    let inputs = &registry
-        .resolve(operation, None)
-        .map_err(|error| error.to_string())?
-        .descriptor
-        .inputs;
+    let inputs = &crate::plugins::descriptor(operation)?.inputs;
     let tree = basecraft_ops::files::Format::from_path(path).ok()
         == Some(basecraft_ops::files::Format::Tree);
     inputs

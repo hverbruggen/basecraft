@@ -325,7 +325,7 @@ use serde_json::json;
 use crate::bridge::{
     ALT, CTRL, KEY_0, KEY_BACKSPACE, KEY_DELETE, KEY_DOWN, KEY_END, KEY_EQUAL, KEY_ESCAPE,
     KEY_HOME, KEY_LEFT, KEY_MINUS, KEY_PAGE_DOWN, KEY_PAGE_UP, KEY_PLUS, KEY_RIGHT, KEY_UP, KEY_Y,
-    KEY_Z, SHIFT, WHEEL_ZOOM, ZOOM_STEP, file_name, memory_text, plugin_dir, took,
+    KEY_Z, SHIFT, WHEEL_ZOOM, ZOOM_STEP, file_name, memory_text, took,
 };
 
 const KEY_A: i32 = 0x41;
@@ -1594,14 +1594,11 @@ impl qobject::AlignmentController {
             Ok(context) => context,
             Err(error) => return QString::from(&json!({"error": error.to_string()}).to_string()),
         };
-        let value =
-            basecraft_plugin_host::manifest::Manifest::load(&plugin_dir(&plugin.to_string()))
-                .map_err(|e| e.to_string())
-                .and_then(|m| {
-                    m.form(&form.to_string())
-                        .map(|f| serde_json::to_value(f.for_context(&context)).unwrap_or_default())
-                        .ok_or_else(|| format!("{plugin} has no {form} settings"))
-                });
+        let value = crate::plugins::bundled_manifest(&plugin.to_string()).and_then(|m| {
+            m.form(&form.to_string())
+                .map(|f| serde_json::to_value(f.for_context(&context)).unwrap_or_default())
+                .ok_or_else(|| format!("{plugin} has no {form} settings"))
+        });
         QString::from(
             &value
                 .unwrap_or_else(|error| serde_json::json!({"error": error}))
@@ -1612,8 +1609,7 @@ impl qobject::AlignmentController {
     pub fn run_form(self: Pin<&mut Self>, plugin: &QString, form: &QString, values: &QString) {
         let tool = (|| -> Result<Tool, String> {
             let plugin = plugin.to_string();
-            let manifest = basecraft_plugin_host::manifest::Manifest::load(&plugin_dir(&plugin))
-                .map_err(|e| e.to_string())?;
+            let manifest = crate::plugins::bundled_manifest(&plugin)?;
             let form = manifest
                 .form(&form.to_string())
                 .ok_or_else(|| format!("{} has no {form} settings", manifest.name))?;

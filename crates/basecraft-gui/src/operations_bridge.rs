@@ -1,10 +1,6 @@
 //! Small generic installed-operation UI. Jobs belong to the application object,
 //! not a tab; closing the picker or switching files never retargets their result.
-use basecraft_plugin_host::{
-    jobs::JobManager,
-    policy::SessionPolicy,
-    registry::{Registry, RegistryConfig},
-};
+use basecraft_plugin_host::{jobs::JobManager, policy::SessionPolicy};
 use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::QString;
 use serde_json::{Value, json};
@@ -73,42 +69,8 @@ impl Drop for OperationsRust {
         }
     }
 }
-fn catalog() -> basecraft_plugin_host::Result<Value> {
-    use basecraft_protocol::operation::ExecutionFamily;
-    let registry = Registry::load(&RegistryConfig::discover()?)?;
-    let mut rows = Vec::new();
-    for operation in registry.operations.values() {
-        let descriptor = &operation.descriptor;
-        let properties = descriptor.parameters["properties"]
-            .as_object()
-            .ok_or_else(|| {
-                basecraft_plugin_host::Error::Protocol("missing parameter properties".into())
-            })?;
-        let reason = if !operation.package.enabled {
-            Some("Plugin is disabled")
-        } else if operation.package.interpreter.is_none() {
-            Some("Python runtime is unavailable")
-        } else if descriptor.family != ExecutionFamily::FileAnalysis {
-            Some("Use the sequence tools or CLI/Python/MCP for snapshot proposals")
-        } else if descriptor
-            .inputs
-            .values()
-            .any(|binding| binding.min > 1 || binding.max != 1)
-        {
-            Some("File lists are available through CLI/Python/MCP")
-        } else if !basecraft_viewmodel::parameters::supported(&descriptor.parameters, 0) {
-            Some("This settings schema is available through CLI/Python/MCP")
-        } else {
-            None
-        };
-        let fields: Vec<_> = properties.iter().map(|(name,schema)| json!({"name":name,"schema":schema,"required":descriptor.parameters["required"].as_array().is_some_and(|required| required.iter().any(|value| value == name))})).collect();
-        rows.push(json!({"operation":operation.id,"title":descriptor.title,"description":descriptor.description,
-            "parameters":descriptor.parameters,"supported":reason.is_none(),"limitation":reason,"fields":fields,"inputs":descriptor.inputs,"outputs":descriptor.outputs,"pins":operation.pins(&registry.generation)}));
-    }
-    Ok(json!({"operations":rows,"diagnostics":registry.diagnostics}))
-}
 fn blast_parameters(parameters: &str) -> basecraft_plugin_host::Result<Value> {
-    let registry = Registry::load(&RegistryConfig::discover()?)?;
+    let registry = crate::plugins::registry()?;
     let operation = registry.resolve("basecraft.blast/submit@1", None)?;
     basecraft_plugin_host::contract::normalize_parameters(
         &operation.descriptor,
@@ -223,7 +185,7 @@ impl qobject::AppOperations {
 
     pub fn catalog(&self) -> QString {
         QString::from(
-            &catalog()
+            &crate::plugins::catalog()
                 .unwrap_or_else(|error| json!({"operations":[],"error":error.to_string()}))
                 .to_string(),
         )
@@ -374,7 +336,7 @@ fn run_request(
             "Operation cancelled before submission".into(),
         ));
     }
-    let registry = Registry::load(&RegistryConfig::discover()?)?;
+    let registry = crate::plugins::registry()?;
     let mut policy = SessionPolicy::new(&root, true)?;
     if let Some(token) = credential {
         let recipient = registry.resolve("basecraft.zenodo/draft@1", None)?;

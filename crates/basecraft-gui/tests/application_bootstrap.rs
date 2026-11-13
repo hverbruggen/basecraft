@@ -55,6 +55,9 @@ mod metadata_bridge;
 mod open_argv;
 #[path = "../src/operations_bridge.rs"]
 mod operations_bridge;
+#[path = "../src/plugins.rs"]
+#[allow(unused_imports, dead_code)] // harness=false omits the included module's test bodies.
+mod plugins;
 #[path = "../src/provenance_bridge.rs"]
 #[allow(unused_imports)] // harness=false omits the included module's #[test] bodies.
 mod provenance_bridge;

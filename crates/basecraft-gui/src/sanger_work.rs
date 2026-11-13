@@ -6,11 +6,7 @@ use basecraft_docs::{
     sanger::{SangerDraft, SangerDraftExt},
 };
 use basecraft_io::abif;
-use basecraft_plugin_host::{
-    jobs::JobManager,
-    policy::SessionPolicy,
-    registry::{Registry, RegistryConfig},
-};
+use basecraft_plugin_host::{jobs::JobManager, policy::SessionPolicy};
 use basecraft_protocol::operation::{OperationOutcome, RuntimeState};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -130,9 +126,7 @@ fn operation(
     cancelled: &AtomicBool,
 ) -> Result<OperationOutcome, String> {
     check(cancelled)?;
-    let registry = RegistryConfig::discover()
-        .and_then(|config| Registry::load(&config))
-        .map_err(|e| e.to_string())?;
+    let registry = crate::plugins::registry().map_err(|e| e.to_string())?;
     let mut request = serde_json::json!({"operation": operation});
     request["inputs"] = inputs;
     request["parameters"] = parameters;

@@ -839,11 +839,7 @@ impl qobject::TreeController {
     }
 
     pub fn extract_clade_alignment(mut self: Pin<&mut Self>) {
-        use basecraft_plugin_host::{
-            jobs::JobManager,
-            policy::SessionPolicy,
-            registry::{Registry, RegistryConfig},
-        };
+        use basecraft_plugin_host::{jobs::JobManager, policy::SessionPolicy};
         use basecraft_protocol::operation::{InputReference, OperationRequest, RuntimeState};
         let access_thread = self.qt_thread();
         if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
@@ -892,9 +888,7 @@ impl qobject::TreeController {
                     .map_err(|e| e.to_string())?;
                 let output =
                     basecraft_plugin_host::file_tool::output_beside(&tree_path, "clade", "afa");
-                let registry = RegistryConfig::discover()
-                    .and_then(|c| Registry::load(&c))
-                    .map_err(|e| e.to_string())?;
+                let registry = crate::plugins::registry().map_err(|e| e.to_string())?;
                 let policy = SessionPolicy::new(session.root(), true).map_err(|e| e.to_string())?;
                 let destination = output
                     .strip_prefix(&policy.root)

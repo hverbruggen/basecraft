@@ -638,15 +638,13 @@ impl qobject::GenomeController {
             let result = report.clone();
             let spawned = crate::jobs::spawn("engine-discovery", move || {
                 let value = (|| -> Result<String, String> {
-                    let manifest =
-                        basecraft_plugin_host::Manifest::load(&plugin_dir("delimitation"))
-                            .map_err(|e| e.to_string())?;
-                let mut plugin = basecraft_plugin_host::PluginProcess::spawn(&manifest)
-                    .map_err(|e| e.to_string())?;
-                plugin
-                    .query("engines")
-                    .map(|report| report.to_string())
-                    .map_err(|e| e.to_string())
+                    let manifest = crate::plugins::bundled_manifest("delimitation")?;
+                    let mut plugin = basecraft_plugin_host::PluginProcess::spawn(&manifest)
+                        .map_err(|e| e.to_string())?;
+                    plugin
+                        .query("engines")
+                        .map(|report| report.to_string())
+                        .map_err(|e| e.to_string())
                 })()
                 .unwrap_or_else(|error| json!({"asap":error,"ptp":error,"mptp":error}).to_string());
                 let mut current = result
@@ -1772,23 +1770,15 @@ impl qobject::GenomeController {
         mut params: serde_json::Value,
         range: Option<(u64, u64)>,
     ) -> Result<(usize, usize), String> {
-        use basecraft_plugin_host::{
-            jobs::JobManager,
-            policy::SessionPolicy,
-            registry::{Registry, RegistryConfig},
-        };
+        use basecraft_plugin_host::{jobs::JobManager, policy::SessionPolicy};
         use basecraft_protocol::operation::{InputReference, OperationRequest, RuntimeState};
-        let id = basecraft_plugin_host::Manifest::load(&plugin_dir(name))
-            .map_err(|e| e.to_string())?
-            .id;
-        let registry = RegistryConfig::discover()
-            .and_then(|config| Registry::load(&config))
-            .map_err(|e| e.to_string())?;
+        let registry = crate::plugins::registry().map_err(|e| e.to_string())?;
+        let dir = plugin_dir(name);
         let registered = registry
             .operations
             .values()
-            .find(|op| op.package.manifest.id == id && op.descriptor.name == operation)
-            .ok_or_else(|| format!("{id} has no registered {operation} operation"))?;
+            .find(|op| op.package.manifest.dir == dir && op.descriptor.name == operation)
+            .ok_or_else(|| format!("{name} has no registered {operation} operation"))?;
         let binding = registered
             .descriptor
             .inputs
