@@ -1,6 +1,7 @@
 //! How the window names a document's alphabet (D12), honestly: what was
 //! stated or guessed, or that basecraft cannot tell, or that the sequences
 //! are of more than one kind.
+use basecraft_docs::{AlignmentDoc, SequenceDoc};
 use basecraft_protocol::facts::{Alphabet, Fact, FactSource, StatedAlphabet};
 
 /// The alphabet as the status line names it.
@@ -25,32 +26,49 @@ pub fn text(fact: &Fact<Alphabet>) -> String {
     }
 }
 
-/// What to ask when basecraft cannot tell what `file` is, or None.
-pub fn question(fact: &Fact<Alphabet>, file: &str) -> Option<String> {
-    (fact.value == Alphabet::Undetermined).then(|| {
-        format!(
-            "Basecraft can't tell whether {file} is DNA, RNA or protein: it has a few letters only \
-             proteins use. Say what it is; tools that need to know refuse until you do."
-        )
-    })
+/// What to ask when basecraft can't tell what some of an alignment's rows
+/// are: the document's own refusal, which names them. Rows of clear but
+/// different kinds are reported, not asked about; a stated alphabet asks
+/// nothing.
+pub fn alignment_question(doc: &AlignmentDoc) -> Option<String> {
+    let unclear = doc.row_alphabets().contains(&Alphabet::Undetermined);
+    doc.alphabet_refusal().filter(|_| unclear)
 }
 
-/// The alphabet a user states, from the dialog's answer.
-pub fn stated(answer: &str) -> Option<StatedAlphabet> {
-    Some(match answer {
+/// [`alignment_question`] for a single sequence.
+pub fn sequence_question(doc: &SequenceDoc) -> Option<String> {
+    let unclear = doc.alphabet().value == Alphabet::Undetermined;
+    doc.alphabet_refusal().filter(|_| unclear)
+}
+
+/// The edit that states the alphabet the user chose in the dialog.
+pub fn stated(answer: &str) -> Option<basecraft_protocol::Op> {
+    let alphabet = match answer {
         "dna" => StatedAlphabet::Dna,
         "rna" => StatedAlphabet::Rna,
         "protein" => StatedAlphabet::Protein,
         _ => return None,
-    })
+    };
+    Some(basecraft_protocol::Op::SetAlphabet { alphabet })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use basecraft_docs::alignment::AlnRow;
+    use std::sync::Arc;
 
     fn fact(value: Alphabet, source: FactSource) -> Fact<Alphabet> {
         Fact { value, source }
+    }
+    fn alignment(rows: &[&str]) -> AlignmentDoc {
+        AlignmentDoc::new(
+            "t",
+            rows.iter()
+                .enumerate()
+                .map(|(i, seq)| AlnRow::new(format!("r{i}"), Arc::new(seq.as_bytes().to_vec())))
+                .collect(),
+        )
     }
 
     #[test]
@@ -71,16 +89,23 @@ mod tests {
     }
 
     #[test]
-    fn only_an_undetermined_document_asks() {
-        let asked = question(
-            &fact(Alphabet::Undetermined, FactSource::Guessed),
-            "a.fasta",
+    fn one_undetermined_row_among_dna_rows_asks_and_names_it() {
+        let dna = "ACGT".repeat(50);
+        let unclear = format!("{}E{}", "ACGT".repeat(25), "ACGT".repeat(25));
+        let doc = alignment(&[&dna, &dna, &unclear]);
+        assert_eq!(doc.alphabet().value, Alphabet::Mixed);
+        let asked = alignment_question(&doc).unwrap();
+        assert!(asked.contains("r2") && !asked.contains("r0"), "{asked}");
+        // Clear rows of different kinds are reported, not asked about.
+        let protein = "MKLVEEFPQ".repeat(20);
+        assert!(alignment_question(&alignment(&[&dna, &protein])).is_none());
+        assert!(alignment_question(&alignment(&[&dna, &dna])).is_none());
+        assert_eq!(
+            stated("rna"),
+            Some(basecraft_protocol::Op::SetAlphabet {
+                alphabet: StatedAlphabet::Rna
+            })
         );
-        assert!(asked.unwrap().contains("a.fasta"));
-        for value in [Alphabet::Dna, Alphabet::Mixed, Alphabet::Unknown] {
-            assert!(question(&fact(value, FactSource::Guessed), "a.fasta").is_none());
-        }
-        assert_eq!(stated("rna"), Some(StatedAlphabet::Rna));
         assert_eq!(stated("mixed"), None);
     }
 }

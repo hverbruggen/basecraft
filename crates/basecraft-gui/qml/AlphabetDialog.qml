@@ -18,8 +18,8 @@ AppContentDialog {
     body: ColumnLayout {
         spacing: 6
         Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: dialog.question }
-        AppButton { id: dna; objectName: "alphabetDna"; text: "It is &DNA"; onClicked: dialog.controller.state_alphabet("dna") }
-        AppButton { objectName: "alphabetRna"; text: "It is &RNA"; onClicked: dialog.controller.state_alphabet("rna") }
-        AppButton { objectName: "alphabetProtein"; text: "It is &protein"; onClicked: dialog.controller.state_alphabet("protein") }
+        AppButton { id: dna; objectName: "alphabetDna"; text: "Mark as &DNA"; onClicked: dialog.controller.state_alphabet("dna") }
+        AppButton { objectName: "alphabetRna"; text: "Mark as &RNA"; onClicked: dialog.controller.state_alphabet("rna") }
+        AppButton { objectName: "alphabetProtein"; text: "Mark as &protein"; onClicked: dialog.controller.state_alphabet("protein") }
     }
 }

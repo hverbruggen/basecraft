@@ -389,9 +389,69 @@ pub fn authorize(plan: &Plan, settings: &Value) -> Result<()> {
     Ok(())
 }
 
+/// Keep the queries of a BLAST search as the search's input record in the
+/// `.basecraft` of `folder`: the chosen project, or a loose file's own folder,
+/// so the records stay with the data. Returns the record's path relative to
+/// `folder`, for the request, whose run records then go there too. A folder
+/// basecraft cannot write to is refused as read-only (D13).
+pub fn record_queries(folder: &Path, queries: &[Query]) -> Result<std::path::PathBuf> {
+    let relative = Path::new(".basecraft/blast")
+        .join(ulid::Ulid::generate().to_string())
+        .join("query-source.json");
+    let record = folder.join(&relative);
+    let written = record
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| {
+            std::fs::write(
+                &record,
+                serde_json::to_vec_pretty(queries).map_err(std::io::Error::other)?,
+            )
+        });
+    match written {
+        Ok(()) => Ok(relative),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            Err(crate::Error::ReadOnlyFolder {
+                folder: folder.to_path_buf(),
+                reason: error.to_string(),
+            })
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_search_keeps_its_queries_in_the_folders_records_or_refuses_a_read_only_folder() {
+        let folder = tempfile::tempdir().unwrap();
+        let queries = vec![Query {
+            name: "q".into(),
+            sequence: "ACGT".into(),
+            source: json!({"path": "a.fasta"}),
+        }];
+        let relative = record_queries(folder.path(), &queries).unwrap();
+        assert!(relative.starts_with(".basecraft/blast"));
+        let kept: Vec<Query> =
+            serde_json::from_slice(&std::fs::read(folder.path().join(&relative)).unwrap()).unwrap();
+        assert_eq!(kept[0].sequence, "ACGT");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let locked = tempfile::tempdir().unwrap();
+            std::fs::set_permissions(locked.path(), std::fs::Permissions::from_mode(0o555))
+                .unwrap();
+            let refused = record_queries(locked.path(), &queries);
+            std::fs::set_permissions(locked.path(), std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+            assert!(
+                matches!(refused, Err(crate::Error::ReadOnlyFolder { .. })),
+                "{refused:?}"
+            );
+        }
+    }
     fn settings(alphabet: &str) -> Value {
         json!({"alphabet":alphabet,"database":"nr"})
     }

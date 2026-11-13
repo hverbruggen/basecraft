@@ -79,6 +79,10 @@ pub mod qobject {
 
         /// Show the tree in `path` with `edits`, a JSON list of drawing
         /// edits, replayed on it. Nothing is written.
+        /// The tab closed: end its document's session now, so a project
+        /// switch that follows sees the project free.
+        #[qinvokable]
+        fn close_session(self: Pin<&mut TreeController>);
         #[qinvokable]
         fn find_query(self: Pin<&mut TreeController>, query: &QString, reverse: bool);
         #[qinvokable]
@@ -166,9 +170,6 @@ pub mod qobject {
         /// "undo", for this label or with `all` for every one left.
         #[qinvokable]
         fn answer_label(self: Pin<&mut TreeController>, answer: &QString, all: bool) -> bool;
-        /// Stop asking; the labels stay where the edit left them.
-        #[qinvokable]
-        fn dismiss_labels(self: Pin<&mut TreeController>);
         #[qinvokable]
         fn redo(self: Pin<&mut TreeController>);
         #[qinvokable]
@@ -541,6 +542,10 @@ fn checked_annotation(
 }
 
 impl qobject::TreeController {
+    pub fn close_session(mut self: Pin<&mut Self>) {
+        self.as_mut().rust_mut().session = None;
+    }
+
     pub fn document_record(&self) -> QString {
         crate::provenance_bridge::session_report(self.rust().session.as_ref(), self.rust().doc)
     }
@@ -720,23 +725,36 @@ impl qobject::TreeController {
         let clears_selection =
             matches!(op, Op::TreeMidpointRoot {} | Op::TreeMinimumVarianceRoot {});
         let placing = matches!(op, Op::TreePlaceLabel { .. });
+        // Only rooting moves a clade label off its group (D11).
+        let rooting = placing
+            || matches!(
+                op,
+                Op::TreeReroot { .. }
+                    | Op::TreeMidpointRoot {}
+                    | Op::TreeMinimumVarianceRoot {}
+                    | Op::TreeRootPosition { .. }
+            );
         let (result, refused_now) = {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
             let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
                 return Err("No tree open".into());
             };
-            let before = session
-                .tree(doc)
-                .map_err(|e| e.to_string())?
-                .displaced_labels();
+            let displaced = |session: &basecraft_ops::Session| {
+                session
+                    .tree(doc)
+                    .map(TreeDoc::displaced_labels)
+                    .map_err(|e| e.to_string())
+            };
+            let before = if rooting {
+                displaced(session)?
+            } else {
+                Vec::new()
+            };
             let (result, refused) =
                 crate::document_open::applying(session, doc, op, basecraft_ops::renames::apply_op);
-            let after = session
-                .tree(doc)
-                .map_err(|e| e.to_string())?
-                .displaced_labels();
-            if result.is_ok() {
+            if rooting && result.is_ok() {
+                let after = displaced(session)?;
                 match (&mut r.labels, placing) {
                     (Some(questions), true) => questions.refresh(&after),
                     _ => r.labels = Questions::after_edit(&before, after),
@@ -1552,18 +1570,24 @@ impl qobject::TreeController {
     }
 
     pub fn answer_label(mut self: Pin<&mut Self>, answer: &QString, all: bool) -> bool {
-        let step = Answer::parse(&answer.to_string()).and_then(|answer| {
-            self.as_mut()
-                .rust_mut()
-                .labels
-                .as_mut()
-                .and_then(|questions| questions.answer(answer, all))
-        });
+        let step = Answer::parse(&answer.to_string())
+            .and_then(|answer| self.rust().labels.as_ref()?.answer(answer, all));
         let done = match step {
-            Some(Step::Place { labels, choice }) => self
-                .as_mut()
-                .edit(Op::TreePlaceLabel { labels, choice })
-                .is_ok(),
+            Some(Step::Place { labels, choice }) => {
+                let placed = self
+                    .as_mut()
+                    .edit(Op::TreePlaceLabel {
+                        labels: labels.clone(),
+                        choice,
+                    })
+                    .is_ok();
+                // Counted only once applied, so Undo reroot stops at the reroot.
+                if let (true, Some(questions)) = (placed, self.as_mut().rust_mut().labels.as_mut())
+                {
+                    questions.placed(&labels);
+                }
+                placed
+            }
             Some(Step::Undo(steps)) => {
                 self.as_mut().rust_mut().labels = None;
                 for _ in 0..steps {
@@ -1578,11 +1602,6 @@ impl qobject::TreeController {
         }
         self.ask_labels();
         done
-    }
-
-    pub fn dismiss_labels(mut self: Pin<&mut Self>) {
-        self.as_mut().rust_mut().labels = None;
-        self.ask_labels();
     }
 
     pub fn redo(self: Pin<&mut Self>) {

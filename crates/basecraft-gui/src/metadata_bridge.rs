@@ -505,7 +505,7 @@ impl qobject::MetadataController {
         let ok = match result {
             Err(error) => {
                 self.as_mut()
-                    .report("error", &crate::document_open::edit_failure(&error));
+                    .report("error", &crate::document_open::project_edit_failure(&error));
                 false
             }
             Ok(Err(error)) => {

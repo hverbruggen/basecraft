@@ -70,6 +70,14 @@ pub mod qobject {
         #[cxx_name = "fileCreated"]
         fn file_created(self: Pin<&mut AlignmentController>, path: QString);
 
+        /// The tab closed: end its document's session now, so a project
+        /// switch that follows sees the project free.
+        #[qinvokable]
+        fn close_session(self: Pin<&mut AlignmentController>);
+        /// Where records of work on this document go, such as a BLAST
+        /// search's: its session's folder (the project, or the file's folder).
+        #[qinvokable]
+        fn record_folder(self: &AlignmentController) -> QString;
         #[qinvokable]
         fn find_query(self: Pin<&mut AlignmentController>, query: &QString, reverse: bool);
         #[qinvokable]
@@ -501,6 +509,15 @@ fn f(v: f64) -> f32 {
 }
 
 impl qobject::AlignmentController {
+    pub fn record_folder(&self) -> QString {
+        let folder = self.rust().session.as_ref().map(|s| s.root().to_path_buf());
+        QString::from(folder.unwrap_or_default().to_string_lossy().as_ref())
+    }
+
+    pub fn close_session(mut self: Pin<&mut Self>) {
+        self.as_mut().rust_mut().session = None;
+    }
+
     pub fn document_record(&self) -> QString {
         crate::provenance_bridge::session_report(self.rust().session.as_ref(), self.rust().doc)
     }
@@ -989,14 +1006,11 @@ impl qobject::AlignmentController {
                 .as_ref()
                 .zip(self.rust().doc)
                 .and_then(|(session, doc)| {
-                    basecraft_viewmodel::alphabet::question(
-                        &session.alignment(doc).ok()?.alphabet(),
-                        &crate::bridge::file_name(&path),
-                    )
+                    basecraft_viewmodel::alphabet::alignment_question(session.alignment(doc).ok()?)
                 });
-        self.as_mut()
-            .set_alphabet_question(QString::from(&question.unwrap_or_default()));
-        if let Some(op) = crate::document_open::take_refused(&path) {
+        let (question, redo) = crate::document_open::after_install(&path, question);
+        self.as_mut().set_alphabet_question(question);
+        if let Some(op) = redo {
             // After the install: opening never changes the document it opens.
             let _ = self.qt_thread().queue(move |mut this| {
                 this.as_mut().edit(op);
@@ -1221,11 +1235,9 @@ impl qobject::AlignmentController {
     }
 
     pub fn state_alphabet(mut self: Pin<&mut Self>, answer: &QString) -> bool {
-        let Some(alphabet) = basecraft_viewmodel::alphabet::stated(&answer.to_string()) else {
-            return false;
-        };
-        let stated = self.as_mut().edit(Op::SetAlphabet { alphabet });
         self.as_mut().set_alphabet_question(QString::default());
+        let stated = basecraft_viewmodel::alphabet::stated(&answer.to_string())
+            .is_some_and(|op| self.as_mut().edit(op));
         self.refresh();
         stated
     }
@@ -1343,11 +1355,6 @@ impl qobject::AlignmentController {
                     (0, doc.width())
                 };
                 basecraft_ops::blast::from_alignment(doc, rows, columns)
-            })
-            .map(|value| {
-                let root = self.rust().session.as_ref().map(|s| s.root().to_path_buf());
-                let root = root.unwrap_or_default();
-                value.map(|queries| queries.map(|q| crate::operations_bridge::queries_in(q, &root)))
             })
             .and_then(|value| {
                 value.unwrap_or_else(|| {

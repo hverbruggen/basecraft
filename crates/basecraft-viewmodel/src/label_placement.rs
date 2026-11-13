@@ -87,34 +87,34 @@ impl Questions {
 
     /// The step for `answer`, to the current label or with `all` to every
     /// label still to place. None when the answer is not offered.
-    pub fn answer(&mut self, answer: Answer, all: bool) -> Option<Step> {
+    pub fn answer(&self, answer: Answer, all: bool) -> Option<Step> {
         let current = self.pending.first()?;
+        let exact = if all {
+            self.pending.iter().all(|l| l.exact)
+        } else {
+            current.exact
+        };
         let choice = match answer {
-            Answer::UndoReroot => {
-                let steps = self.placed + 1;
-                self.pending.clear();
-                return Some(Step::Undo(steps));
-            }
-            Answer::Exact
-                if !(if all {
-                    self.pending.iter().all(|l| l.exact)
-                } else {
-                    current.exact
-                }) =>
-            {
-                return None;
-            }
+            // Back past the placements made so far, then the reroot itself.
+            Answer::UndoReroot => return Some(Step::Undo(self.placed + 1)),
+            Answer::Exact if !exact => return None,
             Answer::Exact => LabelPlacement::Exact,
             Answer::Smallest => LabelPlacement::Smallest,
             Answer::Remove => LabelPlacement::Remove,
         };
-        let labels: Vec<u32> = if all {
-            self.pending.drain(..).map(|label| label.id).collect()
+        let labels = if all {
+            self.pending.iter().map(|label| label.id).collect()
         } else {
-            vec![self.pending.remove(0).id]
+            vec![current.id]
         };
-        self.placed += 1;
         Some(Step::Place { labels, choice })
+    }
+
+    /// The placement edit for `labels` was applied: one more undo step, and
+    /// those labels are no longer asked about. Not called when it failed.
+    pub fn placed(&mut self, labels: &[u32]) {
+        self.placed += 1;
+        self.pending.retain(|label| !labels.contains(&label.id));
     }
 
     /// Keep asking only about labels the tree still reports as displaced,
@@ -163,6 +163,15 @@ mod tests {
         assert_eq!(asked.question().unwrap().total, 1);
     }
 
+    /// Answer, and confirm as the controller does once the edit applied.
+    fn apply(q: &mut Questions, answer: Answer, all: bool) -> Option<Step> {
+        let step = q.answer(answer, all);
+        if let Some(Step::Place { labels, .. }) = &step {
+            q.placed(labels);
+        }
+        step
+    }
+
     #[test]
     fn each_label_is_asked_in_turn_and_exact_only_where_a_clade_matches() {
         let mut q =
@@ -176,7 +185,7 @@ mod tests {
         // Exact for every label is refused while one has no exact clade.
         assert_eq!(q.answer(Answer::Exact, true), None);
         assert_eq!(
-            q.answer(Answer::Exact, false),
+            apply(&mut q, Answer::Exact, false),
             Some(place(&[1], LabelPlacement::Exact))
         );
         let second = q.question().unwrap();
@@ -186,7 +195,7 @@ mod tests {
         );
         assert_eq!(q.answer(Answer::Exact, false), None);
         assert_eq!(
-            q.answer(Answer::Remove, false),
+            apply(&mut q, Answer::Remove, false),
             Some(place(&[2], LabelPlacement::Remove))
         );
         assert!(q.done() && q.question().is_none());
@@ -203,12 +212,9 @@ mod tests {
             ],
         )
         .unwrap();
+        apply(&mut q, Answer::Remove, false);
         assert_eq!(
-            q.answer(Answer::Remove, false),
-            Some(place(&[1], LabelPlacement::Remove))
-        );
-        assert_eq!(
-            q.answer(Answer::Smallest, true),
+            apply(&mut q, Answer::Smallest, true),
             Some(place(&[2, 3], LabelPlacement::Smallest))
         );
         assert!(q.done());
@@ -219,18 +225,25 @@ mod tests {
         let mut q =
             Questions::after_edit(&[], vec![label(1, "All", true), label(2, "AB", false)]).unwrap();
         assert_eq!(q.answer(Answer::UndoReroot, false), Some(Step::Undo(1)));
-        assert!(q.done());
-        let mut q =
-            Questions::after_edit(&[], vec![label(1, "All", true), label(2, "AB", false)]).unwrap();
-        q.answer(Answer::Smallest, false);
+        apply(&mut q, Answer::Smallest, false);
         assert_eq!(q.answer(Answer::UndoReroot, false), Some(Step::Undo(2)));
+    }
+
+    #[test]
+    fn a_placement_that_failed_counts_nothing_and_asks_again() {
+        let q =
+            Questions::after_edit(&[], vec![label(1, "All", true), label(2, "AB", false)]).unwrap();
+        // The controller's edit failed, so it never confirms the placement.
+        assert!(q.answer(Answer::Smallest, false).is_some());
+        assert_eq!(q.question().unwrap().label, "All");
+        assert_eq!(q.answer(Answer::UndoReroot, false), Some(Step::Undo(1)));
     }
 
     #[test]
     fn a_placement_that_settles_another_label_drops_its_question() {
         let mut q =
             Questions::after_edit(&[], vec![label(1, "All", true), label(2, "AB", false)]).unwrap();
-        q.answer(Answer::Exact, false);
+        apply(&mut q, Answer::Exact, false);
         q.refresh(&[label(2, "AB", true)]);
         assert!(
             q.question().unwrap().exact,

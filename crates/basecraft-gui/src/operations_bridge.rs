@@ -34,12 +34,15 @@ pub mod qobject {
         #[qinvokable]
         fn preview_blast(self: &AppOperations, queries: &QString, parameters: &QString) -> QString;
         #[qinvokable]
+        /// `folder` is where the search's records go: the session root of
+        /// the document the queries came from.
         fn submit_blast(
             self: Pin<&mut AppOperations>,
             queries: &QString,
             parameters: &QString,
             approval: &QString,
             truncate: bool,
+            folder: &QString,
         ) -> bool;
         #[qinvokable]
         fn submit(self: Pin<&mut AppOperations>, project: &QString, request: &QString) -> bool;
@@ -68,17 +71,6 @@ impl Drop for OperationsRust {
             work.cancel();
         }
     }
-}
-/// Name the folder a BLAST search from `root`'s session records into: the
-/// chosen project, or a loose file's own folder.
-pub(crate) fn queries_in(
-    mut queries: Vec<basecraft_ops::blast::Query>,
-    root: &std::path::Path,
-) -> Vec<basecraft_ops::blast::Query> {
-    for query in &mut queries {
-        query.source["folder"] = json!(root);
-    }
-    queries
 }
 fn blast_parameters(parameters: &str) -> basecraft_plugin_host::Result<Value> {
     let registry = crate::plugins::registry()?;
@@ -161,7 +153,9 @@ impl qobject::AppOperations {
         parameters: &QString,
         approval: &QString,
         truncate: bool,
+        folder: &QString,
     ) -> bool {
+        let folder = folder.to_string();
         if self.rust().busy {
             return false;
         }
@@ -176,28 +170,17 @@ impl qobject::AppOperations {
             parameters["truncate"] = json!(truncate);
             let plan = basecraft_ops::blast::prepare(&queries, &parameters)?;
             basecraft_ops::blast::authorize(&plan, &parameters)?;
-            // The search's records, its query snapshot included, go in the
-            // `.basecraft` of the folder the queries came from: the chosen
-            // project, or a loose file's own folder. The record keeps no
-            // absolute path.
-            let mut queries = queries;
-            let root = queries
-                .first()
-                .and_then(|query| query.source["folder"].as_str())
-                .map(PathBuf::from)
-                .ok_or_else(|| {
-                    basecraft_plugin_host::Error::Protocol("BLAST queries name no folder".into())
-                })?;
-            for query in &mut queries {
-                if let Some(source) = query.source.as_object_mut() {
-                    source.remove("folder");
-                }
+            // The search's records stay with the data it came from (`folder`,
+            // the controller's session root).
+            if folder.is_empty() {
+                return Err(basecraft_plugin_host::Error::Protocol(
+                    "The searched document has no folder for the search's records".into(),
+                ));
             }
-            let input = PathBuf::from(".basecraft/blast")
-                .join(ulid::Ulid::generate().to_string())
-                .join("query-source.json");
-            std::fs::create_dir_all(root.join(&input).parent().unwrap_or(&root))?;
-            basecraft_ops::records::write_json(&root.join(&input), &queries)?;
+            let root = PathBuf::from(folder);
+            let input = basecraft_ops::blast::record_queries(&root, &queries).map_err(|error| {
+                basecraft_plugin_host::Error::Protocol(crate::document_open::edit_failure(&error))
+            })?;
             Ok((
                 root,
                 json!({"operation":"basecraft.blast/submit@1","inputs":{"queries":[{"kind":"file","path":input}]},"parameters":parameters}),

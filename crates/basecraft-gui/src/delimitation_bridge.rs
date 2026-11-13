@@ -49,6 +49,10 @@ pub mod qobject {
         /// the tree canvas, as JSON.
         #[qproperty(QString, bar_columns)]
         type DelimitationController = super::DelimitationRust;
+        /// The tab closed: end its document's session now, so a project
+        /// switch that follows sees the project free.
+        #[qinvokable]
+        fn close_session(self: Pin<&mut DelimitationController>);
         #[qinvokable]
         fn find_query(self: Pin<&mut DelimitationController>, query: &QString, reverse: bool);
         #[qinvokable]
@@ -359,6 +363,10 @@ fn group(members: BTreeSet<String>, label: String) -> Group {
     }
 }
 impl qobject::DelimitationController {
+    pub fn close_session(mut self: Pin<&mut Self>) {
+        self.as_mut().rust_mut().session = None;
+    }
+
     pub fn accessible_page(&self, page: i32) -> QString {
         let access_thread = self.qt_thread();
         let state = self.rust();

@@ -31,8 +31,11 @@ AppFormDialog {
     signal saveContact(string email)
     signal contactDetailsRequested
     required property var backend
-    function show(provider, mode, isAlignment) {
+    // `folder`: where the search's records go, from the document's session.
+    property string recordFolder: ""
+    function show(provider, mode, isAlignment, folder) {
         if (backend.busy) { open(); return }
+        recordFolder = folder || ""
         alignment = isAlignment === true
         sourceProvider = provider
         sourceMode = mode || "whole"
@@ -83,7 +86,7 @@ AppFormDialog {
                 formError = "Source or settings changed. Search again before submitting."
                 return
             }
-            submitted = backend.submit_blast(current, frozenSettings, preview.approval_hash, truncate)
+            submitted = backend.submit_blast(current, frozenSettings, preview.approval_hash, truncate, recordFolder)
             if (!submitted) formError = backend.message
         } catch (error) { formError = String(error) }
     }

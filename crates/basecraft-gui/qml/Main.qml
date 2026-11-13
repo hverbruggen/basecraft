@@ -58,7 +58,7 @@ ApplicationWindow {
         else if (step.leave) { // A switch: every tab closes; their sessions end as Qt deletes them, which the choice waits for.
             leave(step.leave); discardAuthoredOnQuit = false
             while (documentOpens.count > 0) removeDocument(documentOpens.count - 1)
-            shell.choose_project_after_close(step.project); refreshCurrent()
+            preferences.project_error = shell.choose_project(step.project); refreshCurrent()
         }
     }
 
@@ -72,7 +72,7 @@ ApplicationWindow {
     palette.highlightedText: shell.background
 
     // Theme, font and project folder, whether or not a file is open.
-    GenomeController { id: shell; objectName: "shell"; onProject_chosen: error => preferences.project_error = error }
+    GenomeController { id: shell; objectName: "shell" }
 
     readonly property var ribbonNavigation: ribbonHints
     RibbonKeyHints {
@@ -96,7 +96,11 @@ ApplicationWindow {
         if (!document) return null
         return {token: documentOpens.token_at(index), controller: document.controller, path: documentOpens.path_at(index)}
     }
+    // The tab's session ends now, not when Qt later deletes the tab, so a
+    // project switch right after sees the project free.
     function removeDocument(index) {
+        const removed = documentAt(index)
+        if (removed && removed.controller) removed.controller.close_session()
         const applying = applyingOpenFocus
         applyingOpenFocus = true
         documentOpens.remove_tab(index)
@@ -118,10 +122,7 @@ ApplicationWindow {
             if (index < 0) return
             const path = documentOpens.path_at(index)
             window.removeDocument(index)
-            // A trace review created in a read-only folder (D13): offer a copy.
-            // A review created in a read-only folder (D13): offer a copy.
-            if (message.startsWith("read_only_folder:")) readOnlyCopy.dialog().offered = {file: path, review: true, row: -1}
-            else provenance.notification(path, message, "fail")
+            provenance.notification(path, message, "fail")
         }
         onActivated: (token, review, installedPath) => {
             const index = documentOpens.index_of(token)
@@ -2354,7 +2355,7 @@ ApplicationWindow {
         const controller = window.current
         mode = commandList.blast_source(window.alignmentOpen, mode, !window.alignmentOpen && controller.has_selection())
         const annotation = window.alignmentOpen ? -1 : (feature === undefined ? controller.selected_feature() : feature)
-        blastWindow.dialog().show(source => controller.blast_queries(source, annotation), mode, window.alignmentOpen)
+        blastWindow.dialog().show(source => controller.blast_queries(source, annotation), mode, window.alignmentOpen, controller.record_folder())
     }
 
     // Only what applies where you clicked: an annotation, or the selection.

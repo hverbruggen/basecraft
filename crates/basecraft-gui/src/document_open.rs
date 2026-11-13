@@ -366,11 +366,25 @@ impl Drop for Opens {
     }
 }
 
-/// An edit refused because the folder cannot hold recovery (D13) starts with
-/// its code, so the window can offer to save a copy and edit that (lane gui2).
+/// What an editor says when an edit fails. A folder that cannot hold
+/// recovery (D13) gets the window's own sentence: the window offers a copy
+/// through `refused_edit`, so the core's command-line advice does not apply.
 pub(crate) fn edit_failure(error: &basecraft_ops::Error) -> String {
     match error {
-        basecraft_ops::Error::ReadOnlyFolder { .. } => format!("{}: {error}", error.code()),
+        basecraft_ops::Error::ReadOnlyFolder { .. } => READ_ONLY_EDIT.into(),
+        _ => error.to_string(),
+    }
+}
+pub(crate) const READ_ONLY_EDIT: &str = "Edit refused: the folder is read-only.";
+
+/// [`edit_failure`] for the project's own tables (specimen metadata,
+/// submissions), which a copy elsewhere would cut off from the project.
+pub(crate) fn project_edit_failure(error: &basecraft_ops::Error) -> String {
+    match error {
+        basecraft_ops::Error::ReadOnlyFolder { .. } => "Edit refused: the project folder is \
+            read-only. Copy the project folder to a place you can write to and choose the copy \
+            as the project."
+            .into(),
         _ => error.to_string(),
     }
 }
@@ -413,18 +427,21 @@ pub(crate) fn copy_for_editing(refused: &str, target: &Path) -> Result<(), Strin
     let source = PathBuf::from(refused["file"].as_str().ok_or("No refused edit")?);
     let op: Option<basecraft_protocol::Op> =
         serde_json::from_value(refused["op"].clone()).map_err(|e| e.to_string())?;
-    if target.exists() {
-        return Err(format!(
-            "{} already exists; choose a new name",
-            target.display()
-        ));
-    }
-    std::fs::copy(&source, target).map_err(|e| format!("Could not copy the file: {e}"))?;
     let companion = |file: &Path| {
         let mut name = file.file_name().unwrap_or_default().to_os_string();
         name.push(".basecraft.json");
         file.with_file_name(name)
     };
+    if let Some(taken) = [target.to_path_buf(), companion(target)]
+        .into_iter()
+        .find(|path| path.exists())
+    {
+        return Err(format!(
+            "{} already exists; choose a new name",
+            taken.display()
+        ));
+    }
+    std::fs::copy(&source, target).map_err(|e| format!("Could not copy the file: {e}"))?;
     if companion(&source).is_file() {
         std::fs::copy(companion(&source), companion(target))
             .map_err(|e| format!("Could not copy the file's companion: {e}"))?;
@@ -439,7 +456,25 @@ pub(crate) fn copy_for_editing(refused: &str, target: &Path) -> Result<(), Strin
     Ok(())
 }
 
-/// The refused edit to redo on `path` now that its copy is open.
+/// What a freshly installed document needs next: its alphabet question (D12)
+/// and the refused edit to redo on it (D13), which the caller queues so the
+/// install itself changes nothing. Redoing a stated alphabet answers the
+/// question, so it is not asked again.
+pub(crate) fn after_install(
+    path: &Path,
+    question: Option<String>,
+) -> (cxx_qt_lib::QString, Option<basecraft_protocol::Op>) {
+    let redo = take_refused(path);
+    let question =
+        question.filter(|_| !matches!(redo, Some(basecraft_protocol::Op::SetAlphabet { .. })));
+    (
+        cxx_qt_lib::QString::from(&question.unwrap_or_default()),
+        redo,
+    )
+}
+
+/// The refused edit to redo on `path` now that its copy is open; also drops
+/// it when that open fails, so no later open of the path gets it.
 pub(crate) fn take_refused(path: &Path) -> Option<basecraft_protocol::Op> {
     let key = path.canonicalize().ok()?;
     let mut pending = PENDING

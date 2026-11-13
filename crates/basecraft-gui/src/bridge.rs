@@ -102,6 +102,14 @@ pub mod qobject {
         #[qproperty(f64, scroll_size)]
         type GenomeController = super::ControllerRust;
 
+        /// The tab closed: end its document's session now, so a project
+        /// switch that follows sees the project free.
+        #[qinvokable]
+        fn close_session(self: Pin<&mut GenomeController>);
+        /// Where records of work on this document go, such as a BLAST
+        /// search's: its session's folder (the project, or the file's folder).
+        #[qinvokable]
+        fn record_folder(self: &GenomeController) -> QString;
         #[qinvokable]
         fn find_query(self: Pin<&mut GenomeController>, query: &QString, reverse: bool);
         #[qinvokable]
@@ -154,12 +162,6 @@ pub mod qobject {
         /// the window's project changes.
         #[qinvokable]
         fn choose_project(self: Pin<&mut GenomeController>, path: &QString) -> QString;
-        /// After a switch closed every tab: choose `path` once their
-        /// sessions have ended; `project_chosen` reports "" or the refusal.
-        #[qinvokable]
-        fn choose_project_after_close(self: Pin<&mut GenomeController>, path: &QString);
-        #[qsignal]
-        fn project_chosen(self: Pin<&mut GenomeController>, error: QString);
         #[qinvokable]
         fn resize(self: Pin<&mut GenomeController>, width: f64, height: f64);
         #[qinvokable]
@@ -592,6 +594,15 @@ pub(crate) fn file_folder(file: &Path) -> PathBuf {
 }
 
 impl qobject::GenomeController {
+    pub fn record_folder(&self) -> QString {
+        let folder = self.rust().session.as_ref().map(|s| s.root().to_path_buf());
+        QString::from(folder.unwrap_or_default().to_string_lossy().as_ref())
+    }
+
+    pub fn close_session(mut self: Pin<&mut Self>) {
+        self.as_mut().rust_mut().session = None;
+    }
+
     pub fn document_record(&self) -> QString {
         crate::provenance_bridge::session_report(self.rust().session.as_ref(), self.rust().doc)
     }
@@ -1007,14 +1018,11 @@ impl qobject::GenomeController {
                 .as_ref()
                 .zip(self.rust().doc)
                 .and_then(|(session, doc)| {
-                    basecraft_viewmodel::alphabet::question(
-                        &session.doc(doc).ok()?.alphabet(),
-                        &crate::bridge::file_name(&path),
-                    )
+                    basecraft_viewmodel::alphabet::sequence_question(session.doc(doc).ok()?)
                 });
-        self.as_mut()
-            .set_alphabet_question(QString::from(&question.unwrap_or_default()));
-        if let Some(op) = crate::document_open::take_refused(&path) {
+        let (question, redo) = crate::document_open::after_install(&path, question);
+        self.as_mut().set_alphabet_question(question);
+        if let Some(op) = redo {
             // After the install: opening never changes the document it opens.
             let _ = self.qt_thread().queue(move |mut this| {
                 this.as_mut().edit(op);
@@ -1023,22 +1031,6 @@ impl qobject::GenomeController {
         }
         self.refresh();
         Ok(())
-    }
-
-    pub fn choose_project_after_close(self: Pin<&mut Self>, path: &QString) {
-        let chosen = path.clone();
-        crate::chosen_project::choose_after_close(
-            &self.qt_thread(),
-            path.to_string(),
-            10,
-            move |mut this: Pin<&mut Self>, result| match result {
-                Ok(()) => {
-                    this.as_mut().set_project_dir(chosen);
-                    this.project_chosen(QString::default());
-                }
-                Err(error) => this.project_chosen(QString::from(&error)),
-            },
-        );
     }
 
     /// Returns an error when documents of the current project are still open.
@@ -1441,13 +1433,11 @@ impl qobject::GenomeController {
     }
 
     pub fn state_alphabet(mut self: Pin<&mut Self>, answer: &QString) -> bool {
-        let Some(alphabet) = basecraft_viewmodel::alphabet::stated(&answer.to_string()) else {
-            return false;
-        };
-        let stated = self.as_mut().edit(Op::SetAlphabet { alphabet });
         self.as_mut().set_alphabet_question(QString::default());
+        let stated = basecraft_viewmodel::alphabet::stated(&answer.to_string())
+            .is_some_and(|op| self.as_mut().edit(op).is_some());
         self.refresh();
-        stated.is_some()
+        stated
     }
 
     pub fn undo(self: Pin<&mut Self>) {
@@ -2065,11 +2055,8 @@ impl qobject::GenomeController {
         let result = self
             .with_doc(|session, id| -> basecraft_ops::Result<_> {
                 let source = source.to_string();
-                let root = session.root();
                 if source == "all" {
-                    return session
-                        .blast_records(id)
-                        .map(|queries| crate::operations_bridge::queries_in(queries, root));
+                    return session.blast_records(id);
                 }
                 let doc = session.checked_sequence(id)?;
                 let selected = if source == "annotation" {
@@ -2092,7 +2079,7 @@ impl qobject::GenomeController {
                 let mut query = basecraft_ops::blast::from_doc(doc, range, selected)?;
                 query.source["session"] = serde_json::json!(session.id());
                 query.source["generation"] = serde_json::json!(session.generation(id).unwrap());
-                Ok(crate::operations_bridge::queries_in(vec![query], root))
+                Ok(vec![query])
             })
             .unwrap_or_else(|| Err(basecraft_ops::Error::Invalid("Sequence closed".into())));
         QString::from(&match result {

@@ -30,6 +30,13 @@ AppContentDialog {
             wrapMode: Text.Wrap
             text: dialog.refused ? "The folder holding " + String(dialog.refused.file).split("/").pop() + " is read-only, so basecraft cannot keep recovery of edits there. Save a copy in a folder you can write to and edit the copy; the file here stays unedited." : ""
         }
-        AppButton { id: copy; objectName: "saveEditableCopy"; text: "&Save a copy…"; onClicked: { const refused = dialog.refused; dialog.offered = null; dialog.close(); dialog.saveCopy(refused) } }
+        AppButton { id: copy; objectName: "saveEditableCopy"; text: "&Save a copy…"; onClicked: {
+            // Clear the refusal, so repeating the edit after an abandoned save offers again.
+            const refused = dialog.refused
+            dialog.offered = null
+            if (dialog.owner && dialog.owner.refused_edit !== undefined) dialog.owner.refused_edit = ""
+            dialog.close()
+            dialog.saveCopy(refused)
+        } }
     }
 }

@@ -38,23 +38,6 @@ pub(crate) fn choose(folder: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Choose `folder` after a project switch closed every tab. Qt deletes a
-/// removed tab, and then its controller with its session, on later turns of
-/// the window's event loop, so a refusal is tried again on each of the next
-/// `turns` turns before `done` hears it.
-pub(crate) fn choose_after_close<T, O: crate::jobs::Owner<T>>(
-    owner: &O,
-    folder: String,
-    turns: u32,
-    done: impl FnOnce(std::pin::Pin<&mut T>, Result<(), String>) + Send + 'static,
-) {
-    let again = owner.clone();
-    owner.deliver(move |this| match choose(&folder) {
-        Err(_) if turns > 0 => choose_after_close(&again, folder, turns - 1, done),
-        result => done(this, result),
-    });
-}
-
 /// The chosen project. A chosen folder that has gone missing is an error,
 /// never a reason to read or write somewhere else.
 pub(crate) fn chosen() -> Result<Option<Project>, String> {
@@ -136,77 +119,6 @@ mod tests {
         let other = tempfile::tempdir().unwrap();
         assert!(super::choose(other.path().to_str().unwrap()).is_err());
         drop(candidate);
-        super::choose("").unwrap();
-    }
-
-    /// The closed tabs' sessions end a turn or two after the tabs go; the
-    /// choice waits those turns instead of reporting the project in use.
-    #[test]
-    fn a_choice_after_closing_waits_for_the_closed_sessions() {
-        type Turn = Box<dyn FnOnce(std::pin::Pin<&mut Probe>) + Send>;
-        #[derive(Clone)]
-        struct Queue(std::sync::Arc<std::sync::Mutex<Vec<Turn>>>);
-        impl crate::jobs::Owner<Probe> for Queue {
-            fn deliver(
-                &self,
-                call: impl FnOnce(std::pin::Pin<&mut Probe>) + Send + 'static,
-            ) -> bool {
-                self.0.lock().unwrap().push(Box::new(call));
-                true
-            }
-        }
-        let _serial = serial();
-        let turn = |queue: &Queue| {
-            let calls: Vec<Turn> = std::mem::take(&mut *queue.0.lock().unwrap());
-            for call in calls {
-                call(std::pin::Pin::new(&mut Probe));
-            }
-        };
-        let first = tempfile::tempdir().unwrap();
-        let second = tempfile::tempdir().unwrap();
-        super::choose(first.path().to_str().unwrap()).unwrap();
-        let session = super::session_for(&first.path().join("a.fasta")).unwrap();
-        let queue = Queue(std::sync::Arc::default());
-        let (sender, result) = std::sync::mpsc::channel();
-        super::choose_after_close(
-            &queue,
-            second.path().to_string_lossy().into_owned(),
-            10,
-            move |_, chosen| sender.send(chosen).unwrap(),
-        );
-        turn(&queue);
-        turn(&queue);
-        assert!(
-            result.try_recv().is_err(),
-            "a refusal was reported while turns remain"
-        );
-        drop(session);
-        turn(&queue);
-        assert_eq!(result.try_recv().unwrap(), Ok(()));
-        assert_eq!(
-            super::chosen().unwrap().unwrap().root(),
-            second.path().canonicalize().unwrap()
-        );
-        // With every turn used, the refusal is reported.
-        let held = super::session_for(&second.path().join("b.fasta")).unwrap();
-        let (sender, result) = std::sync::mpsc::channel();
-        super::choose_after_close(
-            &queue,
-            first.path().to_string_lossy().into_owned(),
-            2,
-            move |_, chosen| sender.send(chosen).unwrap(),
-        );
-        for _ in 0..3 {
-            turn(&queue);
-        }
-        assert!(
-            result
-                .try_recv()
-                .unwrap()
-                .unwrap_err()
-                .starts_with("Close the documents")
-        );
-        drop(held);
         super::choose("").unwrap();
     }
 

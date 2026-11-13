@@ -812,7 +812,9 @@ impl qobject::DocumentOpens {
         }
     }
     fn reject(mut self: Pin<&mut Self>, id: u64, error: &OpenError) {
-        if self.rust().opens.requests.contains_key(&id) {
+        if let Some(request) = self.rust().opens.requests.get(&id) {
+            // An edit kept for a copy that did not open is not redone later.
+            let _ = crate::document_open::take_refused(std::path::Path::new(&request.path));
             self.as_mut().rust_mut().opens.retire(id);
             self.failed(
                 QString::from(id.to_string()),

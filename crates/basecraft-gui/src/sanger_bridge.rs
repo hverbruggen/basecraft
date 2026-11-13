@@ -38,6 +38,9 @@ pub mod qobject {
         #[qproperty(QString, accent)]
         #[qproperty(QString, mono_font)]
         #[qproperty(QString, file_path)]
+        /// A review the read's folder cannot keep (D13), as JSON for the
+        /// window's copy offer, or "".
+        #[qproperty(QString, refused_edit)]
         #[qproperty(QString, zoom_text)]
         #[qproperty(f64, trace_scroll_pos)]
         #[qproperty(f64, trace_scroll_size)]
@@ -73,6 +76,10 @@ pub mod qobject {
 
         /// Prepare a review from `paths` (JSON list), oriented against
         /// `reference` when it is not empty. False when one is already running.
+        /// The tab closed: end its document's session now, so a project
+        /// switch that follows sees the project free.
+        #[qinvokable]
+        fn close_session(self: Pin<&mut SangerController>);
         #[qinvokable]
         fn start_review(
             self: Pin<&mut SangerController>,
@@ -287,6 +294,7 @@ pub struct SangerRust {
     accent: QString,
     mono_font: QString,
     file_path: QString,
+    refused_edit: QString,
     zoom_text: QString,
     trace_scroll_pos: f64,
     trace_scroll_size: f64,
@@ -356,6 +364,7 @@ impl Default for SangerRust {
             accent: QString::default(),
             mono_font: QString::default(),
             file_path: QString::default(),
+            refused_edit: QString::default(),
             zoom_text: QString::default(),
             trace_scroll_pos: 0.0,
             trace_scroll_size: 1.0,
@@ -402,6 +411,10 @@ impl Default for SangerRust {
 }
 
 impl qobject::SangerController {
+    pub fn close_session(mut self: std::pin::Pin<&mut Self>) {
+        self.as_mut().rust_mut().review_session = None;
+    }
+
     fn open_draft(self: std::pin::Pin<&mut Self>, path: &QString) -> bool {
         let path = PathBuf::from(path.to_string());
         let result = load_draft_review(&path);
@@ -1111,11 +1124,21 @@ impl qobject::SangerController {
                 true
             }
             Err(error) => {
-                self.as_mut().set_message_kind(QString::from("fail"));
-                self.as_mut().set_message(QString::from(error));
+                self.review_failed(&path, "fail", &error);
                 false
             }
         }
+    }
+
+    /// Report a review that could not start; one the read's folder cannot
+    /// keep (D13) is also offered as a copy.
+    fn review_failed(mut self: std::pin::Pin<&mut Self>, path: &Path, kind: &str, error: &str) {
+        if error == crate::document_open::READ_ONLY_EDIT {
+            let refused = serde_json::json!({"file": path, "review": true}).to_string();
+            self.as_mut().set_refused_edit(QString::from(&refused));
+        }
+        self.as_mut().set_message_kind(QString::from(kind));
+        self.set_message(QString::from(error));
     }
 
     fn install_review_result(
@@ -1152,8 +1175,7 @@ impl qobject::SangerController {
                 true
             }
             Err(error) => {
-                self.as_mut().set_message_kind(QString::from("error"));
-                self.as_mut().set_message(QString::from(&error));
+                self.review_failed(path, "error", &error);
                 false
             }
         }

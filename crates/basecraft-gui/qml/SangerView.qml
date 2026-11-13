@@ -29,7 +29,11 @@ FocusScope {
         function onMessageChanged() {
             if (notificationSink && ctl.message.length)
                 notificationSink.notification(ctl.file_path, ctl.message, ctl.message_kind)
-            if (ctl.message.startsWith("read_only_folder:")) doc.readOnlyFolder(doc.path)
+        }
+        function onRefused_editChanged() {
+            if (!ctl.refused_edit.length) return
+            ctl.refused_edit = ""
+            doc.readOnlyFolder(doc.path)
         }
     }
 

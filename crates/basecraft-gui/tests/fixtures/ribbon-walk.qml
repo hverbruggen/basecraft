@@ -306,7 +306,7 @@ Main {
         list.push(() => {
             show(tabOf(unclear))
             const ask = dialog("alphabetDialog")
-            check(ask && ask.opened && ask.question.includes("unclear.fasta"), "an undetermined sequence did not ask what it is")
+            check(ask && ask.opened && ask.question.includes("unclear"), "an undetermined sequence did not ask what it is")
             find(ask.contentItem, i => i.objectName === "alphabetDna").clicked()
             const ctl = documentAt(tabOf(unclear)).controller
             check(!ask.opened && ctl.alphabet_question === "" && ctl.dirty, "stating DNA was not recorded")
@@ -484,14 +484,12 @@ Main {
             button("labelExact").clicked()
             const next = question()
             check(ask.opened && next && next.label === "AB" && !button("labelExact").visible, "the second label offers an exact clade it does not have")
-            // Escape leaves the label where the reroot put it; the status line names it.
+            // Escape undoes the placement made so far and the reroot (D11 has
+            // no "leave it there"); the tree is as before.
             ask.reject()
-            check(tree.ctl.label_question === "" && tree.ctl.status.includes("\"AB\"") && !tree.ctl.status.includes("\"All\""), "Escape did not leave AB displaced and All placed")
-            // Undo the placement and the reroot, then answer for every label at once.
+            check(tree.ctl.label_question === "" && !tree.ctl.status.includes("moved labels"), "Escape did not undo the reroot")
+            // Answer for every label at once.
             currentView.forceActiveFocus()
-            currentView.pressKey(Qt.Key_Z, Qt.ControlModifier, "")
-            currentView.pressKey(Qt.Key_Z, Qt.ControlModifier, "")
-            check(!tree.ctl.status.includes("moved labels"), "undoing the reroot left labels displaced")
             reroot()
             check(ask.opened, "rerooting again did not ask")
             button("labelPlacementAll").checked = true
