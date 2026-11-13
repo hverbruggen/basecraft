@@ -32,6 +32,7 @@ check:
     python3 -m unittest discover -s benches
     cargo fmt --all --check
     cargo clippy --workspace --all-targets -- -D warnings
+    cargo clippy -p basecraft-ops --all-targets --features test-counters,test-heap -- -D warnings
     python3 tools/isolated_tests.py
     cargo test --workspace --doc
     cargo test -p basecraft-ops --features test-counters --test budgets

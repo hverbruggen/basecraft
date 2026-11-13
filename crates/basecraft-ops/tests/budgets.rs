@@ -215,9 +215,9 @@ fn companions_are_read_once() {
 }
 
 #[test]
-fn large_first_edit_retains_without_reading() {
+fn large_first_edit_records_the_original_without_reading() {
     use std::io::Write;
-    let Some(root) = child_profile("large_first_edit_retains_without_reading") else {
+    let Some(root) = child_profile("large_first_edit_records_the_original_without_reading") else {
         return;
     };
     let file = root.join("large.fa");
@@ -250,8 +250,10 @@ fn large_first_edit_retains_without_reading() {
     let mut reopened = Session::unlogged(&root);
     let doc = reopened.open(&recovered[0]).unwrap();
     assert_eq!(reopened.doc(doc).unwrap().read(0, 4), b"CAAA");
+    // No private copy is kept: without the original nothing is recovered.
     std::fs::remove_file(&file).unwrap();
-    let retained = basecraft_ops::records::recover(&recovery, &root.join("missing")).unwrap();
-    let current = reopened.open(&retained[0]).unwrap();
-    assert_eq!(reopened.doc(current).unwrap().read(0, 4), b"CAAA");
+    assert!(
+        basecraft_ops::records::recover(&recovery, &root.join("missing"))
+            .map_or(true, |outputs| outputs.is_empty())
+    );
 }

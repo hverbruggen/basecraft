@@ -641,14 +641,17 @@ def main():
             assert imported["added"] == ["Bootstrap"] and imported["matched"] == 2, imported
             session.save(tree)
             python_record = session.file_record("target.nwk")
-        cli_record, _ = cli("history", str(project / "target.nwk"), "--json")
+        # Basecraft never guesses the project: the CLI names it, like the session.
+        cli_record, _ = cli("history", str(project / "target.nwk"), "--project", str(project),
+                            "--json")
         for report in (python_record, cli_record):
             assert any(row["summary"] == "Ran basecraft.tree import_support"
                        for row in report["history"]), report["history"]
         assert ([row["summary"] for row in python_record["history"]]
                 == [row["summary"] for row in cli_record["history"]])
         assert python_record["methods"] == cli_record["methods"]
-        subprocess.run([str(binary), "provenance", "verify", str(project / "target.nwk")],
+        subprocess.run([str(binary), "provenance", "verify", str(project / "target.nwk"),
+                        "--project", str(project)],
                        cwd=root, env=env, capture_output=True, timeout=45, check=True)
         record("Python support import over MCP; file_record matches CLI history")
 
