@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use basecraft_docs::alignment::Undo as AlnUndo;
 use basecraft_docs::{AlignmentDoc, EditResult, FeatureId, SequenceDoc, TreeDoc};
+use basecraft_protocol::facts::{Alphabet, Fact};
 use basecraft_protocol::ops::LOG_VERSION;
 use basecraft_protocol::{Actor, DocState, Feature, LogEntry, Op, OpResult};
 
@@ -160,8 +161,7 @@ pub struct Outcome {
     pub feature: Option<FeatureId>,
     /// Things the user should hear about, such as a label a reroot moved.
     pub notes: Vec<String>,
-    /// Labels this edit displaced, such as by a reroot: the window asks
-    /// where each goes (`tree.place_label`, D11).
+    /// Labels this edit displaced; the window asks where each goes (D11).
     pub displaced: Vec<basecraft_protocol::tree::DisplacedLabel>,
 }
 
@@ -444,17 +444,12 @@ impl Session {
 
     /// The letters an alignment or sequence is written in: what the user
     /// said, kept in its companion, or else a guess from its residues.
-    pub fn alphabet(
-        &self,
-        id: DocId,
-    ) -> Result<basecraft_protocol::facts::Fact<basecraft_protocol::facts::Alphabet>> {
+    pub fn alphabet(&self, id: DocId) -> Result<Fact<Alphabet>> {
         let content = &self.slot(id)?.content;
-        if let Some(opened) = content.alignment() {
-            return Ok(opened.doc.alphabet().clone());
-        }
-        content
-            .sequence()
-            .map(|opened| opened.doc.alphabet().clone())
+        let alphabet = content.alignment().map(|opened| opened.doc.alphabet());
+        alphabet
+            .or_else(|| content.sequence().map(|opened| opened.doc.alphabet()))
+            .cloned()
             .ok_or_else(|| invalid("only alignments and sequences have an alphabet"))
     }
 
