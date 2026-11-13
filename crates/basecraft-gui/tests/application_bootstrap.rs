@@ -131,6 +131,8 @@ fn ribbon_journey() {
     ] {
         std::fs::copy(fixtures.join(set).join(file), folder.path().join(file)).unwrap();
     }
+    // The project the journey switches to last.
+    std::fs::create_dir(folder.path().join("second")).unwrap();
     let run = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["--ribbon-walk", folder.path().to_str().unwrap()])
         .env("QT_FORCE_STDERR_LOGGING", "1")

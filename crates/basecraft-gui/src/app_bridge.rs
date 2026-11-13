@@ -117,6 +117,13 @@ pub mod qobject {
         #[qinvokable]
         fn quit(self: Pin<&mut DocumentOpens>, drafts: bool) -> QString;
         #[qinvokable]
+        fn switch_project(
+            self: Pin<&mut DocumentOpens>,
+            drafts: bool,
+            folder: &QString,
+            current: &QString,
+        ) -> QString;
+        #[qinvokable]
         fn discard_all(self: &DocumentOpens, consent: &QString) -> QString;
         #[qinvokable]
         fn save_all(self: Pin<&mut DocumentOpens>, consent: &QString) -> QString;
@@ -221,17 +228,20 @@ fn targets(consent: &QString) -> Vec<Target> {
         })
         .collect()
 }
-/// A quit step for QML: `drafts`, `ask` (with `error`), `save`, `stay` or `leave`.
+/// A quit step for QML: `drafts`, `ask` (with `error`), `save`, `stay`,
+/// `choose` or `leave`. `drafts` and `leave` carry `project` during a
+/// project switch.
 fn quit_json(step: &Quit) -> QString {
     json(&match step {
-        Quit::Drafts => serde_json::json!({"drafts": true}),
+        Quit::Drafts { project } => serde_json::json!({"drafts": true, "project": project}),
         Quit::Ask { targets, error } => serde_json::json!({
             "ask": targets.iter().map(target_json).collect::<Vec<_>>(), "error": error
         }),
         Quit::Save(target) => serde_json::json!({"save": target_json(target)}),
         Quit::Stay => serde_json::json!({"stay": true}),
-        Quit::Leave { drafts } => serde_json::json!({
-            "leave": drafts.iter().map(u64::to_string).collect::<Vec<_>>()
+        Quit::Choose(project) => serde_json::json!({"choose": project}),
+        Quit::Leave { drafts, project } => serde_json::json!({
+            "leave": drafts.iter().map(u64::to_string).collect::<Vec<_>>(), "project": project
         }),
     })
 }
@@ -468,6 +478,18 @@ impl qobject::DocumentOpens {
     }
     fn quit(mut self: Pin<&mut Self>, drafts: bool) -> QString {
         quit_json(&self.as_mut().rust_mut().documents.quit(drafts))
+    }
+    fn switch_project(
+        mut self: Pin<&mut Self>,
+        drafts: bool,
+        folder: &QString,
+        current: &QString,
+    ) -> QString {
+        quit_json(&self.as_mut().rust_mut().documents.switch_project(
+            drafts,
+            folder.to_string(),
+            &current.to_string(),
+        ))
     }
     fn discard_all(&self, consent: &QString) -> QString {
         quit_json(&self.rust().documents.discard_all(&targets(consent)))

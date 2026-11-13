@@ -104,8 +104,9 @@ pub enum Close {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Quit {
-    /// Methods drafts in the document record are unsaved.
-    Drafts,
+    /// Methods drafts in the document record are unsaved. `project` is the
+    /// folder being switched to, when the documents close for a project switch.
+    Drafts { project: Option<String> },
     /// These tabs have unsaved changes; `error` says why the question repeats.
     Ask {
         targets: Vec<Target>,
@@ -115,8 +116,14 @@ pub enum Quit {
     Save(Target),
     /// A save failed; its own notice explains. Stay open.
     Stay,
-    /// Close the window, deleting these empty species workspaces first.
-    Leave { drafts: Vec<u64> },
+    /// Choose this project now: no document holds the current one.
+    Choose(String),
+    /// Delete these empty species workspaces, then close the window, or with
+    /// `project`, close every tab and choose that project.
+    Leave {
+        drafts: Vec<u64>,
+        project: Option<String>,
+    },
 }
 
 pub const CHANGED: &str = "The open documents changed. Review them before closing.";
@@ -163,6 +170,8 @@ pub struct Workspace {
     request: Option<Request>,
     /// Tabs still to save before quitting, and the consent they came from.
     saving: Vec<Target>,
+    /// The project folder the documents close for; none when the window closes.
+    switching: Option<String>,
 }
 
 impl Workspace {
@@ -318,15 +327,39 @@ impl Workspace {
                 .filter(|d| d.draft)
                 .map(|d| d.token)
                 .collect(),
+            project: self.switching.clone(),
         }
     }
 
     /// The window is closing. `drafts` is true when the document record holds
     /// unsaved methods drafts the user has not agreed to drop.
     pub fn quit(&mut self, drafts: bool) -> Quit {
+        self.switching = None;
+        self.leave_or_ask(drafts)
+    }
+
+    /// The user chose project `folder` while `current` ("" for none) is
+    /// chosen. The open documents close first, with the same questions as
+    /// quitting. Choosing the current project again closes nothing, and
+    /// files opened without a project hold none, so they stay open.
+    pub fn switch_project(&mut self, drafts: bool, folder: String, current: &str) -> Quit {
+        self.switching = None;
+        if folder == current {
+            return Quit::Stay;
+        }
+        if current.is_empty() || self.documents.is_empty() {
+            return Quit::Choose(folder);
+        }
+        self.switching = Some(folder);
+        self.leave_or_ask(drafts)
+    }
+
+    fn leave_or_ask(&mut self, drafts: bool) -> Quit {
         self.saving.clear();
         if drafts {
-            return Quit::Drafts;
+            return Quit::Drafts {
+                project: self.switching.clone(),
+            };
         }
         let targets = self.unsaved();
         if targets.is_empty() {
@@ -604,7 +637,7 @@ mod tests {
             ("/a.gb", Kind::Canvas, true),
             ("/b.gb", Kind::Canvas, false),
         ]);
-        assert_eq!(w.quit(true), Quit::Drafts);
+        assert_eq!(w.quit(true), Quit::Drafts { project: None });
         assert_eq!(
             w.quit(false),
             Quit::Ask {
@@ -615,7 +648,83 @@ mod tests {
         w.set_dirty(0, false);
         w.add(3, "/w.spart".into(), Kind::Delimitation);
         w.mark_draft(3);
-        assert_eq!(w.quit(false), Quit::Leave { drafts: vec![3] });
+        assert_eq!(
+            w.quit(false),
+            Quit::Leave {
+                drafts: vec![3],
+                project: None
+            }
+        );
+    }
+
+    #[test]
+    fn switching_project_asks_like_quitting_then_closes_for_the_project() {
+        let mut w = workspace(&[
+            ("/a.gb", Kind::Canvas, true),
+            ("/b.gb", Kind::Canvas, false),
+        ]);
+        // Choosing the current project again closes nothing; without a
+        // chosen project the open files hold none and stay open.
+        assert_eq!(w.switch_project(false, "/p".into(), "/p"), Quit::Stay);
+        assert_eq!(
+            w.switch_project(true, "/q".into(), ""),
+            Quit::Choose("/q".into())
+        );
+        assert_eq!(
+            workspace(&[]).switch_project(true, "/q".into(), "/p"),
+            Quit::Choose("/q".into())
+        );
+        let next = || Some("/q".to_owned());
+        assert_eq!(
+            w.switch_project(true, "/q".into(), "/p"),
+            Quit::Drafts { project: next() }
+        );
+        let ask = w.switch_project(false, "/q".into(), "/p");
+        assert_eq!(
+            ask,
+            Quit::Ask {
+                targets: vec![target(1, "/a.gb")],
+                error: ""
+            }
+        );
+        // Saving the agreed tab leads to the switch, not to closing the window.
+        assert_eq!(
+            w.save_all(vec![target(1, "/a.gb")]),
+            Quit::Save(target(1, "/a.gb"))
+        );
+        w.set_dirty(0, false);
+        assert_eq!(
+            w.quit_saved(true),
+            Quit::Leave {
+                drafts: vec![],
+                project: next()
+            }
+        );
+        // Discarding instead also switches.
+        w.set_dirty(0, true);
+        w.switch_project(false, "/q".into(), "/p");
+        assert_eq!(
+            w.discard_all(&[target(1, "/a.gb")]),
+            Quit::Leave {
+                drafts: vec![],
+                project: next()
+            }
+        );
+        // Closing the window after a cancelled switch closes the window.
+        assert_eq!(
+            w.quit(false),
+            Quit::Ask {
+                targets: vec![target(1, "/a.gb")],
+                error: ""
+            }
+        );
+        assert_eq!(
+            w.discard_all(&[target(1, "/a.gb")]),
+            Quit::Leave {
+                drafts: vec![],
+                project: None
+            }
+        );
     }
 
     #[test]
@@ -625,7 +734,13 @@ mod tests {
             ("/b.gb", Kind::Canvas, false),
         ]);
         let consent = vec![target(1, "/a.gb")];
-        assert_eq!(w.discard_all(&consent), Quit::Leave { drafts: vec![] });
+        assert_eq!(
+            w.discard_all(&consent),
+            Quit::Leave {
+                drafts: vec![],
+                project: None
+            }
+        );
         // Another tab gained changes after the question.
         w.set_dirty(1, true);
         assert_eq!(
@@ -652,7 +767,13 @@ mod tests {
         w.set_dirty(0, false);
         assert_eq!(w.quit_saved(true), Quit::Save(target(2, "/b.gb")));
         w.set_dirty(1, false);
-        assert_eq!(w.quit_saved(true), Quit::Leave { drafts: vec![] });
+        assert_eq!(
+            w.quit_saved(true),
+            Quit::Leave {
+                drafts: vec![],
+                project: None
+            }
+        );
 
         w.set_dirty(0, true);
         w.set_dirty(1, true);

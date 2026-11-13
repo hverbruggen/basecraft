@@ -313,6 +313,20 @@ Main {
             check(loaders.length >= 50, "only " + loaders.length + " dialogs load on demand")
             for (const loader of loaders) check(loader.dialog(), "a dialog failed to build")
         })
+        // Choosing another project asks about unsaved work as quitting does,
+        // closes every document, then switches.
+        list.push(() => {
+            documentAt(0).controller.dirty = true
+            selectProject(folder + "/second")
+            const ask = dialog("quitDocumentsDialog")
+            check(ask.opened && metadataProject === folder, "switching project did not ask about unsaved work")
+            ask.discarded()
+            check(documentTabs().count === 0, "switching project left documents open")
+        })
+        list.push(() => {
+            const error = dialog("preferences").project_error
+            check(metadataProject === folder + "/second" && error === "", "project did not switch after its documents closed: " + error)
+        })
         list.push(() => { console.log("RIBBON_WALK passed"); Qt.quit() })
         return list
     }
