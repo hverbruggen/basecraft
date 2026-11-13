@@ -75,3 +75,72 @@ fn tree_commands_make_the_same_edits_as_typed_operations() {
     }
     assert_eq!(std::fs::read_to_string(&file).unwrap(), TREE);
 }
+
+#[test]
+fn tips_are_labelled_from_the_projects_specimen_table() {
+    use basecraft_protocol::metadata::{ChangeSet, RecordLink};
+    crate::isolated_profile::isolate!();
+    let temp = tempfile::tempdir().unwrap();
+    let profile = temp.path().join("profile");
+    let project = temp.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    let tree = project.join("tree.nwk");
+    std::fs::write(&tree, "(a:1,b:1,c:1);\n").unwrap();
+    let path = |p: &Path| p.to_str().unwrap().to_owned();
+    let labels = |fields: &str| {
+        basecraft(
+            &profile,
+            &[
+                "--project",
+                &path(&project),
+                "tree",
+                "labels",
+                &path(&tree),
+                "--fields",
+                fields,
+            ],
+        )
+    };
+    let none = labels("specimen");
+    assert!(!none.status.success());
+    assert!(String::from_utf8_lossy(&none.stderr).contains("no specimen metadata"));
+
+    let mut session = basecraft_ops::Session::new(&project);
+    let metadata = basecraft_ops::metadata::open(&mut session, true)
+        .unwrap()
+        .unwrap();
+    let link = |record: &str, specimen: &str| RecordLink {
+        document: "tree.nwk".into(),
+        record: record.into(),
+        specimen: specimen.into(),
+    };
+    basecraft_ops::metadata::apply_plan(
+        &mut session,
+        metadata,
+        ChangeSet {
+            specimens: vec!["S1".into(), "S2".into()],
+            links: vec![link("a", "S1"), link("b", "S2")],
+            ..ChangeSet::default()
+        },
+    )
+    .unwrap();
+    session.save(metadata, None).unwrap();
+    drop(session);
+
+    let wrong = labels("colour");
+    assert!(!wrong.status.success());
+    assert!(String::from_utf8_lossy(&wrong.stderr).contains("not a label field"));
+    let done = labels("specimen");
+    assert!(
+        done.status.success(),
+        "{}",
+        String::from_utf8_lossy(&done.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&done.stdout).unwrap();
+    assert_eq!(value["kept_own_name"], 1, "{value}");
+    let mut reader = basecraft_ops::Session::unlogged(&project);
+    let opened = reader.open(&tree).unwrap();
+    let style = reader.tree(opened).unwrap().style();
+    assert_eq!(style.tip_labels["a"], "S1");
+    assert_eq!(style.tip_labels["b"], "S2");
+}

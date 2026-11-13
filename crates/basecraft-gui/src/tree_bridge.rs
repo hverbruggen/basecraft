@@ -1814,53 +1814,18 @@ impl qobject::TreeController {
         project: &QString,
         fields: &QString,
     ) -> QString {
+        // The same labels as `basecraft tree labels`.
         let planned = (|| -> Result<(TreeStyle, usize), String> {
             let r = self.rust();
             let (session, doc) = r.session.as_ref().zip(r.doc).ok_or("No tree open")?;
-            let tree = session.tree(doc).map_err(|e| e.to_string())?;
-            let mut style = tree.style().clone();
-            let previous_style = style.clone();
-            let fields: Vec<basecraft_protocol::metadata::LabelField> =
-                serde_json::from_str(&fields.to_string()).map_err(|e| e.to_string())?;
-            style.tip_labels.clear();
-            style.extra.remove("metadata_labels");
-            if fields.is_empty() {
-                return Ok((style, 0));
-            }
-            let root = PathBuf::from(project.to_string());
-            let mut reader = Session::unlogged(&root);
-            let metadata = basecraft_ops::metadata::open(&mut reader, false)
-                .map_err(|e| e.to_string())?
-                .ok_or("This project has no specimen metadata")?;
-            let source = basecraft_ops::metadata::consumer_source(&reader, metadata)
-                .map_err(|e| e.to_string())?;
-            basecraft_ops::metadata::verify_label_owner(&previous_style, &source)
-                .map_err(|e| e.to_string())?;
-            let path = session
-                .root()
-                .join(session.doc_key(doc).map_err(|e| e.to_string())?);
-            let request = basecraft_ops::metadata::ConsumerRequest::Labels {
-                document: path.to_string_lossy().into_owned(),
-                records: tree
-                    .nodes()
-                    .iter()
-                    .filter(|n| n.is_tip())
-                    .map(|n| n.name.clone())
-                    .collect(),
+            let fields = serde_json::from_str(&fields.to_string()).map_err(|e| e.to_string())?;
+            basecraft_ops::metadata::tip_label_style(
+                session,
+                doc,
+                Path::new(&project.to_string()),
                 fields,
-            };
-            let plan = basecraft_ops::metadata::consumer_plan(&reader, metadata, &request)
-                .map_err(|e| e.to_string())?;
-            let labels: Vec<basecraft_protocol::metadata::ComposedLabel> =
-                serde_json::from_value(plan["labels"].clone()).map_err(|e| e.to_string())?;
-            let issues = labels.iter().filter(|l| l.issue.is_some()).count();
-            style.tip_labels = labels
-                .into_iter()
-                .filter(|l| l.issue.is_none())
-                .map(|l| (l.record, l.label))
-                .collect();
-            style.extra.insert("metadata_labels".into(), plan);
-            Ok((style, issues))
+            )
+            .map_err(|e| e.to_string())
         })();
         match planned {
             Err(error) => QString::from(error),

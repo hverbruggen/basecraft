@@ -153,6 +153,7 @@ impl Server {
                 | "sanger_export"
                 | "sanger_add"
                 | "delimitation_display_tree"
+                | "tree_labels"
         ) || creates)
             && !self.writable
         {
@@ -201,6 +202,24 @@ impl Server {
                 self.session
                     .export_sanger_consensus(doc, &output, text(args, "label")?)?;
                 Ok(json!({"consensus": output}))
+            }
+            "tree_labels" => {
+                let doc = self.doc(args)?;
+                let fields = args["fields"]
+                    .as_array()
+                    .ok_or("Give fields: a list such as [\"genus\", \"specimen\"]")?
+                    .iter()
+                    .map(|field| {
+                        let field = field.as_str().ok_or("Each field is text")?;
+                        Ok(basecraft_ops::metadata::label_field(field)?)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let root = self.session.root().to_path_buf();
+                let kept =
+                    basecraft_ops::metadata::label_tips(&mut self.session, doc, &root, fields)?;
+                let mut state = self.state(doc)?;
+                state["kept_own_name"] = json!(kept);
+                Ok(state)
             }
             "delimitation_display_tree" => {
                 let doc = self.doc(args)?;
@@ -707,6 +726,7 @@ fn tools() -> Value {
         tool("provenance_inspect","Read the provenance publication of a saved project result.",json!({"path":string}), &["path"]),
         tool("provenance_verify","Check a saved result against its recorded hashes and retained inputs; runs no tools.",json!({"path":string}), &["path"]),
         tool("replay","Replay the project's operation log in a scratch session and report problems.",json!({}), &[]),
+        tool("tree_labels","Label an open tree's tips from the project's specimen table, by fields in order: specimen, genus, species, accession, column:NAME. Tips whose link is missing or ambiguous keep their own name (kept_own_name counts them). One undoable style edit; save with save. Requires writes.",json!({"document":doc,"fields":{"type":"array","items":string}}), &["document","fields"]),
         tool("delimitation_display_tree","Attach a tree file (one tree, Newick or NEXUS) as the display tree of an open species workspace; the file is kept as its evidence. Save with save. Requires writes.",json!({"document":doc,"tree":string}), &["document","tree"]),
         tool("sanger_review_create","Start a review of a Sanger read (.ab1) from its instrument calls, optionally saved as a new review file at output. Decide columns with sanger_decide, save with save, export with sanger_export. Requires writes.",json!({"read":string,"output":string}), &["read"]),
         tool("sanger_decide","Decide draft columns of an open Sanger review: columns from 1 as \"12\", \"12,15\" or \"12-14\"; choice accept, reject, pending, or the base to put there (IUPAC, - for a gap). Logged and undoable; save with save. Requires writes.",json!({"document":doc,"columns":string,"choice":string}), &["document","columns","choice"]),

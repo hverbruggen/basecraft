@@ -304,6 +304,44 @@ def main():
         assert shown["cli"] == shown["mcp"] == attached["display_tree"], (shown, attached)
         record("display tree attached to a species workspace: same from CLI and MCP")
 
+        # Tip labels from the specimen table (D1): the CLI and MCP label the
+        # same tips through the same call.
+        for route in ("cli", "mcp"):
+            (project / f"labelled-{route}.nwk").write_text("(a:1,b:1,c:1);\n")
+        links = [{"document": f"labelled-{route}.nwk", "record": record, "specimen": specimen}
+                 for route in ("cli", "mcp") for record, specimen in (("a", "S1"), ("b", "S2"))]
+        client = Mcp(binary, project, env)
+        try:
+            opened = client.tool("metadata_open", {"create": True})
+            assert not opened["isError"], opened
+            table = opened["structuredContent"]
+            linked = client.tool("apply", {"document": table["document"], "version": table["version"],
+                                 "operation": {"op": "metadata.edit", "params": {"edit": {
+                                     "action": "apply", "changes": {"specimens": ["S1", "S2"],
+                                                                    "links": links}}}}})
+            assert not linked["isError"], linked
+            assert not client.tool("save", {"document": table["document"]})["isError"]
+        finally:
+            client.close()
+        labelled, _ = cli("--project", str(project), "tree", "labels",
+                          str(project / "labelled-cli.nwk"), "--fields", "specimen")
+        client = Mcp(binary, project, env)
+        try:
+            styles = {}
+            for route in ("mcp", "cli"):
+                tree = client.tool("open", {"path": f"labelled-{route}.nwk"})["structuredContent"]
+                if route == "mcp":
+                    done = client.tool("tree_labels", {"document": tree["document"],
+                                       "fields": ["specimen"]})
+                    assert not done["isError"], done
+                    assert done["structuredContent"]["kept_own_name"] == labelled["kept_own_name"] == 1
+                    assert not client.tool("save", {"document": tree["document"]})["isError"]
+                read = client.tool("read", {"document": tree["document"]})["structuredContent"]
+                styles[route] = read["style"]["tip_labels"]
+        finally:
+            client.close()
+        assert styles["cli"] == styles["mcp"] == {"a": "S1", "b": "S2"}, styles
+        record("tip labels from the specimen table: same labels from CLI and MCP")
         if args.only_sanger:
             receipt["status"] = "passed"
             receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")

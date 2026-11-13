@@ -76,6 +76,10 @@ pub enum Error {
     Addition(#[from] crate::alignment_add::AdditionError),
     #[error(transparent)]
     DisplayTree(#[from] crate::delimitation::DisplayTreeError),
+    #[error("This project has no specimen metadata")]
+    NoMetadata,
+    #[error("{0} is not a label field; give specimen, genus, species, accession or column:NAME")]
+    NotALabelField(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -91,7 +95,9 @@ impl Error {
         match self {
             Self::StaleRevision { .. } => Code::StaleRevision,
             Self::ChangedOnDisk { .. } => Code::ChangedOnDisk,
-            Self::NotFound { .. } | Self::FolderUnavailable { .. } => Code::NotFound,
+            Self::NotFound { .. } | Self::FolderUnavailable { .. } | Self::NoMetadata => {
+                Code::NotFound
+            }
             Self::Damaged { .. } => Code::Damaged,
             Self::Limit { .. } => Code::Limit,
             Self::Unsupported(_) => Code::Unsupported,
@@ -116,7 +122,8 @@ impl Error {
             | Self::NoFileName(_)
             | Self::ReviewInput(_)
             | Self::Addition(_)
-            | Self::DisplayTree(_) => Code::InvalidArguments,
+            | Self::DisplayTree(_)
+            | Self::NotALabelField(_) => Code::InvalidArguments,
             Self::UnknownFormat(_) => Code::UnknownFormat,
             Self::Empty(_) => Code::EmptyDocument,
             Self::EvidenceConflict(_) => Code::AnalysisInputConflict,

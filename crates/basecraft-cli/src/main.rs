@@ -473,10 +473,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             };
             edit_file(&file, operations, project.as_ref(), save_options)?;
         }
-        Command::Tree { action } => {
-            let (file, operation) = tree::operation(action);
-            edit_file(&file, vec![operation], project.as_ref(), save_options)?;
-        }
+        Command::Tree { action } => tree::run(action, project.as_ref(), save_options)?,
         Command::ImportSupport { tree, source, name } => {
             let tree = tree.canonicalize()?;
             let mut session =
