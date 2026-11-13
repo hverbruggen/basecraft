@@ -18,12 +18,7 @@ fn setup(root: &Path) -> (Session, basecraft_ops::DocId, PathBuf) {
     std::fs::write(&source, ORIGINAL).unwrap();
     let mut session = Session::recoverable(root).unwrap();
     let doc = session.open(&source).unwrap();
-    session
-        .apply(
-            doc,
-            Op::seq_replace(1, 2, "T"),
-        )
-        .unwrap();
+    session.apply(doc, Op::seq_replace(1, 2, "T")).unwrap();
     (session, doc, source)
 }
 

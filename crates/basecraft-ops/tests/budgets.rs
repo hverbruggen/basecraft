@@ -228,12 +228,7 @@ fn large_first_edit_records_the_original_without_reading() {
     let doc = session.open(&file).unwrap();
     let recovery = session.recovery_root().to_path_buf();
     counters::reset();
-    session
-        .apply(
-            doc,
-            Op::seq_replace(0, 1, "C"),
-        )
-        .unwrap();
+    session.apply(doc, Op::seq_replace(0, 1, "C")).unwrap();
     assert!(counters::snapshot().reads.is_empty());
     assert_eq!(counters::snapshot().sync_all, 0);
     assert_eq!(counters::snapshot().sync_data, 1);

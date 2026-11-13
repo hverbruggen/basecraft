@@ -9,12 +9,7 @@ use std::path::{Path, PathBuf};
 
 fn edit(session: &mut Session, path: &Path, residue: &str) -> basecraft_ops::DocId {
     let doc = session.open(path).unwrap();
-    session
-        .apply(
-            doc,
-            Op::seq_replace(0, 1, residue),
-        )
-        .unwrap();
+    session.apply(doc, Op::seq_replace(0, 1, residue)).unwrap();
     doc
 }
 
@@ -114,10 +109,7 @@ fn recovery_writes_edits_not_copies() {
     assert!(!folder.join(".basecraft").exists());
     for position in 0..20 {
         session
-            .apply(
-                doc,
-                Op::seq_replace(position, position + 1, "C"),
-            )
+            .apply(doc, Op::seq_replace(position, position + 1, "C"))
             .unwrap();
     }
     let recovery = session.recovery_root().to_path_buf();
@@ -399,12 +391,7 @@ fn the_first_edit_in_a_folder_that_cannot_hold_recovery_is_refused() {
     std::fs::write(&file, b">a\nACGT\n").unwrap();
     let mut session = Session::recoverable(&folder).unwrap();
     let doc = session.open(&file).unwrap();
-    let error = session
-        .apply(
-            doc,
-            Op::seq_replace(0, 1, "G"),
-        )
-        .unwrap_err();
+    let error = session.apply(doc, Op::seq_replace(0, 1, "G")).unwrap_err();
     let basecraft_ops::Error::ReadOnlyFolder { folder: named, .. } = &error else {
         panic!("{error:?}");
     };
@@ -468,12 +455,7 @@ fn a_symlinked_basecraft_is_named_as_a_link() {
     std::fs::write(&file, b">a\nACGT\n").unwrap();
     let mut session = Session::recoverable(&folder).unwrap();
     let doc = session.open(&file).unwrap();
-    let error = session
-        .apply(
-            doc,
-            Op::seq_replace(0, 1, "G"),
-        )
-        .unwrap_err();
+    let error = session.apply(doc, Op::seq_replace(0, 1, "G")).unwrap_err();
     assert!(error.to_string().contains("symbolic link"), "{error}");
     assert_eq!(
         std::fs::read_dir(root.join("elsewhere")).unwrap().count(),
