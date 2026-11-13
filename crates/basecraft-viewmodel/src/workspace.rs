@@ -118,6 +118,8 @@ pub enum Quit {
     Stay,
     /// Choose this project now: no document holds the current one.
     Choose(String),
+    /// Refused before asking anything; the text says why.
+    Refuse(&'static str),
     /// Delete these empty species workspaces, then close the window, or with
     /// `project`, close every tab and choose that project.
     Leave {
@@ -126,6 +128,8 @@ pub enum Quit {
     },
 }
 
+pub const TASKS_RUNNING: &str =
+    "A task is still running in this project. Choose another project when it has finished.";
 pub const CHANGED: &str = "The open documents changed. Review them before closing.";
 pub const NOT_SAVED: &str = "Some files could not be saved. Review their notifications and retry.";
 
@@ -341,13 +345,29 @@ impl Workspace {
     /// The user chose project `folder` while `current` ("" for none) is
     /// chosen. The open documents close first, with the same questions as
     /// quitting. Choosing the current project again closes nothing, and
-    /// files opened without a project hold none, so they stay open.
-    pub fn switch_project(&mut self, drafts: bool, folder: String, current: &str) -> Quit {
+    /// files opened without a project hold none, so they stay open. `tasks`
+    /// is true while a task outside the tabs (records, submission, a service
+    /// upload) works in the current project: the switch is refused before
+    /// any question, so no tab closes for nothing.
+    pub fn switch_project(
+        &mut self,
+        drafts: bool,
+        tasks: bool,
+        folder: String,
+        current: &str,
+    ) -> Quit {
         self.switching = None;
-        if folder == current {
+        let canonical = |path: &str| std::fs::canonicalize(path).ok();
+        if folder == current || canonical(&folder).is_some_and(|f| Some(f) == canonical(current)) {
             return Quit::Stay;
         }
-        if current.is_empty() || self.documents.is_empty() {
+        if current.is_empty() {
+            return Quit::Choose(folder);
+        }
+        if tasks {
+            return Quit::Refuse(TASKS_RUNNING);
+        }
+        if self.documents.is_empty() {
             return Quit::Choose(folder);
         }
         self.switching = Some(folder);
@@ -665,21 +685,24 @@ mod tests {
         ]);
         // Choosing the current project again closes nothing; without a
         // chosen project the open files hold none and stay open.
-        assert_eq!(w.switch_project(false, "/p".into(), "/p"), Quit::Stay);
         assert_eq!(
-            w.switch_project(true, "/q".into(), ""),
+            w.switch_project(false, false, "/p".into(), "/p"),
+            Quit::Stay
+        );
+        assert_eq!(
+            w.switch_project(true, false, "/q".into(), ""),
             Quit::Choose("/q".into())
         );
         assert_eq!(
-            workspace(&[]).switch_project(true, "/q".into(), "/p"),
+            workspace(&[]).switch_project(true, false, "/q".into(), "/p"),
             Quit::Choose("/q".into())
         );
         let next = || Some("/q".to_owned());
         assert_eq!(
-            w.switch_project(true, "/q".into(), "/p"),
+            w.switch_project(true, false, "/q".into(), "/p"),
             Quit::Drafts { project: next() }
         );
-        let ask = w.switch_project(false, "/q".into(), "/p");
+        let ask = w.switch_project(false, false, "/q".into(), "/p");
         assert_eq!(
             ask,
             Quit::Ask {
@@ -702,13 +725,29 @@ mod tests {
         );
         // Discarding instead also switches.
         w.set_dirty(0, true);
-        w.switch_project(false, "/q".into(), "/p");
+        w.switch_project(false, false, "/q".into(), "/p");
         assert_eq!(
             w.discard_all(&[target(1, "/a.gb")]),
             Quit::Leave {
                 drafts: vec![],
                 project: next()
             }
+        );
+        // A task outside the tabs refuses the switch before any question.
+        assert_eq!(
+            w.switch_project(false, true, "/q".into(), "/p"),
+            Quit::Refuse(TASKS_RUNNING)
+        );
+        // The same folder spelled differently is not a switch.
+        let folder = tempfile::tempdir().unwrap();
+        let plain = folder.path().to_str().unwrap();
+        assert_eq!(
+            w.switch_project(false, false, format!("{plain}/"), plain),
+            Quit::Stay
+        );
+        assert_eq!(
+            w.switch_project(false, false, format!("{plain}/./"), plain),
+            Quit::Stay
         );
         // Closing the window after a cancelled switch closes the window.
         assert_eq!(

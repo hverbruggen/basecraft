@@ -120,6 +120,7 @@ pub mod qobject {
         fn switch_project(
             self: Pin<&mut DocumentOpens>,
             drafts: bool,
+            tasks: bool,
             folder: &QString,
             current: &QString,
         ) -> QString;
@@ -229,7 +230,7 @@ fn targets(consent: &QString) -> Vec<Target> {
         .collect()
 }
 /// A quit step for QML: `drafts`, `ask` (with `error`), `save`, `stay`,
-/// `choose` or `leave`. `drafts` and `leave` carry `project` during a
+/// `choose`, `refuse` or `leave`. `drafts` and `leave` carry `project` during a
 /// project switch.
 fn quit_json(step: &Quit) -> QString {
     json(&match step {
@@ -240,6 +241,7 @@ fn quit_json(step: &Quit) -> QString {
         Quit::Save(target) => serde_json::json!({"save": target_json(target)}),
         Quit::Stay => serde_json::json!({"stay": true}),
         Quit::Choose(project) => serde_json::json!({"choose": project}),
+        Quit::Refuse(error) => serde_json::json!({"refuse": error}),
         Quit::Leave { drafts, project } => serde_json::json!({
             "leave": drafts.iter().map(u64::to_string).collect::<Vec<_>>(), "project": project
         }),
@@ -482,11 +484,13 @@ impl qobject::DocumentOpens {
     fn switch_project(
         mut self: Pin<&mut Self>,
         drafts: bool,
+        tasks: bool,
         folder: &QString,
         current: &QString,
     ) -> QString {
         quit_json(&self.as_mut().rust_mut().documents.switch_project(
             drafts,
+            tasks,
             folder.to_string(),
             &current.to_string(),
         ))

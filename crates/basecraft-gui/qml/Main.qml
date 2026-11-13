@@ -53,16 +53,13 @@ ApplicationWindow {
         else if (step.ask) quitDialog.dialog().ask(step.ask, step.error)
         else if (step.save) saveTarget(documentTarget(documentOpens.target_index(step.save.token, step.save.path)), "",
             success => quitStep(JSON.parse(documentOpens.quit_saved(success))))
-        else if (step.choose) preferences.project_error = shell.choose_project(step.choose)
-        else if (step.leave && step.project) { leave(step.leave); closeForProject(step.project) }
-        else if (step.leave) { leave(step.leave); closeConfirmed = true; window.close() }
-    }
-    // Every tab closes before the project changes. Their sessions end when the
-    // removed tabs are deleted, so the choice waits for the event loop.
-    function closeForProject(folder) {
-        while (documentOpens.count > 0) removeDocument(documentOpens.count - 1)
-        discardAuthoredOnQuit = false
-        Qt.callLater(() => { preferences.project_error = shell.choose_project(folder); refreshCurrent() })
+        else if (step.choose || step.refuse) preferences.project_error = step.refuse || shell.choose_project(step.choose)
+        else if (step.leave && !step.project) { leave(step.leave); closeConfirmed = true; window.close() }
+        else if (step.leave) { // A switch: every tab closes; their sessions end when Qt deletes them, so choose afterwards.
+            leave(step.leave); discardAuthoredOnQuit = false
+            while (documentOpens.count > 0) removeDocument(documentOpens.count - 1)
+            Qt.callLater(() => { preferences.project_error = shell.choose_project(step.project); refreshCurrent() })
+        }
     }
 
     palette.window: shell.background
@@ -195,16 +192,18 @@ ApplicationWindow {
     }
     readonly property var applicationCommands: [findCommand, newSequenceCommand, addAnnotationCommand, openCommand, saveCommand, saveAsCommand, projectCommand, shortcutsCommand, aboutCommand, preferencesCommand, textRepresentationCommand, contextShortcutsCommand, learnCommand, exportSvgCommand, exportPngCommand, historyCommand, methodsCommand, showProvenanceCommand, verifyProvenanceCommand, packageCommand, recoverCommand, installedOperationsCommand].concat(ribbonCommands)
     // Another project closes the open documents first, asking as quitting does.
-    // A job still running in the old project refuses the switch.
+    // A task outside the tabs still working in the old project refuses it first.
     function selectProject(path) {
         const chosen = preferences.select_project(path)
-        if (chosen.length) quitStep(JSON.parse(documentOpens.switch_project(!discardAuthoredOnQuit && !!documentRecord.item && documentRecord.item.unsavedDrafts().length > 0, chosen, shell.project_dir)))
+        if (chosen.length) quitStep(JSON.parse(documentOpens.switch_project(!discardAuthoredOnQuit && !!documentRecord.item && documentRecord.item.unsavedDrafts().length > 0,
+            provenance.busy || submissionJobs.busy || zenodoJobs.busy || blastBackend.busy, chosen, shell.project_dir)))
     }
     property bool preferencesReady: false
     AppSettings {
         id: preferences
         objectName: "preferences"
         onSnapshotChanged: if (window.preferencesReady) window.loadPreferences()
+        onRelease_available: notice => provenance.notification("", notice, "notify")
         onErrorChanged: if (error.length && window.preferencesReady) {
             preferencesError.dialog().open()
         }
@@ -1675,21 +1674,6 @@ ApplicationWindow {
         }
     }
     OnDemand { id: firstLaunch; objectName: "firstLaunch"; sourceComponent: Component { PreferencesDialog { welcome: true; settings: preferences; commands: window.applicationCommands; defaultFontSizePoints: window.defaultFontSizePoints } } }
-    // Opted in at first launch or in Preferences: ask GitHub for the latest
-    // release once per start and say if it is newer.
-    function checkRelease() {
-        const url = preferences.release_url()
-        if (!url.length) return
-        const request = new XMLHttpRequest()
-        request.onreadystatechange = () => {
-            if (request.readyState !== XMLHttpRequest.DONE || request.status !== 200) return
-            const notice = preferences.release_notice(request.responseText)
-            if (notice.length) provenance.notification("", notice, "notify")
-        }
-        request.timeout = 10000
-        request.open("GET", url)
-        request.send()
-    }
     // One contact-details dialog: the GenBank submitter, then other services.
     function showContacts() {
         const prefs = JSON.parse(preferences.snapshot || "{}")
@@ -2741,7 +2725,7 @@ ApplicationWindow {
     Component.onCompleted: {
         loadPreferences()
         if (preferenceValues.ui && !preferenceValues.ui.welcomed && !scriptedRun) firstLaunch.dialog().open()
-        checkRelease()
+        preferences.check_release()
         computeReady = true
         localCpuThreads = Math.max(1, Math.min(availableCpuThreads, localCpuThreads))
         shell.configure_cpu_threads(localCpuThreads)

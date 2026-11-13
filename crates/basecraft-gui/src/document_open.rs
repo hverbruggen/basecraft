@@ -29,13 +29,24 @@ pub(crate) fn start<T>(
     .map_err(OpenError::Spawn)
 }
 
+/// [`start`] in the window's chosen project, as every open is.
+pub(crate) fn start_in_chosen<T>(
+    owner: impl crate::jobs::Owner<T>,
+    path: String,
+    done: impl FnOnce(std::pin::Pin<&mut T>, Result<Candidate, OpenError>) + Send + 'static,
+) -> Result<(), OpenError> {
+    let project = crate::chosen_project::chosen().map_err(basecraft_ops::Error::Invalid)?;
+    start(owner, path, project, done)
+}
+
+/// A view opening its own file, or reopening after Save As.
 pub(crate) fn open_file<T: cxx_qt::Threading + 'static>(
     mut controller: std::pin::Pin<&mut T>,
     path: &cxx_qt_lib::QString,
     completed: impl Fn(std::pin::Pin<&mut T>, Result<Candidate, OpenError>) + Copy + Send + 'static,
 ) -> bool {
     let thread = controller.qt_thread();
-    if let Err(error) = start(thread, path.to_string(), None, completed) {
+    if let Err(error) = start_in_chosen(thread, path.to_string(), completed) {
         completed(controller.as_mut(), Err(error));
         return false;
     }

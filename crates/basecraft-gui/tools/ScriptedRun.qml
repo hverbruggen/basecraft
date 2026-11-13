@@ -1,36 +1,23 @@
 import QtQuick
 import Basecraft
 
-// The window the check tools drive (crates/basecraft-gui/tools/check_*.py,
-// tools/test_delivery.py). The binary loads this instead of Main.qml when it
-// gets --screenshot FILE, optionally with --window-width, --font-size,
-// --font-points, --cpu-threads, --fit, --ribbon INDEX, --species-dialog
-// METHOD, --distance-dialog FORM, --project-picker STEPS and the audits.
-// It reaches the window's parts by objectName; nothing here is production.
+// The window the check tools drive (tools/check_*.py, test_delivery.py). It ships
+// in the binary but loads only for --screenshot FILE, with the options below and
+// the audits. It reaches the window's parts by objectName.
 Main {
     id: run
     scriptedRun: true
 
-    function arg(name) {
-        const args = Qt.application.arguments
-        const i = args.indexOf(name)
-        return i >= 0 ? args[i + 1] : undefined
+    // Each --name value pair on the command line.
+    readonly property var option: { const a = Qt.application.arguments; const o = {}; for (let i = 1; i < a.length - 1; i++) if (a[i].startsWith("--")) o[a[i]] = a[i + 1]; return o }
+    // A part of the window by objectName: its own objects, then the items under its header and content.
+    function part(name) {
+        const visit = item => !item ? null : item.objectName === name ? item : [...(item.children || [])].reduce((found, child) => found || visit(child), null)
+        return run.contentData.find(item => item && item.objectName === name) || visit(run.header) || visit(run.contentItem)
     }
-    function find(item, test) {
-        if (!item) return null
-        if (test(item)) return item
-        for (const child of item.children || []) {
-            const found = find(child, test)
-            if (found) return found
-        }
-        return null
-    }
-    function named(name) { return find(run.header, i => i.objectName === name) || find(run.contentItem, i => i.objectName === name) }
-    function part(name) { return run.contentData.find(item => item && item.objectName === name) }
-
     Component.onCompleted: {
-        if (arg("--window-width")) width = Number(arg("--window-width"))
-        if (arg("--font-size")) font.pixelSize = Number(arg("--font-size"))
+        if (option["--window-width"]) width = Number(option["--window-width"])
+        if (option["--font-size"]) font.pixelSize = Number(option["--font-size"])
     }
 
     // Exercise the actual project command and native picker for integration checks.
@@ -59,42 +46,38 @@ Main {
         }
     }
     Timer {
-        interval: 900
-        running: true
+        interval: 900; running: true
         onTriggered: {
             const error = run.part("preferencesError")
             console.debug("PREFERENCES_AUDIT", JSON.stringify({error: run.part("preferences").error, modal: !!error.item && error.item.visible, ready: run.preferencesReady, font: run.font.family, fontPoints: run.font.pointSize, defaultFontPoints: run.defaultFontSizePoints}))
-            if (run.arg("--project-picker")) {
-                projectPickerCheck.steps = JSON.parse(run.arg("--project-picker"))
+            if (run.option["--project-picker"]) {
+                projectPickerCheck.steps = JSON.parse(run.option["--project-picker"])
                 projectPickerCheck.start()
                 return
             }
             const c = run.current
             if (!c) { console.log("no document open"); shot.start(); return }
-            if (run.arg("--cpu-threads")) run.localCpuThreads = Number(run.arg("--cpu-threads"))
-            if (run.arg("--font-points")) run.part("preferences").update("fontSizePoints", run.arg("--font-points"))
-            if (run.arg("--fit")) c.fit()
-            if (run.arg("--ribbon")) run.ribbonTabName = run.ribbonTabs[Number(run.arg("--ribbon"))]
-            if (run.arg("--species-dialog")) run.beginDelimitation(run.arg("--species-dialog"))
-            if (run.arg("--distance-dialog")) run.part("toolSettings").dialog().show(c, "distance", run.arg("--distance-dialog"))
+            const apply = {"--cpu-threads": v => run.localCpuThreads = Number(v), "--font-points": v => run.part("preferences").update("fontSizePoints", v),
+                "--fit": () => c.fit(), "--ribbon": v => run.ribbonTabName = run.ribbonTabs[Number(v)],
+                "--species-dialog": v => run.beginDelimitation(v), "--distance-dialog": v => run.part("toolSettings").dialog().show(c, "distance", v)}
+            for (const name in apply) if (run.option[name]) apply[name](run.option[name])
             shot.start()
         }
     }
     Timer {
-        id: shot
+        id: shot; interval: 400
         property bool accessibilityAudited: false
-        interval: 400
         onTriggered: {
             const c = run.current
             if (c && c.busy) { shot.start(); return }
-            const ribbon = run.named("applicationRibbon")
-            if (run.arg("--accessibility-audit") && !accessibilityAudited) {
+            const ribbon = run.part("applicationRibbon")
+            if (run.option["--accessibility-audit"] && !accessibilityAudited) {
                 accessibilityAudited = true
                 const view = run.currentView
                 const text = run.part("textRepresentation")
                 const results = {editorFocused: view.activeFocus}
                 view.pressKey(Qt.Key_F6, 0, "")
-                results.ribbonFocused = run.named("ribbonTabBar").currentItem.activeFocus
+                results.ribbonFocused = run.part("ribbonTabBar").currentItem.activeFocus
                 view.pressKey(Qt.Key_F6, Qt.ShiftModifier, "")
                 results.editorReturned = view.activeFocus
                 view.pressKey(Qt.Key_T, Qt.ControlModifier | Qt.AltModifier, "t")
@@ -113,7 +96,7 @@ Main {
                 }))
                 return
             }
-            if (run.arg("--ribbon-audit")) {
+            if (run.option["--ribbon-audit"]) {
                 const groups = []
                 for (const group of ribbon.currentPage.children) {
                     if (!group.visible || group.captionY === undefined) continue
@@ -134,7 +117,7 @@ Main {
                     pageImplicitWidth: ribbon.currentPage.implicitWidth, spacing: ribbon.currentPage.spacing,
                     groups: groups, children: children}))
             }
-            if (run.arg("--render-audit") && run.currentView) {
+            if (run.option["--render-audit"] && run.currentView) {
                 const view = run.currentView
                 const origin = view.mapToItem(null, 0, 0)
                 console.log("RENDER_AUDIT", JSON.stringify({api: view.GraphicsInfo.api,
@@ -146,14 +129,14 @@ Main {
             console.log("interface font points", run.font.pointSize)
             if (c) console.log(typeof c.memory_report === "function" ? c.memory_report() : "Trace", "|", c.status, "|", c.hscroll_size, c.vscroll_size)
             if (run.traceOpen && c.review_mode) console.log("trace mask", c.mask_settings, "thresholds", c.review_settings, "background", c.background, "hover status", run.traceDocument.hoverStatus)
-            if (run.arg("--window-capture") && run.currentView)
-                run.currentView.saveWindow(run.arg("--window-capture"))
+            if (run.option["--window-capture"] && run.currentView)
+                run.currentView.saveWindow(run.option["--window-capture"])
             // Capture the scene into a texture: the offscreen platform's
             // window framebuffer grab is cropped at non-unit display scales.
             let scene = run.contentItem
             while (scene.parent) scene = scene.parent
             const started = scene.grabToImage(result => {
-                console.log("saved", result.saveToFile(run.arg("--screenshot")))
+                console.log("saved", result.saveToFile(run.option["--screenshot"]))
                 run.closeConfirmed = true
                 Qt.quit()
             })

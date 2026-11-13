@@ -65,8 +65,66 @@ pub(crate) fn session_for(file: &Path) -> Result<Session, String> {
 
 #[cfg(test)]
 mod tests {
+    /// Both tests change the window's one chosen project.
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    fn serial() -> std::sync::MutexGuard<'static, ()> {
+        SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    #[derive(Clone)]
+    struct Window;
+    struct Probe;
+    impl crate::jobs::Owner<Probe> for Window {
+        fn deliver(&self, call: impl FnOnce(std::pin::Pin<&mut Probe>) + Send + 'static) -> bool {
+            call(std::pin::Pin::new(&mut Probe));
+            true
+        }
+    }
+
+    /// A view opening its own file, here a species workspace in a project
+    /// subfolder, gets the chosen project: its history goes to the project's
+    /// records and the open session counts as a use of the project.
+    #[test]
+    fn a_view_opening_its_own_file_gets_the_chosen_project() {
+        let _serial = serial();
+        let project = tempfile::tempdir().unwrap();
+        let sub = project.path().join("analyses");
+        std::fs::create_dir(&sub).unwrap();
+        let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../testdata/fixtures/compact/species-delimitation");
+        for file in ["hypotheses.spart", "specimens.afa"] {
+            std::fs::copy(fixtures.join(file), sub.join(file)).unwrap();
+        }
+        super::choose(project.path().to_str().unwrap()).unwrap();
+        let (sender, received) = std::sync::mpsc::channel();
+        crate::document_open::start_in_chosen(
+            Window,
+            sub.join("hypotheses.spart").to_string_lossy().into_owned(),
+            move |_, result| sender.send(result.unwrap()).unwrap(),
+        )
+        .unwrap();
+        let candidate = received
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .unwrap();
+        assert_eq!(
+            candidate.session.project().unwrap().root(),
+            project.path().canonicalize().unwrap()
+        );
+        assert_eq!(
+            candidate.session.root(),
+            project.path().canonicalize().unwrap()
+        );
+        let other = tempfile::tempdir().unwrap();
+        assert!(super::choose(other.path().to_str().unwrap()).is_err());
+        drop(candidate);
+        super::choose("").unwrap();
+    }
+
     #[test]
     fn switching_waits_until_the_old_project_is_no_longer_in_use() {
+        let _serial = serial();
         let first = tempfile::tempdir().unwrap();
         let second = tempfile::tempdir().unwrap();
         let first_path = first.path().to_str().unwrap();

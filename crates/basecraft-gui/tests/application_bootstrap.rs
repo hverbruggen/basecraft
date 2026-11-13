@@ -25,6 +25,7 @@ mod application_test_bridge;
 #[allow(unused_imports)] // harness=false omits the included module's #[test] bodies.
 mod bridge;
 #[path = "../src/chosen_project.rs"]
+#[allow(dead_code)] // harness=false omits the included module's test bodies.
 mod chosen_project;
 #[path = "../src/command_bridge.rs"]
 mod command_bridge;

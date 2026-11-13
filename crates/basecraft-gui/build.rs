@@ -168,6 +168,7 @@ fn main() {
     .qrc("icons.qrc")
     .qrc("controls.qrc")
     .qt_module("Quick")
+    .qt_module("Network")
     .files([
         "src/bridge.rs",
         "src/app_bridge.rs",
@@ -188,7 +189,9 @@ fn main() {
     .cpp_file("cpp/instanceview.h")
     .cpp_file("cpp/instanceview.cpp")
     .cpp_file("cpp/filetreemodel.h")
-    .cpp_file("cpp/filetreemodel.cpp");
+    .cpp_file("cpp/filetreemodel.cpp")
+    .cpp_file("cpp/releasecheck.h")
+    .cpp_file("cpp/releasecheck.cpp");
     // SAFETY: not a memory-safety concern; cxx-qt marks this unsafe because
     // its cc::Build may change between minor versions.
     let builder = unsafe {
@@ -205,7 +208,15 @@ fn main() {
     // GNU import libraries must follow the generated static bridge archives.
     // rustc-link-arg preserves that final ordering for the MinGW linker.
     if std::env::var("TARGET").is_ok_and(|target| target.ends_with("windows-gnu")) {
-        for module in ["Quick", "Qml", "QuickControls2", "Widgets", "Gui", "Core"] {
+        for module in [
+            "Quick",
+            "Qml",
+            "QuickControls2",
+            "Widgets",
+            "Network",
+            "Gui",
+            "Core",
+        ] {
             println!("cargo::rustc-link-arg=-lQt6{module}");
         }
     }

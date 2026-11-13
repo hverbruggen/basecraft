@@ -307,6 +307,27 @@ Main {
             check(!evidence.visible, "site evidence did not fold")
             toggle.checked = true
         })
+        // The species menu says "Rename species…" once the selection is an
+        // existing species, and "Name species…" before.
+        list.push(() => {
+            const view = documentAt(3)
+            const ctl = view.controller
+            const hypothesis = view.hypotheses.find(h => (h.groups || []).length > 0)
+            check(hypothesis, "the species workspace has no groups")
+            ctl.active_hypothesis = hypothesis.id
+            const menu = view.data.find(o => o && o.objectName === "speciesTreeMenu")
+            const caption = () => {
+                menu.openFor({})
+                let text = ""
+                for (let i = 0; i < menu.count; i++) if (menu.itemAt(i).objectName === "nameSpecies") text = menu.itemAt(i).text
+                menu.close()
+                return text
+            }
+            ctl.highlight_taxa("[]")
+            check(caption() === "Name species…", "species menu renames an empty selection")
+            ctl.select_group(hypothesis.id, hypothesis.groups[0].id, false)
+            check(caption() === "Rename species…", "species menu did not follow the selection")
+        })
         // Every dialog built on demand builds without a QML warning.
         list.push(() => {
             const loaders = walk.contentData.filter(item => item && item.sourceComponent !== undefined && typeof item.dialog === "function")

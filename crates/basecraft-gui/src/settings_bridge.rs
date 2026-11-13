@@ -5,6 +5,7 @@ use basecraft_platform::{
 };
 use basecraft_viewmodel::{projects, release};
 use cxx_qt::CxxQtType;
+use cxx_qt::Threading;
 use cxx_qt_lib::{QString, QStringList};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -16,6 +17,10 @@ pub mod qobject {
         type QString = cxx_qt_lib::QString;
         include!("cxx-qt-lib/qstringlist.h");
         type QStringList = cxx_qt_lib::QStringList;
+        include!("releasecheck.h");
+        /// Blocking; runs on a job thread.
+        #[rust_name = "fetch_latest_release"]
+        fn fetchLatestRelease(url: &QString) -> QString;
     }
     unsafe extern "RustQt" {
         #[qobject]
@@ -29,6 +34,7 @@ pub mod qobject {
         type AppSettings = super::SettingsRust;
     }
     impl cxx_qt::Initialize for AppSettings {}
+    impl cxx_qt::Threading for AppSettings {}
     unsafe extern "RustQt" {
         #[qinvokable]
         fn reload(self: Pin<&mut AppSettings>) -> bool;
@@ -49,14 +55,13 @@ pub mod qobject {
             document: &QString,
             file: &QString,
         ) -> QString;
-        /// Where to ask for the latest release, or "" when this start should
-        /// not ask (not opted in, or an offscreen or screenshot run).
+        /// Ask for the latest release when the user opted in, except in
+        /// offscreen and screenshot runs. `release_available` follows when
+        /// it is newer than this build.
         #[qinvokable]
-        fn release_url(self: &AppSettings) -> QString;
-        /// A notice when `response` (the latest release) is newer than this
-        /// build, else "".
-        #[qinvokable]
-        fn release_notice(self: &AppSettings, response: &QString) -> QString;
+        fn check_release(self: Pin<&mut AppSettings>);
+        #[qsignal]
+        fn release_available(self: Pin<&mut AppSettings>, notice: QString);
     }
 }
 pub struct SettingsRust {
@@ -228,21 +233,28 @@ impl qobject::AppSettings {
             .directory(&load_project_history().unwrap_or_default(), &home);
         QString::from(folder.to_string_lossy().as_ref())
     }
-    fn release_url(&self) -> QString {
+    fn check_release(self: Pin<&mut Self>) {
         let opted_in = serde_json::from_str::<Preferences>(&self.snapshot.to_string())
             .is_ok_and(|prefs| prefs.ui.release_notices);
         let platform = std::env::var("QT_QPA_PLATFORM").ok();
         let args: Vec<String> = std::env::args().collect();
-        if release::wanted(opted_in, platform.as_deref(), &args) {
-            QString::from(&release::url(env!("CARGO_PKG_REPOSITORY")))
-        } else {
-            QString::default()
+        if !release::wanted(opted_in, platform.as_deref(), &args) {
+            return;
         }
-    }
-    fn release_notice(&self, response: &QString) -> QString {
-        QString::from(
-            &release::notice(env!("CARGO_PKG_VERSION"), &response.to_string()).unwrap_or_default(),
-        )
+        let url = QString::from(&release::url(env!("CARGO_PKG_REPOSITORY")));
+        // A failed start or request means no notice, as when offline.
+        let _ = crate::jobs::start(
+            self.qt_thread(),
+            move |_| Ok(qobject::fetch_latest_release(&url).to_string()),
+            |this, response: Result<String, String>| {
+                if let Some(notice) = response
+                    .ok()
+                    .and_then(|body| release::notice(env!("CARGO_PKG_VERSION"), &body))
+                {
+                    this.release_available(QString::from(&notice));
+                }
+            },
+        );
     }
     fn dialog_folder(&self, project: &QString, document: &QString, file: &QString) -> QString {
         let home = AppPaths::discover().ok().and_then(|paths| paths.home);

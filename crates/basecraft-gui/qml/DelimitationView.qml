@@ -465,8 +465,10 @@ FocusScope {
         id: treeMenu
         objectName: "speciesTreeMenu"
         property var info: ({})
+        property bool species: false
         function openFor(info) {
             treeMenu.info = info || {}
+            treeMenu.species = ctl.selection_is_species()
             popup()
         }
         readonly property bool canEdit: doc.activeEditable && doc.selection.length > 0 && !ctl.busy
@@ -476,7 +478,7 @@ FocusScope {
         }
         MenuSeparator {}
         TreeMenuItem { text: "Group selection"; objectName: "groupSelection"; enabled: treeMenu.canEdit; onTriggered: doc.groupSelection() }
-        TreeMenuItem { text: ctl.selection_is_species() ? "Rename species…" : "Name species…"; objectName: "nameSpecies"; enabled: treeMenu.canEdit; onTriggered: doc.askSpeciesName() }
+        TreeMenuItem { text: treeMenu.species ? "Rename species…" : "Name species…"; objectName: "nameSpecies"; enabled: treeMenu.canEdit; onTriggered: doc.askSpeciesName() }
         TreeMenuItem { text: "Unassign"; objectName: "unassign"; enabled: treeMenu.canEdit; onTriggered: doc.unassign() }
         TreeMenuItem { text: "Edit a copy…"; visible: doc.activeHypothesis !== null && !doc.activeEditable; onTriggered: doc.newHypothesis(doc.activeHypothesis.id) }
         MenuSeparator { visible: treeMenu.info.node === true; height: visible ? implicitHeight : 0 }
