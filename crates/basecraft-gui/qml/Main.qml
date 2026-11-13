@@ -10,6 +10,8 @@ import Basecraft
 ApplicationWindow {
     id: window
     property bool overviewEnabled: true
+    // Set by tools/ScriptedRun.qml, the check tools' window: no first-launch form.
+    property bool scriptedRun: false
     width: 1200
     height: 760
     visible: true
@@ -73,7 +75,7 @@ ApplicationWindow {
     palette.highlightedText: shell.background
 
     // Theme, font and project folder, whether or not a file is open.
-    GenomeController { id: shell }
+    GenomeController { id: shell; objectName: "shell" }
 
     readonly property var ribbonNavigation: ribbonHints
     RibbonKeyHints {
@@ -210,7 +212,7 @@ ApplicationWindow {
     function persistPreference(key, value) {
         if (preferencesReady) preferences.update(key, JSON.stringify(value))
     }
-    OnDemand { id: preferencesError; sourceComponent: Component { AppContentDialog {
+    OnDemand { id: preferencesError; objectName: "preferencesError"; sourceComponent: Component { AppContentDialog {
         id: preferencesErrorItem
         title: "Preferences could not be loaded or saved"
         standardButtons: Dialog.Close
@@ -285,7 +287,7 @@ ApplicationWindow {
         textRepresentation.dialog().source = source
         textRepresentation.dialog().open()
     }
-    OnDemand { id: textRepresentation; sourceComponent: Component { TextRepresentationDialog { id: textRepresentationItem } } }
+    OnDemand { id: textRepresentation; objectName: "textRepresentation"; sourceComponent: Component { TextRepresentationDialog { id: textRepresentationItem } } }
 
     function focusRegion(backward) {
         const regions = [ribbonTabBar, tree, tabs, delimitationOpen ? window.documentAt(tabs.currentIndex) : currentView].filter(item => item && item.visible && item.enabled)
@@ -908,6 +910,7 @@ ApplicationWindow {
                 spacing: 0
                 RibbonTabs {
                     id: ribbonTabBar
+                    objectName: "ribbonTabBar"
                     ribbonSizeFactor: window.ribbonSizeFactor
                     Layout.fillWidth: true
                     onEnterRibbon: backward => ribbon.enter(backward)
@@ -1516,7 +1519,7 @@ ApplicationWindow {
     }
 
     // Settings for every plugin run, drawn from the plugin's manifest.
-    OnDemand { id: toolSettings; sourceComponent: Component { ToolSettingsDialog { id: toolSettingsItem } } }
+    OnDemand { id: toolSettings; objectName: "toolSettings"; sourceComponent: Component { ToolSettingsDialog { id: toolSettingsItem } } }
     OnDemand { id: operationWindow; sourceComponent: Component { OperationPickerDialog { id: operationPicker; onOpenResult: (path) => window.openPath(path) } } }
 
     OnDemand { id: shortcutsWindow; sourceComponent: Component { ShortcutsDialog { id: shortcuts; commands: window.applicationCommands } } }
@@ -2737,157 +2740,17 @@ ApplicationWindow {
         controller: window.currentKind === "sequence" ? window.current : null
     }
 
-    function arg(name) {
-        const args = Qt.application.arguments
-        const i = args.indexOf(name)
-        return i >= 0 ? args[i + 1] : undefined
-    }
-
     Component.onCompleted: {
-        if (arg("--screenshot")) {
-            if (arg("--window-width")) width = Number(arg("--window-width"))
-            if (arg("--font-size")) font.pixelSize = Number(arg("--font-size"))
-        }
         loadPreferences()
-        if (preferenceValues.ui && !preferenceValues.ui.welcomed && !arg("--screenshot")) firstLaunch.dialog().open()
+        if (preferenceValues.ui && !preferenceValues.ui.welcomed && !scriptedRun) firstLaunch.dialog().open()
         checkRelease()
         computeReady = true
         localCpuThreads = Math.max(1, Math.min(availableCpuThreads, localCpuThreads))
         shell.configure_cpu_threads(localCpuThreads)
-        if (arg("--screenshot")) console.debug("PREFERENCES_AUDIT", JSON.stringify({error: preferences.error, modal: !!preferencesError.item && preferencesError.item.visible, ready: preferencesReady, font: font.family, fontPoints: font.pointSize, defaultFontPoints: defaultFontSizePoints}))
         const args = Qt.application.arguments
         for (let i = 1; i < args.length; i++) {
             if (args[i].startsWith("--")) { i++; continue }
             openPath(args[i])
-        }
-    }
-
-    // Scripted runs for the check tools (crates/basecraft-gui/tools): with
-    // --screenshot FILE, optionally --window-width, --font-size, --font-points,
-    // --cpu-threads, --fit, --ribbon INDEX, --species-dialog METHOD,
-    // --distance-dialog FORM, --project-picker STEPS and the audits.
-    // Exercise the actual project command and native picker for integration checks.
-    Timer {
-        id: projectPickerCheck
-        interval: 150
-        repeat: true
-        property var steps: []
-        property string previousAction: ""
-        onTriggered: {
-            if (previousAction.length) console.log("PROJECT_PICKER_AUDIT", JSON.stringify({
-                action: previousAction, folder: projectDialog ? projectDialog.currentFolder.toString() : window.projectPickerFolder().toString(),
-                policyFolder: window.projectPickerFolder().toString(),
-                visible: projectDialog !== null && projectDialog.visible, project: shell.project_dir,
-                historyError: preferences.project_error, preferencesError: preferences.error,
-                preferencesReady: window.preferencesReady
-            }))
-            if (!steps.length) { stop(); Qt.quit(); return }
-            const step = steps.shift()
-            previousAction = step.action
-            if (step.action === "open") projectCommand.trigger()
-            else if (step.action === "browse") projectDialog.selectedFolder = shell.local_file_url(step.path)
-            else if (step.action === "choose") projectDialog.selectedFolder = shell.local_file_url(step.path)
-            else if (step.action === "accept") projectDialog.accept()
-            else if (step.action === "reject") projectDialog.reject()
-            else if (step.action === "select") window.selectProject(step.path)
-        }
-    }
-    Timer {
-        interval: 900
-        running: arg("--screenshot") !== undefined
-        onTriggered: {
-            if (arg("--project-picker")) {
-                projectPickerCheck.steps = JSON.parse(arg("--project-picker"))
-                projectPickerCheck.start()
-                return
-            }
-            const c = window.current
-            if (!c) { console.log("no document open"); shot.start(); return }
-            if (arg("--cpu-threads")) window.localCpuThreads = Number(arg("--cpu-threads"))
-            if (arg("--font-points")) preferences.update("fontSizePoints", arg("--font-points"))
-            if (arg("--fit")) c.fit()
-            if (arg("--ribbon")) window.ribbonTabName = window.ribbonTabs[Number(arg("--ribbon"))]
-            if (arg("--species-dialog")) window.beginDelimitation(arg("--species-dialog"))
-            if (arg("--distance-dialog")) toolSettings.dialog().show(c, "distance", arg("--distance-dialog"))
-            shot.start()
-        }
-    }
-    Timer {
-        id: shot
-        property bool accessibilityAudited: false
-        interval: 400
-        onTriggered: {
-            const c = window.current
-            if (c && c.busy) { shot.start(); return }
-            if (arg("--accessibility-audit") && !accessibilityAudited) {
-                accessibilityAudited = true
-                const view = window.currentView
-                const results = {editorFocused: view.activeFocus}
-                view.pressKey(Qt.Key_F6, 0, "")
-                results.ribbonFocused = ribbonTabBar.currentItem.activeFocus
-                view.pressKey(Qt.Key_F6, Qt.ShiftModifier, "")
-                results.editorReturned = view.activeFocus
-                view.pressKey(Qt.Key_T, Qt.ControlModifier | Qt.AltModifier, "t")
-                Qt.callLater(() => Qt.callLater(() => {
-                    results.textOpened = textRepresentation.dialog().opened
-                    results.textFocused = textRepresentation.dialog().initialFocusItem.activeFocus
-                    results.hasText = textRepresentation.dialog().snapshot.text.length > 0
-                    view.pressKey(Qt.Key_F6, 0, "")
-                    results.modalFocusKept = textRepresentation.dialog().initialFocusItem.activeFocus
-                    textRepresentation.dialog().close()
-                    Qt.callLater(() => {
-                        results.focusRestored = view.activeFocus
-                        console.log("ACCESSIBILITY_AUDIT", JSON.stringify(results))
-                        shot.start()
-                    })
-                }))
-                return
-            }
-            if (arg("--ribbon-audit")) {
-                const groups = []
-                for (const group of ribbon.currentPage.children) {
-                    if (!group.visible || group.captionY === undefined) continue
-                    const point = group.mapToItem(ribbon, 0, 0)
-                    groups.push({title: group.title, y: point.y, height: group.height,
-                        width: group.width, implicitWidth: group.implicitWidth,
-                        implicitHeight: group.implicitHeight,
-                        caption: point.y + group.captionY, center: point.y + group.bodyCenterY})
-                }
-                // Every child, so a width that does not add up can be traced.
-                const children = []
-                for (const child of ribbon.currentPage.children)
-                    children.push({name: child.title || String(child).split("(")[0], visible: child.visible,
-                        x: child.x, width: child.width, implicitWidth: child.implicitWidth})
-                console.log("RIBBON_AUDIT", JSON.stringify({page: window.ribbonTab,
-                    height: ribbon.height, contentWidth: ribbon.contentWidth,
-                    viewportWidth: ribbon.viewportWidth, pageWidth: ribbon.pageWidth,
-                    pageImplicitWidth: ribbon.currentPage.implicitWidth, spacing: ribbon.currentPage.spacing,
-                    groups: groups, children: children}))
-            }
-            if (arg("--render-audit") && window.currentView) {
-                const view = window.currentView
-                const origin = view.mapToItem(null, 0, 0)
-                console.log("RENDER_AUDIT", JSON.stringify({api: view.GraphicsInfo.api,
-                    software: view.GraphicsInfo.api === GraphicsInfo.Software, error: view.renderError,
-                    x: origin.x, y: origin.y, width: view.width, height: view.height,
-                    windowWidth: window.width, windowHeight: window.height}))
-            }
-            console.log("local CPU threads", window.localCpuThreads)
-            console.log("interface font points", window.font.pointSize)
-            if (c) console.log(typeof c.memory_report === "function" ? c.memory_report() : "Trace", "|", c.status, "|", c.hscroll_size, c.vscroll_size)
-            if (window.traceOpen && c.review_mode) console.log("trace mask", c.mask_settings, "thresholds", c.review_settings, "background", c.background, "hover status", window.traceDocument.hoverStatus)
-            if (arg("--window-capture") && window.currentView)
-                window.currentView.saveWindow(arg("--window-capture"))
-            // Capture the scene into a texture: the offscreen platform's
-            // window framebuffer grab is cropped at non-unit display scales.
-            let scene = window.contentItem
-            while (scene.parent) scene = scene.parent
-            const started = scene.grabToImage(result => {
-                console.log("saved", result.saveToFile(arg("--screenshot")))
-                window.closeConfirmed = true
-                Qt.quit()
-            })
-            if (!started) { console.error("Screenshot capture failed"); Qt.exit(1) }
         }
     }
 }

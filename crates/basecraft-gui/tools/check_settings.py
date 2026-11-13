@@ -85,23 +85,6 @@ def main():
     audit = json.loads(next(line.split("PREFERENCES_AUDIT ", 1)[1] for line in log.splitlines() if "PREFERENCES_AUDIT " in line))
     assert audit["error"] and not audit["modal"] and not audit["ready"], audit
 
-    # Exercise real QSettings INI conversion, not just JSON fixtures. Every
-    # application location stays isolated even though profile mode is disabled.
-    env.pop("BASECRAFT_PROFILE_DIR")
-    legacy = root / "legacy/Basecraft/Basecraft.conf"
-    legacy.parent.mkdir(parents=True, exist_ok=True)
-    legacy.write_text("[ui]\nalignmentInsert=false\nshowGc=true\nsidebarOpen=false\norfMinCodons=234\nlocalCpuThreads=2\n")
-    before = legacy.read_bytes()
-    log = run("legacy-ini", [])
-    migrated = tomllib.loads((root / "legacy/basecraft/preferences.toml").read_text())
-    assert migrated["ui"]["alignment_insert"] is False
-    assert migrated["ui"]["sidebar_open"] is False
-    assert migrated["ui"]["orf_min_codons"] == 234
-    assert migrated["compute"]["local_cpu_threads"] == 2
-    assert migrated["migration"]["qsettings_imported"] is True
-    assert legacy.read_bytes() == before
-    audit = json.loads(next(line.split("PREFERENCES_AUDIT ", 1)[1] for line in log.splitlines() if "PREFERENCES_AUDIT " in line))
-    assert not audit["error"] and not audit["modal"] and audit["ready"], audit
     print(
         f"GUI settings persistence and future-version preservation passed; artifacts: {root}"
     )

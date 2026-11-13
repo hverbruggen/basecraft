@@ -40,8 +40,15 @@ fn main() {
     let trace = startup_trace::Trace::from_env(startup);
     bridge::qobject::configure_canvas_graphics();
     let args: Vec<_> = std::env::args().collect();
-    let gui_test = std::env::var_os("BASECRAFT_GUI_TEST").is_some_and(|value| value == "1")
-        || args.iter().any(|arg| arg == "--screenshot");
+    // The check tools drive the window through tools/ScriptedRun.qml.
+    let scripted = args.iter().any(|arg| arg == "--screenshot");
+    let root = if scripted {
+        "qrc:/qt/qml/Basecraft/tools/ScriptedRun.qml"
+    } else {
+        startup_trace::MAIN_QML_URL
+    };
+    let gui_test =
+        std::env::var_os("BASECRAFT_GUI_TEST").is_some_and(|value| value == "1") || scripted;
     let mut app = application::new(&args, gui_test);
     trace.record(if app.is_null() {
         startup_trace::Event::ApplicationCreationFailed
@@ -60,7 +67,7 @@ fn main() {
             engine
                 .as_mut()
                 .on_object_created(move |_, object, url| {
-                    if *url == QUrl::from(startup_trace::MAIN_QML_URL) && !object.is_null() {
+                    if *url == QUrl::from(root) && !object.is_null() {
                         root_trace.record(startup_trace::Event::QmlRootCreated);
                         // SAFETY: objectCreated supplies a live Qt-owned object.
                         unsafe {
@@ -75,14 +82,14 @@ fn main() {
         engine
             .as_mut()
             .on_object_creation_failed(move |_, url| {
-                if failure_trace.enabled() && *url == QUrl::from(startup_trace::MAIN_QML_URL) {
+                if failure_trace.enabled() && *url == QUrl::from(root) {
                     failure_trace.record(startup_trace::Event::QmlCreationFailed);
                 }
                 eprintln!("Basecraft could not load its interface; check the Qt Quick and Kirigami installation. See the QML errors above.");
                 std::process::exit(1);
             })
             .release();
-        engine.load(&QUrl::from(startup_trace::MAIN_QML_URL));
+        engine.load(&QUrl::from(root));
         trace.record(startup_trace::Event::QmlLoadReturned);
     }
     if let Some(app) = app.as_mut() {
