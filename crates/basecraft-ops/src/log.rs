@@ -81,24 +81,7 @@ impl LogWriter {
             let file = OpenOptions::new().create(true).append(true).open(path)?;
             self.open = Some((month, file));
         }
-        let mut line = Vec::new();
-        for (offset, entry) in entries.iter().enumerate() {
-            let value = serde_json::to_value(entry)?;
-            let checksum = basecraft_io::hash_bytes(&serde_json::to_vec(&value)?);
-            let value = serde_json::to_value(basecraft_protocol::records::JournalEntry {
-                checksum,
-                sequence: self.sequence + offset as u64,
-                entry: value,
-            })?;
-            serde_json::to_writer(&mut line, &value)?;
-            line.push(b'\n');
-            if line.len() > 8 << 20 {
-                return Err(crate::Error::Limit {
-                    what: "operation journal batch".into(),
-                    limit: 8 << 20,
-                });
-            }
-        }
+        let line = encode(entries, self.sequence)?;
         if let Some((_, f)) = &mut self.open {
             // One write per line: with O_APPEND, a crash can't interleave
             // half lines.
@@ -155,6 +138,43 @@ impl LogWriter {
             self.sequence += entries.len() as u64;
         }
         Ok(())
+    }
+}
+
+/// The most bytes one journal batch may take.
+pub(crate) const BATCH_LIMIT: u64 = 8 << 20;
+
+/// `entries` as journal lines numbered from `sequence`, refused past
+/// [`BATCH_LIMIT`].
+fn encode(entries: &[LogEntry], sequence: u64) -> Result<Vec<u8>> {
+    let mut line = Vec::new();
+    for (offset, entry) in entries.iter().enumerate() {
+        let value = serde_json::to_value(entry)?;
+        let checksum = basecraft_io::hash_bytes(&serde_json::to_vec(&value)?);
+        let value = serde_json::to_value(basecraft_protocol::records::JournalEntry {
+            checksum,
+            sequence: sequence + offset as u64,
+            entry: value,
+        })?;
+        serde_json::to_writer(&mut line, &value)?;
+        line.push(b'\n');
+        if line.len() as u64 > BATCH_LIMIT {
+            return Err(crate::Error::Limit {
+                what: "operation journal batch".into(),
+                limit: BATCH_LIMIT,
+            });
+        }
+    }
+    Ok(line)
+}
+
+/// Whether `entries` fit in one journal batch. Counted with the widest
+/// sequence numbers, so a batch that fits here fits when written.
+pub(crate) fn fits_one_batch(entries: &[LogEntry]) -> Result<bool> {
+    match encode(entries, u64::MAX >> 1) {
+        Ok(_) => Ok(true),
+        Err(crate::Error::Limit { .. }) => Ok(false),
+        Err(error) => Err(error),
     }
 }
 

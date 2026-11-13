@@ -62,9 +62,9 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut ReplayReport)
     // Replay entry id -> logged entry id, to check undo and redo targets.
     let mut ids: HashMap<String, String> = HashMap::new();
     let mut proposals = Proposals::default();
-    for (index, &e) in entries.iter().enumerate() {
+    for &e in entries {
         report.entries += 1;
-        if let Some(msg) = proposals.check(index, e) {
+        if let Some(msg) = proposals.check(e) {
             report
                 .problems
                 .push(format!("{} {} {}: {msg}", e.id, e.op.name(), e.doc));
@@ -270,28 +270,24 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut ReplayReport)
     Ok(())
 }
 
-/// The offers of one session so far and where each entry stands, to check
-/// that every decision follows its offer and names edits logged after it.
+/// The entries of one session so far and where each offer sits, to check
+/// that every decision closes its offer: the writer appends the offer, the
+/// edits it applied and the decision as one journal batch.
 #[derive(Default)]
 struct Proposals<'a> {
-    /// Proposal id -> position, document and number of offered edits.
-    offers: HashMap<&'a str, (usize, &'a str, usize)>,
+    log: Vec<&'a LogEntry>,
+    /// Proposal id -> position of its offer in `log`.
+    offers: HashMap<&'a str, usize>,
     decided: std::collections::HashSet<&'a str>,
-    /// Entry id -> position and document.
-    seen: HashMap<&'a str, (usize, &'a str)>,
 }
 
 impl<'a> Proposals<'a> {
-    /// Note entry `e` at `index`; why it is inconsistent, if it is.
-    fn check(&mut self, index: usize, e: &'a LogEntry) -> Option<String> {
+    /// Note entry `e`; why it is inconsistent, if it is.
+    fn check(&mut self, e: &'a LogEntry) -> Option<String> {
         let problem = match &e.op {
-            Op::ProposalOffer {
-                proposal,
-                operations,
-                ..
-            } => self
+            Op::ProposalOffer { proposal, .. } => self
                 .offers
-                .insert(proposal, (index, &e.doc, operations.len()))
+                .insert(proposal, self.log.len())
                 .map(|_| format!("proposal {proposal} is offered twice")),
             Op::ProposalDecide {
                 proposal,
@@ -301,7 +297,7 @@ impl<'a> Proposals<'a> {
             } => self.decide(e, proposal, *outcome, applied),
             _ => None,
         };
-        self.seen.insert(&e.id, (index, &e.doc));
+        self.log.push(e);
         problem
     }
 
@@ -312,35 +308,49 @@ impl<'a> Proposals<'a> {
         outcome: ProposalDecision,
         applied: &[String],
     ) -> Option<String> {
-        let Some(&(offered_at, doc, offered)) = self.offers.get(proposal) else {
+        let Some(&at) = self.offers.get(proposal) else {
             return Some(format!("proposal {proposal} wasn't offered before"));
         };
-        if doc != e.doc {
-            return Some(format!("proposal {proposal} was offered for {doc}"));
+        let offer = self.log[at];
+        if offer.doc != e.doc {
+            return Some(format!("proposal {proposal} was offered for {}", offer.doc));
         }
         if !self.decided.insert(proposal) {
             return Some(format!("proposal {proposal} is decided twice"));
         }
-        let mut distinct = std::collections::HashSet::new();
-        for id in applied {
-            let follows = self
-                .seen
-                .get(id.as_str())
-                .is_some_and(|&(at, d)| at > offered_at && d == doc);
-            if !follows || !distinct.insert(id) {
-                return Some(format!(
-                    "applied edit {id} isn't one logged after the offer"
-                ));
-            }
+        let between = &self.log[at + 1..];
+        if !between
+            .iter()
+            .map(|edit| edit.id.as_str())
+            .eq(applied.iter().map(String::as_str))
+        {
+            return Some(
+                "applied isn't exactly the edits between the offer and the decision".into(),
+            );
         }
+        if let Some(edit) = between
+            .iter()
+            .find(|edit| edit.doc != offer.doc || edit.actor != offer.actor)
+        {
+            return Some(format!(
+                "applied edit {} isn't the offerer's edit to {}",
+                edit.id, offer.doc
+            ));
+        }
+        let Op::ProposalOffer { operations, .. } = &offer.op else {
+            return None;
+        };
+        let as_offered = operations
+            .iter()
+            .map(Op::name)
+            .eq(between.iter().map(|edit| edit.op.name()));
         match outcome {
             ProposalDecision::Rejected if !applied.is_empty() => {
                 Some("a rejection lists applied edits".into())
             }
-            ProposalDecision::Accepted if applied.len() != offered => Some(format!(
-                "accepted, but {} of {offered} offered edits applied",
-                applied.len()
-            )),
+            ProposalDecision::Accepted if !as_offered => {
+                Some("accepted, but the edits applied aren't the edits offered".into())
+            }
             ProposalDecision::Modified if applied.is_empty() => {
                 Some("modified, but nothing applied".into())
             }
@@ -1487,9 +1497,7 @@ mod tests {
     /// The problems `Proposals` finds in `entries`, undecided offers last.
     fn proposal_problems(entries: &[LogEntry]) -> Vec<String> {
         let mut proposals = Proposals::default();
-        let mut problems: Vec<_> = (entries.iter().enumerate())
-            .filter_map(|(index, e)| proposals.check(index, e))
-            .collect();
+        let mut problems: Vec<_> = entries.iter().filter_map(|e| proposals.check(e)).collect();
         problems.extend(proposals.undecided().map(|p| format!("{p} undecided")));
         problems
     }
@@ -1507,7 +1515,13 @@ mod tests {
         assert_eq!(proposal_problems(&consistent), Vec::<String>::new());
         let rejected = [offer("o", "a.fa", 1), decide("d", "a.fa", Rejected, &[])];
         assert_eq!(proposal_problems(&rejected), Vec::<String>::new());
-        let cases: [(&[LogEntry], &str); 8] = [
+        let not_exactly = "applied isn't exactly the edits between";
+        let not_offered = "the edits applied aren't the edits offered";
+        let human = |entry: LogEntry| LogEntry {
+            actor: basecraft_protocol::Actor::Human { user: "u".into() },
+            ..entry
+        };
+        let cases: [(&[LogEntry], &str); 11] = [
             (
                 &[decide("d", "a.fa", Rejected, &[])],
                 "wasn't offered before",
@@ -1519,14 +1533,14 @@ mod tests {
                     offer("o", "a.fa", 1),
                     decide("d", "a.fa", Accepted, &["e1"]),
                 ],
-                "isn't one logged after the offer",
+                not_exactly,
             ),
             (
                 &[
                     offer("o", "a.fa", 1),
                     decide("d", "a.fa", Accepted, &["missing"]),
                 ],
-                "isn't one logged after the offer",
+                not_exactly,
             ),
             (
                 &[
@@ -1534,7 +1548,7 @@ mod tests {
                     edit("e1"),
                     decide("d", "a.fa", Accepted, &["e1"]),
                 ],
-                "1 of 2 offered edits applied",
+                not_offered,
             ),
             (
                 &[
@@ -1551,6 +1565,34 @@ mod tests {
             (
                 &[offer("o", "a.fa", 1), decide("d", "b.fa", Rejected, &[])],
                 "was offered for a.fa",
+            ),
+            // An edit logged between offer and decision that it doesn't list.
+            (
+                &[
+                    offer("o", "a.fa", 2),
+                    edit("e1"),
+                    edit("e2"),
+                    decide("d", "a.fa", Modified, &["e1"]),
+                ],
+                not_exactly,
+            ),
+            // The user's own edit claimed by a plugin's decision.
+            (
+                &[
+                    offer("o", "a.fa", 1),
+                    human(edit("h1")),
+                    decide("d", "a.fa", Accepted, &["h1"]),
+                ],
+                "isn't the offerer's edit",
+            ),
+            // Accepted, but something other than the offer was applied.
+            (
+                &[
+                    offer("o", "a.fa", 1),
+                    logged("r1", "a.fa", Op::feature_remove(0)),
+                    decide("d", "a.fa", Accepted, &["r1"]),
+                ],
+                not_offered,
             ),
         ];
         for (entries, expected) in cases {

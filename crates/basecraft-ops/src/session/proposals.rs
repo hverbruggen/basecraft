@@ -7,6 +7,16 @@ use basecraft_protocol::{
     ops::{ProposalDecision, ProposalSource},
 };
 
+/// The most edits one proposal batch may hold.
+const MAX_PROPOSALS: usize = 4096;
+
+fn too_many() -> crate::Error {
+    crate::Error::Limit {
+        what: "proposal count".into(),
+        limit: MAX_PROPOSALS as _,
+    }
+}
+
 /// Edits a plugin offers for a sequence, as it sent them, pinned to the
 /// document generation and revision it read.
 pub struct SequenceOffer<'a> {
@@ -81,11 +91,8 @@ impl Session {
         if slot.generation != generation || self.revision(id)? != revision {
             return Err(crate::Error::StaleRevision { id, revision });
         }
-        if count > 4096 {
-            return Err(crate::Error::Limit {
-                what: "proposal count".into(),
-                limit: 4096,
-            });
+        if count > MAX_PROPOSALS {
+            return Err(too_many());
         }
         Ok(slot)
     }
@@ -120,6 +127,10 @@ impl Session {
             self.proposal_target(id, generation, revision, 0)?;
             return Ok(ProposalResult::default());
         }
+        // Too many to record: refused before anything is logged.
+        if operations.len() > MAX_PROPOSALS {
+            return Err(too_many());
+        }
         self.track(id)?;
         let proposal = self.next_id();
         let offered = self.entry(
@@ -151,11 +162,14 @@ impl Session {
             .proposal_target(id, generation, revision, operations.len())
             .and_then(|slot| {
                 let (kept, skipped) = known_left_out(slot, operations, skip_known);
+                if kept.is_empty() {
+                    return Ok((None, skipped));
+                }
                 let candidate = slot.content.as_document().proposal_candidate()?;
                 let batch = self.stage_proposals(id, &kept, actor, candidate)?;
-                Ok((batch, skipped))
+                Ok((Some(batch), skipped))
             });
-        let (mut batch, skipped) = match staged {
+        let (batch, skipped) = match staged {
             Ok(staged) => staged,
             Err(error @ crate::Error::Limit { .. }) => return Err(error),
             Err(error) => {
@@ -170,16 +184,46 @@ impl Session {
             }
         };
         let note = (!skipped.is_empty()).then(|| format!("left out {}", skipped.join("; ")));
+        let Some(mut batch) = batch else {
+            // Every offered edit was left out: nothing changes, so the
+            // document, its undo and redo stay as they are.
+            let refused = decide(self, ProposalDecision::Rejected, Vec::new(), note);
+            self.write_entries(&[offered, refused])?;
+            return Ok(ProposalResult {
+                applied: Vec::new(),
+                skipped,
+            });
+        };
         let applied: Vec<String> = batch.edits.iter().map(|e| e.entry_id.clone()).collect();
-        let outcome = match (applied.is_empty(), skipped.is_empty()) {
-            (true, _) => ProposalDecision::Rejected,
-            (false, true) => ProposalDecision::Accepted,
-            (false, false) => ProposalDecision::Modified,
+        let outcome = if skipped.is_empty() {
+            ProposalDecision::Accepted
+        } else {
+            ProposalDecision::Modified
         };
         let mut decided = decide(self, outcome, applied, note);
         decided.state = batch.candidate.as_document().fingerprint();
         batch.entries.insert(0, offered);
         batch.entries.push(decided);
+        if !crate::log::fits_one_batch(&batch.entries)? {
+            // The offer and its edits must land in one journal batch. Record
+            // the offer as refused instead; an offer too large even for
+            // that fails here unrecorded.
+            let refused = decide(
+                self,
+                ProposalDecision::Rejected,
+                Vec::new(),
+                Some(format!(
+                    "too large to apply: the offer and its {} edits exceed the {} MiB journal batch",
+                    batch.edits.len(),
+                    crate::log::BATCH_LIMIT >> 20
+                )),
+            );
+            self.write_entries(&[batch.entries.swap_remove(0), refused])?;
+            return Err(crate::Error::Limit {
+                what: "proposal batch".into(),
+                limit: crate::log::BATCH_LIMIT,
+            });
+        }
         let applied = self.commit_proposals(batch)?;
         Ok(ProposalResult { applied, skipped })
     }
@@ -253,7 +297,7 @@ impl Session {
             entries,
         } = batch;
         self.proposal_target(doc, generation, revision, edits.len())?;
-        if entries.is_empty() {
+        if edits.is_empty() {
             return Ok(vec![]);
         }
         let next_generation = generation
