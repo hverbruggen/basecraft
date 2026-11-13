@@ -5148,6 +5148,31 @@
           ]
         },
         {
+          "description": "State whether the tree is rooted (D18); saved as `[&R]` or `[&U]`.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.set_rooting"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "rooted": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "rooted"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
           "description": "State what the tree's branch lengths measure.",
           "type": "object",
           "properties": {
