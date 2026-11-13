@@ -64,9 +64,22 @@ impl Server {
                 )
         };
         if !resolved.starts_with(self.session.root()) {
-            return Err(basecraft_ops::Error::Invalid(
-                "Path lies outside the configured project".into(),
-            ));
+            // D16: name the recent project that holds it, without choosing it.
+            let holder = basecraft_ops::project::Project::recent_holding(
+                &resolved,
+                self.session.project(),
+                &basecraft_viewmodel::projects::recent(),
+            )
+            .map(|p| {
+                format!(
+                    "; it is in the recent project {}, so start the session there to use it",
+                    p.root().display()
+                )
+            })
+            .unwrap_or_default();
+            return Err(basecraft_ops::Error::Invalid(format!(
+                "Path lies outside the configured project{holder}"
+            )));
         }
         Ok(resolved)
     }

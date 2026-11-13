@@ -255,11 +255,27 @@ pub(crate) fn script_session(
     root: impl Into<PathBuf>,
     project: Option<&basecraft_ops::project::Project>,
 ) -> Result<basecraft_ops::Session, basecraft_ops::Error> {
+    let root = root.into();
+    name_recent_project(&root, project);
     let mut session = basecraft_ops::Session::recoverable(root)?.in_project(project.cloned());
     session.set_actor(basecraft_protocol::Actor::Script {
         client: "CLI".into(),
     });
     Ok(session)
+}
+
+/// A file used without --project that lies in a recent project: say which,
+/// without choosing it (D16; with --project the decision asks nothing).
+fn name_recent_project(path: &std::path::Path, project: Option<&basecraft_ops::project::Project>) {
+    let recent = basecraft_viewmodel::projects::recent();
+    if project.is_none()
+        && let Some(holder) = basecraft_ops::project::Project::recent_holding(path, None, &recent)
+    {
+        let root = holder.root().display();
+        eprintln!(
+            "This file is in the recent project {root}. Without --project it is used as a loose file; add --project {root} to use the project."
+        );
+    }
 }
 
 /// A CLI session for a command whose folder argument is the project.
@@ -296,6 +312,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Command::Metadata { action } => metadata::run(action, save_options)?,
         Command::Submission { action } => submission::run(action, save_options)?,
         Command::History { file, json } => {
+            name_recent_project(&file, project.as_ref());
             let report =
                 basecraft_ops::records::DocumentRecord::saved_report(&file, project.as_ref())?;
             println!(
@@ -308,6 +325,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         Command::Methods { file, json, output } => {
+            name_recent_project(&file, project.as_ref());
             let report =
                 basecraft_ops::records::DocumentRecord::saved_report(&file, project.as_ref())?;
             if let Some(output) = output {
@@ -358,31 +376,40 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let done = basecraft_ops::records::reindex(&project)?;
             println!("{}", serde_json::to_string_pretty(&done)?);
         }
-        Command::Provenance { action } => match action {
-            ProvenanceCommand::Inspect { result } => {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&basecraft_ops::records::inspect(
-                        &result,
-                        project.as_ref()
-                    )?)?
-                );
-            }
-            ProvenanceCommand::Verify { result } => {
-                let issues = basecraft_ops::records::verify(&result, project.as_ref())?;
-                if !issues.is_empty() {
-                    return Err(issues.join("\n").into());
+        Command::Provenance { action } => {
+            let (ProvenanceCommand::Inspect { result }
+            | ProvenanceCommand::Verify { result }
+            | ProvenanceCommand::Methods { result, .. }
+            | ProvenanceCommand::Package { result, .. }) = &action;
+            name_recent_project(result, project.as_ref());
+            match action {
+                ProvenanceCommand::Inspect { result } => {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&basecraft_ops::records::inspect(
+                            &result,
+                            project.as_ref()
+                        )?)?
+                    );
                 }
-                println!("done: recorded hashes verified; replay verification is a separate check");
+                ProvenanceCommand::Verify { result } => {
+                    let issues = basecraft_ops::records::verify(&result, project.as_ref())?;
+                    if !issues.is_empty() {
+                        return Err(issues.join("\n").into());
+                    }
+                    println!(
+                        "done: recorded hashes verified; replay verification is a separate check"
+                    );
+                }
+                ProvenanceCommand::Methods { result, output } => {
+                    let publication = basecraft_ops::records::inspect(&result, project.as_ref())?;
+                    basecraft_ops::records::write_reports(&output, &publication)?;
+                }
+                ProvenanceCommand::Package { result, output } => {
+                    basecraft_ops::records::package(&result, &output, project.as_ref())?;
+                }
             }
-            ProvenanceCommand::Methods { result, output } => {
-                let publication = basecraft_ops::records::inspect(&result, project.as_ref())?;
-                basecraft_ops::records::write_reports(&output, &publication)?;
-            }
-            ProvenanceCommand::Package { result, output } => {
-                basecraft_ops::records::package(&result, &output, project.as_ref())?;
-            }
-        },
+        }
         Command::NewSequence {
             name,
             sequence,

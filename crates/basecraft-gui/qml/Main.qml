@@ -49,17 +49,23 @@ ApplicationWindow {
         }
     }
     function quitStep(step) {
-        if (step.drafts) { draftQuitDialog.dialog().project = step.project || ""; draftQuitDialog.dialog().open() }
+        if (step.drafts) { draftQuitDialog.dialog().project = step.project || ""; draftQuitDialog.dialog().then = step.open ? JSON.stringify(step.open) : ""; draftQuitDialog.dialog().open() }
         else if (step.ask) quitDialog.dialog().ask(step.ask, step.error)
         else if (step.save) saveTarget(documentTarget(documentOpens.target_index(step.save.token, step.save.path)), "",
             success => quitStep(JSON.parse(documentOpens.quit_saved(success))))
-        else if (step.choose || step.refuse) preferences.project_error = step.refuse || shell.choose_project(step.choose)
+        else if (step.refuse) preferences.project_error = step.refuse
+        else if (step.choose) chooseProject(step.choose, step.open)
         else if (step.leave && !step.project) { leave(step.leave); closeConfirmed = true; window.close() }
         else if (step.leave) { // A switch: every tab closes, ending its session at once; then the project is chosen.
             leave(step.leave); discardAuthoredOnQuit = false
             while (documentOpens.count > 0) removeDocument(documentOpens.count - 1)
-            preferences.project_error = shell.choose_project(step.project); refreshCurrent()
+            chooseProject(step.project, step.open); refreshCurrent()
         }
+    }
+    // A switch made to open a file in its project (D16) carries the file.
+    function chooseProject(folder, file) {
+        preferences.project_error = shell.choose_project(folder)
+        if (file && !preferences.project_error.length) Qt.callLater(() => openPath(file.path, file.review, true))
     }
 
     palette.window: shell.background
@@ -198,9 +204,9 @@ ApplicationWindow {
     readonly property var applicationCommands: [findCommand, newSequenceCommand, addAnnotationCommand, openCommand, saveCommand, saveAsCommand, projectCommand, shortcutsCommand, aboutCommand, preferencesCommand, textRepresentationCommand, contextShortcutsCommand, learnCommand, exportSvgCommand, exportPngCommand, historyCommand, methodsCommand, showProvenanceCommand, verifyProvenanceCommand, packageCommand, recoverCommand, installedOperationsCommand].concat(ribbonCommands)
     // Another project closes the open documents first, asking as quitting does.
     // A task still running in the old project, from a tab or not, refuses it first.
-    function selectProject(path) {
+    function selectProject(path, then = "") {
         const chosen = preferences.select_project(path)
-        if (chosen.length) quitStep(JSON.parse(documentOpens.switch_project(!discardAuthoredOnQuit && !!documentRecord.item && documentRecord.item.unsavedDrafts().length > 0, chosen, shell.project_dir)))
+        if (chosen.length) quitStep(JSON.parse(documentOpens.switch_project(!discardAuthoredOnQuit && !!documentRecord.item && documentRecord.item.unsavedDrafts().length > 0, chosen, shell.project_dir, then)))
     }
     property bool preferencesReady: false
     AppSettings {
@@ -292,6 +298,21 @@ ApplicationWindow {
     }
     OnDemand { id: alphabetQuestion; objectName: "alphabetQuestion"; sourceComponent: Component { AlphabetDialog {} } }
     OnDemand { id: readOnlyCopy; objectName: "readOnlyCopy"; sourceComponent: Component { ReadOnlyCopyDialog { onSaveCopy: refused => window.saveCopy(refused) } } }
+    OnDemand { id: otherProject; objectName: "otherProject"; sourceComponent: Component { AppContentDialog {
+        id: otherProjectItem
+        objectName: "otherProjectDialog"
+        property var file: null
+        title: "File in another project"
+        standardButtons: Dialog.Cancel
+        initialFocusItem: switchProject
+        body: ColumnLayout {
+            Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: otherProjectItem.file ? "This file is in project " + otherProjectItem.file.name + ". Switch to that project, or open it on its own?" : "" }
+            RowLayout {
+                AppButton { id: switchProject; objectName: "switchToProject"; text: "&Switch project"; onClicked: { otherProjectItem.close(); window.selectProject(otherProjectItem.file.root, JSON.stringify(otherProjectItem.file)) } }
+                AppButton { objectName: "openOnItsOwn"; text: "&Open on its own"; onClicked: { otherProjectItem.close(); window.openPath(otherProjectItem.file.path, otherProjectItem.file.review, true) } }
+            }
+        }
+    } } }
     OnDemand { id: labelPlacement; objectName: "labelPlacement"; sourceComponent: Component { LabelPlacementDialog {} } }
     OnDemand { id: textRepresentation; objectName: "textRepresentation"; sourceComponent: Component { TextRepresentationDialog { id: textRepresentationItem } } }
 
@@ -315,8 +336,9 @@ ApplicationWindow {
     Shortcut { sequence: "Shift+F6"; onActivated: window.focusRegion(true) }
 
     // Open a file in a tab, or switch to its tab if it's already open.
-    function openPath(path, reviewMethods = false) {
-        const step = JSON.parse(documentOpens.open(path, reviewMethods))
+    function openPath(path, reviewMethods = false, onItsOwn = false) {
+        const step = JSON.parse(documentOpens.open(path, reviewMethods, onItsOwn))
+        if (step.other_project) { otherProject.dialog().file = step.other_project; otherProject.dialog().open(); return }
         if (step.error) { provenance.notification(path, step.error, "fail"); return }
         if (step.project) {
             // Project documents are edited on the Export tab.
@@ -684,6 +706,7 @@ ApplicationWindow {
                 id: tasksDialog
                 service: provenance
                 jobs: jobService
+                documents: documentOpens
                 onOpenDocument: path => window.openPath(path)
                 onCopyText: text => clipboard.put(text)
             }
@@ -2663,7 +2686,8 @@ ApplicationWindow {
             }
         }
         property string project: ""
-        onDiscarded: { window.discardAuthoredOnQuit = true; if (project.length) window.selectProject(project); else window.close() }
+        property string then: ""
+        onDiscarded: { window.discardAuthoredOnQuit = true; if (project.length) window.selectProject(project, then); else window.close() }
     } } }
 
     // Quitting with unsaved changes: save them all, throw them away, or

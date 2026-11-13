@@ -798,10 +798,17 @@ impl PreparedOperation {
         self.write_task_index(outcome, &runtime)
     }
 
-    /// The Tasks view lists runs from small index records in application
-    /// state. This one only points at the run's own `runtime.json`, which
-    /// stays the authoritative record.
+    /// The Tasks view lists runs from small index records in the `.basecraft`
+    /// of the run's home: the session's project when it holds the run, else
+    /// the folder the run is in. This one only points at the run's own
+    /// `runtime.json`, which stays the authoritative record. Its paths are
+    /// relative to the home, so the record travels with a copied project.
     fn write_task_index(&self, outcome: &OperationOutcome, runtime: &Path) -> Result<()> {
+        let home = basecraft_ops::project::Project::base_of(
+            self.project.as_ref(),
+            &self.run.working_directory().join(".basecraft"),
+        )?;
+        let relative = |path: &Path| records::relative(&home, path);
         let source = self.document.as_ref().map_or_else(
             || {
                 self.context
@@ -809,16 +816,22 @@ impl PreparedOperation {
                     .values()
                     .flatten()
                     .find_map(|evidence| evidence.original_path.as_deref())
-                    .map(|path| self.run_path(path).display().to_string())
-                    .unwrap_or_default()
+                    .map(|path| relative(&self.run_path(path)))
+                    .transpose()
+                    .map(Option::unwrap_or_default)
             },
-            |target| target.path.display().to_string(),
-        );
+            |target| relative(&target.path),
+        )?;
         let outputs = outcome
             .artifacts
             .iter()
-            .map(|artifact| (artifact.path.clone(), artifact.digest.clone()))
-            .collect();
+            .map(|artifact| {
+                Ok((
+                    relative(Path::new(&artifact.path))?,
+                    artifact.digest.clone(),
+                ))
+            })
+            .collect::<Result<_>>()?;
         let index = serde_json::to_value(LocalJobIndex {
             schema_version: 1,
             id: self.run.id().into(),
@@ -839,9 +852,9 @@ impl PreparedOperation {
             source: JobIndexSource { path: source },
             outputs,
             diagnostics: outcome.errors.first().map(|error| error.message.clone()),
-            runtime_record: runtime.into(),
+            runtime_record: relative(runtime)?.into(),
         })?;
-        let path = records::job_index_path(self.run.id())?;
+        let path = records::job_index_path(&home, self.run.id());
         std::fs::create_dir_all(path.parent().unwrap_or(&path))?;
         records::write_json(&path, &index)?;
         Ok(())

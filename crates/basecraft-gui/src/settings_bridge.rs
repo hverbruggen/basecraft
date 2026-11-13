@@ -199,7 +199,7 @@ fn change(key: &str, value: &serde_json::Value) -> Result<Change, String> {
 impl qobject::AppSettings {
     fn select_project(mut self: Pin<&mut Self>, path: &QString) -> QString {
         let chosen = path.to_string();
-        let result = history_path().and_then(|file| {
+        let result = projects::history_file().and_then(|file| {
             projects::choose(
                 &mut self.as_mut().rust_mut().project_picker,
                 Path::new(&chosen),
@@ -293,14 +293,8 @@ impl qobject::AppSettings {
     }
 }
 
-fn history_path() -> Result<PathBuf, String> {
-    AppPaths::discover()
-        .map(|paths| paths.state.join("recent-projects.json"))
-        .map_err(|e| e.to_string())
-}
-
 pub(crate) fn load_project_history() -> Result<Vec<PathBuf>, String> {
-    let path = history_path()?;
+    let path = projects::history_file()?;
     projects::load_history(&path)
 }
 
