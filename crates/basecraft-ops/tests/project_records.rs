@@ -391,3 +391,77 @@ fn a_project_keeps_one_index_and_a_loose_input_is_indexed_beside_it() {
         Err(basecraft_ops::Error::EvidenceConflict(_))
     ));
 }
+
+#[test]
+fn the_first_edit_in_a_folder_that_cannot_hold_recovery_is_refused() {
+    let Some(root) =
+        isolated_profile::enter("the_first_edit_in_a_folder_that_cannot_hold_recovery_is_refused")
+    else {
+        return;
+    };
+    let folder = root.join("shared");
+    std::fs::create_dir(&folder).unwrap();
+    // Another program's `.basecraft`, which basecraft must not claim.
+    std::fs::write(folder.join(".basecraft"), b"another program").unwrap();
+    let file = folder.join("gene.fasta");
+    std::fs::write(&file, b">a\nACGT\n").unwrap();
+    let mut session = Session::recoverable(&folder).unwrap();
+    let doc = session.open(&file).unwrap();
+    let error = session
+        .apply(
+            doc,
+            Op::SeqReplace {
+                start: 0,
+                end: 1,
+                residues: "G".into(),
+            },
+        )
+        .unwrap_err();
+    let basecraft_ops::Error::ReadOnlyFolder { folder: named, .. } = &error else {
+        panic!("{error:?}");
+    };
+    assert_eq!(named, &folder);
+    assert_eq!(error.code(), "read_only_folder");
+    assert!(error.to_string().contains("Copy the file"), "{error}");
+    // The document is unedited and nothing was written.
+    assert!(!session.can_undo(doc).unwrap());
+    assert_eq!(session.doc(doc).unwrap().read(0, 4), b"ACGT");
+    assert_eq!(
+        std::fs::read(folder.join(".basecraft")).unwrap(),
+        b"another program"
+    );
+    drop(session);
+    assert_eq!(std::fs::read(&file).unwrap(), b">a\nACGT\n");
+}
+
+#[test]
+fn a_hard_link_in_a_project_subfolder_is_still_matched() {
+    let Some(root) = isolated_profile::enter("a_hard_link_in_a_project_subfolder_is_still_matched")
+    else {
+        return;
+    };
+    let folder = root.join("project");
+    std::fs::create_dir_all(folder.join("data")).unwrap();
+    let source = folder.join("data/reads.fasta");
+    std::fs::write(&source, b">a\nACGT\n").unwrap();
+    let project = Project::new(&folder).unwrap();
+    let run = records::reference_input_with_dependencies(
+        &folder.join("summary.txt"),
+        &source,
+        &basecraft_io::hash_file(&source).unwrap(),
+        &[],
+        "analysis",
+        Some(&project),
+    )
+    .unwrap();
+    let alias = folder.join("data/alias.fasta");
+    std::fs::hard_link(&source, &alias).unwrap();
+    let mut session = Session::new(&folder).in_project(Some(project));
+    let doc = edit(&mut session, &alias, "T");
+    let conflict = match session.save(doc, None).unwrap_err() {
+        basecraft_ops::Error::EvidenceConflict(conflict) => conflict,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(conflict.analyses[0].run, run.directory());
+    assert_eq!(std::fs::read(&source).unwrap(), b">a\nACGT\n");
+}

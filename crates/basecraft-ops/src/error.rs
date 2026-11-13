@@ -49,6 +49,13 @@ pub enum Error {
     PublishedWithFailure(Box<crate::records::replay::PublishedWithFailure>),
     #[error("nothing to {0}")]
     NothingTo(&'static str),
+    /// D13: the first edit needs recovery in the folder's `.basecraft`.
+    #[error(
+        "{} is read-only for basecraft ({reason}), so unsaved edits could not be recovered. \
+         Copy the file to a folder you can write to (for example with `cp` or your file manager) and edit the copy.",
+        folder.display()
+    )]
+    ReadOnlyFolder { folder: PathBuf, reason: String },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -93,6 +100,7 @@ impl Error {
             Self::SaveDecisionStale(_) => Code::SaveDecisionStale,
             Self::PublishedWithFailure(_) => Code::PublishedWithFailure,
             Self::NothingTo(_) => Code::NothingToDo,
+            Self::ReadOnlyFolder { .. } => Code::ReadOnlyFolder,
         }
     }
 

@@ -113,7 +113,7 @@ impl Session {
         if !self.tracked {
             return Ok(());
         }
-        self.start_recovery();
+        self.start_recovery()?;
         let slot = self
             .docs
             .get(id.0)
@@ -263,9 +263,7 @@ impl Session {
 
     pub fn recovery_warning(&self, id: DocId) -> Option<&str> {
         let slot = self.docs.get(id.0)?;
-        self.recovery_off
-            .as_deref()
-            .or(slot.recovery_notice.as_deref())
+        slot.recovery_notice.as_deref()
     }
 
     /// Note recovery that an earlier session, for example one that crashed,
@@ -296,29 +294,25 @@ impl Session {
     }
 
     /// Make the recovery folder before the first edit is recorded. Recovery
-    /// lives only in the folder's `.basecraft`; where that cannot be written
-    /// (a read-only folder, or a `.basecraft` file of another program) the
-    /// session edits without recovery and says so. Working copies it still
-    /// needs go to a temporary folder that is removed when it closes.
-    pub(super) fn start_recovery(&mut self) {
+    /// lives only in the folder's `.basecraft` (D13): where that cannot be
+    /// written, the edit is refused with an error that names the folder.
+    pub(super) fn start_recovery(&self) -> Result<()> {
         if self.log.is_none() || self.storage_root == self.root || self.storage_root.is_dir() {
-            return;
+            return Ok(());
         }
-        if let Err(error) = recovery_directory(&self.storage_root) {
-            self.log = None;
-            self.store_objects = false;
-            self.recovery_off = Some(format!(
-                "Recovery is off: basecraft cannot write {} ({error}). Save to keep your edits.",
-                recovery_folder(&self.root).display()
-            ));
-            // Removed with the session's recovery when it closes.
-            if let Ok(scratch) = tempfile::Builder::new()
-                .prefix("basecraft-session-")
-                .tempdir()
-            {
-                self.storage_root = scratch.keep();
+        let hidden = self.root.join(".basecraft");
+        let reason = if std::fs::symlink_metadata(&hidden).is_ok_and(|m| !m.is_dir()) {
+            "its .basecraft is a file that belongs to another program".to_owned()
+        } else {
+            match recovery_directory(&self.storage_root) {
+                Ok(()) => return Ok(()),
+                Err(error) => error.to_string(),
             }
-        }
+        };
+        Err(crate::Error::ReadOnlyFolder {
+            folder: self.root.clone(),
+            reason,
+        })
     }
 
     /// Cheap change token for readers; saves and job outcomes also invalidate a report.
@@ -448,7 +442,7 @@ impl Session {
             .transpose()
     }
 
-    pub fn snapshot_file(&mut self, path: &Path) -> Result<String> {
+    pub fn snapshot_file(&self, path: &Path) -> Result<String> {
         #[cfg(feature = "test-counters")]
         {
             let bytes = std::fs::read(path)?;
@@ -460,10 +454,10 @@ impl Session {
     }
 
     /// Hash and retain the exact immutable buffer consumed by an analysis.
-    pub fn snapshot_bytes(&mut self, bytes: &[u8]) -> Result<String> {
+    pub fn snapshot_bytes(&self, bytes: &[u8]) -> Result<String> {
         let hash = basecraft_io::hash_bytes(bytes);
         if self.store_objects {
-            self.start_recovery();
+            self.start_recovery()?;
         }
         if self.store_objects {
             let dest = objects_dir(&self.storage_root).join(hash.trim_start_matches("b3:"));

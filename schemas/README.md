@@ -22,14 +22,12 @@ disposable caches only. Until the open items below close, they still hold:
 - LocalOnly history, and the history of a Sanger review whose source folder is
   read-only, in `state/provenance` (j3sxh item 4);
 - recovery of a new sequence made without a project, under the scratch folder
-  until it is saved (`<scratch>/.basecraft/recovery`);
-- working copies of a session whose recovery is off, in a temporary folder
-  removed when the session closes (they hold nothing recoverable).
+  until it is saved (`<scratch>/.basecraft/recovery`).
 
 | Path inside `.basecraft` | What it holds | Format |
 |---|---|---|
 | `analysis-index/<bucket>/<key>.json` | The analysis index: one analysis store and the files its runs depend on. A project keeps one index, in its own `.basecraft`, with project-relative paths. A file outside the writing session's project is indexed in a `.basecraft` beside it, by name. `<bucket>` is the first two hex digits of the BLAKE3 hash of the path, so a save reads one small folder; `<key>` is a hash of the store's path. Readers take the union of every file in a bucket, so copies a sync tool makes on a conflict still count. `analysis-index.lock` is a lock with no content. | JSON, [analysis-index.schema.json](analysis-index.schema.json), RP10 |
-| `analyses-v1/indexed-folders.json` | The index buckets that list this store. A save from a project session asks when the project's root store names a bucket that no longer names it; `basecraft records reindex <project>` rebuilds the index. | JSON, [indexed-folders.schema.json](indexed-folders.schema.json), RP10 |
+| `analyses-v1/indexed-folders.json` | The index buckets that list this store. A save from a project session asks when a store names a bucket that no longer names it: the project's root store always, and every store in the project once when the whole index is missing. `basecraft records reindex <project>` rebuilds the index. | JSON, [indexed-folders.schema.json](indexed-folders.schema.json), RP10 |
 | `analyses-v1/store.json`, `analyses-v1/identity` | Marks the folder as a basecraft analysis store; a random store identity. | JSON (RP08); plain text |
 | `analyses-v1/runs/<run>/` | One analysis run: `input.json` (the input it used, RP06), `run.json` (status and result, RP07), `execution.json` and `request.json` (what ran), `records/` (publications, RP05), and kept bytes: `submitted.fasta`, `submitted.spart` or `submitted.spart.xml` for a generated input, `preserved-input` for an original kept before a save replaced it. | JSON and the input's own format |
 | `analyses-v1/bindings/<hash>` | Which run produced a result file in this folder. | JSON, RP09 |
@@ -38,11 +36,15 @@ disposable caches only. Until the open items below close, they still hold:
 | `log/<host>/<month>-<stream>-<segment>.jsonl` | Journal of a session that records into the folder itself (CLI and scripts). | JSONL, RP03 |
 | `recovery/<session>/` | Unsaved edits of one open session: `.basecraft/log/<session>/…jsonl` (the edit journal, RP03), `.basecraft/objects/<hash>` (exact bytes the session needs: a checkpoint when an original changed on disk, a new document with no file yet, the input of an analysis started on unsaved edits), `pending-save.json` (a save in progress, RP02) and `recovery-integrity-error.json` (RP04). Removed when the session closes with nothing unsaved. | JSONL and JSON |
 
-A folder that refuses new files gets no index (basecraft cannot save over a
-file there either) and no recovery; basecraft says so when you edit there. If
-only its `.basecraft` cannot be written, or `.basecraft` is a file that belongs
-to another program, an analysis of a file there fails and names the folder,
-and a save of a file there asks.
+Editing needs recovery (decision D13). When the folder of a session cannot
+hold `.basecraft` (read-only, or `.basecraft` is a file of another program),
+the first edit is refused with the error `read_only_folder`, which names the
+folder and says to copy the file to a folder you can write to. The desktop
+app offers to save a copy and continues the edit there. A folder that refuses
+new files gets no index (basecraft cannot save over a file there either). If
+only its `.basecraft` cannot be written, or it is a file of another program,
+an analysis of a file there fails and names the folder, and a save of a file
+there asks.
 
 ## Reading the inventory
 

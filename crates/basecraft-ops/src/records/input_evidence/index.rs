@@ -201,20 +201,33 @@ fn shard(bucket: &Path, store: &Path) -> Result<(PathBuf, String)> {
 /// List `store` in the index for each of `sources`. The caller holds the
 /// sources' reservations, so no save of them is choosing stores meanwhile.
 pub(super) fn add(store: &Path, sources: &BTreeSet<PathBuf>, project: Option<&Path>) -> Result<()> {
+    if is_private(store) {
+        return Ok(());
+    }
+    let _store = lock_beside(&store.join("indexed-folders.lock"))?;
     record(store, sources, project, false).map(|_| ())
 }
 
-/// Rebuild `store`'s entries from `sources`: its file in each bucket and its
-/// list of buckets are replaced, and its file in buckets no longer used is
-/// removed. Copies a sync tool made are left; they can only add entries.
+/// Rebuild `store`'s entries from the sources `collect` reads from its
+/// ledgers: its file in each bucket and its list of buckets are replaced, and
+/// its file in buckets no longer used is removed. The store's lock is held
+/// from before the ledgers are read, so a writer adding meanwhile waits and
+/// adds after. `collect` also says whether every ledger was readable; if not,
+/// entries are only added. Copies a sync tool made are left.
 pub(super) fn rebuild(
     store: &Path,
-    sources: &BTreeSet<PathBuf>,
     project: Option<&Path>,
+    collect: impl FnOnce() -> Result<(BTreeSet<PathBuf>, bool)>,
 ) -> Result<usize> {
     let store = std::path::absolute(store)?;
+    let _store = lock_beside(&store.join("indexed-folders.lock"))?;
+    let (sources, complete) = collect()?;
+    if !complete {
+        record(&store, &sources, project, false)?;
+        return Ok(0);
+    }
     let before = indexed_buckets(&store)?;
-    let after = record(&store, sources, project, true)?;
+    let after = record(&store, &sources, project, true)?;
     for gone in before.difference(&after) {
         match std::fs::remove_file(shard(gone, &store)?.0) {
             Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
@@ -226,6 +239,7 @@ pub(super) fn rebuild(
     Ok(after.len())
 }
 
+/// The caller holds the store's lock.
 fn record(
     store: &Path,
     sources: &BTreeSet<PathBuf>,
@@ -329,7 +343,6 @@ fn indexed_buckets(store: &Path) -> Result<BTreeSet<PathBuf>> {
 
 fn list_buckets(store: &Path, indexed: &BTreeSet<PathBuf>, replace: bool) -> Result<()> {
     let home = store_home(store);
-    let _lock = lock_beside(&store.join("indexed-folders.lock"))?;
     let path = store.join("indexed-folders.json");
     let fresh = IndexedFolders {
         schema_version: 1,
@@ -429,8 +442,8 @@ pub(super) fn select(
                 selected.insert(store.clone());
             }
         }
-        if linked && !entry.contains('/') {
-            // Other names of the same file sit in other buckets of this folder.
+        if linked {
+            // Other names of the same file sit in other buckets of this index.
             for other in copies_of_dirs(&index_root(&home)) {
                 for (store, index) in stores_in(&other, inspection) {
                     if index.files.iter().any(|f| same_file(&home.join(f))) {
@@ -457,6 +470,13 @@ fn copies_of_dirs(root: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Projects whose stores were scanned for a lost index without a find. Only
+/// a writer recreates the index, so one scan per process is enough.
+static SCANNED: std::sync::Mutex<BTreeSet<PathBuf>> = std::sync::Mutex::new(BTreeSet::new());
+
+/// A store that lists `bucket` while the bucket does not name it means the
+/// index was lost. The project's root store is always checked; when the whole
+/// index is missing, every store in the project is checked once.
 fn lost(
     project: &Path,
     bucket: &Path,
@@ -464,28 +484,43 @@ fn lost(
     selected: &mut BTreeSet<PathBuf>,
     inspection: &mut super::Inspection,
 ) {
-    let store = project.join(".basecraft/analyses-v1");
-    if indexes.iter().any(|(listed, _)| listed == &store) || !store.is_dir() {
-        return;
+    let mut stores = vec![project.join(".basecraft/analyses-v1")];
+    let mut scanned = SCANNED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !index_root(project).exists() && !scanned.contains(project) {
+        // A project too large to scan is left to `reindex`.
+        stores = super::stores_under(project).unwrap_or(stores);
     }
-    match indexed_buckets(&store) {
-        Ok(buckets) if buckets.contains(&lexical(bucket)) => {
-            selected.insert(store);
-            inspection.issue(
-                super::InspectionCode::RegistryUnavailable,
-                bucket,
-                format!(
-                    "the analysis index here is missing; `basecraft records reindex {}` rebuilds it",
-                    project.display()
-                ),
-            );
+    let mut found = false;
+    for store in stores {
+        if indexes.iter().any(|(listed, _)| listed == &store) || !store.is_dir() {
+            continue;
         }
-        Ok(_) => {}
-        Err(error) => inspection.issue(
+        match indexed_buckets(&store) {
+            Ok(buckets) if buckets.contains(&lexical(bucket)) => {
+                found = true;
+                selected.insert(store);
+            }
+            Ok(_) => {}
+            Err(error) => inspection.issue(
+                super::InspectionCode::RegistryUnavailable,
+                &store.join("indexed-folders.json"),
+                error,
+            ),
+        }
+    }
+    if found {
+        inspection.issue(
             super::InspectionCode::RegistryUnavailable,
-            &store.join("indexed-folders.json"),
-            error,
-        ),
+            bucket,
+            format!(
+                "the analysis index here is missing; `basecraft records reindex {}` rebuilds it",
+                project.display()
+            ),
+        );
+    } else if !index_root(project).exists() {
+        scanned.insert(project.into());
     }
 }
 

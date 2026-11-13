@@ -355,6 +355,15 @@ impl Drop for Opens {
     }
 }
 
+/// An edit refused because the folder cannot hold recovery (D13) starts with
+/// its code, so the window can offer to save a copy and edit that (lane gui2).
+pub(crate) fn edit_failure(error: &basecraft_ops::Error) -> String {
+    match error {
+        basecraft_ops::Error::ReadOnlyFolder { .. } => format!("{}: {error}", error.code()),
+        _ => error.to_string(),
+    }
+}
+
 // All six editors already have a message area; no new presentation or dialog.
 pub(crate) fn recovery_notice(
     session: Option<&Session>,

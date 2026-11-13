@@ -186,8 +186,6 @@ pub struct Session {
     docs: Vec<Slot>,
     typing: Option<Typing>,
     store_objects: bool,
-    /// Why edits go unrecorded, when the recovery folder could not be made.
-    recovery_off: Option<String>,
     /// The open undo group, if any, and the next group number.
     group: Option<u64>,
     next_group: u64,
@@ -225,7 +223,6 @@ impl Session {
             docs: Vec::new(),
             typing: None,
             store_objects: true,
-            recovery_off: None,
             group: None,
             next_group: 1,
             group_docs: std::collections::BTreeMap::new(),
@@ -614,12 +611,12 @@ impl Session {
 }
 
 impl Drop for Session {
-    /// Remove recovery once nothing is unsaved, or when it was off (the folder
-    /// held only working copies), then any emptied recovery and `.basecraft`.
+    /// Remove recovery once nothing is unsaved, then any emptied recovery and
+    /// `.basecraft` folder.
     fn drop(&mut self) {
         let unsaved = self.storage_root.join("pending-save.json").exists()
             || !self.docs.iter().all(Slot::is_clean);
-        if self.storage_root != self.root && (self.recovery_off.is_some() || !unsaved) {
+        if self.storage_root != self.root && !unsaved {
             let _ = std::fs::remove_dir_all(&self.storage_root);
             let _ = std::fs::remove_dir(recovery_folder(&self.root));
             let _ = std::fs::remove_dir(self.root.join(".basecraft"));

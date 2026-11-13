@@ -715,20 +715,33 @@ mod call_set_tests {
     }
 
     #[test]
-    fn unavailable_storage_does_not_prevent_instrument_review_or_lose_edits() {
+    fn a_folder_that_cannot_hold_recovery_refuses_the_review_and_says_where() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join(".basecraft"), "foreign file").unwrap();
-        let mut session = instrument(tmp.path());
-        session
-            .apply(ReviewOp::Set {
-                columns: vec![0],
-                choice: ReviewChoice::Edit('G'),
-            })
-            .unwrap();
-        assert_eq!(session.decision(0), Some(&ReviewChoice::Edit('G')));
-        assert!(session.save(&tmp.path().join("review.json")).is_err());
-        assert_eq!(session.decision(0), Some(&ReviewChoice::Edit('G')));
-        assert!(!tmp.path().join("review.json").exists());
+        let path = tmp.path().join("trace.ab1");
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../testdata/fixtures/compact/sanger-review/forward.ab1"),
+            &path,
+        )
+        .unwrap();
+        let review = instrument_review(&path).unwrap();
+        let mut owner = crate::Session::recoverable(tmp.path()).unwrap();
+        match owner.create_sanger_review(&review) {
+            Err(error @ crate::Error::ReadOnlyFolder { .. }) => {
+                assert_eq!(error.code(), "read_only_folder");
+                assert!(
+                    error
+                        .to_string()
+                        .contains(&tmp.path().display().to_string())
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(
+            std::fs::read(tmp.path().join(".basecraft")).unwrap(),
+            b"foreign file"
+        );
     }
 }
 

@@ -405,6 +405,8 @@ pub enum OperationErrorCode {
     Timeout,
     PublicationIncomplete,
     EvidenceIncomplete,
+    /// The folder cannot hold recovery of unsaved edits; copy the file first.
+    ReadOnlyFolder,
 }
 
 impl OperationErrorCode {
@@ -442,6 +444,7 @@ impl OperationErrorCode {
             Self::Timeout => "timeout",
             Self::PublicationIncomplete => "publication_incomplete",
             Self::EvidenceIncomplete => "evidence_incomplete",
+            Self::ReadOnlyFolder => "read_only_folder",
         }
     }
 }

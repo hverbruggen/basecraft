@@ -882,31 +882,28 @@ pub fn reindex(project: &Path) -> Result<Reindexed> {
     };
     for store in stores_under(&project)? {
         ArtifactRun::validate_store(&store)?;
-        let mut sources = std::collections::BTreeSet::new();
-        let mut complete = true;
-        for entry in std::fs::read_dir(store.join("runs"))? {
-            let run = entry?.path();
-            if !run.join("input.json").is_file() {
-                continue;
+        let mut unreadable = Vec::new();
+        done.folders += index::rebuild(&store, Some(&project), || {
+            let mut sources = std::collections::BTreeSet::new();
+            for entry in std::fs::read_dir(store.join("runs"))? {
+                let run = entry?.path();
+                if !run.join("input.json").is_file() {
+                    continue;
+                }
+                if let Ok(input) = read_input(&run) {
+                    locks.input(
+                        &run,
+                        &input,
+                        &mut std::collections::BTreeSet::new(),
+                        &mut sources,
+                    )?;
+                } else {
+                    unreadable.push(run.join("input.json"));
+                }
             }
-            if let Ok(input) = read_input(&run) {
-                locks.input(
-                    &run,
-                    &input,
-                    &mut std::collections::BTreeSet::new(),
-                    &mut sources,
-                )?;
-            } else {
-                complete = false;
-                done.unreadable.push(run.join("input.json"));
-            }
-        }
-        done.folders += if complete {
-            index::rebuild(&store, &sources, Some(&project))?
-        } else {
-            index::add(&store, &sources, Some(&project))?;
-            0
-        };
+            Ok((sources, unreadable.is_empty()))
+        })?;
+        done.unreadable.extend(unreadable);
         done.stores += 1;
     }
     Ok(done)
