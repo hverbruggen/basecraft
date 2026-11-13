@@ -814,19 +814,9 @@ mod activity_tests {
 
     #[test]
     fn describes_edits() {
-        let op = Op::SeqReplace {
-            start: 9,
-            end: 9,
-            residues: "ACG".into(),
-            record: None,
-        };
+        let op = Op::seq_replace(9, 9, "ACG");
         assert_eq!(describe(&op), "Inserted 3 bp at 10");
-        let op = Op::SeqReplace {
-            start: 9,
-            end: 12,
-            residues: String::new(),
-            record: None,
-        };
+        let op = Op::seq_replace(9, 12, String::new());
         assert_eq!(describe(&op), "Deleted 3 bp at 10–12");
         let op = Op::AlnShift {
             rows: vec![(2, 5)],

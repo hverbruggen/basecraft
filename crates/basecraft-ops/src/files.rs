@@ -1149,31 +1149,10 @@ pub fn extract_record(
     rec
 }
 
-fn complement(b: u8) -> u8 {
-    match b {
-        b'A' => b'T',
-        b'T' | b'U' => b'A',
-        b'C' => b'G',
-        b'G' => b'C',
-        b'a' => b't',
-        b't' | b'u' => b'a',
-        b'c' => b'g',
-        b'g' => b'c',
-        b'R' => b'Y',
-        b'Y' => b'R',
-        b'K' => b'M',
-        b'M' => b'K',
-        b'B' => b'V',
-        b'V' => b'B',
-        b'D' => b'H',
-        b'H' => b'D',
-        other => other,
-    }
-}
-
 /// Reverse-complement a record's sequence and mirror its annotations onto
 /// the other strand. Segment order (5' to 3') carries over unchanged.
 fn reverse_complement_record(rec: &mut genbank::Record) {
+    use basecraft_docs::sequence::complement;
     let n = rec.sequence.len() as u64;
     rec.sequence.reverse();
     for b in &mut rec.sequence {
@@ -1209,7 +1188,7 @@ fn extract_spliced(doc: &SequenceDoc, segments: &[(u64, u64)], reverse: bool) ->
         if reverse {
             part.reverse();
             for x in &mut part {
-                *x = complement(*x);
+                *x = basecraft_docs::sequence::complement(*x);
             }
         }
         sequence.extend(part);
@@ -1258,34 +1237,43 @@ fn extract_spliced(doc: &SequenceDoc, segments: &[(u64, u64)], reverse: bool) ->
             qualifiers: f.qualifiers.clone(),
         });
     }
-    let meta = doc.genbank.clone().unwrap_or_default();
     let name = match &label {
         Some(l) => format!("{}_{l}", doc.name),
         None => format!("{}_{}-{}_spliced", doc.name, lo + 1, hi),
     };
+    let definition = format!(
+        "{}{} parts of {} spliced together",
+        label.map(|l| format!("{l}: ")).unwrap_or_default(),
+        segments.len(),
+        doc.name
+    );
+    extracted(doc, name, &definition, features, sequence)
+}
+
+/// An extracted record, with the source's molecule, division and date.
+fn extracted(
+    doc: &SequenceDoc,
+    name: String,
+    definition: &str,
+    features: Vec<Feature>,
+    sequence: Vec<u8>,
+) -> genbank::Record {
+    let meta = doc.genbank.clone().unwrap_or_default();
+    let or = |value: String, default: &str| {
+        if value.is_empty() {
+            default.to_owned()
+        } else {
+            value
+        }
+    };
     genbank::Record {
         name,
-        molecule: if meta.molecule.is_empty() {
-            "DNA".into()
-        } else {
-            meta.molecule
-        },
+        molecule: or(meta.molecule, "DNA"),
         circular: false,
-        division: if meta.division.is_empty() {
-            "UNK".into()
-        } else {
-            meta.division
-        },
-        date: if meta.date.is_empty() {
-            "01-JAN-1970".into()
-        } else {
-            meta.date
-        },
+        division: or(meta.division, "UNK"),
+        date: or(meta.date, "01-JAN-1970"),
         header: vec![format!(
-            "DEFINITION  {}{} parts of {} spliced together, extracted with Basecraft.",
-            label.map(|l| format!("{l}: ")).unwrap_or_default(),
-            segments.len(),
-            doc.name
+            "DEFINITION  {definition}, extracted with Basecraft."
         )],
         features,
         sequence,
@@ -1358,34 +1346,8 @@ fn extract_range(doc: &SequenceDoc, start: u64, end: u64) -> genbank::Record {
     features.retain(|f| {
         !(f.kind == "source" && f.qualifier("note").is_none_or(|n| !n.starts_with("bases ")))
     });
-    let meta = doc.genbank.clone().unwrap_or_default();
-    genbank::Record {
-        name,
-        molecule: if meta.molecule.is_empty() {
-            "DNA".into()
-        } else {
-            meta.molecule
-        },
-        circular: false,
-        division: if meta.division.is_empty() {
-            "UNK".into()
-        } else {
-            meta.division
-        },
-        date: if meta.date.is_empty() {
-            "01-JAN-1970".into()
-        } else {
-            meta.date
-        },
-        header: vec![format!(
-            "DEFINITION  Bases {}..{} of {}, extracted with Basecraft.",
-            start + 1,
-            end,
-            doc.name
-        )],
-        features,
-        sequence: doc.read(start, end),
-    }
+    let definition = format!("Bases {}..{} of {}", start + 1, end, doc.name);
+    extracted(doc, name, &definition, features, doc.read(start, end))
 }
 
 pub fn load_delimitation(

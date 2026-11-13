@@ -138,23 +138,9 @@ impl SangerDraftExt for SangerDraft {
     /// Orient a draft to the opposite strand while retaining the mapping to
     /// each immutable input trace. Review decisions are created afterwards.
     fn reverse_complemented(&self) -> Self {
-        fn complement(base: char) -> char {
-            match base {
-                'A' => 'T',
-                'T' => 'A',
-                'C' => 'G',
-                'G' => 'C',
-                'R' => 'Y',
-                'Y' => 'R',
-                'K' => 'M',
-                'M' => 'K',
-                'B' => 'V',
-                'V' => 'B',
-                'D' => 'H',
-                'H' => 'D',
-                other => other,
-            }
-        }
+        let complement = |base: char| {
+            u8::try_from(base).map_or(base, |b| char::from(crate::sequence::complement(b)))
+        };
         let mut result = self.clone();
         result.consensus = self.consensus.chars().rev().map(complement).collect();
         result.columns.reverse();

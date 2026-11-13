@@ -172,15 +172,7 @@ fn run() -> Result<()> {
                 return Err("large FASTA payload verification failed".into());
             }
         }
-        session.apply(
-            id,
-            Op::SeqReplace {
-                start: 0,
-                end: 1,
-                residues: "N".into(),
-                record: None,
-            },
-        )?;
+        session.apply(id, Op::seq_replace(0, 1, "N"))?;
         if session.doc(id)?.read(0, 1) != b"N" {
             return Err("large edit verification failed".into());
         }

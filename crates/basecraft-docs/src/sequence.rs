@@ -92,6 +92,30 @@ impl Residues for FastaResidues {
     }
 }
 
+/// The IUPAC complement of a nucleotide code, keeping its case. Other
+/// bytes, such as gaps and N, are their own complement.
+pub fn complement(base: u8) -> u8 {
+    match base {
+        b'A' => b'T',
+        b'T' | b'U' => b'A',
+        b'C' => b'G',
+        b'G' => b'C',
+        b'a' => b't',
+        b't' | b'u' => b'a',
+        b'c' => b'g',
+        b'g' => b'c',
+        b'R' => b'Y',
+        b'Y' => b'R',
+        b'K' => b'M',
+        b'M' => b'K',
+        b'B' => b'V',
+        b'V' => b'B',
+        b'D' => b'H',
+        b'H' => b'D',
+        other => other,
+    }
+}
+
 impl SequenceDoc {
     pub fn new(
         name: impl Into<String>,
@@ -172,10 +196,6 @@ impl SequenceDoc {
 
     pub fn read_into(&self, start: u64, end: u64, out: &mut Vec<u8>) {
         self.seq.read_into(start, end, out);
-    }
-
-    pub fn piece_table(&self) -> &PieceTable {
-        &self.seq
     }
 
     /// Coordinate changes made after `version`, oldest first.

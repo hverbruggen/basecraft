@@ -2262,7 +2262,7 @@
                   "minimum": 0
                 },
                 "record": {
-                  "description": "The record edited, in a file that holds several: see [`Op::record`].",
+                  "description": "The record, by name, in a file that holds several. Absent means\nthe open record.",
                   "type": [
                     "string",
                     "null"
@@ -2303,7 +2303,7 @@
                   "$ref": "#/$defs/Feature"
                 },
                 "record": {
-                  "description": "The record edited, in a file that holds several: see [`Op::record`].",
+                  "description": "The record, by name, in a file that holds several. Absent means\nthe open record.",
                   "type": [
                     "string",
                     "null"
@@ -2336,7 +2336,7 @@
                   "minimum": 0
                 },
                 "record": {
-                  "description": "The record edited, in a file that holds several: see [`Op::record`].",
+                  "description": "The record, by name, in a file that holds several. Absent means\nthe open record.",
                   "type": [
                     "string",
                     "null"
@@ -2372,7 +2372,7 @@
                   "minimum": 0
                 },
                 "record": {
-                  "description": "The record edited, in a file that holds several: see [`Op::record`].",
+                  "description": "The record, by name, in a file that holds several. Absent means\nthe open record.",
                   "type": [
                     "string",
                     "null"
@@ -2410,7 +2410,7 @@
                   "type": "string"
                 },
                 "record": {
-                  "description": "The record edited, in a file that holds several: see [`Op::record`].",
+                  "description": "The record, by name, in a file that holds several. Absent means\nthe open record.",
                   "type": [
                     "string",
                     "null"

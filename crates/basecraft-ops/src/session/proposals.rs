@@ -405,12 +405,7 @@ mod tests {
         let doc = session.open(&path).unwrap();
         session.track(doc).unwrap();
         let before = journal_bytes(dir.path());
-        let op = Op::SeqReplace {
-            start: 0,
-            end: 1,
-            residues: "T".into(),
-            record: None,
-        };
+        let op = Op::seq_replace(0, 1, "T");
         let actor = Actor::Agent {
             model: "proposal-test".into(),
         };
@@ -437,13 +432,7 @@ mod tests {
             qualifiers: vec![],
         };
         let fid = session
-            .apply(
-                doc,
-                Op::FeatureAdd {
-                    feature: feature.clone(),
-                    record: None,
-                },
-            )
+            .apply(doc, Op::feature_add(feature.clone()))
             .unwrap()
             .feature
             .unwrap();
@@ -457,15 +446,8 @@ mod tests {
                 generation,
                 revision,
                 &[
-                    Op::FeatureUpdate {
-                        id: fid.0,
-                        feature: changed,
-                        record: None,
-                    },
-                    Op::FeatureRemove {
-                        id: fid.0,
-                        record: None,
-                    },
+                    Op::feature_update(fid.0, changed),
+                    Op::feature_remove(fid.0),
                 ],
                 &actor,
             )

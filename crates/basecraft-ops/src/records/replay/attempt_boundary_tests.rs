@@ -15,15 +15,7 @@ fn pre_session_refusal_discards_actual_consent() {
     let mut session = Session::recoverable(&source).unwrap();
     let id = session.open(&target).unwrap();
     session
-        .apply(
-            id,
-            basecraft_protocol::Op::SeqReplace {
-                start: 0,
-                end: 1,
-                residues: "T".into(),
-                record: None,
-            },
-        )
+        .apply(id, basecraft_protocol::Op::seq_replace(0, 1, "T"))
         .unwrap();
     let destination = root.join("final");
     let mut attempt =

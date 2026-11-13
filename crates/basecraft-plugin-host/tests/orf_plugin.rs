@@ -95,17 +95,7 @@ fn finds_orfs_and_maps_them_onto_a_newer_version() {
     assert_eq!((seg.start, seg.end), (10, 10 + 3 + 360 + 3));
 
     // The user inserts 5 residues upstream while the plugin was working.
-    session
-        .apply(
-            doc,
-            Op::SeqReplace {
-                start: 2,
-                end: 2,
-                residues: "GGGGG".into(),
-                record: None,
-            },
-        )
-        .unwrap();
+    session.apply(doc, Op::seq_replace(2, 2, "GGGGG")).unwrap();
     let actor = Actor::Plugin {
         id: p.info.id.clone(),
         version: p.info.version.clone(),

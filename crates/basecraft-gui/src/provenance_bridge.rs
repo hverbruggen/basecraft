@@ -510,15 +510,7 @@ mod tests {
         let mut session = basecraft_ops::Session::recoverable_with_paths(root, &paths).unwrap();
         let document = session.open(&file).unwrap();
         session
-            .apply(
-                document,
-                basecraft_protocol::Op::SeqReplace {
-                    start: 0,
-                    end: 1,
-                    residues: "T".into(),
-                    record: None,
-                },
-            )
+            .apply(document, basecraft_protocol::Op::seq_replace(0, 1, "T"))
             .unwrap();
         session.save(document, None).unwrap();
         assert!(

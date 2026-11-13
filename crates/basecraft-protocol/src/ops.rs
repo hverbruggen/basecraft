@@ -284,6 +284,38 @@ pub enum Op {
 }
 
 impl Op {
+    /// Replace residues `start..end` of the open record.
+    pub fn seq_replace(start: u64, end: u64, residues: impl Into<String>) -> Self {
+        Op::SeqReplace {
+            start,
+            end,
+            residues: residues.into(),
+            record: None,
+        }
+    }
+
+    /// Add an annotation to the open record.
+    pub fn feature_add(feature: Feature) -> Self {
+        Op::FeatureAdd {
+            feature,
+            record: None,
+        }
+    }
+
+    /// Remove annotation `id` from the open record.
+    pub fn feature_remove(id: u32) -> Self {
+        Op::FeatureRemove { id, record: None }
+    }
+
+    /// Replace annotation `id` of the open record.
+    pub fn feature_update(id: u32, feature: Feature) -> Self {
+        Op::FeatureUpdate {
+            id,
+            feature,
+            record: None,
+        }
+    }
+
     /// The record a sequence edit or extraction names. Records in a file
     /// that holds several are known by name (accession, LOCUS name, or the
     /// FASTA header up to the first space); absent means the open record.
@@ -585,12 +617,7 @@ mod tests {
             session: "01JB9P".into(),
             actor: Actor::Human { user: "hv".into() },
             doc: "rbcL/rbcL.gb".into(),
-            op: Op::SeqReplace {
-                start: 4,
-                end: 6,
-                residues: "ACG".into(),
-                record: None,
-            },
+            op: Op::seq_replace(4, 6, "ACG"),
             result: OpResult::default(),
             state: DocState {
                 counts: None,

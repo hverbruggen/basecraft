@@ -120,21 +120,6 @@ impl Slot {
         groups
     }
 
-    /// A new edit ends redo; returns the groups of the dropped steps.
-    fn clear_redo(&mut self) -> Vec<u64> {
-        self.redo
-            .drain(..)
-            .filter_map(|applied| applied.group)
-            .collect()
-    }
-
-    fn holds(&self, group: u64) -> bool {
-        self.undo
-            .iter()
-            .chain(&self.redo)
-            .any(|applied| applied.group == Some(group))
-    }
-
     /// The undo stack, or the redo stack.
     fn stack(&mut self, undo: bool) -> &mut Vec<Applied> {
         if undo { &mut self.undo } else { &mut self.redo }

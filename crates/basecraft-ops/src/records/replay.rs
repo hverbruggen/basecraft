@@ -1223,17 +1223,7 @@ mod tests {
         std::fs::write(&path, ">a\nACGT\n").unwrap();
         let mut session = Session::new(root.path());
         let doc = session.open(&path).unwrap();
-        session
-            .apply(
-                doc,
-                Op::SeqReplace {
-                    start: 0,
-                    end: 1,
-                    residues: "T".into(),
-                    record: None,
-                },
-            )
-            .unwrap();
+        session.apply(doc, Op::seq_replace(0, 1, "T")).unwrap();
         let entries = log::read_all(root.path()).unwrap();
         let baseline = entries
             .iter()

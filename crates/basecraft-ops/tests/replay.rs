@@ -23,12 +23,7 @@ ORIGIN
 ";
 
 fn replace(start: u64, end: u64, residues: &str) -> Op {
-    Op::SeqReplace {
-        start,
-        end,
-        residues: residues.into(),
-        record: None,
-    }
+    Op::seq_replace(start, end, residues)
 }
 
 fn feature(start: u64, end: u64) -> Feature {
@@ -50,36 +45,13 @@ fn record_session(root: &Path) {
     }
     // A deletion that trims the CDS's first exon.
     s.apply(d, replace(25, 35, "")).unwrap();
-    let added = s
-        .apply(
-            d,
-            Op::FeatureAdd {
-                feature: feature(5, 30),
-                record: None,
-            },
-        )
-        .unwrap();
+    let added = s.apply(d, Op::feature_add(feature(5, 30))).unwrap();
     let fid = added.feature.unwrap().0;
-    s.apply(
-        d,
-        Op::FeatureUpdate {
-            id: fid,
-            feature: feature(6, 31),
-            record: None,
-        },
-    )
-    .unwrap();
+    s.apply(d, Op::feature_update(fid, feature(6, 31))).unwrap();
     s.undo(d).unwrap();
     s.undo(d).unwrap();
     s.redo(d).unwrap();
-    s.apply(
-        d,
-        Op::FeatureRemove {
-            id: 0,
-            record: None,
-        },
-    )
-    .unwrap();
+    s.apply(d, Op::feature_remove(0)).unwrap();
     s.undo(d).unwrap();
     s.apply(d, replace(0, 3, "NNNN")).unwrap();
     s.extract(d, (15, 50), &[], false, &root.join("seqs/part.gb"), None)
@@ -193,14 +165,11 @@ fn extracts_spliced_cds_and_reverse_complements() {
     // annotation on the forward strand.
     s.apply(
         d,
-        Op::FeatureAdd {
-            feature: Feature {
-                kind: "misc_feature".into(),
-                location: basecraft_protocol::Location::simple(79, 90, Strand::Reverse),
-                qualifiers: vec![],
-            },
-            record: None,
-        },
+        Op::feature_add(Feature {
+            kind: "misc_feature".into(),
+            location: basecraft_protocol::Location::simple(79, 90, Strand::Reverse),
+            qualifiers: vec![],
+        }),
     )
     .unwrap();
     s.extract(d, (79, 90), &[], true, &root.join("seqs/rc.gb"), None)
@@ -239,24 +208,11 @@ fn grouped_operations_undo_together_and_replay() {
         let before = s.doc(d).unwrap().feature_count();
         s.begin_group();
         for i in 0..3 {
-            s.apply(
-                d,
-                Op::FeatureAdd {
-                    feature: feature(i * 10, i * 10 + 5),
-                    record: None,
-                },
-            )
-            .unwrap();
+            s.apply(d, Op::feature_add(feature(i * 10, i * 10 + 5)))
+                .unwrap();
         }
         s.end_group();
-        s.apply(
-            d,
-            Op::FeatureAdd {
-                feature: feature(50, 60),
-                record: None,
-            },
-        )
-        .unwrap();
+        s.apply(d, Op::feature_add(feature(50, 60))).unwrap();
         s.undo(d).unwrap();
         assert_eq!(
             s.doc(d).unwrap().feature_count(),
@@ -866,13 +822,7 @@ fn strict_sequence_proposals_stage_invalid_batches_and_replay_one_undo_group() {
             )
             .is_err()
     );
-    let ops = [
-        replace(0, 1, "T"),
-        Op::FeatureAdd {
-            feature: feature(1, 4),
-            record: None,
-        },
-    ];
+    let ops = [replace(0, 1, "T"), Op::feature_add(feature(1, 4))];
     session
         .apply_sequence_proposals(doc, generation, revision, &ops, &actor)
         .unwrap();

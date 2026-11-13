@@ -629,6 +629,23 @@ impl Session {
     }
 }
 
+impl super::Slot {
+    /// A new edit ends redo; returns the groups of the dropped steps.
+    pub(super) fn clear_redo(&mut self) -> Vec<u64> {
+        self.redo
+            .drain(..)
+            .filter_map(|applied| applied.group)
+            .collect()
+    }
+
+    pub(super) fn holds(&self, group: u64) -> bool {
+        self.undo
+            .iter()
+            .chain(&self.redo)
+            .any(|applied| applied.group == Some(group))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::Splice;

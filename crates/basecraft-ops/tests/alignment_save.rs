@@ -262,12 +262,7 @@ fn alignment_interface_rejections_normalization_and_hashes() {
     let original_hashes = session.save_hashes(doc).unwrap();
     let original_revision = session.revision(doc).unwrap();
     for op in [
-        Op::SeqReplace {
-            start: 0,
-            end: 1,
-            residues: "T".into(),
-            record: None,
-        },
+        Op::seq_replace(0, 1, "T"),
         Op::AlnReplace {
             row: 99,
             start: 0,

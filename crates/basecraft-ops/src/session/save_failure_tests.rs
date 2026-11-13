@@ -7,17 +7,7 @@ fn fixture(root: &Path) -> (Session, DocId, PathBuf) {
     fs::write(&target, b">source\nACGT\n").unwrap();
     let mut session = Session::recoverable(root).unwrap();
     let id = session.open(&target).unwrap();
-    session
-        .apply(
-            id,
-            Op::SeqReplace {
-                start: 0,
-                end: 1,
-                residues: "T".into(),
-                record: None,
-            },
-        )
-        .unwrap();
+    session.apply(id, Op::seq_replace(0, 1, "T")).unwrap();
     (session, id, target)
 }
 
@@ -178,17 +168,7 @@ fn failed_save_journal_keeps_previous_history_and_recovers_written_data() {
     let bundle = crate::records::provenance::companion(&target);
     let manifest = fs::read(bundle.join("manifest.json")).unwrap();
     let records = fs::read_dir(bundle.join("records")).unwrap().count();
-    session
-        .apply(
-            id,
-            Op::SeqReplace {
-                start: 1,
-                end: 2,
-                residues: "A".into(),
-                record: None,
-            },
-        )
-        .unwrap();
+    session.apply(id, Op::seq_replace(1, 2, "A")).unwrap();
     FAILURE.with(|failure| failure.set(Some(WriteStep::Journal)));
     assert!(session.save(id, None).is_err());
     assert_eq!(fs::read(bundle.join("manifest.json")).unwrap(), manifest);

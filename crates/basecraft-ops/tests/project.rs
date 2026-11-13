@@ -8,17 +8,7 @@ use std::path::Path;
 
 fn edit_and_save(session: &mut Session, file: &Path) {
     let doc = session.open(file).unwrap();
-    session
-        .apply(
-            doc,
-            Op::SeqReplace {
-                start: 0,
-                end: 1,
-                residues: "T".into(),
-                record: None,
-            },
-        )
-        .unwrap();
+    session.apply(doc, Op::seq_replace(0, 1, "T")).unwrap();
     session.save(doc, None).unwrap();
 }
 

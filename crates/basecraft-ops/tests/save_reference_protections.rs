@@ -46,17 +46,7 @@ fn reference(root: &Path, source: &Path) -> ArtifactRun {
 fn edited(root: &Path, file: &Path) -> (Session, DocId) {
     let mut session = Session::recoverable(root).unwrap();
     let doc = session.open(file).unwrap();
-    session
-        .apply(
-            doc,
-            Op::SeqReplace {
-                start: 1,
-                end: 2,
-                residues: "T".into(),
-                record: None,
-            },
-        )
-        .unwrap();
+    session.apply(doc, Op::seq_replace(1, 2, "T")).unwrap();
     (session, doc)
 }
 

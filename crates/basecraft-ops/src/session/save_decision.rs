@@ -267,15 +267,7 @@ mod tests {
         let mut session = Session::unlogged(&stage);
         let doc = session.open(&target).unwrap();
         session
-            .apply(
-                doc,
-                basecraft_protocol::Op::SeqReplace {
-                    start: 1,
-                    end: 2,
-                    residues: "T".into(),
-                    record: None,
-                },
-            )
+            .apply(doc, basecraft_protocol::Op::seq_replace(1, 2, "T"))
             .unwrap();
         session.recovery_placement(stage, parent.join("out"));
         (session, doc, target, parent)

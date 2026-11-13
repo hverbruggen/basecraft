@@ -381,22 +381,9 @@ mod tests {
                 col: 0,
                 count: 1,
             },
-            Op::SeqReplace {
-                start: 0,
-                end: 5,
-                residues: "A".into(),
-                record: None,
-            },
-            Op::SeqReplace {
-                start: 0,
-                end: 1,
-                residues: "?".into(),
-                record: None,
-            },
-            Op::FeatureRemove {
-                id: 900,
-                record: None,
-            },
+            Op::seq_replace(0, 5, "A"),
+            Op::seq_replace(0, 1, "?"),
+            Op::feature_remove(900),
         ] {
             assert!(document.apply(&op).is_err());
             assert_eq!(
@@ -458,14 +445,7 @@ mod tests {
                 .saved_hashes(&source, &super::super::WritePublication::Immediate)
                 .unwrap();
             assert_eq!(initial[0], basecraft_io::hash_bytes(&expected_main));
-            let (inverse, _) = document
-                .apply(&Op::SeqReplace {
-                    start: 2,
-                    end: 4,
-                    residues: "n".into(),
-                    record: None,
-                })
-                .unwrap();
+            let (inverse, _) = document.apply(&Op::seq_replace(2, 4, "n")).unwrap();
             assert_ne!(
                 document
                     .saved_hashes(&source, &super::super::WritePublication::Immediate)
@@ -522,28 +502,8 @@ mod tests {
         let mut session = crate::Session::new(root.path());
         let id = session.open(&source).unwrap();
         let initial = session.save_hashes(id).unwrap();
-        let first = session
-            .apply(
-                id,
-                Op::SeqReplace {
-                    start: 60,
-                    end: 60,
-                    residues: "a".into(),
-                    record: None,
-                },
-            )
-            .unwrap();
-        let second = session
-            .apply(
-                id,
-                Op::SeqReplace {
-                    start: 61,
-                    end: 61,
-                    residues: "tg".into(),
-                    record: None,
-                },
-            )
-            .unwrap();
+        let first = session.apply(id, Op::seq_replace(60, 60, "a")).unwrap();
+        let second = session.apply(id, Op::seq_replace(61, 61, "tg")).unwrap();
         assert_ne!(first.entry_id, second.entry_id);
         let edited = session.save_hashes(id).unwrap();
         session.undo(id).unwrap();

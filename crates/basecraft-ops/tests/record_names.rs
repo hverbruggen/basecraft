@@ -53,23 +53,8 @@ fn edit_every_way(root: &Path, file: &Path) -> Vec<Option<String>> {
         )
         .unwrap();
     let id = added.feature.unwrap().0;
-    s.apply(
-        d,
-        Op::FeatureUpdate {
-            id,
-            feature: feature(5),
-            record: None,
-        },
-    )
-    .unwrap();
-    s.apply(
-        d,
-        Op::FeatureRemove {
-            id: 0,
-            record: None,
-        },
-    )
-    .unwrap();
+    s.apply(d, Op::feature_update(id, feature(5))).unwrap();
+    s.apply(d, Op::feature_remove(0)).unwrap();
     s.extract(d, (2, 9), &[], false, &root.join("part.gb"), Some("first"))
         .unwrap();
     basecraft_ops::log::read_all(root)
@@ -133,22 +118,8 @@ fn records_that_share_a_name_refuse_every_edit_and_name_the_clash() {
     let d = s.open(&file).unwrap();
     let refusals = [
         s.apply(d, replace(None)).err(),
-        s.apply(
-            d,
-            Op::FeatureAdd {
-                feature: feature(3),
-                record: None,
-            },
-        )
-        .err(),
-        s.apply(
-            d,
-            Op::FeatureRemove {
-                id: 0,
-                record: None,
-            },
-        )
-        .err(),
+        s.apply(d, Op::feature_add(feature(3))).err(),
+        s.apply(d, Op::feature_remove(0)).err(),
         s.extract(d, (2, 9), &[], false, &root.join("part.gb"), None)
             .err(),
     ];

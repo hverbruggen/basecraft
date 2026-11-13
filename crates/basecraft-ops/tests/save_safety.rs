@@ -23,12 +23,7 @@ fn paths(root: &Path) -> basecraft_platform::paths::AppPaths {
 }
 
 fn replace(start: u64, residues: &str) -> Op {
-    Op::SeqReplace {
-        start,
-        end: start + residues.len() as u64,
-        residues: residues.into(),
-        record: None,
-    }
+    Op::seq_replace(start, start + residues.len() as u64, residues)
 }
 
 fn listing(folder: &Path) -> Vec<PathBuf> {
@@ -264,15 +259,7 @@ fn full_disk_journal_append_rolls_back_and_keeps_a_recoverable_prefix() {
     let generation = session.generation(doc).unwrap();
     // A long insertion needs more journal space than is left.
     let long = "A".repeat(256 << 10);
-    let error = session.apply(
-        doc,
-        Op::SeqReplace {
-            start: 4,
-            end: 4,
-            residues: long,
-            record: None,
-        },
-    );
+    let error = session.apply(doc, Op::seq_replace(4, 4, long));
     eprintln!("full-disk journal error: {error:?}");
     assert!(error.is_err());
     assert_eq!(

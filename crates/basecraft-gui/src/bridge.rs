@@ -1407,11 +1407,7 @@ impl qobject::GenomeController {
             }
             KEY_DELETE if selected.is_some() => {
                 let id = selected.map_or(0, |FeatureId(i)| i);
-                if self
-                    .as_mut()
-                    .edit(Op::FeatureRemove { id, record: None })
-                    .is_some()
-                {
+                if self.as_mut().edit(Op::feature_remove(id)).is_some() {
                     self.as_mut().rust_mut().view.selected = None;
                 }
                 true
@@ -1424,12 +1420,7 @@ impl qobject::GenomeController {
                     _ => None,
                 };
                 if let Some((a, b)) = range {
-                    let op = Op::SeqReplace {
-                        start: a,
-                        end: b,
-                        residues: String::new(),
-                        record: None,
-                    };
+                    let op = Op::seq_replace(a, b, String::new());
                     if self.as_mut().edit(op).is_some() {
                         let mut r = self.as_mut().rust_mut();
                         r.view.selection = None;
@@ -1444,12 +1435,7 @@ impl qobject::GenomeController {
                 if residue && !ctrl && modifiers & ALT == 0 {
                     if let Some(c) = cursor {
                         let (start, end) = selection.unwrap_or((c, c));
-                        let op = Op::SeqReplace {
-                            start,
-                            end,
-                            residues: t.to_ascii_uppercase(),
-                            record: None,
-                        };
+                        let op = Op::seq_replace(start, end, t.to_ascii_uppercase());
                         if self.as_mut().edit(op).is_some() {
                             let mut r = self.as_mut().rust_mut();
                             r.view.selection = None;
@@ -1806,15 +1792,8 @@ impl qobject::GenomeController {
             Err(e) => return QString::from(&e),
         };
         let op = match u32::try_from(id) {
-            Ok(i) => Op::FeatureUpdate {
-                id: i,
-                feature,
-                record: None,
-            },
-            Err(_) => Op::FeatureAdd {
-                feature,
-                record: None,
-            },
+            Ok(i) => Op::feature_update(i, feature),
+            Err(_) => Op::feature_add(feature),
         };
         let result = {
             let mut r = self.as_mut().rust_mut();
@@ -1839,14 +1818,7 @@ impl qobject::GenomeController {
 
     pub fn delete_feature(mut self: Pin<&mut Self>, id: i32) {
         let Ok(i) = u32::try_from(id) else { return };
-        if self
-            .as_mut()
-            .edit(Op::FeatureRemove {
-                id: i,
-                record: None,
-            })
-            .is_some()
-        {
+        if self.as_mut().edit(Op::feature_remove(i)).is_some() {
             self.as_mut().rust_mut().view.selected = None;
         }
         self.refresh();

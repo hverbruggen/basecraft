@@ -11,12 +11,7 @@ const LOCUS: &str =
     include_str!("../../../testdata/fixtures/compact/sequences-annotations/locus.gb");
 
 fn replace() -> Op {
-    Op::SeqReplace {
-        start: 0,
-        end: 1,
-        residues: "GG".into(),
-        record: None,
-    }
+    Op::seq_replace(0, 1, "GG")
 }
 
 /// The fixture record under another name of the same length, as a second

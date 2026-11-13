@@ -230,17 +230,8 @@ fn sequence() {
                 .push(basecraft_protocol::Qualifier::new("note", "reviewed"));
             second.1[0].1 = feature_semantics(second.1[0].1.clone());
             let ops = [
-                Op::SeqReplace {
-                    start: 0,
-                    end: 3,
-                    residues: "NNN".into(),
-                    record: None,
-                },
-                Op::FeatureUpdate {
-                    id: second.1[0].0.0,
-                    feature: second.1[0].1.clone(),
-                    record: None,
-                },
+                Op::seq_replace(0, 3, "NNN"),
+                Op::feature_update(second.1[0].0.0, second.1[0].1.clone()),
             ];
             (ops, [original, first, second])
         },

@@ -140,15 +140,7 @@ fn session_records_loaded_hash_and_refuses_edits_after_external_change() {
     std::fs::write(&path, b">a\nTTTT\n").unwrap();
     assert!(
         session
-            .apply(
-                id,
-                basecraft_protocol::Op::SeqReplace {
-                    start: 0,
-                    end: 1,
-                    residues: "G".into(),
-                    record: None
-                }
-            )
+            .apply(id, basecraft_protocol::Op::seq_replace(0, 1, "G"))
             .is_err()
     );
     assert_eq!(session.doc(id).unwrap().read(0, 4), b"ACGT");
@@ -180,15 +172,7 @@ fn companion_hash_remains_guarded_on_the_captured_path() {
     std::fs::write(sidecar, b"##gff-version 3\n").unwrap();
     assert!(
         session
-            .apply(
-                id,
-                basecraft_protocol::Op::SeqReplace {
-                    start: 0,
-                    end: 1,
-                    residues: "G".into(),
-                    record: None
-                }
-            )
+            .apply(id, basecraft_protocol::Op::seq_replace(0, 1, "G"))
             .is_err()
     );
     assert_eq!(session.doc(id).unwrap().read(0, 4), b"ACGT");
@@ -480,17 +464,7 @@ fn captured_companion_refusals_preserve_baseline_undo_and_journal() {
             let result = if save {
                 session.save(id, Some(&dir.path().join("copy.fasta")))
             } else {
-                session
-                    .apply(
-                        id,
-                        Op::SeqReplace {
-                            start: 0,
-                            end: 1,
-                            residues: "G".into(),
-                            record: None,
-                        },
-                    )
-                    .map(|_| ())
+                session.apply(id, Op::seq_replace(0, 1, "G")).map(|_| ())
             };
             assert!(matches!(
                 result,
@@ -535,15 +509,7 @@ fn captured_multirecord_writer_and_replay_inputs_match_legacy() {
         legacy.doc.to_genbank()
     );
     session
-        .apply(
-            id,
-            basecraft_protocol::Op::SeqReplace {
-                start: 0,
-                end: 1,
-                residues: "G".into(),
-                record: None,
-            },
-        )
+        .apply(id, basecraft_protocol::Op::seq_replace(0, 1, "G"))
         .unwrap();
     session.undo(id).unwrap();
     assert_eq!(
@@ -592,15 +558,7 @@ fn cold_recoverable_edit_reads_no_source_bytes_and_recovery_needs_the_originals(
     #[cfg(feature = "test-counters")]
     basecraft_io::counters::reset();
     session
-        .apply(
-            id,
-            basecraft_protocol::Op::SeqReplace {
-                start: 0,
-                end: 1,
-                residues: "G".into(),
-                record: None,
-            },
-        )
+        .apply(id, basecraft_protocol::Op::seq_replace(0, 1, "G"))
         .unwrap();
     #[cfg(feature = "test-counters")]
     {
