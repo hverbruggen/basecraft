@@ -41,7 +41,6 @@ impl Document for Opened {
     }
     fn proposal_candidate(&self) -> Result<files::Loaded> {
         Ok(files::Loaded::Sequence(Opened {
-            alphabet: self.alphabet.clone(),
             companion_warning: None,
             doc: self.doc.clone(),
             format: self.format,
@@ -74,13 +73,15 @@ impl Document for Opened {
     }
     fn apply(&mut self, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {
         if let Op::SetAlphabet { alphabet } = op {
-            return Ok((super::set_alphabet(&mut self.alphabet, *alphabet), None));
+            let before = super::stated(self.doc.alphabet()).cloned();
+            self.doc.set_alphabet(Some(super::user_alphabet(*alphabet)));
+            return Ok((Inverse::Alphabet(before), None));
         }
         execute_sequence(&mut self.doc, op)
     }
     fn revert(&mut self, inverse: &Inverse) -> Result<()> {
         if let Inverse::Alphabet(before) = inverse {
-            self.alphabet.clone_from(before);
+            self.doc.set_alphabet(before.clone());
             return Ok(());
         }
         undo_sequence(&mut self.doc, inverse)
@@ -101,7 +102,7 @@ impl Document for Opened {
     fn saved_companions(&self, target: &Path) -> Vec<PathBuf> {
         let gff = files::write_sidecar(self, &mut std::io::sink()).is_some();
         let gff = gff.then(|| files::gff_sidecar(target));
-        let facts = self.alphabet.as_ref().map(|_| files::tree_sidecar(target));
+        let facts = super::stated(self.doc.alphabet()).map(|_| files::tree_sidecar(target));
         gff.into_iter().chain(facts).collect()
     }
 
@@ -126,7 +127,7 @@ impl Document for Opened {
                 Ok(())
             })?;
         }
-        super::stage_facts(&mut prepared, target, self.alphabet.as_ref(), &hash)?;
+        super::stage_companion(&mut prepared, target, super::stated(self.doc.alphabet()), &hash)?;
         Ok(prepared)
     }
     fn saved_hashes(
@@ -143,7 +144,7 @@ impl Document for Opened {
             r?;
             out.push(hw.hash());
         }
-        out.extend(super::facts_hash(self.alphabet.as_ref(), &main)?);
+        out.extend(super::facts_hash(super::stated(self.doc.alphabet()), &main)?);
         Ok(out)
     }
     fn merge(&self, previous: &Op, next: &Op) -> Option<Op> {

@@ -437,28 +437,14 @@ impl Session {
         &self,
         id: DocId,
     ) -> Result<basecraft_protocol::facts::Fact<basecraft_protocol::facts::Alphabet>> {
-        use basecraft_protocol::facts::{Alphabet, Fact, FactSource};
         let content = &self.slot(id)?.content;
-        let guessed = |value| Fact {
-            value,
-            source: FactSource::Guessed,
-        };
         if let Some(opened) = content.alignment() {
-            return Ok(opened.alphabet.clone().unwrap_or_else(|| {
-                guessed(if opened.doc.is_protein() {
-                    Alphabet::Protein
-                } else {
-                    Alphabet::Dna
-                })
-            }));
+            return Ok(opened.doc.alphabet().clone());
         }
-        let opened = content
+        content
             .sequence()
-            .ok_or_else(|| invalid("only alignments and sequences have an alphabet"))?;
-        Ok(opened
-            .alphabet
-            .clone()
-            .unwrap_or_else(|| guessed(Alphabet::Unknown)))
+            .map(|opened| opened.doc.alphabet().clone())
+            .ok_or_else(|| invalid("only alignments and sequences have an alphabet"))
     }
 
     pub fn is_alignment(&self, id: DocId) -> bool {
@@ -496,6 +482,11 @@ impl Session {
         } else {
             Vec::new()
         };
+        if let Some(molecule) = crate::blast::stated_molecule(opened.doc.alphabet(), None) {
+            for query in &mut queries {
+                query.source["molecule"] = molecule.as_str().into();
+            }
+        }
         let mut current = crate::blast::from_doc(&opened.doc, None, None)?;
         current.source["session"] = serde_json::json!(self.id());
         current.source["generation"] = serde_json::json!(self.generation(id)?);

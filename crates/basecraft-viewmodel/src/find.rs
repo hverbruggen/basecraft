@@ -255,25 +255,7 @@ pub fn search(input: Input, query: &str, reverse: bool, cancel: &AtomicBool) -> 
     };
     let protein = match &input {
         Input::Alignment(d) => d.is_protein(),
-        // Same conservative alphabet convention as AlignmentDoc: a letter
-        // outside the nucleotide alphabet identifies protein. Inspect the full
-        // sequence here, off the UI thread; SequenceDoc has no alphabet field.
-        Input::Sequence(d) => {
-            let mut protein = false;
-            for start in (0..d.len()).step_by(usize::from(CHUNK)) {
-                if cancel.load(Ordering::Relaxed) {
-                    return Results::default();
-                }
-                if d.read(start, (start + u64::from(CHUNK)).min(d.len()))
-                    .iter()
-                    .any(|&b| b.is_ascii_alphabetic() && dna_mask(b) == 0)
-                {
-                    protein = true;
-                    break;
-                }
-            }
-            protein
-        }
+        Input::Sequence(d) => d.alphabet().value == basecraft_protocol::facts::Alphabet::Protein,
         _ => false,
     };
     let mut s = Scanner::new(

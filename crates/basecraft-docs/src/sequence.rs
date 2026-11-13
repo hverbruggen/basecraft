@@ -6,11 +6,15 @@ use std::sync::{Arc, Mutex};
 use basecraft_io::fasta::IndexedFasta;
 use basecraft_io::{genbank, gff3};
 use basecraft_protocol::Feature;
+use basecraft_protocol::facts::{Alphabet, Fact};
 use basecraft_query::{IntervalIndex, SeqSummary};
 use serde::{Deserialize, Serialize};
 
 use crate::coord::{Change, map_location};
 use crate::piece::{PieceTable, Residues};
+
+/// Residues read to guess a sequence's alphabet.
+const GUESS_SAMPLE: u64 = 100_000;
 
 /// Stable for the life of a document: removing a feature leaves a hole, so
 /// ids in the log, in selections and in plugin results stay valid.
@@ -44,6 +48,8 @@ pub struct SequenceDoc {
     seq: PieceTable,
     features: Vec<Option<Feature>>,
     version: u64,
+    /// The letters of the sequence: from the side file, or guessed.
+    alphabet: Fact<Alphabet>,
     /// `(version after the change, change)`, oldest first.
     changes: Vec<(u64, Change)>,
     index: Mutex<Option<(u64, Arc<IntervalIndex>)>>,
@@ -59,6 +65,7 @@ impl Clone for SequenceDoc {
             seq: self.seq.clone(),
             features: self.features.clone(),
             version: self.version,
+            alphabet: self.alphabet.clone(),
             changes: self.changes.clone(),
             index: Mutex::new(None),
             summary: Mutex::new(None),
@@ -92,17 +99,32 @@ impl SequenceDoc {
         features: Vec<Feature>,
         circular: bool,
     ) -> Self {
+        let seq = PieceTable::new(residues);
+        let alphabet = Alphabet::guessed(&seq.read(0, GUESS_SAMPLE));
         Self {
             name: name.into(),
             circular,
             genbank: None,
-            seq: PieceTable::new(residues),
+            seq,
             features: features.into_iter().map(Some).collect(),
             version: 0,
+            alphabet,
             changes: Vec::new(),
             index: Mutex::new(None),
             summary: Mutex::new(None),
         }
+    }
+
+    /// The letters of the sequence, and who said so.
+    pub fn alphabet(&self) -> &Fact<Alphabet> {
+        &self.alphabet
+    }
+
+    /// Use the alphabet a side file or the user states; `None` guesses
+    /// again from the residues.
+    pub fn set_alphabet(&mut self, stated: Option<Fact<Alphabet>>) {
+        self.alphabet =
+            stated.unwrap_or_else(|| Alphabet::guessed(&self.seq.read(0, GUESS_SAMPLE)));
     }
 
     pub fn from_genbank(rec: genbank::Record) -> Self {

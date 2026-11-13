@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use basecraft_io::fasta::IndexedFasta;
+use basecraft_protocol::facts::{Alphabet, Fact};
 
 use crate::piece::{PieceTable, Residues};
 use crate::sequence::FastaResidues;
@@ -234,7 +235,8 @@ pub struct AlignmentDoc {
     /// Already rectangular alignments retain their established gap-edit semantics.
     preserve_unpadded_lengths: bool,
     version: u64,
-    protein: bool,
+    /// The letters the rows are written in: from the side file, or guessed.
+    alphabet: Fact<Alphabet>,
     consensus: Mutex<ConsensusCache>,
     stats: Mutex<StatsCache>,
 }
@@ -252,12 +254,12 @@ impl AlignmentDoc {
             width: 0,
             preserve_unpadded_lengths,
             version: 0,
-            protein: false,
+            alphabet: Alphabet::guessed(&[]),
             consensus: Mutex::new(ConsensusCache::default()),
             stats: Mutex::new(StatsCache::default()),
         };
         doc.square(&mut Vec::new());
-        doc.protein = doc.detect_protein();
+        doc.alphabet = Alphabet::guessed(&doc.sample());
         doc
     }
 
@@ -331,9 +333,24 @@ impl AlignmentDoc {
         self.version
     }
 
-    /// Whether the residues look like amino acids rather than nucleotides.
+    /// The letters the rows are written in, and who said so.
+    pub fn alphabet(&self) -> &Fact<Alphabet> {
+        &self.alphabet
+    }
+
+    /// Use the alphabet a side file or the user states; `None` guesses
+    /// again from the residues. Consensus and colours follow it.
+    pub fn set_alphabet(&mut self, stated: Option<Fact<Alphabet>>) {
+        let alphabet = stated.unwrap_or_else(|| Alphabet::guessed(&self.sample()));
+        if alphabet.value != self.alphabet.value {
+            self.edited();
+        }
+        self.alphabet = alphabet;
+    }
+
+    /// Whether the alphabet, stated or guessed, is protein.
     pub fn is_protein(&self) -> bool {
-        self.protein
+        self.alphabet.value == Alphabet::Protein
     }
 
     pub fn read(&self, row: usize, start: u64, end: u64) -> Vec<u8> {
@@ -349,22 +366,14 @@ impl AlignmentDoc {
         self.rows.iter().map(|r| r.seq.edit_bytes()).sum()
     }
 
-    fn detect_protein(&self) -> bool {
-        let (mut nucleotide, mut letters) = (0u32, 0u32);
+    /// The residues the alphabet is guessed from: the first 2000 columns
+    /// of the first 20 rows.
+    fn sample(&self) -> Vec<u8> {
         let mut buf = Vec::new();
         for i in 0..self.rows.len().min(20) {
-            buf.clear();
             self.read_into(i, 0, self.width.min(2000), &mut buf);
-            for &b in &buf {
-                if b.is_ascii_alphabetic() {
-                    letters += 1;
-                    if b"ACGTUNRYKMSWBDHVacgtunrykmswbdhv".contains(&b) {
-                        nucleotide += 1;
-                    }
-                }
-            }
         }
-        letters > 0 && nucleotide < letters
+        buf
     }
 
     /// Rows in `ranges`, ascending, without duplicates; checked against the
@@ -467,7 +476,7 @@ impl AlignmentDoc {
 
     /// Validate additions against this alignment's molecule alphabet.
     pub fn validate_additions(&self, rows: &[(String, String)]) -> Result<(), EditError> {
-        let alphabet: &[u8] = if self.protein {
+        let alphabet: &[u8] = if self.is_protein() {
             b"ACDEFGHIKLMNPQRSTVWYBXZJUO-*"
         } else {
             b"ACGTUNRYKMSWBDHV-"
@@ -479,7 +488,7 @@ impl AlignmentDoc {
             {
                 return err(format!(
                     "Sequence {name} contains symbols outside this {} alignment's IUPAC alphabet",
-                    if self.protein {
+                    if self.is_protein() {
                         "protein"
                     } else {
                         "nucleotide"
@@ -764,7 +773,7 @@ impl AlignmentDoc {
             width: self.width,
             preserve_unpadded_lengths: self.preserve_unpadded_lengths,
             version: self.version,
-            protein: self.protein,
+            alphabet: self.alphabet.clone(),
             consensus: Mutex::new(ConsensusCache::default()),
             stats: Mutex::new(StatsCache::default()),
         }
@@ -935,7 +944,7 @@ impl AlignmentDoc {
 
     /// Composition over all rows, independent of which rows are displayed.
     pub fn column_stats(&self, col: u64) -> Option<ColumnStats> {
-        if col >= self.width || self.protein {
+        if col >= self.width || self.is_protein() {
             return None;
         }
         let chunk = self.stats_chunk(col / CONSENSUS_CHUNK);
@@ -945,7 +954,7 @@ impl AlignmentDoc {
     /// Bounded, versioned whole-alignment composition for a visible interval.
     pub fn column_stats_range(&self, start: u64, end: u64) -> Vec<ColumnStats> {
         let end = end.min(self.width);
-        if self.protein || start >= end {
+        if self.is_protein() || start >= end {
             return Vec::new();
         }
         let Ok(capacity) = usize::try_from(end - start) else {
@@ -1180,7 +1189,7 @@ mod tests {
             dna.add_sequences(&[("iupac".into(), "RYKMSWBDHVN".into())], None)
                 .is_ok()
         );
-        assert!(!aln(&["NNRYKMSW", "NNBDHVRY"]).is_protein());
+        assert_eq!(aln(&["NNRYKMSW", "NNBDHVRY"]).alphabet().value, Alphabet::Dna);
         let protein = aln(&["MKLVE", "MKLIE"]);
         assert!(
             protein
@@ -1389,8 +1398,8 @@ mod tests {
 
     #[test]
     fn protein_detection() {
-        assert!(!aln(&["ACGTNACGT-", "ACG-TACGT"]).is_protein());
-        assert!(aln(&["MKLVWQERST", "MKLI-QERST"]).is_protein());
+        assert_eq!(aln(&["ACGTNACGT-", "ACG-TACGT"]).alphabet().value, Alphabet::Dna);
+        assert_eq!(aln(&["MKLVWQERST", "MKLI-QERST"]).alphabet().value, Alphabet::Protein);
     }
 
     /// Random edits, undone in reverse, give back the original exactly.

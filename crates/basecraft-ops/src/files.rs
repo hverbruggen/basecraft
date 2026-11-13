@@ -121,8 +121,6 @@ pub const LONGEST_ALIGNMENT_ROW: u64 = 1_000_000;
 /// An open alignment plus what's needed to write its file back.
 pub struct OpenedAlignment {
     pub doc: AlignmentDoc,
-    /// The letters the user said the alignment is written in.
-    pub alphabet: Option<Fact<Alphabet>>,
     /// Why the alignment's companion could not be used, if it couldn't.
     pub companion_warning: Option<String>,
     /// Rows the GFF3 companion annotates, with their residue counts at open.
@@ -467,7 +465,6 @@ fn load_fasta_from(
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
         let doc = AlignmentDoc::from_fasta(name, &file);
         Ok(Loaded::Alignment(OpenedAlignment {
-            alphabet: None,
             companion_warning: None,
             annotated: annotated_rows(&doc, captured_gff),
             doc,
@@ -760,19 +757,30 @@ pub fn facts_companion(
 /// Put back the alphabet an alignment's or sequence's companion keeps. A
 /// companion that no longer matches the file is ignored, with a warning.
 fn restore_alphabet(content: &mut Loaded, path: &Path, exchange_hash: &str) {
-    let (alphabet, warning) = match content {
-        Loaded::Sequence(opened) => (&mut opened.alphabet, &mut opened.companion_warning),
-        Loaded::Alignment(opened) => (&mut opened.alphabet, &mut opened.companion_warning),
-        _ => return,
-    };
     let companion = tree_sidecar(path);
-    match read_optional(&companion).and_then(|bytes| {
+    let found = read_optional(&companion).and_then(|bytes| {
         bytes
             .map(|bytes| read_companion(&companion, bytes.bytes(), exchange_hash, None))
             .transpose()
-    }) {
-        Ok(found) => *alphabet = found.and_then(|c| c.alphabet),
-        Err(error) => *warning = Some(format!("The companion file was ignored: {error}")),
+    });
+    let (stated, warning) = match found {
+        Ok(found) => (found.and_then(|c| c.alphabet), None),
+        Err(error) => (None, Some(format!("The companion file was ignored: {error}"))),
+    };
+    match content {
+        Loaded::Sequence(opened) => {
+            if stated.is_some() {
+                opened.doc.set_alphabet(stated);
+            }
+            opened.companion_warning = warning;
+        }
+        Loaded::Alignment(opened) => {
+            if stated.is_some() {
+                opened.doc.set_alphabet(stated);
+            }
+            opened.companion_warning = warning;
+        }
+        _ => {}
     }
 }
 
@@ -809,8 +817,6 @@ pub fn save_tree_companion(tree: &Path, doc: &TreeDoc) -> Result<PathBuf> {
 /// An open document plus what's needed to write its file back.
 pub struct Opened {
     pub doc: SequenceDoc,
-    /// The letters the user said the sequence is written in.
-    pub alphabet: Option<Fact<Alphabet>>,
     /// Why the sequence's companion could not be used, if it couldn't.
     pub companion_warning: Option<String>,
     pub format: Format,
@@ -872,7 +878,6 @@ pub fn open_from(path: &Path, source: Source) -> Result<Opened> {
 
 fn opened_genbank(first: genbank::First) -> Opened {
     Opened {
-        alphabet: None,
         companion_warning: None,
         doc: SequenceDoc::from_genbank(first.record),
         format: Format::GenBank,
@@ -914,7 +919,6 @@ fn open_fasta_with_gff(
     let features = gff.and_then(|g| g.sequences.into_iter().find(|s| s.seqid == name));
     let doc = SequenceDoc::from_fasta(Arc::clone(&file), 0, features);
     Ok(Opened {
-        alphabet: None,
         companion_warning: None,
         doc,
         format: Format::Fasta,

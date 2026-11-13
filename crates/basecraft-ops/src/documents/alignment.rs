@@ -48,7 +48,7 @@ impl Document for OpenedAlignment {
     }
 
     fn saved_companions(&self, target: &Path) -> Vec<std::path::PathBuf> {
-        self.alphabet
+        super::stated(self.doc.alphabet())
             .iter()
             .map(|_| files::tree_sidecar(target))
             .collect()
@@ -71,7 +71,9 @@ impl Document for OpenedAlignment {
 
     fn apply(&mut self, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {
         if let Op::SetAlphabet { alphabet } = op {
-            return Ok((super::set_alphabet(&mut self.alphabet, *alphabet), None));
+            let before = super::stated(self.doc.alphabet()).cloned();
+            self.doc.set_alphabet(Some(super::user_alphabet(*alphabet)));
+            return Ok((Inverse::Alphabet(before), None));
         }
         execute_alignment(self, op).map(|steps| (Inverse::Alignment(steps), None))
     }
@@ -79,7 +81,7 @@ impl Document for OpenedAlignment {
     fn revert(&mut self, inverse: &Inverse) -> Result<()> {
         match inverse {
             Inverse::Alignment(steps) => self.doc.undo(steps),
-            Inverse::Alphabet(before) => self.alphabet.clone_from(before),
+            Inverse::Alphabet(before) => self.doc.set_alphabet(before.clone()),
             _ => return Err(invalid("undo of the wrong kind of edit")),
         }
         Ok(())
@@ -97,7 +99,7 @@ impl Document for OpenedAlignment {
         }
         let mut prepared = super::PreparedWrite::default();
         let hash = prepared.push(target, |w| files::write_alignment(&self.doc, w))?;
-        super::stage_facts(&mut prepared, target, self.alphabet.as_ref(), &hash)?;
+        super::stage_companion(&mut prepared, target, super::stated(self.doc.alphabet()), &hash)?;
         Ok(prepared)
     }
 
@@ -109,7 +111,7 @@ impl Document for OpenedAlignment {
         let mut hw = HashingWriter::new(std::io::sink());
         files::write_alignment(&self.doc, &mut hw)?;
         let main = hw.hash();
-        let facts = super::facts_hash(self.alphabet.as_ref(), &main)?;
+        let facts = super::facts_hash(super::stated(self.doc.alphabet()), &main)?;
         Ok(std::iter::once(main).chain(facts).collect())
     }
 
