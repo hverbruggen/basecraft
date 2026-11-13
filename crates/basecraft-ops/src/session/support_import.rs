@@ -93,7 +93,6 @@ impl Session {
         }
         // Register the reference before editing: a refused registration
         // leaves the tree unchanged.
-
         let mut input_run = None;
         if self.tracked {
             let anchor = self.resolve(self.doc_key(id)?);

@@ -98,10 +98,7 @@ fn realigns_with_mafft_and_logs_the_run() {
     let producing = result_record
         .events
         .iter()
-        .find(|event| {
-            matches!(&event.op,
-        Op::ToolRun { run: Some(link), .. } if link.id == outcome.run_id)
-        })
+        .find(|event| event.op.is_run(&outcome.run_id))
         .unwrap();
     assert_eq!(producing.actor, runs[0].actor);
     let methods = result_record.report().unwrap();

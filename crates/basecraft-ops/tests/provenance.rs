@@ -746,22 +746,12 @@ fn methods_come_from_the_run_record(folder: &str) -> records::DocumentRecord {
         })),
     };
     let record = basecraft_protocol::records::RunRecord {
-        schema: basecraft_protocol::records::RUN_RECORD_SCHEMA,
-        operation: "example/analyze@1".into(),
-        package_version: "1".into(),
-        package_digest: None,
-        descriptor_digest: None,
-        environment: basecraft_protocol::records::RunEnvironment::default(),
-        initiator: "test".into(),
-        executor: "example".into(),
-        process_instance: "test".into(),
-        inputs: std::collections::BTreeMap::default(),
-        effective_parameters: serde_json::Value::Null,
-        cpu_threads: 1,
-        stdout: String::new(),
-        stderr: String::new(),
-        tool: None,
         execution: Some(execution),
+        ..basecraft_protocol::records::RunRecord::new(
+            "example/analyze@1".into(),
+            "1".into(),
+            "example".into(),
+        )
     };
     records::write_json(&run.directory().join("execution.json"), &record).unwrap();
     let actor = basecraft_protocol::Actor::Tool {

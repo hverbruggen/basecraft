@@ -347,13 +347,7 @@ impl SangerRun {
             evidence,
             operation: operation.into(),
             anchor: std::path::absolute(anchor)?,
-            base: match project.filter(|project| project.contains(anchor)) {
-                Some(project) => project.root().to_path_buf(),
-                None => std::path::absolute(anchor)?
-                    .parent()
-                    .ok_or_else(|| invalid("the Sanger anchor has no folder"))?
-                    .to_path_buf(),
-            },
+            base: crate::project::Project::base_of(project, anchor)?,
             terminal: std::cell::Cell::new(false),
             started: basecraft_platform::now_rfc3339(),
         };
@@ -407,22 +401,14 @@ impl SangerRun {
             })
             .collect::<crate::Result<_>>()?;
         let record = basecraft_protocol::records::RunRecord {
-            schema: basecraft_protocol::records::RUN_RECORD_SCHEMA,
-            operation: format!("{SANGER_TOOL}/{}", self.operation),
-            package_version: env!("CARGO_PKG_VERSION").into(),
-            package_digest: None,
-            descriptor_digest: None,
-            environment: basecraft_protocol::records::RunEnvironment::default(),
             initiator: "basecraft".into(),
-            executor: SANGER_TOOL.into(),
             process_instance: basecraft_platform::process_instance().into(),
             inputs: std::collections::BTreeMap::from([("sources".into(), sources)]),
-            effective_parameters: serde_json::Value::Null,
-            cpu_threads: 1,
-            stdout: String::new(),
-            stderr: String::new(),
-            tool: None,
-            execution: None,
+            ..basecraft_protocol::records::RunRecord::new(
+                format!("{SANGER_TOOL}/{}", self.operation),
+                env!("CARGO_PKG_VERSION").into(),
+                SANGER_TOOL.into(),
+            )
         };
         inputs::write_json(&self.run.artifact("execution.json")?, &record)
     }
@@ -1606,14 +1592,11 @@ mod tests {
         let tool_runs: Vec<_> = publication
             .events
             .iter()
-            .filter_map(|event| match &event.op {
-                basecraft_protocol::Op::ToolRun { run, operation, .. } => Some((run, operation)),
-                _ => None,
-            })
+            .filter_map(|e| e.op.tool_run())
             .collect();
         assert_eq!(tool_runs.len(), 1);
-        assert_eq!(tool_runs[0].0.as_ref().unwrap().id, run.run.id());
-        assert_eq!(tool_runs[0].1, "consensus");
+        assert_eq!(tool_runs[0].0, "consensus");
+        assert!(publication.events.iter().any(|e| e.op.is_run(run.run.id())));
         let record: basecraft_protocol::records::RunRecord =
             serde_json::from_slice(&std::fs::read(run.directory().join("execution.json")).unwrap())
                 .unwrap();

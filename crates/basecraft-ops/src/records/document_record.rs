@@ -125,13 +125,8 @@ impl DocumentRecord {
         let path = path.canonicalize()?;
         // The project root for a file inside the project, as the GUI opens
         // it, so run links resolve the same way they were written.
-        let root = match project.filter(|project| project.contains(&path)) {
-            Some(project) => project.root(),
-            None => path
-                .parent()
-                .ok_or_else(|| crate::error::invalid("input has no parent"))?,
-        };
-        let mut session = crate::Session::recoverable(root)?.in_project(project.cloned());
+        let root = crate::project::Project::base_of(project, &path)?;
+        let mut session = crate::Session::recoverable(&root)?.in_project(project.cloned());
         let doc = session.open(&path)?;
         session.document_record(doc)
     }

@@ -700,8 +700,12 @@ fn document_inputs_read_the_session_revision_and_record_history() {
     // The result carries the submitted revision and producing activity, too.
     let publication =
         basecraft_ops::records::inspect(&temp.path().join("edited.json"), None).unwrap();
-    assert!(publication.events.iter().any(|event| matches!(&event.op,
-        basecraft_protocol::Op::ToolRun { run: Some(link), .. } if link.id == edited.run_id)));
+    assert!(
+        publication
+            .events
+            .iter()
+            .any(|event| event.op.is_run(&edited.run_id))
+    );
     assert!(
         publication
             .effective_edits
@@ -820,8 +824,7 @@ fn document_repair_waits_for_owner_history_and_does_not_repeat_activity() {
         record
             .events
             .iter()
-            .filter(|event| matches!(&event.op,
-        basecraft_protocol::Op::ToolRun { run: Some(link), .. } if link.id == accepted.run_id))
+            .filter(|event| event.op.is_run(&accepted.run_id))
             .count(),
         1
     );
@@ -836,8 +839,12 @@ fn document_repair_waits_for_owner_history_and_does_not_repeat_activity() {
         1
     );
     let publication = basecraft_ops::records::inspect(&output, None).unwrap();
-    assert!(publication.events.iter().any(|event| matches!(&event.op,
-        basecraft_protocol::Op::ToolRun { run: Some(link), .. } if link.id == accepted.run_id)));
+    assert!(
+        publication
+            .events
+            .iter()
+            .any(|event| event.op.is_run(&accepted.run_id))
+    );
 }
 
 #[test]
@@ -897,8 +904,12 @@ fn canonical_alignment_evidence_preserves_order_headers_and_residues() {
     assert_eq!(std::fs::read_to_string(&source).unwrap(), original);
     let publication =
         basecraft_ops::records::inspect(&root.path().join("result.json"), None).unwrap();
-    assert!(publication.events.iter().any(|event| matches!(&event.op,
-        basecraft_protocol::Op::ToolRun { run: Some(link), .. } if link.id == outcome.run_id)));
+    assert!(
+        publication
+            .events
+            .iter()
+            .any(|event| event.op.is_run(&outcome.run_id))
+    );
 }
 
 #[test]

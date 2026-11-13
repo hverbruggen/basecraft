@@ -37,6 +37,21 @@ fn installed(root: &Path, edit: impl FnOnce(&mut Value)) -> Registry {
     Registry::load(&config).unwrap()
 }
 
+/// The fixture installed, and a project folder holding `file` with `bytes`.
+fn setup(
+    edit: impl FnOnce(&mut Value),
+    file: &str,
+    bytes: &[u8],
+) -> (tempfile::TempDir, Registry, PathBuf) {
+    let temp = tempfile::tempdir().unwrap();
+    let registry = installed(temp.path(), edit);
+    let project = temp.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    let project = project.canonicalize().unwrap();
+    std::fs::write(project.join(file), bytes).unwrap();
+    (temp, registry, project)
+}
+
 /// A request to count the bytes of `file`, relative to the project.
 fn count(file: &str) -> OperationRequest {
     OperationRequest {
@@ -78,12 +93,7 @@ fn digests(outcome: &OperationOutcome) -> Vec<String> {
 
 #[test]
 fn a_moved_run_folder_resolves_and_its_request_runs_again_to_the_same_hashes() {
-    let temp = tempfile::tempdir().unwrap();
-    let registry = installed(temp.path(), |_| {});
-    let project = temp.path().join("project");
-    std::fs::create_dir(&project).unwrap();
-    let project = project.canonicalize().unwrap();
-    std::fs::write(project.join("input.txt"), b"ab\nc\n").unwrap();
+    let (_temp, registry, project) = setup(|_| {}, "input.txt", b"ab\nc\n");
     let request = count("input.txt");
     let first = run(&registry, &project, request);
     let folder = PathBuf::from(first.evidence.clone().unwrap());
@@ -120,12 +130,7 @@ fn a_moved_run_folder_resolves_and_its_request_runs_again_to_the_same_hashes() {
 
 #[test]
 fn a_file_run_leaves_one_tool_run_that_points_at_its_run_record() {
-    let temp = tempfile::tempdir().unwrap();
-    let registry = installed(temp.path(), |_| {});
-    let project = temp.path().join("project");
-    std::fs::create_dir(&project).unwrap();
-    let project = project.canonicalize().unwrap();
-    std::fs::write(project.join("input.txt"), b"abc\n").unwrap();
+    let (_temp, registry, project) = setup(|_| {}, "input.txt", b"abc\n");
     let outcome = run(&registry, &project, count("input.txt"));
     let folder = PathBuf::from(outcome.evidence.clone().unwrap());
     let publication: basecraft_protocol::provenance::Publication =
@@ -157,20 +162,16 @@ fn a_file_run_leaves_one_tool_run_that_points_at_its_run_record() {
 
 #[test]
 fn an_input_with_the_wrong_alphabet_is_refused_before_launch() {
-    let temp = tempfile::tempdir().unwrap();
-    let registry = installed(temp.path(), |contract| {
-        contract["operations"][0]["inputs"]["sources"] = json!({
-            "view":"aligned_fasta","media_type":"text/x-fasta","min":1,"max":8,
-            "alphabets":["dna"]
-        });
-    });
-    let project = temp.path().join("project");
-    std::fs::create_dir(&project).unwrap();
-    std::fs::write(
-        project.join("proteins.fasta"),
+    let (_temp, registry, project) = setup(
+        |contract| {
+            contract["operations"][0]["inputs"]["sources"] = json!({
+                "view":"aligned_fasta","media_type":"text/x-fasta","min":1,"max":8,
+                "alphabets":["dna"]
+            });
+        },
+        "proteins.fasta",
         b">a\nMKWVTFISLLFLFSSAYS\n>b\nMKWVTFISLLFLFSSAYS\n",
-    )
-    .unwrap();
+    );
     let request = count("proteins.fasta");
     let mut jobs = JobManager::default();
     let policy = SessionPolicy::new(&project, true).unwrap();
@@ -190,11 +191,7 @@ fn an_input_with_the_wrong_alphabet_is_refused_before_launch() {
 /// A cancel request while a caller waits ends the run as cancelled quickly.
 #[test]
 fn a_cancel_during_a_wait_ends_the_run() {
-    let temp = tempfile::tempdir().unwrap();
-    let registry = installed(temp.path(), |_| {});
-    let project = temp.path().join("project");
-    std::fs::create_dir(&project).unwrap();
-    std::fs::write(project.join("input.txt"), b"abc\n").unwrap();
+    let (_temp, registry, project) = setup(|_| {}, "input.txt", b"abc\n");
     let mut request = count("input.txt");
     request.parameters = serde_json::from_str(r#"{"mode":"slow"}"#).unwrap();
     let mut jobs = JobManager::default();

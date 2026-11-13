@@ -966,10 +966,7 @@ fn finalize_document(
             .document_record(target.doc)?
             .events
             .iter()
-            .any(|event| {
-                matches!(&event.op, basecraft_protocol::Op::ToolRun { run: Some(link), .. }
-                if link.id == outcome.run_id)
-            });
+            .any(|event| event.op.is_run(&outcome.run_id));
         if !recorded {
             record_document_run(job, target, outcome, session)?;
         }

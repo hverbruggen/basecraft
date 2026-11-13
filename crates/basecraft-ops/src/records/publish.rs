@@ -467,11 +467,7 @@ impl History<'_> {
             .events
             .iter()
             .rev()
-            .find(|event| {
-                event.doc == self.key
-                    && matches!(&event.op,
-                Op::ToolRun { run: Some(link), .. } if link.id == run.id())
-            })
+            .find(|event| event.doc == self.key && event.op.is_run(run.id()))
             .ok_or_else(|| invalid("analysis has no recorded activity"))?
             .clone();
         snapshot.publish_operation_activity(run, &activity)

@@ -3,7 +3,7 @@ use super::{
     Arc, AtomicBool, Error, InvokeResult, Ordering, PluginArtifact, PluginProcess,
     PreparedOperation, Result, Value, contract, link_count, records,
 };
-use basecraft_protocol::records::{RUN_RECORD_SCHEMA, RunEnvironment, RunRecord, RunRuntime};
+use basecraft_protocol::records::{RunEnvironment, RunRecord, RunRuntime};
 
 impl PreparedOperation {
     pub fn execute(&self, cancelled: Arc<AtomicBool>) -> Result<InvokeResult> {
@@ -228,23 +228,20 @@ impl PreparedOperation {
             }
             record.run_directory = relative(&record.run_directory)?;
         }
+        let manifest = &self.operation.package.manifest;
         Ok(RunRecord {
-            schema: RUN_RECORD_SCHEMA,
-            operation: self.operation.id.clone(),
-            package_version: self.operation.package.manifest.version.clone(),
             package_digest: Some(self.operation.package.digest.clone()),
             descriptor_digest: Some(self.operation.descriptor_digest.clone()),
-            environment: RunEnvironment::default(),
             initiator: self.initiator.clone(),
-            executor: self.operation.package.manifest.id.clone(),
             process_instance: basecraft_platform::process_instance().into(),
             inputs,
             effective_parameters,
             cpu_threads,
-            stdout: String::new(),
-            stderr: String::new(),
-            tool: None,
-            execution: None,
+            ..RunRecord::new(
+                self.operation.id.clone(),
+                manifest.version.clone(),
+                manifest.id.clone(),
+            )
         })
     }
 

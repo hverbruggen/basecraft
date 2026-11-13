@@ -79,13 +79,16 @@ impl<'a> ToolRunRecord<'a> {
 /// A run folder named relative to `base`, as a run link holds it.
 fn run_folder(base: &Path, folder: &Path) -> Result<String> {
     let canonical = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    crate::records::relative(&canonical(base), &canonical(folder)).map_err(|_| {
-        invalid(format!(
-            "the run folder {} cannot be named relative to {}",
-            folder.display(),
-            base.display()
-        ))
-    })
+    crate::records::relative(&canonical(base), &canonical(folder))
+        .ok()
+        .filter(|relative| !Path::new(relative).is_absolute())
+        .ok_or_else(|| {
+            invalid(format!(
+                "the run folder {} cannot be named relative to {}",
+                folder.display(),
+                base.display()
+            ))
+        })
 }
 
 impl Session {
@@ -93,12 +96,7 @@ impl Session {
     /// or the file's own folder for a loose file.
     pub(crate) fn run_base(&self, id: DocId) -> Result<PathBuf> {
         let path = self.resolve(self.doc_key(id)?);
-        if let Some(project) = self.project.as_ref().filter(|p| p.contains(&path)) {
-            return Ok(project.root().to_path_buf());
-        }
-        path.parent()
-            .map(Path::to_path_buf)
-            .ok_or_else(|| invalid("the document has no folder"))
+        crate::project::Project::base_of(self.project.as_ref(), &path)
     }
 
     /// The one way a tool run reaches the log: one typed `tool.run` entry.

@@ -94,6 +94,31 @@ pub struct RunRecord {
 
 pub const RUN_RECORD_SCHEMA: u32 = 3;
 
+impl RunRecord {
+    /// A record with nothing run yet: no package digests, environment,
+    /// inputs, settings, output or tool. Callers fill what they know.
+    pub fn new(operation: String, package_version: String, executor: String) -> Self {
+        Self {
+            schema: RUN_RECORD_SCHEMA,
+            operation,
+            package_version,
+            package_digest: None,
+            descriptor_digest: None,
+            environment: RunEnvironment::default(),
+            initiator: String::new(),
+            executor,
+            process_instance: String::new(),
+            inputs: BTreeMap::new(),
+            effective_parameters: Value::Null,
+            cpu_threads: 1,
+            stdout: String::new(),
+            stderr: String::new(),
+            tool: None,
+            execution: None,
+        }
+    }
+}
+
 /// What a run needs to be repeated in the same environment. No paths.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

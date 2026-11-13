@@ -351,8 +351,6 @@ fn normalised_request(
     Ok(recorded)
 }
 
-/// The request a run folder recorded, with its file inputs resolved against
-/// the folder wherever it now is, ready to run again.
 /// The request a run folder recorded, ready to run again: inputs resolved
 /// against the folder's current place, pinned to the package and descriptor
 /// the run used. A different installed runtime is refused, naming both locks.

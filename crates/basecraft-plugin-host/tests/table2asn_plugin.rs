@@ -176,17 +176,8 @@ fn validate(
     let manifest = std::fs::read(Path::new(&folder).join("manifest.json")).unwrap();
     let publication: basecraft_protocol::provenance::Publication =
         serde_json::from_slice(&manifest).unwrap();
-    let tool_runs = publication
-        .events
-        .iter()
-        .filter(|event| {
-            matches!(
-                event.op,
-                basecraft_protocol::Op::ToolRun { run: Some(_), .. }
-            )
-        })
-        .count();
-    assert_eq!(tool_runs, 1);
+    let tool_runs = publication.events.iter().filter_map(|e| e.op.tool_run());
+    assert_eq!(tool_runs.filter(|(_, run)| run.is_some()).count(), 1);
     summary
 }
 

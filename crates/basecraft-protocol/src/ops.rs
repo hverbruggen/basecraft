@@ -334,6 +334,21 @@ impl Op {
         }
     }
 
+    /// For a `tool.run`, its operation and run link; None for other operations.
+    pub fn tool_run(&self) -> Option<(&str, Option<&RunLink>)> {
+        match self {
+            Op::ToolRun { operation, run, .. } => Some((operation, run.as_ref())),
+            _ => None,
+        }
+    }
+
+    /// Whether this is the `tool.run` of the run with this id.
+    pub fn is_run(&self, id: &str) -> bool {
+        self.tool_run()
+            .and_then(|(_, run)| run)
+            .is_some_and(|run| run.id == id)
+    }
+
     pub fn name(&self) -> &'static str {
         match self {
             Op::Open { .. } => "doc.open",
