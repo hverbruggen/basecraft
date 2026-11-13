@@ -3,8 +3,8 @@
 | Entry point | Analysis input | Deduplication | Display tree |
 | --- | --- | --- | --- |
 | Alignment GMYC, single/multiple | Equal-rate UPGMA on retained rows; uncalibrated relative time | Explicit on/off; default on | Fitted representative tree, with mapped specimen selection |
-| Existing-tree GMYC | User-asserted rooted, validated ultrametric time tree | Off uses input unchanged; on is blocked with guidance | Existing fitted tree |
-| PTP/mPTP | User-asserted rooted, bifurcating substitution tree | Off uses input unchanged; on is blocked with guidance | Existing fitted tree |
+| Existing-tree GMYC | Rooted (tag, two clades at the base, or stated) and ultrametric within the rounding of its written lengths; tips evened out before the fit and recorded. Any branch-length meaning; a tree that is not ultrametric is refused with the offer to smooth it (penalised likelihood) | Off uses input unchanged; on is blocked with guidance | Existing fitted tree |
+| PTP/mPTP | Rooted (tag, two clades at the base, or stated), bifurcating substitution tree | Off uses input unchanged; on is blocked with guidance | Existing fitted tree |
 | ASAP | Aligned DNA, upstream ASAP | Explicit on/off; default off | None, UPGMA, NJ or IQ-TREE; all original rows, display only |
 | Manual / display setup | User edits, no inferred partition | Not applicable; retains specimen roster | None, existing, UPGMA, NJ or IQ-TREE |
 | Combine | Saved hypotheses with identical specimen rosters | Not applicable; does not rerun analyses | Existing workspace presentation |
@@ -14,8 +14,20 @@ A precomputed representative tree and mapping can still be imported there.
 Requesting automatic tree-only deduplication fails before a fit: this version
 has no verified alignment-to-tree pruning workflow. Neither zero branches nor
 similar labels establish sequence identity. Use the alignment path for GMYC or
-ASAP, or prepare a representative tree and mapping before fitting. PTP inputs
-must be explicitly rooted; IQ-TREE inference here does not root or date trees.
+ASAP, or prepare a representative tree and mapping before fitting. A tree with
+a `[&R]` or `[&U]` tag is read as stated; without one, two clades at the base
+read as rooted and three or more as unrooted, a guess the run records (D18).
+IQ-TREE inference here does not root or date trees.
+
+Ultrametric (D17): each written branch length may be off by half a unit in its
+last decimal, and a tip's allowed difference is that bound summed along its
+root-to-tip path. A length written without a decimal point is exact, as is one
+basecraft computed from exact lengths: both get only the floating-point bound.
+Pieces of a split written length keep its precision; a merged root branch takes
+the coarser precision of its two parts.
+A tree within it has its tip branches evened out to the common depth that
+changes the largest tip branch least; the run records the depth and change.
+The tree view's threshold cut, time cuts and GMYC use this one check.
 
 Exact identity compares whole aligned DNA strings after uppercase conversion
 and U→T. All other accepted IUPAC codes, `?`, `-` and `.` are literal: N differs

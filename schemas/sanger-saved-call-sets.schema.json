@@ -3,6 +3,10 @@
   "title": "SavedCallSets",
   "type": "object",
   "properties": {
+    "basecraft": {
+      "description": "The basecraft version that wrote this file.",
+      "type": "string"
+    },
     "selected": {
       "type": "string"
     },
@@ -18,11 +22,11 @@
       "minimum": 0
     }
   },
-  "additionalProperties": false,
   "required": [
     "version",
     "selected",
-    "sets"
+    "sets",
+    "basecraft"
   ],
   "$defs": {
     "FileStamp": {
@@ -239,7 +243,6 @@
           }
         }
       },
-      "additionalProperties": false,
       "required": [
         "schema_version",
         "runs",
@@ -491,7 +494,6 @@
           "type": "string"
         }
       },
-      "additionalProperties": false,
       "required": [
         "original",
         "sha256",
@@ -508,7 +510,6 @@
           "type": "string"
         }
       },
-      "additionalProperties": false,
       "required": [
         "path",
         "hash"
@@ -536,7 +537,6 @@
           "$ref": "#/$defs/ReviewEvidence"
         }
       },
-      "additionalProperties": false,
       "required": [
         "draft_path",
         "draft_sha256",

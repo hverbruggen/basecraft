@@ -16,6 +16,10 @@ pub struct ParsedNode {
     /// A tip's name, or an internal node's label (often a support value).
     pub name: String,
     pub length: Option<f64>,
+    /// The power of ten of the last digit written in `length`: -6 for
+    /// `0.000123`, -4 for `1.5e-3`. It bounds the rounding. None for a length
+    /// written without a decimal point, such as `12`, which is exact.
+    pub length_place: Option<i32>,
     /// `&` comments, without brackets, joined with `,`.
     pub comment: String,
 }
@@ -76,7 +80,7 @@ pub fn write_parsed(tree: &ParsedTree, w: &mut dyn std::io::Write) -> std::io::R
                     .ok_or_else(|| std::io::Error::other("invalid parsed tree node"))?;
                 w.write_all(quote_name(&node.name).as_bytes())?;
                 if let Some(length) = node.length {
-                    write!(w, ":{length}")?;
+                    write!(w, ":{}", format_length(length, node.length_place))?;
                 }
                 if !node.comment.is_empty() {
                     write!(w, "[&{}]", node.comment)?;
@@ -464,6 +468,8 @@ impl<'a> Parser<'a> {
                         .parse()
                         .map_err(|_| self.error(&format!("bad branch length {s:?}")))?;
                     nodes[current].length = Some(len);
+                    // Without a decimal point a length is exact (D17 refined).
+                    nodes[current].length_place = s.contains('.').then(|| written_place(s));
                 }
                 Some(_) => {
                     if !expecting_node {
@@ -520,14 +526,63 @@ pub fn quote_name(name: &str) -> String {
     }
 }
 
-/// A branch length, as short as it reads back exactly.
-pub fn format_length(len: f64) -> String {
-    format!("{len}")
+/// A branch length as text: with the decimals the file wrote (`place`), so
+/// its rounding survives a save (D17), else as short as it reads back exactly.
+pub fn format_length(len: f64, place: Option<i32>) -> String {
+    match place.and_then(|place| usize::try_from(-place).ok()) {
+        Some(decimals) if decimals > 0 => format!("{len:.decimals$}"),
+        _ => format!("{len}"),
+    }
+}
+
+/// The power of ten of the last digit of a written number such as `0.0012`
+/// (-4) or `1.25E3` (1).
+fn written_place(number: &str) -> i32 {
+    let (mantissa, exponent) = number
+        .split_once(['e', 'E'])
+        .map_or((number, 0), |(m, e)| (m, e.parse().unwrap_or(0)));
+    let decimals = mantissa.split_once('.').map_or(0, |(_, d)| d.len());
+    exponent - i32::try_from(decimals).unwrap_or(i32::MAX)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_branch_length_keeps_the_place_of_its_last_written_digit() {
+        for (text, place) in [
+            ("0.000123", -6),
+            ("12", 0),
+            ("1.5e-3", -4),
+            ("1.25E3", 1),
+            ("2.100000", -6),
+        ] {
+            assert_eq!(written_place(text), place, "{text}");
+        }
+        // Without a decimal point a length is exact: no place.
+        let tree = parse_newick("(a:0.123456,b:7,c:7.0):0;").unwrap();
+        let places: Vec<_> = tree.nodes.iter().map(|n| n.length_place).collect();
+        assert_eq!(places, [None, Some(-6), None, Some(-1)]);
+    }
+
+    #[test]
+    fn saving_keeps_the_written_decimals() {
+        let text = "(a:0.100000,b:2.50,c:1.5e-3,d:7);";
+        let tree = parse_newick(text).unwrap();
+        let mut out = Vec::new();
+        write_parsed(&tree, &mut out).unwrap();
+        let saved = parse_newick(std::str::from_utf8(&out).unwrap()).unwrap();
+        let places = |t: &ParsedTree| t.nodes.iter().map(|n| n.length_place).collect::<Vec<_>>();
+        assert_eq!(places(&saved), places(&tree));
+        let saved = String::from_utf8(out).unwrap();
+        assert!(
+            saved.contains("(a:0.100000,b:2.50,c:0.0015,d:7)"),
+            "{saved}"
+        );
+        // A computed length has no written place: the shortest exact form.
+        assert_eq!(format_length(1.0, None), "1");
+    }
 
     fn tips(t: &ParsedTree) -> Vec<&str> {
         t.nodes

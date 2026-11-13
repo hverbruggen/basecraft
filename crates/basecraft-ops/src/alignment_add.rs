@@ -55,6 +55,48 @@ pub fn parse_sequences(text: &str, name: &str) -> Result<Vec<(String, String)>, 
     Ok(rows)
 }
 
+/// Why sequences cannot be added to an alignment.
+#[derive(Debug, thiserror::Error)]
+pub enum AdditionError {
+    /// The text is not sequences; the reason as `parse_sequences` gives it.
+    #[error("{0}")]
+    Unreadable(String),
+    #[error(transparent)]
+    OutsideAlphabet(#[from] basecraft_docs::alignment::EditError),
+    #[error("These sequence IDs are already in the alignment:\n\n{}", bullets(.0))]
+    NamesTaken(Vec<String>),
+    #[error("Select one reviewed specimen at a time")]
+    NotOneSpecimen,
+    /// The accepted review could not be kept as the addition's evidence.
+    #[error("{0}")]
+    Evidence(String),
+}
+
+fn bullets(names: &[String]) -> String {
+    names
+        .iter()
+        .map(|n| format!("• {n}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The rows `text` (FASTA, or one sequence named `name`) adds to `alignment`,
+/// refused if a symbol is outside its alphabet or a name is already a row.
+pub fn addition_rows(
+    alignment: &basecraft_docs::alignment::AlignmentDoc,
+    text: &str,
+    name: &str,
+) -> Result<Vec<(String, String)>, AdditionError> {
+    let rows = parse_sequences(text, name).map_err(AdditionError::Unreadable)?;
+    alignment.validate_additions(&rows)?;
+    let taken = alignment.duplicate_sequence_names(&rows);
+    if taken.is_empty() {
+        Ok(rows)
+    } else {
+        Err(AdditionError::NamesTaken(taken))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

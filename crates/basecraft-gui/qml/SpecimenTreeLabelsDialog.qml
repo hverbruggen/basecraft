@@ -30,7 +30,7 @@ AppDialog {
             if (saved.error) { error = saved.error; return }
             pendingLinks = {}
         }
-        const e = target.compose_metadata_labels(metadataTipLabels.projectDir, JSON.stringify(fields))
+        const e = target.compose_metadata_labels(JSON.stringify(fields))
         if (e.length) error = e; else close()
     }
     title: "Tree tip labels"

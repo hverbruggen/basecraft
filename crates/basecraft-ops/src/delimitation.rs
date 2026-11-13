@@ -347,6 +347,107 @@ pub fn checked_display_tree(
     Ok(Some(source))
 }
 
+/// Why a file cannot be a species workspace's display tree.
+#[derive(Debug, thiserror::Error)]
+pub enum DisplayTreeError {
+    #[error(
+        "Attach a display tree first (delimitation display-tree WORKSPACE --tree FILE, or Attach tree in the window)"
+    )]
+    NoneAttached,
+    #[error("{} is not a text tree file", .0.display())]
+    NotText(PathBuf),
+    #[error("Choose a file containing exactly one display tree; {} holds {count}", path.display())]
+    NotOneTree { path: PathBuf, count: usize },
+}
+
+/// A display tree as read for a species workspace.
+pub struct DisplayTreeFile {
+    /// The file read: the one named, or for the tree already attached, its
+    /// kept copy.
+    pub path: PathBuf,
+    pub tree: basecraft_docs::TreeDoc,
+    pub hash: String,
+    /// The workspace edit that attaches the tree, with the file kept as its
+    /// evidence; `None` when the workspace already shows this tree.
+    pub edit: Option<DelimitationEdit>,
+}
+
+/// Read `named` as the display tree of species workspace `doc`: one tree,
+/// kept as evidence when it is new to the workspace. The window, the CLI and
+/// MCP attach a display tree through this.
+pub fn display_tree(session: &Session, doc: DocId, named: &Path) -> Result<DisplayTreeFile> {
+    let work = session.delimitation(doc)?;
+    // The same file under another spelling (relative, `..`, a symlink) is
+    // the tree already attached, not a new one.
+    let canonical = |path: &Path| std::fs::canonicalize(path).ok();
+    let same = work.view.display_tree.as_deref().is_some_and(|stored| {
+        Some(stored) == named.to_str()
+            || canonical(Path::new(stored)).is_some_and(|s| Some(s) == canonical(named))
+    });
+    let path = if same {
+        checked_display_tree(work)?.unwrap_or_else(|| named.to_path_buf())
+    } else {
+        named.canonicalize()?
+    };
+    let bytes = std::fs::read(&path)?;
+    let text = std::str::from_utf8(&bytes).map_err(|_| DisplayTreeError::NotText(path.clone()))?;
+    let trees = basecraft_io::newick::parse_trees(text)?;
+    if trees.len() != 1 {
+        return Err(DisplayTreeError::NotOneTree {
+            path,
+            count: trees.len(),
+        }
+        .into());
+    }
+    let hash = basecraft_io::hash_bytes(&bytes);
+    let edit = if same {
+        None
+    } else {
+        let run = reference_input(
+            &session.root().join(session.doc_key(doc)?),
+            &path,
+            &hash,
+            session.project(),
+        )?;
+        Some(DelimitationEdit::SetDisplayTree {
+            path: path.to_string_lossy().into_owned(),
+            hash: hash.clone(),
+            evidence_run: run.directory().display().to_string(),
+        })
+    };
+    Ok(DisplayTreeFile {
+        path,
+        tree: basecraft_docs::TreeDoc::from_parsed(&trees[0].name, &trees[0]),
+        hash,
+        edit,
+    })
+}
+
+/// The display tree attached to species workspace `doc`, read from its kept
+/// copy; refused by name when none is attached.
+pub fn attached_display_tree(session: &Session, doc: DocId) -> Result<DisplayTreeFile> {
+    let named = session
+        .delimitation(doc)?
+        .view
+        .display_tree
+        .clone()
+        .ok_or(DisplayTreeError::NoneAttached)?;
+    display_tree(session, doc, Path::new(&named))
+}
+
+/// Attach the tree in `tree` as the display tree of species workspace `doc`.
+pub fn attach_display_tree(session: &mut Session, doc: DocId, tree: &Path) -> Result<()> {
+    if let Some(edit) = display_tree(session, doc, tree)?.edit {
+        session.apply(
+            doc,
+            Op::DelimitationEdit {
+                edit: Box::new(edit),
+            },
+        )?;
+    }
+    Ok(())
+}
+
 /// Apply an immutable method result to the current canonical workspace. GUI,
 /// CLI and MCP callers share roster validation and report identity semantics.
 pub fn add_analysis_result(

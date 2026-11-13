@@ -6,12 +6,18 @@
       "version": "1.0.0",
       "implementation": "find_orfs",
       "title": "Find open reading frames",
-      "description": "Find open reading frames. Uses the existing public plugin implementation and declared immutable inputs.",
+      "description": "Find open reading frames on both strands: ATG to the next stop codon of the chosen genetic code.",
       "family": "sequence_proposal",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
+        "required": ["genetic_code"],
         "properties": {
+          "genetic_code": {
+            "description": "NCBI genetic code (translation table): its stop codons end an ORF. No default.",
+            "type": "integer",
+            "enum": [1, 2, 3, 4, 5, 6, 9, 10, 11, 12, 13, 14, 16, 21, 22, 23, 24, 25, 26, 29, 30, 33]
+          },
           "min_codons": {
             "type": "integer",
             "minimum": 1,

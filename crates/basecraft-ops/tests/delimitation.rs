@@ -758,3 +758,52 @@ fn only_companions(folder: &std::path::Path) -> bool {
             .all(|name| name == "documents"),
     }
 }
+
+#[test]
+fn a_display_tree_is_attached_once_with_its_file_as_evidence() {
+    crate::isolated_profile::isolate!();
+    let dir = tempfile::tempdir().unwrap();
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../testdata/fixtures/compact/species-delimitation");
+    let workspace = dir.path().join("hypotheses.spart");
+    let tree = dir.path().join("time.nwk");
+    std::fs::copy(fixtures.join("hypotheses.spart"), &workspace).unwrap();
+    std::fs::copy(fixtures.join("time.nwk"), &tree).unwrap();
+    let two = dir.path().join("two.nwk");
+    std::fs::write(&two, "(a,b);\n(a,b);\n").unwrap();
+    let mut session = Session::recoverable(dir.path()).unwrap();
+    let doc = session.open(&workspace).unwrap();
+
+    let refused = basecraft_ops::delimitation::attach_display_tree(&mut session, doc, &two)
+        .unwrap_err()
+        .to_string();
+    assert!(refused.contains("exactly one display tree"), "{refused}");
+    assert!(
+        session
+            .delimitation(doc)
+            .unwrap()
+            .view
+            .display_tree
+            .is_none()
+    );
+
+    basecraft_ops::delimitation::attach_display_tree(&mut session, doc, &tree).unwrap();
+    let shown = session.delimitation(doc).unwrap().view.display_tree.clone();
+    assert_eq!(shown.as_deref(), tree.canonicalize().unwrap().to_str());
+    let again = basecraft_ops::delimitation::display_tree(&session, doc, &tree).unwrap();
+    assert!(
+        again.edit.is_none(),
+        "the attached tree is not attached again"
+    );
+    let respelled = dir.path().join(".").join("time.nwk");
+    let again = basecraft_ops::delimitation::display_tree(&session, doc, &respelled).unwrap();
+    assert!(
+        again.edit.is_none(),
+        "nor under another spelling of its path"
+    );
+    assert!(
+        basecraft_ops::delimitation::checked_display_tree(session.delimitation(doc).unwrap())
+            .unwrap()
+            .is_some()
+    );
+}

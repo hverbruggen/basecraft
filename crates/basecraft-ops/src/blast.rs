@@ -408,7 +408,7 @@ pub fn record_queries(folder: &Path, queries: &[Query]) -> Result<std::path::Pat
             reason: error.to_string(),
         });
     }
-    crate::records::write_json(&record, &queries)?;
+    crate::records::write_plain_json(&record, &queries)?;
     Ok(relative)
 }
 

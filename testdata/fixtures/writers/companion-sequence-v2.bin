@@ -1,0 +1,9 @@
+{
+  "alphabet": {
+    "source": "user",
+    "value": "rna"
+  },
+  "basecraft": "<version>",
+  "exchange_hash": "b3:0a75621a212d5a9565a509d4bf818a852afffb8e9470f118805c583d0a139153",
+  "version": 1
+}

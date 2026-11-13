@@ -28,6 +28,10 @@ pub(crate) struct Options {
     /// Known affected analyses still require their own explicit policy.
     #[arg(long, global = true, value_parser = crate::save_policy, default_value = "cancel")]
     pub save_known_policy: SavePolicy,
+    /// Save even when a file written by a later basecraft holds fields this
+    /// version does not know; those fields are dropped.
+    #[arg(long, global = true)]
+    pub drop_newer_fields: bool,
 }
 
 impl Options {
@@ -38,6 +42,9 @@ impl Options {
         path: Option<&Path>,
         no_overwrite: bool,
     ) -> basecraft_ops::Result<()> {
+        if self.drop_newer_fields {
+            session.drop_newer_fields(doc)?;
+        }
         if self.acknowledge_incomplete_evidence || self.save_known_policy != SavePolicy::Cancel {
             let check = session.check_save(doc, path)?;
             let decision = session.decide_save(

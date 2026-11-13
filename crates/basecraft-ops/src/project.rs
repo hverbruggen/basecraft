@@ -117,6 +117,21 @@ impl Project {
             .map(Path::to_path_buf)
     }
 
+    /// The project on the recent-projects list `recent` that holds `file`
+    /// when the `chosen` project does not, comparing canonical paths; the
+    /// innermost one when they nest (D16). Only the list is consulted:
+    /// basecraft never searches the disk for a project.
+    pub fn recent_holding(file: &Path, chosen: Option<&Self>, recent: &[PathBuf]) -> Option<Self> {
+        if chosen.is_some_and(|project| project.contains(file)) {
+            return None;
+        }
+        recent
+            .iter()
+            .filter_map(|root| Self::new(root).ok())
+            .filter(|project| project.contains(file))
+            .max_by_key(|project| project.root.components().count())
+    }
+
     /// Where a result inside the project keeps its history.
     pub fn provenance_bundle(&self, result: &Path) -> Option<PathBuf> {
         self.contains(result)
@@ -127,6 +142,41 @@ impl Project {
 #[cfg(test)]
 mod tests {
     use super::Project;
+
+    #[test]
+    fn a_file_names_the_innermost_recent_project_that_holds_it() {
+        let root = tempfile::tempdir().unwrap();
+        let outer = root.path().join("outer");
+        let inner = outer.join("inner");
+        std::fs::create_dir_all(inner.join("data")).unwrap();
+        std::fs::create_dir(root.path().join("unlisted")).unwrap();
+        let file = inner.join("data/a.fasta");
+        std::fs::write(&file, b">a\nA\n").unwrap();
+        let recent = [outer.clone(), inner.clone(), root.path().join("gone")];
+        let holder = |file: &std::path::Path, recent: &[std::path::PathBuf]| {
+            Project::recent_holding(file, None, recent).map(|p| p.root().to_path_buf())
+        };
+        let inner = inner.canonicalize().unwrap();
+        assert_eq!(holder(&file, &recent), Some(inner.clone()));
+        // Another spelling of the same file, and a file not written yet.
+        let dotted = outer.join("inner/../inner/data/a.fasta");
+        assert_eq!(holder(&dotted, &recent), Some(inner.clone()));
+        assert_eq!(holder(&inner.join("new.gb"), &recent), Some(inner));
+        assert_eq!(
+            holder(&outer.join("b.fasta"), &recent),
+            Some(outer.canonicalize().unwrap())
+        );
+        // Only listed projects count; no folder on disk is examined.
+        let loose = root.path().join("unlisted/c.fasta");
+        assert_eq!(holder(&loose, &recent), None);
+        assert_eq!(holder(&file, &[]), None);
+        // A chosen project that holds the file names none; one that does not
+        // leaves the answer as it was.
+        let chosen = |root: &std::path::Path| Project::new(root).unwrap();
+        assert!(Project::recent_holding(&file, Some(&chosen(&outer)), &recent).is_none());
+        let other = root.path().join("unlisted");
+        assert!(Project::recent_holding(&file, Some(&chosen(&other)), &recent).is_some());
+    }
 
     #[test]
     fn membership_is_the_chosen_folder_only() {

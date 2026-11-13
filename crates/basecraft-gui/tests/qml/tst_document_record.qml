@@ -44,22 +44,18 @@ Item {
             compare(dialog.historyRows.length, 2)
             dialog.close()
         }
-        function test_authored_text_survives_refresh_and_document_switch() {
+        function test_selection_survives_refresh_and_clears_on_document_switch() {
             const dialog = createTemporaryObject(component, root)
-            dialog.showPage(2)
-            dialog.draftText = "My reviewed methods"
-            dialog.draftRevision = "one"
+            dialog.showPage(0)
+            dialog.selectedId = "a"
             mock.revision = "two"
             dialog.refreshReport()
-            compare(dialog.draftText, "My reviewed methods")
-            compare(dialog.draftRevision, "one")
+            compare(dialog.selectedId, "a")
             compare(dialog.report.revision, "two")
             mock.name = "tree.nwk"
             dialog.refreshReport()
-            compare(dialog.draftText, "")
-            mock.name = "alignment.fasta"
-            dialog.refreshReport()
-            compare(dialog.draftText, "My reviewed methods")
+            compare(dialog.selectedId, "")
+            compare(dialog.report.document, "tree.nwk")
             dialog.close()
         }
         function test_narrow_large_font() {
@@ -74,6 +70,7 @@ Item {
             verify(dialog.height <= root.height)
             const tabs = findChild(dialog, "recordTabs")
             verify(tabs !== null)
+            compare(tabs.count, 3)
             verify(tabs.width <= dialog.availableWidth + 1)
             for (let i = 0; i < tabs.count; ++i) {
                 const tab = tabs.itemAt(i)

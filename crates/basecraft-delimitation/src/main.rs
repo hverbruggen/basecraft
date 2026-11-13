@@ -382,6 +382,20 @@ fn run(
         .get(request.tree_index)
         .ok_or("selected tree index outside file")?;
     let tree = basecraft_docs::TreeDoc::from_parsed(&parsed.name, parsed);
+    // The request can state whether the tree is rooted; otherwise the
+    // tree's own reading decides: its tag, or two clades at the base (D18).
+    let rooting = tree.rooting();
+    let rooted = request
+        .rooted
+        .unwrap_or(rooting.value == basecraft_protocol::facts::Rooting::Rooted);
+    if request.rooted.is_none()
+        && rooted
+        && rooting.source == basecraft_protocol::facts::FactSource::Guessed
+    {
+        result.job.diagnostics.push(
+            "the tree has two clades at its base and no rooting tag, so it was read as rooted (a guess; state it with tree.set_rooting)".into(),
+        );
+    }
     result
         .metrics
         .insert("tree_count".into(), trees.len().into());
@@ -403,13 +417,12 @@ fn run(
             result.metrics.insert(
                 "tips".into(),
                 serde_json::to_value(basecraft_delimitation::time_tree::substitution_tips(
-                    &tree,
-                    request.rooted,
+                    &tree, rooted,
                 )?)?,
             );
         }
         "ptp" | "mptp" => {
-            basecraft_delimitation::time_tree::substitution_tips(&tree, request.rooted)?;
+            basecraft_delimitation::time_tree::substitution_tips(&tree, rooted)?;
             let groups: Vec<std::collections::BTreeSet<String>> = serde_json::from_value(
                 request
                     .parameters
@@ -436,9 +449,8 @@ fn run(
             }
         }
         "validate_time_tree" | "manual_cut" => {
-            let time =
-                basecraft_delimitation::time_tree::validate(&tree, request.rooted, 1e-8, true)?;
-            result.job.diagnostics.clone_from(&time.diagnostics);
+            let time = basecraft_delimitation::time_tree::validate(&tree, rooted, true)?;
+            result.job.diagnostics.extend(time.diagnostics.clone());
             if request.method == "manual_cut" {
                 let threshold = request
                     .parameters
@@ -469,8 +481,7 @@ fn run(
                 .insert("time_tree".into(), serde_json::to_value(time)?);
         }
         "relative_time" => {
-            let converted =
-                basecraft_delimitation::time_tree::convert(&tree, request.rooted, 10_000)?;
+            let converted = basecraft_delimitation::time_tree::convert(&tree, rooted, 10_000)?;
             if !converted.converged {
                 return Err("relative-time optimization did not converge".into());
             }
@@ -490,8 +501,7 @@ fn run(
                 .insert("conversion".into(), serde_json::to_value(converted)?);
         }
         "gmyc_single" | "gmyc_multiple" | "gmyc_exhaustive" => {
-            let mut time =
-                basecraft_delimitation::time_tree::validate(&tree, request.rooted, 1e-8, true)?;
+            let mut time = basecraft_delimitation::time_tree::validate(&tree, rooted, true)?;
             let clamp = request
                 .parameters
                 .get("reference_age_clamp")
@@ -503,12 +513,11 @@ fn run(
             let mut merged = BTreeMap::new();
             let tree = match basecraft_delimitation::gmyc::collapse_zero_age(full, &time)? {
                 Some((collapsed, groups)) if !clamp => {
-                    time = basecraft_delimitation::time_tree::validate(
-                        &collapsed,
-                        request.rooted,
-                        1e-8,
-                        true,
-                    )?;
+                    // Keep the record of the user's tree; the collapsed one
+                    // is checked again for the fit.
+                    let full_diagnostics = std::mem::take(&mut time.diagnostics);
+                    time = basecraft_delimitation::time_tree::validate(&collapsed, rooted, true)?;
+                    time.diagnostics.splice(0..0, full_diagnostics);
                     let tips: usize = groups.values().map(std::collections::BTreeSet::len).sum();
                     time.diagnostics.push(format!(
                         "{tips} tips in {} zero-age tree clades (zero distance within each clade); each clade was fitted as one tip and its members restored; no exact sequence identity is inferred",
@@ -860,7 +869,7 @@ fn run_asap(
         ("score_weight", f64::from(settings.score_weight).into()),
         (
             "distance_engine",
-            format!("basecraft-distance {}", env!("CARGO_PKG_VERSION")).into(),
+            format!("basecraft-distance {}", basecraft_protocol::VERSION).into(),
         ),
         ("distance_gap_policy", matrix.gap_policy.clone().into()),
     ] {
@@ -932,7 +941,7 @@ fn run_asap(
                 method: "ASAP".into(),
                 version: format!(
                     "basecraft-asap {} (native port of reference ASAP)",
-                    env!("CARGO_PKG_VERSION")
+                    basecraft_protocol::VERSION
                 ),
                 inputs: [(request.input.clone(), request.input_hash.clone())].into(),
                 parameters: parameters.clone(),
@@ -985,7 +994,7 @@ fn workspace(
         Score, Specimen,
     };
     let id = request.job_id.clone();
-    DelimitationWorkspace { version:1,name:tree.name.clone(),specimens:tree.tips_in_order().iter().map(|&i| Specimen { id:tree.node(i).name.clone(),label:tree.node(i).name.clone(),sources: [(request.input.clone(),tree.node(i).name.clone())].into(),attributes:BTreeMap::new() }).collect(),hypotheses:vec![Hypothesis { id:id.clone(),name,origin:HypothesisOrigin::Inferred,parent:None,groups:groups.into_iter().enumerate().map(|(i,members)| Group { id:format!("group-{}",i+1),label:(i+1).to_string(),color:["#377eb8","#e41a1c","#4daf4a","#984ea3","#ff7f00"][i%5].into(),members,scores:vec![],individual_scores:BTreeMap::new(),attributes:BTreeMap::new() }).collect(),unassigned:std::collections::BTreeSet::new(),scores:vec![Score {value:likelihood,method:request.method.clone(),scale:"logLikelihood".into(),interpretation:"Maximized mixed waiting-time log likelihood; convergence is not evidence of biological support".into()}],provenance:Provenance {method:request.method.clone(),version:env!("CARGO_PKG_VERSION").into(),inputs:[(request.input.clone(),request.input_hash.clone())].into(),analysis_tree:Some(request.input_hash.clone()),parameters:request.parameters.clone(),seed:Some(request.seed),workers:Some(request.workers),status:Some(JobStatus::Completed),..Provenance::default()},attributes:BTreeMap::new() }],view:DelimitationView {display_tree:Some(request.input.clone()),visible:vec![id],..DelimitationView::default()},exchange_fields:BTreeMap::new() }
+    DelimitationWorkspace { version:1,name:tree.name.clone(),specimens:tree.tips_in_order().iter().map(|&i| Specimen { id:tree.node(i).name.clone(),label:tree.node(i).name.clone(),sources: [(request.input.clone(),tree.node(i).name.clone())].into(),attributes:BTreeMap::new() }).collect(),hypotheses:vec![Hypothesis { id:id.clone(),name,origin:HypothesisOrigin::Inferred,parent:None,groups:groups.into_iter().enumerate().map(|(i,members)| Group { id:format!("group-{}",i+1),label:(i+1).to_string(),color:["#377eb8","#e41a1c","#4daf4a","#984ea3","#ff7f00"][i%5].into(),members,scores:vec![],individual_scores:BTreeMap::new(),attributes:BTreeMap::new() }).collect(),unassigned:std::collections::BTreeSet::new(),scores:vec![Score {value:likelihood,method:request.method.clone(),scale:"logLikelihood".into(),interpretation:"Maximized mixed waiting-time log likelihood; convergence is not evidence of biological support".into()}],provenance:Provenance {method:request.method.clone(),version:basecraft_protocol::VERSION.into(),inputs:[(request.input.clone(),request.input_hash.clone())].into(),analysis_tree:Some(request.input_hash.clone()),parameters:request.parameters.clone(),seed:Some(request.seed),workers:Some(request.workers),status:Some(JobStatus::Completed),..Provenance::default()},attributes:BTreeMap::new() }],view:DelimitationView {display_tree:Some(request.input.clone()),visible:vec![id],..DelimitationView::default()},exchange_fields:BTreeMap::new() }
 }
 
 fn progress(

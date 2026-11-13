@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::PathBuf};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct SavedReview {
     pub draft_path: PathBuf,
     pub draft_sha256: String,
@@ -15,7 +14,6 @@ pub struct SavedReview {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct SavedCallSets {
     pub version: u32,
     pub selected: String,
@@ -23,7 +21,6 @@ pub struct SavedCallSets {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct ReviewEvidence {
     pub schema_version: u32,
     pub runs: Vec<PathBuf>,
@@ -43,7 +40,6 @@ impl Default for ReviewEvidence {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct ReviewSource {
     // Identity in the immutable draft/placement, never rebased.
     pub original: PathBuf,
@@ -55,7 +51,6 @@ pub struct ReviewSource {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct ReviewSupport {
     pub path: PathBuf,
     pub hash: String,
@@ -81,6 +76,8 @@ pub enum SangerJobStatus {
 }
 
 /// Execution and job-index share this shape. Recovery omits `artifact_run`.
+/// In `.basecraft/jobs`, paths are relative to the home that holds that
+/// `.basecraft`, `/`-separated.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct SangerJobRecord {
     pub schema_version: u32,
@@ -205,6 +202,15 @@ pub struct SangerPlacement {
     pub parameters: Vec<String>,
 }
 
+/// The saved review format this build writes.
+pub const SAVED_REVIEW_VERSION: u32 = 3;
+
+impl crate::records::RecordFormat for SavedCallSets {
+    fn is_current(&self) -> bool {
+        self.version == SAVED_REVIEW_VERSION
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,19 +221,21 @@ mod tests {
             include_str!("../../../testdata/fixtures/sanger-review/single.json"),
             include_str!("../../../testdata/fixtures/sanger-review/multi.json"),
         ] {
-            let record: SavedCallSets = serde_json::from_str(bytes).unwrap();
+            let record: SavedCallSets = crate::records::decode(bytes.as_bytes()).unwrap();
             assert_eq!(record.version, 3);
-            assert_eq!(
-                serde_json::to_value(record).unwrap(),
-                serde_json::from_str::<serde_json::Value>(bytes).unwrap()
-            );
+            // The record type does not hold the stamp; everything else survives.
+            let mut original: serde_json::Value = serde_json::from_str(bytes).unwrap();
+            original
+                .as_object_mut()
+                .unwrap()
+                .remove(crate::records::WRITTEN_BY);
+            assert_eq!(serde_json::to_value(record).unwrap(), original);
         }
     }
 }
 
 /// Immutable analysis data stored separately from edit-sized journal entries.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct ReviewRecord {
     pub path: PathBuf,
     pub hash: String,

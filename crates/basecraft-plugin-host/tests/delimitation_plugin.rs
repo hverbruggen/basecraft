@@ -237,10 +237,15 @@ fn exact_identity_precedes_public_tree_inference_and_restores_specimens() {
         std::fs::read(find(&common::evidence(&outcome), "fit.json.run.json").unwrap()).unwrap();
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../testdata/fixtures/records-v1/workflow-failure.json");
+    // The fixture holds `<version>` where the writing basecraft version goes.
+    let stamp = format!("\"basecraft\": \"{}\"", basecraft_protocol::VERSION);
+    let bytes = String::from_utf8(bytes)
+        .unwrap()
+        .replace(&stamp, "\"basecraft\": \"<version>\"");
     if std::env::var_os("BASECRAFT_CAPTURE_WORKFLOW_RECORDS").is_some() {
         std::fs::write(fixture, bytes).unwrap();
     } else {
-        assert_eq!(bytes, std::fs::read(fixture).unwrap());
+        assert_eq!(bytes.as_bytes(), std::fs::read(fixture).unwrap());
     }
     assert!(!root.path().join("single.spart").exists());
     drop(session);

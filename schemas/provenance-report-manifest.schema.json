@@ -4,6 +4,10 @@
   "description": "Publication report metadata, distinct from a standalone report export.",
   "type": "object",
   "properties": {
+    "basecraft": {
+      "description": "The basecraft version that wrote this file.",
+      "type": "string"
+    },
     "citations": {
       "type": "array",
       "items": {
@@ -42,6 +46,7 @@
     "template_version",
     "output_hashes",
     "redactions",
-    "citations"
+    "citations",
+    "basecraft"
   ]
 }

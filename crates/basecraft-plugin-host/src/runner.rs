@@ -101,11 +101,17 @@ pub fn verify_completed_result(
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
         return Err(Error::Protocol("unsafe completed run directory".into()));
     }
-    let execution: RunRecord = serde_json::from_slice(&basecraft_ops::records::read_record(
-        &directory.join("execution.json"),
-    )?)?;
-    if execution.schema != RUN_RECORD_SCHEMA
-        || execution.operation != query.operation
+    let (execution, writer) = basecraft_protocol::records::decode_written::<RunRecord>(
+        &basecraft_ops::records::read_record(&directory.join("execution.json"))?,
+    )?;
+    if execution.schema != RUN_RECORD_SCHEMA {
+        return Err(Error::Protocol(basecraft_protocol::records::other_format(
+            &writer,
+            execution.schema,
+            RUN_RECORD_SCHEMA,
+        )));
+    }
+    if execution.operation != query.operation
         || execution.package_digest.as_ref() != Some(&query.pins.package_digest)
         || execution.descriptor_digest.as_ref() != Some(&query.pins.descriptor_digest)
         || execution.effective_parameters != query.effective_parameters
@@ -189,12 +195,15 @@ pub fn lookup_completed_result(
             continue;
         } // Input ledgers and domain runs have no runtime receipt.
         let candidate = (|| -> Result<Option<VerifiedOperationResult>> {
-            let outcome: OperationOutcome =
-                serde_json::from_slice(&basecraft_ops::records::read_record(&receipt)?)?;
+            let (outcome, writer) = basecraft_protocol::records::decode_written::<OperationOutcome>(
+                &basecraft_ops::records::read_record(&receipt)?,
+            )?;
             if outcome.schema != 1 {
-                return Err(Error::Protocol(
-                    "unsupported operation receipt version".into(),
-                ));
+                return Err(Error::Protocol(basecraft_protocol::records::other_format(
+                    &writer,
+                    outcome.schema,
+                    1,
+                )));
             }
             if !query.matches(&outcome)
                 || outcome.state != basecraft_protocol::operation::RuntimeState::Completed
@@ -383,7 +392,7 @@ impl PreparedOperation {
             let upstream = &mut input.upstream;
             for dependency in &dependencies {
                 let bytes = basecraft_ops::records::read_record(&dependency.join("manifest.json"))?;
-                let publication: Publication = serde_json::from_slice(&bytes)?;
+                let publication: Publication = basecraft_protocol::records::decode(&bytes)?;
                 if !upstream.iter().any(|entry| entry.id == publication.id) {
                     upstream.push(basecraft_protocol::input_records::UpstreamLink {
                         bundle: (records::relative(&directory, &dependency.canonicalize()?)?)
@@ -455,7 +464,7 @@ impl PreparedOperation {
             self.submission_identity(result)?;
             let receipt = &self.run_path(&self.context.outputs["receipt"]);
             if !receipt.try_exists()? {
-                records::write_json(receipt, result.data.as_deref().unwrap_or(&Value::Null))?;
+                records::write_plain_json(receipt, result.data.as_deref().unwrap_or(&Value::Null))?;
             }
         }
         let mut paths = BTreeSet::new();
@@ -588,7 +597,7 @@ impl PreparedOperation {
             )?;
         }
         records::write_json(&self.run.artifact("validated.json")?, result)?;
-        records::write_json(&self.run.artifact("validated-artifacts.json")?, &validated)?;
+        records::write_plain_json(&self.run.artifact("validated-artifacts.json")?, &validated)?;
         Ok(validated)
     }
 
@@ -795,10 +804,17 @@ impl PreparedOperation {
         self.write_task_index(outcome, &runtime)
     }
 
-    /// The Tasks view lists runs from small index records in application
-    /// state. This one only points at the run's own `runtime.json`, which
-    /// stays the authoritative record.
+    /// The Tasks view lists runs from small index records in the `.basecraft`
+    /// of the run's home: the session's project when it holds the run, else
+    /// the folder the run is in. This one only points at the run's own
+    /// `runtime.json`, which stays the authoritative record. Its paths are
+    /// relative to the home, so the record travels with a copied project.
     fn write_task_index(&self, outcome: &OperationOutcome, runtime: &Path) -> Result<()> {
+        let home = basecraft_ops::project::Project::base_of(
+            self.project.as_ref(),
+            &self.run.working_directory().join(".basecraft"),
+        )?;
+        let relative = |path: &Path| records::relative(&home, path);
         let source = self.document.as_ref().map_or_else(
             || {
                 self.context
@@ -806,16 +822,22 @@ impl PreparedOperation {
                     .values()
                     .flatten()
                     .find_map(|evidence| evidence.original_path.as_deref())
-                    .map(|path| self.run_path(path).display().to_string())
-                    .unwrap_or_default()
+                    .map(|path| relative(&self.run_path(path)))
+                    .transpose()
+                    .map(Option::unwrap_or_default)
             },
-            |target| target.path.display().to_string(),
-        );
+            |target| relative(&target.path),
+        )?;
         let outputs = outcome
             .artifacts
             .iter()
-            .map(|artifact| (artifact.path.clone(), artifact.digest.clone()))
-            .collect();
+            .map(|artifact| {
+                Ok((
+                    relative(Path::new(&artifact.path))?,
+                    artifact.digest.clone(),
+                ))
+            })
+            .collect::<Result<_>>()?;
         let index = serde_json::to_value(LocalJobIndex {
             schema_version: 1,
             id: self.run.id().into(),
@@ -836,9 +858,9 @@ impl PreparedOperation {
             source: JobIndexSource { path: source },
             outputs,
             diagnostics: outcome.errors.first().map(|error| error.message.clone()),
-            runtime_record: runtime.into(),
+            runtime_record: relative(runtime)?.into(),
         })?;
-        let path = records::job_index_path(self.run.id())?;
+        let path = records::job_index_path(&home, self.run.id());
         std::fs::create_dir_all(path.parent().unwrap_or(&path))?;
         records::write_json(&path, &index)?;
         Ok(())

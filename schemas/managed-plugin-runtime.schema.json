@@ -4,6 +4,10 @@
   "description": "Retained managed-runtime receipt. The host verifies its paths and digests.",
   "type": "object",
   "properties": {
+    "basecraft": {
+      "description": "The basecraft version that wrote this file.",
+      "type": "string"
+    },
     "executable_digests": {
       "type": "object",
       "additionalProperties": {
@@ -43,7 +47,6 @@
       "minimum": 0
     }
   },
-  "additionalProperties": false,
   "required": [
     "schema",
     "executables",
@@ -53,6 +56,7 @@
     "manifest_digest",
     "package_digest",
     "reported_versions",
-    "executable_digests"
+    "executable_digests",
+    "basecraft"
   ]
 }

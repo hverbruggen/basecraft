@@ -72,7 +72,7 @@ Main {
                     edit(middle, "T"); middlePage = middle.accessible_page(0)
                 }
                 consent = dialog("quitDocumentsDialog"); quitConsent = consent
-                consent.ask(JSON.parse(documentOpens.quit(false)).ask || []) // B (and batch C); the unrelated owner becomes dirty later.
+                consent.ask(JSON.parse(documentOpens.quit()).ask || []) // B (and batch C); the unrelated owner becomes dirty later.
                 check(consent.unsaved.length === (scenario === "quit-batch" ? 2 : 1) && consent.unsaved[0].token === ownerB.token, "quit snapshot did not capture its owners")
             }
             edit(c, "T"); pageC = c.accessible_page(0)

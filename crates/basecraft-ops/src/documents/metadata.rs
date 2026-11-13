@@ -78,6 +78,7 @@ impl Document for OpenedMetadata {
             reverse: true,
             ..Default::default()
         };
+        prepared.check_record::<basecraft_protocol::metadata_records::MetadataManifest>(target);
         for (path, bytes) in crate::metadata::files(target)
             .into_iter()
             .zip(crate::metadata::encode(&self.metadata)?)

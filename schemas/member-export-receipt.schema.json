@@ -4,6 +4,10 @@
   "description": "Identity of the synced pending file, recorded before no-replace promotion.",
   "type": "object",
   "properties": {
+    "basecraft": {
+      "description": "The basecraft version that wrote this file.",
+      "type": "string"
+    },
     "destination": {
       "type": "string"
     },
@@ -37,6 +41,7 @@
     "hash",
     "device",
     "inode",
-    "size"
+    "size",
+    "basecraft"
   ]
 }

@@ -167,7 +167,7 @@ fn history_is_fingerprints_only_and_path_escape_is_detected() {
     publication.inputs[0].retained = Some("../gene.fasta".into());
     std::fs::write(
         records::companion(&file).join("manifest.json"),
-        serde_json::to_vec(&publication).unwrap(),
+        basecraft_protocol::records::encode(&publication).unwrap(),
     )
     .unwrap();
     assert!(
@@ -412,6 +412,7 @@ fn recovery_rejects_traversal_and_skips_corrupt_retained_candidates() {
                 let mut value: serde_json::Value = serde_json::from_str(line).unwrap();
                 value.as_object_mut().unwrap().remove("_checksum");
                 value.as_object_mut().unwrap().remove("_sequence");
+                let writer = value.as_object_mut().unwrap().remove("basecraft").unwrap();
                 if index == 0 {
                     value["params"]["path"] = open.into();
                     value["doc"] = key.into();
@@ -419,6 +420,7 @@ fn recovery_rejects_traversal_and_skips_corrupt_retained_candidates() {
                 let checksum = basecraft_io::hash_bytes(&serde_json::to_vec(&value).unwrap());
                 value["_checksum"] = checksum.into();
                 value["_sequence"] = index.into();
+                value["basecraft"] = writer;
                 serde_json::to_string(&value).unwrap() + "\n"
             })
             .collect::<String>();
@@ -471,7 +473,7 @@ fn ancestor_only_artifacts_and_duplicate_parent_references_are_checked() {
     );
     let mut current = records::inspect(&file, None).unwrap();
     current.parents.push(current.parents[0].clone());
-    let bytes = serde_json::to_vec(&current).unwrap();
+    let bytes = basecraft_protocol::records::encode(&current).unwrap();
     std::fs::write(bundle.join("manifest.json"), &bytes).unwrap();
     std::fs::write(
         bundle.join("records").join(format!("{}.json", current.id)),

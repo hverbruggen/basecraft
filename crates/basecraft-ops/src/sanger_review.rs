@@ -7,7 +7,7 @@ mod edit;
 pub use captured::CapturedInput;
 mod storage;
 use basecraft_docs::sanger::SangerDraftExt;
-pub use storage::{SangerRun, record_addition};
+pub use storage::{CheckedAddition, SangerRun, check_addition, record_addition};
 pub(crate) use storage::{is_review, relocate_package};
 
 use std::path::{Path, PathBuf};
@@ -283,8 +283,11 @@ impl SangerReview {
     }
 
     pub(crate) fn decode(bytes: &[u8], path: &Path) -> Result<Self, String> {
-        let value: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+        let (value, writer) =
+            basecraft_protocol::records::decode_written::<serde_json::Value>(bytes)
+                .map_err(|e| e.to_string())?;
         Self::decode_value(value, path)
+            .map_err(|e| basecraft_protocol::records::unreadable(&writer, &e).to_string())
     }
 
     fn decode_value(value: serde_json::Value, path: &Path) -> Result<Self, String> {
@@ -557,7 +560,7 @@ pub(crate) fn read_journal_record(
             detail: "Sanger analysis record changed".into(),
         });
     }
-    Ok(serde_json::from_slice(&bytes)?)
+    Ok(basecraft_protocol::records::decode(&bytes)?)
 }
 
 pub fn instrument_review(path: &Path) -> Result<SangerReview, String> {

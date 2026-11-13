@@ -47,7 +47,7 @@ fn check_export(report: &Report, directory: &Path, capture: Option<&str>) {
     check_file(
         directory,
         "manifest.json",
-        &pretty(&export_manifest(report), false),
+        &basecraft_protocol::records::encode(&export_manifest(report)).unwrap(),
         capture,
     );
     check_file(
@@ -68,7 +68,7 @@ fn check_export(report: &Report, directory: &Path, capture: Option<&str>) {
     );
     assert_eq!(
         std::fs::read(directory.join("report.json")).unwrap(),
-        serde_json::to_vec_pretty(report).unwrap()
+        basecraft_protocol::records::encode(report).unwrap()
     );
 }
 fn check_provenance(publication: &Publication, directory: &Path, capture: Option<&str>) -> Report {
@@ -80,7 +80,7 @@ fn check_provenance(publication: &Publication, directory: &Path, capture: Option
     check_file(
         &reports,
         "manifest.json",
-        &pretty(&provenance_manifest(publication, &report), true),
+        &basecraft_protocol::records::encode(&provenance_manifest(publication, &report)).unwrap(),
         capture,
     );
     check_file(
@@ -149,7 +149,11 @@ fn export_selected_ownership_acceptance_and_refusal() {
     ] {
         let folder = tempfile::tempdir_in(root).unwrap();
         std::fs::write(folder.path().join("history.md"), b"foreign history").unwrap();
-        std::fs::write(folder.path().join("manifest.json"), pretty(&marker, false)).unwrap();
+        std::fs::write(
+            folder.path().join("manifest.json"),
+            basecraft_protocol::records::encode(&marker).unwrap(),
+        )
+        .unwrap();
         std::fs::write(folder.path().join("methods.md"), b"authored\r\n").unwrap();
         std::fs::write(folder.path().join("unrelated"), b"keep").unwrap();
         check_export(&report, folder.path(), None);
@@ -253,10 +257,10 @@ fn export_partial_writes_keep_order_and_authored_text() {
         }
         std::fs::write(
             folder.path().join("manifest.json"),
-            pretty(
+            basecraft_protocol::records::encode(
                 &json!({"schema_version":1,"template_version":null,"coordinates":null}),
-                false,
-            ),
+            )
+            .unwrap(),
         )
         .unwrap();
         std::fs::write(folder.path().join("methods.md"), b"authored").unwrap();
@@ -345,10 +349,10 @@ fn export_follows_existing_manifest_symlink() {
     crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let marker = dir.path().join("marker.json");
-    let bytes = pretty(
+    let bytes = basecraft_protocol::records::encode(
         &json!({"schema_version":1,"template_version":null,"coordinates":null}),
-        false,
-    );
+    )
+    .unwrap();
     std::fs::write(&marker, &bytes).unwrap();
     let folder = dir.path().join("export");
     std::fs::create_dir(&folder).unwrap();

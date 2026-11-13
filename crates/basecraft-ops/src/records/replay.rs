@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use basecraft_platform::files::{ObjectIdentity, OrdinaryKind, object_identity};
-use basecraft_protocol::{LogEntry, Op};
+use basecraft_protocol::{LogEntry, Op, ops::ProposalDecision};
 
 use crate::session::{DocId, Session, objects_dir};
 use crate::{Error, Result, log};
@@ -31,11 +31,16 @@ impl ReplayReport {
 }
 
 pub fn replay(root: &Path) -> Result<ReplayReport> {
-    let entries = log::read_all(root)?;
+    let written = log::read_all_written(root)?;
+    // Saves are written again as the build that logged them wrote them.
+    let writers: HashMap<&str, &str> = written
+        .iter()
+        .map(|(e, writer)| (e.id.as_str(), writer.as_str()))
+        .collect();
     let mut report = ReplayReport::default();
     let mut order: Vec<&str> = Vec::new();
     let mut by_session: HashMap<&str, Vec<&LogEntry>> = HashMap::new();
-    for e in &entries {
+    for (e, _) in &written {
         let list = by_session.entry(&e.session).or_default();
         if list.is_empty() {
             order.push(&e.session);
@@ -44,12 +49,17 @@ pub fn replay(root: &Path) -> Result<ReplayReport> {
     }
     for sid in order {
         report.sessions += 1;
-        replay_session(root, &by_session[sid], &mut report)?;
+        replay_session(root, &by_session[sid], &writers, &mut report)?;
     }
     Ok(report)
 }
 
-fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut ReplayReport) -> Result<()> {
+fn replay_session(
+    root: &Path,
+    entries: &[&LogEntry],
+    writers: &HashMap<&str, &str>,
+    report: &mut ReplayReport,
+) -> Result<()> {
     let work = tempfile::tempdir()?;
     let mut session = Session::replay_session(work.path());
     let source_root = recorded_source_root(root, entries.iter().copied());
@@ -61,8 +71,14 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut ReplayReport)
     let mut rebased: std::collections::HashSet<&str> = std::collections::HashSet::new();
     // Replay entry id -> logged entry id, to check undo and redo targets.
     let mut ids: HashMap<String, String> = HashMap::new();
-    for e in entries {
+    let mut proposals = Proposals::default();
+    for &e in entries {
         report.entries += 1;
+        if let Some(msg) = proposals.check(e) {
+            report
+                .problems
+                .push(format!("{} {} {}: {msg}", e.id, e.op.name(), e.doc));
+        }
         let mut problem = |msg: String| {
             report
                 .problems
@@ -177,7 +193,13 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut ReplayReport)
         match &e.op {
             // Species metadata records the original folder as its relocation
             // base. Hash against that destination, not replay's disposable root.
-            Op::Save { path, .. } => match session.save_hashes_at(doc, &source_root.join(path)) {
+            Op::Save { path, .. } => match basecraft_protocol::records::writing_as(
+                writers
+                    .get(e.id.as_str())
+                    .copied()
+                    .unwrap_or(basecraft_protocol::VERSION),
+                || session.save_hashes_at(doc, &source_root.join(path)),
+            ) {
                 Ok(got) => {
                     let want: Vec<&String> = e.result.hashes.iter().map(|(_, h)| h).collect();
                     if got.iter().collect::<Vec<_>>() != want {
@@ -204,7 +226,12 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut ReplayReport)
             // External tools aren't re-run: their outputs are new files,
             // and opening one later checks it against its stored copy.
             // Exports are figures; drawing isn't part of replay.
-            Op::ToolRun { .. } | Op::Export { .. } | Op::JobFinished { .. } => {}
+            // Proposal entries change nothing; `Proposals` checks them.
+            Op::ToolRun { .. }
+            | Op::Export { .. }
+            | Op::JobFinished { .. }
+            | Op::ProposalOffer { .. }
+            | Op::ProposalDecide { .. } => {}
             Op::Undo { of } | Op::Redo { of } => {
                 let r = if matches!(e.op, Op::Undo { .. }) {
                     session.undo_single(doc)
@@ -251,7 +278,107 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut ReplayReport)
             ));
         }
     }
+    for proposal in proposals.undecided() {
+        report
+            .problems
+            .push(format!("proposal {proposal} was offered and never decided"));
+    }
     Ok(())
+}
+
+/// The entries of one session so far and where each offer sits, to check
+/// that every decision closes its offer: the writer appends the offer, the
+/// edits it applied and the decision as one journal batch.
+#[derive(Default)]
+struct Proposals<'a> {
+    log: Vec<&'a LogEntry>,
+    /// Proposal id -> position of its offer in `log`.
+    offers: HashMap<&'a str, usize>,
+    decided: std::collections::HashSet<&'a str>,
+}
+
+impl<'a> Proposals<'a> {
+    /// Note entry `e`; why it is inconsistent, if it is.
+    fn check(&mut self, e: &'a LogEntry) -> Option<String> {
+        let problem = match &e.op {
+            Op::ProposalOffer { proposal, .. } => self
+                .offers
+                .insert(proposal, self.log.len())
+                .map(|_| format!("proposal {proposal} is offered twice")),
+            Op::ProposalDecide {
+                proposal,
+                outcome,
+                applied,
+                ..
+            } => self.decide(e, proposal, *outcome, applied),
+            _ => None,
+        };
+        self.log.push(e);
+        problem
+    }
+
+    fn decide(
+        &mut self,
+        e: &LogEntry,
+        proposal: &'a str,
+        outcome: ProposalDecision,
+        applied: &[String],
+    ) -> Option<String> {
+        let Some(&at) = self.offers.get(proposal) else {
+            return Some(format!("proposal {proposal} wasn't offered before"));
+        };
+        let offer = self.log[at];
+        if offer.doc != e.doc {
+            return Some(format!("proposal {proposal} was offered for {}", offer.doc));
+        }
+        if !self.decided.insert(proposal) {
+            return Some(format!("proposal {proposal} is decided twice"));
+        }
+        let between = &self.log[at + 1..];
+        if !between
+            .iter()
+            .map(|edit| edit.id.as_str())
+            .eq(applied.iter().map(String::as_str))
+        {
+            return Some(
+                "applied isn't exactly the edits between the offer and the decision".into(),
+            );
+        }
+        if let Some(edit) = between
+            .iter()
+            .find(|edit| edit.doc != offer.doc || edit.actor != offer.actor)
+        {
+            return Some(format!(
+                "applied edit {} isn't the offerer's edit to {}",
+                edit.id, offer.doc
+            ));
+        }
+        let Op::ProposalOffer { operations, .. } = &offer.op else {
+            return None;
+        };
+        let as_offered = operations
+            .iter()
+            .map(Op::name)
+            .eq(between.iter().map(|edit| edit.op.name()));
+        match outcome {
+            ProposalDecision::Rejected if !applied.is_empty() => {
+                Some("a rejection lists applied edits".into())
+            }
+            ProposalDecision::Accepted if !as_offered => {
+                Some("accepted, but the edits applied aren't the edits offered".into())
+            }
+            ProposalDecision::Modified if applied.is_empty() => {
+                Some("modified, but nothing applied".into())
+            }
+            _ => None,
+        }
+    }
+
+    fn undecided(&self) -> impl Iterator<Item = &&'a str> {
+        self.offers
+            .keys()
+            .filter(|proposal| !self.decided.contains(*proposal))
+    }
 }
 
 fn recorded_source_root<'a>(
@@ -567,7 +694,7 @@ fn recover_entries(
     let pending_path = root.join("pending-save.json");
     if pending_path.is_file() {
         let pending: basecraft_protocol::records::PendingSave =
-            serde_json::from_slice(&std::fs::read(&pending_path)?)?;
+            basecraft_protocol::records::decode(&std::fs::read(&pending_path)?)?;
         if !pending.baseline.result.hashes.is_empty()
             && pending.baseline.result.hashes.iter().all(|(path, hash)| {
                 scratch_key(path).is_ok()
@@ -699,6 +826,8 @@ fn recover_entries(
             Op::Save { .. }
             | Op::ToolRun { .. }
             | Op::JobFinished { .. }
+            | Op::ProposalOffer { .. }
+            | Op::ProposalDecide { .. }
             | Op::Export { .. }
             | Op::Extract { .. } => {}
             Op::Undo { .. } => {
@@ -1304,7 +1433,13 @@ mod tests {
         attempts.push(divergent_create);
         for attempt in attempts {
             let mut report = ReplayReport::default();
-            replay_session(root.path(), &[baseline, &attempt, edit], &mut report).unwrap();
+            replay_session(
+                root.path(),
+                &[baseline, &attempt, edit],
+                &HashMap::new(),
+                &mut report,
+            )
+            .unwrap();
             if attempt.id == baseline.id && attempt.op == baseline.op {
                 // A missing original is not a problem: the baseline and the
                 // edit after it are not checkable.
@@ -1342,6 +1477,170 @@ mod tests {
                     .starts_with(".basecraft-recover-")
             }));
         }
+    }
+
+    fn logged(id: &str, doc: &str, op: Op) -> LogEntry {
+        LogEntry {
+            source: None,
+            v: basecraft_protocol::ops::LOG_VERSION,
+            id: id.into(),
+            t: "2026-11-13T12:00:00Z".into(),
+            host: "host".into(),
+            session: "session".into(),
+            actor: basecraft_protocol::Actor::External,
+            doc: doc.into(),
+            op,
+            result: basecraft_protocol::OpResult::default(),
+            state: basecraft_protocol::DocState {
+                len: 0,
+                features: 0,
+                rows: None,
+                counts: None,
+            },
+        }
+    }
+
+    fn offer(id: &str, doc: &str, offered: usize) -> LogEntry {
+        logged(
+            id,
+            doc,
+            Op::ProposalOffer {
+                proposal: "p".into(),
+                source: basecraft_protocol::ops::ProposalSource::Run { id: "run".into() },
+                base_revision: 0,
+                operations: vec![Op::seq_replace(0, 1, "A"); offered],
+            },
+        )
+    }
+
+    fn decide(id: &str, doc: &str, outcome: ProposalDecision, applied: &[&str]) -> LogEntry {
+        logged(
+            id,
+            doc,
+            Op::ProposalDecide {
+                proposal: "p".into(),
+                outcome,
+                automatic: true,
+                applied: applied.iter().map(|id| (*id).into()).collect(),
+                note: None,
+            },
+        )
+    }
+
+    /// The problems `Proposals` finds in `entries`, undecided offers last.
+    fn proposal_problems(entries: &[LogEntry]) -> Vec<String> {
+        let mut proposals = Proposals::default();
+        let mut problems: Vec<_> = entries.iter().filter_map(|e| proposals.check(e)).collect();
+        problems.extend(proposals.undecided().map(|p| format!("{p} undecided")));
+        problems
+    }
+
+    #[test]
+    fn proposal_entries_are_checked_for_consistency() {
+        use ProposalDecision::{Accepted, Modified, Rejected};
+        let edit = |id| logged(id, "a.fa", Op::seq_replace(0, 1, "T"));
+        let consistent = [
+            offer("o", "a.fa", 2),
+            edit("e1"),
+            edit("e2"),
+            decide("d", "a.fa", Accepted, &["e1", "e2"]),
+        ];
+        assert_eq!(proposal_problems(&consistent), Vec::<String>::new());
+        let rejected = [offer("o", "a.fa", 1), decide("d", "a.fa", Rejected, &[])];
+        assert_eq!(proposal_problems(&rejected), Vec::<String>::new());
+        let not_exactly = "applied isn't exactly the edits between";
+        let not_offered = "the edits applied aren't the edits offered";
+        let human = |entry: LogEntry| LogEntry {
+            actor: basecraft_protocol::Actor::Human { user: "u".into() },
+            ..entry
+        };
+        let cases: [(&[LogEntry], &str); 11] = [
+            (
+                &[decide("d", "a.fa", Rejected, &[])],
+                "wasn't offered before",
+            ),
+            (&[offer("o", "a.fa", 1)], "undecided"),
+            (
+                &[
+                    edit("e1"),
+                    offer("o", "a.fa", 1),
+                    decide("d", "a.fa", Accepted, &["e1"]),
+                ],
+                not_exactly,
+            ),
+            (
+                &[
+                    offer("o", "a.fa", 1),
+                    decide("d", "a.fa", Accepted, &["missing"]),
+                ],
+                not_exactly,
+            ),
+            (
+                &[
+                    offer("o", "a.fa", 2),
+                    edit("e1"),
+                    decide("d", "a.fa", Accepted, &["e1"]),
+                ],
+                not_offered,
+            ),
+            (
+                &[
+                    offer("o", "a.fa", 1),
+                    edit("e1"),
+                    decide("d", "a.fa", Rejected, &["e1"]),
+                ],
+                "a rejection lists applied edits",
+            ),
+            (
+                &[offer("o", "a.fa", 1), decide("d", "a.fa", Modified, &[])],
+                "nothing applied",
+            ),
+            (
+                &[offer("o", "a.fa", 1), decide("d", "b.fa", Rejected, &[])],
+                "was offered for a.fa",
+            ),
+            // An edit logged between offer and decision that it doesn't list.
+            (
+                &[
+                    offer("o", "a.fa", 2),
+                    edit("e1"),
+                    edit("e2"),
+                    decide("d", "a.fa", Modified, &["e1"]),
+                ],
+                not_exactly,
+            ),
+            // The user's own edit claimed by a plugin's decision.
+            (
+                &[
+                    offer("o", "a.fa", 1),
+                    human(edit("h1")),
+                    decide("d", "a.fa", Accepted, &["h1"]),
+                ],
+                "isn't the offerer's edit",
+            ),
+            // Accepted, but something other than the offer was applied.
+            (
+                &[
+                    offer("o", "a.fa", 1),
+                    logged("r1", "a.fa", Op::feature_remove(0)),
+                    decide("d", "a.fa", Accepted, &["r1"]),
+                ],
+                not_offered,
+            ),
+        ];
+        for (entries, expected) in cases {
+            let problems = proposal_problems(entries);
+            assert!(
+                problems.iter().any(|problem| problem.contains(expected)),
+                "{expected}: {problems:?}"
+            );
+        }
+        let twice = [
+            offer("o", "a.fa", 1),
+            decide("d", "a.fa", Rejected, &[]),
+            decide("d2", "a.fa", Rejected, &[]),
+        ];
+        assert!(proposal_problems(&twice)[0].contains("decided twice"));
     }
 }
 

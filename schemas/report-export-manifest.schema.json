@@ -4,6 +4,10 @@
   "description": "Standalone report metadata; document and revision retain their exact strings.",
   "type": "object",
   "properties": {
+    "basecraft": {
+      "description": "The basecraft version that wrote this file.",
+      "type": "string"
+    },
     "coordinates": {
       "type": "string"
     },
@@ -33,6 +37,7 @@
     "document",
     "unsaved",
     "template_version",
-    "coordinates"
+    "coordinates",
+    "basecraft"
   ]
 }

@@ -225,30 +225,6 @@ fn retained(run: &ArtifactRun, path: &Path, index: usize) -> crate::Result<Artif
     })
 }
 
-fn carry_authored(dependencies: &[PathBuf], run: &ArtifactRun) -> crate::Result<()> {
-    for dependency in dependencies {
-        let authored = dependency.join("reports/methods.md");
-        if !authored.is_file() {
-            continue;
-        }
-        if std::fs::symlink_metadata(&authored)?
-            .file_type()
-            .is_symlink()
-        {
-            return Err(invalid(
-                "Authored methods path is a symlink; original preserved",
-            ));
-        }
-        std::fs::create_dir_all(run.directory().join("reports"))?;
-        basecraft_io::write_atomic(&run.directory().join("reports/methods.md"), |w| {
-            std::io::copy(&mut std::fs::File::open(&authored)?, w)?;
-            Ok(())
-        })?;
-        break;
-    }
-    Ok(())
-}
-
 fn publication(run: &ArtifactRun, origin: &str, artifacts: Vec<ArtifactRevision>) -> Publication {
     Publication {
         schema_version: 1,
@@ -343,7 +319,6 @@ impl SangerRun {
             &serde_json::from_slice::<serde_json::Value>(&payload)?,
         )?;
         linked_input(&run, &dependencies, &payload)?;
-        carry_authored(ancestors, &run)?;
         let result = Self {
             captures,
             run,
@@ -376,8 +351,8 @@ impl SangerRun {
         self.run.artifact(name)
     }
 
-    fn job_path(&self) -> crate::Result<PathBuf> {
-        crate::records::job_index_path(self.run.id())
+    fn job_path(&self) -> PathBuf {
+        crate::records::job_index_path(&self.base, self.run.id())
     }
 
     /// The stage's run record, as every tool run has one: its sources with
@@ -409,7 +384,7 @@ impl SangerRun {
             inputs: std::collections::BTreeMap::from([("sources".into(), sources)]),
             ..basecraft_protocol::records::RunRecord::new(
                 format!("{SANGER_TOOL}/{}", self.operation),
-                env!("CARGO_PKG_VERSION").into(),
+                basecraft_protocol::VERSION.into(),
                 SANGER_TOOL.into(),
             )
         };
@@ -429,16 +404,24 @@ impl SangerRun {
             status,
             operation: self.operation.clone(),
             started: self.started.clone(),
+            // Paths relative to the home, so the record travels with it.
             source: SangerJobSource {
-                path: self.evidence.sources.first().map(|s| s.path.clone()),
+                path: self
+                    .evidence
+                    .sources
+                    .first()
+                    .map(|s| inputs::relative(&self.base, &s.location()?).map(PathBuf::from))
+                    .transpose()?,
             },
             outputs: std::collections::BTreeMap::new(),
-            primary_output: result.map(Path::to_path_buf),
+            primary_output: result
+                .map(|path| inputs::relative(&self.base, path).map(PathBuf::from))
+                .transpose()?,
             diagnostics: diagnostic.map(str::to_owned),
-            artifact_run: Some(self.run.directory().to_path_buf()),
+            artifact_run: Some(inputs::relative(&self.base, self.run.directory())?.into()),
             extra: std::collections::BTreeMap::new(),
         })?;
-        let path = self.job_path()?;
+        let path = self.job_path();
         std::fs::create_dir_all(path.parent().ok_or_else(|| invalid("job has no parent"))?)?;
         inputs::write_json(&path, &value)
     }
@@ -850,15 +833,14 @@ impl SangerReview {
     }
 
     fn write_embedded(&self, path: &Path) -> crate::Result<()> {
-        let mut bytes = self.encoded_at(path, &self.evidence)?;
-        // Embedded support JSON ends with a newline.
-        bytes.push(b'\n');
+        let bytes = self.encoded_at(path, &self.evidence)?;
         basecraft_io::write_atomic(path, |w| w.write_all(&bytes))?;
         Ok(())
     }
 
     fn encoded_at(&self, path: &Path, evidence: &ReviewEvidence) -> crate::Result<Vec<u8>> {
-        let bytes = serde_json::to_vec_pretty(&self.stored_with_evidence(path, evidence)?)?;
+        let bytes =
+            basecraft_protocol::records::encode(&self.stored_with_evidence(path, evidence)?)?;
         if bytes.len() > 64 * 1024 * 1024 {
             return Err(invalid(
                 "Sanger review exceeds 64 MiB; previous file preserved",
@@ -889,7 +871,6 @@ impl SangerReview {
         dependencies.sort();
         dependencies.dedup();
         linked_input(&run, &dependencies, self.draft_json.as_bytes())?;
-        carry_authored(&dependencies, &run)?;
         let snapshot = run.artifact("review.sanger-review.json")?;
         self.write_embedded(&snapshot)?;
         let mut record = publication(
@@ -926,11 +907,11 @@ pub(crate) fn relocate_package(
     paths: &BTreeMap<PathBuf, String>,
 ) -> crate::Result<()> {
     let bytes = crate::records::provenance::read_record(copied)?;
-    let value: serde_json::Value = serde_json::from_slice(&bytes)?;
-    let mut stored: super::StoredCallSets = serde_json::from_value(value)?;
+    let (mut stored, writer) =
+        basecraft_protocol::records::decode_written::<super::StoredCallSets>(&bytes)?;
     if stored.version != 3 {
         return Err(crate::Error::Unsupported(
-            "Unsupported Sanger review version".into(),
+            basecraft_protocol::records::other_format(&writer, stored.version, 3),
         ));
     }
     for set in &mut stored.sets {
@@ -1102,14 +1083,12 @@ impl SangerReview {
     }
 }
 
-/// Verify the exact accepted review before selecting it as an alignment input.
-/// The actual row mutation continues through the existing typed alignment op.
-pub fn record_addition(
-    session: &mut crate::Session,
-    doc: crate::DocId,
-    descriptor: &str,
-    sequence: &str,
-) -> crate::Result<()> {
+/// An accepted review checked as an alignment input; nothing is recorded yet.
+pub struct CheckedAddition(AdditionEvidence);
+
+/// Verify the exact accepted review before selecting it as an alignment
+/// input, writing nothing.
+pub fn check_addition(descriptor: &str, sequence: &str) -> crate::Result<CheckedAddition> {
     let evidence: AdditionEvidence = serde_json::from_str(descriptor)?;
     if evidence.schema_version != 1
         || evidence.sequence_hash != basecraft_io::hash_bytes(sequence.as_bytes())
@@ -1119,7 +1098,7 @@ pub fn record_addition(
         ));
     }
     let bytes = crate::records::provenance::read_record(&evidence.bundle.join("manifest.json"))?;
-    let publication: Publication = serde_json::from_slice(&bytes)?;
+    let publication: Publication = basecraft_protocol::records::decode(&bytes)?;
     if publication.id != evidence.id
         || basecraft_io::hash_bytes(&bytes) != evidence.hash
         || basecraft_io::hash_file(&evidence.review)? != evidence.review_hash
@@ -1150,6 +1129,18 @@ pub fn record_addition(
     if !issues.is_empty() {
         return Err(invalid(issues.join("; ")));
     }
+    Ok(CheckedAddition(evidence))
+}
+
+/// Verify the accepted review again and record it as the input of the row
+/// just added to alignment `doc`. Call it only once the row is in.
+pub fn record_addition(
+    session: &mut crate::Session,
+    doc: crate::DocId,
+    descriptor: &str,
+    sequence: &str,
+) -> crate::Result<()> {
+    let CheckedAddition(evidence) = check_addition(descriptor, sequence)?;
     let hash = session.snapshot_file(&evidence.review)?;
     let inputs = [(evidence.review.to_string_lossy().into_owned(), hash)];
     let params = serde_json::to_value(ReviewedConsensus {
@@ -1272,7 +1263,6 @@ impl SangerReview {
             "Sanger review/support",
             |run| publication_context.register(run),
         )?;
-        carry_authored(&dependencies, &run)?;
         let bytes = self.session_bytes(logical)?;
         // Support must be complete even when public history is disabled or this
         // is an unlogged recovery write. Session may add its history afterward.
@@ -1292,6 +1282,7 @@ impl SangerReview {
         });
         crate::records::provenance::publish(run.directory(), &support)?;
         let mut prepared = crate::documents::PreparedWrite::default();
+        prepared.check_record::<super::StoredCallSets>(target);
         prepared.push(target, |writer| writer.write_all(&bytes))?;
         prepared.run = Some(run);
         Ok(prepared)
@@ -1426,27 +1417,12 @@ mod tests {
         let exact = review.draft_json.clone();
         let path = folder.join("specimen.sanger-review.json");
         review.save(&path).unwrap();
-        let authored =
-            crate::records::provenance::bundle_for_result(&path, None).join("reports/methods.md");
-        std::fs::write(
-            &authored,
-            "User-authored laboratory methods, preserved verbatim.\n",
-        )
-        .unwrap();
-        review.save(&path).unwrap();
         let package = tmp.path().join("package");
         crate::records::provenance::package(&path, &package, None).unwrap();
         std::fs::remove_dir_all(folder).unwrap();
         let moved = tmp.path().join("moved-export");
         std::fs::rename(&package, &moved).unwrap();
         let path = moved.join("specimen.sanger-review.json");
-        assert_eq!(
-            std::fs::read_to_string(
-                crate::records::provenance::companion(&path).join("reports/methods.md")
-            )
-            .unwrap(),
-            "User-authored laboratory methods, preserved verbatim.\n"
-        );
         let reopened = ReviewSession::load(&path).unwrap();
         assert_eq!(reopened.draft_json, exact);
         assert_eq!(reopened.events(), review.events());
@@ -1567,7 +1543,7 @@ mod tests {
             .unwrap();
         assert!(partial.is_file());
         let job: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(run.job_path().unwrap()).unwrap()).unwrap();
+            serde_json::from_slice(&std::fs::read(run.job_path()).unwrap()).unwrap();
         assert_eq!(job["status"], "failed");
         assert!(job["primary_output"].is_null());
         assert!(trace.is_file());
@@ -1723,7 +1699,8 @@ mod tests {
         extended["unknown_field"] = true.into();
         let bytes = serde_json::to_vec(&extended).unwrap();
         std::fs::write(&path, &bytes).unwrap();
-        assert!(ReviewSession::load(&path).is_err());
+        // D14: a field this build does not know does not stop it opening.
+        assert!(ReviewSession::load(&path).is_ok());
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
         let alias = tmp.path().join("trace-alias.json");
         std::fs::hard_link(&trace, &alias).unwrap();
@@ -1741,7 +1718,7 @@ mod tests {
                 .unwrap();
             let directory = run.directory().to_path_buf();
             std::fs::write(run.artifact("partial").unwrap(), b"recover me").unwrap();
-            let job = run.job_path().unwrap();
+            let job = run.job_path();
             if cancelled {
                 run.cancelled("explicit cancellation").unwrap();
                 assert!(

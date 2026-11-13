@@ -94,6 +94,7 @@ impl Document for DelimitationWorkspace {
             files::companion_folder(&companion)?;
             companion
         };
+        prepared.check_record::<basecraft_protocol::companion_records::Companion>(&sidecar);
         prepared.push(&sidecar, |w| {
             files::delimitation_companion(
                 self,
@@ -272,8 +273,7 @@ mod tests {
             let record = serde_json::json!({"schema_version":1,
                 "id":run.file_name().unwrap().to_str().unwrap(),
                 "result":name,"status":"saved"});
-            let mut expected_record = serde_json::to_vec_pretty(&record).unwrap();
-            expected_record.push(b'\n');
+            let expected_record = basecraft_protocol::records::encode(&record).unwrap();
             assert_eq!(
                 std::fs::read(run.join("run.json")).unwrap(),
                 expected_record

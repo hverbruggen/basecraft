@@ -388,39 +388,20 @@ impl JobManager {
                 id: job.prepared.operation.package.manifest.id.clone(),
                 version: job.prepared.operation.package.manifest.version.clone(),
             };
-            let mut rejected = Vec::new();
-            let known = session
-                .checked_sequence(target.doc)
-                .ok()
-                .filter(|_| self.skip_known_features);
-            let ops: Vec<_> = if let Some(document) = known {
-                result
-                    .ops
-                    .iter()
-                    .filter(|op| match op {
-                        basecraft_protocol::Op::FeatureAdd { feature, .. }
-                            if document.features().any(|(_, known)| {
-                                known.kind == feature.kind && known.location == feature.location
-                            }) =>
-                        {
-                            rejected.push(format!("already annotated: {}", feature.kind));
-                            false
-                        }
-                        _ => true,
-                    })
-                    .cloned()
-                    .collect()
-            } else {
-                result.ops.clone()
-            };
-            let edit_ids = match session.apply_sequence_proposals(
+            let applied = match session.apply_sequence_proposals(
                 target.doc,
-                target.generation,
-                target.revision,
-                &ops,
-                &actor,
+                basecraft_ops::session::SequenceOffer {
+                    generation: target.generation,
+                    revision: target.revision,
+                    operations: &result.ops,
+                    actor: &actor,
+                    source: basecraft_protocol::ops::ProposalSource::Run {
+                        id: job.prepared.run.id().into(),
+                    },
+                    skip_known: self.skip_known_features,
+                },
             ) {
-                Ok(ids) => ids,
+                Ok(applied) => applied,
                 Err(error) => {
                     job.outcome
                         .lock()
@@ -444,8 +425,8 @@ impl JobManager {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             outcome.proposals = Some(ProposalOutcome {
                 document: Some(target.doc.0.to_string()),
-                applied: ops.len(),
-                rejected,
+                applied: applied.applied.len(),
+                rejected: applied.skipped,
             });
             outcome.warnings.push(format!(
                 "Proposals attached to session document {} at generation {}",
@@ -468,7 +449,7 @@ impl JobManager {
                     target.doc,
                     plugin,
                     basecraft_ops::session::ToolRunRecord {
-                        edits: Some(&edit_ids[..]),
+                        edits: Some(&applied.applied[..]),
                         ..record
                     },
                 )?;
@@ -663,7 +644,7 @@ impl JobManager {
                 "evidence_incomplete: proposal tool-run activity was not recorded; publication-only repair cannot restore the owning session journal".into(),
             ));
         }
-        let result = serde_json::from_slice(&basecraft_ops::records::read_record(
+        let result = basecraft_protocol::records::decode(&basecraft_ops::records::read_record(
             &job.prepared.run.artifact("validated.json")?,
         )?)?;
         let artifacts = serde_json::from_slice::<Vec<(String, std::path::PathBuf, String)>>(
@@ -1203,8 +1184,16 @@ pub fn error_value(
 }
 
 pub fn error_code(error: &Error) -> OperationErrorCode {
-    if let Error::Ops(error) = error {
-        return ops_error_code(error);
+    use crate::contract::ContractError;
+    match error {
+        Error::Ops(error) => return ops_error_code(error),
+        Error::Contract(ContractError::UnknownSetting { .. }) => {
+            return OperationErrorCode::UnknownSetting;
+        }
+        Error::Contract(ContractError::MissingSetting { .. }) => {
+            return OperationErrorCode::MissingChoice;
+        }
+        _ => {}
     }
     let message = error.to_string();
     if message.contains("permission_denied") {

@@ -55,6 +55,9 @@ pub enum StatedAlphabet {
     Dna,
     Rna,
     Protein,
+    /// The user declined to say (D22): basecraft does not ask again, and
+    /// what needs the alphabet still refuses.
+    Undetermined,
 }
 
 impl From<StatedAlphabet> for Alphabet {
@@ -63,66 +66,99 @@ impl From<StatedAlphabet> for Alphabet {
             StatedAlphabet::Dna => Alphabet::Dna,
             StatedAlphabet::Rna => Alphabet::Rna,
             StatedAlphabet::Protein => Alphabet::Protein,
+            StatedAlphabet::Undetermined => Alphabet::Undetermined,
         }
     }
 }
 
-/// Letters counted per sequence when a document opens: every letter. Keep it
-/// at `u64::MAX`. A cap on the guess (a pending user decision) needs more
-/// than a smaller number here: counts at open would then cover only a
-/// prefix, and an edit that deletes letters never counted would take the
-/// counts below zero. Capped counts would have to know they are partial and
-/// recount the prefix after an edit instead of subtracting.
-pub const GUESS_LETTERS: u64 = u64::MAX;
+/// The guess counts the first 1,000 counted letters of each sequence (D12
+/// amended); gaps, N, X and ? are not counted toward them.
+pub const GUESS_LETTERS: u64 = 1_000;
 
-/// Letter counts for basecraft's one guess (D12). Edits add what they insert
-/// and remove what they delete, so the guess stays current at the cost of
-/// the edit. Gaps, N, X and ? don't count.
+/// Letter counts for basecraft's one guess (D12): the first
+/// [`GUESS_LETTERS`] counted letters of a sequence. The counts know how far
+/// into the sequence they reach. An edit there recounts that prefix; an edit
+/// beyond it changes nothing. Counts never subtract, so letters that were
+/// never counted can't take them below zero.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AlphabetCounts {
     letters: u64,
     protein_only: u64,
     t: u64,
     u: u64,
+    /// Residues read, counted or not, up to the last letter counted.
+    reach: u64,
 }
 
 impl AlphabetCounts {
     pub fn of(residues: &[u8]) -> Self {
         let mut counts = Self::default();
-        counts.add(residues);
+        counts.read(residues);
         counts
     }
 
-    pub fn letters(&self) -> u64 {
-        self.letters
-    }
-
-    pub fn add(&mut self, residues: &[u8]) {
-        self.count(residues, 1);
-    }
-
-    pub fn remove(&mut self, residues: &[u8]) {
-        self.count(residues, u64::MAX);
-    }
-
-    /// Add `step` per letter: 1 to add, `u64::MAX` (wrapping) to remove.
-    fn count(&mut self, residues: &[u8], step: u64) {
+    /// Count on from where the counts stop, until [`GUESS_LETTERS`]
+    /// letters are counted.
+    pub fn read(&mut self, residues: &[u8]) {
         for &b in residues {
-            let b = b.to_ascii_uppercase();
-            if matches!(b, b'N' | b'X') || !(b.is_ascii_alphabetic() || b == b'*') {
-                continue;
+            if self.is_full() {
+                return;
             }
-            self.letters = self.letters.wrapping_add(step);
-            let class = match b {
-                b'E' | b'F' | b'I' | b'L' | b'P' | b'Q' | b'J' | b'O' | b'Z' | b'*' => {
-                    &mut self.protein_only
-                }
-                b'T' => &mut self.t,
-                b'U' => &mut self.u,
-                _ => continue,
-            };
-            *class = class.wrapping_add(step);
+            self.reach += 1;
+            self.tally(b, 1);
         }
+    }
+
+    /// Add `step` (1, or `u64::MAX` to take one away) for `b` if it counts.
+    fn tally(&mut self, b: u8, step: u64) {
+        let Some(b) = letter(b) else {
+            return;
+        };
+        self.letters = self.letters.wrapping_add(step);
+        let class = match b {
+            b'E' | b'F' | b'I' | b'L' | b'P' | b'Q' | b'J' | b'O' | b'Z' | b'*' => {
+                &mut self.protein_only
+            }
+            b'T' => &mut self.t,
+            b'U' => &mut self.u,
+            _ => return,
+        };
+        *class = class.wrapping_add(step);
+    }
+
+    /// Whether all [`GUESS_LETTERS`] letters are counted, so residues
+    /// further on change nothing.
+    pub fn is_full(&self) -> bool {
+        self.letters >= GUESS_LETTERS
+    }
+
+    /// Follow replacing `removed` at `start` with `inserted`. Returns false
+    /// when the prefix must be counted again. An edit beyond the counted
+    /// prefix changes nothing; one of gaps, N, X and ? only moves where the
+    /// prefix ends. While fewer than [`GUESS_LETTERS`] letters are counted,
+    /// every letter is, so taking the removed ones away is exact.
+    pub fn edited(&mut self, start: u64, removed: &[u8], inserted: &[u8]) -> bool {
+        if self.is_full() && start >= self.reach {
+            return true;
+        }
+        let shift =
+            |reach: u64| (reach + inserted.len() as u64).saturating_sub(removed.len() as u64);
+        let counts = |bytes: &[u8]| bytes.iter().any(|&b| letter(b).is_some());
+        if !counts(removed) && !counts(inserted) {
+            self.reach = shift(self.reach);
+            return true;
+        }
+        if self.is_full() {
+            return false;
+        }
+        for &b in removed {
+            self.tally(b, u64::MAX);
+        }
+        for &b in inserted {
+            self.tally(b, 1);
+        }
+        self.reach = shift(self.reach);
+        !self.is_full()
     }
 
     /// No protein-only letters: DNA, or RNA when U appears without T (IUPAC
@@ -143,6 +179,12 @@ impl AlphabetCounts {
             Alphabet::Undetermined
         }
     }
+}
+
+/// `b` in upper case when it counts toward the guess: not a gap, N, X or ?.
+fn letter(b: u8) -> Option<u8> {
+    let b = b.to_ascii_uppercase();
+    (!matches!(b, b'N' | b'X') && (b.is_ascii_alphabetic() || b == b'*')).then_some(b)
 }
 
 impl Alphabet {
@@ -260,15 +302,52 @@ mod tests {
     }
 
     #[test]
-    fn counts_follow_edits() {
-        let mut counts = super::AlphabetCounts::of(b"ACGTACGT");
-        counts.add(b"MELQ");
+    fn only_the_first_thousand_letters_count() {
+        // Protein-only letters after the first 1,000 counted letters don't
+        // count; gaps and N before them don't use up the 1,000.
+        let dna = format!(
+            "{}{}{}",
+            "-N".repeat(500),
+            "ACGT".repeat(250),
+            "MELQ".repeat(100)
+        );
+        let counts = super::AlphabetCounts::of(dna.as_bytes());
+        assert_eq!(counts.alphabet(), Alphabet::Dna);
+        assert!(counts.is_full());
+        // Beyond the prefix: nothing changes.
+        let mut beyond = counts;
+        assert!(beyond.edited(2000, b"", b"EEEE"));
+        assert_eq!(beyond, counts);
+        // Inside it, letters need a recount; gaps only move its end.
+        let mut inside = counts;
+        assert!(!inside.edited(1999, b"T", b"E"));
+        let mut gaps = counts;
+        assert!(gaps.edited(0, b"", b"----"));
+        assert!(!gaps.edited(2003, b"", b"E"), "the prefix now ends at 2004");
+    }
+
+    #[test]
+    fn short_and_late_starting_rows_update_without_a_recount() {
+        // A row whose letters start late: gap edits and letter edits while
+        // fewer than 1,000 letters are counted are followed exactly.
+        let row = format!("{}{}", "-".repeat(100_000), "ACGT");
+        let mut counts = super::AlphabetCounts::of(row.as_bytes());
+        assert!(
+            counts.edited(50, b"", b"-"),
+            "a gap column needs no recount"
+        );
+        assert!(counts.edited(100_001, b"A", b"E"));
         assert_eq!(counts.alphabet(), Alphabet::Protein);
-        counts.remove(b"MELQ");
-        assert_eq!(counts, super::AlphabetCounts::of(b"ACGTACGT"));
-        counts.remove(b"TT");
-        counts.add(b"UU");
-        assert_eq!(counts.alphabet(), Alphabet::Rna);
+        assert!(counts.edited(100_001, b"E", b"A"));
+        assert_eq!(
+            counts,
+            super::AlphabetCounts::of(format!("-{row}").as_bytes())
+        );
+        let mut full = super::AlphabetCounts::of("A".repeat(999).as_bytes());
+        assert!(
+            !full.edited(999, b"", b"CC"),
+            "reaching 1,000 letters recounts"
+        );
     }
 
     #[test]

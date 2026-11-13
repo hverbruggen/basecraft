@@ -31,6 +31,8 @@ pub mod qobject {
         #[qproperty(QString, message)]
         #[qproperty(QString, message_kind)]
         #[qproperty(QString, message_details)]
+        /// The tree a "not ultrametric" refusal offers to smooth (D17), else "".
+        #[qproperty(QString, smoothing_tree)]
         #[qproperty(bool, dirty)]
         /// The copy offer for an edit a read-only folder refused (D13), or "".
         #[qproperty(QString, refused_edit)]
@@ -258,6 +260,9 @@ pub struct DelimitationRust {
     message: QString,
     message_kind: QString,
     message_details: QString,
+    smoothing_tree: QString,
+    /// The tree the latest analysis or attach used.
+    analysis_tree: String,
     dirty: bool,
     refused_edit: QString,
     busy: bool,
@@ -307,6 +312,8 @@ impl Default for DelimitationRust {
             message: QString::default(),
             message_kind: QString::default(),
             message_details: QString::default(),
+            smoothing_tree: QString::default(),
+            analysis_tree: String::new(),
             dirty: false,
             refused_edit: QString::default(),
             busy: false,
@@ -407,6 +414,10 @@ impl qobject::DelimitationController {
     }
 
     fn fail(mut self: Pin<&mut Self>, text: &str) {
+        // A tree that is not ultrametric: offer to smooth it (D17).
+        let tree = &self.rust().analysis_tree;
+        let offer = needs_smoothing(Path::new(tree)).then(|| QString::from(tree));
+        self.as_mut().set_smoothing_tree(offer.unwrap_or_default());
         let summary = crate::bridge::error_summary(text);
         let details = if summary == text.trim() {
             ""
@@ -689,43 +700,40 @@ impl qobject::DelimitationController {
         }
     }
     pub fn attach_tree(mut self: Pin<&mut Self>, path: &QString, rooted: bool) -> bool {
-        let access_thread = self.qt_thread();
         if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
             crate::bridge::checked_document!(sync self, session.delimitation(doc));
         }
         if !self.as_mut().workspace_available() {
             return false;
         }
-        let result = (|| -> Result<_, Box<dyn std::error::Error>> {
-            let mut p = PathBuf::from(path.to_string());
-            if let Some((session, doc)) = self.rust().session.as_ref().zip(self.rust().doc) {
-                let work = session.delimitation(doc)?;
-                if work.view.display_tree.as_deref() == Some(path.to_string().as_str()) {
-                    p = basecraft_ops::delimitation::checked_display_tree(work)?
-                        .ok_or("No display tree")?;
-                }
+        // The same read and evidence as `basecraft delimitation display-tree`.
+        let result = {
+            let state = self.rust();
+            match state.session.as_ref().zip(state.doc) {
+                Some((session, doc)) => basecraft_ops::delimitation::display_tree(
+                    session,
+                    doc,
+                    Path::new(&path.to_string()),
+                )
+                .map_err(|e| e.to_string()),
+                None => Err("No species workspace is open".to_owned()),
             }
-            let bytes = std::fs::read(&p)?;
-            let trees = basecraft_io::newick::parse_trees(std::str::from_utf8(&bytes)?)?;
-            if trees.len() != 1 {
-                return Err("Choose a file containing exactly one display tree".into());
-            }
-            let tree = TreeDoc::from_parsed(&trees[0].name, &trees[0]);
-            // A manual cut works on the tree as drawn, so it needs ultrametric
-            // ages but not a rooting assertion or a bifurcating tree. The
-            // tolerance allows Newick lengths printed to six decimals.
-            let time = basecraft_delimitation::time_tree::validate(&tree, true, 1e-4, false);
-            let hash = basecraft_io::hash_bytes(&bytes);
-            Ok((p, tree, time, hash, bytes))
-        })();
+        };
         match result {
-            Ok((source, tree, time, hash, _bytes)) => {
-                let retained = source;
+            Ok(file) => {
+                let tree = file.tree;
+                // A cut needs a rooted ultrametric tree (D17), read as the tree
+                // reads (D18), but not a bifurcating one.
+                let time = basecraft_delimitation::time_tree::validate(
+                    &tree,
+                    tree.rooting().value == basecraft_protocol::facts::Rooting::Rooted,
+                    false,
+                );
                 self.as_mut().rust_mut().display_tree = Some(tree.clone());
                 let warning = time.as_ref().err().map(ToString::to_string);
                 if let Ok(time) = time {
                     let height = time.root_height;
-                    self.as_mut().rust_mut().time_tree = Some((tree, time, hash.clone()));
+                    self.as_mut().rust_mut().time_tree = Some((tree, time, file.hash.clone()));
                     self.as_mut().set_can_cut(true);
                     self.as_mut().set_root_height(height);
                 } else {
@@ -733,54 +741,11 @@ impl qobject::DelimitationController {
                     self.as_mut().set_can_cut(false);
                 }
                 self.as_mut()
-                    .set_display_path(QString::from(retained.to_string_lossy().as_ref()));
-                let changed = {
-                    let state = self.rust();
-                    let Some((session, doc)) = state.session.as_ref().zip(state.doc) else {
-                        self.fail("No species workspace is open");
-                        return false;
-                    };
-                    crate::bridge::checked_document!(access_thread, session.delimitation(doc))
-                        .view
-                        .display_tree
-                        .as_deref()
-                        != Some(path.to_string().as_str())
-                };
-                if changed {
-                    let evidence = {
-                        let state = self.rust();
-                        let Some((session, doc)) = state.session.as_ref().zip(state.doc) else {
-                            self.fail("No species workspace is open");
-                            return false;
-                        };
-                        basecraft_ops::delimitation::reference_input(
-                            &session.root().join(crate::bridge::checked_document!(
-                                access_thread,
-                                session.doc_key(doc)
-                            )),
-                            &retained,
-                            &hash,
-                            session.project(),
-                        )
-                    };
-                    let run = match evidence {
-                        Ok(run) => run,
-                        Err(error) => {
-                            self.fail(&error.to_string());
-                            return false;
-                        }
-                    };
-                    if self
-                        .as_mut()
-                        .edit(DelimitationEdit::SetDisplayTree {
-                            path: retained.to_string_lossy().into_owned(),
-                            hash: hash.clone(),
-                            evidence_run: run.directory().display().to_string(),
-                        })
-                        .is_err()
-                    {
-                        return false;
-                    }
+                    .set_display_path(QString::from(file.path.to_string_lossy().as_ref()));
+                if let Some(edit) = file.edit
+                    && self.as_mut().edit(edit).is_err()
+                {
+                    return false;
                 }
                 // A newly attached tree is drawn afresh even at the same path.
                 let revision = self.rust().display_revision + 1;
@@ -1609,12 +1574,7 @@ impl qobject::DelimitationController {
             let work = s.delimitation(d)?;
             basecraft_ops::session::apply_drawing_edits(&mut tree, &work.view.tree_edits);
             let font = crate::appearance::current().font.clone();
-            let columns =
-                delimitation::tip_columns(work, &tip_names(&tree), &delimitation::palette(theme));
-            let figure = basecraft_viewmodel::tree::figure_with_columns(
-                &tree, &columns, 900.0, 20.0, theme, &font,
-            );
-            let svg = delimitation::comparison_svg(work, &figure, &font);
+            let svg = delimitation::comparison_figure(work, &tree, theme, &font, None);
             if let Some(width) = png_width {
                 let bytes = crate::figure_png::render(&svg, width)?;
                 s.export(d, Path::new(&path.to_string()), "png", |w| {
@@ -1736,6 +1696,7 @@ impl qobject::DelimitationController {
         if self.rust().busy {
             return;
         }
+        self.as_mut().rust_mut().analysis_tree = input.to_string();
         let display_job = method.to_string().starts_with("display_");
         let display_rooted = method.to_string() == "display_upgma";
         let result = (|| -> Result<_, String> {
@@ -1963,7 +1924,7 @@ impl qobject::DelimitationController {
                             session,
                             doc,
                             &operation,
-                            [(role, vec![analysis_input])].into(),
+                            &[(role, vec![analysis_input])].into(),
                             params,
                             &exports,
                         )
@@ -2508,6 +2469,27 @@ impl cxx_qt::Initialize for qobject::DelimitationController {
             this.update_bar_columns();
         });
     }
+}
+
+/// Whether the tree file an analysis used is one that smoothing would make
+/// usable: a tree, with lengths, that is not ultrametric (D17).
+fn needs_smoothing(path: &Path) -> bool {
+    if !matches!(
+        basecraft_ops::files::Format::from_path(path),
+        Ok(basecraft_ops::files::Format::Tree)
+    ) {
+        return false;
+    }
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| basecraft_io::newick::parse_trees(&text).ok())
+        .and_then(|trees| trees.into_iter().next())
+        .is_some_and(|parsed| {
+            basecraft_delimitation::time_tree::needs_smoothing(&TreeDoc::from_parsed(
+                &parsed.name,
+                &parsed,
+            ))
+        })
 }
 
 #[cfg(test)]

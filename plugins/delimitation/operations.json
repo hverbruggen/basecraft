@@ -14,7 +14,7 @@
         "properties": {
           "rooted": {
             "type": "boolean",
-            "default": false
+            "description": "Whether the tree is rooted. Leave it out to use the tree's own reading: its [&R] or [&U] tag, or two clades at the base."
           },
           "tree_index": {
             "type": "integer",
@@ -101,7 +101,7 @@
         "properties": {
           "rooted": {
             "type": "boolean",
-            "default": false
+            "description": "Whether the tree is rooted. Leave it out to use the tree's own reading: its [&R] or [&U] tag, or two clades at the base."
           },
           "tree_index": {
             "type": "integer",
@@ -178,7 +178,7 @@
         "properties": {
           "rooted": {
             "type": "boolean",
-            "default": false
+            "description": "Whether the tree is rooted. Leave it out to use the tree's own reading: its [&R] or [&U] tag, or two clades at the base."
           },
           "tree_index": {
             "type": "integer",
@@ -262,7 +262,7 @@
         "properties": {
           "rooted": {
             "type": "boolean",
-            "default": false
+            "description": "Whether the tree is rooted. Leave it out to use the tree's own reading: its [&R] or [&U] tag, or two clades at the base."
           },
           "tree_index": {
             "type": "integer",
@@ -346,7 +346,7 @@
         "properties": {
           "rooted": {
             "type": "boolean",
-            "default": false
+            "description": "Whether the tree is rooted. Leave it out to use the tree's own reading: its [&R] or [&U] tag, or two clades at the base."
           },
           "tree_index": {
             "type": "integer",
@@ -467,7 +467,7 @@
         "properties": {
           "rooted": {
             "type": "boolean",
-            "default": false
+            "description": "Whether the tree is rooted. Leave it out to use the tree's own reading: its [&R] or [&U] tag, or two clades at the base."
           },
           "tree_index": {
             "type": "integer",
@@ -592,7 +592,7 @@
         "properties": {
           "rooted": {
             "type": "boolean",
-            "default": false
+            "description": "Whether the tree is rooted. Leave it out to use the tree's own reading: its [&R] or [&U] tag, or two clades at the base."
           },
           "tree_index": {
             "type": "integer",
@@ -680,7 +680,7 @@
         "properties": {
           "rooted": {
             "type": "boolean",
-            "default": false
+            "description": "Whether the tree is rooted. Leave it out to use the tree's own reading: its [&R] or [&U] tag, or two clades at the base."
           },
           "tree_index": {
             "type": "integer",
@@ -761,7 +761,7 @@
         "properties": {
           "rooted": {
             "type": "boolean",
-            "default": false
+            "description": "Whether the tree is rooted. Leave it out to use the tree's own reading: its [&R] or [&U] tag, or two clades at the base."
           },
           "tree_index": {
             "type": "integer",
@@ -870,7 +870,7 @@
         "properties": {
           "rooted": {
             "type": "boolean",
-            "default": false
+            "description": "Whether the tree is rooted. Leave it out to use the tree's own reading: its [&R] or [&U] tag, or two clades at the base."
           },
           "tree_index": {
             "type": "integer",
@@ -979,7 +979,7 @@
         "properties": {
           "rooted": {
             "type": "boolean",
-            "default": false
+            "description": "Whether the tree is rooted. Leave it out to use the tree's own reading: its [&R] or [&U] tag, or two clades at the base."
           },
           "tree_index": {
             "type": "integer",
@@ -1045,7 +1045,7 @@
         "properties": {
           "rooted": {
             "type": "boolean",
-            "default": false
+            "description": "Whether the tree is rooted. Leave it out to use the tree's own reading: its [&R] or [&U] tag, or two clades at the base."
           },
           "tree_index": {
             "type": "integer",
@@ -1128,7 +1128,7 @@
         "properties": {
           "rooted": {
             "type": "boolean",
-            "default": false
+            "description": "Whether the tree is rooted. Leave it out to use the tree's own reading: its [&R] or [&U] tag, or two clades at the base."
           },
           "tree_index": {
             "type": "integer",
@@ -1267,7 +1267,7 @@
         "properties": {
           "rooted": {
             "type": "boolean",
-            "default": false
+            "description": "Whether the tree is rooted. Leave it out to use the tree's own reading: its [&R] or [&U] tag, or two clades at the base."
           },
           "tree_index": {
             "type": "integer",
@@ -1333,7 +1333,7 @@
         "properties": {
           "rooted": {
             "type": "boolean",
-            "default": false
+            "description": "Whether the tree is rooted. Leave it out to use the tree's own reading: its [&R] or [&U] tag, or two clades at the base."
           },
           "tree_index": {
             "type": "integer",

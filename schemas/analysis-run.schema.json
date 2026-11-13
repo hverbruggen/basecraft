@@ -4,6 +4,10 @@
   "description": "The existing version-one analysis-store `run.json` family.\nThis describes fresh writer shapes; production readers retain their selective\nJSON checks. Serialize through `Value` for recursive sorting before `write_json`.",
   "type": "object",
   "properties": {
+    "basecraft": {
+      "description": "The basecraft version that wrote this file.",
+      "type": "string"
+    },
     "id": {
       "type": "string"
     },
@@ -37,7 +41,8 @@
   "required": [
     "schema_version",
     "id",
-    "status"
+    "status",
+    "basecraft"
   ],
   "$defs": {
     "AnalysisRunStatus": {
@@ -86,7 +91,6 @@
           "minimum": 0
         }
       },
-      "additionalProperties": false,
       "required": [
         "id",
         "logical_name",

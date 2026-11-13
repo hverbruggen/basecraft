@@ -3,6 +3,10 @@
   "title": "SangerRequest",
   "type": "object",
   "properties": {
+    "basecraft": {
+      "description": "The basecraft version that wrote this file.",
+      "type": "string"
+    },
     "operation": {
       "type": "string"
     },
@@ -15,6 +19,7 @@
   },
   "required": [
     "operation",
-    "sources"
+    "sources",
+    "basecraft"
   ]
 }

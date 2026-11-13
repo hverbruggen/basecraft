@@ -168,7 +168,7 @@ impl Lifecycle {
             if now - previous >= 10.0 {
                 // If startup/shutdown fails before completion can be recorded,
                 // conservatively cover initialization + invocation + teardown.
-                basecraft_ops::records::write_json(&stamp, &(now + 60.0))?;
+                basecraft_ops::records::write_plain_json(&stamp, &(now + 60.0))?;
                 return Ok(Some(ContactPermit { _lock: lock, stamp }));
             }
             std::thread::sleep(Duration::from_millis(50));
@@ -243,7 +243,7 @@ impl ContactPermit {
             .duration_since(UNIX_EPOCH)
             .map_err(|e| Error::Protocol(e.to_string()))?
             .as_secs_f64();
-        basecraft_ops::records::write_json(&self.stamp, &now)?;
+        basecraft_ops::records::write_plain_json(&self.stamp, &now)?;
         Ok(())
     }
 }

@@ -12,7 +12,6 @@ use serde::{Deserialize, Serialize};
 
 /// Retained managed-runtime receipt. The host verifies its paths and digests.
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct Runtime {
     pub schema: u32,
     pub executables: Vec<String>,

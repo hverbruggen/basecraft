@@ -19,8 +19,8 @@ A hash check does not set replay verification or prove authorship.
 `reports/` contains `history.md`, `methods.generated.md`, `parameters.tsv`,
 `source-map.json` and a frozen report manifest (template version 1). Generated
 prose describes typed edits factually; it does not invent trimming rationales,
-earlier laboratory methods, or unknown tool arguments/versions. User-authored
-`methods.md` is never overwritten. Tool-specific methods/citation templates and
+earlier laboratory methods, or unknown tool arguments/versions. Tool-specific
+methods/citation templates and
 validated RO-Crate export remain separate future interfaces.
 
 CLI: `basecraft provenance inspect|verify RESULT`, `basecraft provenance methods
@@ -33,7 +33,7 @@ only the standard library. Full hash verification additionally uses the open-sou
 `blake3` package. No Basecraft process, network connection or database is required.
 
 Opening is read-only. Recoverable sessions promote on first mutation/explicit
-execution into application state `recovery/SESSION/`. The baseline and retained
+execution into `.basecraft/recovery/SESSION/` of the project, or beside a loose file. The baseline and retained
 objects precede edits. Each UTF-8 JSONL event has `_sequence` and `_checksum`, whose
 value hashes the compact, key-sorted JSON event without framing fields. One writer
 owns each unique stream, rotated at 8 MiB. Entries are synced before acceptance;
@@ -59,7 +59,8 @@ writes; a completed data replacement with a failed ancillary write reports
 Non-cooperating applications can still race the final filesystem replacement;
 network/cloud synchronization is not a distributed transaction protocol.
 
-Jobs persist application-state `jobs/RUN/manifest.json` plus `input.snapshot` before
+Jobs persist `.basecraft/jobs/RUN/manifest.json` (of the run's project, or the
+`.basecraft` that holds the run) plus `input.snapshot` before
 launch and use that retained snapshot as the tool input. Terminal status, submitted
 document generation, effective parameters, plugin version, observed tool identity,
 CPU allocation, output hashes and diagnostics remain inspectable after temporary
@@ -83,8 +84,6 @@ Exports include `methods.generated.md`, `history.md`, `parameters.tsv`,
 `citations.json`, `source-map.json`, `record.json`, `report.json` and `manifest.json`.
 The manifest pins the report revision, unsaved-state flag and template version.
 These are separate atomic writes; an export failure may leave a partial report.
-User-authored `methods.md` is not generated or overwritten. Explicit authored-draft
-saves include a source-revision comment.
 
 Plugin `ExecutionInfo.methods` optionally supplies a frozen `description` and
 `citations` list alongside the existing `methods_template` and resolved parameters.

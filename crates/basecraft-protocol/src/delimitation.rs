@@ -262,7 +262,9 @@ pub struct DelimitationRequest {
     pub input: String,
     pub input_hash: String,
     pub output: String,
-    pub rooted: bool,
+    /// Whether the tree is rooted, as the caller states it; None uses the
+    /// tree's own reading: its tag, or two clades at the base (D18).
+    pub rooted: Option<bool>,
     pub tree_index: usize,
     pub seed: u64,
     pub workers: usize,

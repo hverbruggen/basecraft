@@ -6,7 +6,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
-use basecraft_protocol::{Actor, LogEntry, Op};
+use basecraft_protocol::{Actor, LogEntry, Op, ops::ProposalDecision};
 
 use crate::Result;
 
@@ -81,24 +81,7 @@ impl LogWriter {
             let file = OpenOptions::new().create(true).append(true).open(path)?;
             self.open = Some((month, file));
         }
-        let mut line = Vec::new();
-        for (offset, entry) in entries.iter().enumerate() {
-            let value = serde_json::to_value(entry)?;
-            let checksum = basecraft_io::hash_bytes(&serde_json::to_vec(&value)?);
-            let value = serde_json::to_value(basecraft_protocol::records::JournalEntry {
-                checksum,
-                sequence: self.sequence + offset as u64,
-                entry: value,
-            })?;
-            serde_json::to_writer(&mut line, &value)?;
-            line.push(b'\n');
-            if line.len() > 8 << 20 {
-                return Err(crate::Error::Limit {
-                    what: "operation journal batch".into(),
-                    limit: 8 << 20,
-                });
-            }
-        }
+        let line = encode(entries, self.sequence)?;
         if let Some((_, f)) = &mut self.open {
             // One write per line: with O_APPEND, a crash can't interleave
             // half lines.
@@ -132,15 +115,15 @@ impl LogWriter {
                     .is_err()
                 {
                     self.poisoned = true;
-                    let bytes = serde_json::to_vec_pretty(&serde_json::to_value(
-                        basecraft_protocol::records::RecoveryIntegrityError {
+                    let bytes = basecraft_protocol::records::encode(
+                        &basecraft_protocol::records::RecoveryIntegrityError {
                             schema_version: 1,
                             verified_length: previous_length,
                             error: "append failed and rollback durability could not be confirmed"
                                 .into(),
                             extra: std::collections::BTreeMap::new(),
                         },
-                    )?)?;
+                    )?;
                     let _ =
                         basecraft_io::write_atomic(&self.poison_marker, |w| w.write_all(&bytes));
                     return Err(crate::Error::Damaged {
@@ -158,19 +141,66 @@ impl LogWriter {
     }
 }
 
+/// The most bytes one journal batch may take.
+pub(crate) const BATCH_LIMIT: u64 = 8 << 20;
+
+/// `entries` as journal lines numbered from `sequence`, refused past
+/// [`BATCH_LIMIT`].
+fn encode(entries: &[LogEntry], sequence: u64) -> Result<Vec<u8>> {
+    let mut line = Vec::new();
+    for (offset, entry) in entries.iter().enumerate() {
+        let value = serde_json::to_value(entry)?;
+        let checksum = basecraft_io::hash_bytes(&serde_json::to_vec(&value)?);
+        let value = serde_json::to_value(basecraft_protocol::records::JournalEntry {
+            basecraft: basecraft_protocol::records::writing_version(),
+            checksum,
+            sequence: sequence + offset as u64,
+            entry: value,
+        })?;
+        serde_json::to_writer(&mut line, &value)?;
+        line.push(b'\n');
+        if line.len() as u64 > BATCH_LIMIT {
+            return Err(crate::Error::Limit {
+                what: "operation journal batch".into(),
+                limit: BATCH_LIMIT,
+            });
+        }
+    }
+    Ok(line)
+}
+
+/// Whether `entries` fit in one journal batch. Counted with the widest
+/// sequence numbers, so a batch that fits here fits when written.
+pub(crate) fn fits_one_batch(entries: &[LogEntry]) -> Result<bool> {
+    match encode(entries, u64::MAX >> 1) {
+        Ok(_) => Ok(true),
+        Err(crate::Error::Limit { .. }) => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
 /// Every entry under a project's log directory, from all hosts. Within a
 /// host's stream, file order is kept: it is the order of events.
 pub fn read_all(root: &Path) -> Result<Vec<LogEntry>> {
+    Ok(read_all_written(root)?
+        .into_iter()
+        .map(|(e, _)| e)
+        .collect())
+}
+
+/// [`read_all`], with the basecraft version that wrote each entry.
+pub fn read_all_written(root: &Path) -> Result<Vec<(LogEntry, String)>> {
     Ok(read_entries(root, false)?.0)
 }
 
 /// Like `read_all`, but lines that can't be read are skipped and counted
 /// instead of failing the whole read.
 pub fn read_readable(root: &Path) -> Result<(Vec<LogEntry>, usize)> {
-    read_entries(root, true)
+    let (entries, skipped) = read_entries(root, true)?;
+    Ok((entries.into_iter().map(|(e, _)| e).collect(), skipped))
 }
 
-fn read_entries(root: &Path, lenient: bool) -> Result<(Vec<LogEntry>, usize)> {
+fn read_entries(root: &Path, lenient: bool) -> Result<(Vec<(LogEntry, String)>, usize)> {
     let mut entries = Vec::new();
     let mut skipped = 0;
     let mut total_bytes = 0u64;
@@ -221,7 +251,8 @@ fn read_entries(root: &Path, lenient: bool) -> Result<(Vec<LogEntry>, usize)> {
                                 }
                                 *expected += 1;
                             }
-                            entries.push(e);
+                            let writer = value[basecraft_protocol::records::WRITTEN_BY].as_str();
+                            entries.push((e, writer.unwrap_or_default().to_owned()));
                         }
                         Err(_) if lenient => skipped += 1,
                         Err(e) => {
@@ -369,7 +400,7 @@ pub fn parse_entry(line: &str) -> serde_json::Result<LogEntry> {
             "journal checksum mismatch",
         ));
     }
-    serde_json::from_value(record.entry)
+    basecraft_protocol::records::convert(record.entry, &record.basecraft)
 }
 
 /// A readable account of what happened in the projects under `roots` since
@@ -561,6 +592,12 @@ pub fn describe(op: &Op) -> String {
             if *small_first { "small" } else { "large" }
         ),
         Op::TreeRenameTip { from, to } => format!("Renamed {from} to {to}"),
+        Op::TreeSetRooting { rooted } => {
+            format!(
+                "Stated the tree {}",
+                if *rooted { "rooted" } else { "unrooted" }
+            )
+        }
         Op::TreeSetBranchLengths { meaning } => format!("Branch lengths measure {meaning:?}"),
         Op::SetAlphabet { alphabet } => format!("Alphabet set to {alphabet:?}"),
         Op::TreeAnnotate {
@@ -596,6 +633,68 @@ pub fn describe(op: &Op) -> String {
         Op::SangerUpdate { .. } => "Updated Sanger call sets and supporting evidence".into(),
         Op::SangerReview { edit, .. } => crate::sanger_review::describe(edit),
         Op::JobFinished { report } => format!("{} {:?}", report.method, report.status),
+        Op::ProposalOffer { operations, .. } => format!("Proposed {}", offered(operations)),
+        Op::ProposalDecide { .. } => format!("Proposal {}", decision(op, None)),
+    }
+}
+
+/// One History line for a proposal: who offered what, and what was decided.
+/// "basecraft.pyrodigal proposed 12 features; all accepted automatically".
+pub(crate) fn describe_proposal(actor: &Actor, offer: &Op, decide: Option<&Op>) -> String {
+    let Op::ProposalOffer { operations, .. } = offer else {
+        return describe(offer);
+    };
+    let who = match actor {
+        Actor::Plugin { id, .. } => id.clone(),
+        Actor::Tool { tool, .. } => tool.clone(),
+        Actor::Agent { model } => format!("Agent {model}"),
+        Actor::Script { client } => format!("Script {client}"),
+        Actor::Human { .. } => "You".into(),
+        Actor::External => "An outside change".into(),
+    };
+    let decided = decide.map_or_else(
+        || "not decided".into(),
+        |op| decision(op, Some(operations.len())),
+    );
+    format!("{who} proposed {}; {decided}", offered(operations))
+}
+
+/// "12 features" when every offered edit adds a feature, else "3 edits".
+fn offered(operations: &[Op]) -> String {
+    let n = operations.len();
+    let noun = if operations
+        .iter()
+        .all(|op| matches!(op, Op::FeatureAdd { .. }))
+    {
+        "feature"
+    } else {
+        "edit"
+    };
+    format!("{n} {noun}{}", if n == 1 { "" } else { "s" })
+}
+
+/// "all accepted automatically", "2 of 3 accepted", "rejected: why".
+fn decision(op: &Op, offered: Option<usize>) -> String {
+    let Op::ProposalDecide {
+        outcome,
+        automatic,
+        applied,
+        note,
+        ..
+    } = op
+    else {
+        return String::new();
+    };
+    let how = if *automatic { " automatically" } else { "" };
+    let text = match (outcome, offered) {
+        (ProposalDecision::Accepted, _) => format!("all accepted{how}"),
+        (ProposalDecision::Modified, Some(n)) => format!("{} of {n} accepted{how}", applied.len()),
+        (ProposalDecision::Modified, None) => format!("partly accepted{how}"),
+        (ProposalDecision::Rejected, _) => format!("rejected{how}"),
+    };
+    match note {
+        Some(note) => format!("{text} ({note})"),
+        None => text,
     }
 }
 
@@ -667,7 +766,7 @@ mod activity_tests {
             writer.faults.rollback_sync = true;
             assert!(writer.append(&entry).is_err());
             let bytes = fs::read(work.join("recovery-integrity-error.json")).unwrap();
-            let expected = serde_json::to_vec_pretty(&serde_json::json!({
+            let expected = basecraft_protocol::records::encode(&serde_json::json!({
                 "schema_version": 1, "verified_length": length,
                 "error": "append failed and rollback durability could not be confirmed"
             }))

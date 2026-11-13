@@ -21,7 +21,7 @@ pub use input_evidence::{
     InspectionRelevance, Mutation, SavePolicy, SubmittedInput, check, check_in, conflicts,
     conflicts_in, link_generated_input, lock, preserve_input, read_input,
     reference_input_with_dependencies, register, reindex, relative, relink, resolve, stamp,
-    verified_source, verify_ancestors, wait_in_background, write_json,
+    verified_source, verify_ancestors, wait_in_background, write_json, write_plain_json,
 };
 pub use jobs::{job_index_path, jobs};
 pub use links::{

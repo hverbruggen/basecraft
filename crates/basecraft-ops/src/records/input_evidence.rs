@@ -158,7 +158,7 @@ pub(crate) fn reference_input_locked(
         let manifest = dependency.join("manifest.json");
         if manifest.is_file() {
             let bytes = crate::records::provenance::read_record(&manifest)?;
-            let record: Publication = serde_json::from_slice(&bytes)?;
+            let record: Publication = basecraft_protocol::records::decode(&bytes)?;
             upstream.push(basecraft_protocol::input_records::UpstreamLink {
                 bundle: (crate::records::input_evidence::relative(run.directory(), dependency)?)
                     .into(),
@@ -347,7 +347,7 @@ impl Inspection {
     fn name(&mut self, run: &Path) -> String {
         let path = run.join("run.json");
         let result = self.record(&path).and_then(|bytes| {
-            let value: serde_json::Value = serde_json::from_slice(&bytes)?;
+            let value: serde_json::Value = basecraft_protocol::records::decode(&bytes)?;
             Ok(value["result"]
                 .as_str()
                 .unwrap_or("Unpublished analysis")
@@ -462,7 +462,7 @@ fn validate_input(run: &Path, bytes: &[u8]) -> Result<SubmittedInput> {
     if !metadata.is_file() || metadata.file_type().is_symlink() {
         return Err(invalid("unsafe input evidence record"));
     }
-    let record: SubmittedInput = serde_json::from_slice(bytes)?;
+    let record: SubmittedInput = basecraft_protocol::records::decode(bytes)?;
     if record.schema_version != 1
         || !matches!(
             record.state.as_str(),
@@ -490,16 +490,29 @@ fn validate_input(run: &Path, bytes: &[u8]) -> Result<SubmittedInput> {
     Ok(record)
 }
 
+/// Write the record `value` to `path` through the one record encoder, which
+/// names the basecraft version that wrote it.
 pub fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
+    write_bytes(path, &basecraft_protocol::records::encode(value)?)
+}
+
+/// Write JSON basecraft keeps but does not author, unchanged: plugin data,
+/// plain values and lists inside a run folder, whose run record names the
+/// writing version.
+pub fn write_plain_json(path: &Path, value: &impl Serialize) -> Result<()> {
     let mut bytes = serde_json::to_vec_pretty(value)?;
     bytes.push(b'\n');
+    write_bytes(path, &bytes)
+}
+
+fn write_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
     if path.file_name().is_some_and(|name| name == "input.json")
         && let Some(store) = index::store_of(path)
     {
         // Lock order: the ledger and its inputs, then each index briefly.
         let locks = lock()?;
         locks.record(path.parent().unwrap())?;
-        if let Ok(input) = serde_json::from_slice::<SubmittedInput>(&bytes) {
+        if let Ok(input) = basecraft_protocol::records::decode::<SubmittedInput>(bytes) {
             let mut sources = std::collections::BTreeSet::new();
             locks.input(
                 path.parent().unwrap(),
@@ -521,10 +534,10 @@ pub fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
                 }
             }
         }
-        basecraft_io::write_atomic(path, |w| w.write_all(&bytes))?;
+        basecraft_io::write_atomic(path, |w| w.write_all(bytes))?;
         basecraft_platform::files::sync_directory(path.parent().unwrap())?;
     } else {
-        basecraft_io::write_atomic(path, |w| w.write_all(&bytes))?;
+        basecraft_io::write_atomic(path, |w| w.write_all(bytes))?;
     }
     Ok(())
 }
@@ -1976,10 +1989,6 @@ pub fn package(
         original_id, publication.origin
     );
     crate::records::provenance::publish(&target_bundle, &publication)?;
-    let authored = bundle.join("reports/methods.md");
-    if authored.is_file() {
-        copy(&authored, &target_bundle.join("reports/methods.md"))?;
-    }
     let issues = crate::records::provenance::verify(&copied, None)?;
     if !issues.is_empty() {
         return Err(crate::Error::Damaged {
@@ -2092,7 +2101,7 @@ fn export_history(
         if record_bytes > 128 << 20 || scheduled > 10_000 {
             return Err(invalid("export history exceeds bounded record limit"));
         }
-        let record: Publication = serde_json::from_slice(&bytes)?;
+        let record: Publication = basecraft_protocol::records::decode(&bytes)?;
         if record.id != key.1 || record.schema_version != 1 {
             return Err(invalid("inconsistent export history record"));
         }
@@ -2164,11 +2173,11 @@ fn export_history(
         hashes.insert(key.clone(), basecraft_io::hash_file(&path)?);
         rebased.insert(key, publication);
     }
-    let bytes = serde_json::to_vec_pretty(&serde_json::to_value(ProvenanceExportMap {
+    let bytes = basecraft_protocol::records::encode(&ProvenanceExportMap {
         schema_version: 1,
         records: mapping,
         extra: BTreeMap::new(),
-    })?)?;
+    })?;
     let hash = basecraft_io::hash_bytes(&bytes);
     let name = format!("artifacts/{}", hash.trim_start_matches("b3:"));
     basecraft_io::write_atomic(&target.join(&name), |w| w.write_all(&bytes))?;
@@ -2256,7 +2265,7 @@ pub(crate) fn ancestors(
                     return Err(invalid("ancestor record hash differs"));
                 }
                 let publication: basecraft_protocol::provenance::Publication =
-                    serde_json::from_slice(&bytes)?;
+                    basecraft_protocol::records::decode(&bytes)?;
                 if &publication.id != id || publication.schema_version != 1 {
                     return Err(invalid("unsupported or inconsistent ancestor record"));
                 }
@@ -2310,7 +2319,7 @@ pub(crate) fn link_generated_input_locked(
     for dependency in dependencies {
         let bytes = crate::records::provenance::read_record(&dependency.join("manifest.json"))?;
         let publication: basecraft_protocol::provenance::Publication =
-            serde_json::from_slice(&bytes)?;
+            basecraft_protocol::records::decode(&bytes)?;
         upstream.push(basecraft_protocol::input_records::UpstreamLink {
             bundle: (crate::records::input_evidence::relative(run.directory(), dependency)?).into(),
             id: publication.id.clone(),

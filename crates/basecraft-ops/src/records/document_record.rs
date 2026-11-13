@@ -61,8 +61,9 @@ impl DocumentRecord {
         activity: &LogEntry,
     ) -> crate::Result<()> {
         let manifest = run.directory().join("manifest.json");
-        let mut publication: Publication =
-            serde_json::from_slice(&crate::records::provenance::read_record(&manifest)?)?;
+        let mut publication: Publication = basecraft_protocol::records::decode(
+            &crate::records::provenance::read_record(&manifest)?,
+        )?;
         let (events, effective) = super::publish::portable_analysis_activity(self, activity);
         publication.events = events;
         publication.effective_edits = effective;
@@ -70,8 +71,7 @@ impl DocumentRecord {
         let mut input = crate::records::input_evidence::read_input(run.directory())?;
         let mut upstream = input.upstream.clone();
         for (bundle, origin) in &self.origins {
-            let mut bytes = serde_json::to_vec_pretty(origin)?;
-            bytes.push(b'\n');
+            let bytes = basecraft_protocol::records::encode(origin)?;
             let reference = basecraft_protocol::input_records::UpstreamLink {
                 bundle: (crate::records::input_evidence::relative(
                     run.directory(),
@@ -188,7 +188,8 @@ impl DocumentRecord {
             .find(|(_, publication)| publication.id == link.id)
             .map(|(bundle, _)| bundle.clone())
             .or_else(|| self.run_root.as_ref().map(|root| root.join(&link.folder)))?;
-        serde_json::from_slice(&std::fs::read(folder.join("execution.json")).ok()?).ok()
+        basecraft_protocol::records::decode(&std::fs::read(folder.join("execution.json")).ok()?)
+            .ok()
     }
 
     pub fn include_input(&mut self, input: &Self) {
@@ -244,9 +245,47 @@ impl DocumentRecord {
             "History of {}\nRevision: {}\n\n",
             self.document, self.revision
         );
+        // A proposal is one row: its offer, the edits applied and the
+        // decision fold into the offer's row.
+        let mut decisions = std::collections::HashMap::new();
+        let mut folded = HashSet::new();
         for event in &self.events {
-            let contributing = effective.contains(event.id.as_str());
-            let status = if contributing {
+            if let Op::ProposalDecide {
+                proposal, applied, ..
+            } = &event.op
+            {
+                decisions.insert(proposal.as_str(), event);
+                folded.insert(event.id.as_str());
+                folded.extend(applied.iter().map(String::as_str));
+            }
+        }
+        for event in &self.events {
+            if folded.contains(event.id.as_str()) {
+                continue;
+            }
+            let decided = match &event.op {
+                Op::ProposalOffer { proposal, .. } => {
+                    Some(decisions.get(proposal.as_str()).copied())
+                }
+                _ => None,
+            };
+            let applied = match decided.flatten().map(|decide| &decide.op) {
+                Some(Op::ProposalDecide { applied, .. }) => &applied[..],
+                _ => &[],
+            };
+            let contributing = if decided.is_some() {
+                applied.iter().any(|id| effective.contains(id.as_str()))
+            } else {
+                effective.contains(event.id.as_str())
+            };
+            let status = if decided.is_some() {
+                match (contributing, applied.is_empty(), decided.flatten()) {
+                    (true, _, _) => "Contributing",
+                    (false, _, None) => "Related activity",
+                    (false, true, Some(_)) => "Rejected",
+                    (false, false, Some(_)) => "Undone / not contributing",
+                }
+            } else if contributing {
                 if presentation(&event.op) {
                     "Presentation"
                 } else {
@@ -264,7 +303,14 @@ impl DocumentRecord {
                     _ => "Undone / not contributing",
                 }
             };
-            let summary = crate::log::describe(&event.op);
+            let summary = match decided {
+                Some(decide) => crate::log::describe_proposal(
+                    &event.actor,
+                    &event.op,
+                    decide.map(|decide| &decide.op),
+                ),
+                None => crate::log::describe(&event.op),
+            };
             let actor = match &event.actor {
                 Actor::Tool { tool, version } => format!("{tool} {version}"),
                 Actor::Plugin { id, version } => format!("{id} {version}"),
@@ -280,6 +326,14 @@ impl DocumentRecord {
                 event.t,
                 readable_details(event)?
             );
+            let details = match decided.flatten() {
+                Some(decide) => format!(
+                    "{details}\nDecision, {}:\n{}",
+                    decide.t,
+                    readable_details(decide)?
+                ),
+                None => details,
+            };
             let _ = writeln!(history_text, "{}  {summary} [{status}]", event.t);
             history.push(HistoryRow {
                 id: event.id.clone(),
@@ -321,7 +375,9 @@ impl DocumentRecord {
                 | Op::Save { .. }
                 | Op::Undo { .. }
                 | Op::Redo { .. }
-                | Op::JobFinished { .. } => continue,
+                | Op::JobFinished { .. }
+                | Op::ProposalOffer { .. }
+                | Op::ProposalDecide { .. } => continue,
                 op => format!(
                     "{}. This change was recorded in Basecraft.",
                     crate::log::describe(op)
@@ -366,7 +422,7 @@ impl DocumentRecord {
         })
     }
 
-    /// Export a frozen report snapshot. Authored methods.md is never overwritten.
+    /// Export a frozen report snapshot.
     pub fn export(&self, directory: &Path) -> crate::Result<()> {
         self.report()?.export(directory)
     }
@@ -438,7 +494,7 @@ fn presentation(op: &Op) -> bool {
     }
 }
 
-/// Files a report export writes. Authored `methods.md` is never among them.
+/// Files a report export writes.
 const REPORT_FILES: [&str; 8] = [
     "methods.generated.md",
     "history.md",
@@ -463,7 +519,7 @@ fn check_report_folder(directory: &Path) -> crate::Result<()> {
     }
     let earlier = std::fs::read(directory.join("manifest.json"))
         .ok()
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|bytes| basecraft_protocol::records::decode::<serde_json::Value>(&bytes).ok())
         .is_some_and(|m| {
             m["schema_version"] == 1
                 && m.get("template_version").is_some()
@@ -541,11 +597,14 @@ fn write_report_files(report: &Report, directory: &Path) -> crate::Result<()> {
             "citations.json",
             serde_json::to_vec_pretty(&report.citations)?,
         ),
-        ("manifest.json", serde_json::to_vec_pretty(&manifest)?),
+        (
+            "manifest.json",
+            basecraft_protocol::records::encode(&manifest)?,
+        ),
     ] {
         basecraft_io::write_atomic(&directory.join(name), |w| w.write_all(&bytes))?;
     }
-    let bytes = serde_json::to_vec_pretty(report)?;
+    let bytes = basecraft_protocol::records::encode(report)?;
     basecraft_io::write_atomic(&directory.join("report.json"), |w| w.write_all(&bytes))?;
     Ok(())
 }

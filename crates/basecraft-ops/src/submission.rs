@@ -54,15 +54,17 @@ pub fn load(path: &Path) -> Result<Submission> {
 }
 
 pub(crate) fn load_from(path: &Path, bytes: &[u8]) -> Result<Submission> {
-    let sub: Submission = serde_json::from_slice(bytes).map_err(|e| crate::Error::Damaged {
-        path: path.to_path_buf(),
-        detail: format!("not a submission: {e}"),
-    })?;
+    let (sub, writer) =
+        basecraft_protocol::records::decode_written::<Submission>(bytes).map_err(|e| {
+            crate::Error::Damaged {
+                path: path.to_path_buf(),
+                detail: format!("not a submission: {e}"),
+            }
+        })?;
     if sub.version != SUBMISSION_VERSION {
-        return Err(crate::Error::Unsupported(format!(
-            "submission format version {} is not supported",
-            sub.version
-        )));
+        return Err(crate::Error::Unsupported(
+            basecraft_protocol::records::other_format(&writer, sub.version, SUBMISSION_VERSION),
+        ));
     }
     model::validate(&sub).map_err(|e| invalid(e.0))?;
     Ok(sub)
@@ -70,9 +72,7 @@ pub(crate) fn load_from(path: &Path, bytes: &[u8]) -> Result<Submission> {
 
 /// The bytes a submission document is saved as.
 pub fn encode(sub: &Submission) -> Result<Vec<u8>> {
-    let mut bytes = serde_json::to_vec_pretty(sub)?;
-    bytes.push(b'\n');
-    Ok(bytes)
+    Ok(basecraft_protocol::records::encode(sub)?)
 }
 
 /// The source reference for an alignment file inside the project: its
@@ -688,7 +688,7 @@ fn genbank_files(
     if let Some(organelle) = sub.batch.organelle {
         modifiers.push(("location".into(), organelle.as_str().into()));
     }
-    if matches!(sub.batch.marker, Marker::Coding { .. }) {
+    if let (Marker::Coding { .. }, Some(code)) = (&sub.batch.marker, sub.batch.genetic_code) {
         let name = if sub
             .batch
             .organelle
@@ -698,7 +698,7 @@ fn genbank_files(
         } else {
             "gcode"
         };
-        modifiers.push((name.into(), sub.batch.genetic_code.to_string()));
+        modifiers.push((name.into(), code.to_string()));
     }
     let mut fsa = Vec::new();
     ncbi::write_fsa(
@@ -1068,6 +1068,12 @@ pub fn export(
     submitter: &Submitter,
 ) -> Result<PackageSummary> {
     let sub = checked(session, doc)?.clone();
+    // Its records would be read in no frame and exported with no code.
+    if matches!(sub.batch.marker, Marker::Coding { .. }) && sub.batch.genetic_code.is_none() {
+        return Err(invalid(
+            "Choose the genetic code for this coding marker before export",
+        ));
+    }
     let directory = if directory.is_absolute() {
         directory.to_path_buf()
     } else {
@@ -1094,7 +1100,7 @@ pub fn export(
     }
     if manifest.is_file() {
         let existing: Value =
-            serde_json::from_slice(&std::fs::read(&manifest)?).unwrap_or(Value::Null);
+            basecraft_protocol::records::decode(&std::fs::read(&manifest)?).unwrap_or(Value::Null);
         if existing["schema"] != PACKAGE_SCHEMA {
             return Err(invalid(format!(
                 "{} is not a Basecraft submission package",
@@ -1185,8 +1191,7 @@ pub fn export(
         },
         validation,
     })?;
-    let mut bytes = serde_json::to_vec_pretty(&package)?;
-    bytes.push(b'\n');
+    let bytes = basecraft_protocol::records::encode(&package)?;
     session.export(doc, &manifest, "genbank-submission-package", |w| {
         w.write_all(&bytes)
     })?;
@@ -1227,13 +1232,14 @@ fn read_validation(package: &Path, input_hash: &str) -> Result<Option<Validation
     if !path.is_file() {
         return Ok(None);
     }
-    let summary: ValidationSummary = serde_json::from_slice(&std::fs::read(&path)?)?;
+    let summary: ValidationSummary = basecraft_protocol::records::decode(&std::fs::read(&path)?)?;
     Ok((summary.input_hash == input_hash).then_some(summary))
 }
 
 /// The package's recorded input hash, checked against its current files.
 fn package_inputs(package: &Path) -> Result<(Value, String)> {
-    let manifest: Value = serde_json::from_slice(&std::fs::read(package.join("package.json"))?)?;
+    let manifest: Value =
+        basecraft_protocol::records::decode(&std::fs::read(package.join("package.json"))?)?;
     if manifest["schema"] != PACKAGE_SCHEMA {
         return Err(invalid("not a Basecraft submission package"));
     }
@@ -1294,7 +1300,7 @@ fn verified_reports(
     outcome: &Value,
 ) -> Result<Option<PathBuf>> {
     let read = |path: &Path| -> Result<Value> {
-        Ok(serde_json::from_slice(
+        Ok(basecraft_protocol::records::decode(
             &crate::records::provenance::read_record(path)?,
         )?)
     };
@@ -1587,8 +1593,7 @@ pub fn record_validation(
     }
     std::fs::create_dir_all(&dir)?;
     write_file(&dir.join("issues.tsv"), &issues_table(&summary.issues))?;
-    let mut bytes = serde_json::to_vec_pretty(&summary)?;
-    bytes.push(b'\n');
+    let bytes = basecraft_protocol::records::encode(&summary)?;
     write_file(&dir.join("summary.json"), &bytes)?;
     // The manifest and README now describe this run.
     let blocking =
@@ -1599,8 +1604,7 @@ pub fn record_validation(
     for (ext, hash) in &summary.copies {
         manifest["files"][format!("genbank/{BASE}.{ext}")] = json!(hash);
     }
-    let mut bytes = serde_json::to_vec_pretty(&manifest)?;
-    bytes.push(b'\n');
+    let bytes = basecraft_protocol::records::encode(&manifest)?;
     write_file(&package.join("package.json"), &bytes)?;
     let readme_path = package.join("README.txt");
     if let Ok(text) = std::fs::read_to_string(&readme_path) {

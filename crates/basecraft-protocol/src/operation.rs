@@ -286,7 +286,6 @@ pub struct Effects {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct OperationRequest {
     pub operation: String,
     #[serde(default)]
@@ -306,7 +305,7 @@ pub struct OperationRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum InputReference {
     File {
         path: String,
@@ -319,7 +318,6 @@ pub enum InputReference {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct OperationPins {
     pub generation: String,
     pub package_digest: String,
@@ -329,7 +327,6 @@ pub struct OperationPins {
 /// What the host allocated for one run, sent with every invocation. Paths are
 /// relative to `run_root`; an input outside the run folder is absolute.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct InvocationContext {
     pub schema: u32,
     pub operation: String,
@@ -353,7 +350,6 @@ pub struct InvocationContext {
 /// follow the context's rule; in the run record they are relative to the run
 /// folder.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct InvocationInputEvidence {
     pub original_path: Option<String>,
     pub source_hash: Option<String>,
@@ -406,6 +402,8 @@ pub enum OperationErrorCode {
     PublishedWithFailure,
     NothingToDo,
     RecordNamesRepeat,
+    /// A save would drop fields a later basecraft wrote (D14).
+    NewerFieldsDropped,
     ChangedOnDisk,
     WrongDocumentKind,
     UnknownDocument,
@@ -431,6 +429,11 @@ pub enum OperationErrorCode {
     EvidenceIncomplete,
     /// The folder cannot hold recovery of unsaved edits; copy the file first.
     ReadOnlyFolder,
+    /// A choice the command needs and has no default for was not given (D1):
+    /// a setting, the project, or the display tree to draw on.
+    MissingChoice,
+    /// A setting the operation does not have.
+    UnknownSetting,
 }
 
 impl OperationErrorCode {
@@ -446,6 +449,7 @@ impl OperationErrorCode {
             Self::PublishedWithFailure => "published_with_failure",
             Self::NothingToDo => "nothing_to_do",
             Self::RecordNamesRepeat => "record_names_repeat",
+            Self::NewerFieldsDropped => "newer_fields_dropped",
             Self::ChangedOnDisk => "changed_on_disk",
             Self::WrongDocumentKind => "wrong_document_kind",
             Self::UnknownDocument => "unknown_document",
@@ -470,6 +474,8 @@ impl OperationErrorCode {
             Self::PublicationIncomplete => "publication_incomplete",
             Self::EvidenceIncomplete => "evidence_incomplete",
             Self::ReadOnlyFolder => "read_only_folder",
+            Self::MissingChoice => "missing_choice",
+            Self::UnknownSetting => "unknown_setting",
         }
     }
 }

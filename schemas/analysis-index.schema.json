@@ -4,6 +4,10 @@
   "description": "One file of the analysis index, `.basecraft/analysis-index/<bucket>/<key>.json`:\none analysis store (`.basecraft/analyses-v1`) and the files whose paths fall\nin this bucket that its runs depend on. A project's index sits in the\nproject's `.basecraft` with project-relative paths; a file outside the\nwriting session's project is indexed in a `.basecraft` beside it by name.\n`<bucket>` is the first two hex digits of the BLAKE3 hash of the path;\n`<key>` is a hash of `store`. Paths are `/`-separated and relative to the\nfolder holding `.basecraft`. Readers take the union of every file in a\nbucket, copies a sync tool made included.",
   "type": "object",
   "properties": {
+    "basecraft": {
+      "description": "The basecraft version that wrote this file.",
+      "type": "string"
+    },
     "files": {
       "type": "array",
       "items": {
@@ -20,10 +24,10 @@
       "type": "string"
     }
   },
-  "additionalProperties": false,
   "required": [
     "schema_version",
     "store",
-    "files"
+    "files",
+    "basecraft"
   ]
 }

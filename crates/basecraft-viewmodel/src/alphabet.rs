@@ -28,17 +28,17 @@ pub fn text(fact: &Fact<Alphabet>) -> String {
 
 /// What to ask when basecraft can't tell what some of an alignment's rows
 /// are: the document's own refusal, which names them. Rows of clear but
-/// different kinds are reported, not asked about; a stated alphabet asks
-/// nothing.
+/// different kinds are reported, not asked about; an answer, including
+/// "don't ask again" (D22), asks nothing.
 pub fn alignment_question(doc: &AlignmentDoc) -> Option<String> {
     let unclear = doc.row_alphabets().contains(&Alphabet::Undetermined);
-    doc.alphabet_refusal().filter(|_| unclear)
+    (doc.stated_alphabet().is_none() && unclear).then(|| doc.alphabet_refusal())?
 }
 
 /// [`alignment_question`] for a single sequence.
 pub fn sequence_question(doc: &SequenceDoc) -> Option<String> {
     let unclear = doc.alphabet().value == Alphabet::Undetermined;
-    doc.alphabet_refusal().filter(|_| unclear)
+    (doc.stated_alphabet().is_none() && unclear).then(|| doc.alphabet_refusal())?
 }
 
 /// The edit that states the alphabet the user chose in the dialog.
@@ -47,6 +47,7 @@ pub fn stated(answer: &str) -> Option<basecraft_protocol::Op> {
         "dna" => StatedAlphabet::Dna,
         "rna" => StatedAlphabet::Rna,
         "protein" => StatedAlphabet::Protein,
+        "undetermined" => StatedAlphabet::Undetermined,
         _ => return None,
     };
     Some(basecraft_protocol::Op::SetAlphabet { alphabet })
@@ -107,5 +108,18 @@ mod tests {
             })
         );
         assert_eq!(stated("mixed"), None);
+    }
+
+    #[test]
+    fn a_declined_question_is_not_asked_again_but_still_refuses() {
+        let unclear = format!("{}E{}", "ACGT".repeat(25), "ACGT".repeat(25));
+        let mut doc = alignment(&[&unclear]);
+        assert!(alignment_question(&doc).is_some());
+        let Some(basecraft_protocol::Op::SetAlphabet { alphabet }) = stated("undetermined") else {
+            panic!("no declined answer");
+        };
+        doc.set_alphabet(Some(fact(alphabet.into(), FactSource::User)));
+        assert_eq!(alignment_question(&doc), None);
+        assert!(doc.alphabet_refusal().is_some());
     }
 }

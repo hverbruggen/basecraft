@@ -250,12 +250,17 @@ fn annotate(session: &mut Session, doc: basecraft_ops::DocId, label: &str, start
     let ids = session
         .apply_sequence_proposals(
             doc,
-            session.generation(doc).unwrap(),
-            session.revision(doc).unwrap(),
-            &ops,
-            &actor,
+            basecraft_ops::session::SequenceOffer {
+                generation: session.generation(doc).unwrap(),
+                revision: session.revision(doc).unwrap(),
+                operations: &ops,
+                actor: &actor,
+                source: basecraft_protocol::ops::ProposalSource::Run { id: label.into() },
+                skip_known: false,
+            },
         )
-        .unwrap();
+        .unwrap()
+        .applied;
     session
         .record_tool_run(
             doc,

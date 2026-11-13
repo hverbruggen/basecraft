@@ -368,10 +368,10 @@ pub fn recorded_request(
     run: &Path,
     registry: &crate::registry::Registry,
 ) -> Result<OperationRequest> {
-    let mut request: OperationRequest = serde_json::from_slice(
+    let mut request: OperationRequest = basecraft_protocol::records::decode(
         &basecraft_ops::records::read_record(&run.join("request.json"))?,
     )?;
-    let record: basecraft_protocol::records::RunRecord = serde_json::from_slice(
+    let record: basecraft_protocol::records::RunRecord = basecraft_protocol::records::decode(
         &basecraft_ops::records::read_record(&run.join("execution.json"))?,
     )?;
     let (Some(package_digest), Some(descriptor_digest)) =

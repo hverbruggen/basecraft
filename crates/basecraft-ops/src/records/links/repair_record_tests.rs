@@ -25,7 +25,7 @@ fn original_recovery(
     origin: Option<&StagedLink>,
     view: Option<&StagedLink>,
 ) -> Vec<u8> {
-    serde_json::to_vec_pretty(&serde_json::json!({
+    basecraft_protocol::records::encode(&serde_json::json!({
         "schema": 1,
         "note": "Save As association recovery: previous entries and intended metadata; snapshots are retained separately",
         "previous_origin": original_previous(previous_origin),
@@ -41,7 +41,7 @@ fn original_guard(recovery: &Path, tree: &Path) -> Vec<u8> {
     let relative = recovery
         .strip_prefix(tree.parent().unwrap().canonicalize().unwrap())
         .unwrap();
-    serde_json::to_vec_pretty(&serde_json::json!({
+    basecraft_protocol::records::encode(&serde_json::json!({
         "schema": 1,
         "unavailable": "Save As alignment publication incomplete",
         "recovery": relative.as_os_str(),
@@ -123,10 +123,10 @@ fn repair_original_producer_bytes() {
             .unwrap();
         let actual = std::fs::read(&recovery).unwrap();
         assert_eq!(actual, expected);
-        assert!(!actual.ends_with(b"\n"));
+        assert!(actual.ends_with(b"\n"));
         let guard = std::fs::read(&paths[0]).unwrap();
         assert_eq!(guard, original_guard(&recovery, &target));
-        assert!(!guard.ends_with(b"\n"));
+        assert!(guard.ends_with(b"\n"));
         if let Some(capture) = std::env::var_os("BASECRAFT_RECORD_CAPTURE") {
             let capture = PathBuf::from(capture);
             std::fs::create_dir_all(&capture).unwrap();

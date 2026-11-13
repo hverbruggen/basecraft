@@ -130,12 +130,16 @@ fn round_trip(project: Option<&Project>, folder: &Path, records: &Path, key: &st
         Vec::<String>::new(),
         "a record sits beside a document"
     );
-    for name in &documents {
+    // Every Save As copy has its saved history in .basecraft. (A stated
+    // alphabet alone leaves a document saved (D22), so its original may
+    // have none; species workspaces keep theirs with their run.)
+    for name in documents.iter().filter(|name| {
+        name.starts_with("copy-") && Path::new(name).extension().is_none_or(|e| e != "spart")
+    }) {
         assert!(
             Project::provenance_record(project, &folder.join(name))
                 .join("manifest.json")
-                .is_file()
-                || Path::new(name).extension().is_some_and(|e| e == "spart"),
+                .is_file(),
             "{name} has no saved history in .basecraft"
         );
     }

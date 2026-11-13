@@ -8,7 +8,31 @@ use serde::{Serialize, de::DeserializeOwned};
 use std::path::{Path, PathBuf};
 
 type Encoder = fn(&[u8], bool) -> Vec<u8>;
-fn encode<T: DeserializeOwned + Serialize>(original: &[u8], sorted: bool) -> Vec<u8> {
+fn encode<T: DeserializeOwned + Serialize + schemars::JsonSchema>(
+    original: &[u8],
+    sorted: bool,
+) -> Vec<u8> {
+    // A record written through `records::encode` names its writer; the
+    // record type does not hold that field.
+    let mut value: serde_json::Value = serde_json::from_slice(original).unwrap();
+    if original.starts_with(b"{\n")
+        && let Some(writer) = value.as_object_mut().and_then(|o| o.remove(WRITTEN_BY))
+    {
+        // A record written through `encode` is listed, so its schema
+        // requires the stamp.
+        let schema = schemars::schema_for!(T);
+        let title = schema.get("title").and_then(serde_json::Value::as_str);
+        assert!(
+            title.is_some_and(|t| STAMPED.contains(&t)),
+            "{title:?} is written through records::encode but missing from records::STAMPED"
+        );
+        let record: T = serde_json::from_value(value).unwrap();
+        let mut value = serde_json::to_value(record).unwrap();
+        value[WRITTEN_BY] = writer;
+        let mut bytes = serde_json::to_vec_pretty(&value).unwrap();
+        bytes.push(b'\n');
+        return bytes;
+    }
     let record: T = serde_json::from_slice(original).unwrap();
     let pretty =
         original.contains(&b'\n') && original.starts_with(b"{\n") || original.starts_with(b"[\n");
@@ -107,7 +131,14 @@ fn current_records_round_trip() {
         };
         let original = std::fs::read(&path).unwrap();
         eprintln!("checking {name}");
-        let current = encoder(&original, sorted);
+        // JSON Lines hold one record per line.
+        let current = if path.extension().is_some_and(|ext| ext == "jsonl") {
+            (original.split_inclusive(|&b| b == b'\n'))
+                .flat_map(|line| encoder(line, sorted))
+                .collect()
+        } else {
+            encoder(&original, sorted)
+        };
         if std::env::var_os("BASECRAFT_UPDATE_RECORDS").is_some() {
             std::fs::write(&path, current).unwrap();
         } else {

@@ -27,7 +27,7 @@ Item {
         property string last: ""
         function record_revision() { return "revision-1" }
         function style_json() { return JSON.stringify({style: {}, tips: host.records.map(s => s.id)}) }
-        function compose_metadata_labels(project, fields) { last = fields; return "" }
+        function compose_metadata_labels(fields) { last = fields; return "" }
         function action(name, args) { last = name }
     }
     Component {

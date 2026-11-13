@@ -10,6 +10,10 @@
         "$ref": "#/$defs/PublishedArtifact"
       }
     },
+    "basecraft": {
+      "description": "The basecraft version that wrote this file.",
+      "type": "string"
+    },
     "data": true,
     "effective_parameters": true,
     "errors": {
@@ -69,7 +73,8 @@
     "effective_parameters",
     "artifacts",
     "warnings",
-    "errors"
+    "errors",
+    "basecraft"
   ],
   "$defs": {
     "OperationError": {
@@ -150,9 +155,24 @@
           ]
         },
         {
+          "description": "A save would drop fields a later basecraft wrote (D14).",
+          "type": "string",
+          "const": "newer_fields_dropped"
+        },
+        {
           "description": "The folder cannot hold recovery of unsaved edits; copy the file first.",
           "type": "string",
           "const": "read_only_folder"
+        },
+        {
+          "description": "A choice the command needs and has no default for was not given (D1):\na setting, the project, or the display tree to draw on.",
+          "type": "string",
+          "const": "missing_choice"
+        },
+        {
+          "description": "A setting the operation does not have.",
+          "type": "string",
+          "const": "unknown_setting"
         }
       ]
     },
@@ -169,7 +189,6 @@
           "type": "string"
         }
       },
-      "additionalProperties": false,
       "required": [
         "generation",
         "package_digest",

@@ -25,6 +25,8 @@ pub(crate) struct PreparedWrite {
     pub reverse: bool,
     /// The owner accepted an absent main file: never replace another writer's.
     pub create: bool,
+    /// Records this save replaces that hold fields a later basecraft wrote.
+    pub unknown: Vec<(PathBuf, basecraft_protocol::records::UnknownFields)>,
 }
 
 impl PreparedWrite {
@@ -52,6 +54,24 @@ impl PreparedWrite {
         drop(writer);
         self.files.push((path.into(), hash.clone(), file));
         Ok(hash)
+    }
+    /// Note the fields a later basecraft wrote into the record at `path`
+    /// that `T` would drop when this save replaces it (D14).
+    pub fn check_record<T: basecraft_protocol::records::RecordFormat>(&mut self, path: &Path) {
+        if let Ok(bytes) = std::fs::read(path)
+            && let Some(unknown) = basecraft_protocol::records::unknown_fields::<T>(&bytes)
+        {
+            self.unknown.push((path.into(), unknown));
+        }
+    }
+    /// Note what removing the record at `path` would drop when a later
+    /// basecraft wrote it (D14).
+    pub fn check_removal(&mut self, path: &Path) {
+        if let Ok(bytes) = std::fs::read(path)
+            && let Some(unknown) = basecraft_protocol::records::removed_fields(&bytes)
+        {
+            self.unknown.push((path.into(), unknown));
+        }
     }
     /// Remove `path` once the files are written, if it exists: a companion
     /// whose facts are gone must not bring them back on reopen.
@@ -132,6 +152,8 @@ impl PreparedWrite {
         Ok(hashes)
     }
 }
+
+use basecraft_protocol::companion_records::Companion;
 
 mod alignment;
 mod delimitation;
@@ -226,12 +248,13 @@ fn stage_companion(
     main: &str,
 ) -> Result<()> {
     let path = crate::files::companion_path(project, target);
-    match crate::files::facts_companion(alphabet, main) {
-        Some(companion) => {
-            crate::files::companion_folder(&path)?;
-            prepared.push(&path, |w| companion.write(w))?;
-        }
-        None => prepared.remove_stale(&path),
+    if let Some(companion) = crate::files::facts_companion(alphabet, main) {
+        prepared.check_record::<Companion>(&path);
+        crate::files::companion_folder(&path)?;
+        prepared.push(&path, |w| companion.write(w))?;
+    } else {
+        prepared.check_removal(&path);
+        prepared.remove_stale(&path);
     }
     Ok(())
 }

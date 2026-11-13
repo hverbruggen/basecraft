@@ -13,14 +13,7 @@ pub fn url(repository: &str) -> String {
 pub fn notice(current: &str, response: &str) -> Option<String> {
     let release: serde_json::Value = serde_json::from_str(response).ok()?;
     let tag = release["tag_name"].as_str()?;
-    let version = |text: &str| -> Option<Vec<u64>> {
-        text.trim_start_matches('v')
-            .split(['.', '-'])
-            .take(3)
-            .map(|part| part.parse().ok())
-            .collect()
-    };
-    let newer = version(tag)? > version(current)?;
+    let newer = basecraft_protocol::records::later(tag.trim_start_matches('v'), current);
     newer.then(|| {
         format!(
             "Basecraft {} is available: {}",

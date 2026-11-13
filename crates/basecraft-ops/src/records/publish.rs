@@ -87,7 +87,7 @@ impl History<'_> {
                 .and_then(|r| r.origins.first())
                 .map(|(_, p)| p.clone())
         } else if previous_bundle.join("manifest.json").is_file() {
-            let publication: Publication = serde_json::from_slice(
+            let publication: Publication = basecraft_protocol::records::decode(
                 &crate::records::provenance::read_record(&previous_bundle.join("manifest.json"))?,
             )?;
             if publication.schema_version != 1 {
@@ -107,7 +107,7 @@ impl History<'_> {
             && source_bundle.join("manifest.json").is_file()
         {
             previous_bundle = &source_bundle;
-            let publication: Publication = serde_json::from_slice(
+            let publication: Publication = basecraft_protocol::records::decode(
                 &crate::records::provenance::read_record(&source_bundle.join("manifest.json"))?,
             )?;
             if publication.schema_version != 1 {
@@ -149,7 +149,7 @@ impl History<'_> {
                 // in the new bundle; clean source references remain references.
                 for entry in std::fs::read_dir(previous_bundle.join("records"))? {
                     let entry = entry?;
-                    let record: Publication = serde_json::from_slice(
+                    let record: Publication = basecraft_protocol::records::decode(
                         &crate::records::provenance::read_record(&entry.path())?,
                     )?;
                     for output in record.outputs {
@@ -521,7 +521,7 @@ impl History<'_> {
         let mut upstream = Vec::new();
         for dependency in snapshot.origin_bundles() {
             let bytes = crate::records::read_record(&dependency.join("manifest.json"))?;
-            let parent: Publication = serde_json::from_slice(&bytes)?;
+            let parent: Publication = basecraft_protocol::records::decode(&bytes)?;
             upstream.push(basecraft_protocol::input_records::UpstreamLink {
                 bundle: crate::records::relative(
                     &bundle.canonicalize()?,

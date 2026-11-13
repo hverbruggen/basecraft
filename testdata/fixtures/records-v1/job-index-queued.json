@@ -1,4 +1,5 @@
 {
+  "basecraft": "<version>",
   "diagnostics": null,
   "effective_parameters": {
     "include_newlines": true,
@@ -16,10 +17,10 @@
     "id": "org.example.registry-fixture",
     "version": "1.0.0"
   },
-  "runtime_record": "/fixture/runtime-1/.basecraft/analyses-v1/runs/fixture-run-1/runtime.json",
+  "runtime_record": ".basecraft/analyses-v1/runs/fixture-run-1/runtime.json",
   "schema_version": 1,
   "source": {
-    "path": "/fixture/runtime-1/input.txt"
+    "path": "input.txt"
   },
   "started": "2026-01-01T00:00:00.000Z",
   "status": "queued"

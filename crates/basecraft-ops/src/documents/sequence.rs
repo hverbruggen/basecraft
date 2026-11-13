@@ -301,6 +301,7 @@ pub(crate) fn execute_sequence(
         | Op::TreeRotate { .. }
         | Op::TreeLadderize { .. }
         | Op::TreeRenameTip { .. }
+        | Op::TreeSetRooting { .. }
         | Op::TreeSetBranchLengths { .. }
         | Op::TreeAnnotate { .. }
         | Op::TreePlaceLabel { .. }
@@ -316,6 +317,9 @@ pub(crate) fn execute_sequence(
         ),
         Op::SubmissionEdit { .. } => Err(invalid("this needs a submission document")),
         Op::JobFinished { .. } => Err(invalid("use log_job_finished")),
+        Op::ProposalOffer { .. } | Op::ProposalDecide { .. } => {
+            Err(invalid("use apply_sequence_proposals"))
+        }
         Op::Open { .. }
         | Op::CreateSangerReview { .. }
         | Op::CreateSequence { .. }

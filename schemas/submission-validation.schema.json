@@ -4,6 +4,10 @@
   "description": "A table2asn run, as recorded in the package.",
   "type": "object",
   "properties": {
+    "basecraft": {
+      "description": "The basecraft version that wrote this file.",
+      "type": "string"
+    },
     "copies": {
       "description": "Hashes of the `.sqn` and `.gbf` copied into `genbank/`.",
       "type": "object",
@@ -64,7 +68,8 @@
     "errors",
     "warnings",
     "infos",
-    "message"
+    "message",
+    "basecraft"
   ],
   "$defs": {
     "Issue": {

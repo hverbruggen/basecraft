@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::{CladeAnnotation, CladeRef, Feature, SupportKind, TreeStyle};
 
 /// Log format version, written into every entry.
-pub const LOG_VERSION: u32 = 2;
+pub const LOG_VERSION: u32 = 3;
 
 /// A change to a document. Coordinates are 0-based, half-open.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -177,6 +177,9 @@ pub enum Op {
     TreeLadderize { small_first: bool },
     #[serde(rename = "tree.rename_tip")]
     TreeRenameTip { from: String, to: String },
+    /// State whether the tree is rooted (D18); saved as `[&R]` or `[&U]`.
+    #[serde(rename = "tree.set_rooting")]
+    TreeSetRooting { rooted: bool },
     /// State what the tree's branch lengths measure.
     #[serde(rename = "tree.set_branch_lengths")]
     TreeSetBranchLengths {
@@ -290,6 +293,32 @@ pub enum Op {
     /// A terminal job record, including failures and cancellation.
     #[serde(rename = "job.finished")]
     JobFinished { report: crate::records::JobRecord },
+    /// Edits a plugin or agent offered for this document, as received. The
+    /// entry's actor made the offer. Changes nothing; the edits applied
+    /// follow it, and [`Op::ProposalDecide`] says what was done with it.
+    #[serde(rename = "proposal.offer")]
+    ProposalOffer {
+        /// A new id; the decision names it.
+        proposal: String,
+        source: ProposalSource,
+        /// The document revision the edits were made against.
+        base_revision: u64,
+        operations: Vec<Op>,
+    },
+    /// What was done with an offer. Changes nothing; the entry's actor is
+    /// who decided, or on whose behalf a policy decided.
+    #[serde(rename = "proposal.decide")]
+    ProposalDecide {
+        proposal: String,
+        outcome: ProposalDecision,
+        /// No one reviewed the offer: basecraft's policy decided.
+        automatic: bool,
+        /// Log ids of the edits applied, in order.
+        applied: Vec<String>,
+        /// Why, when something was left out or refused.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+    },
     /// Undo the operation with log id `of`.
     #[serde(rename = "history.undo")]
     Undo { of: String },
@@ -391,6 +420,7 @@ impl Op {
             Op::TreeRotate { .. } => "tree.rotate",
             Op::TreeLadderize { .. } => "tree.ladderize",
             Op::TreeRenameTip { .. } => "tree.rename_tip",
+            Op::TreeSetRooting { .. } => "tree.set_rooting",
             Op::TreeSetBranchLengths { .. } => "tree.set_branch_lengths",
             Op::SetAlphabet { .. } => "doc.set_alphabet",
             Op::TreeAnnotate { .. } => "tree.annotate",
@@ -406,10 +436,32 @@ impl Op {
             Op::SangerUpdate { .. } => "sanger.update",
             Op::SangerSelect { .. } => "sanger.select",
             Op::JobFinished { .. } => "job.finished",
+            Op::ProposalOffer { .. } => "proposal.offer",
+            Op::ProposalDecide { .. } => "proposal.decide",
             Op::Undo { .. } => "history.undo",
             Op::Redo { .. } => "history.redo",
         }
     }
+}
+
+/// Where offered edits came from, beside the entry's actor.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ProposalSource {
+    /// A plugin run, by its run id.
+    Run { id: String },
+}
+
+/// The decision on an offer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ProposalDecision {
+    /// Every offered edit was applied as offered.
+    Accepted,
+    /// Nothing was applied.
+    Rejected,
+    /// Some offered edits were left out or changed before applying.
+    Modified,
 }
 
 /// Who made a change: a person in the GUI (`human`), a script through the
@@ -713,7 +765,6 @@ mod tests {
 /// Where a tool run's own record is: the run's id and its folder, relative
 /// to the project root, or to the document's own folder for a loose file.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct RunLink {
     pub id: String,
     pub folder: String,

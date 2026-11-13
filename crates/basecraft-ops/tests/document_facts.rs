@@ -301,3 +301,65 @@ fn genbank_files_state_their_molecule_and_every_record_counts() {
     session.save(doc, None).unwrap();
     assert!(!files::companion_path(None, &dir.path().join("two.gb")).exists());
 }
+
+/// 1,000 nucleotides, then protein-only letters the guess never reaches.
+fn dna_then_protein() -> String {
+    format!("{}{}", "ACGT".repeat(250), "MELQ".repeat(250))
+}
+
+#[test]
+fn the_guess_counts_only_the_first_thousand_letters_of_a_sequence() {
+    crate::isolated_profile::isolate!();
+    let dir = tempfile::tempdir().unwrap();
+    let text = format!(">s\n{}\n", dna_then_protein());
+    let (mut session, doc) = open(dir.path(), "long.fasta", &text);
+    assert_eq!(session.alphabet(doc).unwrap().value, Alphabet::Dna);
+    // Beyond the counted prefix an edit changes nothing, even one that
+    // would turn the whole sequence into protein.
+    session
+        .apply(doc, Op::seq_replace(1000, 2000, "E".repeat(800)))
+        .unwrap();
+    assert_eq!(session.alphabet(doc).unwrap().value, Alphabet::Dna);
+    // Inside it, the prefix is counted again: 20 E among the first 1,000.
+    session
+        .apply(doc, Op::seq_replace(0, 20, "E".repeat(20)))
+        .unwrap();
+    assert_eq!(session.alphabet(doc).unwrap().value, Alphabet::Protein);
+    // Deleting letters that were never counted can't take the counts below zero.
+    session.apply(doc, Op::seq_replace(0, 1700, "")).unwrap();
+    assert_eq!(session.alphabet(doc).unwrap().value, Alphabet::Protein);
+    session.undo(doc).unwrap();
+    session.undo(doc).unwrap();
+    assert_eq!(session.alphabet(doc).unwrap().value, Alphabet::Dna);
+}
+
+#[test]
+fn every_row_of_a_long_alignment_is_guessed_from_its_first_thousand_letters() {
+    crate::isolated_profile::isolate!();
+    let dir = tempfile::tempdir().unwrap();
+    let row = dna_then_protein();
+    let text = format!(">a\n{row}\n>b\n{row}\n>short\nAC\n");
+    let (mut session, doc) = open(dir.path(), "long.afa", &text);
+    assert_eq!(session.alphabet(doc).unwrap().value, Alphabet::Dna);
+    let replace = |row, start, end, residues: &str| Op::AlnReplace {
+        row,
+        start,
+        end,
+        residues: residues.into(),
+    };
+    session
+        .apply(doc, replace(0, 1500, 1600, &"E".repeat(100)))
+        .unwrap();
+    assert_eq!(session.alphabet(doc).unwrap().value, Alphabet::Dna);
+    session
+        .apply(doc, replace(0, 0, 50, &"E".repeat(50)))
+        .unwrap();
+    let rows: Vec<_> = session
+        .sequence_alphabets(doc)
+        .unwrap()
+        .into_iter()
+        .map(|s| s.alphabet)
+        .collect();
+    assert_eq!(rows, [Alphabet::Protein, Alphabet::Dna, Alphabet::Dna]);
+    assert_eq!(session.alphabet(doc).unwrap().value, Alphabet::Mixed);
+}

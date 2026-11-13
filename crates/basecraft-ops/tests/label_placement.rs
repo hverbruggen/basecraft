@@ -156,20 +156,23 @@ fn on_a_tree_marked_unrooted_a_label_follows_its_surviving_split() {
 }
 
 #[test]
-fn on_an_untagged_tree_the_user_is_asked_and_exact_offers_the_split() {
+fn on_an_untagged_tree_the_base_decides_whether_a_label_marks_a_split() {
     crate::isolated_profile::isolate!();
+    // Three clades at the base read as unrooted (D18): the label follows its
+    // split, as on a tree marked unrooted.
     let dir = tempfile::tempdir().unwrap();
-    let (mut session, tree, displaced) = rerooted_split(dir.path(), "((a,b),(c,d));\n");
-    let report: Vec<_> = displaced.iter().map(|l| (l.id, l.exact)).collect();
-    assert_eq!(report, [(1, true)]);
-    session
-        .apply(tree, place(&[1], LabelPlacement::Exact))
-        .unwrap();
-    assert_eq!(displaced_now(&session, tree), []);
+    let (session, tree, displaced) = rerooted_split(dir.path(), "((a,b),c,d);\n");
+    assert_eq!(displaced, []);
     assert_eq!(
         marked(&session, tree),
         (vec!["c".into(), "d".into()], vec!["a".into(), "b".into()])
     );
+    // Two clades read as rooted: the label marks a clade, which the reroot
+    // leaves without an exact match, so the user is asked.
+    let dir = tempfile::tempdir().unwrap();
+    let (_, _, displaced) = rerooted_split(dir.path(), "((a,b),(c,d));\n");
+    let report: Vec<_> = displaced.iter().map(|l| (l.id, l.exact)).collect();
+    assert_eq!(report, [(1, false)]);
 }
 
 #[test]

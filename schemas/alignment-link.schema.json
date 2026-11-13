@@ -15,6 +15,10 @@
         "null"
       ]
     },
+    "basecraft": {
+      "description": "The basecraft version that wrote this file.",
+      "type": "string"
+    },
     "inferred": {
       "description": "False for an explicitly associated imported tree: matching names is not inference provenance.",
       "type": "boolean"
@@ -45,6 +49,7 @@
     "snapshot",
     "snapshot_hash",
     "alignment_version",
-    "inferred"
+    "inferred",
+    "basecraft"
   ]
 }

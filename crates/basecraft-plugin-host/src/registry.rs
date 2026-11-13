@@ -115,7 +115,7 @@ fn load_index(config: &RegistryConfig) -> Result<InstallationIndex> {
     if bytes.len() > MAX_DESCRIPTOR_BYTES {
         return Err(Error::Protocol("plugin index exceeds size limit".into()));
     }
-    let index: InstallationIndex = serde_json::from_slice(&bytes)?;
+    let index: InstallationIndex = basecraft_protocol::records::decode(&bytes)?;
     if index.schema != 1 {
         return Err(Error::Protocol("unsupported plugin index version".into()));
     }
@@ -415,7 +415,7 @@ fn write_index(
     }
     let mut index = load_index(config)?;
     change(&mut index)?;
-    let bytes = serde_json::to_vec_pretty(&index)?;
+    let bytes = basecraft_protocol::records::encode(&index)?;
     if bytes.len() > MAX_DESCRIPTOR_BYTES {
         return Err(Error::Protocol("plugin index exceeds size limit".into()));
     }

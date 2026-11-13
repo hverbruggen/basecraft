@@ -55,7 +55,6 @@ fn every_kind_reads_each_input_once() {
                 .env("BASECRAFT_PROFILE_DIR", root.path().join("profile"))
                 .env("BASECRAFT_STATE_DIR", root.path().join("profile/state"))
                 .env("BASECRAFT_CACHE_DIR", root.path().join("profile/cache"))
-                .env("BASECRAFT_SCRATCH_DIR", root.path())
                 .output()
                 .unwrap();
             println!("{}", String::from_utf8_lossy(&result.stdout));

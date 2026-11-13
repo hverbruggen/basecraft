@@ -9,9 +9,7 @@ use basecraft_protocol::operation::{OperationPins, RuntimeState};
 use serde_json::json;
 
 fn bytes(value: &Value) -> Vec<u8> {
-    let mut bytes = serde_json::to_vec_pretty(value).unwrap();
-    bytes.push(b'\n');
-    bytes
+    basecraft_protocol::records::encode(value).unwrap()
 }
 fn member_oracle(destination: &Path, hash: &str) -> Value {
     let (device, inode) = identity(destination).unwrap();

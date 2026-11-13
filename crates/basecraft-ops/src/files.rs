@@ -770,7 +770,7 @@ pub(crate) fn companion_folder(companion: &Path) -> Result<()> {
 use basecraft_protocol::companion_records::{
     COMPANION_VERSION, Companion, DelimitationCompanion, SupportName, TreeCompanion,
 };
-use basecraft_protocol::facts::{Alphabet, AlphabetCounts, Fact, FactSource, GUESS_LETTERS};
+use basecraft_protocol::facts::{Alphabet, AlphabetCounts, Fact, FactSource};
 
 /// Read a document's companion. Refuses another layout, a companion written
 /// for different bytes than the document's, and for a tree, a companion that
@@ -781,11 +781,16 @@ fn read_companion(
     exchange_hash: &str,
     tree: Option<&TreeDoc>,
 ) -> Result<Companion> {
-    let companion: Companion = serde_json::from_slice(bytes)?;
+    let (companion, writer) = basecraft_protocol::records::decode_written::<Companion>(bytes)?;
     if companion.version != COMPANION_VERSION {
         return Err(Error::Unsupported(format!(
-            "{} was written by a different basecraft version",
-            path.display()
+            "{}: {}",
+            path.display(),
+            basecraft_protocol::records::other_format(
+                &writer,
+                companion.version,
+                COMPANION_VERSION
+            )
         )));
     }
     if companion.exchange_hash != exchange_hash {
@@ -1164,7 +1169,7 @@ fn fasta_alphabets(file: &fasta::IndexedFasta) -> Vec<(String, Fact<Alphabet>)> 
         .map(|record| {
             let mut counts = AlphabetCounts::default();
             let mut start = 0;
-            while start < record.len && counts.letters() < GUESS_LETTERS {
+            while start < record.len && !counts.is_full() {
                 buf.clear();
                 let end = (start + PIECE).min(record.len);
                 if record
@@ -1173,7 +1178,7 @@ fn fasta_alphabets(file: &fasta::IndexedFasta) -> Vec<(String, Fact<Alphabet>)> 
                 {
                     break;
                 }
-                counts.add(&buf);
+                counts.read(&buf);
                 start = end;
             }
             (record.name.clone(), Alphabet::guessed(counts.alphabet()))
@@ -1214,7 +1219,7 @@ fn genbank_alphabets(rest: &[u8]) -> Vec<(String, Fact<Alphabet>)> {
         } else if line.starts_with(b"//") {
             origin = false;
         } else if origin && let Some((_, _, counts)) = &mut record {
-            counts.add(line);
+            counts.read(line);
         }
     }
     out.extend(record.map(finish));

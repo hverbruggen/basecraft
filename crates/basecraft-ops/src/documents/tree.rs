@@ -23,6 +23,7 @@ impl Document for OpenedTree {
                 | Op::TreeRotate { .. }
                 | Op::TreeLadderize { .. }
                 | Op::TreeRenameTip { .. }
+                | Op::TreeSetRooting { .. }
                 | Op::TreeSetBranchLengths { .. }
                 | Op::TreeAnnotate { .. }
                 | Op::TreePlaceLabel { .. }
@@ -112,6 +113,7 @@ impl Document for OpenedTree {
         let sidecar = files::companion_path(project, target);
         files::companion_folder(&sidecar)?;
         let hash = prepared.push(target, |w| files::write_tree(self, w))?;
+        prepared.check_record::<basecraft_protocol::companion_records::Companion>(&sidecar);
         prepared.push(&sidecar, |w| {
             files::tree_companion(&self.doc, &hash).write(w)
         })?;

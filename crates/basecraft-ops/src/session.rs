@@ -23,6 +23,7 @@ use crate::error::invalid;
 use crate::files::{self, Loaded, Opened};
 use crate::log::LogWriter;
 
+mod alphabet;
 mod creation;
 mod extraction;
 mod history;
@@ -42,6 +43,7 @@ mod save_failure_tests;
 mod saved_mark_tests;
 mod tool_runs;
 pub use open::{objects_dir, recovery_folder};
+pub use proposals::{ProposalResult, SequenceOffer};
 pub use save_decision::{EvidenceAction, SaveCheck, SaveDecision, SaveOutcome, SaveWarning};
 pub use tool_runs::ToolRunRecord;
 pub mod support_import;
@@ -89,6 +91,8 @@ struct Slot {
     origin_issue: Option<String>,
     origin_bundle: PathBuf,
     disk_stamp: basecraft_protocol::provenance::FileStamp,
+    /// The next save may drop fields a later basecraft wrote (D14).
+    drop_newer_fields: bool,
 }
 
 /// Undo reaches back at least this many steps; older edits are settled.

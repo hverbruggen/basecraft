@@ -28,7 +28,6 @@ fn store_writer_bytes_and_validation() {
             .env("BASECRAFT_PROFILE_DIR", root.path().join("profile"))
             .env("BASECRAFT_STATE_DIR", root.path().join("profile/state"))
             .env("BASECRAFT_CACHE_DIR", root.path().join("profile/cache"))
-            .env("BASECRAFT_SCRATCH_DIR", root.path())
             .status()
             .unwrap();
         assert!(status.success());
@@ -41,7 +40,10 @@ fn store_writer_bytes_and_validation() {
     let original = std::fs::read(&marker).unwrap();
     assert_eq!(
         original,
-        b"{\"format\":\"basecraft.analysis-store\",\"schema_version\":1}\n"
+        basecraft_protocol::records::encode(
+            &json!({"format":"basecraft.analysis-store","schema_version":1})
+        )
+        .unwrap()
     );
     capture("store.json", &original);
     ArtifactRun::validate_store(store).unwrap();
@@ -51,12 +53,15 @@ fn store_writer_bytes_and_validation() {
         json!({}),
         json!([]),
     ] {
-        std::fs::write(&marker, serde_json::to_vec(&bad).unwrap()).unwrap();
+        // Objects carry the stamp; a list can't, and is refused for that.
+        let bytes = basecraft_protocol::records::encode(&bad)
+            .unwrap_or_else(|_| serde_json::to_vec(&bad).unwrap());
+        std::fs::write(&marker, bytes).unwrap();
+        let error = ArtifactRun::validate_store(store).unwrap_err().to_string();
         assert!(
-            ArtifactRun::validate_store(store)
-                .unwrap_err()
-                .to_string()
-                .contains("foreign or unsupported analysis namespace; nothing was migrated")
+            error.contains("foreign or unsupported analysis namespace; nothing was migrated")
+                || error.contains("names no basecraft version"),
+            "{error}"
         );
     }
     std::fs::write(&marker, vec![b' '; 4097]).unwrap();
@@ -66,7 +71,10 @@ fn store_writer_bytes_and_validation() {
             .to_string()
             .contains("unsafe marker")
     );
-    let extended_marker = b"{\"format\":\"basecraft.analysis-store\",\"future\":{\"enabled\":true},\"schema_version\":1}\n";
+    let extended_marker = &basecraft_protocol::records::encode(
+        &json!({"format":"basecraft.analysis-store","future":{"enabled":true},"schema_version":1}),
+    )
+    .unwrap();
     std::fs::write(&marker, extended_marker).unwrap();
     ArtifactRun::validate_store(store).unwrap();
     capture("store-extended.json", extended_marker);
@@ -89,15 +97,13 @@ fn store_writer_bytes_and_validation() {
     let store = root.join("results/.basecraft/analyses-v1");
     // A loose file: the index sits beside it, in the bucket for its name.
     let index = walk(&data.join(".basecraft/analysis-index")).pop().unwrap();
-    let expected = r#"{
-  "schema_version": 1,
-  "store": "../results/.basecraft/analyses-v1",
-  "files": [
-    "reads.fasta"
-  ]
-}
-"#;
-    assert_eq!(std::fs::read_to_string(&index).unwrap(), expected);
+    let expected = basecraft_protocol::records::encode(&json!({
+        "schema_version": 1,
+        "store": "../results/.basecraft/analyses-v1",
+        "files": ["reads.fasta"]
+    }))
+    .unwrap();
+    assert_eq!(std::fs::read(&index).unwrap(), expected);
     // The store lists the bucket, so a lost index can be noticed.
     let bucket = index
         .parent()
@@ -106,11 +112,13 @@ fn store_writer_bytes_and_validation() {
         .unwrap()
         .to_str()
         .unwrap();
-    let folders = format!(
-        "{{\n  \"schema_version\": 1,\n  \"folders\": [\n    \"../data/.basecraft/analysis-index/{bucket}\"\n  ]\n}}\n"
-    );
+    let folders = basecraft_protocol::records::encode(&json!({
+        "schema_version": 1,
+        "folders": [format!("../data/.basecraft/analysis-index/{bucket}")]
+    }))
+    .unwrap();
     assert_eq!(
-        std::fs::read_to_string(store.join("indexed-folders.json")).unwrap(),
+        std::fs::read(store.join("indexed-folders.json")).unwrap(),
         folders
     );
     // Nothing about the analysis is kept in basecraft's own folders.

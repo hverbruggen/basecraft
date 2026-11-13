@@ -30,8 +30,7 @@ impl Companion {
     /// Write the companion as basecraft keeps it: indented JSON and a final
     /// newline. Every companion is written through here.
     pub fn write(&self, w: &mut dyn std::io::Write) -> std::io::Result<()> {
-        serde_json::to_writer_pretty(&mut *w, self)?;
-        writeln!(w)
+        w.write_all(&crate::records::encode(self)?)
     }
 
     pub fn new(exchange_hash: impl Into<String>) -> Self {
@@ -75,4 +74,10 @@ pub struct DelimitationCompanion {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path_base: Option<PathBuf>,
     pub workspace: crate::delimitation::DelimitationWorkspace,
+}
+
+impl crate::records::RecordFormat for Companion {
+    fn is_current(&self) -> bool {
+        self.version == COMPANION_VERSION
+    }
 }

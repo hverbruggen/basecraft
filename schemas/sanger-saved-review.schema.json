@@ -3,6 +3,10 @@
   "title": "SavedReview",
   "type": "object",
   "properties": {
+    "basecraft": {
+      "description": "The basecraft version that wrote this file.",
+      "type": "string"
+    },
     "draft_json": {
       "type": "string"
     },
@@ -22,13 +26,13 @@
       "$ref": "#/$defs/ReviewEvidence"
     }
   },
-  "additionalProperties": false,
   "required": [
     "draft_path",
     "draft_sha256",
     "draft_json",
     "events",
-    "evidence"
+    "evidence",
+    "basecraft"
   ],
   "$defs": {
     "FileStamp": {
@@ -245,7 +249,6 @@
           }
         }
       },
-      "additionalProperties": false,
       "required": [
         "schema_version",
         "runs",
@@ -497,7 +500,6 @@
           "type": "string"
         }
       },
-      "additionalProperties": false,
       "required": [
         "original",
         "sha256",
@@ -514,7 +516,6 @@
           "type": "string"
         }
       },
-      "additionalProperties": false,
       "required": [
         "path",
         "hash"

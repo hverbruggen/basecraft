@@ -11,6 +11,14 @@ use basecraft_protocol::submission::{
 use std::path::Path;
 
 fn golden(format: &str, variant: &str, path: &Path, bytes: Vec<u8>) {
+    // Goldens hold `<version>` where the writing basecraft version goes.
+    let stamp = format!("\"basecraft\": \"{}\"", basecraft_protocol::VERSION);
+    let bytes = match String::from_utf8(bytes) {
+        Ok(text) => text
+            .replace(&stamp, "\"basecraft\": \"<version>\"")
+            .into_bytes(),
+        Err(error) => error.into_bytes(),
+    };
     let version = writer_versions(path)[format];
     let name = format!("{format}-{variant}-v{version}.bin");
     let target = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -284,32 +292,32 @@ fn companion_record_types_round_trip_original_writer_bytes() {
                 .join(name),
         )
         .unwrap();
-        let record: T = serde_json::from_slice(&original).unwrap();
-        let mut encoded = serde_json::to_vec_pretty(&record).unwrap();
-        if original.ends_with(b"\n") {
-            encoded.push(b'\n');
-        }
-        assert_eq!(encoded, original);
+        let record: T = basecraft_protocol::records::decode(&original).unwrap();
+        let stamp = format!("\"basecraft\": \"{}\"", basecraft_protocol::VERSION);
+        let encoded = String::from_utf8(basecraft_protocol::records::encode(&record).unwrap())
+            .unwrap()
+            .replace(&stamp, "\"basecraft\": \"<version>\"");
+        assert_eq!(encoded.as_bytes(), original);
     }
     use basecraft_protocol::companion_records::Companion;
     crate::isolated_profile::isolate!();
-    check::<Companion>("companion-tree-v1.bin");
-    check::<Companion>("companion-delimitation-v1.bin");
-    check::<Companion>("companion-alignment-v1.bin");
-    check::<Companion>("companion-sequence-v1.bin");
+    check::<Companion>("companion-tree-v2.bin");
+    check::<Companion>("companion-delimitation-v2.bin");
+    check::<Companion>("companion-alignment-v2.bin");
+    check::<Companion>("companion-sequence-v2.bin");
 }
 
 // Only current writer goldens are kept; the journal has no old-writer exceptions.
 fn writer_versions(path: &Path) -> std::collections::BTreeMap<String, u32> {
     use basecraft_ops::files::Format;
     let formats: &[(&str, u32)] = match Format::from_path(path) {
-        Ok(Format::Fasta) => &[("fasta", 1), ("gff3", 1), ("companion", 1)],
+        Ok(Format::Fasta) => &[("fasta", 1), ("gff3", 1), ("companion", 2)],
         Ok(Format::GenBank) => &[("genbank", 1)],
-        Ok(Format::Tree) => &[("newick", 1), ("companion", 1), ("alignment-link", 1)],
-        Ok(Format::Delimitation) => &[("spart", 1), ("companion", 1)],
-        Ok(Format::Metadata) => &[("metadata-manifest", 1), ("metadata-tsv", 1)],
-        Ok(Format::Submission) => &[("submission", 1)],
-        Ok(Format::SangerReview) => &[("sanger-review", 3)],
+        Ok(Format::Tree) => &[("newick", 1), ("companion", 2), ("alignment-link", 2)],
+        Ok(Format::Delimitation) => &[("spart", 1), ("companion", 2)],
+        Ok(Format::Metadata) => &[("metadata-manifest", 2), ("metadata-tsv", 1)],
+        Ok(Format::Submission) => &[("submission", 3)],
+        Ok(Format::SangerReview) => &[("sanger-review", 4)],
         Err(_) => &[],
     };
     formats

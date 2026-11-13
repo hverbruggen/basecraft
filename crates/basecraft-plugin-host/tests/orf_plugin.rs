@@ -7,7 +7,6 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use basecraft_ops::Session;
-use basecraft_plugin_host::apply::apply_proposals;
 use basecraft_plugin_host::process::python_interpreter;
 use basecraft_plugin_host::{Manifest, PluginProcess, Snapshot};
 use basecraft_protocol::{Actor, Op};
@@ -70,7 +69,7 @@ fn record(dir: &Path) -> std::path::PathBuf {
 }
 
 #[test]
-fn finds_orfs_and_maps_them_onto_a_newer_version() {
+fn finds_orfs_and_applies_them_as_one_proposal() {
     crate::isolated_profile::isolate!();
     let Some(mut p) = plugin() else { return };
     assert_eq!(p.info.operations, vec!["find_orfs", "selftest"]);
@@ -84,7 +83,7 @@ fn finds_orfs_and_maps_them_onto_a_newer_version() {
     let result = p
         .invoke(
             "find_orfs",
-            json!({ "min_codons": 100 }),
+            json!({ "min_codons": 100, "genetic_code": 11 }),
             context(),
             Some(&snap),
         )
@@ -96,20 +95,90 @@ fn finds_orfs_and_maps_them_onto_a_newer_version() {
     let seg = &feature.location.segments[0];
     assert_eq!((seg.start, seg.end), (10, 10 + 3 + 360 + 3));
 
-    // The user inserts 5 residues upstream while the plugin was working.
-    session.apply(doc, Op::seq_replace(2, 2, "GGGGG")).unwrap();
     let actor = Actor::Plugin {
         id: p.info.id.clone(),
         version: p.info.version.clone(),
     };
-    let report = apply_proposals(&mut session, doc, snap.version, result.ops, &actor).unwrap();
-    assert_eq!((report.applied, report.dropped), (1, 0));
+    let applied = session
+        .apply_sequence_proposals(
+            doc,
+            basecraft_ops::session::SequenceOffer {
+                generation: session.generation(doc).unwrap(),
+                revision: snap.version,
+                operations: &result.ops,
+                actor: &actor,
+                source: basecraft_protocol::ops::ProposalSource::Run { id: "orf".into() },
+                skip_known: false,
+            },
+        )
+        .unwrap();
+    assert_eq!((applied.applied.len(), applied.skipped.len()), (1, 0));
     let (_, f) = session.doc(doc).unwrap().features().last().unwrap();
     let seg = &f.location.segments[0];
-    assert_eq!((seg.start, seg.end), (15, 15 + 366));
+    assert_eq!((seg.start, seg.end), (10, 10 + 366));
     assert_eq!(
         &session.doc(doc).unwrap().read(seg.start, seg.start + 3),
         b"ATG"
+    );
+}
+
+/// TGA ends an ORF in the bacterial code and codes for tryptophan in code 4,
+/// so one sequence holds a short ORF under code 11 and a long one under 4.
+#[test]
+fn the_genetic_code_decides_which_codons_end_an_orf() {
+    crate::isolated_profile::isolate!();
+    let Some(mut p) = plugin() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let body = format!(
+        "{}ATG{}TGA{}TAA{}",
+        "C".repeat(10),
+        "AAA".repeat(40),
+        "AAA".repeat(80),
+        "C".repeat(200)
+    );
+    let path = dir.path().join("code.fasta");
+    std::fs::write(&path, format!(">code\n{body}\n")).unwrap();
+    let mut session = Session::unlogged(dir.path());
+    let doc = session.open(&path).unwrap();
+    let snap = Snapshot::of(session.doc_key(doc).unwrap(), session.doc(doc).unwrap()).unwrap();
+    let mut forward = |params: serde_json::Value| -> Vec<(u64, u64)> {
+        let result = p
+            .invoke("find_orfs", params, context(), Some(&snap))
+            .unwrap();
+        result
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::FeatureAdd { feature, .. }
+                    if feature.location.segments[0].strand
+                        == basecraft_protocol::Strand::Forward =>
+                {
+                    let seg = &feature.location.segments[0];
+                    Some((seg.start, seg.end))
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(
+        forward(json!({ "min_codons": 30, "genetic_code": 11 })),
+        [(10, 10 + 3 + 120 + 3)]
+    );
+    assert_eq!(
+        forward(json!({ "min_codons": 30, "genetic_code": 4 })),
+        [(10, 10 + 3 + 120 + 3 + 240 + 3)]
+    );
+    let missing = p
+        .invoke(
+            "find_orfs",
+            json!({ "min_codons": 30 }),
+            context(),
+            Some(&snap),
+        )
+        .unwrap_err();
+    assert!(
+        missing.to_string().contains("needs a genetic code"),
+        "{missing}"
     );
 }
 

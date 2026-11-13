@@ -52,7 +52,6 @@ fn scenario<T: Debug + PartialEq>(
             .env("BASECRAFT_PROFILE_DIR", isolated.path().join("profile"))
             .env("BASECRAFT_STATE_DIR", isolated.path().join("state"))
             .env("BASECRAFT_CACHE_DIR", isolated.path().join("cache"))
-            .env("BASECRAFT_SCRATCH_DIR", isolated.path().join("scratch"))
             .env("TMPDIR", isolated.path())
             .env("TMP", isolated.path())
             .env("TEMP", isolated.path())
@@ -114,7 +113,14 @@ fn scenario<T: Debug + PartialEq>(
     drop(session);
 
     let entries = log::read_all(dir.path()).unwrap();
-    assert_eq!(entries.len(), 6, "open, two edits, undo, redo, save");
+    // D22: an alphabet answer is in the side file at once, so its save has
+    // nothing to write and logs nothing.
+    let saved = !matches!(ops[0], Op::SetAlphabet { .. });
+    assert_eq!(
+        entries.len(),
+        5 + usize::from(saved),
+        "open, two edits, undo, redo, save"
+    );
     assert!(matches!(entries[0].op, Op::Open { .. }));
     assert_eq!(entries[1].op, ops[0]);
     assert_eq!(entries[2].op, ops[1]);
@@ -132,8 +138,10 @@ fn scenario<T: Debug + PartialEq>(
             of: second.entry_id
         }
     );
-    assert!(matches!(entries[5].op, Op::Save { .. }));
-    assert_ne!(entries[5].result.hashes, Vec::new());
+    if saved {
+        assert!(matches!(entries[5].op, Op::Save { .. }));
+        assert_ne!(entries[5].result.hashes, Vec::new());
+    }
     assert!(
         entries
             .iter()
@@ -726,6 +734,26 @@ fn alignment_alphabet() {
                 [StatedAlphabet::Rna, StatedAlphabet::Dna]
                     .map(|alphabet| Op::SetAlphabet { alphabet }),
                 [original, stated(Alphabet::Rna), stated(Alphabet::Dna)],
+            )
+        },
+    );
+}
+
+#[test]
+fn tree_rooting() {
+    use basecraft_protocol::facts::Rooting;
+    crate::isolated_profile::isolate!();
+    // Untagged with two clades at the base: a guessed root (D18), which the
+    // user states unrooted and then rooted. The saved tag keeps the reading;
+    // reopened, the file states it.
+    scenario(
+        "tree_rooting",
+        |root| fixture(root, "t.nwk", b"((a:1,b:1):1,(c:1,d:1):1);\n"),
+        |s, d| s.tree(d).unwrap().rooting().value,
+        |_, _| {
+            (
+                [false, true].map(|rooted| Op::TreeSetRooting { rooted }),
+                [Rooting::Rooted, Rooting::Unrooted, Rooting::Rooted],
             )
         },
     );

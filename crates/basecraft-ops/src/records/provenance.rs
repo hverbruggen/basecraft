@@ -170,7 +170,7 @@ pub fn export_file(source: &Path, destination: &Path, hash: &str, receipt: &Path
 pub fn verify_export(destination: &Path, hash: &str, receipt: &Path) -> Result<()> {
     use basecraft_platform::files::{identity, link_count};
     let receipt: basecraft_protocol::publication_records::MemberExportReceipt =
-        serde_json::from_slice(&read_record(receipt)?)?;
+        basecraft_protocol::records::decode(&read_record(receipt)?)?;
     let metadata = std::fs::symlink_metadata(destination)?;
     if !metadata.is_file()
         || metadata.file_type().is_symlink()
@@ -217,7 +217,7 @@ pub fn inspect(result: &Path, project: Option<&crate::project::Project>) -> Resu
         )
         .into());
     }
-    let publication: Publication = serde_json::from_slice(&read_record(&manifest)?)?;
+    let publication: Publication = basecraft_protocol::records::decode(&read_record(&manifest)?)?;
     if publication.schema_version != 1 {
         return Err(crate::Error::Unsupported(
             "unsupported provenance schema version".into(),
@@ -356,7 +356,7 @@ pub(crate) fn verify_records(bundle: &Path, current: &Publication) -> Result<Vec
             issues.push(format!("{id}: ancestor record hash differs"));
         }
         hashes.insert(id.clone(), hash);
-        let publication: Publication = serde_json::from_slice(&bytes)?;
+        let publication: Publication = basecraft_protocol::records::decode(&bytes)?;
         if publication.id != id || publication.schema_version != 1 {
             return Err(invalid(
                 "unsupported or inconsistent ancestor identity/version",
@@ -435,8 +435,7 @@ fn stage_json(
     path: &Path,
     value: &impl serde::Serialize,
 ) -> Result<()> {
-    let mut bytes = serde_json::to_vec_pretty(value)?;
-    bytes.push(b'\n');
+    let bytes = basecraft_protocol::records::encode(value)?;
     if bytes.len() > 64 << 20 {
         return Err(crate::Error::Limit {
             what: "provenance record publication".into(),
@@ -629,7 +628,7 @@ pub fn publish_run(
 ) -> Result<Publication> {
     let (events, effective_edits) = std::fs::read(bundle.join("manifest.json"))
         .ok()
-        .and_then(|bytes| serde_json::from_slice::<Publication>(&bytes).ok())
+        .and_then(|bytes| basecraft_protocol::records::decode::<Publication>(&bytes).ok())
         .map(|previous| (previous.events, previous.effective_edits))
         .unwrap_or_default();
     let publication = Publication {
@@ -730,7 +729,7 @@ pub(crate) fn stage(
     Ok(prepared)
 }
 
-/// Deterministic evidence-based reports. User-authored methods.md is untouched.
+/// Deterministic evidence-based reports.
 pub fn write_reports(output: &Path, publication: &Publication) -> Result<()> {
     let mut prepared = crate::documents::PreparedWrite::default();
     stage_reports(&mut prepared, output, publication)?;
@@ -775,7 +774,12 @@ fn stage_reports(
     ] {
         prepared.push(&output.join("reports").join(name), |w| w.write_all(bytes))?;
     }
-    stage_json(prepared, &output.join("reports/source-map.json"), &mappings)?;
+    // A list carries no version; the report manifest beside it does.
+    let mut map = serde_json::to_vec_pretty(&mappings)?;
+    map.push(b'\n');
+    prepared.push(&output.join("reports/source-map.json"), |w| {
+        w.write_all(&map)
+    })?;
     stage_json(
         prepared,
         &output.join("reports/manifest.json"),

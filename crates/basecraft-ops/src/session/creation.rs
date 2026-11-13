@@ -172,7 +172,7 @@ impl Session {
         review: &basecraft_protocol::sanger_records::SavedCallSets,
     ) -> Result<basecraft_protocol::sanger_records::ReviewRecord> {
         self.start_recovery()?;
-        let bytes = serde_json::to_vec(review)?;
+        let bytes = basecraft_protocol::records::encode(review)?;
         let hash = basecraft_io::hash_bytes(&bytes);
         let directory = crate::session::objects_dir(&self.storage_root);
         std::fs::create_dir_all(&directory)?;
@@ -259,6 +259,7 @@ impl Slot {
             absent_sidecars: vec![],
             origin: None,
             origin_issue: None,
+            drop_newer_fields: false,
         }
     }
 }
