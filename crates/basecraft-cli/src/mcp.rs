@@ -1,6 +1,7 @@
 //! Initial local MCP stdio server, implementing the 2025-11-25 protocol.
 //! Documents remain in one headless session. This does not attach to a GUI.
 use basecraft_ops::{DocId, Session};
+use basecraft_protocol::facts::Alphabet;
 use basecraft_protocol::{Actor, Op};
 use serde_json::{Value, json};
 use std::{
@@ -100,6 +101,13 @@ impl Server {
         let version = self.session.revision(doc)?;
         let mut state = json!({"document":doc.0,"path":self.session.doc_key(doc)?,"kind":kind,"version":version,"generation":self.session.generation(doc)?,
             "state":self.session.state(doc)?,"can_undo":self.session.can_undo(doc)?,"can_redo":self.session.can_redo(doc)?});
+        if let Ok(alphabet) = self.session.alphabet(doc) {
+            // D12: per-sequence values when the sequences are not of one kind.
+            if matches!(alphabet.value, Alphabet::Mixed | Alphabet::Undetermined) {
+                state["sequence_alphabets"] = json!(self.session.sequence_alphabets(doc)?);
+            }
+            state["alphabet"] = json!(alphabet);
+        }
         if let Ok(tree) = self.session.tree(doc) {
             state["displaced_labels"] = json!(tree.displaced_labels());
         }

@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 
 use basecraft_docs::FeatureId;
-use basecraft_protocol::facts::{Alphabet, Fact, FactSource};
+use basecraft_protocol::facts::{Alphabet, Fact, FactSource, SequenceAlphabet};
 use basecraft_protocol::{DocState, Op};
 
 use crate::Result;
@@ -141,11 +141,52 @@ mod sequence;
 mod submission;
 pub(crate) mod tree;
 
-/// The user's alphabet, as the fact `doc.set_alphabet` records.
-fn user_alphabet(value: Alphabet) -> Fact<Alphabet> {
-    Fact {
+/// The user's alphabet, as the fact `doc.set_alphabet` records. Only a
+/// kind of sequence can be stated, not "undetermined" or "mixed".
+fn user_alphabet(value: Alphabet) -> Result<Fact<Alphabet>> {
+    if matches!(value, Alphabet::Undetermined | Alphabet::Mixed) {
+        return Err(crate::error::invalid("state DNA, RNA or protein"));
+    }
+    Ok(Fact {
         value,
         source: FactSource::User,
+    })
+}
+
+impl crate::Session {
+    /// The letters an alignment or sequence is written in: what the user
+    /// said, kept in its companion, or else basecraft's guess (D12), which
+    /// is "mixed" when its sequences disagree.
+    pub fn alphabet(&self, id: crate::DocId) -> Result<Fact<Alphabet>> {
+        let content = self.content(id)?;
+        let alignment = content.alignment().map(|opened| opened.doc.alphabet());
+        alignment
+            .or_else(|| content.sequence().map(|opened| opened.doc.alphabet()))
+            .cloned()
+            .ok_or_else(|| crate::error::invalid("only alignments and sequences have an alphabet"))
+    }
+
+    /// Each sequence's guessed alphabet: the rows of an alignment, or the
+    /// open record of a sequence file.
+    pub fn sequence_alphabets(&self, id: crate::DocId) -> Result<Vec<SequenceAlphabet>> {
+        let content = self.content(id)?;
+        if let Some(opened) = content.alignment() {
+            let rows = opened.doc.rows().zip(opened.doc.row_alphabets());
+            return Ok(rows
+                .map(|(row, alphabet)| SequenceAlphabet {
+                    name: row.name.clone(),
+                    alphabet,
+                })
+                .collect());
+        }
+        let opened = content.sequence().ok_or_else(|| {
+            crate::error::invalid("only alignments and sequences have an alphabet")
+        })?;
+        let alphabet = opened.doc.guessed_alphabet();
+        Ok(vec![SequenceAlphabet {
+            name: opened.doc.name.clone(),
+            alphabet,
+        }])
     }
 }
 

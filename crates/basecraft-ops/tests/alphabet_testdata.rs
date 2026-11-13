@@ -1,12 +1,16 @@
-//! Every FASTA and GenBank file in testdata opens with the same protein or
-//! nucleotide alphabet as the guessers replaced on 13 November: alignments
-//! from the first 2000 columns of 20 rows, sequences from all residues,
-//! protein when any letter is outside the IUPAC nucleotide codes. Run with
+//! Every FASTA and GenBank file in testdata, guessed by the D12 rule, set
+//! against the guessers it replaced (alignments from the first 2000 columns
+//! of 20 rows, sequences from all residues, protein when any letter is
+//! outside the IUPAC nucleotide codes). Files whose protein-or-not answer
+//! changed are listed in `CHANGED_BY_D12`. Run with
 //! `cargo test -p basecraft-ops --test alphabet_testdata -- --ignored`.
 use std::path::{Path, PathBuf};
 
 use basecraft_ops::Session;
 use basecraft_protocol::facts::Alphabet;
+
+/// Files whose protein-or-not answer the D12 rule changed.
+const CHANGED_BY_D12: [&str; 0] = [];
 
 /// Invalid on purpose: they don't open.
 const DO_NOT_OPEN: [&str; 3] = [
@@ -42,6 +46,7 @@ fn testdata_alphabets_are_unchanged() {
         &mut files,
     );
     let mut skipped = Vec::new();
+    let mut changed = Vec::new();
     for file in files {
         let dir = tempfile::tempdir().unwrap();
         let copy = dir.path().join(file.file_name().unwrap());
@@ -60,10 +65,19 @@ fn testdata_alphabets_are_unchanged() {
         } else {
             old_guess(session.blast_records(doc).unwrap()[0].sequence.as_bytes())
         };
-        let new = session.alphabet(doc).unwrap().value == Alphabet::Protein;
-        assert_eq!(old, new, "{}", file.display());
-        println!("checked {}", file.display());
+        let alphabet = session.alphabet(doc).unwrap().value;
+        println!("checked {} {alphabet:?}", file.display());
+        if old != (alphabet == Alphabet::Protein) {
+            println!("changed {} {alphabet:?}", file.display());
+            changed.push(file);
+        }
     }
+    assert_eq!(changed.len(), CHANGED_BY_D12.len(), "{changed:?}");
+    assert!(
+        CHANGED_BY_D12
+            .iter()
+            .all(|name| changed.iter().any(|f| f.ends_with(name)))
+    );
     assert_eq!(skipped.len(), DO_NOT_OPEN.len(), "{skipped:?}");
     assert!(
         DO_NOT_OPEN

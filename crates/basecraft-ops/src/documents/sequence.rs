@@ -95,7 +95,8 @@ impl Document for Opened {
     fn apply(&mut self, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {
         if let Op::SetAlphabet { alphabet } = op {
             let before = super::stated(self.doc.alphabet()).cloned();
-            self.doc.set_alphabet(Some(super::user_alphabet(*alphabet)));
+            self.doc
+                .set_alphabet(Some(super::user_alphabet(*alphabet)?));
             return Ok((Inverse::Alphabet(before), None));
         }
         execute_sequence(&mut self.doc, op)

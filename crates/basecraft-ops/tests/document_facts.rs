@@ -150,3 +150,104 @@ fn a_sequence_with_a_stated_alphabet_saves_again_after_an_edit() {
     assert_eq!(reopened.alphabet(doc).unwrap().source, FactSource::User);
     assert_eq!(reopened.opening_warning(doc).unwrap(), None);
 }
+
+/// Open `text` as `name` and return the session and document.
+fn open(dir: &std::path::Path, name: &str, text: &str) -> (Session, basecraft_ops::DocId) {
+    let path = dir.join(name);
+    std::fs::write(&path, text).unwrap();
+    let mut session = Session::new(dir);
+    let doc = session.open(&path).unwrap();
+    (session, doc)
+}
+
+#[test]
+fn the_guess_follows_d12_per_sequence() {
+    crate::isolated_profile::isolate!();
+    let dir = tempfile::tempdir().unwrap();
+    let dna = "ACGTACGTAC".repeat(100);
+    let one_e = format!("{}E", &dna[1..]);
+    for (name, text, expected) in [
+        (
+            "x.afa",
+            format!(">a\n{dna}\n>b\nACGTX{}\n", &dna[5..]),
+            Alphabet::Dna,
+        ),
+        (
+            "iupac.afa",
+            ">a\nACGRYKMSWBDHVN\n>b\nRYKMSWACGTNNNN\n".into(),
+            Alphabet::Dna,
+        ),
+        (
+            "rna.afa",
+            ">a\nACGUACGU\n>b\nUUGCA-GU\n".into(),
+            Alphabet::Rna,
+        ),
+        (
+            "rare-e.fasta",
+            format!(">s\n{one_e}\n"),
+            Alphabet::Undetermined,
+        ),
+        (
+            "mixed.afa",
+            format!(">dna\n{}\n>protein\nMKLVEFIQPA\n", &dna[..10]),
+            Alphabet::Mixed,
+        ),
+    ] {
+        let (session, doc) = open(dir.path(), name, &text);
+        let alphabet = session.alphabet(doc).unwrap();
+        assert_eq!((name, alphabet.value), (name, expected));
+        assert_eq!(alphabet.source, FactSource::Guessed);
+    }
+    let (session, doc) = open(
+        dir.path(),
+        "mixed2.afa",
+        ">dna\nACGTACGTAC\n>protein\nMKLVEFIQPA\n",
+    );
+    let rows: Vec<_> = session
+        .sequence_alphabets(doc)
+        .unwrap()
+        .into_iter()
+        .map(|s| (s.name, s.alphabet))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("dna".into(), Alphabet::Dna),
+            ("protein".into(), Alphabet::Protein)
+        ]
+    );
+}
+
+#[test]
+fn undetermined_or_mixed_sequences_are_named_until_an_alphabet_is_stated() {
+    crate::isolated_profile::isolate!();
+    let dir = tempfile::tempdir().unwrap();
+    let dna = "ACGTACGTAC".repeat(100);
+    let text = format!(">clear\n{dna}\n>unclear\n{}E\n", &dna[1..]);
+    let (mut session, doc) = open(dir.path(), "rows.afa", &text);
+    let refusal = session.alignment(doc).unwrap().alphabet_refusal().unwrap();
+    assert!(
+        refusal.contains("can't tell") && refusal.contains("unclear (Undetermined)"),
+        "{refusal}"
+    );
+    assert!(!refusal.contains("clear (Dna)"), "{refusal}");
+    session
+        .apply(
+            doc,
+            Op::SetAlphabet {
+                alphabet: Alphabet::Dna,
+            },
+        )
+        .unwrap();
+    assert_eq!(session.alignment(doc).unwrap().alphabet_refusal(), None);
+    assert!(
+        session
+            .apply(
+                doc,
+                Op::SetAlphabet {
+                    alphabet: Alphabet::Mixed
+                }
+            )
+            .is_err()
+    );
+}

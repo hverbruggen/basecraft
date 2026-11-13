@@ -158,6 +158,9 @@ enum Command {
         #[arg(long)]
         record: Option<String>,
     },
+    /// What an alignment or sequence is written in: the stated alphabet or
+    /// basecraft's guess, and each sequence's guess.
+    Alphabet { file: PathBuf },
     /// Index a FASTA file (or load its cached index) and print a summary.
     Index { file: PathBuf },
     /// Replay a project's operation log and check every step.
@@ -461,6 +464,18 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             println!(
                 "{}",
                 serde_json::json!({"output":output,"hash":basecraft_io::hash_file(&output)?})
+            );
+        }
+        Command::Alphabet { file } => {
+            let file = file.canonicalize()?;
+            let root = file.parent().unwrap_or(std::path::Path::new("."));
+            let mut session = script_session(root, project.as_ref())?;
+            let doc = session.open(&file)?;
+            let alphabet = session.alphabet(doc)?;
+            let sequences = session.sequence_alphabets(doc)?;
+            println!(
+                "{}",
+                serde_json::json!({ "alphabet": alphabet, "sequences": sequences })
             );
         }
         Command::Index { file } => {
