@@ -55,10 +55,10 @@ ApplicationWindow {
             success => quitStep(JSON.parse(documentOpens.quit_saved(success))))
         else if (step.choose || step.refuse) preferences.project_error = step.refuse || shell.choose_project(step.choose)
         else if (step.leave && !step.project) { leave(step.leave); closeConfirmed = true; window.close() }
-        else if (step.leave) { // A switch: every tab closes; their sessions end when Qt deletes them, so choose afterwards.
+        else if (step.leave) { // A switch: every tab closes; their sessions end as Qt deletes them, which the choice waits for.
             leave(step.leave); discardAuthoredOnQuit = false
             while (documentOpens.count > 0) removeDocument(documentOpens.count - 1)
-            Qt.callLater(() => { preferences.project_error = shell.choose_project(step.project); refreshCurrent() })
+            shell.choose_project_after_close(step.project); refreshCurrent()
         }
     }
 
@@ -72,7 +72,7 @@ ApplicationWindow {
     palette.highlightedText: shell.background
 
     // Theme, font and project folder, whether or not a file is open.
-    GenomeController { id: shell; objectName: "shell" }
+    GenomeController { id: shell; objectName: "shell"; onProject_chosen: error => preferences.project_error = error }
 
     readonly property var ribbonNavigation: ribbonHints
     RibbonKeyHints {

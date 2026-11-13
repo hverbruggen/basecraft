@@ -207,13 +207,30 @@ pub(crate) fn listed() -> Vec<Entry> {
     board().entries.clone()
 }
 
-/// Whether a listed job still runs: a plugin run or Sanger stage from a tab,
-/// or a records, submission or service task. Each holds its project.
+/// Whether a job that holds its project still runs: a listed job (a plugin
+/// run or Sanger stage, a records, submission or service task) or a job that
+/// owns a document's session, such as the sequence annotators.
 pub(crate) fn working() -> bool {
-    board()
-        .entries
-        .iter()
-        .any(|entry| matches!(entry.status, "running" | "cancelling"))
+    SESSION_JOBS.load(std::sync::atomic::Ordering::Acquire) > 0
+        || board()
+            .entries
+            .iter()
+            .any(|entry| matches!(entry.status, "running" | "cancelling"))
+}
+
+/// Session jobs whose task has not returned yet.
+static SESSION_JOBS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+struct SessionHeld;
+impl SessionHeld {
+    fn new() -> Self {
+        SESSION_JOBS.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        Self
+    }
+}
+impl Drop for SessionHeld {
+    fn drop(&mut self) {
+        SESSION_JOBS.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
 }
 
 pub(crate) fn cancel(id: u64) {
@@ -386,10 +403,12 @@ fn session_job<T, R: Send + 'static>(
             "Document is unavailable while another operation owns it",
         )?)));
     let worker_slot = slot.clone();
+    let held = SessionHeld::new();
     let started = run(
         owner,
         listing,
         move |work| {
+            let _held = held;
             let mut session = worker_slot
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
@@ -534,6 +553,32 @@ mod tests {
             returned.recv().unwrap(),
             (identity, Err(INTERRUPTED.into()))
         );
+    }
+
+    /// An unlisted session job, such as an annotator run from a tab, holds
+    /// its project like a listed one.
+    #[test]
+    fn a_session_job_counts_as_working_until_its_task_returns() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut session = Some(Session::unlogged(temp.path()));
+        let (owner, queue) = window();
+        let (release, gate) = mpsc::channel::<()>();
+        let (entered, running) = mpsc::channel::<()>();
+        with_session(
+            owner,
+            &mut session,
+            move |_, _| {
+                entered.send(()).unwrap();
+                gate.recv().unwrap();
+                Ok::<_, String>(())
+            },
+            |_: Pin<&mut Probe>, _, _| {},
+        )
+        .unwrap();
+        running.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(working(), "a session job holds its project");
+        release.send(()).unwrap();
+        queue.recv_timeout(Duration::from_secs(5)).unwrap()(&mut Probe::default());
     }
 
     #[test]

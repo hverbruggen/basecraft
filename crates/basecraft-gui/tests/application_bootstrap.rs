@@ -136,11 +136,42 @@ fn ribbon_journey() {
     }
     // The project the journey switches to last.
     std::fs::create_dir(folder.path().join("second")).unwrap();
+    // A folder the journey cannot save into, and a plugin whose run never ends.
+    let locked = folder.path().join("locked");
+    std::fs::create_dir(&locked).unwrap();
+    std::fs::copy(
+        folder.path().join("homologues.afa"),
+        locked.join("locked.afa"),
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+    }
+    let plugin = folder.path().join("fixture-plugin");
+    std::fs::create_dir(&plugin).unwrap();
+    for file in ["plugin.toml", "operations.json", "plugin.py"] {
+        std::fs::copy(
+            fixtures.join("../registry-plugin").join(file),
+            plugin.join(file),
+        )
+        .unwrap();
+    }
+    basecraft_plugin_host::registry::register_editable(
+        &basecraft_plugin_host::registry::RegistryConfig::discover().unwrap(),
+        &plugin,
+    )
+    .unwrap();
+    let original = std::fs::read_to_string(folder.path().join("homologues.afa")).unwrap();
     let run = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["--ribbon-walk", folder.path().to_str().unwrap()])
         .env("QT_FORCE_STDERR_LOGGING", "1")
         .output()
         .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
     let log = String::from_utf8_lossy(&run.stderr);
     // Layout loops that predate this test: forms sized from their content and
     // the Sanger review's canvas. Anything else fails the journey.
@@ -169,6 +200,47 @@ fn ribbon_journey() {
         run.status.success() && log.contains("RIBBON_WALK passed") && warnings.is_empty(),
         "ribbon journey failed ({:?}); warnings: {warnings:#?}\n{log}",
         run.status
+    );
+    // The journey saved one inserted gap: same records and residues, the text
+    // changed. Nothing reached the read-only folder.
+    let saved = std::fs::read_to_string(folder.path().join("homologues.afa")).unwrap();
+    let records = |text: &str| -> Vec<(String, String)> {
+        text.split('>')
+            .skip(1)
+            .map(|record| {
+                let (name, rows) = record.split_once('\n').unwrap_or((record, ""));
+                (
+                    name.trim().to_owned(),
+                    rows.chars().filter(|c| !c.is_whitespace()).collect(),
+                )
+            })
+            .collect()
+    };
+    let ungapped = |records: Vec<(String, String)>| -> Vec<(String, String)> {
+        records
+            .into_iter()
+            .map(|(name, row)| (name, row.replace('-', "")))
+            .collect()
+    };
+    assert_ne!(
+        records(&saved),
+        records(&original),
+        "the journey's save wrote nothing"
+    );
+    assert_eq!(ungapped(records(&saved)), ungapped(records(&original)));
+    let gaps = |text: &str| {
+        records(text)
+            .iter()
+            .map(|(_, row)| row.matches('-').count())
+            .sum::<usize>()
+    };
+    assert!(
+        gaps(&saved) > gaps(&original),
+        "the saved alignment has no new gap"
+    );
+    assert_eq!(
+        std::fs::read(locked.join("locked.afa")).unwrap(),
+        original.as_bytes()
     );
     let _ = folder.keep();
     println!("Every ribbon tab of every document kind showed its commands, without QML warnings");

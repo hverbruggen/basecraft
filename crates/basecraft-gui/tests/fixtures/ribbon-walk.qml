@@ -19,6 +19,20 @@ Main {
 
     function fail(message) { console.error("RIBBON_WALK failed: " + message); Qt.exit(2) }
     function check(value, message) { if (!value) fail(message) }
+    // A step that waits: it runs again on the next tick until test() holds.
+    function until(test, message) {
+        let tries = 0
+        const step = () => { if (!test()) { if (++tries > 1500) fail(message); walk.steps.unshift(step) } }
+        return step
+    }
+    function tabOf(path) {
+        for (let i = 0; i < documentTabs().count; i++) {
+            const d = documentAt(i)
+            if (d && d.controller && d.controller.file_path === path) return i
+        }
+        return -1
+    }
+    function textOf(controller) { controller.select_all(); return controller.selection_text() }
     function find(item, test) {
         if (!item) return null
         if (test(item)) return item
@@ -334,6 +348,104 @@ Main {
             check(loaders.length >= 50, "only " + loaders.length + " dialogs load on demand")
             for (const loader of loaders) check(loader.dialog(), "a dialog failed to build")
         })
+        // 6.1: open, edit, save, close and reopen an alignment, with undo, redo,
+        // save and close from the keyboard (window shortcuts, through the
+        // platform's key entry). The parent process checks the saved file.
+        const aligned = folder + "/homologues.afa"
+        const edited = {}
+        list.push(() => {
+            show(1)
+            const ctl = documentAt(1).controller
+            check(ctl.file_path === aligned && !ctl.dirty, "the alignment opened dirty or under another path")
+            edited.original = textOf(ctl)
+            ctl.select_block(0, 0, 0, 0)
+            ctl.insert_gap()
+            edited.text = textOf(ctl)
+            check(ctl.dirty && edited.text !== edited.original, "inserting a gap changed nothing")
+            currentView.forceActiveFocus()
+            currentView.pressKey(Qt.Key_Z, Qt.ControlModifier, "")
+            check(textOf(ctl) === edited.original, "Ctrl+Z did not undo the gap")
+            currentView.pressKey(Qt.Key_Z, Qt.ControlModifier | Qt.ShiftModifier, "")
+            check(textOf(ctl) === edited.text, "Ctrl+Shift+Z did not redo the gap")
+            edited.controller = ctl
+            currentView.pressKey(Qt.Key_S, Qt.ControlModifier, "")
+        })
+        list.push(until(() => !edited.controller.dirty, "Ctrl+S did not save the alignment"))
+        list.push(() => {
+            const ctl = edited.controller
+            check(documentAt(1).controller === ctl && ctl.file_path === aligned && documentTabs().currentIndex === 1, "saving changed the document's identity or tab")
+            edited.tabs = documentTabs().count
+            currentView.pressKey(Qt.Key_W, Qt.ControlModifier, "")
+            check(documentTabs().count === edited.tabs - 1 && tabOf(aligned) < 0, "Ctrl+W did not close the saved alignment")
+            openPath(aligned)
+        })
+        list.push(until(() => tabOf(aligned) >= 0 && documentAt(tabOf(aligned)).controller, "the alignment did not reopen"))
+        list.push(() => {
+            const ctl = documentAt(tabOf(aligned)).controller
+            check(ctl !== edited.controller && !ctl.dirty && textOf(ctl) === edited.text, "the reopened alignment lost the saved gap")
+        })
+        // 6.1 error and cancellation: a save that fails keeps the work dirty,
+        // and cancelling the close question keeps the tab.
+        const locked = folder + "/locked/locked.afa"
+        list.push(() => openPath(locked))
+        list.push(until(() => tabOf(locked) >= 0 && documentAt(tabOf(locked)).controller, "the locked alignment did not open"))
+        list.push(() => {
+            show(tabOf(locked))
+            const ctl = documentAt(tabOf(locked)).controller
+            ctl.select_block(0, 0, 0, 0)
+            ctl.insert_gap()
+            edited.controller = ctl
+            edited.message = ctl.message
+            currentView.forceActiveFocus()
+            currentView.pressKey(Qt.Key_S, Qt.ControlModifier, "")
+        })
+        list.push(until(() => edited.controller.message !== edited.message || !edited.controller.dirty, "the failed save reported nothing"))
+        list.push(() => {
+            check(edited.controller.dirty, "a save into a read-only folder was reported as saved")
+            currentView.pressKey(Qt.Key_W, Qt.ControlModifier, "")
+            const ask = dialog("closeDocumentDialog")
+            check(ask && ask.opened, "closing unsaved work did not ask")
+            ask.reject()
+            check(tabOf(locked) >= 0 && edited.controller.dirty, "cancelling the close question closed the tab")
+            currentView.pressKey(Qt.Key_W, Qt.ControlModifier, "")
+            dialog("closeDocumentDialog").discarded()
+            check(tabOf(locked) < 0, "discarding did not close the tab")
+        })
+        // 6.2 background completion: an annotator run on the sequence finishes
+        // while another tab is active, without moving the tab or the focus. A
+        // project switch meanwhile is refused before any question.
+        list.push(() => {
+            show(0)
+            edited.controller = documentAt(0).controller
+            edited.controller.find_orfs(30, false)
+            check(edited.controller.busy, "the ORF finder did not start")
+            show(2)
+            currentView.forceActiveFocus()
+            edited.focus = activeFocusItem
+            selectProject(folder + "/second")
+            check(dialog("preferences").project_error.startsWith("A task is still running") && metadataProject === folder && documentTabs().count === edited.tabs, "a busy tab did not refuse the switch first")
+        })
+        list.push(until(() => !edited.controller.busy, "the ORF finder did not finish"))
+        list.push(() => {
+            check(documentTabs().currentIndex === 2 && activeFocusItem === edited.focus, "a background completion moved the tab or the focus")
+            check(edited.controller.message.length > 0, "the ORF finder reported nothing")
+        })
+        // Cancellation through the job service: a plugin run that never ends
+        // is cancelled from the job list; the focus stays where it was.
+        list.push(() => {
+            check(hangRun.submit(folder, JSON.stringify({operation: "org.example.registry-fixture/count@1",
+                inputs: {sources: [{kind: "file", path: "time.nwk"}]}, parameters: {mode: "hang"}})), "the hanging run did not start")
+        })
+        list.push(until(() => JSON.parse(jobWatch.jobs).some(j => j.operation.includes("registry-fixture") && j.status === "running"), "the hanging run is not in the job list"))
+        list.push(() => {
+            selectProject(folder + "/second")
+            check(dialog("preferences").project_error.startsWith("A task is still running"), "a running job did not refuse the switch")
+            const row = JSON.parse(jobWatch.jobs).find(j => j.operation.includes("registry-fixture") && j.status === "running")
+            check(row.cancellable, "the running plugin cannot be cancelled")
+            jobWatch.cancel(row.id)
+        })
+        list.push(until(() => !hangRun.busy && JSON.parse(jobWatch.jobs).some(j => j.operation.includes("registry-fixture") && j.status === "cancelled"), "cancelling from the job list did not stop the run"))
+        list.push(() => check(activeFocusItem === edited.focus && documentTabs().currentIndex === 2, "the cancelled job moved the focus"))
         // Choosing another project asks about unsaved work as quitting does,
         // closes every document, then switches.
         list.push(() => {
@@ -344,6 +456,7 @@ Main {
             ask.discarded()
             check(documentTabs().count === 0, "switching project left documents open")
         })
+        list.push(until(() => metadataProject === folder + "/second" || dialog("preferences").project_error.length > 0, "the project choice never finished"))
         list.push(() => {
             const error = dialog("preferences").project_error
             check(metadataProject === folder + "/second" && error === "", "project did not switch after its documents closed: " + error)
@@ -352,6 +465,8 @@ Main {
         return list
     }
     AppOperations { id: contactCheck }
+    AppOperations { id: hangRun }
+    AppJobs { id: jobWatch }
     Timer {
         interval: 30; repeat: true; running: true
         onTriggered: {

@@ -149,6 +149,12 @@ pub mod qobject {
         /// the window's project changes.
         #[qinvokable]
         fn choose_project(self: Pin<&mut GenomeController>, path: &QString) -> QString;
+        /// After a switch closed every tab: choose `path` once their
+        /// sessions have ended; `project_chosen` reports "" or the refusal.
+        #[qinvokable]
+        fn choose_project_after_close(self: Pin<&mut GenomeController>, path: &QString);
+        #[qsignal]
+        fn project_chosen(self: Pin<&mut GenomeController>, error: QString);
         #[qinvokable]
         fn resize(self: Pin<&mut GenomeController>, width: f64, height: f64);
         #[qinvokable]
@@ -985,6 +991,22 @@ impl qobject::GenomeController {
         self.as_mut().notify("");
         self.refresh();
         Ok(())
+    }
+
+    pub fn choose_project_after_close(self: Pin<&mut Self>, path: &QString) {
+        let chosen = path.clone();
+        crate::chosen_project::choose_after_close(
+            &self.qt_thread(),
+            path.to_string(),
+            10,
+            move |mut this: Pin<&mut Self>, result| match result {
+                Ok(()) => {
+                    this.as_mut().set_project_dir(chosen);
+                    this.project_chosen(QString::default());
+                }
+                Err(error) => this.project_chosen(QString::from(&error)),
+            },
+        );
     }
 
     /// Returns an error when documents of the current project are still open.
