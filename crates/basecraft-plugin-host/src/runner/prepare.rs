@@ -16,23 +16,24 @@ struct GeneratedInput {
 }
 
 /// The input view of a session document's current revision.
-/// Refuse an alignment whose residues are not an alphabet the input accepts.
+/// Refuse a document whose alphabet is not one the input accepts, or can't
+/// be told yet (D12): `refusal` says why.
 fn check_alphabet(
     operation: &RegisteredOperation,
     name: &str,
-    alignment: &basecraft_docs::AlignmentDoc,
+    (protein, refusal): (bool, Option<String>),
     shown: &str,
 ) -> Result<()> {
     use basecraft_protocol::operation::Alphabet;
     let accepted = &operation.descriptor.inputs[name].alphabets;
     if !accepted.is_empty()
-        && let Some(refusal) = alignment.alphabet_refusal()
+        && let Some(refusal) = refusal
     {
         return Err(Error::Protocol(format!(
             "unsupported_input: {shown}: {refusal}"
         )));
     }
-    let found = if alignment.is_protein() {
+    let found = if protein {
         Alphabet::Protein
     } else {
         Alphabet::Nucleotide
@@ -46,7 +47,7 @@ fn check_alphabet(
     };
     let wanted: Vec<_> = accepted.iter().map(word).collect();
     Err(Error::Protocol(format!(
-        "unsupported_input: {} needs a {} alignment, and {shown} holds {} sequences",
+        "unsupported_input: {} needs {} sequences, and {shown} holds {} sequences",
         operation.descriptor.title,
         wanted.join(" or "),
         word(&found),
@@ -62,12 +63,9 @@ fn document_view(
     let mut bytes = Vec::new();
     let view = operation.descriptor.inputs[name].view;
     if session.is_alignment(doc) {
-        check_alphabet(
-            operation,
-            name,
-            session.alignment(doc)?,
-            "the open alignment",
-        )?;
+        let alignment = session.alignment(doc)?;
+        let alphabet = (alignment.is_protein(), alignment.alphabet_refusal());
+        check_alphabet(operation, name, alphabet, "the open alignment")?;
     }
     match view {
         InputView::AlignedFasta if session.is_alignment(doc) => {
@@ -176,6 +174,9 @@ fn prepare_inputs(
                 }
             };
             let checked = session.checked_sequence(doc)?;
+            let protein = checked.alphabet().value == basecraft_protocol::facts::Alphabet::Protein;
+            let alphabet = (protein, checked.alphabet_refusal());
+            check_alphabet(operation, name, alphabet, "the open sequence")?;
             sequence = Some(SequenceTarget {
                 doc,
                 session: session.id().into(),
@@ -671,7 +672,9 @@ fn freeze_inputs(
                         || source.display().to_string(),
                         |file| file.to_string_lossy().into_owned(),
                     );
-                    check_alphabet(operation, &name, &alignment.doc, &shown)?;
+                    let doc = &alignment.doc;
+                    let alphabet = (doc.is_protein(), doc.alphabet_refusal());
+                    check_alphabet(operation, &name, alphabet, &shown)?;
                     if binding.view == InputView::AlignedFasta {
                         alignment
                             .doc

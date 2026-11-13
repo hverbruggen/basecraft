@@ -131,7 +131,7 @@ fn an_input_with_the_wrong_alphabet_is_refused_before_launch() {
         .to_string();
     assert!(
         error.contains(
-            "Count bytes needs a nucleotide alignment, and proteins.fasta holds protein sequences"
+            "Count bytes needs nucleotide sequences, and proteins.fasta holds protein sequences"
         ),
         "{error}"
     );

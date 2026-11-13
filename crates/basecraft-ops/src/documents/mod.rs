@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 
 use basecraft_docs::FeatureId;
-use basecraft_protocol::facts::{Alphabet, Fact, FactSource, SequenceAlphabet};
+use basecraft_protocol::facts::{Alphabet, Fact, FactSource, SequenceAlphabet, StatedAlphabet};
 use basecraft_protocol::{DocState, Op};
 
 use crate::Result;
@@ -141,58 +141,79 @@ mod sequence;
 mod submission;
 pub(crate) mod tree;
 
-/// The user's alphabet, as the fact `doc.set_alphabet` records. Only a
-/// kind of sequence can be stated, not "undetermined" or "mixed".
-fn user_alphabet(value: Alphabet) -> Result<Fact<Alphabet>> {
-    if matches!(value, Alphabet::Undetermined | Alphabet::Mixed) {
-        return Err(crate::error::invalid("state DNA, RNA or protein"));
-    }
-    Ok(Fact {
-        value,
+/// The user's alphabet, as the fact `doc.set_alphabet` records.
+fn user_alphabet(value: StatedAlphabet) -> Fact<Alphabet> {
+    Fact {
+        value: value.into(),
         source: FactSource::User,
-    })
+    }
 }
 
 impl crate::Session {
     /// The letters an alignment or sequence is written in: what the user
-    /// said, kept in its companion, or else basecraft's guess (D12), which
-    /// is "mixed" when its sequences disagree.
+    /// said, kept in its companion, or what the file says, or else
+    /// basecraft's guess (D12): the sequences' common value, "mixed" when
+    /// they differ. A sequence file counts every record it holds.
     pub fn alphabet(&self, id: crate::DocId) -> Result<Fact<Alphabet>> {
         let content = self.content(id)?;
-        let alignment = content.alignment().map(|opened| opened.doc.alphabet());
-        alignment
-            .or_else(|| content.sequence().map(|opened| opened.doc.alphabet()))
-            .cloned()
-            .ok_or_else(|| crate::error::invalid("only alignments and sequences have an alphabet"))
+        if let Some(opened) = content.alignment() {
+            return Ok(opened.doc.alphabet());
+        }
+        let opened = sequence(content)?;
+        let open = opened.doc.alphabet();
+        if open.source == FactSource::User || opened.others.alphabets.is_empty() {
+            return Ok(open);
+        }
+        let others = opened.others.alphabets.iter().map(|(_, fact)| fact);
+        let all: Vec<&Fact<Alphabet>> = std::iter::once(&open).chain(others).collect();
+        let stated = all.iter().all(|fact| fact.source == FactSource::Stated);
+        Ok(Fact {
+            value: Alphabet::common(all.iter().map(|fact| fact.value)),
+            source: if stated {
+                FactSource::Stated
+            } else {
+                FactSource::Guessed
+            },
+        })
     }
 
-    /// Each sequence's guessed alphabet: the rows of an alignment, or the
-    /// open record of a sequence file.
+    /// Each sequence's alphabet, guessed or stated by the file: the rows of
+    /// an alignment, or every record of a sequence file.
     pub fn sequence_alphabets(&self, id: crate::DocId) -> Result<Vec<SequenceAlphabet>> {
         let content = self.content(id)?;
+        let entry = |name: &str, alphabet| SequenceAlphabet {
+            name: name.to_owned(),
+            alphabet,
+        };
         if let Some(opened) = content.alignment() {
-            let rows = opened.doc.rows().zip(opened.doc.row_alphabets());
-            return Ok(rows
-                .map(|(row, alphabet)| SequenceAlphabet {
-                    name: row.name.clone(),
-                    alphabet,
-                })
+            return Ok(opened
+                .doc
+                .rows()
+                .map(|row| entry(&row.name, row.alphabet()))
                 .collect());
         }
-        let opened = content.sequence().ok_or_else(|| {
-            crate::error::invalid("only alignments and sequences have an alphabet")
-        })?;
-        let alphabet = opened.doc.guessed_alphabet();
-        Ok(vec![SequenceAlphabet {
-            name: opened.doc.name.clone(),
-            alphabet,
-        }])
+        let opened = sequence(content)?;
+        let open = opened.doc.alphabet();
+        let open = if open.source == FactSource::User {
+            opened.doc.guessed_alphabet()
+        } else {
+            open.value
+        };
+        let others = opened
+            .others
+            .alphabets
+            .iter()
+            .map(|(name, fact)| entry(name, fact.value));
+        Ok(std::iter::once(entry(&opened.doc.name, open))
+            .chain(others)
+            .collect())
     }
 }
 
-/// The alphabet a side file keeps: anything not guessed.
-fn stated(alphabet: &Fact<Alphabet>) -> Option<&Fact<Alphabet>> {
-    (alphabet.source != FactSource::Guessed).then_some(alphabet)
+fn sequence(content: &crate::files::Loaded) -> Result<&crate::files::Opened> {
+    content
+        .sequence()
+        .ok_or_else(|| crate::error::invalid("only alignments and sequences have an alphabet"))
 }
 
 /// Stage the facts companion of an alignment or sequence: written when it

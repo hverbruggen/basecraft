@@ -6,7 +6,20 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// The letters a sequence or alignment is written in.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum Alphabet {
     Dna,
@@ -22,32 +35,90 @@ pub enum Alphabet {
     Mixed,
 }
 
-/// Letter counts for basecraft's one guess (D12), so a long sequence can be
-/// read in pieces. Gaps, N, X and ? don't count.
-#[derive(Clone, Copy, Debug, Default)]
+impl std::fmt::Display for Alphabet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Alphabet::Dna => "DNA",
+            Alphabet::Rna => "RNA",
+            Alphabet::Protein => "protein",
+            Alphabet::Unknown => "unknown",
+            Alphabet::Undetermined => "undetermined",
+            Alphabet::Mixed => "mixed",
+        })
+    }
+}
+
+/// What a user can state: a kind of sequence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StatedAlphabet {
+    Dna,
+    Rna,
+    Protein,
+}
+
+impl From<StatedAlphabet> for Alphabet {
+    fn from(stated: StatedAlphabet) -> Self {
+        match stated {
+            StatedAlphabet::Dna => Alphabet::Dna,
+            StatedAlphabet::Rna => Alphabet::Rna,
+            StatedAlphabet::Protein => Alphabet::Protein,
+        }
+    }
+}
+
+/// Letters counted per sequence when a document opens. `u64::MAX` counts
+/// every letter; a cap on the guess (a pending user decision) is this one
+/// number. Edits always update the counts exactly.
+pub const GUESS_LETTERS: u64 = u64::MAX;
+
+/// Letter counts for basecraft's one guess (D12). Edits add what they insert
+/// and remove what they delete, so the guess stays current at the cost of
+/// the edit. Gaps, N, X and ? don't count.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AlphabetCounts {
     letters: u64,
     protein_only: u64,
-    t: bool,
-    u: bool,
+    t: u64,
+    u: u64,
 }
 
 impl AlphabetCounts {
+    pub fn of(residues: &[u8]) -> Self {
+        let mut counts = Self::default();
+        counts.add(residues);
+        counts
+    }
+
+    pub fn letters(&self) -> u64 {
+        self.letters
+    }
+
     pub fn add(&mut self, residues: &[u8]) {
+        self.count(residues, 1);
+    }
+
+    pub fn remove(&mut self, residues: &[u8]) {
+        self.count(residues, u64::MAX);
+    }
+
+    /// Add `step` per letter: 1 to add, `u64::MAX` (wrapping) to remove.
+    fn count(&mut self, residues: &[u8], step: u64) {
         for &b in residues {
             let b = b.to_ascii_uppercase();
             if matches!(b, b'N' | b'X') || !(b.is_ascii_alphabetic() || b == b'*') {
                 continue;
             }
-            self.letters += 1;
-            match b {
+            self.letters = self.letters.wrapping_add(step);
+            let class = match b {
                 b'E' | b'F' | b'I' | b'L' | b'P' | b'Q' | b'J' | b'O' | b'Z' | b'*' => {
-                    self.protein_only += 1;
+                    &mut self.protein_only
                 }
-                b'T' => self.t = true,
-                b'U' => self.u = true,
-                _ => {}
-            }
+                b'T' => &mut self.t,
+                b'U' => &mut self.u,
+                _ => continue,
+            };
+            *class = class.wrapping_add(step);
         }
     }
 
@@ -58,7 +129,7 @@ impl AlphabetCounts {
         if self.letters == 0 {
             Alphabet::Unknown
         } else if self.protein_only == 0 {
-            if self.u && !self.t {
+            if self.u > 0 && self.t == 0 {
                 Alphabet::Rna
             } else {
                 Alphabet::Dna
@@ -74,9 +145,7 @@ impl AlphabetCounts {
 impl Alphabet {
     /// Basecraft's one guess for one sequence (D12): see [`AlphabetCounts`].
     pub fn guess(residues: &[u8]) -> Self {
-        let mut counts = AlphabetCounts::default();
-        counts.add(residues);
-        counts.alphabet()
+        AlphabetCounts::of(residues).alphabet()
     }
 
     /// A document's alphabet from its sequences': their common value, or
@@ -180,8 +249,23 @@ mod tests {
             Alphabet::guess(&with(b"ACGT", b"EE", 98)),
             Alphabet::Protein
         );
+        // Exactly 1% is still undetermined: 1 E in 100 letters.
+        let one_percent = with(b"ACGT", b"E", 99);
+        assert_eq!(Alphabet::guess(&one_percent), Alphabet::Undetermined);
         assert_eq!(Alphabet::guess(b"MKLVEFIQ*"), Alphabet::Protein);
         assert_eq!(Alphabet::guess(b"--??NNXX"), Alphabet::Unknown);
+    }
+
+    #[test]
+    fn counts_follow_edits() {
+        let mut counts = super::AlphabetCounts::of(b"ACGTACGT");
+        counts.add(b"MELQ");
+        assert_eq!(counts.alphabet(), Alphabet::Protein);
+        counts.remove(b"MELQ");
+        assert_eq!(counts, super::AlphabetCounts::of(b"ACGTACGT"));
+        counts.remove(b"TT");
+        counts.add(b"UU");
+        assert_eq!(counts.alphabet(), Alphabet::Rna);
     }
 
     #[test]

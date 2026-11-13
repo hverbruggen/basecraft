@@ -709,7 +709,7 @@ fn sanger_scenario(name: &str, filename: &str) {
 /// undo, redo, save, reopen and replay like any edit.
 #[test]
 fn alignment_alphabet() {
-    use basecraft_protocol::facts::{Alphabet, Fact, FactSource};
+    use basecraft_protocol::facts::{Alphabet, Fact, FactSource, StatedAlphabet};
     crate::isolated_profile::isolate!();
     let stated = |value| Fact {
         value,
@@ -723,7 +723,8 @@ fn alignment_alphabet() {
             let original = s.alphabet(d).unwrap();
             assert_eq!(original.source, FactSource::Guessed);
             (
-                [Alphabet::Rna, Alphabet::Dna].map(|alphabet| Op::SetAlphabet { alphabet }),
+                [StatedAlphabet::Rna, StatedAlphabet::Dna]
+                    .map(|alphabet| Op::SetAlphabet { alphabet }),
                 [original, stated(Alphabet::Rna), stated(Alphabet::Dna)],
             )
         },

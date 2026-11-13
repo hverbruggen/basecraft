@@ -93,10 +93,12 @@ major. MCP spells the id `plugin_id.local_name.vMAJOR`.
 
 Inputs. A view is `bytes`, `aligned_fasta`, `ungapped_fasta`, `newick` or
 `sequence_snapshot`; it names the transformation the host applies when it
-freezes the input. An alignment input may list the `alphabets` it accepts
-(`nucleotide`, `protein`). The host refuses any other alignment before the
-plugin starts, for example "Distance tree needs a nucleotide alignment, and
-proteins.fasta holds protein sequences". `retain: true` keeps the submitted
+freezes the input. An alignment or sequence input may list the `alphabets`
+it accepts (`nucleotide`, `protein`). The host refuses any other document
+before the plugin starts, for example "Distance tree needs nucleotide
+sequences, and proteins.fasta holds protein sequences", and refuses one whose
+sequences basecraft can't tell apart or that are of different kinds, naming
+them, until the user states the alphabet. `retain: true` keeps the submitted
 bytes with the run. `verify: true` checks the input's retained evidence before
 the run, as for a reused distance cache.
 

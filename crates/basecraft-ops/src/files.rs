@@ -576,7 +576,7 @@ pub fn tree_sidecar(path: &Path) -> PathBuf {
 use basecraft_protocol::companion_records::{
     COMPANION_VERSION, Companion, DelimitationCompanion, SupportName, TreeCompanion,
 };
-use basecraft_protocol::facts::{Alphabet, Fact};
+use basecraft_protocol::facts::{Alphabet, AlphabetCounts, Fact, FactSource, GUESS_LETTERS};
 
 /// Read a document's companion. Refuses another layout, a companion written
 /// for different bytes than the document's, and for a tree, a companion that
@@ -757,6 +757,11 @@ pub fn facts_companion(
 /// Put back the alphabet an alignment's or sequence's companion keeps. A
 /// companion that no longer matches the file is ignored, with a warning.
 fn restore_alphabet(content: &mut Loaded, path: &Path, exchange_hash: &str) {
+    // Only sequences and alignments keep an alphabet; a tree reads its
+    // companion once, elsewhere.
+    if !matches!(content, Loaded::Sequence(_) | Loaded::Alignment(_)) {
+        return;
+    }
     let companion = tree_sidecar(path);
     let found = read_optional(&companion).and_then(|bytes| {
         bytes
@@ -771,13 +776,14 @@ fn restore_alphabet(content: &mut Loaded, path: &Path, exchange_hash: &str) {
         ),
     };
     match content {
-        Loaded::Sequence(opened) if stated.is_some() => opened.doc.set_alphabet(stated),
-        Loaded::Alignment(opened) if stated.is_some() => opened.doc.set_alphabet(stated),
-        _ => {}
-    }
-    match content {
-        Loaded::Sequence(opened) => opened.companion_warning = warning,
-        Loaded::Alignment(opened) => opened.companion_warning = warning,
+        Loaded::Sequence(opened) => {
+            opened.doc.set_alphabet(stated);
+            opened.companion_warning = warning;
+        }
+        Loaded::Alignment(opened) => {
+            opened.doc.set_alphabet(stated);
+            opened.companion_warning = warning;
+        }
         _ => {}
     }
 }
@@ -832,6 +838,9 @@ pub struct OtherRecords {
     /// Record names that more than one record in the file uses. Edits name
     /// their record, so they are refused while this is not empty.
     pub repeated_names: Vec<String>,
+    /// The alphabet of each record after the open one (D12.5), stated by
+    /// the file or guessed, read once at open.
+    pub alphabets: Vec<(String, Fact<Alphabet>)>,
     /// GenBank: the exact bytes after the first record, held once.
     pub genbank: Arc<Vec<u8>>,
     /// FASTA: the GFF3 companion without the open record's lines.
@@ -878,6 +887,7 @@ fn opened_genbank(first: genbank::First) -> Opened {
         others: OtherRecords {
             count: first.records,
             repeated_names: repeated(&names),
+            alphabets: genbank_alphabets(&first.rest),
             genbank: Arc::new(first.rest),
             gff: None,
         },
@@ -926,11 +936,81 @@ fn open_fasta_with_gff(
                     .map(|r| r.name.clone())
                     .collect::<Vec<_>>(),
             ),
+            alphabets: fasta_alphabets(&file),
             genbank: Arc::default(),
             gff: gff_bytes.map(|bytes| Arc::new(gff3::keep_others(bytes, &name))),
         },
         fasta: Some(file),
     })
+}
+
+/// Each FASTA record after the first, with its guessed alphabet.
+fn fasta_alphabets(file: &fasta::IndexedFasta) -> Vec<(String, Fact<Alphabet>)> {
+    const PIECE: u64 = 1 << 16;
+    let mut buf = Vec::new();
+    let records = file.index.records.iter().skip(1);
+    records
+        .map(|record| {
+            let mut counts = AlphabetCounts::default();
+            let mut start = 0;
+            while start < record.len && counts.letters() < GUESS_LETTERS {
+                buf.clear();
+                let end = (start + PIECE).min(record.len);
+                if record
+                    .read_into(file.bytes(), start, end, &mut buf)
+                    .is_err()
+                {
+                    break;
+                }
+                counts.add(&buf);
+                start = end;
+            }
+            (record.name.clone(), Alphabet::guessed(counts.alphabet()))
+        })
+        .collect()
+}
+
+/// Each GenBank record in `rest`, with the alphabet its LOCUS line states
+/// ("aa", or a DNA or RNA molecule type), else guessed from its ORIGIN.
+fn genbank_alphabets(rest: &[u8]) -> Vec<(String, Fact<Alphabet>)> {
+    let finish = |(name, stated, counts): (String, Option<Alphabet>, AlphabetCounts)| {
+        let fact = stated.map_or_else(
+            || Alphabet::guessed(counts.alphabet()),
+            |value| Fact {
+                value,
+                source: FactSource::Stated,
+            },
+        );
+        (name, fact)
+    };
+    let mut out = Vec::new();
+    let mut record: Option<(String, Option<Alphabet>, AlphabetCounts)> = None;
+    let mut origin = false;
+    for line in rest.split(|&b| b == b'\n') {
+        if line.starts_with(b"LOCUS") {
+            out.extend(record.take().map(finish));
+            let text = String::from_utf8_lossy(line);
+            let words: Vec<&str> = text.split_whitespace().collect();
+            let unit = words.iter().position(|w| *w == "bp" || *w == "aa");
+            let stated = unit.and_then(|i| match words[i] {
+                "aa" => Some(Alphabet::Protein),
+                _ => words
+                    .get(i + 1)
+                    .and_then(|m| basecraft_docs::sequence::molecule_alphabet(m)),
+            });
+            let name = words.get(1).copied().unwrap_or_default().to_owned();
+            record = Some((name, stated, AlphabetCounts::default()));
+            origin = false;
+        } else if line.starts_with(b"ORIGIN") {
+            origin = true;
+        } else if line.starts_with(b"//") {
+            origin = false;
+        } else if origin && let Some((_, _, counts)) = &mut record {
+            counts.add(line);
+        }
+    }
+    out.extend(record.map(finish));
+    out
 }
 
 fn repeated(names: &[String]) -> Vec<String> {

@@ -36,6 +36,7 @@
         "sequence": {
           "view": "sequence_snapshot",
           "media_type": "application/vnd.apache.arrow.stream",
+          "alphabets": ["nucleotide"],
           "min": 1,
           "max": 1
         }

@@ -466,7 +466,7 @@ impl TreeDoc {
             .filter(|(_, a)| {
                 self.clade_tips(&a.clade).map_or(true, |now| {
                     now != a.tips
-                        && (a.rooting == Rooting::Rooted
+                        && (a.rooting != Rooting::Unrooted
                             || all.difference(&now).cloned().collect::<BTreeSet<_>>() != a.tips)
                 })
             })
@@ -525,13 +525,14 @@ impl TreeDoc {
         Ok(common[0])
     }
 
-    /// After a reroot, point labels made on an unrooted tree whose split
-    /// survived at the clade that now marks it. Nothing moved, so their tips
-    /// and rooting stay.
+    /// After a reroot, point labels made on a tree marked unrooted whose
+    /// split survived at the clade that now marks it. Nothing moved, so their
+    /// tips and rooting stay. Labels of unknown rooting are left displaced
+    /// for the user to place (D11).
     fn repoint_split_labels(&mut self) {
         for id in self.displaced_annotations() {
             let a = &self.annotations[&id];
-            if a.rooting != Rooting::Rooted
+            if a.rooting == Rooting::Unrooted
                 && let Some(node) = self.exact_clade(a)
             {
                 let clade = self.clade_ref(node);
@@ -593,6 +594,11 @@ impl TreeDoc {
                     ))
                 })?;
                 a.clade = self.clade_ref(node);
+                // Placed on the other side of its split: the user has said
+                // the label marks a split.
+                if self.tips_under(node) != a.tips {
+                    a.rooting = Rooting::Unrooted;
+                }
             }
             LabelPlacement::Smallest => {
                 let node = self.smallest_clade(&a.tips)?;

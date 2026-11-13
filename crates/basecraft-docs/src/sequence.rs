@@ -6,26 +6,39 @@ use std::sync::{Arc, Mutex};
 use basecraft_io::fasta::IndexedFasta;
 use basecraft_io::{genbank, gff3};
 use basecraft_protocol::Feature;
-use basecraft_protocol::facts::{Alphabet, AlphabetCounts, Fact};
+use basecraft_protocol::facts::{Alphabet, AlphabetCounts, Fact, FactSource, GUESS_LETTERS};
 use basecraft_query::{IntervalIndex, SeqSummary};
 use serde::{Deserialize, Serialize};
 
 use crate::coord::{Change, map_location};
 use crate::piece::{PieceTable, Residues};
 
-/// Basecraft's guess (D12) over every current residue, read in pieces.
-pub(crate) fn guess_alphabet(seq: &PieceTable) -> Alphabet {
+/// Letter counts for the guess (D12), read in pieces, up to
+/// [`GUESS_LETTERS`] letters.
+pub(crate) fn count_letters(seq: &PieceTable) -> AlphabetCounts {
     const PIECE: u64 = 1 << 16;
     let mut counts = AlphabetCounts::default();
     let mut buf = Vec::new();
     let mut start = 0;
-    while start < seq.len() {
+    while start < seq.len() && counts.letters() < GUESS_LETTERS {
         buf.clear();
         seq.read_into(start, (start + PIECE).min(seq.len()), &mut buf);
         counts.add(&buf);
         start += PIECE;
     }
-    counts.alphabet()
+    counts
+}
+
+/// The alphabet a GenBank LOCUS molecule type states, when it names one.
+pub fn molecule_alphabet(molecule: &str) -> Option<Alphabet> {
+    let molecule = molecule.to_ascii_lowercase();
+    if molecule.contains("rna") {
+        Some(Alphabet::Rna)
+    } else if molecule.contains("dna") {
+        Some(Alphabet::Dna)
+    } else {
+        None
+    }
 }
 
 /// Stable for the life of a document: removing a feature leaves a hole, so
@@ -60,8 +73,12 @@ pub struct SequenceDoc {
     seq: PieceTable,
     features: Vec<Option<Feature>>,
     version: u64,
-    /// The letters of the sequence: from the side file, or guessed.
-    alphabet: Fact<Alphabet>,
+    /// The alphabet the side file or the user states.
+    stated: Option<Fact<Alphabet>>,
+    /// The alphabet the file itself states (a GenBank molecule type).
+    file_alphabet: Option<Alphabet>,
+    /// Letter counts for the guess, kept current by every edit.
+    counts: AlphabetCounts,
     /// `(version after the change, change)`, oldest first.
     changes: Vec<(u64, Change)>,
     index: Mutex<Option<(u64, Arc<IntervalIndex>)>>,
@@ -77,7 +94,9 @@ impl Clone for SequenceDoc {
             seq: self.seq.clone(),
             features: self.features.clone(),
             version: self.version,
-            alphabet: self.alphabet.clone(),
+            stated: self.stated.clone(),
+            file_alphabet: self.file_alphabet,
+            counts: self.counts,
             changes: self.changes.clone(),
             index: Mutex::new(None),
             summary: Mutex::new(None),
@@ -136,7 +155,7 @@ impl SequenceDoc {
         circular: bool,
     ) -> Self {
         let seq = PieceTable::new(residues);
-        let alphabet = Alphabet::guessed(guess_alphabet(&seq));
+        let counts = count_letters(&seq);
         Self {
             name: name.into(),
             circular,
@@ -144,31 +163,56 @@ impl SequenceDoc {
             seq,
             features: features.into_iter().map(Some).collect(),
             version: 0,
-            alphabet,
+            stated: None,
+            file_alphabet: None,
+            counts,
             changes: Vec::new(),
             index: Mutex::new(None),
             summary: Mutex::new(None),
         }
     }
 
-    /// The letters of the sequence, and who said so.
-    pub fn alphabet(&self) -> &Fact<Alphabet> {
-        &self.alphabet
+    /// The letters of the sequence, and who said so: the side file or the
+    /// user, else the file itself, else basecraft's guess (D12).
+    pub fn alphabet(&self) -> Fact<Alphabet> {
+        if let Some(stated) = &self.stated {
+            return stated.clone();
+        }
+        match self.file_alphabet {
+            Some(value) => Fact {
+                value,
+                source: FactSource::Stated,
+            },
+            None => Alphabet::guessed(self.counts.alphabet()),
+        }
+    }
+
+    /// What the side file or the user states, which the side file keeps.
+    pub fn stated_alphabet(&self) -> Option<&Fact<Alphabet>> {
+        self.stated.as_ref()
     }
 
     /// Basecraft's guess (D12) from the current residues.
     pub fn guessed_alphabet(&self) -> Alphabet {
-        guess_alphabet(&self.seq)
+        self.counts.alphabet()
     }
 
-    /// Use the alphabet a side file or the user states; `None` guesses
-    /// again from the residues.
+    /// Use the alphabet a side file or the user states; `None` drops it.
     pub fn set_alphabet(&mut self, stated: Option<Fact<Alphabet>>) {
-        self.alphabet = stated.unwrap_or_else(|| Alphabet::guessed(guess_alphabet(&self.seq)));
+        self.stated = stated;
+    }
+
+    /// Why something that needs the alphabet can't run yet (D12).
+    pub fn alphabet_refusal(&self) -> Option<String> {
+        if self.alphabet().source != FactSource::Guessed {
+            return None;
+        }
+        crate::alignment::alphabet_refusal([(self.name.as_str(), self.counts.alphabet())])
     }
 
     pub fn from_genbank(rec: genbank::Record) -> Self {
         let mut doc = Self::new(rec.name, Arc::new(rec.sequence), rec.features, rec.circular);
+        doc.file_alphabet = molecule_alphabet(&rec.molecule);
         doc.genbank = Some(GenbankMeta {
             molecule: rec.molecule,
             division: rec.division,
@@ -366,6 +410,8 @@ impl SequenceDoc {
     pub fn replace(&mut self, start: u64, end: u64, residues: &[u8]) -> EditResult {
         let removed = self.seq.delete(start, end);
         self.seq.insert(start, residues);
+        self.counts.remove(&removed);
+        self.counts.add(residues);
         let change = Change {
             pos: start,
             deleted: end - start,

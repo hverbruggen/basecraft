@@ -18,16 +18,7 @@ fn setup(root: &Path) -> (Session, basecraft_ops::DocId, PathBuf) {
     std::fs::write(&source, ORIGINAL).unwrap();
     let mut session = Session::recoverable(root).unwrap();
     let doc = session.open(&source).unwrap();
-    session
-        .apply(
-            doc,
-            Op::SeqReplace {
-                start: 1,
-                end: 2,
-                residues: "T".into(),
-            },
-        )
-        .unwrap();
+    session.apply(doc, Op::seq_replace(1, 2, "T")).unwrap();
     (session, doc, source)
 }
 
@@ -81,11 +72,7 @@ fn default_and_unrelated_scaling() {
         session
             .apply(
                 doc,
-                Op::SeqReplace {
-                    start: 1,
-                    end: 2,
-                    residues: if index % 2 == 0 { "G" } else { "T" }.into(),
-                },
+                Op::seq_replace(1, 2, if index % 2 == 0 { "G" } else { "T" }),
             )
             .unwrap();
         counters::reset();

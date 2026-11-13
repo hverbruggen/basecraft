@@ -327,10 +327,14 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
             if !binding.alphabets.is_empty()
                 && !matches!(
                     binding.view,
-                    InputView::AlignedFasta | InputView::UngappedFasta
+                    InputView::AlignedFasta
+                        | InputView::UngappedFasta
+                        | InputView::SequenceSnapshot
                 )
             {
-                return Err(invalid("only alignment inputs declare alphabets"));
+                return Err(invalid(
+                    "only alignment and sequence inputs declare alphabets",
+                ));
             }
         }
         for (name, binding) in &descriptor.outputs {

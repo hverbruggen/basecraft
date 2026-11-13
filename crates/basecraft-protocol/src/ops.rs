@@ -186,7 +186,9 @@ pub enum Op {
     /// one companion, so in a multi-record FASTA or GenBank file this states
     /// the alphabet of every record in the file, not only the open one.
     #[serde(rename = "doc.set_alphabet")]
-    SetAlphabet { alphabet: crate::facts::Alphabet },
+    SetAlphabet {
+        alphabet: crate::facts::StatedAlphabet,
+    },
     /// Add, change (same `id`) or, with no annotation, remove a clade
     /// annotation.
     #[serde(rename = "tree.annotate")]

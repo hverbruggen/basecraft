@@ -10,7 +10,7 @@
 
 use basecraft_docs::alignment::{dna_mask, is_gap};
 use basecraft_docs::{AlignmentDoc, SequenceDoc};
-use basecraft_protocol::facts::{Alphabet, AlphabetCounts, FactSource};
+use basecraft_protocol::facts::Alphabet;
 use std::collections::VecDeque;
 use std::sync::{
     Arc,
@@ -256,21 +256,8 @@ pub fn search(input: Input, query: &str, reverse: bool, cancel: &AtomicBool) -> 
     };
     let protein = match &input {
         Input::Alignment(d) => d.is_protein(),
-        // A stated alphabet wins. Otherwise guess over every current residue,
-        // off the UI thread, so edits and letters past any sample count.
-        Input::Sequence(d) if d.alphabet().source != FactSource::Guessed => {
-            d.alphabet().value == Alphabet::Protein
-        }
-        Input::Sequence(d) => {
-            let mut counts = AlphabetCounts::default();
-            for start in (0..d.len()).step_by(usize::from(CHUNK)) {
-                if cancel.load(Ordering::Relaxed) {
-                    return Results::default();
-                }
-                counts.add(&d.read(start, (start + u64::from(CHUNK)).min(d.len())));
-            }
-            counts.alphabet() == Alphabet::Protein
-        }
+        // Stated, or guessed from counts that edits keep current.
+        Input::Sequence(d) => d.alphabet().value == Alphabet::Protein,
         _ => false,
     };
     let mut s = Scanner::new(

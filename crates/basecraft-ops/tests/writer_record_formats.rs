@@ -353,7 +353,7 @@ fn companions_read_and_written_again_keep_their_bytes() {
     let alignment = dir.path().join("pair.afa");
     std::fs::write(&alignment, ">a\nACGT\n>b\nACGA\n").unwrap();
     let doc = session.open(&alignment).unwrap();
-    let alphabet = basecraft_protocol::facts::Alphabet::Protein;
+    let alphabet = basecraft_protocol::facts::StatedAlphabet::Protein;
     let set = basecraft_protocol::Op::SetAlphabet { alphabet };
     session.apply(doc, set).unwrap();
     session.save(doc, None).unwrap();

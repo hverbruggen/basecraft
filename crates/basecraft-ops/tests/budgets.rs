@@ -95,11 +95,7 @@ fn fasta() {
 #[test]
 fn genbank() {
     scenario("genbank", "sequences-annotations/locus.gb", 1, |i| {
-        Op::SeqReplace {
-            start: u64::from(i),
-            end: u64::from(i) + 1,
-            residues: "C".into(),
-        }
+        Op::seq_replace(u64::from(i), u64::from(i) + 1, "C")
     });
 }
 
@@ -232,16 +228,7 @@ fn large_first_edit_records_the_original_without_reading() {
     let doc = session.open(&file).unwrap();
     let recovery = session.recovery_root().to_path_buf();
     counters::reset();
-    session
-        .apply(
-            doc,
-            Op::SeqReplace {
-                start: 0,
-                end: 1,
-                residues: "C".into(),
-            },
-        )
-        .unwrap();
+    session.apply(doc, Op::seq_replace(0, 1, "C")).unwrap();
     assert!(counters::snapshot().reads.is_empty());
     assert_eq!(counters::snapshot().sync_all, 0);
     assert_eq!(counters::snapshot().sync_data, 1);

@@ -1065,7 +1065,7 @@
           "type": "object",
           "properties": {
             "alphabet": {
-              "$ref": "#/$defs/Alphabet"
+              "$ref": "#/$defs/StatedAlphabet"
             }
           },
           "required": [
@@ -1811,34 +1811,6 @@
           "required": [
             "kind"
           ]
-        }
-      ]
-    },
-    "Alphabet": {
-      "description": "The letters a sequence or alignment is written in.",
-      "oneOf": [
-        {
-          "type": "string",
-          "enum": [
-            "dna",
-            "rna",
-            "protein"
-          ]
-        },
-        {
-          "description": "No letters to judge by: gaps, N, X and ? only.",
-          "type": "string",
-          "const": "unknown"
-        },
-        {
-          "description": "A guess only: a few protein-only letters, 1% or fewer. The user has\nto say what the sequence is before anything that needs it runs.",
-          "type": "string",
-          "const": "undetermined"
-        },
-        {
-          "description": "A document only: its sequences are not all of one kind.",
-          "type": "string",
-          "const": "mixed"
         }
       ]
     },
@@ -4745,6 +4717,15 @@
       "required": [
         "name",
         "columns"
+      ]
+    },
+    "StatedAlphabet": {
+      "description": "What a user can state: a kind of sequence.",
+      "type": "string",
+      "enum": [
+        "dna",
+        "rna",
+        "protein"
       ]
     },
     "Strand": {

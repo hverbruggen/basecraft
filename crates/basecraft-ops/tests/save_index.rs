@@ -344,14 +344,7 @@ fn measure_save(root: &Path, label: &str, residue: &str, interactive: bool) {
     };
     let doc = session.open(&root.join("unrelated.fasta")).unwrap();
     session
-        .apply(
-            doc,
-            basecraft_protocol::Op::SeqReplace {
-                start: 0,
-                end: 1,
-                residues: residue.into(),
-            },
-        )
+        .apply(doc, basecraft_protocol::Op::seq_replace(0, 1, residue))
         .unwrap();
     // Recovery sessions retain the original by hard link at the first edit,
     // so the save also covers the multi-link lookup.

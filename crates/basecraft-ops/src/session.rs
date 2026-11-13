@@ -476,7 +476,7 @@ impl Session {
         } else {
             Vec::new()
         };
-        if let Some(molecule) = crate::blast::stated_molecule(opened.doc.alphabet(), None) {
+        if let Some(molecule) = crate::blast::stated_molecule(&opened.doc.alphabet()) {
             for query in &mut queries {
                 query.source["molecule"] = molecule.as_str().into();
             }

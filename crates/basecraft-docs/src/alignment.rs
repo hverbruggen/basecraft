@@ -9,11 +9,11 @@
 //!
 //! Each edit returns the [`Undo`] steps that reverse it exactly.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 
 use basecraft_io::fasta::IndexedFasta;
-use basecraft_protocol::facts::{Alphabet, Fact, FactSource};
+use basecraft_protocol::facts::{Alphabet, AlphabetCounts, Fact, FactSource};
 
 use crate::piece::{PieceTable, Residues};
 use crate::sequence::FastaResidues;
@@ -35,16 +35,40 @@ pub struct AlnRow {
     seq: PieceTable,
     /// Explicit row extent, excluding only synthetic rectangular suffix padding.
     content_len: u64,
+    /// Letter counts for the row's guessed alphabet, kept current by edits.
+    counts: AlphabetCounts,
 }
 
 impl AlnRow {
     pub fn new(name: impl Into<String>, residues: Arc<dyn Residues>) -> Self {
+        Self::with_description(name.into(), String::new(), residues)
+    }
+
+    fn with_description(name: String, description: String, residues: Arc<dyn Residues>) -> Self {
+        let content_len = residues.len();
+        let seq = PieceTable::new(residues);
+        let counts = crate::sequence::count_letters(&seq);
         Self {
-            name: name.into(),
-            description: String::new(),
-            content_len: residues.len(),
-            seq: PieceTable::new(residues),
+            name,
+            description,
+            seq,
+            content_len,
+            counts,
         }
+    }
+
+    /// The row's guessed alphabet (D12).
+    pub fn alphabet(&self) -> Alphabet {
+        self.counts.alphabet()
+    }
+
+    /// Replace `start..end` with `residues`, keeping the letter counts.
+    fn splice(&mut self, start: u64, end: u64, residues: &[u8]) -> Vec<u8> {
+        let removed = self.seq.delete(start, end);
+        self.seq.insert(start, residues);
+        self.counts.remove(&removed);
+        self.counts.add(residues);
+        removed
     }
 
     pub fn len(&self) -> u64 {
@@ -235,10 +259,60 @@ pub struct AlignmentDoc {
     /// Already rectangular alignments retain their established gap-edit semantics.
     preserve_unpadded_lengths: bool,
     version: u64,
-    /// The letters the rows are written in: from the side file, or guessed.
-    alphabet: Fact<Alphabet>,
+    /// The alphabet the side file or the user states.
+    stated: Option<Fact<Alphabet>>,
+    /// The rows' common guess, cached per version.
+    guessed: Mutex<Option<(u64, Alphabet)>>,
     consensus: Mutex<ConsensusCache>,
     stats: Mutex<StatsCache>,
+}
+
+/// Why something that needs the alphabet can't run (D12), for sequences and
+/// their guesses: some can't be told apart, or they are of different kinds.
+/// Smaller groups are named first, so a lone odd row is easy to find.
+pub fn alphabet_refusal<'a>(
+    sequences: impl IntoIterator<Item = (&'a str, Alphabet)>,
+) -> Option<String> {
+    let mut groups: BTreeMap<Alphabet, Vec<&str>> = BTreeMap::new();
+    for (name, alphabet) in sequences {
+        if alphabet != Alphabet::Unknown {
+            groups.entry(alphabet).or_default().push(name);
+        }
+    }
+    let names = |names: &[&str]| {
+        let shown = names
+            .iter()
+            .take(10)
+            .copied()
+            .collect::<Vec<_>>()
+            .join(", ");
+        match names.len() {
+            0..=10 => shown,
+            n => format!("{shown} and {} more", n - 10),
+        }
+    };
+    if let Some(unclear) = groups.get(&Alphabet::Undetermined) {
+        return Some(format!(
+            "Basecraft can't tell whether these sequences are DNA, RNA or protein: {}. State the alphabet first.",
+            names(unclear)
+        ));
+    }
+    if groups.len() < 2 {
+        return None;
+    }
+    let mut groups: Vec<_> = groups.into_iter().collect();
+    groups.sort_by_key(|(_, names)| names.len());
+    let largest = groups.len() - 1;
+    let kinds: Vec<String> = (groups.iter().enumerate())
+        .map(|(i, (alphabet, list))| match i {
+            i if i == largest => format!("{} {alphabet}", list.len()),
+            _ => format!("{} {alphabet}: {}", list.len(), names(list)),
+        })
+        .collect();
+    Some(format!(
+        "The sequences are not all of one kind ({}). State the alphabet, or split them by kind.",
+        kinds.join("; ")
+    ))
 }
 
 impl AlignmentDoc {
@@ -254,12 +328,12 @@ impl AlignmentDoc {
             width: 0,
             preserve_unpadded_lengths,
             version: 0,
-            alphabet: Alphabet::guessed(Alphabet::Unknown),
+            stated: None,
+            guessed: Mutex::new(None),
             consensus: Mutex::new(ConsensusCache::default()),
             stats: Mutex::new(StatsCache::default()),
         };
         doc.square(&mut Vec::new());
-        doc.alphabet = Alphabet::guessed(Alphabet::common(doc.row_alphabets()));
         doc
     }
 
@@ -276,15 +350,11 @@ impl AlignmentDoc {
                     .split_once(char::is_whitespace)
                     .map_or("", |(_, d)| d.trim())
                     .to_string();
-                AlnRow {
-                    name: r.name.clone(),
-                    description,
-                    content_len: r.len,
-                    seq: PieceTable::new(Arc::new(FastaResidues {
-                        file: Arc::clone(file),
-                        record: i,
-                    })),
-                }
+                let residues = FastaResidues {
+                    file: Arc::clone(file),
+                    record: i,
+                };
+                AlnRow::with_description(r.name.clone(), description, Arc::new(residues))
             })
             .collect();
         Self::new(name, rows)
@@ -333,68 +403,68 @@ impl AlignmentDoc {
         self.version
     }
 
-    /// The letters the rows are written in, and who said so.
-    pub fn alphabet(&self) -> &Fact<Alphabet> {
-        &self.alphabet
+    /// The letters the rows are written in, and who said so: the side file
+    /// or the user, else the rows' common guess (D12), mixed when they differ.
+    pub fn alphabet(&self) -> Fact<Alphabet> {
+        if let Some(stated) = &self.stated {
+            return stated.clone();
+        }
+        let mut cache = self
+            .guessed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let value = match *cache {
+            Some((version, value)) if version == self.version => value,
+            _ => {
+                let value = Alphabet::common(self.rows.iter().map(AlnRow::alphabet));
+                *cache = Some((self.version, value));
+                value
+            }
+        };
+        Alphabet::guessed(value)
     }
 
-    /// Use the alphabet a side file or the user states; `None` guesses
-    /// again from the residues. Consensus and colours follow it.
+    /// What the side file or the user states, which the side file keeps.
+    pub fn stated_alphabet(&self) -> Option<&Fact<Alphabet>> {
+        self.stated.as_ref()
+    }
+
+    /// Use the alphabet a side file or the user states; `None` drops it.
+    /// Consensus and colours follow it.
     pub fn set_alphabet(&mut self, stated: Option<Fact<Alphabet>>) {
-        let alphabet =
-            stated.unwrap_or_else(|| Alphabet::guessed(Alphabet::common(self.row_alphabets())));
-        if alphabet.value != self.alphabet.value {
+        if stated != self.stated {
+            self.stated = stated;
             self.edited();
         }
-        self.alphabet = alphabet;
     }
 
     /// Whether the alphabet, stated or guessed, is protein.
     pub fn is_protein(&self) -> bool {
-        self.alphabet.value == Alphabet::Protein
+        self.alphabet().value == Alphabet::Protein
     }
 
-    /// Each row's guessed alphabet (D12), from its current residues.
+    /// A guessed alphabet whose rows disagree: no consensus or composition.
+    fn is_mixed(&self) -> bool {
+        self.alphabet().value == Alphabet::Mixed
+    }
+
+    /// Each row's guessed alphabet (D12).
     pub fn row_alphabets(&self) -> Vec<Alphabet> {
-        self.rows
-            .iter()
-            .map(|row| crate::sequence::guess_alphabet(&row.seq))
-            .collect()
+        self.rows.iter().map(AlnRow::alphabet).collect()
     }
 
     /// Why something that needs the alphabet can't run yet (D12): rows
     /// basecraft can't tell apart, or rows of different kinds. None when the
     /// alphabet is stated or every row agrees.
     pub fn alphabet_refusal(&self) -> Option<String> {
-        if self.alphabet.source != FactSource::Guessed {
+        if self.alphabet().source != FactSource::Guessed {
             return None;
         }
-        let rows = self.row_alphabets();
-        let named = |keep: &dyn Fn(Alphabet) -> bool| {
-            let names: Vec<String> = (rows.iter().zip(&self.rows))
-                .filter(|(a, _)| keep(**a))
-                .map(|(a, row)| format!("{} ({a:?})", row.name))
-                .collect();
-            let more = names.len().saturating_sub(10);
-            let list = names.into_iter().take(10).collect::<Vec<_>>().join(", ");
-            if more > 0 {
-                format!("{list} and {more} more")
-            } else {
-                list
-            }
-        };
-        if rows.contains(&Alphabet::Undetermined) {
-            return Some(format!(
-                "Basecraft can't tell whether these sequences are DNA, RNA or protein: {}. State the alphabet first.",
-                named(&|a| a == Alphabet::Undetermined)
-            ));
-        }
-        (Alphabet::common(rows.iter().copied()) == Alphabet::Mixed).then(|| {
-            format!(
-                "The sequences are not all of one kind: {}. State the alphabet, or split them by kind.",
-                named(&|a| a != Alphabet::Unknown)
-            )
-        })
+        alphabet_refusal(
+            self.rows
+                .iter()
+                .map(|row| (row.name.as_str(), row.alphabet())),
+        )
     }
 
     pub fn read(&self, row: usize, start: u64, end: u64) -> Vec<u8> {
@@ -433,8 +503,7 @@ impl AlignmentDoc {
     fn splice(&mut self, row: usize, start: u64, end: u64, residues: &[u8], undo: &mut Vec<Undo>) {
         let row_data = &mut self.rows[row];
         let content_len = row_data.content_len;
-        let removed = row_data.seq.delete(start, end);
-        row_data.seq.insert(start, residues);
+        let removed = row_data.splice(start, end, residues);
         // Explicit edits extend/shorten the meaningful extent even when their
         // bytes are gaps. Do not inspect residue values to infer alignment.
         row_data.content_len = if start < content_len {
@@ -510,10 +579,14 @@ impl AlignmentDoc {
 
     /// Validate additions against this alignment's molecule alphabet.
     pub fn validate_additions(&self, rows: &[(String, String)]) -> Result<(), EditError> {
-        let alphabet: &[u8] = if self.is_protein() {
-            b"ACDEFGHIKLMNPQRSTVWYBXZJUO-*"
-        } else {
-            b"ACGTUNRYKMSWBDHV-"
+        // Rows that disagree, or can't be told apart, take either set: the
+        // user may be adding rows to settle exactly that.
+        let kind = self.alphabet().value;
+        let alphabet: &[u8] = match kind {
+            Alphabet::Protein | Alphabet::Mixed | Alphabet::Undetermined => {
+                b"ACDEFGHIKLMNPQRSTVWYBXZJUO-*"
+            }
+            _ => b"ACGTUNRYKMSWBDHV-",
         };
         for (name, sequence) in rows {
             if !sequence
@@ -522,7 +595,7 @@ impl AlignmentDoc {
             {
                 return err(format!(
                     "Sequence {name} contains symbols outside this {} alignment's IUPAC alphabet",
-                    if self.is_protein() {
+                    if alphabet.contains(&b'E') {
                         "protein"
                     } else {
                         "nucleotide"
@@ -807,7 +880,8 @@ impl AlignmentDoc {
             width: self.width,
             preserve_unpadded_lengths: self.preserve_unpadded_lengths,
             version: self.version,
-            alphabet: self.alphabet.clone(),
+            stated: self.stated.clone(),
+            guessed: Mutex::new(None),
             consensus: Mutex::new(ConsensusCache::default()),
             stats: Mutex::new(StatsCache::default()),
         }
@@ -955,8 +1029,7 @@ impl AlignmentDoc {
                     content_len,
                 } => {
                     let row = &mut self.rows[*row];
-                    row.seq.delete(*pos, pos + len);
-                    row.seq.insert(*pos, residues);
+                    row.splice(*pos, pos + len, residues);
                     row.content_len = *content_len;
                 }
                 Undo::InsertRow { index, row } => self.rows.insert(*index, (**row).clone()),
@@ -978,7 +1051,7 @@ impl AlignmentDoc {
 
     /// Composition over all rows, independent of which rows are displayed.
     pub fn column_stats(&self, col: u64) -> Option<ColumnStats> {
-        if col >= self.width || self.is_protein() {
+        if col >= self.width || self.is_protein() || self.is_mixed() {
             return None;
         }
         let chunk = self.stats_chunk(col / CONSENSUS_CHUNK);
@@ -988,7 +1061,7 @@ impl AlignmentDoc {
     /// Bounded, versioned whole-alignment composition for a visible interval.
     pub fn column_stats_range(&self, start: u64, end: u64) -> Vec<ColumnStats> {
         let end = end.min(self.width);
-        if self.is_protein() || start >= end {
+        if self.is_protein() || self.is_mixed() || start >= end {
             return Vec::new();
         }
         let Ok(capacity) = usize::try_from(end - start) else {
@@ -1119,10 +1192,17 @@ impl AlignmentDoc {
         }
         #[allow(clippy::cast_precision_loss)]
         let rows = self.rows.len().max(1) as f32;
+        let (protein, mixed) = (self.is_protein(), self.is_mixed());
         let cols: Vec<Consensus> = counts
             .iter()
             .map(|c| {
-                if !self.is_protein() {
+                if mixed {
+                    return Consensus {
+                        residue: GAP,
+                        agreement: 0.0,
+                    };
+                }
+                if !protein {
                     return dna_consensus(c, u32::try_from(self.rows.len()).unwrap_or(u32::MAX));
                 }
                 let (best, &count) = c[..26]
@@ -1342,13 +1422,13 @@ mod tests {
         );
         assert_eq!(aln(&["A", "G"]).consensus_at(0).unwrap().residue, b'A');
         assert_eq!(aln(&["?", "?", "A"]).consensus_at(0).unwrap().residue, b'N');
-        assert_eq!(
-            aln(&["E", "E", "F", "L", "I"])
-                .consensus_at(0)
-                .unwrap()
-                .residue,
-            b'E'
-        );
+        // Stated, so the protein path doesn't depend on the guess.
+        let mut protein = aln(&["E", "E", "F", "L", "V"]);
+        protein.set_alphabet(Some(Fact {
+            value: Alphabet::Protein,
+            source: FactSource::User,
+        }));
+        assert_eq!(protein.consensus_at(0).unwrap().residue, b'E');
     }
 
     #[test]
