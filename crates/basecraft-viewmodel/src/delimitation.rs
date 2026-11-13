@@ -244,6 +244,38 @@ pub fn tip_columns(
         .collect()
 }
 
+/// The comparison figure of species workspace `work` on its display tree
+/// `tree` (drawing edits already applied), with the columns the workspace
+/// shows, or with the hypotheses `shown` names, in that order, shown or not.
+/// The window's export and `basecraft delimitation figures` both draw it here.
+#[must_use]
+pub fn comparison_figure(
+    work: &DelimitationWorkspace,
+    tree: &basecraft_docs::TreeDoc,
+    theme: &Theme,
+    font: &str,
+    shown: Option<&[String]>,
+) -> String {
+    let tips = tree
+        .tips_in_order()
+        .iter()
+        .map(|&i| tree.node(i).name.clone())
+        .collect();
+    let chosen;
+    let work = match shown {
+        Some(ids) => {
+            let mut copy = work.clone();
+            copy.view.visible = ids.to_vec();
+            chosen = copy;
+            &chosen
+        }
+        None => work,
+    };
+    let columns = tip_columns(work, &tips, &palette(theme));
+    let figure = crate::tree::figure_with_columns(tree, &columns, 900.0, 20.0, theme, font);
+    comparison_svg(work, &figure, font)
+}
+
 /// The comparison figure: the tree with its bar columns, a letter above each
 /// column and a legend of the letters below.
 #[must_use]
@@ -440,6 +472,28 @@ mod tests {
                     .all(|band| colors.contains(&band.color))
             );
         }
+    }
+
+    #[test]
+    fn a_comparison_figure_shows_the_hypotheses_asked_for() {
+        let mut work = workspace();
+        let every: Vec<String> = work.hypotheses.iter().map(|h| h.id.clone()).collect();
+        work.view.visible = every[..1].to_vec();
+        let tree = TreeDoc::from_newick("t", "((a:1,c:1):1,(b:1,d:1):1);").unwrap();
+        let theme = Theme::publication();
+        let figure =
+            |shown: Option<&[String]>| comparison_figure(&work, &tree, &theme, "serif", shown);
+        let all = figure(Some(&every));
+        assert_ne!(
+            all,
+            figure(None),
+            "named hypotheses are drawn though hidden"
+        );
+        for id in &every {
+            let one = figure(Some(std::slice::from_ref(id)));
+            assert!(one.len() < all.len(), "{id}");
+        }
+        assert_ne!(figure(Some(&every[..1])), figure(Some(&every[1..2])));
     }
 
     #[test]

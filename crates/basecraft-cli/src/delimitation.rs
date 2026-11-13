@@ -40,7 +40,71 @@ pub enum DelimitationCommand {
         #[arg(long)]
         tree: PathBuf,
     },
+    /// Write the comparison figure of WORKSPACE on its display tree as SVG in
+    /// FOLDER, in publication style: one with every hypothesis
+    /// (NAME.svg) and one per hypothesis (NAME.ID.svg).
+    Figures {
+        workspace: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
 }
+
+/// The batch figures of species workspace `doc` in `folder`: the comparison
+/// of every hypothesis, then one per hypothesis, each recorded as an export.
+/// The window's figure export draws with the same `comparison_figure`.
+pub fn figures(
+    session: &mut basecraft_ops::Session,
+    doc: basecraft_ops::DocId,
+    folder: &std::path::Path,
+) -> Result<Vec<PathBuf>> {
+    let work = session.delimitation(doc)?;
+    let named = work.view.display_tree.clone().ok_or(
+        "Attach a display tree first (basecraft delimitation display-tree WORKSPACE --tree FILE)",
+    )?;
+    let file = delimitation::display_tree(session, doc, std::path::Path::new(&named))?;
+    let mut tree = basecraft_docs::TreeDoc::from_parsed(&file.tree.name, &file.tree);
+    let work = session.delimitation(doc)?.clone();
+    basecraft_ops::session::apply_drawing_edits(&mut tree, &work.view.tree_edits);
+    let theme = basecraft_viewmodel::Theme::publication();
+    let stem = std::path::Path::new(session.doc_key(doc)?)
+        .file_stem()
+        .map_or_else(|| "species".into(), |s| s.to_string_lossy().into_owned());
+    let safe = |id: &str| -> String {
+        id.chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect()
+    };
+    std::fs::create_dir_all(folder)?;
+    let mut written = Vec::new();
+    let ids: Vec<String> = work.hypotheses.iter().map(|h| h.id.clone()).collect();
+    let every = std::iter::once((format!("{stem}.svg"), ids.clone()));
+    let each = ids
+        .iter()
+        .map(|id| (format!("{stem}.{}.svg", safe(id)), vec![id.clone()]));
+    for (name, shown) in every.chain(each) {
+        let svg = basecraft_viewmodel::delimitation::comparison_figure(
+            &work,
+            &tree,
+            &theme,
+            FONT,
+            Some(&shown),
+        );
+        let path = folder.join(name);
+        session.export(doc, &path, "svg", |w| w.write_all(svg.as_bytes()))?;
+        written.push(path);
+    }
+    Ok(written)
+}
+
+/// The figures' font: a generic family every SVG viewer has.
+const FONT: &str = "sans-serif";
 
 fn absolute(path: PathBuf) -> std::io::Result<PathBuf> {
     std::path::absolute(path)
@@ -89,6 +153,13 @@ pub fn run(
             save_options.save(&mut session, doc, None, false)?;
             let shown = &session.delimitation(doc)?.view.display_tree;
             serde_json::json!({"workspace": workspace, "display_tree": shown})
+        }
+        DelimitationCommand::Figures { workspace, output } => {
+            let workspace = workspace.canonicalize()?;
+            let root = workspace.parent().ok_or("the workspace has no folder")?;
+            let mut session = crate::script_session(root.to_path_buf(), project)?;
+            let doc = session.open(&workspace)?;
+            serde_json::json!({"figures": figures(&mut session, doc, &absolute(output)?)?})
         }
     };
     println!("{}", serde_json::to_string_pretty(&value)?);

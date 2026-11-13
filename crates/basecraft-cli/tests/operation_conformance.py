@@ -304,6 +304,26 @@ def main():
         assert shown["cli"] == shown["mcp"] == attached["display_tree"], (shown, attached)
         record("display tree attached to a species workspace: same from CLI and MCP")
 
+        # Batch figures (D1): all hypotheses, then one each, the same from CLI and MCP.
+        drawn, _ = cli("delimitation", "figures", str(species / "cli.spart"),
+                       "-o", str(species / "cli-figures"))
+        client = Mcp(binary, project, env)
+        try:
+            opened = client.tool("open", {"path": "species/mcp.spart"})["structuredContent"]
+            made = client.tool("delimitation_figures", {"document": opened["document"],
+                               "output": "species/mcp-figures"})
+            assert not made["isError"], made
+        finally:
+            client.close()
+        cli_files = sorted(Path(f).name.removeprefix("cli") for f in drawn["figures"])
+        mcp_files = sorted(Path(f).name.removeprefix("mcp")
+                           for f in made["structuredContent"]["figures"])
+        assert cli_files == mcp_files and len(cli_files) == 3, (cli_files, mcp_files)
+        for name in cli_files:
+            assert ((species / "cli-figures" / f"cli{name}").read_bytes()
+                    == (species / "mcp-figures" / f"mcp{name}").read_bytes()), name
+        record("batch species figures: same files from CLI and MCP")
+
         # Tip labels from the specimen table (D1): the CLI and MCP label the
         # same tips through the same call.
         for route in ("cli", "mcp"):

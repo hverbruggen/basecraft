@@ -1560,12 +1560,7 @@ impl qobject::DelimitationController {
             let work = s.delimitation(d)?;
             basecraft_ops::session::apply_drawing_edits(&mut tree, &work.view.tree_edits);
             let font = crate::appearance::current().font.clone();
-            let columns =
-                delimitation::tip_columns(work, &tip_names(&tree), &delimitation::palette(theme));
-            let figure = basecraft_viewmodel::tree::figure_with_columns(
-                &tree, &columns, 900.0, 20.0, theme, &font,
-            );
-            let svg = delimitation::comparison_svg(work, &figure, &font);
+            let svg = delimitation::comparison_figure(work, &tree, theme, &font, None);
             if let Some(width) = png_width {
                 let bytes = crate::figure_png::render(&svg, width)?;
                 s.export(d, Path::new(&path.to_string()), "png", |w| {

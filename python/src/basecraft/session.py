@@ -425,6 +425,10 @@ class Session:
         """Label an open tree's tips from the specimen table, by ``fields`` in order."""
         return self.call("tree_labels", {"document": document, "fields": [str(f) for f in fields]})
 
+    def delimitation_figures(self, document, output):
+        """Write the workspace's comparison figures (all, then one per hypothesis) to ``output``."""
+        return self.call("delimitation_figures", {"document": document, "output": str(output)})
+
     def delimitation_display_tree(self, document, tree):
         """Attach the tree file ``tree`` as an open species workspace's display tree."""
         return self.call("delimitation_display_tree", {"document": document, "tree": str(tree)})

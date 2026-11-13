@@ -1,5 +1,5 @@
-//! Attach a display tree to a species workspace from the command line (D1),
-//! through the same call as the window.
+//! Attach a display tree to a species workspace and write its batch figures
+//! from the command line (D1), through the same calls as the window.
 #[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
 mod isolated_profile;
 use std::path::Path;
@@ -57,4 +57,34 @@ fn a_display_tree_is_attached_and_saved_from_the_command_line() {
     // Saved: attaching it again from a new session finds it already there.
     let again: serde_json::Value = serde_json::from_slice(&attach(&tree).stdout).unwrap();
     assert_eq!(again["display_tree"], value["display_tree"]);
+
+    // Batch figures: every hypothesis, then one per hypothesis.
+    let figures = folder.join("figures");
+    let written = basecraft(
+        &profile,
+        &[
+            "delimitation",
+            "figures",
+            &path(&workspace),
+            "-o",
+            &path(&figures),
+        ],
+    );
+    assert!(
+        written.status.success(),
+        "{}",
+        String::from_utf8_lossy(&written.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&written.stdout).unwrap();
+    let files = value["figures"].as_array().unwrap();
+    assert_eq!(
+        files.len(),
+        3,
+        "all, then each of the two hypotheses: {value}"
+    );
+    assert!(figures.join("hypotheses.svg").is_file());
+    for file in files {
+        let svg = std::fs::read_to_string(file.as_str().unwrap()).unwrap();
+        assert!(svg.contains("<svg"), "{file}");
+    }
 }
