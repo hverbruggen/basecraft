@@ -1,25 +1,44 @@
-//! Analysis index beside the files analyses used. Each folder holding such a
-//! file keeps `.basecraft/analysis-index/`, one file per analysis store whose
-//! runs depend on files there. Writers only add entries, before they change a
-//! ledger, so the index may list more than is current, never less. Readers take
-//! the union of every file in that folder, copies a sync tool made included, so
-//! no writer's entry is lost to another writer or another machine. Each store
-//! lists the folders it is indexed in, so a lost index is noticed and rebuilt.
+//! The analysis index: which analysis stores have runs that depend on a file.
+//! A project keeps one index in its own `.basecraft`, keyed by
+//! project-relative path; a file outside the writing session's project is
+//! indexed in a `.basecraft` beside it (rules 6.0 and 2.5). Entries sit in 256
+//! buckets by a hash of the path, one file per store in each bucket, so a save
+//! reads one small folder. Writers only add entries, before they change a
+//! ledger, so the index may list more than is current, never less. Readers
+//! take the union of every file in a bucket, copies a sync tool made included,
+//! so no writer's entry is lost to another writer or machine. Each store lists
+//! the buckets it is indexed in, so a lost index is noticed and rebuilt.
 use super::{Path, PathBuf, Result, lexical, stamp};
 use basecraft_protocol::records::{AnalysisIndex, IndexedFolders};
 use fs4::fs_std::FileExt;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The folder whose `.basecraft` indexes `source`, and the entry naming it
-/// there. Every index read and write goes through here, so placing the index
-/// elsewhere (for example at a project's root) changes only this function.
-fn home(source: &Path) -> Option<(PathBuf, String)> {
+/// there: the project's root and the project-relative path for a file inside
+/// `project`, otherwise the file's own folder and its name.
+fn home(source: &Path, project: Option<&Path>) -> Option<(PathBuf, String)> {
+    if let Some(project) = project
+        && let Some(rest) = basecraft_platform::files::inside(source, project)
+    {
+        return Some((project.into(), rest.to_str()?.replace('\\', "/")));
+    }
     let name = source.file_name()?.to_str()?;
     Some((source.parent()?.into(), name.into()))
 }
 
-fn shards(folder: &Path) -> PathBuf {
-    folder.join(".basecraft").join("analysis-index")
+fn index_root(home: &Path) -> PathBuf {
+    home.join(".basecraft").join("analysis-index")
+}
+
+/// The bucket folder holding `entry`'s index files.
+fn bucket(home: &Path, entry: &str) -> PathBuf {
+    let key = basecraft_io::hash_bytes(entry.as_bytes());
+    index_root(home).join(&key.trim_start_matches("b3:")[..2])
+}
+
+/// The folder a bucket indexes: `<home>/.basecraft/analysis-index/<bucket>`.
+fn home_of(bucket: &Path) -> &Path {
+    bucket.ancestors().nth(3).unwrap_or(bucket)
 }
 
 /// Every copy of a record in `dir` whose name starts with `stem`: the record
@@ -169,29 +188,33 @@ fn store_home(store: &Path) -> &Path {
     store.parent().and_then(Path::parent).unwrap_or(store)
 }
 
-/// The index file `folder` keeps for `store`, and the store's path as the
-/// file records it. Named by that path, so a copied store (which keeps its
-/// identity) gets its own file.
-fn shard(folder: &Path, store: &Path) -> Result<(PathBuf, String)> {
-    let relative = super::relative(folder, store)?.replace('\\', "/");
+/// The file a bucket keeps for `store`, and the store's path as the file
+/// records it, relative to the indexed folder. Named by that path, so a copied
+/// store (which keeps its identity) gets its own file.
+fn shard(bucket: &Path, store: &Path) -> Result<(PathBuf, String)> {
+    let relative = super::relative(home_of(bucket), store)?.replace('\\', "/");
     let key = basecraft_io::hash_bytes(relative.as_bytes());
     let name = format!("{}.json", &key.trim_start_matches("b3:")[..32]);
-    Ok((shards(folder).join(name), relative))
+    Ok((bucket.join(name), relative))
 }
 
-/// List `store` in the index beside each of `sources`. The caller holds the
+/// List `store` in the index for each of `sources`. The caller holds the
 /// sources' reservations, so no save of them is choosing stores meanwhile.
-pub(super) fn add(store: &Path, sources: &BTreeSet<PathBuf>) -> Result<()> {
-    record(store, sources, false).map(|_| ())
+pub(super) fn add(store: &Path, sources: &BTreeSet<PathBuf>, project: Option<&Path>) -> Result<()> {
+    record(store, sources, project, false).map(|_| ())
 }
 
-/// Rebuild `store`'s entries from `sources`: its file in each folder and its
-/// list of folders are replaced, and its file in folders no longer used is
+/// Rebuild `store`'s entries from `sources`: its file in each bucket and its
+/// list of buckets are replaced, and its file in buckets no longer used is
 /// removed. Copies a sync tool made are left; they can only add entries.
-pub(super) fn rebuild(store: &Path, sources: &BTreeSet<PathBuf>) -> Result<usize> {
+pub(super) fn rebuild(
+    store: &Path,
+    sources: &BTreeSet<PathBuf>,
+    project: Option<&Path>,
+) -> Result<usize> {
     let store = std::path::absolute(store)?;
-    let before = indexed_folders(&store)?;
-    let after = record(&store, sources, true)?;
+    let before = indexed_buckets(&store)?;
+    let after = record(&store, sources, project, true)?;
     for gone in before.difference(&after) {
         match std::fs::remove_file(shard(gone, &store)?.0) {
             Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
@@ -203,76 +226,87 @@ pub(super) fn rebuild(store: &Path, sources: &BTreeSet<PathBuf>) -> Result<usize
     Ok(after.len())
 }
 
-fn record(store: &Path, sources: &BTreeSet<PathBuf>, replace: bool) -> Result<BTreeSet<PathBuf>> {
+fn record(
+    store: &Path,
+    sources: &BTreeSet<PathBuf>,
+    project: Option<&Path>,
+    replace: bool,
+) -> Result<BTreeSet<PathBuf>> {
     if is_private(store) {
         return Ok(BTreeSet::new());
     }
     let store = std::path::absolute(store)?;
-    let mut folders = BTreeMap::<PathBuf, BTreeSet<String>>::new();
+    let mut homes = BTreeMap::<PathBuf, BTreeMap<PathBuf, BTreeSet<String>>>::new();
     for source in sources.iter().filter(|source| !is_private(source)) {
-        if let Some((folder, entry)) = home(source) {
-            folders.entry(folder).or_default().insert(entry);
+        if let Some((home, entry)) = home(source, project) {
+            let bucket = bucket(&home, &entry);
+            homes
+                .entry(home)
+                .or_default()
+                .entry(bucket)
+                .or_default()
+                .insert(entry);
         }
     }
     let mut indexed = BTreeSet::new();
-    for (folder, entries) in folders {
-        if update(&folder, &store, &entries, replace)? {
-            indexed.insert(folder);
-        }
+    for (home, buckets) in homes {
+        indexed.extend(update(&home, &store, &buckets, replace)?);
     }
-    list_folders(&store, &indexed, replace)?;
+    list_buckets(&store, &indexed, replace)?;
     Ok(indexed)
 }
 
-/// Write this store's file in `folder`'s index. False when the folder itself
-/// refuses new files: basecraft cannot save over a file there either.
+/// Write this store's file in each of `buckets` of `home`'s index, and return
+/// the buckets written. None when the folder itself refuses new files:
+/// basecraft cannot save over a file there either.
 fn update(
-    folder_path: &Path,
+    home: &Path,
     store: &Path,
-    entries: &BTreeSet<String>,
+    buckets: &BTreeMap<PathBuf, BTreeSet<String>>,
     replace: bool,
-) -> Result<bool> {
+) -> Result<Vec<PathBuf>> {
     let unwritable = |detail: String| {
         crate::error::invalid(format!(
             "cannot record which analyses use files in {}: {detail}",
-            folder_path.display()
+            home.display()
         ))
     };
-    let hidden = folder_path.join(".basecraft");
+    let hidden = home.join(".basecraft");
     if std::fs::symlink_metadata(&hidden).is_ok_and(|m| !m.is_dir()) {
         return Err(unwritable(
             "its .basecraft is a file that belongs to another program".into(),
         ));
     }
     let result = (|| -> Result<()> {
-        let dir = shards(folder_path);
-        folder(&dir)?;
-        let canonical = folder_path.canonicalize()?;
-        let _lock = lock_beside(&canonical.join(".basecraft/analysis-index.lock"))?;
-        let (path, relative) = shard(folder_path, store)?;
-        let fresh = AnalysisIndex {
-            schema_version: 1,
-            store: relative,
-            files: BTreeSet::new(),
-        };
-        let mut index = existing(&path, |i: &AnalysisIndex| i.schema_version, replace, fresh)?;
-        let before = index.clone();
-        index.files.extend(entries.iter().cloned());
-        if index != before || replace {
-            write(&path, &index)?;
+        folder(&index_root(home))?;
+        let _lock = lock_beside(&home.canonicalize()?.join(".basecraft/analysis-index.lock"))?;
+        for (bucket, entries) in buckets {
+            folder(bucket)?;
+            let (path, relative) = shard(bucket, store)?;
+            let fresh = AnalysisIndex {
+                schema_version: 1,
+                store: relative,
+                files: BTreeSet::new(),
+            };
+            let mut index = existing(&path, |i: &AnalysisIndex| i.schema_version, replace, fresh)?;
+            let before = index.clone();
+            index.files.extend(entries.iter().cloned());
+            if index != before || replace {
+                write(&path, &index)?;
+            }
         }
         Ok(())
     })();
     match result {
-        Ok(()) => Ok(true),
+        Ok(()) => Ok(buckets.keys().cloned().collect()),
         Err(crate::Error::Io(error))
             if matches!(
                 error.kind(),
                 std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ReadOnlyFilesystem
             ) =>
         {
-            if tempfile::tempfile_in(folder_path).is_err() {
-                Ok(false)
+            if tempfile::tempfile_in(home).is_err() {
+                Ok(Vec::new())
             } else {
                 Err(unwritable(error.to_string()))
             }
@@ -282,18 +316,18 @@ fn update(
     }
 }
 
-/// The folders whose index lists `store`, from every copy of its list.
-fn indexed_folders(store: &Path) -> Result<BTreeSet<PathBuf>> {
+/// The index buckets that list `store`, from every copy of its list.
+fn indexed_buckets(store: &Path) -> Result<BTreeSet<PathBuf>> {
     let home = store_home(store);
-    let mut folders = BTreeSet::new();
+    let mut buckets = BTreeSet::new();
     for path in copies(store, "indexed-folders")? {
         let list = read(&path, |l: &IndexedFolders| l.schema_version)?;
-        folders.extend(list.folders.iter().map(|f| lexical(&home.join(f))));
+        buckets.extend(list.folders.iter().map(|f| lexical(&home.join(f))));
     }
-    Ok(folders)
+    Ok(buckets)
 }
 
-fn list_folders(store: &Path, indexed: &BTreeSet<PathBuf>, replace: bool) -> Result<()> {
+fn list_buckets(store: &Path, indexed: &BTreeSet<PathBuf>, replace: bool) -> Result<()> {
     let home = store_home(store);
     let _lock = lock_beside(&store.join("indexed-folders.lock"))?;
     let path = store.join("indexed-folders.json");
@@ -303,9 +337,9 @@ fn list_folders(store: &Path, indexed: &BTreeSet<PathBuf>, replace: bool) -> Res
     };
     let mut list = existing(&path, |l: &IndexedFolders| l.schema_version, replace, fresh)?;
     let before = list.clone();
-    for folder in indexed {
+    for bucket in indexed {
         list.folders
-            .insert(super::relative(home, folder)?.replace('\\', "/"));
+            .insert(super::relative(home, bucket)?.replace('\\', "/"));
     }
     if list != before || replace {
         write(&path, &list)?;
@@ -313,26 +347,20 @@ fn list_folders(store: &Path, indexed: &BTreeSet<PathBuf>, replace: bool) -> Res
     Ok(())
 }
 
-/// The index files beside `folder`, each with the store it names.
-fn stores_beside(
-    folder: &Path,
-    inspection: &mut super::Inspection,
-) -> Vec<(PathBuf, AnalysisIndex)> {
-    let found = match copies(&shards(folder), "") {
+/// The index files in `bucket`, each with the store it names.
+fn stores_in(bucket: &Path, inspection: &mut super::Inspection) -> Vec<(PathBuf, AnalysisIndex)> {
+    let found = match copies(bucket, "") {
         Ok(found) => found,
         Err(error) => {
-            inspection.issue(
-                super::InspectionCode::RegistryUnavailable,
-                &shards(folder),
-                error,
-            );
+            inspection.issue(super::InspectionCode::RegistryUnavailable, bucket, error);
             return Vec::new();
         }
     };
+    let home = home_of(bucket);
     let mut indexes = Vec::new();
     for path in found {
         match read(&path, |i: &AnalysisIndex| i.schema_version) {
-            Ok(index) => indexes.push((lexical(&folder.join(&index.store)), index)),
+            Ok(index) => indexes.push((lexical(&home.join(&index.store)), index)),
             Err(error) => {
                 inspection.issue(super::InspectionCode::RegistryUnavailable, &path, error);
             }
@@ -341,13 +369,13 @@ fn stores_beside(
     indexes
 }
 
-/// The stores listed for `source` in the index beside it.
-pub(super) fn listed(source: &Path) -> Result<Vec<PathBuf>> {
-    let Some((folder, entry)) = home(&lexical(source)) else {
+/// The stores listed for `source` in its index.
+pub(super) fn listed(source: &Path, project: Option<&Path>) -> Result<Vec<PathBuf>> {
+    let Some((home, entry)) = home(&lexical(source), project) else {
         return Ok(Vec::new());
     };
     let mut inspection = super::Inspection::default();
-    let indexes = stores_beside(&folder, &mut inspection);
+    let indexes = stores_in(&bucket(&home, &entry), &mut inspection);
     if let Some(issue) = inspection.issues.first() {
         return Err(crate::error::invalid(issue.reason.clone()));
     }
@@ -358,13 +386,15 @@ pub(super) fn listed(source: &Path) -> Result<Vec<PathBuf>> {
         .collect())
 }
 
-/// Stores that can refer to `target`: those listed for it in the index beside
-/// it under either spelling, and, for a file with several hard links, those
-/// listed for any file there that is the same file. Stores that no longer
-/// exist are left out: their ledgers went with them. With the session's
-/// `project`, a store at the project's root that names the folder while the
-/// index there does not name the store means the index was lost: the store is
-/// inspected and the check is incomplete, so the save asks.
+/// Stores that can refer to `target`. The index at the root of the session's
+/// `project` (for a file inside it) and the index beside the file are read,
+/// under either spelling of the path; a writer that did not know the project
+/// indexed beside the file. A file with several hard links also matches the
+/// entries in its folder's index for files that are the same file. Stores that
+/// no longer exist are left out: their ledgers went with them. When the
+/// project's root store lists this bucket of the project's index but the
+/// bucket does not name the store, the index was lost: the store is inspected
+/// and the check is incomplete, so the save asks.
 pub(super) fn select(
     target: &Path,
     absolute: &Path,
@@ -376,13 +406,14 @@ pub(super) fn select(
     let same_file = |path: &Path| {
         identity.is_some() && stamp(path).ok().and_then(|s| Some((s.device?, s.inode?))) == identity
     };
+    let mut places = BTreeSet::new();
+    for spelling in [target.to_path_buf(), lexical(absolute)] {
+        places.extend(home(&spelling, project));
+        places.extend(home(&spelling, None));
+    }
     let mut selected = BTreeSet::new();
-    let spellings: BTreeSet<_> = [target.to_path_buf(), lexical(absolute)].into();
-    for spelling in spellings {
-        let Some((folder, entry)) = home(&spelling) else {
-            continue;
-        };
-        let hidden = folder.join(".basecraft");
+    for (home, entry) in places {
+        let hidden = home.join(".basecraft");
         if std::fs::symlink_metadata(&hidden).is_ok_and(|m| !m.is_dir()) {
             inspection.issue(
                 super::InspectionCode::RegistryUnavailable,
@@ -391,42 +422,71 @@ pub(super) fn select(
             );
             continue;
         }
-        let indexes = stores_beside(&folder, inspection);
+        let bucket = bucket(&home, &entry);
+        let indexes = stores_in(&bucket, inspection);
         for (store, index) in &indexes {
-            if index.files.contains(&entry)
-                || linked && index.files.iter().any(|f| same_file(&folder.join(f)))
-            {
+            if index.files.contains(&entry) {
                 selected.insert(store.clone());
             }
         }
-        if let Some(project) = project {
-            let store = project.join(".basecraft/analyses-v1");
-            let named = indexes.iter().any(|(listed, _)| listed == &store);
-            if !named && store.is_dir() {
-                match indexed_folders(&store) {
-                    Ok(folders) if folders.contains(&lexical(&folder)) => {
+        if linked && !entry.contains('/') {
+            // Other names of the same file sit in other buckets of this folder.
+            for other in copies_of_dirs(&index_root(&home)) {
+                for (store, index) in stores_in(&other, inspection) {
+                    if index.files.iter().any(|f| same_file(&home.join(f))) {
                         selected.insert(store);
-                        inspection.issue(
-                            super::InspectionCode::RegistryUnavailable,
-                            &shards(&folder),
-                            format!(
-                                "the analysis index here is missing; `basecraft records reindex {}` rebuilds it",
-                                project.display()
-                            ),
-                        );
                     }
-                    Ok(_) => {}
-                    Err(error) => inspection.issue(
-                        super::InspectionCode::RegistryUnavailable,
-                        &store.join("indexed-folders.json"),
-                        error,
-                    ),
                 }
             }
+        }
+        if project == Some(home.as_path()) {
+            lost(&home, &bucket, &indexes, &mut selected, inspection);
         }
     }
     selected.retain(|store| store.try_exists().ok() != Some(false));
     selected.into_iter().collect()
+}
+
+fn copies_of_dirs(root: &Path) -> Vec<PathBuf> {
+    std::fs::read_dir(root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .map(|entry| entry.path())
+        .collect()
+}
+
+fn lost(
+    project: &Path,
+    bucket: &Path,
+    indexes: &[(PathBuf, AnalysisIndex)],
+    selected: &mut BTreeSet<PathBuf>,
+    inspection: &mut super::Inspection,
+) {
+    let store = project.join(".basecraft/analyses-v1");
+    if indexes.iter().any(|(listed, _)| listed == &store) || !store.is_dir() {
+        return;
+    }
+    match indexed_buckets(&store) {
+        Ok(buckets) if buckets.contains(&lexical(bucket)) => {
+            selected.insert(store);
+            inspection.issue(
+                super::InspectionCode::RegistryUnavailable,
+                bucket,
+                format!(
+                    "the analysis index here is missing; `basecraft records reindex {}` rebuilds it",
+                    project.display()
+                ),
+            );
+        }
+        Ok(_) => {}
+        Err(error) => inspection.issue(
+            super::InspectionCode::RegistryUnavailable,
+            &store.join("indexed-folders.json"),
+            error,
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -457,7 +517,7 @@ mod tests {
         locks.source(&source).unwrap();
         locks.source(&introduced).unwrap();
         let store = run.directory().parent().unwrap().parent().unwrap();
-        super::add(store, &[introduced.canonicalize().unwrap()].into()).unwrap();
+        super::add(store, &[introduced.canonicalize().unwrap()].into(), None).unwrap();
         std::thread::spawn(move || {
             let mut session = crate::Session::new(other.parent().unwrap());
             let doc = session.open(&other).unwrap();

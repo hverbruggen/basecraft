@@ -87,13 +87,8 @@ fn store_writer_bytes_and_validation() {
     )
     .unwrap();
     let store = root.join("results/.basecraft/analyses-v1");
-    let shards = data.join(".basecraft/analysis-index");
-    let index = std::fs::read_dir(&shards)
-        .unwrap()
-        .next()
-        .unwrap()
-        .unwrap()
-        .path();
+    // A loose file: the index sits beside it, in the bucket for its name.
+    let index = walk(&data.join(".basecraft/analysis-index")).pop().unwrap();
     let expected = r#"{
   "schema_version": 1,
   "store": "../results/.basecraft/analyses-v1",
@@ -103,14 +98,17 @@ fn store_writer_bytes_and_validation() {
 }
 "#;
     assert_eq!(std::fs::read_to_string(&index).unwrap(), expected);
-    // The store lists the folder, so a lost index can be noticed.
-    let folders = r#"{
-  "schema_version": 1,
-  "folders": [
-    "../data"
-  ]
-}
-"#;
+    // The store lists the bucket, so a lost index can be noticed.
+    let bucket = index
+        .parent()
+        .unwrap()
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap();
+    let folders = format!(
+        "{{\n  \"schema_version\": 1,\n  \"folders\": [\n    \"../data/.basecraft/analysis-index/{bucket}\"\n  ]\n}}\n"
+    );
     assert_eq!(
         std::fs::read_to_string(store.join("indexed-folders.json")).unwrap(),
         folders

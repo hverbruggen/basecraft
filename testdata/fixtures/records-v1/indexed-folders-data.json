@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "folders": [
-    "data",
-    "data/reads"
+    "../.basecraft/analysis-index/3f",
+    "../.basecraft/analysis-index/a0"
   ]
 }

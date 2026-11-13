@@ -204,11 +204,15 @@ pub struct AlignmentLink {
     pub extra: BTreeMap<String, serde_json::Value>,
 }
 
-/// `.basecraft/analysis-index/<key>.json` in a folder whose files
-/// analyses used: one analysis store (`.basecraft/analyses-v1`) and the files
-/// here its runs depend on; `<key>` is a hash of the store's path. Paths are
-/// `/`-separated and relative to the folder holding `.basecraft`. Writers only add entries; readers take the union of
-/// every file in `analysis-index/`, copies a sync tool made included.
+/// One file of the analysis index, `.basecraft/analysis-index/<bucket>/<key>.json`:
+/// one analysis store (`.basecraft/analyses-v1`) and the files whose paths fall
+/// in this bucket that its runs depend on. A project's index sits in the
+/// project's `.basecraft` with project-relative paths; a file outside the
+/// writing session's project is indexed in a `.basecraft` beside it by name.
+/// `<bucket>` is the first two hex digits of the BLAKE3 hash of the path;
+/// `<key>` is a hash of `store`. Paths are `/`-separated and relative to the
+/// folder holding `.basecraft`. Readers take the union of every file in a
+/// bucket, copies a sync tool made included.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AnalysisIndex {
@@ -217,9 +221,9 @@ pub struct AnalysisIndex {
     pub files: std::collections::BTreeSet<String>,
 }
 
-/// `indexed-folders.json` in an analysis store: the folders whose analysis
-/// index lists this store, relative to the folder holding the store's
-/// `.basecraft`. Lets a lost index be noticed and rebuilt.
+/// `indexed-folders.json` in an analysis store: the index buckets that list
+/// this store, relative to the folder holding the store's `.basecraft`. Lets a
+/// lost index be noticed and rebuilt.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct IndexedFolders {

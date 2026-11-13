@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "AnalysisIndex",
-  "description": "`.basecraft/analysis-index/<key>.json` in a folder whose files\nanalyses used: one analysis store (`.basecraft/analyses-v1`) and the files\nhere its runs depend on; `<key>` is a hash of the store's path. Paths are\n`/`-separated and relative to the folder holding `.basecraft`. Writers only add entries; readers take the union of\nevery file in `analysis-index/`, copies a sync tool made included.",
+  "description": "One file of the analysis index, `.basecraft/analysis-index/<bucket>/<key>.json`:\none analysis store (`.basecraft/analyses-v1`) and the files whose paths fall\nin this bucket that its runs depend on. A project's index sits in the\nproject's `.basecraft` with project-relative paths; a file outside the\nwriting session's project is indexed in a `.basecraft` beside it by name.\n`<bucket>` is the first two hex digits of the BLAKE3 hash of the path;\n`<key>` is a hash of `store`. Paths are `/`-separated and relative to the\nfolder holding `.basecraft`. Readers take the union of every file in a\nbucket, copies a sync tool made included.",
   "type": "object",
   "properties": {
     "files": {

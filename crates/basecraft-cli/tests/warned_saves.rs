@@ -60,16 +60,25 @@ fn headless_save_conformance() {
         .map(|name| format!("{name}.fasta"))
         .chain(["new.gb".into(), "occupied.gb".into()])
         .collect();
-    std::fs::write(
-        data.join(".basecraft/analysis-index/distant.json"),
-        serde_json::to_vec_pretty(&json!({
-            "schema_version": 1,
-            "store": "../.basecraft/analyses-v1",
-            "files": names,
-        }))
-        .unwrap(),
-    )
-    .unwrap();
+    // Each name goes in the bucket the index keeps it in: the first two hex
+    // digits of the name's hash (schemas/README.md).
+    for name in names {
+        let key = basecraft_io::hash_bytes(name.as_bytes());
+        let bucket = data
+            .join(".basecraft/analysis-index")
+            .join(&key.trim_start_matches("b3:")[..2]);
+        std::fs::create_dir_all(&bucket).unwrap();
+        std::fs::write(
+            bucket.join(format!("distant-{name}.json")),
+            serde_json::to_vec_pretty(&json!({
+                "schema_version": 1,
+                "store": "../.basecraft/analyses-v1",
+                "files": [name],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
     let config = root.join("fixture.json");
     std::fs::write(
         &config,

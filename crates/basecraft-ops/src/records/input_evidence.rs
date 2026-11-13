@@ -46,6 +46,13 @@ impl Mutation {
         Ok(Self { _locks: lock()? })
     }
 
+    /// A mutation for a session that holds `project`.
+    pub fn begin_in(project: Option<&crate::project::Project>) -> Result<Self> {
+        Ok(Self {
+            _locks: lock_in(project)?,
+        })
+    }
+
     pub fn read_input(&self, directory: &Path) -> Result<SubmittedInput> {
         read_input(directory)
     }
@@ -112,7 +119,7 @@ pub(crate) fn reference_input_locked(
         &ulid::Ulid::generate().to_string(),
     )?;
     let source = source.canonicalize()?;
-    let reservation = lock()?;
+    let reservation = lock_in(project)?;
     reservation.source(&source)?;
     if captured_stamp.map_or_else(
         || {
@@ -499,15 +506,17 @@ pub fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
                 &mut std::collections::BTreeSet::new(),
                 &mut sources,
             )?;
-            index::add(store, &sources)?;
-            // Runs elsewhere that depend on this one are listed beside its old
-            // input; list them beside the new one too.
+            let project = locks.project();
+            let project = project.as_deref();
+            index::add(store, &sources, project)?;
+            // Runs elsewhere that depend on this one are listed with its old
+            // input; list them with the new one too.
             if let Ok(old) = read_input(path.parent().unwrap())
                 && let Some(reference) = &old.source
             {
                 let previous = path.parent().unwrap().join(&reference.path);
-                for dependent in index::listed(&previous)? {
-                    index::add(&dependent, &sources)?;
+                for dependent in index::listed(&previous, project)? {
+                    index::add(&dependent, &sources, project)?;
                 }
             }
         }
@@ -550,6 +559,9 @@ fn open_lock(path: &Path) -> Result<std::fs::File> {
 #[derive(Default)]
 struct Scope {
     held: std::cell::RefCell<BTreeMap<PathBuf, (std::fs::File, bool)>>,
+    /// The project of the session this scope works for (rule 2.5): ledger
+    /// writes inside it index inputs at the project's root.
+    project: std::cell::RefCell<Option<PathBuf>>,
 }
 type HeldLocks = std::rc::Rc<Scope>;
 thread_local! {
@@ -595,7 +607,23 @@ pub fn lock() -> Result<Locks> {
     }))
 }
 
+/// A scope working for the session's `project`; nested writers on this
+/// thread index their inputs at that project's root.
+pub fn lock_in(project: Option<&crate::project::Project>) -> Result<Locks> {
+    let locks = lock()?;
+    locks.set_project(project.map(crate::project::Project::root));
+    Ok(locks)
+}
+
 impl Locks {
+    fn set_project(&self, project: Option<&Path>) {
+        if let Some(project) = project {
+            *self.0.project.borrow_mut() = Some(project.into());
+        }
+    }
+    fn project(&self) -> Option<PathBuf> {
+        self.0.project.borrow().clone()
+    }
     fn record(&self, directory: &Path) -> Result<()> {
         let directory = lexical(&std::path::absolute(directory)?);
         self.reserve([directory], true)
@@ -742,8 +770,9 @@ pub(crate) fn lock_save(
     project: Option<&Path>,
 ) -> Result<SaveLock> {
     let locks = lock()?;
+    locks.set_project(project);
     // Holding the target's keys stops any new reference to it, so the stores
-    // the index beside it lists stay the right set.
+    // the index lists for it stay the right set.
     locks.reserve(writes.iter().cloned(), true)?;
     locks.source(target)?;
     let (canonical, selected, inspection) = selection(target, project)?;
@@ -843,13 +872,15 @@ pub struct Reindexed {
 /// A store with an unreadable ledger only gains entries, since that ledger's
 /// inputs are unknown.
 pub fn reindex(project: &Path) -> Result<Reindexed> {
+    let project = project.canonicalize()?;
     let locks = lock()?;
+    locks.set_project(Some(&project));
     let mut done = Reindexed {
         stores: 0,
         folders: 0,
         unreadable: Vec::new(),
     };
-    for store in stores_under(project)? {
+    for store in stores_under(&project)? {
         ArtifactRun::validate_store(&store)?;
         let mut sources = std::collections::BTreeSet::new();
         let mut complete = true;
@@ -871,9 +902,9 @@ pub fn reindex(project: &Path) -> Result<Reindexed> {
             }
         }
         done.folders += if complete {
-            index::rebuild(&store, &sources)?
+            index::rebuild(&store, &sources, Some(&project))?
         } else {
-            index::add(&store, &sources)?;
+            index::add(&store, &sources, Some(&project))?;
             0
         };
         done.stores += 1;
@@ -895,13 +926,14 @@ pub fn register(run: &ArtifactRun) -> Result<()> {
     }
     let input = read_input(run.directory())?;
     let mut sources = std::collections::BTreeSet::new();
-    lock()?.input(
+    let locks = lock()?;
+    locks.input(
         run.directory(),
         &input,
         &mut std::collections::BTreeSet::new(),
         &mut sources,
     )?;
-    index::add(store, &sources)
+    index::add(store, &sources, locks.project().as_deref())
 }
 
 fn same_source(run: &Path, reference: &InputReference, target: &Path) -> bool {

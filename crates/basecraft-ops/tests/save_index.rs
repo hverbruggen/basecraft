@@ -73,8 +73,10 @@ fn damaged_index_cannot_hide_a_reference() {
     let source = root.join("source.fasta");
     std::fs::write(&source, b">a\nACGT\n").unwrap();
     reference(&root.join("known"), &source);
-    for entry in std::fs::read_dir(root.join(".basecraft/analysis-index")).unwrap() {
-        std::fs::write(entry.unwrap().path(), b"damaged").unwrap();
+    for bucket in std::fs::read_dir(root.join(".basecraft/analysis-index")).unwrap() {
+        for entry in std::fs::read_dir(bucket.unwrap().path()).unwrap() {
+            std::fs::write(entry.unwrap().path(), b"damaged").unwrap();
+        }
     }
     assert!(!records::check(&source).unwrap().is_complete());
     let mut session = basecraft_ops::Session::new(&root);
@@ -367,7 +369,12 @@ fn completed_registration_needs_no_unrelated_ledger_reads() {
             .all(|p| !p.starts_with(root.join("analysis")))
     );
     // Registering again changes nothing.
-    let index = root.join(".basecraft/analysis-index");
+    let index = std::fs::read_dir(root.join(".basecraft/analysis-index"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
     let shard = std::fs::read_dir(&index)
         .unwrap()
         .next()
@@ -496,4 +503,50 @@ fn tree(folder: &Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
     }
     files.sort();
     files
+}
+
+#[cfg(feature = "test-counters")]
+#[test]
+fn a_project_save_reads_one_bucket_of_its_index() {
+    let Some(root) = isolated_profile::enter("a_project_save_reads_one_bucket_of_its_index") else {
+        return;
+    };
+    let folder = root.join("project");
+    std::fs::create_dir_all(folder.join("data")).unwrap();
+    let project = basecraft_ops::project::Project::new(&folder).unwrap();
+    for i in 0..300 {
+        let results = folder.join(format!("results-{}", i % 30));
+        std::fs::create_dir_all(&results).unwrap();
+        let source = folder.join(format!("data/input-{i}.fasta"));
+        std::fs::write(&source, b">a\nACGT\n").unwrap();
+        records::reference_input_with_dependencies(
+            &results.join("out.txt"),
+            &source,
+            &basecraft_io::hash_file(&source).unwrap(),
+            &[],
+            "index test",
+            Some(&project),
+        )
+        .unwrap();
+    }
+    let target = folder.join("data/unrelated.fasta");
+    std::fs::write(&target, b">b\nAAAA\n").unwrap();
+    let mut session = basecraft_ops::Session::new(&folder).in_project(Some(project));
+    let doc = session.open(&target).unwrap();
+    session
+        .apply(
+            doc,
+            basecraft_protocol::Op::SeqReplace {
+                start: 0,
+                end: 1,
+                residues: "T".into(),
+            },
+        )
+        .unwrap();
+    basecraft_io::counters::reset();
+    session.save(doc, None).unwrap();
+    let counts = basecraft_io::counters::snapshot();
+    assert!(counts.store_inspections.is_empty());
+    let bytes: u64 = counts.reads.values().map(|r| r.bytes).sum();
+    assert!(bytes < 100_000, "{bytes} bytes read");
 }

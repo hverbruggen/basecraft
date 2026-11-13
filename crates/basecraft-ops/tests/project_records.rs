@@ -258,7 +258,7 @@ fn a_sync_conflict_copy_of_the_index_still_counts() {
     // Another machine's version wins the name; ours becomes a conflict copy.
     let shards = data.join(".basecraft/analysis-index");
     let shard = files(&shards).pop().unwrap();
-    let copy = shards.join(
+    let copy = shard.with_file_name(
         shard
             .file_name()
             .unwrap()
@@ -287,9 +287,17 @@ fn a_lost_index_makes_a_project_save_ask_until_reindexed() {
     let source = folder.join("data/reads.fasta");
     std::fs::write(&source, b">a\nACGT\n").unwrap();
     // The analysis keeps its run in the project's own store.
-    let run = reference(&folder.join("summary.txt"), &source);
-    std::fs::remove_dir_all(folder.join("data/.basecraft")).unwrap();
     let project = Project::new(&folder).unwrap();
+    let run = records::reference_input_with_dependencies(
+        &folder.join("summary.txt"),
+        &source,
+        &basecraft_io::hash_file(&source).unwrap(),
+        &[],
+        "analysis",
+        Some(&project),
+    )
+    .unwrap();
+    std::fs::remove_dir_all(folder.join(".basecraft/analysis-index")).unwrap();
     let mut session = Session::new(&folder).in_project(Some(project));
     let doc = edit(&mut session, &source, "T");
     let check = match session.save(doc, None).unwrap_err() {
@@ -301,9 +309,11 @@ fn a_lost_index_makes_a_project_save_ask_until_reindexed() {
     assert_eq!(std::fs::read(&source).unwrap(), b">a\nACGT\n");
     let done = records::reindex(&folder).unwrap();
     assert_eq!((done.stores, done.folders), (1, 1));
-    let check = records::check(&source).unwrap();
-    assert!(check.is_complete(), "{:?}", check.issues);
-    assert_eq!(check.conflict.analyses.len(), 1);
+    let check = match session.save(doc, None).unwrap_err() {
+        basecraft_ops::Error::EvidenceConflict(conflict) => conflict,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(check.analyses[0].run, run.directory());
 }
 
 #[test]
@@ -331,4 +341,53 @@ fn a_foreign_basecraft_file_beside_an_input_is_not_skipped() {
         "{error}"
     );
     assert!(!records::check(&source).unwrap().is_complete());
+}
+
+#[test]
+fn a_project_keeps_one_index_and_a_loose_input_is_indexed_beside_it() {
+    let Some(root) =
+        isolated_profile::enter("a_project_keeps_one_index_and_a_loose_input_is_indexed_beside_it")
+    else {
+        return;
+    };
+    let folder = root.join("project");
+    for sub in ["project/data/deep", "project/results", "outside"] {
+        std::fs::create_dir_all(root.join(sub)).unwrap();
+    }
+    let inside = folder.join("data/deep/reads.fasta");
+    let outside = root.join("outside/other.fasta");
+    for path in [&inside, &outside] {
+        std::fs::write(path, b">a\nACGT\n").unwrap();
+    }
+    let project = Project::new(&folder).unwrap();
+    for source in [&inside, &outside] {
+        records::reference_input_with_dependencies(
+            &folder.join("results/out.txt"),
+            source,
+            &basecraft_io::hash_file(source).unwrap(),
+            &[],
+            "analysis",
+            Some(&project),
+        )
+        .unwrap();
+    }
+    // One index, at the project's root, keyed by project-relative path.
+    assert_eq!(
+        index_files(&folder),
+        ["data/deep/reads.fasta".to_owned()].into()
+    );
+    assert!(!folder.join("data/.basecraft").exists());
+    assert!(!folder.join("data/deep/.basecraft").exists());
+    // The file outside the project is indexed beside it.
+    assert_eq!(
+        index_files(&root.join("outside")),
+        ["other.fasta".to_owned()].into()
+    );
+    // A save from the project session finds the analysis.
+    let mut session = Session::new(&folder).in_project(Some(project));
+    let doc = edit(&mut session, &inside, "T");
+    assert!(matches!(
+        session.save(doc, None),
+        Err(basecraft_ops::Error::EvidenceConflict(_))
+    ));
 }

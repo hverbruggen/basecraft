@@ -34,6 +34,7 @@ impl History<'_> {
         inputs: &[(String, String)],
         snapshot: &crate::records::document_record::DocumentRecord,
     ) -> Result<()> {
+        let _scope = crate::records::input_evidence::lock_in(self.project)?;
         if !self.tracked || self.policy == ProvenancePolicy::None {
             return Ok(());
         }
@@ -61,6 +62,7 @@ impl History<'_> {
         snapshot: Option<&crate::records::document_record::DocumentRecord>,
     ) -> Result<crate::documents::PreparedWrite> {
         use basecraft_protocol::provenance::{ArtifactRevision, Completeness, EditActivity};
+        let _scope = crate::records::input_evidence::lock_in(self.project)?;
         let bundle = match self.policy {
             ProvenancePolicy::Portable => {
                 if let Some(hidden) =
@@ -476,6 +478,7 @@ impl History<'_> {
         snapshot: &crate::records::document_record::DocumentRecord,
         run: &crate::records::analysis_store::ArtifactRun,
     ) -> Result<()> {
+        let _scope = crate::records::input_evidence::lock_in(self.project)?;
         let activity = self
             .events
             .iter()
@@ -502,6 +505,7 @@ impl History<'_> {
         current: impl FnOnce() -> Result<Vec<u8>>,
     ) -> Result<()> {
         use basecraft_protocol::provenance::{ArtifactRevision, Completeness, InputReference};
+        let _scope = crate::records::input_evidence::lock_in(self.project)?;
         if !self.tracked || self.policy == ProvenancePolicy::None {
             return Ok(());
         }

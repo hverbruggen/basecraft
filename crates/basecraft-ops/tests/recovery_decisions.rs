@@ -39,8 +39,8 @@ fn indexes(root: &Path) -> String {
         if path.is_dir() {
             text += &indexes(&path);
         } else if path
-            .parent()
-            .is_some_and(|p| p.ends_with(".basecraft/analysis-index"))
+            .components()
+            .any(|part| part.as_os_str() == "analysis-index")
         {
             text += &std::fs::read_to_string(path).unwrap();
         }
