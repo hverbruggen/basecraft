@@ -36,18 +36,20 @@ impl Session {
         };
         let path = files::tree_sidecar(&self.resolve(&main));
         let key = self.relative(&path);
-        let hash = if let Some(companion) = files::facts_companion(stated.as_ref(), &main_hash) {
-            if let Some(unknown) = std::fs::read(&path)
-                .ok()
-                .and_then(|bytes| basecraft_protocol::records::unknown_fields::<Companion>(&bytes))
-                .filter(|_| !std::mem::take(&mut self.docs[id.0].drop_newer_fields))
-            {
-                return Err(Error::NewerFieldsDropped {
-                    path,
-                    writer: unknown.writer,
-                    fields: unknown.fields,
-                });
-            }
+        let companion = files::facts_companion(stated.as_ref(), &main_hash);
+        // D14: a side file a later basecraft wrote is not overwritten or
+        // removed with fields this build doesn't know, unless allowed.
+        let drop_newer_fields = std::mem::take(&mut self.docs[id.0].drop_newer_fields);
+        let unknown = std::fs::read(&path)
+            .ok()
+            .and_then(|bytes| match &companion {
+                Some(_) => basecraft_protocol::records::unknown_fields::<Companion>(&bytes),
+                None => basecraft_protocol::records::removed_fields(&bytes),
+            });
+        if let Some(unknown) = unknown.filter(|_| !drop_newer_fields) {
+            return Err(Error::NewerFieldsDropped(vec![(path, unknown)]));
+        }
+        let hash = if let Some(companion) = companion {
             let bytes = basecraft_protocol::records::encode(&companion)?;
             basecraft_io::write_atomic(&path, |w| w.write_all(&bytes))?;
             Some(basecraft_io::hash_bytes(&bytes))
