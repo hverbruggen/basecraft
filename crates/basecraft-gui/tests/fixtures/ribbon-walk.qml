@@ -319,7 +319,7 @@ Main {
             show(0)
             const newSequence = command("file.new-sequence")
             check(newSequence.shortcut === "Ctrl+N", "new sequence lost Ctrl+N")
-            check(!newSequence.enabled && newSequence.effectiveTooltip === "Choose a project first", "new sequence available without a project")
+            check(!newSequence.enabled && newSequence.effectiveTooltip === "Choose a project first (File > Project)", "new sequence available without a project")
             const annotate = command("ribbon.annotate-the-selection")
             check(annotate.shortcut === "Ctrl+Shift+N" && annotate.enabled, "annotate not ready on a sequence")
             persistPreference("shortcut", {id: "ribbon.annotate-the-selection", value: "Ctrl+J"})

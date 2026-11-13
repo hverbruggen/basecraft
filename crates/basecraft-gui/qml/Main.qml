@@ -1454,12 +1454,12 @@ ApplicationWindow {
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
                         title: "Zenodo"
-                        RibbonButton { commandId: "export.zenodo"; iconName: "save-as"; tip: shell.project_dir.length ? "Prepare selected saved files for a Zenodo draft" : "Choose a project folder first"; enabled: shell.project_dir.length > 0; onInvoked: { const zenodo = zenodoWindow.item; if (zenodo && (zenodo.ready || zenodoJobs.busy || zenodo.attempted)) zenodo.open(); else zenodoPicker.dialog().open() } }
+                        RibbonButton { commandId: "export.zenodo"; iconName: "save-as"; tip: "Prepare selected saved files for a Zenodo draft"; enabled: shell.project_dir.length > 0; onInvoked: { const zenodo = zenodoWindow.item; if (zenodo && (zenodo.ready || zenodoJobs.busy || zenodo.attempted)) zenodo.open(); else zenodoPicker.dialog().open() } }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
                         title: "Specimens"
-                        RibbonButton { commandId: "metadata.table"; iconName: "matrix"; tip: shell.project_dir.length ? "The project's specimens, identifications and collection data" : "Choose a project folder first"; enabled: shell.project_dir.length > 0; onInvoked: specimenTable.dialog().open() }
+                        RibbonButton { commandId: "metadata.table"; iconName: "matrix"; tip: "The project's specimens, identifications and collection data"; enabled: shell.project_dir.length > 0; onInvoked: specimenTable.dialog().open() }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {

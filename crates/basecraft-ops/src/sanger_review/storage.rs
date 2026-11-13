@@ -225,30 +225,6 @@ fn retained(run: &ArtifactRun, path: &Path, index: usize) -> crate::Result<Artif
     })
 }
 
-fn carry_authored(dependencies: &[PathBuf], run: &ArtifactRun) -> crate::Result<()> {
-    for dependency in dependencies {
-        let authored = dependency.join("reports/methods.md");
-        if !authored.is_file() {
-            continue;
-        }
-        if std::fs::symlink_metadata(&authored)?
-            .file_type()
-            .is_symlink()
-        {
-            return Err(invalid(
-                "Authored methods path is a symlink; original preserved",
-            ));
-        }
-        std::fs::create_dir_all(run.directory().join("reports"))?;
-        basecraft_io::write_atomic(&run.directory().join("reports/methods.md"), |w| {
-            std::io::copy(&mut std::fs::File::open(&authored)?, w)?;
-            Ok(())
-        })?;
-        break;
-    }
-    Ok(())
-}
-
 fn publication(run: &ArtifactRun, origin: &str, artifacts: Vec<ArtifactRevision>) -> Publication {
     Publication {
         schema_version: 1,
@@ -343,7 +319,6 @@ impl SangerRun {
             &serde_json::from_slice::<serde_json::Value>(&payload)?,
         )?;
         linked_input(&run, &dependencies, &payload)?;
-        carry_authored(ancestors, &run)?;
         let result = Self {
             captures,
             run,
@@ -889,7 +864,6 @@ impl SangerReview {
         dependencies.sort();
         dependencies.dedup();
         linked_input(&run, &dependencies, self.draft_json.as_bytes())?;
-        carry_authored(&dependencies, &run)?;
         let snapshot = run.artifact("review.sanger-review.json")?;
         self.write_embedded(&snapshot)?;
         let mut record = publication(
@@ -1272,7 +1246,6 @@ impl SangerReview {
             "Sanger review/support",
             |run| publication_context.register(run),
         )?;
-        carry_authored(&dependencies, &run)?;
         let bytes = self.session_bytes(logical)?;
         // Support must be complete even when public history is disabled or this
         // is an unlogged recovery write. Session may add its history afterward.
@@ -1426,27 +1399,12 @@ mod tests {
         let exact = review.draft_json.clone();
         let path = folder.join("specimen.sanger-review.json");
         review.save(&path).unwrap();
-        let authored =
-            crate::records::provenance::bundle_for_result(&path, None).join("reports/methods.md");
-        std::fs::write(
-            &authored,
-            "User-authored laboratory methods, preserved verbatim.\n",
-        )
-        .unwrap();
-        review.save(&path).unwrap();
         let package = tmp.path().join("package");
         crate::records::provenance::package(&path, &package, None).unwrap();
         std::fs::remove_dir_all(folder).unwrap();
         let moved = tmp.path().join("moved-export");
         std::fs::rename(&package, &moved).unwrap();
         let path = moved.join("specimen.sanger-review.json");
-        assert_eq!(
-            std::fs::read_to_string(
-                crate::records::provenance::companion(&path).join("reports/methods.md")
-            )
-            .unwrap(),
-            "User-authored laboratory methods, preserved verbatim.\n"
-        );
         let reopened = ReviewSession::load(&path).unwrap();
         assert_eq!(reopened.draft_json, exact);
         assert_eq!(reopened.events(), review.events());

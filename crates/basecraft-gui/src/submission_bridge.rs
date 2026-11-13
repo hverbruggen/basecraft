@@ -454,7 +454,7 @@ impl qobject::SubmissionController {
             return Ok(());
         }
         if self.rust().project_dir.is_empty() {
-            return Err("Choose a project folder first".into());
+            return Err(basecraft_viewmodel::commands::NEEDS_PROJECT.into());
         }
         let project = basecraft_ops::project::Project::new(self.rust().project())
             .map_err(|_| "The chosen project folder is missing".to_string())?;

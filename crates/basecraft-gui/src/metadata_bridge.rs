@@ -446,7 +446,7 @@ impl qobject::MetadataController {
     pub fn create(mut self: Pin<&mut Self>) -> bool {
         let project = self.rust().project();
         if self.rust().project_dir.is_empty() {
-            self.report("error", "Choose a project folder first");
+            self.report("error", basecraft_viewmodel::commands::NEEDS_PROJECT);
             return false;
         }
         // Creation has a fixed-size empty payload; callers can immediately
