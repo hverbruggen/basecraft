@@ -153,7 +153,8 @@ enum Command {
         segments: String,
         #[arg(long)]
         reverse: bool,
-        /// The record to extract from, in a file of several; the first if left out.
+        /// Check that this is the open (first) record of a file of several.
+        /// Other records can't be extracted yet.
         #[arg(long)]
         record: Option<String>,
     },

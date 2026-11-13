@@ -10,6 +10,7 @@
 
 use basecraft_docs::alignment::{dna_mask, is_gap};
 use basecraft_docs::{AlignmentDoc, SequenceDoc};
+use basecraft_protocol::facts::{Alphabet, FactSource};
 use std::collections::VecDeque;
 use std::sync::{
     Arc,
@@ -255,7 +256,25 @@ pub fn search(input: Input, query: &str, reverse: bool, cancel: &AtomicBool) -> 
     };
     let protein = match &input {
         Input::Alignment(d) => d.is_protein(),
-        Input::Sequence(d) => d.alphabet().value == basecraft_protocol::facts::Alphabet::Protein,
+        // A stated alphabet wins. Otherwise guess over every current residue,
+        // off the UI thread, so edits and letters past any sample count.
+        Input::Sequence(d) if d.alphabet().source != FactSource::Guessed => {
+            d.alphabet().value == Alphabet::Protein
+        }
+        Input::Sequence(d) => {
+            let mut protein = false;
+            for start in (0..d.len()).step_by(usize::from(CHUNK)) {
+                if cancel.load(Ordering::Relaxed) {
+                    return Results::default();
+                }
+                let chunk = d.read(start, (start + u64::from(CHUNK)).min(d.len()));
+                if Alphabet::guess(&chunk) == Alphabet::Protein {
+                    protein = true;
+                    break;
+                }
+            }
+            protein
+        }
         _ => false,
     };
     let mut s = Scanner::new(
@@ -576,6 +595,14 @@ mod tests {
             (r.hits[0].start, r.hits[0].end),
             (u64::from(CHUNK) - 2, u64::from(CHUNK) + 5)
         );
+    }
+    #[test]
+    fn a_sequence_edited_to_protein_letters_is_searched_as_protein() {
+        let mut doc = SequenceDoc::new("s", Arc::new(b"ACGTACGT".to_vec()), vec![], false);
+        doc.replace(0, 8, b"MELQMELQ");
+        let r = search(Input::Sequence(doc), "LQ", false, &AtomicBool::new(false));
+        assert!(!r.nucleotide);
+        assert_eq!(r.hits.iter().map(|h| h.start).collect::<Vec<_>>(), [2, 6]);
     }
     #[test]
     fn find_names_annotations_and_protein_symbols() {

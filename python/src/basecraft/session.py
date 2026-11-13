@@ -417,7 +417,8 @@ class Session:
 
         Coordinates are zero-based, half-open; segments are in biological order,
         followed by optional reverse complement. Pass the inspected version.
-        ``record`` names the record in a file of several; left out, the open one.
+        ``record`` optionally checks the name of the open (first) record of a
+        file of several; other records can't be extracted yet.
         """
         args = {"document": document, "version": version, "path": str(path),
                 "start": start, "end": end, "segments": list(segments), "reverse": reverse}

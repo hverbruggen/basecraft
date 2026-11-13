@@ -119,11 +119,14 @@ fn records_that_share_a_name_refuse_every_edit_and_name_the_clash() {
     let refusals = [
         s.apply(d, replace(None)).err(),
         s.apply(d, Op::feature_add(feature(3))).err(),
+        s.apply(d, Op::feature_update(0, feature(5))).err(),
         s.apply(d, Op::feature_remove(0)).err(),
         s.extract(d, (2, 9), &[], false, &root.join("part.gb"), None)
             .err(),
     ];
     for refusal in refusals {
+        let code = refusal.as_ref().map(Error::code);
+        assert_eq!(code, Some("record_names_repeat"));
         match refusal {
             Some(Error::RecordNamesRepeat(names)) => assert_eq!(names, ["first"]),
             other => panic!("expected a refusal naming the clash, got {other:?}"),

@@ -360,7 +360,8 @@ impl Session {
             inverse,
             group,
         });
-        dropped.extend(slot.settle());
+        let settled = slot.settle();
+        dropped.extend(self.settle_members(settled));
         self.forget_groups(dropped);
         Ok(Outcome {
             entry_id,
@@ -454,8 +455,27 @@ impl Session {
         Ok(last)
     }
 
+    /// Settle every member's part of groups one document settled, with the
+    /// older steps beneath it, so no group stays half undoable. Returns
+    /// every group settled.
+    pub(super) fn settle_members(&mut self, mut pending: Vec<u64>) -> Vec<u64> {
+        let mut settled = Vec::new();
+        while let Some(group) = pending.pop() {
+            settled.push(group);
+            let members = self.group_docs.get(&group).cloned().unwrap_or_default();
+            for member in members {
+                let slot = &mut self.docs[member];
+                if let Some(last) = slot.undo.iter().rposition(|a| a.group == Some(group)) {
+                    pending.extend(slot.settle_oldest(last + 1));
+                }
+            }
+        }
+        settled
+    }
+
     /// Forget the documents of groups no document can undo or redo any more.
     pub(super) fn forget_groups(&mut self, mut dropped: Vec<u64>) {
+        dropped.sort_unstable();
         dropped.dedup();
         for group in dropped {
             let held = self.group_docs.get(&group).is_some_and(|members| {

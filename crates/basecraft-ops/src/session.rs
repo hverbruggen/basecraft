@@ -109,6 +109,11 @@ impl Slot {
         {
             count += 1;
         }
+        self.settle_oldest(count)
+    }
+
+    /// Settle the oldest `count` undo steps; returns their groups.
+    fn settle_oldest(&mut self, count: usize) -> Vec<u64> {
         let mut groups = Vec::new();
         self.settled.extend(self.undo.drain(..count).map(|applied| {
             groups.extend(applied.group);

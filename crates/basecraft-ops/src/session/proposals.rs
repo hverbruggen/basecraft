@@ -175,7 +175,8 @@ impl Session {
         slot.generation = next_generation;
         let mut dropped = slot.clear_redo();
         slot.undo.extend(applied);
-        dropped.extend(slot.settle());
+        let settled = slot.settle();
+        dropped.extend(self.settle_members(settled));
         self.forget_groups(dropped);
         self.next_group = next_group;
         Ok(ids)

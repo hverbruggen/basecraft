@@ -375,6 +375,11 @@ fn a_long_grouped_session_keeps_its_group_table_bounded() {
         .filter_map(|applied| applied.group)
         .collect();
     assert!(session.group_docs.keys().copied().eq(held));
+    // A group settled in one document is settled in every member, so none
+    // is left half undoable.
+    for (group, members) in &session.group_docs {
+        assert!(members.iter().all(|&m| session.docs[m].holds(*group)));
+    }
     // What stays still undoes as one step in both documents.
     session.undo(a).unwrap();
     assert!(session.can_redo(b).unwrap());

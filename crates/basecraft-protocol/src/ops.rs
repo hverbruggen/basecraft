@@ -317,8 +317,8 @@ impl Op {
     }
 
     /// The record a sequence edit or extraction names. Records in a file
-    /// that holds several are known by name (accession, LOCUS name, or the
-    /// FASTA header up to the first space); absent means the open record.
+    /// that holds several are known by name (LOCUS name, or the FASTA
+    /// header up to the first space); absent means the open record.
     /// `None` for operations that don't name a record.
     pub fn record(&mut self) -> Option<&mut Option<String>> {
         match self {
