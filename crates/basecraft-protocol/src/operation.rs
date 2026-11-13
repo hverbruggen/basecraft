@@ -210,7 +210,8 @@ pub struct InputBinding {
     pub min: usize,
     pub max: usize,
     /// Residue alphabets the operation accepts. Empty accepts any. The host
-    /// refuses other alignments before launch.
+    /// refuses other documents before launch, and undetermined or mixed ones
+    /// until the user states the alphabet (D12).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub alphabets: Vec<Alphabet>,
     /// Check the input's retained evidence before the run, as for a reused
@@ -341,8 +342,9 @@ pub struct InvocationContext {
     pub progress_file: String,
     #[serde(default)]
     pub input_evidence: BTreeMap<String, Vec<InvocationInputEvidence>>,
-    /// The alphabet of each alignment input: what the user or the file's
-    /// companion stated, or else the host's guess from the residues.
+    /// The alphabet of each alignment or sequence input: what the user or the
+    /// file's companion stated, or else the host's guess from the residues
+    /// (D12).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub alphabets: BTreeMap<String, Alphabet>,
 }

@@ -91,7 +91,7 @@ impl AlignmentWorkflow<'_> {
     }
 
     fn persist(&self) -> Result<()> {
-        let mutation = basecraft_ops::records::Mutation::begin()?;
+        let mutation = basecraft_ops::records::Mutation::begin_in(self.parent.project.as_ref())?;
         basecraft_ops::records::write_json(
             &self.parent.run.artifact("stages.json")?,
             &self.stages,

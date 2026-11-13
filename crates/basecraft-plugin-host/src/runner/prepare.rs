@@ -175,7 +175,13 @@ fn prepare_inputs(
             };
             let checked = session.checked_sequence(doc)?;
             let alphabet = (checked.alphabet().value, checked.alphabet_refusal());
-            check_alphabet(operation, name, alphabet, "the open sequence", &mut alphabets)?;
+            check_alphabet(
+                operation,
+                name,
+                alphabet,
+                "the open sequence",
+                &mut alphabets,
+            )?;
             sequence = Some(SequenceTarget {
                 doc,
                 session: session.id().into(),

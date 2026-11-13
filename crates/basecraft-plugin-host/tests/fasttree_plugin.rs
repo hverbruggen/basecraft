@@ -105,11 +105,9 @@ fn builds_a_tree_with_fasttree_and_logs_the_run() {
     assert!(runs[0].op.is_run(&outcome.run_id));
 }
 
-/// A DNA alignment with one stray letter used to get GTR under `FastTree`'s
-/// own rule (more than 90% nucleotide letters). Basecraft's one guess,
-/// `Alphabet::guess`, calls any letter outside the IUPAC codes protein.
+/// A DNA alignment with one stray X still gets GTR: basecraft's guess (D12)
+/// ignores X, as `FastTree`'s own rule did.
 #[test]
-#[ignore = "expected to fail until the user chooses the alphabet guess rule (FastTree's old 90% rule or any letter outside the IUPAC codes)"]
 fn a_dna_alignment_with_one_stray_letter_still_gets_gtr() {
     crate::isolated_profile::isolate!();
     assert!(fasttree_available(), "FastTree is needed");
@@ -126,4 +124,32 @@ fn a_dna_alignment_with_one_stray_letter_still_gets_gtr() {
         execution["execution"]["resolved_parameters"]["model"], "GTR",
         "{execution}"
     );
+}
+
+/// An alignment whose rows are of different kinds is refused before
+/// `FastTree` starts, naming the odd row (D12).
+#[test]
+fn a_mixed_alignment_is_refused_before_launch() {
+    crate::isolated_profile::isolate!();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let file = root.join("mixed.aln.fasta");
+    std::fs::write(
+        &file,
+        ">a\nATGGCTAAAGGTCCTGAAGCTTTAGAAGCT\n>b\nATGGCTAAAGGTCCAGAAGCTTTAGAAGCA\n\
+         >c\nATGGCAAAAGGACCAGAAGCATTAGAAGCA\n>p\nMKLEFIPQWERTYKLEFIPQWERTYKLEFI\n",
+    )
+    .unwrap();
+    let mut session = Session::new(root);
+    let doc = session.open(&file).unwrap();
+    let error = common::refused_in(&common::bundled(), &mut session, |s| {
+        json!({"operation":"basecraft.fasttree/tree@1","inputs":{"alignment":common::document(s, doc)},
+            "parameters":{},"destinations":{"artifacts/tree.nwk":"mixed.fasttree.nwk"}})
+    });
+    assert!(
+        error.contains("mixed.aln.fasta: The sequences are not all of one kind"),
+        "{error}"
+    );
+    assert!(error.contains("1 protein: p;"), "{error}");
+    assert!(!root.join("mixed.fasttree.nwk").exists());
 }

@@ -275,8 +275,8 @@ pub struct PreparedOperation {
     pub initiator: String,
     started: String,
     workflow_registry: Option<Arc<crate::registry::Registry>>,
-    /// The session's project, for reading the history of results and, once
-    /// lane data's `Mutation::begin_in` lands, for the analysis index.
+    /// The session's project: the history of results and the analysis index
+    /// live at its root.
     pub(crate) project: Option<basecraft_ops::project::Project>,
     _scratch: tempfile::TempDir,
 }
@@ -301,7 +301,7 @@ impl PreparedOperation {
             .collect();
         // Preserve leaves and delegate the primary ledger under one boundary:
         // a cooperating save must not invalidate the primary before its rewrite.
-        let mutation = records::Mutation::begin()?;
+        let mutation = records::Mutation::begin_in(self.project.as_ref())?;
         for (binding, records) in &self.context.input_evidence {
             if !retained_bindings.contains(binding) {
                 continue;
@@ -367,7 +367,7 @@ impl PreparedOperation {
 
     /// Inherit a workflow stage's original ledgers, avoiding a parent/child cycle.
     pub(crate) fn inherit_input_ancestry(&self, parent: &Path) -> Result<()> {
-        let mutation = records::Mutation::begin()?;
+        let mutation = records::Mutation::begin_in(self.project.as_ref())?;
         let dependencies = sources_from_upstream(parent)?;
         let mut ledgers = BTreeSet::from([self.run.directory().to_path_buf()]);
         ledgers.extend(

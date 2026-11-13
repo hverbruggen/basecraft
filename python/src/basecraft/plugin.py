@@ -128,8 +128,10 @@ class Context:
                    for record in records]
             for name, records in raw.get("input_evidence", {}).items()
         }
-        #: The alphabet of each alignment input ("dna", "rna", "protein" or
-        #: "unknown"), as the user or the file stated it or the host guessed it.
+        #: The alphabet of each alignment or sequence input ("dna", "rna",
+        #: "protein", "unknown", "undetermined" or "mixed"), as the user or the
+        #: file stated it or the host guessed it. An input that lists the
+        #: alphabets it accepts gets only one of those.
         self.alphabets: dict[str, str] = dict(raw.get("alphabets", {}))
 
     def input(self, name: str) -> str | None:
@@ -169,8 +171,8 @@ def local_context(root, inputs: dict, outputs: dict, run_id: str = "local", snap
                   alphabets: dict | None = None) -> Context:
     """A context for calling a handler directly, as a plugin's own tests do.
     ``inputs`` maps bindings to lists of paths; ``outputs`` maps roles to
-    paths relative to ``root``; ``alphabets`` maps alignment bindings to their
-    alphabet."""
+    paths relative to ``root``; ``alphabets`` maps alignment and sequence
+    bindings to their alphabet."""
     return Context({"schema": PROTOCOL_VERSION, "operation": "local", "run_id": run_id, "run_root": str(root),
                     "inputs": inputs, "outputs": outputs, "cpu_threads": 1,
                     "cancel_file": "cancel", "progress_file": "progress",

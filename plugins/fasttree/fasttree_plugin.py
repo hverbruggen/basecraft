@@ -76,8 +76,9 @@ def tree(params, context):
     records = read_fasta(source)
     if len(records) < 3:
         raise ValueError("FastTree needs at least three sequences")
+    # The host refuses an unknown, undetermined or mixed alignment first (D12).
     alphabet = context.alphabets.get("alignment", "unknown")
-    if alphabet == "unknown":
+    if alphabet not in ("dna", "rna", "protein"):
         raise ValueError("FastTree needs to know whether the alignment is DNA or protein")
     nucleotide = alphabet in ("dna", "rna")
     models = DNA_MODELS if nucleotide else PROTEIN_MODELS
