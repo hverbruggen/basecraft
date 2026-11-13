@@ -1747,11 +1747,19 @@ ApplicationWindow {
         property bool inSelection: false
         property var source: null
         property string sourcePath: ""
+        property var codes: []
+        property int suggested: -1
+        property string suggestedFrom: ""
         function search(selectionOnly) {
             if (!window.current || window.current.busy) return
             source = window.current
             sourcePath = source.file_path
             inSelection = selectionOnly
+            codes = JSON.parse(source.genetic_codes())
+            const code = source.genetic_code()
+            suggested = codes.findIndex(c => c.id === code)
+            suggestedFrom = source.genetic_code_source()
+            orfCode.currentIndex = suggested
             open()
         }
         title: inSelection ? "Find open reading frames in the selection" : "Find open reading frames"
@@ -1759,10 +1767,24 @@ ApplicationWindow {
         onOpened: codons.forceActiveFocus()
         onAccepted: {
             window.orfMinCodons = codons.value
-            if (source && source.file_path === sourcePath && !source.busy) source.find_orfs(codons.value, orfDialogItem.inSelection)
+            if (orfCode.currentIndex < 0) return
+            if (source && source.file_path === sourcePath && !source.busy) source.find_orfs(codons.value, codes[orfCode.currentIndex].id, orfDialogItem.inSelection)
         }
         body: ColumnLayout {
             spacing: 8
+            RowLayout {
+                Label { id: orfCodeLabel; text: "Genetic code" }
+                AppComboBox {
+                    id: orfCode; objectName: "orfCode"; Accessible.labelledBy: orfCodeLabel; Accessible.name: orfCodeLabel.text
+                    Layout.fillWidth: true
+                    model: orfDialogItem.codes
+                    textRole: "name"
+                }
+                Label {
+                    text: orfCode.currentIndex === orfDialogItem.suggested ? "(" + orfDialogItem.suggestedFrom + ")" : ""
+                    opacity: 0.7
+                }
+            }
             RowLayout {
                 Label { id: codonsLabel; text: "At least" }
                 AppSpinBox {
@@ -1798,16 +1820,20 @@ ApplicationWindow {
             sourcePath = source.file_path
             inSelection = selectionOnly
             const code = source.genetic_code()
-            let i = 0
+            let i = -1
             for (let k = 0; k < geneticCodes.count; k++)
                 if (geneticCodes.get(k).code === code) i = k
             codeBox.currentIndex = i
+            suggested = i
+            suggestedFrom = source.genetic_code_source()
             open()
         }
+        property int suggested: -1
+        property string suggestedFrom: ""
         title: inSelection ? "Predict genes in the selection" : "Predict genes"
         standardButtons: Dialog.Ok | Dialog.Cancel
         onOpened: codeBox.forceActiveFocus()
-        onAccepted: if (source && source.file_path === sourcePath && !source.busy) source.predict_genes(geneticCodes.get(codeBox.currentIndex).code, inSelection)
+        onAccepted: if (codeBox.currentIndex >= 0 && source && source.file_path === sourcePath && !source.busy) source.predict_genes(geneticCodes.get(codeBox.currentIndex).code, inSelection)
         body: ColumnLayout {
             spacing: 8
             RowLayout {
@@ -1819,6 +1845,10 @@ ApplicationWindow {
                     textRole: "label"
                     Keys.onReturnPressed: genesDialogItem.accept()
                     Keys.onEnterPressed: genesDialogItem.accept()
+                }
+                Label {
+                    text: codeBox.currentIndex === genesDialogItem.suggested ? "(" + genesDialogItem.suggestedFrom + ")" : ""
+                    opacity: 0.7
                 }
             }
             Label {

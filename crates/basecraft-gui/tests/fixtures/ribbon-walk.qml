@@ -548,7 +548,7 @@ Main {
         list.push(() => {
             show(0)
             edited.controller = documentAt(0).controller
-            edited.controller.find_orfs(30, false)
+            edited.controller.find_orfs(30, 11, false)
             check(edited.controller.busy, "the ORF finder did not start")
             show(2)
             currentView.forceActiveFocus()
