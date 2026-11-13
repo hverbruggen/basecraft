@@ -388,8 +388,8 @@ pub static COMMANDS: &[Command] = &[
     },
     Command {
         id: "ribbon.delete-the-selected-annotation",
-        caption: "",
-        tip: "",
+        caption: "Delete",
+        tip: "Delete the selected annotation",
         key: "D",
         scope: "Sequence",
         icon: "",
@@ -1017,6 +1017,23 @@ pub fn caption(id: &str) -> &'static str {
     field(id, |command| command.caption)
 }
 
+/// Ribbon buttons with less room than their command's caption.
+static RIBBON_LABELS: [(&str, &str); 4] = [
+    ("project.open", "Open/New"),
+    ("ribbon.annotate-the-selection", "Add"),
+    ("ribbon.export-an-editable-svg-of-this-view", "SVG"),
+    ("figure.export-png", "PNG"),
+];
+
+/// The text of the ribbon button for `id`: a short label where the caption
+/// does not fit, else the caption.
+pub fn ribbon_label(id: &str) -> &'static str {
+    RIBBON_LABELS
+        .iter()
+        .find(|(command, _)| *command == id)
+        .map_or_else(|| caption(id), |(_, label)| label)
+}
+
 pub fn tip(id: &str) -> &'static str {
     field(id, |command| command.tip)
 }
@@ -1264,6 +1281,19 @@ pub fn ribbon_panel(tab: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ribbon_buttons_use_a_short_label_only_where_one_is_listed() {
+        assert_eq!(ribbon_label("project.open"), "Open/New");
+        assert_eq!(caption("project.open"), "Open project…");
+        assert_eq!(
+            ribbon_label("file.new-sequence"),
+            caption("file.new-sequence")
+        );
+        for (id, _) in RIBBON_LABELS {
+            assert!(find(id).is_some(), "{id} is not a command");
+        }
+    }
 
     #[test]
     fn every_ribbon_tab_has_its_own_page() {

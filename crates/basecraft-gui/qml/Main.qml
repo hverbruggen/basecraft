@@ -972,7 +972,7 @@ ApplicationWindow {
                     spacing: 6 * window.ribbonSizeFactor
                     RibbonGroup {
                         title: "Project"
-                        AppRibbonButton { action: projectCommand; visible: projectCommand.visible; text: "Open/New"; iconName: "project"; tip: projectCommand.effectiveTooltip }
+                        AppRibbonButton { action: projectCommand; visible: projectCommand.visible; text: commandList.ribbon_label(projectCommand.commandId); iconName: "project"; tip: projectCommand.effectiveTooltip }
                         AppRibbonButton {
                             id: recentProjectButton
                             property string keyHint: "RC"
@@ -1105,12 +1105,10 @@ ApplicationWindow {
                         disabledReason: "Open a sequence to use this group"
                         enabled: window.currentKind === "sequence"
                         title: "Annotation"
-                        AppRibbonButton { action: addAnnotationCommand; text: "Add"; visible: addAnnotationCommand.visible; iconName: "annotation-add"; tip: addAnnotationCommand.effectiveTooltip }
+                        AppRibbonButton { action: addAnnotationCommand; text: commandList.ribbon_label(addAnnotationCommand.commandId); visible: addAnnotationCommand.visible; iconName: "annotation-add"; tip: addAnnotationCommand.effectiveTooltip }
                         RibbonButton { commandId: "ribbon.edit-the-selected-annotation"; iconName: "annotation-edit"; keys: "Enter"; onInvoked: editor.openSelected() }
                         RibbonButton { commandId: "ribbon.delete-the-selected-annotation";
-                            text: "Delete"
                             iconName: "annotation-delete"
-                            tip: "Delete the selected annotation"
                             keys: "Delete"
                             onInvoked: {
                                 const id = window.current.selected_feature()
@@ -1471,8 +1469,8 @@ ApplicationWindow {
                     spacing: 6 * window.ribbonSizeFactor
                     RibbonGroup {
                         title: "Figure"
-                        AppRibbonButton { action: exportSvgCommand; visible: exportSvgCommand.visible; text: "SVG"; iconName: "save-as"; tip: exportSvgCommand.effectiveTooltip }
-                        AppRibbonButton { action: exportPngCommand; visible: exportPngCommand.visible; text: "PNG"; iconName: "figure-export"; tip: exportPngCommand.effectiveTooltip }
+                        AppRibbonButton { action: exportSvgCommand; visible: exportSvgCommand.visible; text: commandList.ribbon_label(exportSvgCommand.commandId); iconName: "save-as"; tip: exportSvgCommand.effectiveTooltip }
+                        AppRibbonButton { action: exportPngCommand; visible: exportPngCommand.visible; text: commandList.ribbon_label(exportPngCommand.commandId); iconName: "figure-export"; tip: exportPngCommand.effectiveTooltip }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {

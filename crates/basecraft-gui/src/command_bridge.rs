@@ -17,6 +17,8 @@ pub mod qobject {
         #[qinvokable]
         fn caption(self: &AppCommands, id: &QString) -> QString;
         #[qinvokable]
+        fn ribbon_label(self: &AppCommands, id: &QString) -> QString;
+        #[qinvokable]
         fn tip(self: &AppCommands, id: &QString) -> QString;
         #[qinvokable]
         fn key(self: &AppCommands, id: &QString) -> QString;
@@ -50,6 +52,9 @@ pub struct CommandList;
 impl qobject::AppCommands {
     fn caption(&self, id: &QString) -> QString {
         QString::from(commands::caption(&id.to_string()))
+    }
+    fn ribbon_label(&self, id: &QString) -> QString {
+        QString::from(commands::ribbon_label(&id.to_string()))
     }
     fn tip(&self, id: &QString) -> QString {
         QString::from(commands::tip(&id.to_string()))
