@@ -13,12 +13,40 @@ impl Session {
         self.docs.get(id.0).is_some_and(|slot| !slot.is_clean())
     }
 
+    /// [`Session::write_alphabet_now`], or, when the side file can't take
+    /// the answer now, the note saying so: also added to the document's
+    /// notice, so an undo or redo that has no notes of its own reports it.
+    /// `changed_on_disk`: the document's files changed on disk before this
+    /// step, so none is replaced now (a save would refuse too).
+    pub(super) fn answer_written(
+        &mut self,
+        id: DocId,
+        keep_saved: bool,
+        changed_on_disk: bool,
+    ) -> Option<String> {
+        let error = if changed_on_disk {
+            "its files changed on disk since they were read".to_owned()
+        } else {
+            self.write_alphabet_now(id, keep_saved).err()?.to_string()
+        };
+        let note = format!("The alphabet answer is kept until the next save: {error}");
+        let notice = &mut self.docs[id.0].recovery_notice;
+        *notice = Some(
+            notice
+                .take()
+                .map_or(note.clone(), |n| format!("{n}\n{note}")),
+        );
+        Some(note)
+    }
+
     /// Write the alphabet `id` states to its side file now, through the one
-    /// companion writer, or remove the side file when nothing is stated. A
-    /// document that was clean stays clean. A new document with no file yet
-    /// gets its side file with its first save, and so does a session that
-    /// publishes to a recovery destination.
-    pub(super) fn write_alphabet_now(&mut self, id: DocId, was_clean: bool) -> Result<()> {
+    /// companion writer, or remove the side file when nothing is stated. With
+    /// `keep_saved`, a document that was saved stays saved. A new document
+    /// with no file yet gets its side file with its first save, and so does
+    /// a session that publishes to a recovery destination. A side file that
+    /// changed on disk since the session last read or wrote it is left alone,
+    /// as a save would refuse to replace it.
+    fn write_alphabet_now(&mut self, id: DocId, keep_saved: bool) -> Result<()> {
         if !matches!(
             self.write_publication,
             crate::documents::WritePublication::Immediate
@@ -36,6 +64,11 @@ impl Session {
         };
         let path = files::tree_sidecar(&self.resolve(&main));
         let key = self.relative(&path);
+        let known = slot.source_stamps.iter().find(|(p, _)| p == &path);
+        let now = crate::records::input_evidence::stamp(&path).ok();
+        if known.map_or(now.is_some(), |(_, known)| *known != now) {
+            return Err(Error::ChangedOnDisk { path });
+        }
         let companion = files::facts_companion(stated.as_ref(), &main_hash);
         // D14: a side file a later basecraft wrote is not overwritten or
         // removed with fields this build doesn't know, unless allowed.
@@ -78,7 +111,7 @@ impl Session {
             Some(entry) => entry.1 = stamp,
             None => slot.source_stamps.push((path, stamp)),
         }
-        if was_clean {
+        if keep_saved {
             slot.saved_at = Some(slot.mark());
         }
         Ok(())

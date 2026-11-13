@@ -321,8 +321,10 @@ impl Session {
         // A checkpoint describes the content an edit applies to, so it is taken
         // first. Otherwise apply first, so a refused edit starts no tracking.
         let slot = &self.docs[doc.0];
-        let checkpoints = self.tracked
-            && (self.source_changed(doc) || slot.baseline_logged && slot.baseline.is_some());
+        // Before tracking takes the files on disk as known.
+        let changed_on_disk = self.source_changed(doc);
+        let checkpoints =
+            self.tracked && (changed_on_disk || slot.baseline_logged && slot.baseline.is_some());
         if checkpoints {
             self.track(doc)?;
         }
@@ -380,9 +382,9 @@ impl Session {
         dropped.extend(self.settle_members(settled));
         self.forget_groups(dropped);
         if let Some(was_clean) = alphabet
-            && let Err(error) = self.write_alphabet_now(doc, was_clean)
+            && let Some(note) = self.answer_written(doc, was_clean, changed_on_disk)
         {
-            notes.push(format!("The answer is kept until the next save: {error}"));
+            notes.push(note);
         }
         Ok(Outcome {
             entry_id,
@@ -565,6 +567,8 @@ impl Session {
     /// document returns to where it was.
     fn step(&mut self, id: DocId, undo: bool, whole: bool) -> Result<String> {
         self.docs.get(id.0).ok_or(Error::UnknownDocument { id })?;
+        // Before tracking takes the files on disk as known.
+        let changed_on_disk = self.source_changed(id);
         self.track(id)?;
         self.typing = None;
         let was_clean = self.docs[id.0].is_clean();
@@ -617,13 +621,14 @@ impl Session {
             self.unstep(id, undo, entries.len())?;
             return Err(error);
         }
-        let moved = self.docs[id.0].stack(!undo).iter().rev().take(undone.len());
-        let alphabet = moved
-            .into_iter()
-            .any(|step| matches!(step.op, Op::SetAlphabet { .. }));
-        // An answer the side file can't take now still reaches it on save.
-        if alphabet {
-            let _ = self.write_alphabet_now(id, was_clean);
+        let moved: Vec<bool> = (self.docs[id.0].stack(!undo).iter().rev())
+            .take(undone.len())
+            .map(|step| matches!(step.op, Op::SetAlphabet { .. }))
+            .collect();
+        // Only a step of alphabet answers alone leaves a saved document
+        // saved; with other edits in the group, those still need a save.
+        if moved.contains(&true) {
+            self.answer_written(id, was_clean && !moved.contains(&false), changed_on_disk);
         }
         Ok(undone.pop().unwrap_or_default())
     }

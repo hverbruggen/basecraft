@@ -107,3 +107,59 @@ fn a_declined_answer_is_kept_and_analyses_still_refuse() {
     session.apply(doc, answer(StatedAlphabet::Dna)).unwrap();
     assert_eq!(session.doc(doc).unwrap().alphabet_refusal(), None);
 }
+
+#[test]
+fn a_group_mixing_an_answer_with_an_edit_still_needs_a_save() {
+    crate::isolated_profile::isolate!();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("s.fasta"), unclear()).unwrap();
+    let (mut session, doc) = open(dir.path());
+    session.begin_group();
+    session.apply(doc, Op::seq_replace(0, 1, "T")).unwrap();
+    session.apply(doc, answer(StatedAlphabet::Dna)).unwrap();
+    session.end_group();
+    assert!(session.is_unsaved(doc));
+    session.undo(doc).unwrap();
+    assert!(!session.is_unsaved(doc), "undone back to the file on disk");
+    session.redo(doc).unwrap();
+    assert!(session.is_unsaved(doc), "the redone edit is not on disk");
+}
+
+#[test]
+fn a_side_file_changed_on_disk_is_left_alone_and_the_answer_waits() {
+    crate::isolated_profile::isolate!();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("s.fasta"), unclear()).unwrap();
+    let side = dir.path().join("s.fasta.basecraft.json");
+    let (mut session, doc) = open(dir.path());
+    // Another program writes the side file after the session read the folder.
+    std::fs::write(&side, b"written elsewhere").unwrap();
+    let outcome = session.apply(doc, answer(StatedAlphabet::Dna)).unwrap();
+    assert!(
+        outcome
+            .notes
+            .iter()
+            .any(|n| n.contains("kept until the next save")),
+        "{:?}",
+        outcome.notes
+    );
+    assert_eq!(std::fs::read(&side).unwrap(), b"written elsewhere");
+    assert!(session.is_unsaved(doc));
+}
+
+#[test]
+fn an_undo_that_cannot_write_the_side_file_says_so() {
+    crate::isolated_profile::isolate!();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("s.fasta"), unclear()).unwrap();
+    let side = dir.path().join("s.fasta.basecraft.json");
+    let (mut session, doc) = open(dir.path());
+    session.apply(doc, answer(StatedAlphabet::Dna)).unwrap();
+    assert!(side.exists());
+    std::fs::write(&side, b"changed elsewhere").unwrap();
+    session.undo(doc).unwrap();
+    let notice = session.recovery_warning(doc).unwrap_or_default();
+    assert!(notice.contains("kept until the next save"), "{notice}");
+    assert_eq!(std::fs::read(&side).unwrap(), b"changed elsewhere");
+    assert!(session.is_unsaved(doc));
+}
