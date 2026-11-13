@@ -393,3 +393,43 @@ fn bootstrap_destination_publishes_working_copy_and_repairs_late_collision() {
         Vec::<String>::new()
     );
 }
+
+/// Corrected distances are substitutions per site; uncorrected p-distances
+/// are proportions of differing sites, so their tree's meaning stays unknown.
+#[test]
+fn only_corrected_distance_trees_state_substitution_lengths() {
+    crate::isolated_profile::isolate!();
+    assert!(engine(), "the distance engine is needed");
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let input = root.join("input.aln.fasta");
+    std::fs::write(
+        &input,
+        ">a\nAAAAAAAC\n>b\nAAAAAACC\n>c\nCCAAAAAC\n>d\nCCAAAACC\n",
+    )
+    .unwrap();
+    let mut session = Session::new(root);
+    let doc = session.open(&input).unwrap();
+    let registry = common::bundled();
+    for (model, expected) in [
+        ("p", None),
+        (
+            "jc69",
+            Some(basecraft_protocol::facts::BranchLengths::Substitutions),
+        ),
+    ] {
+        let destination = format!("{model}.nwk");
+        let outcome = common::run_in(&registry, &mut session, |s| {
+            tree_request(s, doc, &json!({"model":model,"threads":1}), &destination)
+        });
+        common::assert_completed(&outcome);
+        let tree = basecraft_ops::files::load_tree(&root.join(&destination))
+            .unwrap()
+            .doc;
+        assert_eq!(
+            tree.branch_lengths().map(|fact| fact.value.clone()),
+            expected,
+            "{model}"
+        );
+    }
+}

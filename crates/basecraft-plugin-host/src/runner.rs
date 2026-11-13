@@ -265,6 +265,8 @@ pub struct PreparedOperation {
     pub request: OperationRequest,
     pub parameters: Value,
     granted_parameters: std::sync::Mutex<Value>,
+    /// The external tool the run record names, once it is written.
+    tool: std::sync::Mutex<Option<basecraft_protocol::plugin::ToolInfo>>,
     pub context: InvocationContext,
     pub policy: SessionPolicy,
     pub ledger_inputs: Vec<ArtifactRevision>,
@@ -509,9 +511,9 @@ impl PreparedOperation {
         // collection so retained results, explicit exports, verification and
         // repair agree.
         let support = file_tool::producer_support(&self.operation.descriptor, &self.parameters);
-        let none = basecraft_protocol::operation::OutputFacts::default();
         let stated: Vec<_> = validated
             .iter()
+            .filter(|(_, path, _)| file_tool::is_tree(path))
             .filter_map(|(role, path, _)| {
                 let binding = &self.operation.descriptor.outputs[role];
                 let primary = binding
@@ -520,17 +522,15 @@ impl PreparedOperation {
                     .map_or(!binding.collection, |member| {
                         *path == self.run_path(&self.context.outputs[role]).join(member)
                     });
-                let facts = if primary { &binding.facts } else { &none };
+                let lengths = primary
+                    .then(|| file_tool::stated_branch_lengths(binding, &self.parameters))
+                    .flatten();
                 let support = support.filter(|_| role == "artifacts");
-                let wanted = if file_tool::is_tree(path) {
-                    support.is_some() || facts.branch_lengths.is_some()
-                } else {
-                    facts.alphabet.is_some()
-                };
-                wanted.then(|| (role.clone(), path.clone(), facts, support))
+                (support.is_some() || lengths.is_some())
+                    .then(|| (role.clone(), path.clone(), lengths, support))
             })
             .collect();
-        for (role, path, facts, support) in stated {
+        for (role, path, lengths, support) in stated {
             let sidecar = basecraft_ops::files::tree_sidecar(&path);
             match std::fs::symlink_metadata(&sidecar) {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -541,7 +541,7 @@ impl PreparedOperation {
                 }
                 Err(error) => return Err(error.into()),
             }
-            if let Some(sidecar) = file_tool::write_output_companion(&path, support, facts)? {
+            if let Some(sidecar) = file_tool::write_tree_companion(&path, support, lengths)? {
                 if !paths.insert(sidecar.clone()) {
                     return Err(Error::Protocol("duplicate companion".into()));
                 }
@@ -698,10 +698,13 @@ impl PreparedOperation {
     /// producer support semantics and the link to the alignment it came from.
     fn finalise_exported_tree(&self, role: &str, tree: &Path) -> Result<()> {
         self.run.bind(tree)?;
-        file_tool::write_output_companion(
+        file_tool::write_tree_companion(
             tree,
             file_tool::producer_support(&self.operation.descriptor, &self.parameters),
-            &self.operation.descriptor.outputs[role].facts,
+            file_tool::stated_branch_lengths(
+                &self.operation.descriptor.outputs[role],
+                &self.parameters,
+            ),
         )?;
         let Some(frozen) = self
             .context
@@ -765,7 +768,16 @@ impl PreparedOperation {
                 outputs,
             )
         };
-        (basecraft_ops::session::run_actor(&self.run, plugin), record)
+        let tool = self
+            .tool
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let actor = tool.map_or(plugin, |tool| basecraft_protocol::Actor::Tool {
+            tool: tool.name,
+            version: tool.version,
+        });
+        (actor, record)
     }
 
     /// A context path: relative to the run folder, or absolute outside it.

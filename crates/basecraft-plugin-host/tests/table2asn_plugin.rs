@@ -167,7 +167,7 @@ fn validate(
             "test",
         )
         .unwrap();
-    let outcome = jobs.wait(&accepted.run_id, &|| false).unwrap();
+    let outcome = jobs.wait(&accepted.run_id, None, &|| false).unwrap();
     let folder = outcome.evidence.clone().unwrap();
     let outcome = serde_json::to_value(outcome).unwrap();
     let summary = submission::record_validation(root, Path::new(name), &outcome)

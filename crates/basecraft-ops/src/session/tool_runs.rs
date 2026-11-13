@@ -2,6 +2,7 @@
 use super::Session;
 use super::{Actor, DocId, Op, OpResult, Result};
 use super::{PathBuf, invalid};
+use std::path::Path;
 
 /// What one tool run records. Every route (GUI, CLI, Python, MCP, plugins,
 /// imports) reaches the document's log through `Session::record_tool_run`.
@@ -44,17 +45,25 @@ impl<'a> ToolRunRecord<'a> {
         }
     }
 
-    /// The `tool.run` operation, with `outputs` named relative to `root`, the
-    /// folder of the log that will hold it.
+    /// The `tool.run` operation. Its run link is relative to `base`: the
+    /// project root, or the document's own folder for a loose file. A run
+    /// folder that cannot be named relative to it is refused.
     pub(crate) fn op(
         self,
-        root: &std::path::Path,
+        base: &Path,
         outputs: Vec<String>,
         input_run: Option<basecraft_protocol::records::ActivityInputRun>,
         contributions: Option<basecraft_protocol::records::ActivityContributions>,
-    ) -> Op {
+    ) -> Result<Op> {
         let (plugin, operation) = self.activity;
-        Op::ToolRun {
+        let run = match self.run {
+            Some(run) => Some(basecraft_protocol::ops::RunLink {
+                id: run.id().into(),
+                folder: run_folder(base, run.directory())?,
+            }),
+            None => None,
+        };
+        Ok(Op::ToolRun {
             plugin: plugin.to_string(),
             operation: operation.to_string(),
             params: self.params,
@@ -62,30 +71,36 @@ impl<'a> ToolRunRecord<'a> {
             outputs,
             input_run,
             contributions,
-            run: self.run.map(|run| basecraft_protocol::ops::RunLink {
-                id: run.id().into(),
-                folder: super::relative(root, run.directory()),
-            }),
-        }
+            run,
+        })
     }
 }
 
-/// Who ran a tool: the external program the run record names, or else the
-/// plugin.
-pub fn run_actor(run: &crate::records::ArtifactRun, plugin: Actor) -> Actor {
-    std::fs::read(run.directory().join("execution.json"))
-        .ok()
-        .and_then(|bytes| {
-            serde_json::from_slice::<basecraft_protocol::records::RunRecord>(&bytes).ok()
-        })
-        .and_then(|record| record.tool)
-        .map_or(plugin, |tool| Actor::Tool {
-            tool: tool.name,
-            version: tool.version,
-        })
+/// A run folder named relative to `base`, as a run link holds it.
+fn run_folder(base: &Path, folder: &Path) -> Result<String> {
+    let canonical = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    crate::records::relative(&canonical(base), &canonical(folder)).map_err(|_| {
+        invalid(format!(
+            "the run folder {} cannot be named relative to {}",
+            folder.display(),
+            base.display()
+        ))
+    })
 }
 
 impl Session {
+    /// The folder a document's run links are relative to: the project root,
+    /// or the file's own folder for a loose file.
+    pub(crate) fn run_base(&self, id: DocId) -> Result<PathBuf> {
+        let path = self.resolve(self.doc_key(id)?);
+        if let Some(project) = self.project.as_ref().filter(|p| p.contains(&path)) {
+            return Ok(project.root().to_path_buf());
+        }
+        path.parent()
+            .map(Path::to_path_buf)
+            .ok_or_else(|| invalid("the document has no folder"))
+    }
+
     /// The one way a tool run reaches the log: one typed `tool.run` entry.
     pub fn record_tool_run(
         &mut self,
@@ -120,7 +135,7 @@ impl Session {
             hashes.push((key.clone(), basecraft_io::hash_file(path)?));
             keys.push(key);
         }
-        let op = record.op(&self.root, keys, input_run, contributions);
+        let op = record.op(&self.run_base(id)?, keys, input_run, contributions)?;
         let entry = self.entry(
             id,
             actor,

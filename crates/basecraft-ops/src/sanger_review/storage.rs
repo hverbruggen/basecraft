@@ -177,6 +177,9 @@ pub struct SangerRun {
     evidence: ReviewEvidence,
     operation: String,
     anchor: PathBuf,
+    /// What the stage's run link is relative to: the project root, or the
+    /// anchor's folder outside a project.
+    base: PathBuf,
     terminal: std::cell::Cell<bool>,
     started: String,
 }
@@ -321,9 +324,16 @@ impl SangerRun {
             .filter_map(|s| s.ledger.clone())
             .collect();
         dependencies.extend_from_slice(ancestors);
+        // Sources relative to the run folder, so the request moves with it.
+        let sources = paths
+            .iter()
+            .map(|path| {
+                inputs::relative(run.directory(), &std::path::absolute(path)?).map(PathBuf::from)
+            })
+            .collect::<crate::Result<_>>()?;
         let payload = serde_json::to_vec(&serde_json::to_value(SangerRequest {
             operation: operation.into(),
-            sources: paths.to_vec(),
+            sources,
         })?)?;
         inputs::write_json(
             &run.artifact("request.json")?,
@@ -337,6 +347,13 @@ impl SangerRun {
             evidence,
             operation: operation.into(),
             anchor: std::path::absolute(anchor)?,
+            base: match project.filter(|project| project.contains(anchor)) {
+                Some(project) => project.root().to_path_buf(),
+                None => std::path::absolute(anchor)?
+                    .parent()
+                    .ok_or_else(|| invalid("the Sanger anchor has no folder"))?
+                    .to_path_buf(),
+            },
             terminal: std::cell::Cell::new(false),
             started: basecraft_platform::now_rfc3339(),
         };
@@ -347,10 +364,6 @@ impl SangerRun {
 
     pub fn captured_inputs(&self) -> &[crate::sanger_review::CapturedInput] {
         &self.captures
-    }
-
-    pub fn parameters(&self, value: &serde_json::Value) -> crate::Result<()> {
-        inputs::write_json(&self.run.artifact("parameters.json")?, value)
     }
 
     pub fn review_snapshot(&self, session: &SangerReview) -> crate::Result<PathBuf> {
@@ -370,9 +383,29 @@ impl SangerRun {
         crate::records::job_index_path(self.run.id())
     }
 
-    /// The stage's run record, as every tool run has one. Its sources and
-    /// their hashes are in `request.json` and the publication.
+    /// The stage's run record, as every tool run has one: its sources with
+    /// paths relative to the run folder and their hashes. A stage records no
+    /// settings yet, so `effective_parameters` is null and methods say so.
     fn write_run_record(&self) -> crate::Result<()> {
+        let folder = self.run.directory();
+        let sources = self
+            .evidence
+            .sources
+            .iter()
+            .map(|source| {
+                let hash = format!("sha256:{}", source.sha256);
+                Ok(basecraft_protocol::operation::InvocationInputEvidence {
+                    original_path: Some(inputs::relative(folder, &source.location()?)?),
+                    source_hash: Some(hash.clone()),
+                    submitted_hash: hash,
+                    transformation: "identity-v1".into(),
+                    run_directory: match &source.ledger {
+                        Some(ledger) => inputs::relative(folder, ledger)?,
+                        None => ".".into(),
+                    },
+                })
+            })
+            .collect::<crate::Result<_>>()?;
         let record = basecraft_protocol::records::RunRecord {
             schema: basecraft_protocol::records::RUN_RECORD_SCHEMA,
             operation: format!("{SANGER_TOOL}/{}", self.operation),
@@ -383,8 +416,8 @@ impl SangerRun {
             initiator: "basecraft".into(),
             executor: SANGER_TOOL.into(),
             process_instance: basecraft_platform::process_instance().into(),
-            inputs: std::collections::BTreeMap::new(),
-            effective_parameters: serde_json::Value::Object(serde_json::Map::new()),
+            inputs: std::collections::BTreeMap::from([("sources".into(), sources)]),
+            effective_parameters: serde_json::Value::Null,
             cpu_threads: 1,
             stdout: String::new(),
             stderr: String::new(),
@@ -446,11 +479,6 @@ impl SangerRun {
             return Err(invalid("Sanger run terminated or has no declared outputs"));
         }
         let mut artifacts = vec![retained(&self.run, &self.run.artifact("request.json")?, 0)?];
-        let mut paths = paths.to_vec();
-        let parameters = self.run.artifact("parameters.json")?;
-        if parameters.is_file() {
-            paths.push(parameters);
-        }
         for (index, path) in paths.iter().enumerate() {
             artifacts.push(retained(&self.run, path, index + 1)?);
         }
@@ -492,11 +520,12 @@ impl SangerRun {
         };
         let entry = crate::records::provenance::file_run_entry(
             record,
+            &self.base,
             &publication,
             &self.started,
             sanger_actor(),
             &self.operation,
-        );
+        )?;
         publication.events.push(entry);
         crate::records::provenance::publish(self.directory(), &publication)?;
         self.evidence.runs.push(self.directory().into());

@@ -4555,7 +4555,7 @@
       ]
     },
     "RunLink": {
-      "description": "Where a tool run's own record is: the run's id and its folder, relative\nto the folder of the log that holds the entry.",
+      "description": "Where a tool run's own record is: the run's id and its folder, relative\nto the project root, or to the document's own folder for a loose file.",
       "type": "object",
       "properties": {
         "folder": {

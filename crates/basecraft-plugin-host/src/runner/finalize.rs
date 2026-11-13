@@ -387,13 +387,18 @@ impl PreparedOperation {
                 .map(|input| (input.logical_name.clone(), input.hash.clone()))
                 .collect();
             let (actor, record) = self.tool_run(&inputs, &[]);
+            let base = self
+                .project
+                .as_ref()
+                .map_or(self.policy.root.as_path(), |project| project.root());
             let activity = basecraft_ops::records::file_run_entry(
                 record,
+                base,
                 &publication,
                 &self.started,
                 actor,
                 &self.operation.id,
-            );
+            )?;
             self.publication_input_record()?
                 .publish_operation_activity(&self.run, &activity)?;
         }

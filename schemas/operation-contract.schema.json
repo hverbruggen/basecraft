@@ -383,20 +383,22 @@
       "description": "Facts an output declares about its primary member. The host writes them,\nmarked as stated, into the member's companion file.",
       "type": "object",
       "properties": {
-        "alphabet": {
+        "branch_lengths": {
+          "description": "What a tree's branch lengths measure.",
           "anyOf": [
             {
-              "$ref": "#/$defs/Alphabet"
+              "$ref": "#/$defs/BranchLengths"
             },
             {
               "type": "null"
             }
           ]
         },
-        "branch_lengths": {
+        "when": {
+          "description": "The facts hold only for runs whose parameters meet this, such as a\ncorrected distance model.",
           "anyOf": [
             {
-              "$ref": "#/$defs/BranchLengths"
+              "$ref": "#/$defs/ParameterCondition"
             },
             {
               "type": "null"
@@ -425,6 +427,28 @@
             "test",
             "parameter",
             "value"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "parameter": {
+              "type": "string"
+            },
+            "test": {
+              "type": "string",
+              "const": "one_of"
+            },
+            "values": {
+              "type": "array",
+              "items": true
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "test",
+            "parameter",
+            "values"
           ]
         },
         {

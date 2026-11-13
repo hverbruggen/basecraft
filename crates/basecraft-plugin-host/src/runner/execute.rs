@@ -249,6 +249,10 @@ impl PreparedOperation {
     }
 
     fn write_run_record(&self, record: &RunRecord) -> Result<()> {
+        self.tool
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone_from(&record.tool);
         records::write_json(
             &self.run.artifact("execution.json")?,
             &serde_json::to_value(record)?,

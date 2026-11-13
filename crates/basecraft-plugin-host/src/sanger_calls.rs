@@ -263,7 +263,7 @@ impl SangerCaller {
         let (id, identity) = self.active.take().ok_or("No call was started")?;
         let outcome = self
             .jobs
-            .wait(&id, &|| {
+            .wait(&id, None, &|| {
                 cancelled.load(std::sync::atomic::Ordering::Acquire)
             })
             .map_err(|e| e.to_string())?;

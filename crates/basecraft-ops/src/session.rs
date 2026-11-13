@@ -42,7 +42,7 @@ mod save_failure_tests;
 mod saved_mark_tests;
 mod tool_runs;
 pub use save_decision::{EvidenceAction, SaveCheck, SaveDecision, SaveOutcome, SaveWarning};
-pub use tool_runs::{ToolRunRecord, run_actor};
+pub use tool_runs::ToolRunRecord;
 pub mod support_import;
 use crate::{Error, Result};
 

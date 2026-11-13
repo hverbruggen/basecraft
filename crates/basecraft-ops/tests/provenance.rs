@@ -709,67 +709,104 @@ fn provenance_works_with_recovery_disabled_and_preserves_frozen_reports() {
     assert!(!paths.state.join("recovery").exists());
 }
 
-#[test]
-fn methods_use_frozen_plugin_metadata_and_reject_unmatched_contribution() {
-    crate::isolated_profile::isolate!();
+/// A run's settings, tool and citations reach methods from its run record,
+/// wherever in the project the result sits. Returns the result's record.
+fn methods_come_from_the_run_record(folder: &str) -> records::DocumentRecord {
     let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("gene.fasta");
-    let output = dir.path().join("result.fasta");
+    let project = basecraft_ops::project::Project::new(dir.path()).unwrap();
+    let place = dir.path().join(folder);
+    std::fs::create_dir_all(&place).unwrap();
+    let file = place.join("gene.fasta");
+    let output = place.join("result.fasta");
     std::fs::write(&file, ">gene\nACGT\n").unwrap();
     std::fs::write(&output, ">gene\nACGT\n").unwrap();
-    let mut session = Session::recoverable_with_paths(dir.path(), &paths(dir.path())).unwrap();
+    let mut session = Session::recoverable_with_paths(dir.path(), &paths(dir.path()))
+        .unwrap()
+        .in_project(Some(project.clone()));
     let doc = session.open(&file).unwrap();
     let snapshot = session.document_record(doc).unwrap();
     let input_hash = session.snapshot_file(&file).unwrap();
-    let inputs = vec![("gene.fasta".into(), input_hash)];
+    let inputs = vec![(
+        format!("{folder}/gene.fasta")
+            .trim_start_matches('/')
+            .to_string(),
+        input_hash,
+    )];
     // How the tool ran is in the run folder's record, not in the parameters.
     let run = records::ArtifactRun::create(&output, "01M79RUNRECORDMETHODS0000").unwrap();
-    std::fs::write(
-        run.directory().join("execution.json"),
-        r#"{"schema":3,"operation":"example/analyze@1","package_version":"1","package_digest":null,
-        "descriptor_digest":null,"environment":{"interpreter":null,"runtime":null},"initiator":"test",
-        "executor":"example","process_instance":"test","inputs":{},"effective_parameters":{},
-        "cpu_threads":1,"stdout":"","stderr":"","tool":{"name":"RecordedTool","version":"1.2"},
-        "execution":{"argv":[],"methods_template":"example.v1","resolved_parameters":{"seed":42},
-        "methods":{"description":"Sequences were processed","citations":["A recorded citation"]}}}"#,
-    )
-    .unwrap();
-    let actor = basecraft_ops::session::run_actor(
-        &run,
-        basecraft_protocol::Actor::Plugin {
-            id: "example".into(),
-            version: "1".into(),
-        },
+    let execution = basecraft_protocol::plugin::ExecutionInfo {
+        argv: Vec::new(),
+        resolved_parameters: serde_json::Map::from_iter([("seed".to_string(), 42.into())]),
+        preprocessing: Vec::new(),
+        environment: std::collections::BTreeMap::default(),
+        methods_template: Some("example.v1".into()),
+        methods: Some(Box::new(basecraft_protocol::plugin::MethodsInfo {
+            description: "Sequences were processed".into(),
+            citations: vec!["A recorded citation".into()],
+        })),
+    };
+    let record = basecraft_protocol::records::RunRecord {
+        schema: basecraft_protocol::records::RUN_RECORD_SCHEMA,
+        operation: "example/analyze@1".into(),
+        package_version: "1".into(),
+        package_digest: None,
+        descriptor_digest: None,
+        environment: basecraft_protocol::records::RunEnvironment::default(),
+        initiator: "test".into(),
+        executor: "example".into(),
+        process_instance: "test".into(),
+        inputs: std::collections::BTreeMap::default(),
+        effective_parameters: serde_json::Value::Null,
+        cpu_threads: 1,
+        stdout: String::new(),
+        stderr: String::new(),
+        tool: None,
+        execution: Some(execution),
+    };
+    records::write_json(&run.directory().join("execution.json"), &record).unwrap();
+    let actor = basecraft_protocol::Actor::Tool {
+        tool: "RecordedTool".into(),
+        version: "1.2".into(),
+    };
+    let tool = basecraft_ops::session::ToolRunRecord::new(
+        ("example", "analyze"),
+        serde_json::Value::Null,
+        &inputs,
+        std::slice::from_ref(&output),
     );
-    session
-        .record_tool_run(
-            doc,
-            actor,
-            basecraft_ops::session::ToolRunRecord {
-                run: Some(&run),
-                ..basecraft_ops::session::ToolRunRecord::new(
-                    ("example", "analyze"),
-                    serde_json::Value::Object(serde_json::Map::new()),
-                    &inputs,
-                    std::slice::from_ref(&output),
-                )
-            },
-        )
-        .unwrap();
+    let tool = basecraft_ops::session::ToolRunRecord {
+        run: Some(&run),
+        ..tool
+    };
+    session.record_tool_run(doc, actor, tool).unwrap();
     session
         .publish_analysis_snapshot(doc, &output, &inputs, &snapshot)
         .unwrap();
     drop(session);
-    // Reopened in the same folder, the result's history finds the run record.
-    let mut reader = Session::detached(dir.path());
-    let result = reader.open(&output).unwrap();
-    let mut record = reader.document_record(result).unwrap();
-    let report = record.report().unwrap();
-    assert!(report.methods.contains("RecordedTool (version 1.2)"));
-    assert!(report.methods.contains("seed = 42"));
+    // Read as `basecraft report` reads it, with the project chosen.
+    let report = records::DocumentRecord::saved_report(&output, Some(&project)).unwrap();
+    assert!(
+        report.methods.contains("RecordedTool (version 1.2)"),
+        "{}",
+        report.methods
+    );
+    assert!(report.methods.contains("seed = 42"), "{}", report.methods);
     assert_eq!(report.citations, vec!["A recorded citation"]);
+    records::DocumentRecord::from_file(&output, Some(&project)).unwrap()
+}
+
+#[test]
+fn methods_use_frozen_plugin_metadata_and_reject_unmatched_contribution() {
+    crate::isolated_profile::isolate!();
+    let mut record = methods_come_from_the_run_record("");
     record.effective[0].id = "missing".into();
     assert!(record.report().is_err());
+}
+
+#[test]
+fn methods_find_the_run_record_of_a_result_in_a_project_subfolder() {
+    crate::isolated_profile::isolate!();
+    methods_come_from_the_run_record("genes");
 }
 
 #[test]

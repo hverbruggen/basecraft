@@ -683,7 +683,7 @@ mod tests {
 }
 
 /// Where a tool run's own record is: the run's id and its folder, relative
-/// to the folder of the log that holds the entry.
+/// to the project root, or to the document's own folder for a loose file.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RunLink {

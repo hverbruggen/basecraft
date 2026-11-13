@@ -353,10 +353,51 @@ fn normalised_request(
 
 /// The request a run folder recorded, with its file inputs resolved against
 /// the folder wherever it now is, ready to run again.
-pub fn recorded_request(run: &Path) -> Result<OperationRequest> {
+/// The request a run folder recorded, ready to run again: inputs resolved
+/// against the folder's current place, pinned to the package and descriptor
+/// the run used. A different installed runtime is refused, naming both locks.
+pub fn recorded_request(
+    run: &Path,
+    registry: &crate::registry::Registry,
+) -> Result<OperationRequest> {
     let mut request: OperationRequest = serde_json::from_slice(
         &basecraft_ops::records::read_record(&run.join("request.json"))?,
     )?;
+    let record: basecraft_protocol::records::RunRecord = serde_json::from_slice(
+        &basecraft_ops::records::read_record(&run.join("execution.json"))?,
+    )?;
+    let (Some(package_digest), Some(descriptor_digest)) =
+        (record.package_digest, record.descriptor_digest)
+    else {
+        return Err(Error::Protocol(
+            "the run record names no plugin package to run again".into(),
+        ));
+    };
+    let pins = basecraft_protocol::operation::OperationPins {
+        generation: registry.generation.clone(),
+        package_digest,
+        descriptor_digest,
+    };
+    let operation = registry.resolve(&request.operation, Some(&pins))?;
+    let installed = operation
+        .package
+        .manifest
+        .managed_runtime
+        .as_ref()
+        .map(|runtime| runtime.lock_digest.as_str());
+    let recorded = record
+        .environment
+        .runtime
+        .as_ref()
+        .map(|r| r.lock_digest.as_str());
+    if installed != recorded {
+        return Err(Error::Protocol(format!(
+            "plugin_changed: the run used runtime lock {}, and the installed runtime has {}",
+            recorded.unwrap_or("none"),
+            installed.unwrap_or("none")
+        )));
+    }
+    request.pins = Some(pins);
     for reference in request
         .inputs
         .values_mut()
@@ -538,6 +579,7 @@ impl PreparedOperation {
             run,
             request,
             granted_parameters: std::sync::Mutex::new(parameters.clone()),
+            tool: std::sync::Mutex::default(),
             parameters,
             context,
             policy,
@@ -671,15 +713,7 @@ fn freeze_inputs(
                         || source.display().to_string(),
                         |file| file.to_string_lossy().into_owned(),
                     );
-                    // What the companion states, or else a guess from the residues.
-                    let found = alignment.alphabet.as_ref().map_or(
-                        if alignment.doc.is_protein() {
-                            Alphabet::Protein
-                        } else {
-                            Alphabet::Dna
-                        },
-                        |fact| fact.value,
-                    );
+                    let found = alignment.doc.alphabet().value;
                     check_alphabet(operation, &name, found, &shown, alphabets)?;
                     if binding.view == InputView::AlignedFasta {
                         alignment
@@ -776,18 +810,11 @@ fn allocate_run(
         .values()
         .find_map(|destination| Path::new(destination).file_name())
         .map(|name| name.to_string_lossy().into_owned());
+    // The run folder is basecraft's record and always goes under the
+    // project's `.basecraft`; `artifact_write` governs the user's files only.
     let anchor = policy
         .root
         .join(exported_name.as_deref().unwrap_or("operation"));
-    let anchor = if policy.artifact_write {
-        anchor
-    } else {
-        let paths = basecraft_platform::paths::AppPaths::discover()
-            .map_err(|error| Error::Protocol(error.to_string()))?;
-        let directory = paths.state.join("operation-jobs").join(&run_id);
-        std::fs::create_dir_all(&directory)?;
-        directory.join("operation")
-    };
     // Freeze/serialize before locking. Publication rechecks each exact original
     // hash and keeps ownership, exemptions and primary links under one guard.
     let sequence_payload = sequence

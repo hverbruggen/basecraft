@@ -85,8 +85,18 @@ pub enum ProvenancePolicy {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Files {
+    /// Any value an earlier build wrote, such as `local-only`, reads as
+    /// `portable`, so an old preferences file still opens.
+    #[serde(deserialize_with = "any_provenance")]
     pub provenance: ProvenancePolicy,
     pub recovery: bool,
+}
+
+fn any_provenance<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<ProvenancePolicy, D::Error> {
+    serde::de::IgnoredAny::deserialize(deserializer)?;
+    Ok(ProvenancePolicy::Portable)
 }
 impl Default for Files {
     fn default() -> Self {
@@ -638,6 +648,17 @@ fn merge(destination: &mut toml::Value, source: toml::Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_removed_provenance_setting_still_loads() {
+        for value in ["local-only", "none"] {
+            let prefs: Preferences = toml::from_str(&format!(
+                "[files]\nprovenance = \"{value}\"\nrecovery = false\n"
+            ))
+            .unwrap();
+            assert_eq!(prefs.files.provenance, ProvenancePolicy::Portable);
+            assert!(!prefs.files.recovery);
+        }
+    }
     #[test]
     fn new_sequence_annotation_shortcuts_remap_and_detect_conflicts() {
         let mut prefs = Preferences::default();

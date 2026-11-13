@@ -37,8 +37,18 @@ for name in ("calls", "primers"):
 plugin.run()
 "#;
 
+/// A caller that hangs is cancelled after 60 s and fails the test.
 fn called(caller: &mut SangerCaller) -> Result<CalledDraft, String> {
-    caller.wait(&std::sync::atomic::AtomicBool::new(false))
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let watchdog = cancel.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(60));
+        watchdog.store(true, std::sync::atomic::Ordering::Release);
+    });
+    let started = std::time::Instant::now();
+    let called = caller.wait(&cancel);
+    assert!(started.elapsed().as_secs() < 60, "caller timeout");
+    called
 }
 
 #[test]

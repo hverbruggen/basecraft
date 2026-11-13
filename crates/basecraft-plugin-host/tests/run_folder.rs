@@ -16,7 +16,7 @@ use std::{
 };
 
 /// The counting fixture, installed; `edit` may change its contract first.
-fn registry(root: &Path, edit: impl FnOnce(&mut Value)) -> Registry {
+fn installed(root: &Path, edit: impl FnOnce(&mut Value)) -> Registry {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/registry-plugin");
     let package = root.join("package");
@@ -79,7 +79,7 @@ fn digests(outcome: &OperationOutcome) -> Vec<String> {
 #[test]
 fn a_moved_run_folder_resolves_and_its_request_runs_again_to_the_same_hashes() {
     let temp = tempfile::tempdir().unwrap();
-    let registry = registry(temp.path(), |_| {});
+    let registry = installed(temp.path(), |_| {});
     let project = temp.path().join("project");
     std::fs::create_dir(&project).unwrap();
     let project = project.canonicalize().unwrap();
@@ -102,14 +102,26 @@ fn a_moved_run_folder_resolves_and_its_request_runs_again_to_the_same_hashes() {
     assert_eq!(std::fs::read(original).unwrap(), b"ab\nc\n");
     assert!(folder.join(&source.run_directory).is_dir());
 
-    let again = run(&registry, &moved, recorded_request(&folder).unwrap());
+    let again = run(
+        &registry,
+        &moved,
+        recorded_request(&folder, &registry).unwrap(),
+    );
     assert_eq!(digests(&again), digests(&first));
+
+    // A different installed package is refused, not run with other results.
+    let other = tempfile::tempdir().unwrap();
+    let changed = installed(other.path(), |contract| {
+        contract["operations"][0]["description"] = Value::from("Changed");
+    });
+    let refused = recorded_request(&folder, &changed).unwrap_err().to_string();
+    assert!(refused.contains("plugin_changed"), "{refused}");
 }
 
 #[test]
 fn a_file_run_leaves_one_tool_run_that_points_at_its_run_record() {
     let temp = tempfile::tempdir().unwrap();
-    let registry = registry(temp.path(), |_| {});
+    let registry = installed(temp.path(), |_| {});
     let project = temp.path().join("project");
     std::fs::create_dir(&project).unwrap();
     let project = project.canonicalize().unwrap();
@@ -146,7 +158,7 @@ fn a_file_run_leaves_one_tool_run_that_points_at_its_run_record() {
 #[test]
 fn an_input_with_the_wrong_alphabet_is_refused_before_launch() {
     let temp = tempfile::tempdir().unwrap();
-    let registry = registry(temp.path(), |contract| {
+    let registry = installed(temp.path(), |contract| {
         contract["operations"][0]["inputs"]["sources"] = json!({
             "view":"aligned_fasta","media_type":"text/x-fasta","min":1,"max":8,
             "alphabets":["dna"]
@@ -173,4 +185,29 @@ fn an_input_with_the_wrong_alphabet_is_refused_before_launch() {
         "{error}"
     );
     assert!(!project.join(".basecraft").exists());
+}
+
+/// A cancel request while a caller waits ends the run as cancelled quickly.
+#[test]
+fn a_cancel_during_a_wait_ends_the_run() {
+    let temp = tempfile::tempdir().unwrap();
+    let registry = installed(temp.path(), |_| {});
+    let project = temp.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::write(project.join("input.txt"), b"abc\n").unwrap();
+    let mut request = count("input.txt");
+    request.parameters = serde_json::from_str(r#"{"mode":"slow"}"#).unwrap();
+    let mut jobs = JobManager::default();
+    let policy = SessionPolicy::new(&project, true).unwrap();
+    let accepted = jobs
+        .submit(&registry, request, policy, "cancel test")
+        .unwrap();
+    let started = Instant::now();
+    let outcome = jobs
+        .wait(&accepted.run_id, None, &|| {
+            started.elapsed() > Duration::from_millis(300)
+        })
+        .unwrap();
+    assert_eq!(outcome.state, RuntimeState::Cancelled, "{outcome:?}");
+    assert!(started.elapsed() < Duration::from_secs(5));
 }

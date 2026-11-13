@@ -649,21 +649,19 @@ pub fn publish_run(
 
 /// The journal entry for a tool run that changed no open document, kept in
 /// the run's own publication; `doc` names the operation. The record's inputs
-/// are the publication's.
+/// are the publication's; `base` is what the run link is relative to.
 pub fn file_run_entry(
     record: crate::session::ToolRunRecord<'_>,
+    base: &Path,
     publication: &Publication,
     started: &str,
     actor: Actor,
     doc: &str,
-) -> LogEntry {
+) -> Result<LogEntry> {
     let names =
         |artifacts: &[ArtifactRevision]| artifacts.iter().map(|a| a.logical_name.clone()).collect();
-    let root = record
-        .run
-        .map_or_else(PathBuf::new, |run| run.directory().to_path_buf());
-    let op = record.op(&root, names(&publication.outputs), None, None);
-    LogEntry {
+    let op = record.op(base, names(&publication.outputs), None, None)?;
+    Ok(LogEntry {
         v: basecraft_protocol::ops::LOG_VERSION,
         id: publication.id.clone(),
         t: started.into(),
@@ -689,7 +687,7 @@ pub fn file_run_entry(
             features: 0,
             rows: None,
         },
-    }
+    })
 }
 
 /// Artifacts must already be durable before this final manifest publication.

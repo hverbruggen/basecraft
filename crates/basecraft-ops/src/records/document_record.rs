@@ -13,7 +13,8 @@ pub struct DocumentRecord {
     pub(crate) data: RecordData,
     #[serde(skip)]
     pub(crate) origins: Vec<(std::path::PathBuf, Publication)>,
-    /// The folder that run folders named in the session's log are relative to.
+    /// The folder run links are relative to: the project root, or the
+    /// file's own folder for a loose file.
     #[serde(skip)]
     pub(crate) run_root: Option<std::path::PathBuf>,
 }
@@ -122,9 +123,14 @@ impl DocumentRecord {
         project: Option<&crate::project::Project>,
     ) -> crate::Result<Self> {
         let path = path.canonicalize()?;
-        let root = path
-            .parent()
-            .ok_or_else(|| crate::error::invalid("input has no parent"))?;
+        // The project root for a file inside the project, as the GUI opens
+        // it, so run links resolve the same way they were written.
+        let root = match project.filter(|project| project.contains(&path)) {
+            Some(project) => project.root(),
+            None => path
+                .parent()
+                .ok_or_else(|| crate::error::invalid("input has no parent"))?,
+        };
         let mut session = crate::Session::recoverable(root)?.in_project(project.cloned());
         let doc = session.open(&path)?;
         session.document_record(doc)
@@ -592,11 +598,17 @@ fn tool_methods(
     } else {
         text.push_str(" Effective defaults were not fully recorded; submitted parameters are available in the supporting record.");
     }
-    if operation == "import_support" {
+    if (plugin, operation) == crate::session::support_import::ACTIVITY
+        && let Ok(import) = serde_json::from_value::<
+            crate::session::support_import::SupportImportParams,
+        >(params.clone())
+    {
         let _ = write!(
             text,
             " Support mapping: matching clades; source {}; sets {}; matched branches {}.",
-            params["source"], params["sets"], params["matched"]
+            serde_json::to_string(&import.source).unwrap_or_default(),
+            serde_json::to_string(&import.sets).unwrap_or_default(),
+            import.matched
         );
     }
     if let Some(event) = event {

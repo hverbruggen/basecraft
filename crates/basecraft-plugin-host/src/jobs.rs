@@ -76,17 +76,25 @@ impl Job {
         self.stopped.1.notify_all();
     }
 
-    /// Block until the worker stops, or for `CANCEL_CHECK` once it has.
-    fn wait_for_worker(&self) {
+    /// Block until the worker stops, at most `CANCEL_CHECK`; whether it has.
+    fn wait_for_worker(&self) -> bool {
         let (stopped, wake) = &self.stopped;
         let stopped = stopped
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let _ = if *stopped {
-            wake.wait_timeout(stopped, CANCEL_CHECK)
-        } else {
-            wake.wait_timeout_while(stopped, CANCEL_CHECK, |stopped| !*stopped)
-        };
+        let (stopped, _) = wake
+            .wait_timeout_while(stopped, CANCEL_CHECK, |stopped| !*stopped)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *stopped
+    }
+}
+
+/// Signals the worker's stop even when the worker panics.
+struct StopOnDrop(Arc<Job>);
+
+impl Drop for StopOnDrop {
+    fn drop(&mut self) {
+        self.0.stop();
     }
 }
 
@@ -223,16 +231,13 @@ impl JobManager {
         session: &mut basecraft_ops::Session,
         interrupted: &dyn Fn() -> bool,
     ) -> Result<OperationOutcome> {
-        self.wait_with(id, Some(session), interrupted)
+        self.wait(id, Some(session), interrupted)
     }
 
-    /// Block until a job that needs no session is terminal. `interrupted`
-    /// requests cancellation.
-    pub fn wait(&self, id: &str, interrupted: &dyn Fn() -> bool) -> Result<OperationOutcome> {
-        self.wait_with(id, None, interrupted)
-    }
-
-    fn wait_with(
+    /// Block until the job is terminal, driving `session` between waits when
+    /// the job needs it. `interrupted` requests cancellation. A worker that
+    /// stops without a final state is an error, not a wait.
+    pub fn wait(
         &self,
         id: &str,
         mut session: Option<&mut basecraft_ops::Session>,
@@ -242,6 +247,7 @@ impl JobManager {
             .jobs
             .get(id)
             .ok_or_else(|| Error::Protocol("unknown job in this session".into()))?;
+        let mut stopped = false;
         loop {
             if let Some(session) = session.as_deref_mut() {
                 self.poll_session(session);
@@ -253,7 +259,13 @@ impl JobManager {
             if outcome.state.terminal() {
                 return Ok(outcome);
             }
-            job.wait_for_worker();
+            if stopped {
+                return Err(Error::Protocol(format!(
+                    "job {id} stopped without a final state ({:?})",
+                    outcome.state
+                )));
+            }
+            stopped = job.wait_for_worker();
         }
     }
     pub fn target_document(&self, id: &str) -> Option<basecraft_ops::DocId> {
@@ -584,6 +596,7 @@ impl JobManager {
         let worker = std::thread::Builder::new()
             .name(format!("operation-{}", outcome.run_id))
             .spawn(move || {
+                let _stop = StopOnDrop(task.clone());
                 let result =
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| execute(&task)));
                 if result.is_err() {
@@ -593,7 +606,6 @@ impl JobManager {
                         "operation worker interrupted by an internal failure".into(),
                     );
                 }
-                task.stop();
             })?;
         *job.worker
             .lock()
@@ -955,8 +967,8 @@ fn finalize_document(
             .events
             .iter()
             .any(|event| {
-                matches!(&event.op, basecraft_protocol::Op::ToolRun { params, .. }
-                if params["run_id"].as_str() == Some(outcome.run_id.as_str()))
+                matches!(&event.op, basecraft_protocol::Op::ToolRun { run: Some(link), .. }
+                if link.id == outcome.run_id)
             });
         if !recorded {
             record_document_run(job, target, outcome, session)?;

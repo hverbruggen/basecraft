@@ -13,6 +13,15 @@ use crate::{DocId, Result, Session, error::invalid};
 /// Plugin and operation names of the recorded import activity.
 pub const ACTIVITY: (&str, &str) = ("basecraft.tree", "import_support");
 
+/// What a support import's `tool.run` records: where the values came from,
+/// the sets added and the most branches any one set matched.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct SupportImportParams {
+    pub(crate) source: String,
+    pub(crate) sets: Vec<String>,
+    pub(crate) matched: usize,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SupportImport {
     /// Names of the support sets added, in order.
@@ -84,7 +93,7 @@ impl Session {
         }
         // Register the reference before editing: a refused registration
         // leaves the tree unchanged.
-        let mut params = serde_json::json!({"source": label, "matched": matched});
+
         let mut input_run = None;
         if self.tracked {
             let anchor = self.resolve(self.doc_key(id)?);
@@ -105,7 +114,11 @@ impl Session {
                 _ => None,
             })
             .collect();
-        params["sets"] = serde_json::json!(added);
+        let params = serde_json::to_value(SupportImportParams {
+            source: label,
+            sets: added.clone(),
+            matched,
+        })?;
         let key = self.relative(&source);
         self.begin_group();
         let mut edit_ids = Vec::new();

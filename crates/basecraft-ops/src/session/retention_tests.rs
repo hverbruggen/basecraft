@@ -336,7 +336,6 @@ fn missing_cross_device_document_does_not_block_other_recovery() {
 fn a_long_grouped_session_keeps_its_group_table_bounded() {
     let dir = tempfile::tempdir().unwrap();
     let mut session = Session::new(dir.path());
-    session.provenance_policy = basecraft_platform::settings::ProvenancePolicy::None;
     let a = session.create_sequence("a", "ACGT").unwrap();
     let b = session.create_sequence("b", "ACGT").unwrap();
     let edit = || Op::seq_replace(0, 1, "G");

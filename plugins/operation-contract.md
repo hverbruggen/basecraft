@@ -104,12 +104,15 @@ the run, as for a reused distance cache.
 
 Outputs. A single-file role has `max: 1`. A collection role is one folder;
 `primary` names the member that holds the main result, which the GUI opens and
-history reports. `facts` declares what is known about the primary member
-(`alphabet`: `dna`, `rna` or `protein`; `branch_lengths`: `substitutions`,
-`relative_time` or `{"absolute_time": {"unit": "Ma"}}`); the IQ-TREE, FastTree
-and distance trees declare substitution lengths. The host writes the declared
-facts, marked as stated, into the primary member's companion file
-(`<file>.basecraft.json`), together with the tree's support semantics. `tree_support` says what support values on output trees mean, optionally
+history reports. `facts` declares what a tree's branch lengths measure
+(`branch_lengths`: `substitutions`, `relative_time` or
+`{"absolute_time": {"unit": "Ma"}}`), optionally only `when` a parameter
+condition holds (`equals`, `one_of`, `positive`). IQ-TREE and FastTree trees
+declare substitution lengths; distance trees declare them only for the
+corrected models `jc69` and `k2p`, so a `p`-distance tree stays unknown. The
+host writes the declared meaning, marked as stated, into the primary tree's
+companion file (`<file>.basecraft.json`), together with the tree's support
+semantics. Output alphabets are not declared yet. `tree_support` says what support values on output trees mean, optionally
 only when a parameter has a value. `bootstrap_exports` lets a run export its
 `bootstrap-<run>.nex` trees beside the exported tree when
 `bootstrap_destination` is `working`. Output roles need `artifact_write`. File
@@ -221,13 +224,21 @@ Each run keeps:
 
 The document's history gets one `tool.run` entry per run. It holds the tool's
 own requested parameters and a `run` link (the run's id and its folder,
-relative to the folder of the log). History and methods read how the tool ran,
-its effective settings, preprocessing and citations, from `execution.json`.
+relative to the project root, or to the document's own folder for a loose
+file; a run folder that cannot be named that way is refused). History and
+methods read how the tool ran, its effective settings, preprocessing and
+citations, from `execution.json`.
+
+A run folder always sits under the project's `.basecraft`, or beside a loose
+file, also for a read-only session: `artifact_write` governs the user's
+files, not basecraft's records.
 
 The record holds no absolute path and no interpreter path, so a project can
-move with its run folders. `runner::recorded_request(folder)` reads the
-request back with its inputs resolved against the folder's new location;
-running it again gives the same output hashes.
+move with its run folders. `runner::recorded_request(folder, registry)` reads
+the request back with its inputs resolved against the folder's new location
+and pinned to the package and descriptor the run used; a different installed
+package, or a runtime with another lock digest, is refused, naming both.
+Running it again gives the same output hashes.
 
 ## JSON Schema profile and limits
 
