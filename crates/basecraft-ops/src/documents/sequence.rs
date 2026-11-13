@@ -297,6 +297,7 @@ pub(crate) fn execute_sequence(
         | Op::TreeRenameTip { .. }
         | Op::TreeSetBranchLengths { .. }
         | Op::TreeAnnotate { .. }
+        | Op::TreePlaceLabel { .. }
         | Op::TreeAddSupport { .. }
         | Op::TreeRemoveSupport { .. }
         | Op::TreeStyle { .. } => Err(invalid(format!("{} needs a tree", op.name()))),

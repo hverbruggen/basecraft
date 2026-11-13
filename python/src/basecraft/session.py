@@ -426,6 +426,19 @@ class Session:
             args["record"] = record
         return self.call("extract", args)
 
+    def place_labels(self, document, version, choice, labels=()):
+        """Settle labels a reroot left on another group of tips, as one undo step.
+
+        ``choice`` is ``"exact"`` (the clade holding exactly the label's tips;
+        offered when the label's ``exact`` is true), ``"smallest"`` (the
+        smallest clade holding all its tips) or ``"remove"``. ``labels`` lists
+        label ids from the tree state's ``displaced_labels``; empty means all.
+        """
+        params = {"choice": choice}
+        if labels:
+            params["labels"] = list(labels)
+        return self.apply(document, version, {"op": "tree.place_label", "params": params})
+
     def import_support(self, document, path, name=""):
         """Add the support values of another project tree file to an open tree.
 

@@ -196,6 +196,15 @@ pub enum Op {
     },
     /// A set of support values, such as bootstraps from another analysis:
     /// one per internal node in preorder, as text.
+    /// Settle labels a reroot left on another group of tips (D11): each goes
+    /// where `choice` says. Empty `labels` means every displaced label. One
+    /// undo step; refused as a whole when one label can't be placed.
+    #[serde(rename = "tree.place_label")]
+    TreePlaceLabel {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        labels: Vec<u32>,
+        choice: crate::tree::LabelPlacement,
+    },
     #[serde(rename = "tree.add_support")]
     TreeAddSupport {
         name: String,
@@ -364,6 +373,7 @@ impl Op {
             Op::TreeSetBranchLengths { .. } => "tree.set_branch_lengths",
             Op::SetAlphabet { .. } => "doc.set_alphabet",
             Op::TreeAnnotate { .. } => "tree.annotate",
+            Op::TreePlaceLabel { .. } => "tree.place_label",
             Op::TreeAddSupport { .. } => "tree.add_support",
             Op::TreeRemoveSupport { .. } => "tree.remove_support",
             Op::TreeStyle { .. } => "tree.style",

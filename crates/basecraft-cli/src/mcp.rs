@@ -100,6 +100,9 @@ impl Server {
         let version = self.session.revision(doc)?;
         let mut state = json!({"document":doc.0,"path":self.session.doc_key(doc)?,"kind":kind,"version":version,"generation":self.session.generation(doc)?,
             "state":self.session.state(doc)?,"can_undo":self.session.can_undo(doc)?,"can_redo":self.session.can_redo(doc)?});
+        if self.session.is_tree(doc) {
+            state["displaced_labels"] = json!(self.session.displaced_labels(doc)?);
+        }
         if let Ok(review) = self.session.sanger_review(doc) {
             state["call_sets"] = json!(review.call_sets());
             state["selected_call_set"] = json!(review.draft_sha256);

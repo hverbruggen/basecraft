@@ -318,12 +318,14 @@ impl Session {
         if checkpoints {
             self.track(doc)?;
         }
-        let displaced = crate::documents::tree::displaced(&self.docs[doc.0].content);
+        let before = crate::documents::tree::displaced(&self.docs[doc.0].content);
+        let mut notes = crate::documents::tree::placement_notes(&self.docs[doc.0].content, &op);
         let (inverse, feature) = self.docs[doc.0]
             .content_mut()
             .as_document_mut()
             .apply(&op)?;
-        let notes = crate::documents::tree::moved_labels(&self.docs[doc.0].content, &displaced);
+        let displaced = crate::documents::tree::newly_displaced(&self.docs[doc.0].content, &before);
+        notes.extend(displaced.iter().map(crate::documents::tree::displaced_note));
         if !checkpoints && let Err(error) = self.track(doc) {
             restore_inverse(self.docs[doc.0].content_mut(), &inverse)?;
             return Err(error);
@@ -367,6 +369,7 @@ impl Session {
             entry_id,
             feature,
             notes,
+            displaced,
         })
     }
 
@@ -485,6 +488,15 @@ impl Session {
                 self.group_docs.remove(&group);
             }
         }
+    }
+
+    /// Every label of tree `id` that no longer marks the group it was made
+    /// for, and whether `tree.place_label` can offer `exact` for it (D11).
+    pub fn displaced_labels(
+        &self,
+        id: DocId,
+    ) -> Result<Vec<basecraft_protocol::tree::DisplacedLabel>> {
+        Ok(self.tree(id)?.displaced_labels())
     }
 
     /// Other documents changed by the newest step of `id` that are not

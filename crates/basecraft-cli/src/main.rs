@@ -404,6 +404,11 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             save_options.save(&mut session, doc, None, false)?;
+            // A reroot can leave labels on other groups; place them with tree.place_label.
+            if session.is_tree(doc) {
+                let displaced = session.displaced_labels(doc)?;
+                println!("{}", serde_json::json!({ "displaced_labels": displaced }));
+            }
         }
         Command::ImportSupport { tree, source, name } => {
             let tree = tree.canonicalize()?;

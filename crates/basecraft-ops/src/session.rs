@@ -160,6 +160,9 @@ pub struct Outcome {
     pub feature: Option<FeatureId>,
     /// Things the user should hear about, such as a label a reroot moved.
     pub notes: Vec<String>,
+    /// Labels this edit displaced, such as by a reroot: the window asks
+    /// where each goes (`tree.place_label`, D11).
+    pub displaced: Vec<basecraft_protocol::tree::DisplacedLabel>,
 }
 
 /// Target-save and evidence locks held while writing an export or extract.

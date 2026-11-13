@@ -14,6 +14,7 @@ use basecraft_protocol::facts::{BranchLengths, Fact};
 use std::collections::{BTreeMap, BTreeSet};
 
 use basecraft_io::newick::{self, ParsedTree};
+use basecraft_protocol::tree::LabelPlacement;
 use basecraft_protocol::{CladeAnnotation, CladeRef, SupportKind, TreeStyle};
 
 pub use crate::alignment::EditError;
@@ -472,6 +473,114 @@ impl TreeDoc {
             })
             .map(|(&id, _)| id)
             .collect()
+    }
+
+    /// Every displaced label, saying whether a clade now holds exactly its
+    /// tips, so the window can offer that choice (D11).
+    pub fn displaced_labels(&self) -> Vec<basecraft_protocol::tree::DisplacedLabel> {
+        self.displaced_annotations()
+            .into_iter()
+            .map(|id| {
+                let a = &self.annotations[&id];
+                basecraft_protocol::tree::DisplacedLabel {
+                    id,
+                    label: a.label.clone(),
+                    exact: self
+                        .smallest_clade(&a.tips)
+                        .is_ok_and(|(_, tips)| tips == a.tips),
+                }
+            })
+            .collect()
+    }
+
+    /// The smallest clade holding every tip in `tips`, and its tips.
+    fn smallest_clade(
+        &self,
+        tips: &BTreeSet<String>,
+    ) -> Result<(usize, BTreeSet<String>), EditError> {
+        let mut found = self
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| n.is_tip() && tips.contains(&n.name))
+            .map(|(i, _)| i);
+        let mut common = self.ancestors(
+            found
+                .next()
+                .ok_or_else(|| EditError("the label has no tips".into()))?,
+        );
+        let mut count = 1;
+        for tip in found {
+            let up: BTreeSet<usize> = self.ancestors(tip).into_iter().collect();
+            common.retain(|n| up.contains(n));
+            count += 1;
+        }
+        if count != tips.len() {
+            return err("some of the label's tips are no longer in the tree");
+        }
+        let node = common[0];
+        Ok((node, self.clade_tips(&self.clade_ref(node))?))
+    }
+
+    /// Put displaced label `id` on another clade, or remove it (D11).
+    fn place_label(&mut self, id: u32, choice: LabelPlacement) -> Result<(), EditError> {
+        let mut a = self.annotations[&id].clone();
+        if choice == LabelPlacement::Remove {
+            self.annotations.remove(&id);
+            return Ok(());
+        }
+        let (node, tips) = self.smallest_clade(&a.tips)?;
+        if choice == LabelPlacement::Exact && tips != a.tips {
+            return err(format!(
+                "no clade holds exactly the tips of label {:?}",
+                a.label
+            ));
+        }
+        a.clade = self.clade_ref(node);
+        a.tips = tips;
+        a.rooting = match self.rooted {
+            Some(true) => basecraft_protocol::facts::Rooting::Rooted,
+            Some(false) => basecraft_protocol::facts::Rooting::Unrooted,
+            None => basecraft_protocol::facts::Rooting::Unknown,
+        };
+        self.annotations.insert(id, a);
+        Ok(())
+    }
+
+    /// Place `labels` (every displaced label when empty) as `choice` says,
+    /// all or none. Returns the labels as they were.
+    pub(crate) fn place_labels(
+        &mut self,
+        labels: &[u32],
+        choice: LabelPlacement,
+    ) -> Result<Vec<(u32, Option<CladeAnnotation>)>, EditError> {
+        let displaced = self.displaced_annotations();
+        let ids = if labels.is_empty() {
+            displaced.clone()
+        } else {
+            labels.to_vec()
+        };
+        if ids.is_empty() {
+            return err("no label is displaced");
+        }
+        if let Some(id) = ids.iter().find(|id| !displaced.contains(id)) {
+            return err(format!("label {id} is not displaced"));
+        }
+        let before: Vec<_> = ids
+            .iter()
+            .map(|id| (*id, self.annotations.get(id).cloned()))
+            .collect();
+        for &id in &ids {
+            if let Err(error) = self.place_label(id, choice) {
+                for (id, a) in &before {
+                    self.annotations
+                        .insert(*id, a.clone().expect("displaced labels exist"));
+                }
+                return Err(error);
+            }
+        }
+        self.edited();
+        Ok(before)
     }
 
     /// How to name `node` in an operation.
