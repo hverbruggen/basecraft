@@ -324,6 +324,11 @@ impl Session {
         self.project.as_ref().filter(|_| !self.staged)
     }
 
+    /// Where this session keeps the companion of `file`.
+    pub fn companion_path(&self, file: &Path) -> PathBuf {
+        crate::files::companion_path(self.companion_project(), file)
+    }
+
     pub fn id(&self) -> &str {
         &self.id
     }

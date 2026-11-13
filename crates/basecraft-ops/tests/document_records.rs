@@ -215,6 +215,47 @@ fn copying_a_document_inside_basecraft_carries_its_companion() {
         tree.branch_lengths().map(|fact| &fact.value),
         Some(&BranchLengths::Substitutions)
     );
-    // A second copy onto the same name is refused.
+    // A second copy onto the same name is refused and changes nothing.
+    let before = std::fs::read(&copy).unwrap();
     assert!(files::copy_document(None, &path, &copy).is_err());
+    assert_eq!(std::fs::read(&copy).unwrap(), before);
+    // A record left behind by a file that is gone is replaced.
+    let second = folder.join("elsewhere/second.nwk");
+    let orphan = files::companion_path(None, &second);
+    std::fs::write(&orphan, "{}").unwrap();
+    files::copy_document(None, &path, &second).unwrap();
+    assert_eq!(
+        std::fs::read(&orphan).unwrap(),
+        std::fs::read(files::companion_path(None, &path)).unwrap()
+    );
+}
+
+#[test]
+fn a_species_record_for_other_bytes_is_ignored_with_a_warning() {
+    crate::isolated_profile::isolate!();
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().canonicalize().unwrap();
+    let path = folder.join("species.spart");
+    let text = include_str!("../../../testdata/fixtures/delimitation/manual.spart");
+    std::fs::write(&path, text).unwrap();
+    let work = basecraft_io::spart::parse_text(text).unwrap();
+    let companion = files::companion_path(None, &path);
+    std::fs::create_dir_all(companion.parent().unwrap()).unwrap();
+    let mut bytes = Vec::new();
+    files::delimitation_companion(&work, &format!("b3:{}", "0".repeat(64)), &path)
+        .unwrap()
+        .write(&mut bytes)
+        .unwrap();
+    std::fs::write(&companion, bytes).unwrap();
+    let mut session = Session::new(&folder);
+    let doc = session.open(&path).unwrap();
+    let record = session.document_record(doc).unwrap();
+    assert!(
+        record
+            .warnings
+            .iter()
+            .any(|w| w.contains("companion file was ignored")),
+        "{:?}",
+        record.warnings
+    );
 }

@@ -53,7 +53,12 @@ impl Session {
             .collect();
         let (origin, mut origin_issue) =
             crate::records::document_record::read_origin(path, &hashes, self.project.as_ref());
-        if let Some(warning) = content.as_document().opening_warning() {
+        for warning in content
+            .as_document()
+            .opening_warning()
+            .into_iter()
+            .chain(captured.warning.as_deref())
+        {
             origin_issue = Some(
                 origin_issue
                     .map_or_else(|| warning.to_owned(), |issue| format!("{issue}\n{warning}")),

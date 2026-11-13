@@ -509,7 +509,7 @@ fn workspaces_using(
         if crate::files::Format::from_path(&path).ok() != Some(crate::files::Format::Delimitation) {
             continue;
         }
-        match crate::files::load_delimitation_in(session.project(), &path) {
+        match crate::files::load_delimitation_in(session.companion_project(), &path) {
             Ok(work) if uses(&work, &path) => found.push(path),
             Ok(_) => {}
             Err(_) => note_unreadable(session, unreadable, path),

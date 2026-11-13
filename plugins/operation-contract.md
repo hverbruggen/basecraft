@@ -121,6 +121,12 @@ only when a parameter has a value. `bootstrap_exports` lets a run export its
 `bootstrap_destination` is `working`. Output roles need `artifact_write`. File
 analyses never write documents.
 
+A plugin never writes a companion beside a user's document. The delimitation
+engine's `<file>.basecraft.json` beside the SPART it writes in the run's
+output folder is a run-internal staging name: it stays in the run, where the
+host reads it as the result's run companion, and nothing named that way is
+written into the user's folders.
+
 Sequence proposals have `family: "sequence_proposal"`, exactly one
 `sequence_snapshot` input and `document_write: true`. They return edits.
 

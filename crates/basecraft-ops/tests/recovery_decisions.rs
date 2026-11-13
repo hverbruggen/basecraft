@@ -361,6 +361,8 @@ fn nested_delimitation_registers_only_final_stores_and_reopens() {
         assert_eq!(work.exchange_fields["retained-unknown"], "keep");
         let side = basecraft_ops::files::companion_path(Some(&project), &file);
         assert!(!basecraft_ops::project::Project::document_record(None, &file).exists());
+        // Nothing of the stage's loose records is left in the recovered folder.
+        assert!(!file.parent().unwrap().join(".basecraft/documents").exists());
         let value: serde_json::Value =
             serde_json::from_slice(&std::fs::read(side).unwrap()).unwrap();
         assert_eq!(

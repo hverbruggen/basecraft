@@ -88,13 +88,7 @@ impl Document for DelimitationWorkspace {
         let xml = files::delimitation_xml(target);
         let main_hash = prepared.push(target, |w| files::write_delimitation(self, xml, w))?;
         let sidecar = if let Some(run) = &new_run {
-            run.artifact(&format!(
-                "{}.basecraft.json",
-                target
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .ok_or_else(|| invalid("SPART filename must be UTF-8"))?
-            ))?
+            run.artifact(&files::run_companion_name(target))?
         } else {
             let companion = files::companion_path(project, target);
             files::companion_folder(&companion)?;

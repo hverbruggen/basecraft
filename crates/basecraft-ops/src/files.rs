@@ -303,6 +303,8 @@ fn load_source(
 /// Exact inputs retained until admission and recovery preparation finish.
 pub(crate) struct CapturedLoad {
     pub content: Loaded,
+    /// Why a companion was ignored, for the opening notice.
+    pub warning: Option<String>,
     pub files: Vec<(PathBuf, String)>,
     pub stamps: Vec<(PathBuf, Option<basecraft_protocol::provenance::FileStamp>)>,
 }
@@ -368,6 +370,7 @@ pub(crate) fn capture_load(
     }
     let main = files[0].1.clone();
     let companion = files.get(1).map(|(_, source, _)| source);
+    let mut warning = None;
     let content = match format {
         Format::Fasta => load_fasta_from(
             path,
@@ -400,12 +403,16 @@ pub(crate) fn capture_load(
             (&companion_path(project, path), companion),
             tree_issue,
         )?),
-        Format::Delimitation => Loaded::Delimitation(load_delimitation_bytes(
-            path,
-            main.bytes(),
-            &files[0].2,
-            (&companion_path(project, path), companion),
-        )?),
+        Format::Delimitation => {
+            let (work, ignored) = load_delimitation_bytes(
+                path,
+                main.bytes(),
+                &files[0].2,
+                (&companion_path(project, path), companion),
+            )?;
+            warning = ignored;
+            Loaded::Delimitation(work)
+        }
         Format::Submission => Loaded::Submission(crate::submission::load_from(path, main.bytes())?),
         Format::Metadata => Loaded::Metadata(crate::metadata::load_with(path, &mut |file| {
             files
@@ -417,7 +424,7 @@ pub(crate) fn capture_load(
                 })
         })?),
     };
-    finish_capture(
+    let mut captured = finish_capture(
         project,
         content,
         files
@@ -425,7 +432,9 @@ pub(crate) fn capture_load(
             .map(|(path, _, hash)| (path, hash))
             .collect(),
         stamps,
-    )
+    )?;
+    captured.warning = warning;
+    Ok(captured)
 }
 
 fn finish_capture(
@@ -450,6 +459,7 @@ fn finish_capture(
     }
     Ok(CapturedLoad {
         content,
+        warning: None,
         files,
         stamps,
     })
@@ -586,15 +596,28 @@ pub fn gff_sidecar(path: &Path) -> PathBuf {
 /// relative path ([`crate::project::Project::document_record`]).
 pub fn companion_path(project: Option<&crate::project::Project>, path: &Path) -> PathBuf {
     if let Ok(Some(run)) = crate::records::analysis_store::ArtifactRun::for_result(path) {
-        let name = path.file_name().unwrap_or_default().to_string_lossy();
-        return run.join(format!("{name}.basecraft.json"));
+        return run_companion(&run, path);
     }
     crate::project::Project::document_record(project, path)
 }
 
-/// Copy a document to `target` with its companion, which goes where
-/// `target`'s companion is kept. Refuses a target, or a target companion,
-/// that already exists.
+/// The name a result's companion has in the analysis run it is bound to.
+pub fn run_companion_name(file: &Path) -> String {
+    format!(
+        "{}.basecraft.json",
+        file.file_name().unwrap_or_default().to_string_lossy()
+    )
+}
+
+/// The companion of `file` inside run folder `run`.
+pub fn run_companion(run: &Path, file: &Path) -> PathBuf {
+    run.join(run_companion_name(file))
+}
+
+/// Copy a document to a new `target` with its companion, which goes where
+/// `target`'s companion is kept. An existing target is refused and never
+/// replaced; a record left at the target's place by a file that is gone is
+/// replaced. If the companion can't be copied, the target is removed again.
 pub fn copy_document(
     project: Option<&crate::project::Project>,
     source: &Path,
@@ -604,26 +627,46 @@ pub fn copy_document(
         companion_path(project, source),
         companion_path(project, target),
     );
-    if let Some(taken) = [target, to.as_path()]
-        .into_iter()
-        .find(|path| path.exists())
-    {
-        return Err(crate::error::invalid(format!(
-            "{} already exists; choose a new name",
-            taken.display()
-        )));
+    let folder = target
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let staged = tempfile::NamedTempFile::new_in(folder)?;
+    std::fs::copy(source, staged.path())?;
+    if let Err(error) = basecraft_platform::atomic::rename_noreplace(staged.path(), target) {
+        return Err(if error.kind() == io::ErrorKind::AlreadyExists {
+            crate::error::invalid(format!(
+                "{} already exists; choose a new name",
+                target.display()
+            ))
+        } else {
+            error.into()
+        });
     }
-    std::fs::copy(source, target)?;
-    if from.is_file() {
-        companion_folder(&to)?;
-        std::fs::copy(&from, &to)?;
+    let companion = (|| -> Result<()> {
+        if to.exists() {
+            // The target did not exist: this record is an orphan.
+            std::fs::remove_file(&to)?;
+        }
+        if from.is_file() {
+            companion_folder(&to)?;
+            basecraft_io::write_atomic(&to, |w| {
+                io::copy(&mut std::fs::File::open(&from)?, w)?;
+                Ok(())
+            })?;
+        }
+        Ok(())
+    })();
+    if companion.is_err() {
+        let _ = std::fs::remove_file(target);
     }
-    Ok(())
+    companion
 }
 
 /// Move the companion a document got as a loose file to where `project`
 /// keeps it, when that is somewhere else: for a document published as part
-/// of a folder, such as a recovery, into a project.
+/// of a folder, such as a recovery, into a project. Folders the move
+/// leaves empty go too, so nothing remains beside the document.
 pub(crate) fn settle_companion(
     project: Option<&crate::project::Project>,
     document: &Path,
@@ -633,15 +676,28 @@ pub(crate) fn settle_companion(
     if loose == kept || !loose.is_file() {
         return Ok(());
     }
-    if kept.is_file() {
-        // The save wrote the companion where it is kept (a result bound to
-        // its run); the loose one is the input recovery replayed from.
+    if crate::records::analysis_store::ArtifactRun::for_result(document)?.is_some() {
+        // The save wrote the companion into the result's run; the loose one
+        // is the input recovery replayed from.
         std::fs::remove_file(&loose)?;
-        return Ok(());
+    } else {
+        // Replaces a record an earlier file at this path left behind.
+        companion_folder(&kept)?;
+        std::fs::rename(&loose, &kept)?;
     }
-    companion_folder(&kept)?;
-    basecraft_platform::atomic::rename_noreplace(&loose, &kept)?;
+    remove_empty_record_folders(&loose);
     Ok(())
+}
+
+/// Remove the folders between `record` and its `.basecraft`, that folder
+/// included, while they are empty.
+fn remove_empty_record_folders(record: &Path) {
+    for folder in record.ancestors().skip(1) {
+        let last = folder.file_name().is_some_and(|name| name == ".basecraft");
+        if std::fs::remove_dir(folder).is_err() || last {
+            break;
+        }
+    }
 }
 
 /// Whether a recorded file `key` is the companion of document `main`:
@@ -654,12 +710,13 @@ pub(crate) fn is_companion_key(key: &Path, main: &Path) -> bool {
     let has = |part: &str| key.components().any(|c| c.as_os_str() == part);
     let mut record = name.to_os_string();
     record.push(".json");
-    let mut bound = name.to_os_string();
-    bound.push(".basecraft.json");
+    let bound = run_companion_name(main);
     (has(".basecraft") && has("documents") && key.file_name() == Some(record.as_os_str()))
         || (Format::from_path(main).ok() == Some(Format::Delimitation)
             && has("analyses-v1")
-            && key.file_name() == Some(bound.as_os_str()))
+            && key
+                .file_name()
+                .is_some_and(|file| file.to_string_lossy() == bound))
 }
 
 /// Make the folder a companion is written into. A `.basecraft` that is a
@@ -783,10 +840,7 @@ fn load_tree_bytes(
         let bound = run.is_some();
         let (sidecar, side) = match run {
             Some(run) => {
-                let sidecar = run.join(format!(
-                    "{}.basecraft.json",
-                    path.file_name().unwrap_or_default().to_string_lossy()
-                ));
+                let sidecar = run_companion(&run, path);
                 let side = read_optional(&sidecar)?;
                 (sidecar, side)
             }
@@ -1562,6 +1616,7 @@ pub fn load_delimitation_in(
     let companion = companion_path(project, path);
     let side = read_optional(&companion)?;
     load_delimitation_bytes(path, source.bytes(), &hash, (&companion, side.as_ref()))
+        .map(|(work, _)| work)
 }
 
 fn load_delimitation_bytes(
@@ -1569,7 +1624,10 @@ fn load_delimitation_bytes(
     bytes: &[u8],
     exchange_hash: &str,
     (companion, captured_side): (&Path, Option<&Source>),
-) -> Result<basecraft_protocol::delimitation::DelimitationWorkspace> {
+) -> Result<(
+    basecraft_protocol::delimitation::DelimitationWorkspace,
+    Option<String>,
+)> {
     let text =
         std::str::from_utf8(bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     let mut work = if text.trim_start().starts_with('<') {
@@ -1584,21 +1642,32 @@ fn load_delimitation_bytes(
             "Hidden species workspace metadata is missing; restore its folder context or explicitly open a standalone SPART copy",
         ));
     }
+    let mut warning = None;
     if let Some(source) = captured_side {
-        let side = read_companion(companion, source.bytes(), exchange_hash, None)?
-            .delimitation
-            .ok_or_else(|| Error::Damaged {
+        let side = read_companion(companion, source.bytes(), exchange_hash, None).and_then(|c| {
+            c.delimitation.ok_or_else(|| Error::Damaged {
                 path: companion.to_path_buf(),
                 detail: "the companion holds no species workspace".into(),
-            })?;
-        work = side.workspace;
-        if let Some(old) = side.path_base {
-            let new = path.parent().unwrap_or(Path::new(".")).canonicalize()?;
-            rebase_delimitation_paths(&mut work, &old, &new);
+            })
+        });
+        match side {
+            Ok(side) => {
+                work = side.workspace;
+                if let Some(old) = side.path_base {
+                    let new = path.parent().unwrap_or(Path::new(".")).canonicalize()?;
+                    rebase_delimitation_paths(&mut work, &old, &new);
+                }
+            }
+            // A run's own record must hold; a document's record that no
+            // longer fits it is ignored, as for trees and sequences.
+            Err(error) if hidden.is_some() => return Err(error),
+            Err(error) => {
+                warning = Some(format!("The companion file was ignored: {error}"));
+            }
         }
     }
     basecraft_docs::delimitation::validate(&work).map_err(|e| crate::error::invalid(e.0))?;
-    Ok(work)
+    Ok((work, warning))
 }
 
 pub fn write_delimitation(
@@ -1722,4 +1791,30 @@ pub fn delimitation_xml(path: &Path) -> bool {
             || e.eq_ignore_ascii_case("spartxml")
             || e.eq_ignore_ascii_case("spart-xml")
     })
+}
+
+#[cfg(test)]
+mod companion_tests {
+    use super::*;
+
+    /// A recovered loose record replaces one an earlier file at the same
+    /// project path left behind, and the emptied loose folders go.
+    #[test]
+    fn settling_replaces_an_orphan_record_and_removes_empty_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        let project = crate::project::Project::new(&root).unwrap();
+        let document = root.join("sub/a.nwk");
+        std::fs::write(&document, "(a,b);").unwrap();
+        let kept = companion_path(Some(&project), &document);
+        std::fs::create_dir_all(kept.parent().unwrap()).unwrap();
+        std::fs::write(&kept, "stale").unwrap();
+        let loose = crate::project::Project::document_record(None, &document);
+        std::fs::create_dir_all(loose.parent().unwrap()).unwrap();
+        std::fs::write(&loose, "recovered").unwrap();
+        settle_companion(Some(&project), &document).unwrap();
+        assert_eq!(std::fs::read_to_string(&kept).unwrap(), "recovered");
+        assert!(!root.join("sub/.basecraft").exists());
+    }
 }

@@ -411,7 +411,10 @@ pub(crate) fn refused_edit(
         return None;
     };
     let file = session.root().join(session.doc_key(doc).ok()?);
-    let text = serde_json::json!({"file": file, "folder": folder, "op": op}).to_string();
+    // The copy reads the file's record from the project this session uses.
+    let project = session.project().map(basecraft_ops::project::Project::root);
+    let text = serde_json::json!({"file": file, "folder": folder, "op": op, "project": project})
+        .to_string();
     Some(cxx_qt_lib::QString::from(&text))
 }
 
@@ -427,7 +430,11 @@ pub(crate) fn copy_for_editing(refused: &str, target: &Path) -> Result<(), Strin
     let source = PathBuf::from(refused["file"].as_str().ok_or("No refused edit")?);
     let op: Option<basecraft_protocol::Op> =
         serde_json::from_value(refused["op"].clone()).map_err(|e| e.to_string())?;
-    let project = crate::chosen_project::chosen()?;
+    let project = refused["project"]
+        .as_str()
+        .map(basecraft_ops::project::Project::new)
+        .transpose()
+        .map_err(|e| format!("The file's project is unavailable: {e}"))?;
     basecraft_ops::files::copy_document(project.as_ref(), &source, target)
         .map_err(|e| format!("Could not copy the file: {e}"))?;
     if let Some(op) = op {

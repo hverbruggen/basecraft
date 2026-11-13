@@ -171,7 +171,7 @@ fn stage_workspace(
         files::write_delimitation(work, files::delimitation_xml(target), w)
     })?;
     let hash = basecraft_io::hash_file(&staged)?;
-    basecraft_io::write_atomic(&run.artifact(&format!("{name}.basecraft.json"))?, |w| {
+    basecraft_io::write_atomic(&run.artifact(&files::run_companion_name(target))?, |w| {
         files::delimitation_companion(work, &hash, target)?.write(w)
     })?;
     Ok(name.into())
@@ -469,13 +469,13 @@ fn combined_hypotheses(
     let mut hypotheses = vec![];
     for path in paths {
         let hash = basecraft_io::hash_file(path)?;
-        let sidecar = files::companion_path(session.project(), path);
+        let sidecar = session.companion_path(path);
         let side_hash = if sidecar.exists() {
             Some(basecraft_io::hash_file(&sidecar)?)
         } else {
             None
         };
-        let work = files::load_delimitation_in(session.project(), path)?;
+        let work = files::load_delimitation_in(session.companion_project(), path)?;
         if basecraft_io::hash_file(path)? != hash
             || (if sidecar.exists() {
                 Some(basecraft_io::hash_file(&sidecar)?)
@@ -638,7 +638,7 @@ pub fn combine_to(
             "Choose at least two saved species hypothesis files",
         ));
     }
-    if output.try_exists()? || files::companion_path(session.project(), output).try_exists()? {
+    if output.try_exists()? || session.companion_path(output).try_exists()? {
         return Err(std::io::Error::new(
             std::io::ErrorKind::AlreadyExists,
             "Choose a new filename for the combined hypotheses",

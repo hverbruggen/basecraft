@@ -550,12 +550,9 @@ impl PreparedOperation {
                 let hash = basecraft_io::hash_file(&sidecar)?;
                 // Bound tree reads use the run-root companion; the collection
                 // member carries the same facts when exported.
-                let hidden = self.run.artifact(&format!(
-                    "{}.basecraft.json",
-                    path.file_name()
-                        .and_then(|file| file.to_str())
-                        .ok_or_else(|| Error::Protocol("companion filename".into()))?
-                ))?;
+                let hidden = self
+                    .run
+                    .artifact(&basecraft_ops::files::run_companion_name(&path))?;
                 basecraft_io::write_atomic(&hidden, |writer| {
                     let mut input = std::fs::File::open(&sidecar)?;
                     std::io::copy(&mut input, writer)?;
