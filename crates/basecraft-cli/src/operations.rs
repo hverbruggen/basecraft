@@ -210,3 +210,151 @@ pub fn run_foreground(
     let target = manager.target_document(&accepted.run_id);
     Ok((serde_json::to_value(outcome)?, target))
 }
+
+/// One tool on files (D1): input files in, new result files out, no open or
+/// save step. `basecraft run mafft/align rbcL.fasta -o rbcL.aln.fasta`
+#[derive(clap::Args)]
+pub struct RunArgs {
+    /// The operation: its full ID, or a part that names one, such as `mafft/align`.
+    operation: String,
+    /// Input files, for an operation that takes one input role.
+    files: Vec<PathBuf>,
+    /// An input file for a named role: `ROLE=FILE`; repeat for several.
+    #[arg(long = "input", value_name = "ROLE=FILE")]
+    inputs: Vec<String>,
+    /// Where a result goes: `FILE` for the operation's one result, or
+    /// `ROLE=FILE` (`ROLE/MEMBER=FILE` inside a collection).
+    #[arg(short, long = "output", value_name = "[ROLE=]FILE")]
+    outputs: Vec<String>,
+    /// A setting: `NAME=VALUE`. VALUE is read as JSON when it parses, else as text.
+    #[arg(long = "param", value_name = "NAME=VALUE")]
+    params: Vec<String>,
+}
+
+/// The one ID among the registered operations that `name` names.
+fn find_operation(registry: &Registry, name: &str) -> Result<String> {
+    if registry.operations.contains_key(name) {
+        return Ok(name.into());
+    }
+    let matches: Vec<&String> = registry
+        .operations
+        .keys()
+        .filter(|id| id.contains(&format!("{name}@")) || id.contains(&format!(".{name}/")))
+        .collect();
+    match matches.as_slice() {
+        [one] => Ok((*one).clone()),
+        [] => Err(format!(
+            "no installed operation is called {name}; see `basecraft operations list`"
+        )
+        .into()),
+        several => Err(format!(
+            "{name} could be {}; give the full ID",
+            several
+                .iter()
+                .map(|id| id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+        .into()),
+    }
+}
+
+/// The only name in `names`, or a refusal that lists them and says how to choose.
+fn only<'a>(names: impl Iterator<Item = &'a String>, what: &str, how: &str) -> Result<String> {
+    let names: Vec<&String> = names.collect();
+    match names.as_slice() {
+        [one] => Ok((*one).clone()),
+        _ => Err(format!(
+            "this operation has {} {what} roles ({}); name one with {how}",
+            names.len(),
+            names
+                .iter()
+                .map(|name| name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+        .into()),
+    }
+}
+
+fn pair(text: &str, how: &str) -> Result<(String, String)> {
+    text.split_once('=')
+        .map(|(name, value)| (name.to_owned(), value.to_owned()))
+        .ok_or_else(|| format!("{text}: expected {how}").into())
+}
+
+/// Run one tool on files. With the global `--project` the run belongs to that
+/// project; without it the first input file is a loose file, and the run's
+/// records go beside it.
+pub fn run_files(args: RunArgs, project: Option<&basecraft_ops::project::Project>) -> Result<()> {
+    use std::collections::BTreeMap;
+    let registry = Registry::load(&RegistryConfig::discover()?)?;
+    let operation = find_operation(&registry, &args.operation)?;
+    let descriptor = &registry.operations[&operation].descriptor;
+    let mut inputs: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
+    if !args.files.is_empty() {
+        let required = descriptor
+            .inputs
+            .iter()
+            .filter(|(_, binding)| binding.min > 0);
+        let role = only(required.map(|(role, _)| role), "input", "--input ROLE=FILE")?;
+        inputs.entry(role).or_default().extend(args.files);
+    }
+    for item in &args.inputs {
+        let (role, file) = pair(item, "--input ROLE=FILE")?;
+        inputs.entry(role).or_default().push(file.into());
+    }
+    let mut outputs = BTreeMap::new();
+    for item in &args.outputs {
+        let (member, file) = if let Some((member, file)) = item.split_once('=') {
+            (member.to_owned(), PathBuf::from(file))
+        } else {
+            let role = only(descriptor.outputs.keys(), "result", "-o ROLE=FILE")?;
+            let binding = &descriptor.outputs[&role];
+            let member = match (&binding.primary, binding.collection) {
+                (Some(primary), true) => format!("{role}/{primary}"),
+                _ => role,
+            };
+            (member, PathBuf::from(item))
+        };
+        outputs.insert(member, file);
+    }
+    let mut parameters = serde_json::Map::new();
+    for item in &args.params {
+        let (name, text) = pair(item, "--param NAME=VALUE")?;
+        let value = serde_json::from_str(&text).unwrap_or(Value::String(text));
+        parameters.insert(name, value);
+    }
+    let first = inputs
+        .values()
+        .flatten()
+        .next()
+        .ok_or("give at least one input file")?;
+    let root = match project {
+        Some(project) => project.root().to_path_buf(),
+        None => first
+            .canonicalize()?
+            .parent()
+            .ok_or("the input file has no folder")?
+            .to_path_buf(),
+    };
+    let request = basecraft_ops::requests::file_request(
+        &root,
+        &operation,
+        &inputs,
+        Value::Object(parameters),
+        &outputs,
+    )?;
+    let policy = basecraft_plugin_host::policy::SessionPolicy::new(&root, true)?;
+    let mut session = crate::script_session(&root, project)?;
+    basecraft_platform::interrupt::install()?;
+    let (value, _) = run_foreground(&registry, &request, policy, "CLI", &mut session)?;
+    println!("{}", serde_json::to_string(&value)?);
+    if value["state"] != "completed" {
+        let reason = value["errors"][0]["message"]
+            .as_str()
+            .unwrap_or("the run did not complete");
+        return Err(reason.to_owned().into());
+    }
+    Ok(())
+}

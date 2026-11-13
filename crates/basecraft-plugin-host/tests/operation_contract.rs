@@ -295,3 +295,43 @@ fn unique_diagnostics_do_not_square_unrelated_scientific_parameter_text() {
             .is_err()
     );
 }
+
+/// A setting the run needs and has no default for, or one the operation does
+/// not have, is refused by name (D1): basecraft never picks a choice silently.
+#[test]
+fn a_missing_or_unknown_setting_is_named() {
+    crate::isolated_profile::isolate!();
+    let mut descriptor = fixture().operation_contract().unwrap().operations.remove(0);
+    let refused =
+        contract::normalize_parameters(&descriptor, &json!({"colour": "red"})).unwrap_err();
+    assert_eq!(
+        basecraft_plugin_host::jobs::error_code(&refused).as_str(),
+        "unknown_setting"
+    );
+    let unknown = refused.to_string();
+    assert!(
+        unknown.contains("no setting colour") && unknown.contains("mode"),
+        "{unknown}"
+    );
+    descriptor.parameters = json!({
+        "type": "object", "additionalProperties": false,
+        "properties": {"outgroup": {"type": "string"}, "seed": {"type": "integer", "default": 1}},
+        "required": ["outgroup"]
+    });
+    let refused = contract::normalize_parameters(&descriptor, &json!({})).unwrap_err();
+    assert!(matches!(
+        &refused,
+        basecraft_plugin_host::Error::Contract(contract::ContractError::MissingSetting { name, .. })
+            if name == "outgroup"
+    ));
+    assert_eq!(
+        basecraft_plugin_host::jobs::error_code(&refused).as_str(),
+        "missing_choice"
+    );
+    let missing = refused.to_string();
+    assert!(missing.contains("needs the setting outgroup"), "{missing}");
+    assert_eq!(
+        contract::normalize_parameters(&descriptor, &json!({"outgroup": "a"})).unwrap(),
+        json!({"outgroup": "a", "seed": 1})
+    );
+}

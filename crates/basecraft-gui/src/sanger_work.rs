@@ -435,22 +435,9 @@ impl ReviewDocument {
     pub fn review(&self) -> Option<&SangerReview> {
         self.session.sanger_review(self.id).ok()
     }
+    /// A review decision, as the CLI's `sanger decide` and MCP make it.
     pub fn apply(&mut self, edit: ReviewOp) -> Result<(), String> {
-        let call_set = self
-            .session
-            .sanger_review(self.id)
-            .map_err(|e| e.to_string())?
-            .draft_sha256
-            .clone();
-        self.session
-            .apply(
-                self.id,
-                basecraft_protocol::Op::SangerReview {
-                    call_set,
-                    edit: Box::new(edit),
-                },
-            )
-            .map(|_| ())
+        basecraft_ops::sanger_commands::decide(&mut self.session, self.id, edit)
             .map_err(|e| crate::document_open::edit_failure(&e))
     }
 

@@ -1184,8 +1184,16 @@ pub fn error_value(
 }
 
 pub fn error_code(error: &Error) -> OperationErrorCode {
-    if let Error::Ops(error) = error {
-        return ops_error_code(error);
+    use crate::contract::ContractError;
+    match error {
+        Error::Ops(error) => return ops_error_code(error),
+        Error::Contract(ContractError::UnknownSetting { .. }) => {
+            return OperationErrorCode::UnknownSetting;
+        }
+        Error::Contract(ContractError::MissingSetting { .. }) => {
+            return OperationErrorCode::MissingChoice;
+        }
+        _ => {}
     }
     let message = error.to_string();
     if message.contains("permission_denied") {

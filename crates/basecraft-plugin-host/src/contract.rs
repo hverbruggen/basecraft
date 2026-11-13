@@ -522,6 +522,21 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
     Ok(())
 }
 
+/// A run's settings that do not fit its operation, named (D1).
+#[derive(Debug, thiserror::Error)]
+pub enum ContractError {
+    #[error("operation contract: {operation} has no setting {name}; its settings are: {}", known.join(", "))]
+    UnknownSetting {
+        operation: String,
+        name: String,
+        known: Vec<String>,
+    },
+    #[error(
+        "operation contract: {operation} needs the setting {name}, which has no default; give it"
+    )]
+    MissingSetting { operation: String, name: String },
+}
+
 /// Fill only explicitly declared top-level defaults. No coercion or branch guessing.
 pub fn normalize_parameters(descriptor: &OperationDescriptor, requested: &Value) -> Result<Value> {
     let mut parameters = requested
@@ -533,8 +548,16 @@ pub fn normalize_parameters(descriptor: &OperationDescriptor, requested: &Value)
         .get("properties")
         .and_then(Value::as_object)
         .ok_or_else(|| invalid("missing parameter properties"))?;
-    if parameters.keys().any(|name| !properties.contains_key(name)) {
-        return Err(invalid("unknown parameter"));
+    if let Some(name) = parameters
+        .keys()
+        .find(|name| !properties.contains_key(*name))
+    {
+        return Err(ContractError::UnknownSetting {
+            operation: descriptor.name.clone(),
+            name: name.clone(),
+            known: properties.keys().cloned().collect(),
+        }
+        .into());
     }
     for (name, definition) in properties {
         if !parameters.contains_key(name)
@@ -542,6 +565,22 @@ pub fn normalize_parameters(descriptor: &OperationDescriptor, requested: &Value)
         {
             parameters.insert(name.clone(), default.clone());
         }
+    }
+    // A choice the run needs and has no default for is refused by name (D1):
+    // basecraft never picks it silently.
+    let required = descriptor.parameters["required"]
+        .as_array()
+        .into_iter()
+        .flatten();
+    if let Some(name) = required
+        .filter_map(Value::as_str)
+        .find(|name| !parameters.contains_key(*name))
+    {
+        return Err(ContractError::MissingSetting {
+            operation: descriptor.name.clone(),
+            name: name.to_owned(),
+        }
+        .into());
     }
     let effective = Value::Object(parameters);
     BoundedSchema::compile(&descriptor.parameters)?.validate(&effective)?;

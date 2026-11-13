@@ -85,7 +85,12 @@ impl Server {
     }
 
     fn doc(&self, args: &Value) -> Result<DocId> {
-        let id = args["document"]
+        self.doc_named(args, "document")
+    }
+
+    /// The open document whose ID `args[field]` gives.
+    fn doc_named(&self, args: &Value, field: &str) -> Result<DocId> {
+        let id = args[field]
             .as_u64()
             .and_then(|n| usize::try_from(n).ok())
             .ok_or("Invalid document ID")?;
@@ -156,6 +161,13 @@ impl Server {
                 | "submission_validation_request"
                 | "submission_record_validation"
                 | "submission_accession_table"
+                | "sanger_review_create"
+                | "sanger_decide"
+                | "sanger_export"
+                | "sanger_add"
+                | "delimitation_display_tree"
+                | "tree_labels"
+                | "delimitation_figures"
         ) || creates)
             && !self.writable
         {
@@ -176,6 +188,81 @@ impl Server {
                 let doc = self.session.open(&path)?;
                 self.documents.insert(doc.0, doc);
                 self.state(doc)
+            }
+            // Sanger review decisions (D1), through the same calls as the
+            // window and `basecraft sanger`.
+            "sanger_review_create" => {
+                let read = self.path(text(args, "read")?)?;
+                let doc = basecraft_ops::sanger_commands::review_read(&mut self.session, &read)?;
+                if let Some(output) = args.get("output").and_then(Value::as_str) {
+                    let output = self.path(output)?;
+                    self.session.save_new(doc, Some(&output))?;
+                }
+                self.documents.insert(doc.0, doc);
+                self.state(doc)
+            }
+            "sanger_decide" => {
+                let doc = self.doc(args)?;
+                let edit = basecraft_protocol::sanger::ReviewOp::Set {
+                    columns: basecraft_ops::sanger_commands::columns(text(args, "columns")?)?,
+                    choice: basecraft_ops::sanger_commands::choice(text(args, "choice")?)?,
+                };
+                basecraft_ops::sanger_commands::decide(&mut self.session, doc, edit)?;
+                self.state(doc)
+            }
+            "sanger_export" => {
+                let doc = self.doc(args)?;
+                let output = self.path(text(args, "output")?)?;
+                self.session
+                    .export_sanger_consensus(doc, &output, text(args, "label")?)?;
+                Ok(json!({"consensus": output}))
+            }
+            "tree_labels" => {
+                let doc = self.doc(args)?;
+                let fields = args["fields"]
+                    .as_array()
+                    .ok_or("Give fields: a list such as [\"genus\", \"specimen\"]")?
+                    .iter()
+                    .map(|field| {
+                        let field = field.as_str().ok_or("Each field is text")?;
+                        Ok(basecraft_ops::metadata::label_field(field)?)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let project =
+                    self.session
+                        .project()
+                        .cloned()
+                        .ok_or(basecraft_ops::Error::NoProject(
+                            "Labelling tips from the specimen table",
+                        ))?;
+                let kept =
+                    basecraft_ops::metadata::label_tips(&mut self.session, doc, &project, fields)?;
+                let mut state = self.state(doc)?;
+                state["kept_own_name"] = json!(kept);
+                Ok(state)
+            }
+            "delimitation_figures" => {
+                let doc = self.doc(args)?;
+                let folder = self.path(text(args, "output")?)?;
+                let written = crate::delimitation::figures(&mut self.session, doc, &folder)?;
+                Ok(json!({"figures": written}))
+            }
+            "delimitation_display_tree" => {
+                let doc = self.doc(args)?;
+                let tree = self.path(text(args, "tree")?)?;
+                basecraft_ops::delimitation::attach_display_tree(&mut self.session, doc, &tree)?;
+                self.state(doc)
+            }
+            "sanger_add" => {
+                let review = self.doc(args)?;
+                let alignment = self.doc_named(args, "alignment")?;
+                basecraft_ops::sanger_commands::add_consensus(
+                    &mut self.session,
+                    review,
+                    alignment,
+                    text(args, "label")?,
+                )?;
+                self.state(alignment)
             }
             "sequence_create" => {
                 let doc = self
@@ -665,6 +752,13 @@ fn tools() -> Value {
         tool("provenance_inspect","Read the provenance publication of a saved project result.",json!({"path":string}), &["path"]),
         tool("provenance_verify","Check a saved result against its recorded hashes and retained inputs; runs no tools.",json!({"path":string}), &["path"]),
         tool("replay","Replay the project's operation log in a scratch session and report problems.",json!({}), &[]),
+        tool("tree_labels","Label an open tree's tips from the project's specimen table, by fields in order: specimen, genus, species, accession, column:NAME. Tips whose link is missing or ambiguous keep their own name (kept_own_name counts them). One undoable style edit; save with save. Requires writes.",json!({"document":doc,"fields":{"type":"array","items":string}}), &["document","fields"]),
+        tool("delimitation_figures","Write an open species workspace's comparison figure on its display tree as SVG files in the output folder, in publication style: one with every hypothesis and one per hypothesis. Each is recorded as an export. Requires writes.",json!({"document":doc,"output":string}), &["document","output"]),
+        tool("delimitation_display_tree","Attach a tree file (one tree, Newick or NEXUS) as the display tree of an open species workspace; the file is kept as its evidence. Save with save. Requires writes.",json!({"document":doc,"tree":string}), &["document","tree"]),
+        tool("sanger_review_create","Start a review of a Sanger read (.ab1) from its instrument calls, optionally saved as a new review file at output. Decide columns with sanger_decide, save with save, export with sanger_export. Requires writes.",json!({"read":string,"output":string}), &["read"]),
+        tool("sanger_decide","Decide draft columns of an open Sanger review: columns from 1 as \"12\", \"12,15\" or \"12-14\"; choice accept, reject, pending, or the base to put there (IUPAC, - for a gap). Logged and undoable; save with save. Requires writes.",json!({"document":doc,"columns":string,"choice":string}), &["document","columns","choice"]),
+        tool("sanger_add","Add an open Sanger review's decided consensus to an open alignment (alignment: its document ID) as a new last row named label, recording the review as its evidence. The row is not placed; save with save. Requires writes.",json!({"document":doc,"alignment":doc,"label":string}), &["document","alignment","label"]),
+        tool("sanger_export","Export an open Sanger review's consensus as FASTA under label (such as the specimen ID). Every column must be decided. Requires writes.",json!({"document":doc,"output":string,"label":string}), &["document","output","label"]),
         tool("sequence_create", "Create an independent unsaved DNA sequence from plain IUPAC text. Save to a new .gb destination with save; edit with apply. Requires writes.", json!({"name":string,"sequence":string}), &["name","sequence"]),
         tool("metadata_open","Open the project's specimen metadata (roster, taxa, identifications, record links, typed collection columns) as a document. With create, write empty tables first if the project has none. Edit it with apply and metadata.edit operations; save it with save.",json!({"create":{"type":"boolean"}}), &[]),
         tool("metadata_plan_headers","Plan, without applying, an import from structured FASTA headers. request: {document: project FASTA path, pattern: {name, separator, fields: [{role: specimen|taxon|record|ignore|column, column?}]}, options?: {create_specimens, overwrite}}. Returns {changes, issues, rows, matched}; apply the reviewed changes with apply {op: metadata.edit, params: {edit: {action: apply, changes}}}.",json!({"document":doc,"request":{"type":"object"}}), &["document","request"]),
