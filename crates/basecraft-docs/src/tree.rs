@@ -31,6 +31,9 @@ pub struct TreeNode {
     pub name: String,
     /// Length of the branch above.
     pub length: Option<f64>,
+    /// The power of ten of the last digit the file wrote for `length`; None
+    /// for a length basecraft computed. It bounds the length's rounding.
+    pub length_place: Option<i32>,
 }
 
 impl TreeNode {
@@ -228,6 +231,7 @@ impl TreeDoc {
                 children: p.children.clone(),
                 name: p.name.clone(),
                 length: p.length,
+                length_place: p.length_place,
             })
             .collect();
         let support_label = |s: &str| {
@@ -694,6 +698,8 @@ impl TreeDoc {
         };
         self.nodes[node].length = Some(length * fraction);
         self.nodes[other].length = Some(length * (1.0 - fraction));
+        self.nodes[node].length_place = None;
+        self.nodes[other].length_place = None;
         self.rooted = Some(true);
         self.edited();
         Ok(())
@@ -872,6 +878,7 @@ impl TreeDoc {
             let e = edges.len();
             edges.push(Edge {
                 length: node.length,
+                length_place: node.length_place,
                 support: (0..sets)
                     .map(|s| self.supports[s].values[i].clone())
                     .collect(),
@@ -892,7 +899,11 @@ impl TreeDoc {
                 })
                 .collect();
             let e = edges.len();
-            edges.push(Edge { length, support });
+            edges.push(Edge {
+                length,
+                length_place: None,
+                support,
+            });
             adj[a].push((b, e));
             adj[b].push((a, e));
         }
@@ -936,30 +947,35 @@ impl TreeDoc {
             children: Vec::new(),
             name: String::new(),
             length: None,
+            length_place: None,
         });
         for v in &mut values {
             v.push(None);
         }
-        let half = edges[split].length.map(|l| l / 2.0);
-        // (old node, came from, new parent, length, support) to place.
-        let mut stack: Vec<(usize, usize, usize, Option<f64>, SupportValues)> = vec![
+        // The halves are computed, so neither keeps a written precision.
+        let half = (edges[split].length.map(|l| l / 2.0), None);
+        // (old node, came from, new parent, length and its place, support).
+        type Placed = (Option<f64>, Option<i32>);
+        let mut stack: Vec<(usize, usize, usize, Placed, SupportValues)> = vec![
             (other, target, 0, half, vec![None; sets]),
             (target, other, 0, half, edges[split].support.clone()),
         ];
-        while let Some((old, from, parent, length, support)) = stack.pop() {
+        while let Some((old, from, parent, (length, length_place), support)) = stack.pop() {
             let id = nodes.len();
             nodes.push(TreeNode {
                 parent: Some(parent),
                 children: Vec::new(),
                 name: self.nodes[old].name.clone(),
                 length,
+                length_place,
             });
             for (s, v) in values.iter_mut().enumerate() {
                 v.push(support[s].clone());
             }
             nodes[parent].children.push(id);
             for &(next, e) in order(old, from, &adj).iter().rev() {
-                stack.push((next, old, id, edges[e].length, edges[e].support.clone()));
+                let placed = (edges[e].length, edges[e].length_place);
+                stack.push((next, old, id, placed, edges[e].support.clone()));
             }
         }
         self.nodes = nodes;
@@ -1102,6 +1118,7 @@ impl TreeDoc {
                 };
                 if i == root {
                     node.length = None;
+                    node.length_place = None;
                 }
                 node.children = node.children.iter().map(|&c| mapping[c]).collect();
                 node
@@ -1213,6 +1230,7 @@ impl TreeDoc {
 
 struct Edge {
     length: Option<f64>,
+    length_place: Option<i32>,
     support: Vec<Option<String>>,
 }
 

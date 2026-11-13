@@ -16,6 +16,9 @@ pub struct ParsedNode {
     /// A tip's name, or an internal node's label (often a support value).
     pub name: String,
     pub length: Option<f64>,
+    /// The power of ten of the last digit written in `length`: -6 for
+    /// `0.000123`, 0 for `12`, -4 for `1.5e-3`. It bounds the rounding.
+    pub length_place: Option<i32>,
     /// `&` comments, without brackets, joined with `,`.
     pub comment: String,
 }
@@ -464,6 +467,7 @@ impl<'a> Parser<'a> {
                         .parse()
                         .map_err(|_| self.error(&format!("bad branch length {s:?}")))?;
                     nodes[current].length = Some(len);
+                    nodes[current].length_place = Some(written_place(s));
                 }
                 Some(_) => {
                     if !expecting_node {
@@ -523,6 +527,16 @@ pub fn quote_name(name: &str) -> String {
 /// A branch length, as short as it reads back exactly.
 pub fn format_length(len: f64) -> String {
     format!("{len}")
+}
+
+/// The power of ten of the last digit of a written number such as `0.0012`
+/// (-4) or `1.25E3` (1).
+fn written_place(number: &str) -> i32 {
+    let (mantissa, exponent) = number
+        .split_once(['e', 'E'])
+        .map_or((number, 0), |(m, e)| (m, e.parse().unwrap_or(0)));
+    let decimals = mantissa.split_once('.').map_or(0, |(_, d)| d.len());
+    exponent - i32::try_from(decimals).unwrap_or(i32::MAX)
 }
 
 #[cfg(test)]

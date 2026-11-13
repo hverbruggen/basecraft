@@ -12,7 +12,7 @@ pub struct TreeUndo {
 enum Change {
     Root(Box<TreeDoc>),
     Position {
-        lengths: [(usize, Option<f64>); 2],
+        lengths: [(usize, Option<f64>, Option<i32>); 2],
         rooted: Option<bool>,
     },
     Children(Vec<(usize, Vec<usize>)>),
@@ -102,8 +102,9 @@ impl TreeDoc {
             Change::Root(before) => *self = (**before).clone(),
             Change::BranchLengths(before) => self.branch_lengths.clone_from(before),
             Change::Position { lengths, rooted } => {
-                for &(i, length) in lengths {
+                for &(i, length, place) in lengths {
                     self.nodes[i].length = length;
+                    self.nodes[i].length_place = place;
                 }
                 self.rooted = *rooted;
             }
@@ -173,8 +174,9 @@ impl TreeDoc {
                 let (a, b, _) = self
                     .root_branch()
                     .ok_or_else(|| EditError("the root needs two branches with lengths".into()))?;
+                let node = |i: usize| (i, self.nodes[i].length, self.nodes[i].length_place);
                 let change = Change::Position {
-                    lengths: [(a, self.nodes[a].length), (b, self.nodes[b].length)],
+                    lengths: [node(a), node(b)],
                     rooted: self.rooted,
                 };
                 self.set_root_position(clade, *fraction)?;
