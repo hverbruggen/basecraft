@@ -576,7 +576,7 @@ pub fn tree_sidecar(path: &Path) -> PathBuf {
 use basecraft_protocol::companion_records::{
     COMPANION_VERSION, Companion, DelimitationCompanion, SupportName, TreeCompanion,
 };
-use basecraft_protocol::facts::{Alphabet, AlphabetCounts, Fact, FactSource, GUESS_LETTERS};
+use basecraft_protocol::facts::{Alphabet, AlphabetCounts, Fact, FactSource};
 
 /// Read a document's companion. Refuses another layout, a companion written
 /// for different bytes than the document's, and for a tree, a companion that
@@ -952,7 +952,7 @@ fn fasta_alphabets(file: &fasta::IndexedFasta) -> Vec<(String, Fact<Alphabet>)> 
         .map(|record| {
             let mut counts = AlphabetCounts::default();
             let mut start = 0;
-            while start < record.len && counts.letters() < GUESS_LETTERS {
+            while start < record.len && !counts.is_full() {
                 buf.clear();
                 let end = (start + PIECE).min(record.len);
                 if record
@@ -961,7 +961,7 @@ fn fasta_alphabets(file: &fasta::IndexedFasta) -> Vec<(String, Fact<Alphabet>)> 
                 {
                     break;
                 }
-                counts.add(&buf);
+                counts.read(&buf);
                 start = end;
             }
             (record.name.clone(), Alphabet::guessed(counts.alphabet()))
@@ -1002,7 +1002,7 @@ fn genbank_alphabets(rest: &[u8]) -> Vec<(String, Fact<Alphabet>)> {
         } else if line.starts_with(b"//") {
             origin = false;
         } else if origin && let Some((_, _, counts)) = &mut record {
-            counts.add(line);
+            counts.read(line);
         }
     }
     out.extend(record.map(finish));

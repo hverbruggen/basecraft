@@ -62,12 +62,14 @@ impl AlnRow {
         self.counts.alphabet()
     }
 
-    /// Replace `start..end` with `residues`, keeping the letter counts.
+    /// Replace `start..end` with `residues`, recounting the letters when
+    /// the edit reaches into the counted prefix.
     fn splice(&mut self, start: u64, end: u64, residues: &[u8]) -> Vec<u8> {
         let removed = self.seq.delete(start, end);
         self.seq.insert(start, residues);
-        self.counts.remove(&removed);
-        self.counts.add(residues);
+        if self.counts.changed_by_edit_at(start) {
+            self.counts = crate::sequence::count_letters(&self.seq);
+        }
         removed
     }
 

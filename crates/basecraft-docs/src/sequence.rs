@@ -6,24 +6,24 @@ use std::sync::{Arc, Mutex};
 use basecraft_io::fasta::IndexedFasta;
 use basecraft_io::{genbank, gff3};
 use basecraft_protocol::Feature;
-use basecraft_protocol::facts::{Alphabet, AlphabetCounts, Fact, FactSource, GUESS_LETTERS};
+use basecraft_protocol::facts::{Alphabet, AlphabetCounts, Fact, FactSource};
 use basecraft_query::{IntervalIndex, SeqSummary};
 use serde::{Deserialize, Serialize};
 
 use crate::coord::{Change, map_location};
 use crate::piece::{PieceTable, Residues};
 
-/// Letter counts for the guess (D12), read in pieces, up to
-/// [`GUESS_LETTERS`] letters.
+/// Letter counts for the guess (D12), read in pieces until
+/// [`basecraft_protocol::facts::GUESS_LETTERS`] letters are counted.
 pub(crate) fn count_letters(seq: &PieceTable) -> AlphabetCounts {
-    const PIECE: u64 = 1 << 16;
+    const PIECE: u64 = 1 << 12;
     let mut counts = AlphabetCounts::default();
     let mut buf = Vec::new();
     let mut start = 0;
-    while start < seq.len() && counts.letters() < GUESS_LETTERS {
+    while start < seq.len() && !counts.is_full() {
         buf.clear();
         seq.read_into(start, (start + PIECE).min(seq.len()), &mut buf);
-        counts.add(&buf);
+        counts.read(&buf);
         start += PIECE;
     }
     counts
@@ -398,8 +398,9 @@ impl SequenceDoc {
     pub fn replace(&mut self, start: u64, end: u64, residues: &[u8]) -> EditResult {
         let removed = self.seq.delete(start, end);
         self.seq.insert(start, residues);
-        self.counts.remove(&removed);
-        self.counts.add(residues);
+        if self.counts.changed_by_edit_at(start) {
+            self.counts = count_letters(&self.seq);
+        }
         let change = Change {
             pos: start,
             deleted: end - start,
