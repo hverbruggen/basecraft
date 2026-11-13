@@ -283,14 +283,7 @@ fn measure_save(root: &Path, label: &str, residue: &str, interactive: bool) {
     };
     let doc = session.open(&root.join("unrelated.fasta")).unwrap();
     session
-        .apply(
-            doc,
-            basecraft_protocol::Op::SeqReplace {
-                start: 0,
-                end: 1,
-                residues: residue.into(),
-            },
-        )
+        .apply(doc, basecraft_protocol::Op::seq_replace(0, 1, residue))
         .unwrap();
     // Recovery sessions retain the original by hard link at the first edit,
     // so the save also covers the multi-link lookup.
@@ -461,14 +454,7 @@ fn a_save_in_one_project_leaves_another_alone() {
     let mut session = basecraft_ops::Session::new(root.join("first"));
     let doc = session.open(&target).unwrap();
     session
-        .apply(
-            doc,
-            basecraft_protocol::Op::SeqReplace {
-                start: 0,
-                end: 1,
-                residues: "T".into(),
-            },
-        )
+        .apply(doc, basecraft_protocol::Op::seq_replace(0, 1, "T"))
         .unwrap();
     basecraft_io::counters::reset();
     session.save(doc, None).unwrap();
@@ -527,14 +513,7 @@ fn a_project_save_reads_one_bucket_of_its_index() {
     let mut session = basecraft_ops::Session::new(&folder).in_project(Some(project));
     let doc = session.open(&target).unwrap();
     session
-        .apply(
-            doc,
-            basecraft_protocol::Op::SeqReplace {
-                start: 0,
-                end: 1,
-                residues: "T".into(),
-            },
-        )
+        .apply(doc, basecraft_protocol::Op::seq_replace(0, 1, "T"))
         .unwrap();
     basecraft_io::counters::reset();
     session.save(doc, None).unwrap();

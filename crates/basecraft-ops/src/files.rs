@@ -757,6 +757,10 @@ pub fn facts_companion(
 /// Put back the alphabet an alignment's or sequence's companion keeps. A
 /// companion that no longer matches the file is ignored, with a warning.
 fn restore_alphabet(content: &mut Loaded, path: &Path, exchange_hash: &str) {
+    // Trees and species files read their side file in their own loader.
+    if !matches!(content, Loaded::Sequence(_) | Loaded::Alignment(_)) {
+        return;
+    }
     let companion = tree_sidecar(path);
     let found = read_optional(&companion).and_then(|bytes| {
         bytes
