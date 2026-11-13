@@ -74,6 +74,8 @@ pub enum Error {
     /// Sequences that cannot join an alignment, and why.
     #[error(transparent)]
     Addition(#[from] crate::alignment_add::AdditionError),
+    #[error(transparent)]
+    DisplayTree(#[from] crate::delimitation::DisplayTreeError),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -113,7 +115,8 @@ impl Error {
             | Self::Invalid(_)
             | Self::NoFileName(_)
             | Self::ReviewInput(_)
-            | Self::Addition(_) => Code::InvalidArguments,
+            | Self::Addition(_)
+            | Self::DisplayTree(_) => Code::InvalidArguments,
             Self::UnknownFormat(_) => Code::UnknownFormat,
             Self::Empty(_) => Code::EmptyDocument,
             Self::EvidenceConflict(_) => Code::AnalysisInputConflict,

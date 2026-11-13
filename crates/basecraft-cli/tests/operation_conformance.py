@@ -276,6 +276,34 @@ def main():
         assert (project / "cli-tree.nwk").read_text() == (project / "mcp-tree.nwk").read_text()
         record("tree reroot and ladderize by name: same tree from CLI and MCP")
 
+        # A display tree attached to a species workspace (D1): the CLI and MCP
+        # attach the same tree through the same call and save it.
+        species = project / "species"
+        species.mkdir()
+        fixtures = Path(__file__).resolve().parents[3] / "testdata/fixtures/compact/species-delimitation"
+        shutil.copy(fixtures / "time.nwk", species / "time.nwk")
+        for route in ("cli", "mcp"):
+            shutil.copy(fixtures / "hypotheses.spart", species / f"{route}.spart")
+        attached, _ = cli("delimitation", "display-tree", str(species / "cli.spart"),
+                          "--tree", str(species / "time.nwk"))
+        client = Mcp(binary, project, env)
+        try:
+            shown = {}
+            for route in ("mcp", "cli"):
+                opened = client.tool("open", {"path": f"species/{route}.spart"})
+                document = opened["structuredContent"]["document"]
+                if route == "mcp":
+                    done = client.tool("delimitation_display_tree",
+                                       {"document": document, "tree": "species/time.nwk"})
+                    assert not done["isError"], done
+                    assert not client.tool("save", {"document": document})["isError"]
+                read = client.tool("read", {"document": document})["structuredContent"]
+                shown[route] = read["view"]["display_tree"]
+        finally:
+            client.close()
+        assert shown["cli"] == shown["mcp"] == attached["display_tree"], (shown, attached)
+        record("display tree attached to a species workspace: same from CLI and MCP")
+
         if args.only_sanger:
             receipt["status"] = "passed"
             receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")

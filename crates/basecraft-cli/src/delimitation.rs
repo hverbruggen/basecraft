@@ -32,13 +32,25 @@ pub enum DelimitationCommand {
         #[arg(long, default_value = ".")]
         project: PathBuf,
     },
+    /// Attach the tree in TREE (one tree, Newick or NEXUS) as the display tree
+    /// of the species workspace WORKSPACE and save it. The tree file is kept as
+    /// the workspace's evidence.
+    DisplayTree {
+        workspace: PathBuf,
+        #[arg(long)]
+        tree: PathBuf,
+    },
 }
 
 fn absolute(path: PathBuf) -> std::io::Result<PathBuf> {
     std::path::absolute(path)
 }
 
-pub fn run(command: DelimitationCommand) -> Result<()> {
+pub fn run(
+    command: DelimitationCommand,
+    project: Option<&basecraft_ops::project::Project>,
+    save_options: crate::save::Options,
+) -> Result<()> {
     let value = match command {
         DelimitationCommand::LinkedAlignment { path, project } => {
             let project = basecraft_ops::project::Project::new(absolute(project)?)?;
@@ -67,6 +79,16 @@ pub fn run(command: DelimitationCommand) -> Result<()> {
             let mut session = crate::project_session(&absolute(project)?)?;
             delimitation::combine_to(&mut session, &paths, &output, keep.as_ref())?;
             serde_json::json!({"output": output})
+        }
+        DelimitationCommand::DisplayTree { workspace, tree } => {
+            let workspace = workspace.canonicalize()?;
+            let root = workspace.parent().ok_or("the workspace has no folder")?;
+            let mut session = crate::script_session(root.to_path_buf(), project)?;
+            let doc = session.open(&workspace)?;
+            delimitation::attach_display_tree(&mut session, doc, &absolute(tree)?)?;
+            save_options.save(&mut session, doc, None, false)?;
+            let shown = &session.delimitation(doc)?.view.display_tree;
+            serde_json::json!({"workspace": workspace, "display_tree": shown})
         }
     };
     println!("{}", serde_json::to_string_pretty(&value)?);

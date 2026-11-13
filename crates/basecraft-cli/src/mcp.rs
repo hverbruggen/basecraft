@@ -152,6 +152,7 @@ impl Server {
                 | "sanger_decide"
                 | "sanger_export"
                 | "sanger_add"
+                | "delimitation_display_tree"
         ) || creates)
             && !self.writable
         {
@@ -200,6 +201,12 @@ impl Server {
                 self.session
                     .export_sanger_consensus(doc, &output, text(args, "label")?)?;
                 Ok(json!({"consensus": output}))
+            }
+            "delimitation_display_tree" => {
+                let doc = self.doc(args)?;
+                let tree = self.path(text(args, "tree")?)?;
+                basecraft_ops::delimitation::attach_display_tree(&mut self.session, doc, &tree)?;
+                self.state(doc)
             }
             "sanger_add" => {
                 let review = self.doc(args)?;
@@ -700,6 +707,7 @@ fn tools() -> Value {
         tool("provenance_inspect","Read the provenance publication of a saved project result.",json!({"path":string}), &["path"]),
         tool("provenance_verify","Check a saved result against its recorded hashes and retained inputs; runs no tools.",json!({"path":string}), &["path"]),
         tool("replay","Replay the project's operation log in a scratch session and report problems.",json!({}), &[]),
+        tool("delimitation_display_tree","Attach a tree file (one tree, Newick or NEXUS) as the display tree of an open species workspace; the file is kept as its evidence. Save with save. Requires writes.",json!({"document":doc,"tree":string}), &["document","tree"]),
         tool("sanger_review_create","Start a review of a Sanger read (.ab1) from its instrument calls, optionally saved as a new review file at output. Decide columns with sanger_decide, save with save, export with sanger_export. Requires writes.",json!({"read":string,"output":string}), &["read"]),
         tool("sanger_decide","Decide draft columns of an open Sanger review: columns from 1 as \"12\", \"12,15\" or \"12-14\"; choice accept, reject, pending, or the base to put there (IUPAC, - for a gap). Logged and undoable; save with save. Requires writes.",json!({"document":doc,"columns":string,"choice":string}), &["document","columns","choice"]),
         tool("sanger_add","Add an open Sanger review's decided consensus to an open alignment (alignment: its document ID) as a new last row named label, recording the review as its evidence. The row is not placed; save with save. Requires writes.",json!({"document":doc,"alignment":doc,"label":string}), &["document","alignment","label"]),

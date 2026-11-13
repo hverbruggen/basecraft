@@ -688,43 +688,38 @@ impl qobject::DelimitationController {
         }
     }
     pub fn attach_tree(mut self: Pin<&mut Self>, path: &QString, rooted: bool) -> bool {
-        let access_thread = self.qt_thread();
         if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
             crate::bridge::checked_document!(sync self, session.delimitation(doc));
         }
         if !self.as_mut().workspace_available() {
             return false;
         }
-        let result = (|| -> Result<_, Box<dyn std::error::Error>> {
-            let mut p = PathBuf::from(path.to_string());
-            if let Some((session, doc)) = self.rust().session.as_ref().zip(self.rust().doc) {
-                let work = session.delimitation(doc)?;
-                if work.view.display_tree.as_deref() == Some(path.to_string().as_str()) {
-                    p = basecraft_ops::delimitation::checked_display_tree(work)?
-                        .ok_or("No display tree")?;
-                }
+        // The same read and evidence as `basecraft delimitation display-tree`.
+        let result = {
+            let state = self.rust();
+            match state.session.as_ref().zip(state.doc) {
+                Some((session, doc)) => basecraft_ops::delimitation::display_tree(
+                    session,
+                    doc,
+                    Path::new(&path.to_string()),
+                )
+                .map_err(|e| e.to_string()),
+                None => Err("No species workspace is open".to_owned()),
             }
-            let bytes = std::fs::read(&p)?;
-            let trees = basecraft_io::newick::parse_trees(std::str::from_utf8(&bytes)?)?;
-            if trees.len() != 1 {
-                return Err("Choose a file containing exactly one display tree".into());
-            }
-            let tree = TreeDoc::from_parsed(&trees[0].name, &trees[0]);
-            // A manual cut works on the tree as drawn, so it needs ultrametric
-            // ages but not a rooting assertion or a bifurcating tree. The
-            // tolerance allows Newick lengths printed to six decimals.
-            let time = basecraft_delimitation::time_tree::validate(&tree, true, 1e-4, false);
-            let hash = basecraft_io::hash_bytes(&bytes);
-            Ok((p, tree, time, hash, bytes))
-        })();
+        };
         match result {
-            Ok((source, tree, time, hash, _bytes)) => {
-                let retained = source;
+            Ok(file) => {
+                let tree = TreeDoc::from_parsed(&file.tree.name, &file.tree);
+                // A manual cut works on the tree as drawn, so it needs
+                // ultrametric ages but not a rooting assertion or a
+                // bifurcating tree. The tolerance allows Newick lengths
+                // printed to six decimals.
+                let time = basecraft_delimitation::time_tree::validate(&tree, true, 1e-4, false);
                 self.as_mut().rust_mut().display_tree = Some(tree.clone());
                 let warning = time.as_ref().err().map(ToString::to_string);
                 if let Ok(time) = time {
                     let height = time.root_height;
-                    self.as_mut().rust_mut().time_tree = Some((tree, time, hash.clone()));
+                    self.as_mut().rust_mut().time_tree = Some((tree, time, file.hash.clone()));
                     self.as_mut().set_can_cut(true);
                     self.as_mut().set_root_height(height);
                 } else {
@@ -732,54 +727,11 @@ impl qobject::DelimitationController {
                     self.as_mut().set_can_cut(false);
                 }
                 self.as_mut()
-                    .set_display_path(QString::from(retained.to_string_lossy().as_ref()));
-                let changed = {
-                    let state = self.rust();
-                    let Some((session, doc)) = state.session.as_ref().zip(state.doc) else {
-                        self.fail("No species workspace is open");
-                        return false;
-                    };
-                    crate::bridge::checked_document!(access_thread, session.delimitation(doc))
-                        .view
-                        .display_tree
-                        .as_deref()
-                        != Some(path.to_string().as_str())
-                };
-                if changed {
-                    let evidence = {
-                        let state = self.rust();
-                        let Some((session, doc)) = state.session.as_ref().zip(state.doc) else {
-                            self.fail("No species workspace is open");
-                            return false;
-                        };
-                        basecraft_ops::delimitation::reference_input(
-                            &session.root().join(crate::bridge::checked_document!(
-                                access_thread,
-                                session.doc_key(doc)
-                            )),
-                            &retained,
-                            &hash,
-                            session.project(),
-                        )
-                    };
-                    let run = match evidence {
-                        Ok(run) => run,
-                        Err(error) => {
-                            self.fail(&error.to_string());
-                            return false;
-                        }
-                    };
-                    if self
-                        .as_mut()
-                        .edit(DelimitationEdit::SetDisplayTree {
-                            path: retained.to_string_lossy().into_owned(),
-                            hash: hash.clone(),
-                            evidence_run: run.directory().display().to_string(),
-                        })
-                        .is_err()
-                    {
-                        return false;
-                    }
+                    .set_display_path(QString::from(file.path.to_string_lossy().as_ref()));
+                if let Some(edit) = file.edit
+                    && self.as_mut().edit(edit).is_err()
+                {
+                    return false;
                 }
                 // A newly attached tree is drawn afresh even at the same path.
                 let revision = self.rust().display_revision + 1;

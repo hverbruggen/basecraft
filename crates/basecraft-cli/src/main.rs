@@ -338,7 +338,9 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         .transpose()?;
     let save_options = cli.save_options;
     match cli.command {
-        Command::Delimitation { action } => delimitation::run(action)?,
+        Command::Delimitation { action } => {
+            delimitation::run(action, project.as_ref(), save_options)?;
+        }
         Command::Plugins { action } => operations::plugins(action)?,
         Command::Operations { action } => operations::operations(action)?,
         Command::Run(args) => operations::run_files(args)?,

@@ -421,6 +421,10 @@ class Session:
         return self.call("sanger_export", {"document": document, "output": str(output),
                                            "label": str(label)})
 
+    def delimitation_display_tree(self, document, tree):
+        """Attach the tree file ``tree`` as an open species workspace's display tree."""
+        return self.call("delimitation_display_tree", {"document": document, "tree": str(tree)})
+
     def sanger_add(self, document, alignment, label):
         """Add the decided consensus to an open alignment as a new row ``label``."""
         return self.call("sanger_add", {"document": document, "alignment": alignment,
