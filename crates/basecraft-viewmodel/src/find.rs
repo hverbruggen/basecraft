@@ -262,16 +262,12 @@ pub fn search(input: Input, query: &str, reverse: bool, cancel: &AtomicBool) -> 
             d.alphabet().value == Alphabet::Protein
         }
         Input::Sequence(d) => {
-            let mut protein = false;
-            for start in (0..d.len()).step_by(usize::from(CHUNK)) {
-                if cancel.load(Ordering::Relaxed) {
-                    return Results::default();
-                }
+            let protein = (0..d.len()).step_by(usize::from(CHUNK)).any(|start| {
                 let chunk = d.read(start, (start + u64::from(CHUNK)).min(d.len()));
-                if Alphabet::guess(&chunk) == Alphabet::Protein {
-                    protein = true;
-                    break;
-                }
+                cancel.load(Ordering::Relaxed) || Alphabet::guess(&chunk) == Alphabet::Protein
+            });
+            if cancel.load(Ordering::Relaxed) {
+                return Results::default();
             }
             protein
         }

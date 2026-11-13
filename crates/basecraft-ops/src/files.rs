@@ -771,18 +771,13 @@ fn restore_alphabet(content: &mut Loaded, path: &Path, exchange_hash: &str) {
         ),
     };
     match content {
-        Loaded::Sequence(opened) => {
-            if stated.is_some() {
-                opened.doc.set_alphabet(stated);
-            }
-            opened.companion_warning = warning;
-        }
-        Loaded::Alignment(opened) => {
-            if stated.is_some() {
-                opened.doc.set_alphabet(stated);
-            }
-            opened.companion_warning = warning;
-        }
+        Loaded::Sequence(opened) if stated.is_some() => opened.doc.set_alphabet(stated),
+        Loaded::Alignment(opened) if stated.is_some() => opened.doc.set_alphabet(stated),
+        _ => {}
+    }
+    match content {
+        Loaded::Sequence(opened) => opened.companion_warning = warning,
+        Loaded::Alignment(opened) => opened.companion_warning = warning,
         _ => {}
     }
 }
@@ -1132,20 +1127,14 @@ pub fn extract_record(
     segments: &[(u64, u64)],
     reverse: bool,
 ) -> genbank::Record {
-    let mut rec = if segments.len() > 1 {
-        extract_spliced(doc, segments, reverse)
-    } else {
-        let mut r = extract_range(doc, start, end);
-        if reverse {
-            reverse_complement_record(&mut r);
-        }
-        r
-    };
-    rec.name = if reverse && segments.len() <= 1 {
-        format!("{}_rc", rec.name)
-    } else {
-        rec.name
-    };
+    if segments.len() > 1 {
+        return extract_spliced(doc, segments, reverse);
+    }
+    let mut rec = extract_range(doc, start, end);
+    if reverse {
+        reverse_complement_record(&mut rec);
+        rec.name.push_str("_rc");
+    }
     rec
 }
 
