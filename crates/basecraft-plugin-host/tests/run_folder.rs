@@ -107,12 +107,49 @@ fn a_moved_run_folder_resolves_and_its_request_runs_again_to_the_same_hashes() {
 }
 
 #[test]
+fn a_file_run_leaves_one_tool_run_that_points_at_its_run_record() {
+    let temp = tempfile::tempdir().unwrap();
+    let registry = registry(temp.path(), |_| {});
+    let project = temp.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    let project = project.canonicalize().unwrap();
+    std::fs::write(project.join("input.txt"), b"abc\n").unwrap();
+    let outcome = run(&registry, &project, count("input.txt"));
+    let folder = PathBuf::from(outcome.evidence.clone().unwrap());
+    let publication: basecraft_protocol::provenance::Publication =
+        serde_json::from_slice(&std::fs::read(folder.join("manifest.json")).unwrap()).unwrap();
+    let tool_runs: Vec<_> = publication
+        .events
+        .iter()
+        .filter_map(|event| match &event.op {
+            basecraft_protocol::Op::ToolRun { params, run, .. } => Some((params, run)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(tool_runs.len(), 1);
+    let (params, link) = tool_runs[0];
+    // The entry holds the tool's own parameters; the rest is in the run record.
+    assert_eq!(*params, json!({"mode":"normal"}));
+    assert_eq!(link.as_ref().unwrap().id, outcome.run_id);
+    let record: RunRecord =
+        serde_json::from_slice(&std::fs::read(folder.join("execution.json")).unwrap()).unwrap();
+    assert_eq!(record.effective_parameters, outcome.effective_parameters);
+    assert!(
+        record
+            .environment
+            .interpreter
+            .unwrap()
+            .starts_with("Python 3.")
+    );
+}
+
+#[test]
 fn an_input_with_the_wrong_alphabet_is_refused_before_launch() {
     let temp = tempfile::tempdir().unwrap();
     let registry = registry(temp.path(), |contract| {
         contract["operations"][0]["inputs"]["sources"] = json!({
             "view":"aligned_fasta","media_type":"text/x-fasta","min":1,"max":8,
-            "alphabets":["nucleotide"]
+            "alphabets":["dna"]
         });
     });
     let project = temp.path().join("project");
@@ -131,7 +168,7 @@ fn an_input_with_the_wrong_alphabet_is_refused_before_launch() {
         .to_string();
     assert!(
         error.contains(
-            "Count bytes needs a nucleotide alignment, and proteins.fasta holds protein sequences"
+            "Count bytes needs a DNA alignment, and proteins.fasta holds protein sequences"
         ),
         "{error}"
     );

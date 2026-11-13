@@ -111,10 +111,21 @@ fn gui_annotation_keeps_its_invocation_in_the_hidden_store_and_skips_known_featu
     assert!(basecraft_ops::files::gff_sidecar(&file).is_file());
     drop(session);
     let publication = records::inspect(&file, None).unwrap();
-    assert!(publication.events.iter().any(|event| matches!(&event.op,
-        Op::ToolRun { params, .. }
-            if params["effective"]["min_codons"] == 100 && params["initiator"] == "GUI"
-                && params["run_id"] == first.run_id.as_str())));
+    // The entry names its run; the run record holds the effective settings.
+    let link = publication
+        .events
+        .iter()
+        .find_map(|event| match &event.op {
+            Op::ToolRun { run: Some(run), .. } if run.id == first.run_id => Some(run.clone()),
+            _ => None,
+        })
+        .unwrap();
+    let record: basecraft_protocol::records::RunRecord = serde_json::from_slice(
+        &std::fs::read(project.join(&link.folder).join("execution.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(record.effective_parameters["min_codons"], 100);
+    assert_eq!(record.initiator, "GUI");
     assert_eq!(records::verify(&file, None).unwrap(), Vec::<String>::new());
 
     // Moving the whole folder keeps the run and the saved record together.

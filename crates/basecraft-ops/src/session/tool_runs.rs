@@ -19,6 +19,9 @@ pub struct ToolRunRecord<'a> {
     pub edits: Option<&'a [String]>,
     /// A run on a referenced source need not promote it to an edit journal.
     pub referenced: bool,
+    /// The run folder, when the run has one. Its `execution.json` is what
+    /// history and methods read about how the tool ran.
+    pub run: Option<&'a crate::records::ArtifactRun>,
 }
 
 impl<'a> ToolRunRecord<'a> {
@@ -37,8 +40,49 @@ impl<'a> ToolRunRecord<'a> {
             input_run: None,
             edits: None,
             referenced: false,
+            run: None,
         }
     }
+
+    /// The `tool.run` operation, with `outputs` named relative to `root`, the
+    /// folder of the log that will hold it.
+    pub(crate) fn op(
+        self,
+        root: &std::path::Path,
+        outputs: Vec<String>,
+        input_run: Option<basecraft_protocol::records::ActivityInputRun>,
+        contributions: Option<basecraft_protocol::records::ActivityContributions>,
+    ) -> Op {
+        let (plugin, operation) = self.activity;
+        Op::ToolRun {
+            plugin: plugin.to_string(),
+            operation: operation.to_string(),
+            params: self.params,
+            inputs: self.inputs.iter().map(|(k, _)| k.clone()).collect(),
+            outputs,
+            input_run,
+            contributions,
+            run: self.run.map(|run| basecraft_protocol::ops::RunLink {
+                id: run.id().into(),
+                folder: super::relative(root, run.directory()),
+            }),
+        }
+    }
+}
+
+/// Who ran a tool: the external program the run record names, or else the
+/// plugin.
+pub fn run_actor(run: &crate::records::ArtifactRun, plugin: Actor) -> Actor {
+    std::fs::read(run.directory().join("execution.json"))
+        .ok()
+        .and_then(|bytes| {
+            serde_json::from_slice::<basecraft_protocol::records::RunRecord>(&bytes).ok()
+        })
+        .and_then(|record| record.tool)
+        .map_or(plugin, |tool| Actor::Tool {
+            tool: tool.name,
+            version: tool.version,
+        })
 }
 
 impl Session {
@@ -47,9 +91,9 @@ impl Session {
         &mut self,
         id: DocId,
         actor: Actor,
-        record: ToolRunRecord<'_>,
+        mut record: ToolRunRecord<'_>,
     ) -> Result<()> {
-        let mut input_run = record.input_run;
+        let mut input_run = record.input_run.take();
         let contributions = match record.edits {
             Some(edits) => {
                 self.check_owned_edits(id, &actor, edits)?;
@@ -76,19 +120,11 @@ impl Session {
             hashes.push((key.clone(), basecraft_io::hash_file(path)?));
             keys.push(key);
         }
-        let (plugin, operation) = record.activity;
+        let op = record.op(&self.root, keys, input_run, contributions);
         let entry = self.entry(
             id,
             actor,
-            Op::ToolRun {
-                plugin: plugin.to_string(),
-                operation: operation.to_string(),
-                params: record.params,
-                inputs: record.inputs.iter().map(|(k, _)| k.clone()).collect(),
-                outputs: keys,
-                input_run,
-                contributions,
-            },
+            op,
             OpResult {
                 notes: Vec::new(),
                 hashes,
@@ -133,10 +169,7 @@ impl Session {
         let Some((source, hash)) = inputs.first() else {
             return Ok(None);
         };
-        if !self.tracked
-            || edits.is_empty()
-            || self.provenance_policy == basecraft_platform::settings::ProvenancePolicy::None
-        {
+        if !self.tracked || edits.is_empty() {
             return Ok(None);
         }
         let ledger = crate::records::input_evidence::reference_input_with_dependencies(

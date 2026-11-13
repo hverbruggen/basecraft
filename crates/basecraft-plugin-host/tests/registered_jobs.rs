@@ -708,7 +708,7 @@ fn document_inputs_read_the_session_revision_and_record_history() {
     let publication =
         basecraft_ops::records::inspect(&temp.path().join("edited.json"), None).unwrap();
     assert!(publication.events.iter().any(|event| matches!(&event.op,
-        basecraft_protocol::Op::ToolRun { params, .. } if params["run_id"] == edited.run_id)));
+        basecraft_protocol::Op::ToolRun { run: Some(link), .. } if link.id == edited.run_id)));
     assert!(
         publication
             .effective_edits
@@ -722,7 +722,9 @@ fn document_inputs_read_the_session_revision_and_record_history() {
         .events
         .iter()
         .filter_map(|event| match &event.op {
-            basecraft_protocol::Op::ToolRun { params, .. } => params["run_id"].as_str(),
+            basecraft_protocol::Op::ToolRun {
+                run: Some(link), ..
+            } => Some(link.id.as_str()),
             _ => None,
         })
         .collect();
@@ -826,7 +828,7 @@ fn document_repair_waits_for_owner_history_and_does_not_repeat_activity() {
             .events
             .iter()
             .filter(|event| matches!(&event.op,
-        basecraft_protocol::Op::ToolRun { params, .. } if params["run_id"] == accepted.run_id))
+        basecraft_protocol::Op::ToolRun { run: Some(link), .. } if link.id == accepted.run_id))
             .count(),
         1
     );
@@ -842,7 +844,7 @@ fn document_repair_waits_for_owner_history_and_does_not_repeat_activity() {
     );
     let publication = basecraft_ops::records::inspect(&output, None).unwrap();
     assert!(publication.events.iter().any(|event| matches!(&event.op,
-        basecraft_protocol::Op::ToolRun { params, .. } if params["run_id"] == accepted.run_id)));
+        basecraft_protocol::Op::ToolRun { run: Some(link), .. } if link.id == accepted.run_id)));
 }
 
 #[test]
@@ -903,7 +905,7 @@ fn canonical_alignment_evidence_preserves_order_headers_and_residues() {
     let publication =
         basecraft_ops::records::inspect(&root.path().join("result.json"), None).unwrap();
     assert!(publication.events.iter().any(|event| matches!(&event.op,
-        basecraft_protocol::Op::ToolRun { params, .. } if params["run_id"] == outcome.run_id)));
+        basecraft_protocol::Op::ToolRun { run: Some(link), .. } if link.id == outcome.run_id)));
 }
 
 #[test]

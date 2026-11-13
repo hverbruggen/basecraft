@@ -42,7 +42,7 @@ mod save_failure_tests;
 mod saved_mark_tests;
 mod tool_runs;
 pub use save_decision::{EvidenceAction, SaveCheck, SaveDecision, SaveOutcome, SaveWarning};
-pub use tool_runs::ToolRunRecord;
+pub use tool_runs::{ToolRunRecord, run_actor};
 pub mod support_import;
 use crate::{Error, Result};
 
@@ -169,7 +169,7 @@ pub struct Session {
     /// The folder the user chose, or none. Set once, when the session is made.
     project: Option<crate::project::Project>,
     storage_root: PathBuf,
-    provenance_policy: basecraft_platform::settings::ProvenancePolicy,
+    /// Where Sanger review sources go when their own folder is read-only.
     local_provenance_root: PathBuf,
     tracked: bool,
     write_publication: crate::documents::WritePublication,
@@ -202,7 +202,6 @@ impl Session {
         let log = Some(LogWriter::new(&root, &host));
         Self {
             storage_root: root.clone(),
-            provenance_policy: basecraft_platform::settings::ProvenancePolicy::Portable,
             local_provenance_root: root.join(".basecraft/provenance"),
             tracked: true,
             write_publication: crate::documents::WritePublication::Immediate,
@@ -246,7 +245,6 @@ impl Session {
         let mut session = Self::new(root);
         session.storage_root = paths.state.join("recovery").join(&session.id);
         session.local_provenance_root = paths.state.join("provenance");
-        session.provenance_policy = preferences.files.provenance;
         session.log = preferences
             .files
             .recovery
@@ -556,12 +554,10 @@ impl Session {
         let slot = self.slot(id)?;
         Ok(crate::records::publish::History {
             session: &self.id,
-            policy: self.provenance_policy,
             tracked: self.tracked,
             root: &self.root,
             project: self.project.as_ref(),
             storage_root: &self.storage_root,
-            local_root: &self.local_provenance_root,
             events: self.events.matching(|event| event.doc == slot.key)?,
             pending: &self.pending_baselines,
             key: &slot.key,

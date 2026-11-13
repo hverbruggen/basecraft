@@ -124,6 +124,7 @@ fn negotiation_refuses_another_protocol_or_identity() {
         id: manifest.id.clone(),
         version: manifest.version.clone(),
         operations: vec!["count".into()],
+        interpreter: None,
     };
     assert!(verify_handshake(&manifest, &info).is_err());
     info.protocol = basecraft_protocol::plugin::PROTOCOL_VERSION;
@@ -163,6 +164,7 @@ fn the_sdk_runs_a_handler_on_paths_relative_to_the_run_folder() {
         cancel_file: "cancel".into(),
         progress_file: "progress".into(),
         input_evidence: BTreeMap::new(),
+        alphabets: BTreeMap::new(),
     };
     let result = process
         .invoke(

@@ -86,9 +86,7 @@ impl Session {
         // leaves the tree unchanged.
         let mut params = serde_json::json!({"source": label, "matched": matched});
         let mut input_run = None;
-        if self.tracked
-            && self.provenance_policy != basecraft_platform::settings::ProvenancePolicy::None
-        {
+        if self.tracked {
             let anchor = self.resolve(self.doc_key(id)?);
             let ledger = crate::records::input_evidence::reference_input_with_dependencies(
                 &anchor,

@@ -5,7 +5,7 @@ use super::{
     PathBuf, PreparedOperation, RegisteredOperation, Result, SequenceTarget, SessionPolicy, Value,
     captures, contract, records, sources_from_upstream,
 };
-use basecraft_protocol::operation::QueryPreparation;
+use basecraft_protocol::operation::{Alphabet, QueryPreparation};
 
 struct GeneratedInput {
     position: usize,
@@ -15,52 +15,53 @@ struct GeneratedInput {
     dependencies: Vec<PathBuf>,
 }
 
-/// The input view of a session document's current revision.
-/// Refuse an alignment whose residues are not an alphabet the input accepts.
+/// Refuse an alignment whose alphabet the input does not accept, and record
+/// the alphabet for the plugin. One binding holds one alphabet.
 fn check_alphabet(
     operation: &RegisteredOperation,
     name: &str,
-    alignment: &basecraft_docs::AlignmentDoc,
+    found: Alphabet,
     shown: &str,
+    alphabets: &mut BTreeMap<String, Alphabet>,
 ) -> Result<()> {
-    use basecraft_protocol::operation::Alphabet;
     let accepted = &operation.descriptor.inputs[name].alphabets;
-    let found = if alignment.is_protein() {
-        Alphabet::Protein
-    } else {
-        Alphabet::Nucleotide
-    };
-    if accepted.is_empty() || accepted.contains(&found) {
-        return Ok(());
-    }
     let word = |alphabet: &Alphabet| match alphabet {
-        Alphabet::Nucleotide => "nucleotide",
+        Alphabet::Dna => "DNA",
+        Alphabet::Rna => "RNA",
         Alphabet::Protein => "protein",
+        Alphabet::Unknown => "unknown",
     };
-    let wanted: Vec<_> = accepted.iter().map(word).collect();
-    Err(Error::Protocol(format!(
-        "unsupported_input: {} needs a {} alignment, and {shown} holds {} sequences",
-        operation.descriptor.title,
-        wanted.join(" or "),
-        word(&found),
-    )))
+    if !accepted.is_empty() && !accepted.contains(&found) {
+        let wanted: Vec<_> = accepted.iter().map(word).collect();
+        return Err(Error::Protocol(format!(
+            "unsupported_input: {} needs a {} alignment, and {shown} holds {} sequences",
+            operation.descriptor.title,
+            wanted.join(" or "),
+            word(&found),
+        )));
+    }
+    if *alphabets.entry(name.into()).or_insert(found) != found {
+        return Err(Error::Protocol(format!(
+            "unsupported_input: {} needs the alignments in {name} to share one alphabet",
+            operation.descriptor.title
+        )));
+    }
+    Ok(())
 }
 
+/// The input view of a session document's current revision.
 fn document_view(
     session: &basecraft_ops::Session,
     doc: basecraft_ops::DocId,
     operation: &RegisteredOperation,
     name: &str,
+    alphabets: &mut BTreeMap<String, Alphabet>,
 ) -> Result<(Vec<u8>, &'static str, &'static str)> {
     let mut bytes = Vec::new();
     let view = operation.descriptor.inputs[name].view;
     if session.is_alignment(doc) {
-        check_alphabet(
-            operation,
-            name,
-            session.alignment(doc)?,
-            "the open alignment",
-        )?;
+        let found = session.alphabet(doc)?.value;
+        check_alphabet(operation, name, found, "the open alignment", alphabets)?;
     }
     match view {
         InputView::AlignedFasta if session.is_alignment(doc) => {
@@ -94,6 +95,7 @@ struct PreparationInputs {
     generated: BTreeMap<String, Vec<GeneratedInput>>,
     accepted_hashes: BTreeMap<PathBuf, String>,
     bindings: crate::policy::ResolvedBindings,
+    alphabets: BTreeMap<String, Alphabet>,
 }
 
 /// Validate input bindings against the owning session's current revisions and
@@ -109,6 +111,7 @@ fn prepare_inputs(
     let mut input_record = basecraft_ops::records::DocumentRecord::empty("Inputs");
     let mut generated: BTreeMap<String, Vec<GeneratedInput>> = BTreeMap::new();
     let mut accepted_hashes: BTreeMap<PathBuf, String> = BTreeMap::new();
+    let mut alphabets = BTreeMap::new();
     let bindings =
         if operation.descriptor.family == ExecutionFamily::SequenceProposal {
             let session = session.as_deref_mut().ok_or_else(|| {
@@ -242,7 +245,7 @@ fn prepare_inputs(
                             accepted_hashes.insert(path, hash);
                         } else {
                             let (bytes, transformation, extension) =
-                                document_view(session, id, operation, &name)?;
+                                document_view(session, id, operation, &name, &mut alphabets)?;
                             generated
                                 .entry(name.clone())
                                 .or_default()
@@ -277,6 +280,7 @@ fn prepare_inputs(
         generated,
         accepted_hashes,
         bindings,
+        alphabets,
     })
 }
 
@@ -517,6 +521,7 @@ impl PreparedOperation {
             cancel_file: wire(&run.artifact("cancel")?),
             progress_file: wire(&run.artifact("progress")?),
             input_evidence,
+            alphabets: inputs.alphabets.clone(),
         };
         records::write_json(&run.artifact("descriptor.json")?, &operation.descriptor)?;
         records::write_json(
@@ -541,6 +546,7 @@ impl PreparedOperation {
             initiator,
             started: basecraft_platform::now_rfc3339(),
             workflow_registry,
+            project,
             _scratch: frozen.scratch,
         };
         if let Some((target, save)) = target {
@@ -592,6 +598,7 @@ fn freeze_inputs(
         generated,
         accepted_hashes,
         bindings,
+        alphabets,
         ..
     } = inputs;
     let scratch = tempfile::Builder::new()
@@ -664,7 +671,16 @@ fn freeze_inputs(
                         || source.display().to_string(),
                         |file| file.to_string_lossy().into_owned(),
                     );
-                    check_alphabet(operation, &name, &alignment.doc, &shown)?;
+                    // What the companion states, or else a guess from the residues.
+                    let found = alignment.alphabet.as_ref().map_or(
+                        if alignment.doc.is_protein() {
+                            Alphabet::Protein
+                        } else {
+                            Alphabet::Dna
+                        },
+                        |fact| fact.value,
+                    );
+                    check_alphabet(operation, &name, found, &shown, alphabets)?;
                     if binding.view == InputView::AlignedFasta {
                         alignment
                             .doc
@@ -893,14 +909,13 @@ impl AllocatedRun {
     fn retain(&mut self, name: &str, role: &str, bytes: &[u8]) -> Result<PathBuf> {
         let path = self.run.artifact(name)?;
         basecraft_io::write_atomic(&path, |w| std::io::Write::write_all(w, bytes))?;
-        self.ledger_inputs.push(ArtifactRevision {
-            id: format!("{}:{role}", self.run.id()),
-            logical_name: name.into(),
-            hash: basecraft_io::hash_bytes(bytes),
-            size: bytes.len() as u64,
-            retained: Some(name.into()),
-            reference: None,
-        });
+        self.ledger_inputs.push(records::retained_file(
+            &self.run,
+            role,
+            name.into(),
+            &path,
+            basecraft_io::hash_bytes(bytes),
+        )?);
         Ok(path)
     }
 

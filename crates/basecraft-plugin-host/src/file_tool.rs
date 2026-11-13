@@ -78,21 +78,56 @@ pub(crate) fn producer_support<'a>(
         .map(|rule| (rule.name.as_str(), rule.kind))
 }
 
-/// Persist producer semantics only when the parsed tree has exactly one support
-/// field. Slash-separated external/combined values need their own verified order.
-pub(crate) fn write_support_sidecar(
-    tree: &Path,
-    name: &str,
-    kind: basecraft_protocol::SupportKind,
+/// Write what the producer states about an output into its companion: for a
+/// tree, the support semantics (only when it has exactly one support field;
+/// slash-separated values need their own verified order) and the branch-length
+/// meaning; for another file, its alphabet. None when nothing is stated.
+pub(crate) fn write_output_facts(
+    path: &Path,
+    support: Option<(&str, basecraft_protocol::SupportKind)>,
+    facts: &basecraft_protocol::operation::OutputFacts,
 ) -> Result<Option<PathBuf>> {
-    let mut doc = basecraft_ops::files::load_tree(tree)?.doc;
-    if doc.supports().len() != 1 {
+    use basecraft_protocol::facts::{Fact, FactSource};
+    if !is_tree(path) {
+        let Some(companion) = facts.alphabet.and_then(|value| {
+            let alphabet = Fact {
+                value,
+                source: FactSource::Stated,
+            };
+            basecraft_ops::files::facts_companion(Some(&alphabet), "")
+        }) else {
+            return Ok(None);
+        };
+        let companion = basecraft_protocol::companion_records::Companion {
+            exchange_hash: basecraft_io::hash_file(path)?,
+            ..companion
+        };
+        let sidecar = basecraft_ops::files::tree_sidecar(path);
+        basecraft_io::write_atomic(&sidecar, |w| companion.write(w))?;
+        return Ok(Some(sidecar));
+    }
+    let mut doc = basecraft_ops::files::load_tree(path)?.doc;
+    let support = support.filter(|_| doc.supports().len() == 1);
+    if support.is_none() && facts.branch_lengths.is_none() {
         return Ok(None);
     }
-    let old = doc.supports()[0].name.clone();
-    doc.rename_support(&old, name);
-    doc.set_support_kind(name, kind);
-    Ok(Some(basecraft_ops::files::save_tree_companion(tree, &doc)?))
+    if let Some((name, kind)) = support {
+        let old = doc.supports()[0].name.clone();
+        doc.rename_support(&old, name);
+        doc.set_support_kind(name, kind);
+    }
+    if let Some(meaning) = &facts.branch_lengths {
+        doc.restore_branch_lengths(Some(Fact {
+            value: meaning.clone(),
+            source: FactSource::Stated,
+        }));
+    }
+    Ok(Some(basecraft_ops::files::save_tree_companion(path, &doc)?))
+}
+
+pub(crate) fn is_tree(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("nwk"))
 }
 
 pub(crate) struct CancellationRegistration(String);

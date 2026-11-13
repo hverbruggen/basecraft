@@ -96,7 +96,7 @@ fn unsaved_clade_tree_with_referenced_alignment_retains_both_inputs_and_selectio
             .iter()
             .any(|e| matches!(e.op, Op::TreeRenameTip { .. }))
     );
-    assert!(publication.events.iter().any(|e| matches!(&e.op, Op::ToolRun { params, .. } if params.pointer("/effective/taxa") == Some(&json!(["a","b"])))));
+    assert!(publication.events.iter().any(|e| matches!(&e.op, Op::ToolRun { params, run: Some(_), .. } if params.pointer("/taxa") == Some(&json!(["a","b"])))));
     assert_eq!(
         records::verify(&result, None).unwrap(),
         Vec::<String>::new()

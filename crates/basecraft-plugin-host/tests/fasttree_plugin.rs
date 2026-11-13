@@ -87,6 +87,6 @@ fn builds_a_tree_with_fasttree_and_logs_the_run() {
     assert_eq!(runs.len(), 1);
     assert!(matches!(&runs[0].actor, Actor::Tool { tool, .. } if tool == "fasttree"));
     assert!(
-        matches!(&runs[0].op, Op::ToolRun { params, .. } if params["run_id"] == outcome.run_id.as_str())
+        matches!(&runs[0].op, Op::ToolRun { run: Some(link), .. } if link.id == outcome.run_id.as_str())
     );
 }

@@ -117,9 +117,23 @@ fn runtime_is_frozen_updates_preserve_disabled_and_failed_solve_preserves_active
         &std::fs::read(accepted.run.artifact("execution.json").unwrap()).unwrap(),
     )
     .unwrap();
+    // The run record holds the environment: the lock, the conda
+    // specification it was solved from and the interpreter's version.
+    let environment = &evidence["environment"];
     assert_eq!(
-        evidence["runtime"]["lock_digest"],
+        environment["runtime"]["lock_digest"],
         runtime.lock_digest.as_str()
+    );
+    assert_eq!(
+        environment["runtime"]["dependencies"],
+        serde_json::to_value(&package.manifest.runtime.as_ref().unwrap().dependencies).unwrap()
+    );
+    assert!(
+        environment["interpreter"]
+            .as_str()
+            .unwrap()
+            .starts_with("Python 3."),
+        "{environment}"
     );
     assert!(
         !evidence

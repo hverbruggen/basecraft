@@ -70,7 +70,7 @@ fn tool_run(file: &Path, plugin: &str) -> LogEntry {
 
 /// Route-independent invocation evidence: the operation, accepted package,
 /// requested and effective settings, and the hash of the submitted snapshot.
-fn invocation(entry: &LogEntry) -> Value {
+fn invocation(file: &Path, entry: &LogEntry) -> Value {
     let Op::ToolRun {
         plugin,
         operation,
@@ -80,10 +80,20 @@ fn invocation(entry: &LogEntry) -> Value {
     else {
         unreachable!()
     };
+    let record = run_record(file, entry);
     json!({"actor": entry.actor, "plugin": plugin, "operation": operation,
-        "requested": params["requested"], "effective": params["effective"],
-        "id": params["operation"], "pins": params["pins"],
+        "requested": params, "effective": record.effective_parameters,
+        "id": record.operation, "pins": [record.package_digest, record.descriptor_digest],
         "snapshot": entry.result.hashes.iter().map(|(_, hash)| hash).collect::<Vec<_>>()})
+}
+
+/// The run record the entry points at, in the project's run folder.
+fn run_record(file: &Path, entry: &LogEntry) -> basecraft_protocol::records::RunRecord {
+    let Op::ToolRun { run: Some(run), .. } = &entry.op else {
+        panic!("the tool run names no run folder")
+    };
+    let folder = project_of(file).root().join(&run.folder);
+    serde_json::from_slice(&std::fs::read(folder.join("execution.json")).unwrap()).unwrap()
 }
 
 fn features(file: &Path) -> Vec<(String, String)> {
@@ -253,16 +263,13 @@ fn every_annotation_route_keeps_the_same_invocation_evidence() {
     assert_eq!(saved["isError"], false, "{saved}");
     mcp.close();
 
-    let expected = invocation(&tool_run(&gui, "basecraft.orf-finder"));
+    let expected = invocation(&gui, &tool_run(&gui, "basecraft.orf-finder"));
     assert_eq!(expected["effective"]["min_codons"], 100, "{expected}");
     assert_eq!(expected["snapshot"].as_array().unwrap().len(), 1);
     for (file, initiator) in [(&gui, "GUI"), (&script, "CLI"), (&agent, "mcp-client")] {
         let entry = tool_run(file, "basecraft.orf-finder");
-        assert_eq!(invocation(&entry), expected, "{}", file.display());
-        let Op::ToolRun { params, .. } = &entry.op else {
-            unreachable!()
-        };
-        assert_eq!(params["initiator"], initiator);
+        assert_eq!(invocation(file, &entry), expected, "{}", file.display());
+        assert_eq!(run_record(file, &entry).initiator, initiator);
         assert_eq!(features(file), features(&gui), "{}", file.display());
         assert_eq!(features(file).len(), 1);
         assert_eq!(

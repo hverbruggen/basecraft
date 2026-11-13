@@ -716,6 +716,7 @@ mod activity_tests {
                 outputs: vec![],
                 input_run: None,
                 contributions: None,
+                run: None,
             },
             result: basecraft_protocol::OpResult::default(),
             state: basecraft_protocol::DocState {

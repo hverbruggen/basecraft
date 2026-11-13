@@ -2,8 +2,7 @@
 use super::{
     ArtifactDestination, ArtifactRevision, BTreeMap, CollectionExportIntent, CollectionIntent,
     Error, InvokeResult, OperationOutcome, Path, PathBuf, PreparedOperation, PublishedArtifact,
-    Result, export_collection, export_member, file_tool, records, verify_collection,
-    verify_member_receipt,
+    Result, export_collection, file_tool, records, verify_collection,
 };
 
 type PublishedFiles = Vec<(String, PathBuf, String)>;
@@ -192,14 +191,13 @@ impl PreparedOperation {
                     .strip_prefix(self.run_path(&self.context.outputs[role]))
                     .map_err(|_| Error::Protocol("collection member escapes allocation".into()))?;
                 let retained = retained.join(relative);
-                publication_outputs.push(ArtifactRevision {
-                    id: format!("{}:output-{index}", self.run.id()),
-                    logical_name: records::relative(&self.policy.root, &retained)?,
-                    hash: digest.clone(),
-                    size: std::fs::metadata(&retained)?.len(),
-                    retained: Some(records::relative(self.run.directory(), &retained)?),
-                    reference: None,
-                });
+                publication_outputs.push(records::retained_file(
+                    &self.run,
+                    &format!("output-{index}"),
+                    records::relative(&self.policy.root, &retained)?,
+                    &retained,
+                    digest.clone(),
+                )?);
                 continue;
             }
             let retained = self.run.artifact(&name)?;
@@ -252,21 +250,19 @@ impl PreparedOperation {
                     self.persist(outcome)?;
                 }
             }
-            publication_outputs.push(ArtifactRevision {
-                id: format!("{}:output-{index}", self.run.id()),
-                logical_name: records::relative(
-                    self.run
-                        .directory()
-                        .ancestors()
-                        .nth(4)
-                        .ok_or_else(|| Error::Protocol("invalid run location".into()))?,
-                    &retained,
-                )?,
-                hash: digest.clone(),
-                size: std::fs::metadata(&retained)?.len(),
-                retained: Some(records::relative(self.run.directory(), &retained)?),
-                reference: None,
-            });
+            let store = self
+                .run
+                .directory()
+                .ancestors()
+                .nth(4)
+                .ok_or_else(|| Error::Protocol("invalid run location".into()))?;
+            publication_outputs.push(records::retained_file(
+                &self.run,
+                &format!("output-{index}"),
+                records::relative(store, &retained)?,
+                &retained,
+                digest.clone(),
+            )?);
         }
         Ok(publication_outputs)
     }
@@ -333,14 +329,14 @@ impl PreparedOperation {
         let mut exported = Vec::new();
         for (destination, retained, hash) in exports {
             let path = self.policy.root.join(destination);
-            exported.push(ArtifactRevision {
-                id: format!("{}:export-{}", self.run.id(), exported.len()),
-                logical_name: records::relative(&self.policy.root, &path)?,
-                hash: hash.clone(),
-                size: std::fs::metadata(&path)?.len(),
-                retained: Some(records::relative(self.run.directory(), retained)?),
-                reference: None,
-            });
+            let export = records::retained_file(
+                &self.run,
+                &format!("export-{}", exported.len()),
+                records::relative(&self.policy.root, &path)?,
+                retained,
+                hash.clone(),
+            )?;
+            exported.push(export);
             // An exported tree's support semantics and alignment link travel
             // with it, so a complete export keeps them.
             if path
@@ -352,14 +348,13 @@ impl PreparedOperation {
                     basecraft_ops::records::sidecar(&path),
                 ] {
                     if companion.is_file() && companion.starts_with(self.run.directory()) {
-                        exported.push(ArtifactRevision {
-                            id: format!("{}:export-{}", self.run.id(), exported.len()),
-                            logical_name: records::relative(&self.policy.root, &companion)?,
-                            hash: basecraft_io::hash_file(&companion)?,
-                            size: std::fs::metadata(&companion)?.len(),
-                            retained: Some(records::relative(self.run.directory(), &companion)?),
-                            reference: None,
-                        });
+                        exported.push(records::retained_file(
+                            &self.run,
+                            &format!("export-{}", exported.len()),
+                            records::relative(&self.policy.root, &companion)?,
+                            &companion,
+                            basecraft_io::hash_file(&companion)?,
+                        )?);
                     }
                 }
             }
@@ -386,15 +381,18 @@ impl PreparedOperation {
             publication_outputs,
         )?;
         if self.document.is_none() && self.sequence.is_none() {
-            let (actor, params) = self.tool_activity(outcome)?;
-            let activity = basecraft_ops::records::tool_run_entry(
+            let inputs: Vec<_> = publication
+                .inputs
+                .iter()
+                .map(|input| (input.logical_name.clone(), input.hash.clone()))
+                .collect();
+            let (actor, record) = self.tool_run(&inputs, &[]);
+            let activity = basecraft_ops::records::file_run_entry(
+                record,
                 &publication,
                 &self.started,
                 actor,
                 &self.operation.id,
-                &self.operation.package.manifest.id,
-                &self.operation.descriptor.implementation,
-                params,
             );
             self.publication_input_record()?
                 .publish_operation_activity(&self.run, &activity)?;
@@ -426,13 +424,13 @@ impl PreparedOperation {
             .iter()
             .any(|a| a.path == path && a.digest == hash)
         {
-            verify_member_receipt(&destination_path, hash, &intent)?;
+            records::verify_export(&destination_path, hash, &intent)?;
         } else {
             if destination_path.exists() {
-                verify_member_receipt(&destination_path, hash, &intent)?;
+                records::verify_export(&destination_path, hash, &intent)?;
             } else {
                 let destination = self.policy.path(destination, true)?;
-                export_member(retained, &destination, hash, &intent)?;
+                records::export_file(retained, &destination, hash, &intent)?;
             }
             outcome.artifacts.push(PublishedArtifact {
                 role: role.into(),
@@ -445,7 +443,7 @@ impl PreparedOperation {
             .extension()
             .is_some_and(|extension| extension.eq_ignore_ascii_case("nwk"))
         {
-            self.finalise_exported_tree(&destination_path)?;
+            self.finalise_exported_tree(role, &destination_path)?;
         }
         Ok(())
     }

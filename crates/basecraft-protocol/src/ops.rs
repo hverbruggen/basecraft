@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::{CladeAnnotation, CladeRef, Feature, SupportKind, TreeStyle};
 
 /// Log format version, written into every entry.
-pub const LOG_VERSION: u32 = 1;
+pub const LOG_VERSION: u32 = 2;
 
 /// A change to a document. Coordinates are 0-based, half-open.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -210,6 +210,9 @@ pub enum Op {
         /// The document edits this activity made, such as imported values.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         contributions: Option<crate::records::ActivityContributions>,
+        /// The run folder whose `execution.json` says how the tool ran.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        run: Option<RunLink>,
     },
     /// An atomic species-hypothesis edit against a workspace.
     #[serde(rename = "delimitation.edit")]
@@ -607,4 +610,13 @@ mod tests {
             Op::AlnRemoveGapColumns {}
         );
     }
+}
+
+/// Where a tool run's own record is: the run's id and its folder, relative
+/// to the folder of the log that holds the entry.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RunLink {
+    pub id: String,
+    pub folder: String,
 }

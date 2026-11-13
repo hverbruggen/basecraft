@@ -209,16 +209,16 @@ fn sidecar_failure_reports_partial_save_and_keeps_pending_recovery() {
     assert!(!session.recovery_root().join("pending-save.json").exists());
 }
 
+/// History has no off switch: without recovery, nothing goes to the private
+/// folders, and the history still goes beside the file.
 #[test]
-fn no_recovery_and_no_provenance_policy_leave_no_durable_lineage() {
-    use basecraft_platform::settings::{Change, ProvenancePolicy, SettingsStore};
+fn without_recovery_history_still_goes_beside_the_file_and_nothing_private() {
+    use basecraft_platform::settings::{Change, SettingsStore};
     crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let paths = paths(dir.path());
-    let store = SettingsStore::new(paths.preferences());
-    store.update(Change::Recovery(false)).unwrap();
-    store
-        .update(Change::Provenance(ProvenancePolicy::None))
+    SettingsStore::new(paths.preferences())
+        .update(Change::Recovery(false))
         .unwrap();
     let file = dir.path().join("gene.fasta");
     std::fs::write(&file, ">gene\nACGT\n").unwrap();
@@ -228,7 +228,7 @@ fn no_recovery_and_no_provenance_policy_leave_no_durable_lineage() {
     session.save(doc, None).unwrap();
     assert!(!paths.state.join("recovery").exists());
     assert!(!paths.state.join("provenance").exists());
-    assert!(!records::companion(&file).exists());
+    assert!(records::companion(&file).join("manifest.json").is_file());
 }
 
 #[test]
@@ -769,12 +769,51 @@ fn methods_use_frozen_plugin_metadata_and_reject_unmatched_contribution() {
     let snapshot = session.document_record(doc).unwrap();
     let input_hash = session.snapshot_file(&file).unwrap();
     let inputs = vec![("gene.fasta".into(), input_hash)];
-    session.record_tool_run(doc, basecraft_protocol::Actor::Tool { tool:"RecordedTool".into(),version:"1.2".into() }, basecraft_ops::session::ToolRunRecord::new(("example", "analyze"), serde_json::json!({"_execution":{"methods_template":"example.v1","methods":{"description":"Sequences were processed","citations":["A recorded citation"]},"resolved_parameters":{"seed":42}}}), &inputs, std::slice::from_ref(&output))).unwrap();
+    // How the tool ran is in the run folder's record, not in the parameters.
+    let run = records::ArtifactRun::create(&output, "01M79RUNRECORDMETHODS0000").unwrap();
+    std::fs::write(
+        run.directory().join("execution.json"),
+        serde_json::json!({"schema":3,"operation":"example/analyze@1","package_version":"1",
+            "package_digest":null,"descriptor_digest":null,
+            "environment":{"interpreter":null,"runtime":null},"initiator":"test","executor":"example",
+            "process_instance":"test","inputs":{},"effective_parameters":{"seed":1},"cpu_threads":1,
+            "stdout":"","stderr":"","tool":{"name":"RecordedTool","version":"1.2"},
+            "execution":{"argv":[],"methods_template":"example.v1",
+                "methods":{"description":"Sequences were processed","citations":["A recorded citation"]},
+                "resolved_parameters":{"seed":42}}})
+        .to_string(),
+    )
+    .unwrap();
+    let actor = basecraft_ops::session::run_actor(
+        &run,
+        basecraft_protocol::Actor::Plugin {
+            id: "example".into(),
+            version: "1".into(),
+        },
+    );
+    session
+        .record_tool_run(
+            doc,
+            actor,
+            basecraft_ops::session::ToolRunRecord {
+                run: Some(&run),
+                ..basecraft_ops::session::ToolRunRecord::new(
+                    ("example", "analyze"),
+                    serde_json::json!({}),
+                    &inputs,
+                    std::slice::from_ref(&output),
+                )
+            },
+        )
+        .unwrap();
     session
         .publish_analysis_snapshot(doc, &output, &inputs, &snapshot)
         .unwrap();
-    let publication = records::inspect(&output, None).unwrap();
-    let mut record = basecraft_ops::records::DocumentRecord::from_publication(&publication);
+    drop(session);
+    // Reopened in the same folder, the result's history finds the run record.
+    let mut reader = Session::detached(dir.path());
+    let result = reader.open(&output).unwrap();
+    let mut record = reader.document_record(result).unwrap();
     let report = record.report().unwrap();
     assert!(report.methods.contains("RecordedTool (version 1.2)"));
     assert!(report.methods.contains("seed = 42"));

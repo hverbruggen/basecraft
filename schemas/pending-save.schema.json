@@ -3373,6 +3373,17 @@
                 },
                 "plugin": {
                   "type": "string"
+                },
+                "run": {
+                  "description": "The run folder whose `execution.json` says how the tool ran.",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/RunLink"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               },
               "required": [
@@ -4552,6 +4563,23 @@
       ],
       "required": [
         "record"
+      ]
+    },
+    "RunLink": {
+      "description": "Where a tool run's own record is: the run's id and its folder, relative\nto the folder of the log that holds the entry.",
+      "type": "object",
+      "properties": {
+        "folder": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "folder"
       ]
     },
     "Score": {

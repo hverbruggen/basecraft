@@ -36,7 +36,6 @@ fn recovery_starts_at_completed_save() {
     let path = source.join("sequence.fa");
     std::fs::write(&path, b">sequence\nACGT\n").unwrap();
     let mut session = Session::new(&source);
-    session.provenance_policy = basecraft_platform::settings::ProvenancePolicy::None;
     let doc = session.open(&path).unwrap();
     let replace = |start, residues: &str| Op::SeqReplace {
         start,
@@ -85,7 +84,6 @@ fn recovery_checkpoints_external_edits_and_undo_and_needs_replaced_originals() {
                 output.write_all(b"\n").unwrap();
             }
             let mut session = Session::recoverable(&source).unwrap();
-            session.provenance_policy = basecraft_platform::settings::ProvenancePolicy::None;
             let doc = session.open(&path).unwrap();
             let replace = |start, residue: &str| Op::SeqReplace {
                 start,
@@ -183,7 +181,6 @@ fn cross_device_recovery_after_save_as_and_interrupted_save() {
             source.metadata().unwrap().dev(),
             root.metadata().unwrap().dev()
         );
-        session.provenance_policy = basecraft_platform::settings::ProvenancePolicy::None;
         let doc = if scenario == "new-save-as" {
             session.create_sequence("sequence", "AAAA").unwrap()
         } else {
@@ -289,7 +286,6 @@ fn recovery_after_save_keeps_feature_ids_and_external_save_as() {
     )
     .unwrap();
     let mut session = Session::new(&source);
-    session.provenance_policy = basecraft_platform::settings::ProvenancePolicy::None;
     let doc = session.open(&file).unwrap();
     let feature = session
         .doc(doc)
@@ -329,7 +325,6 @@ fn external_document_checkpoint_stays_inside_recovery_storage() {
     let source = root.join("outside.fa");
     std::fs::write(&source, b">outside\nAAAA\n").unwrap();
     let mut session = Session::recoverable(&project).unwrap();
-    session.provenance_policy = basecraft_platform::settings::ProvenancePolicy::None;
     let doc = session.open(&source).unwrap();
     let edit = |start, residues: &str| Op::SeqReplace {
         start,

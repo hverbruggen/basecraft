@@ -41,6 +41,7 @@ fn context() -> basecraft_protocol::operation::InvocationContext {
         cancel_file: "cancel".into(),
         progress_file: "progress".into(),
         input_evidence: std::collections::BTreeMap::new(),
+        alphabets: std::collections::BTreeMap::new(),
     }
 }
 

@@ -13,6 +13,9 @@ pub struct DocumentRecord {
     pub(crate) data: RecordData,
     #[serde(skip)]
     pub(crate) origins: Vec<(std::path::PathBuf, Publication)>,
+    /// The folder that run folders named in the session's log are relative to.
+    #[serde(skip)]
+    pub(crate) run_root: Option<std::path::PathBuf>,
 }
 impl std::ops::Deref for DocumentRecord {
     type Target = RecordData;
@@ -109,6 +112,7 @@ impl DocumentRecord {
                 effective: Vec::new(),
             },
             origins: Vec::new(),
+            run_root: None,
         }
     }
 
@@ -171,6 +175,21 @@ impl DocumentRecord {
     }
 
     /// Include an explicitly contributing input revision, retaining independent origins.
+    /// A run's own record: in the bundle of an origin with the run's id, or
+    /// in the run folder the log names.
+    fn run_record(
+        &self,
+        link: &basecraft_protocol::ops::RunLink,
+    ) -> Option<basecraft_protocol::records::RunRecord> {
+        let folder = self
+            .origins
+            .iter()
+            .find(|(_, publication)| publication.id == link.id)
+            .map(|(bundle, _)| bundle.clone())
+            .or_else(|| self.run_root.as_ref().map(|root| root.join(&link.folder)))?;
+        serde_json::from_slice(&std::fs::read(folder.join("execution.json")).ok()?).ok()
+    }
+
     pub fn include_input(&mut self, input: &Self) {
         self.events.extend(input.events.iter().cloned());
         self.effective.extend(input.effective.iter().cloned());
@@ -282,19 +301,20 @@ impl DocumentRecord {
                     plugin,
                     operation,
                     params,
+                    run,
                     ..
                 } => {
-                    if let Some(values) = params
-                        .pointer("/_execution/methods/citations")
-                        .and_then(serde_json::Value::as_array)
+                    let record = run.as_ref().and_then(|link| self.run_record(link));
+                    let execution = record.as_ref().and_then(|r| r.execution.as_ref());
+                    for value in execution
+                        .and_then(|e| e.methods.as_ref())
+                        .map_or(&[][..], |m| &m.citations)
                     {
-                        for value in values.iter().filter_map(serde_json::Value::as_str) {
-                            if !citations.iter().any(|c| c == value) {
-                                citations.push(value.to_string());
-                            }
+                        if !citations.contains(value) {
+                            citations.push(value.clone());
                         }
                     }
-                    tool_methods(plugin, operation, params, event)
+                    tool_methods(plugin, operation, params, record.as_ref(), event)
                 }
                 Op::Open { .. }
                 | Op::Save { .. }
@@ -528,12 +548,21 @@ fn write_report_files(report: &Report, directory: &Path) -> crate::Result<()> {
     Ok(())
 }
 
-/// Retained job evidence is independent of open tabs. Reading creates no directories.
-pub fn jobs(previous: bool) -> crate::Result<serde_json::Value> {
+/// Where the Tasks view's index record of job `id` lives.
+pub fn job_index_path(id: &str) -> crate::Result<std::path::PathBuf> {
+    Ok(jobs_folder()?.join(id).join("manifest.json"))
+}
+
+fn jobs_folder() -> crate::Result<std::path::PathBuf> {
     let paths = basecraft_platform::paths::AppPaths::discover()
         .map_err(|e| crate::error::invalid(e.to_string()))?;
+    Ok(paths.state.join("jobs"))
+}
+
+/// Retained job evidence is independent of open tabs. Reading creates no directories.
+pub fn jobs(previous: bool) -> crate::Result<serde_json::Value> {
     job_records(
-        &paths.state.join("jobs"),
+        &jobs_folder()?,
         previous,
         basecraft_platform::process_instance(),
     )
@@ -804,6 +833,7 @@ fn tool_methods(
     plugin: &str,
     operation: &str,
     params: &serde_json::Value,
+    record: Option<&basecraft_protocol::records::RunRecord>,
     event: Option<&LogEntry>,
 ) -> String {
     let tool = match event.map(|e| &e.actor) {
@@ -813,24 +843,22 @@ fn tool_methods(
         }
         _ => format!("{plugin} (software version not recorded)"),
     };
-    let procedure = params
-        .pointer("/_execution/methods/description")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("A recorded analysis was performed");
+    let execution = record.and_then(|record| record.execution.as_ref());
+    let procedure = execution
+        .and_then(|e| e.methods.as_ref())
+        .map_or("A recorded analysis was performed", |m| {
+            m.description.as_str()
+        });
     let mut text = format!("{procedure} using {tool} (operation: {operation}).");
-    if let Some(steps) = params
-        .pointer("/_execution/preprocessing")
-        .and_then(serde_json::Value::as_array)
-    {
-        for step in steps.iter().filter_map(serde_json::Value::as_str) {
-            let _ = write!(text, " {step}.");
-        }
+    for step in execution.map_or(&[][..], |e| &e.preprocessing) {
+        let _ = write!(text, " {step}.");
     }
-    if let Some(settings) = params
-        .pointer("/_execution/resolved_parameters")
-        .or_else(|| params.get("effective"))
-        .and_then(serde_json::Value::as_object)
-    {
+    let settings = match (execution, record) {
+        (Some(execution), _) => Some(&execution.resolved_parameters),
+        (None, Some(record)) => record.effective_parameters.as_object(),
+        (None, None) => None,
+    };
+    if let Some(settings) = settings {
         if !settings.is_empty() {
             text.push_str(" Recorded effective settings: ");
             text.push_str(

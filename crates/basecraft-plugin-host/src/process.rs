@@ -258,6 +258,7 @@ impl PluginProcess {
                 id: manifest.id.clone(),
                 version: manifest.version.clone(),
                 operations: Vec::new(),
+                interpreter: None,
             },
             startup: Duration::ZERO,
             child,

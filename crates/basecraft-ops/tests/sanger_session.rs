@@ -3,7 +3,6 @@
 mod sanger_fixture;
 
 use basecraft_ops::{Session, records, sanger_review::SangerReview};
-use basecraft_platform::settings::{Change, ProvenancePolicy, SettingsStore};
 use basecraft_protocol::{
     Op,
     sanger::{ReviewChoice, ReviewOp},
@@ -241,58 +240,6 @@ fn structural_redo_keeps_decisions_and_shared_ancestry() {
         SangerReview::load(&path).unwrap().decision(0),
         Some(&ReviewChoice::Edit('A'))
     );
-}
-
-#[test]
-fn support_survives_private_history_and_recovery_publication() {
-    let Some(root) =
-        isolated_profile::enter("support_survives_private_history_and_recovery_publication")
-    else {
-        return;
-    };
-    let settings = SettingsStore::new(
-        basecraft_platform::paths::AppPaths::discover()
-            .unwrap()
-            .preferences(),
-    );
-    for (name, policy) in [
-        ("local", ProvenancePolicy::LocalOnly),
-        ("none", ProvenancePolicy::None),
-    ] {
-        settings.update(Change::Provenance(policy)).unwrap();
-        let folder = root.join(name);
-        std::fs::create_dir(&folder).unwrap();
-        let mut session = Session::recoverable(&folder).unwrap();
-        let id = session.create_sanger_review(&fixture(&root)).unwrap();
-        let target = folder.join("review.json");
-        edit(&mut session, id, 'N');
-        session.save_new(id, Some(&target)).unwrap();
-        edit(&mut session, id, 'A');
-        session.save_new(id, Some(&target)).unwrap();
-        assert_eq!(
-            SangerReview::load(&target).unwrap().decision(0),
-            Some(&ReviewChoice::Edit('A'))
-        );
-        if policy == ProvenancePolicy::LocalOnly {
-            let record = basecraft_ops::records::DocumentRecord::from_file(&target, None).unwrap();
-            assert!(
-                record
-                    .events
-                    .iter()
-                    .any(|event| matches!(event.op, Op::SangerReview { .. }))
-            );
-        }
-        edit(&mut session, id, 'T');
-        let output = records::recover(session.recovery_root(), &folder.join("recovered")).unwrap();
-        let mut recovered = Session::recoverable(output[0].parent().unwrap()).unwrap();
-        let id = recovered.open(&output[0]).unwrap();
-        edit(&mut recovered, id, 'G');
-        recovered.save(id, None).unwrap();
-        assert_eq!(
-            SangerReview::load(&output[0]).unwrap().decision(0),
-            Some(&ReviewChoice::Edit('G'))
-        );
-    }
 }
 
 #[test]

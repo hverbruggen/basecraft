@@ -1317,8 +1317,9 @@ fn verified_reports(
         serde_json::from_value(read(&run.join("execution.json"))?)?;
     if execution.schema != basecraft_protocol::records::RUN_RECORD_SCHEMA
         || execution.operation != VALIDATE_OPERATION
-        || outcome["pins"]["package_digest"] != execution.package_digest.as_str()
-        || outcome["pins"]["descriptor_digest"] != execution.descriptor_digest.as_str()
+        || outcome["pins"]["package_digest"] != execution.package_digest.as_deref().unwrap_or("")
+        || outcome["pins"]["descriptor_digest"]
+            != execution.descriptor_digest.as_deref().unwrap_or("")
         || outcome["effective_parameters"] != execution.effective_parameters
         || execution.inputs.len() != 4
     {

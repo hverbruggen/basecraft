@@ -77,10 +77,10 @@ pub enum DataColorScheme {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProvenancePolicy {
+    /// History always goes to the project's `.basecraft`, or beside a loose
+    /// file. The setting stays only until the Preferences control goes.
     #[default]
     Portable,
-    LocalOnly,
-    None,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]

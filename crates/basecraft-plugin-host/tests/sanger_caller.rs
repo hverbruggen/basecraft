@@ -38,14 +38,7 @@ plugin.run()
 "#;
 
 fn called(caller: &mut SangerCaller) -> Result<CalledDraft, String> {
-    let started = std::time::Instant::now();
-    loop {
-        if let Some(called) = caller.poll()? {
-            return Ok(called);
-        }
-        assert!(started.elapsed().as_secs() < 60, "caller timeout");
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
+    caller.wait(&std::sync::atomic::AtomicBool::new(false))
 }
 
 #[test]

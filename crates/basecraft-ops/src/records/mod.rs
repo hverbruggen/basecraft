@@ -14,7 +14,9 @@ pub(crate) mod replay;
 pub(crate) mod save_guard;
 
 pub use analysis_store::{ArtifactDestination, ArtifactRun};
-pub use document_record::{DocumentRecord, MethodsParagraph, Report, ReportExt, jobs};
+pub use document_record::{
+    DocumentRecord, MethodsParagraph, Report, ReportExt, job_index_path, jobs,
+};
 pub use input_evidence::{
     AffectedAnalysis, BackgroundWait, EvidenceConflict, InspectionCode, InspectionIssue,
     InspectionRelevance, Mutation, SavePolicy, SubmittedInput, check, check_in, conflicts,
@@ -24,8 +26,8 @@ pub use input_evidence::{
 };
 pub use links::{AlignmentLink, AlignmentLinkExt, metadata_present, sidecar, view_sidecar};
 pub use provenance::{
-    bundle_for_result, companion, inspect, package, publish, publish_run, read_record, tool_actor,
-    tool_run_entry, verify, write_reports,
+    bundle_for_result, companion, export_file, file_run_entry, inspect, package, publish,
+    publish_run, read_record, retained_file, verify, verify_export, write_reports,
 };
 pub use replay::{
     PublishedWithFailure, RecoveryCompletion, RecoveryMode, RecoveryPhase, ReplayReport,

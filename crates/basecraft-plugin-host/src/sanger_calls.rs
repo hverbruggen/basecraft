@@ -255,6 +255,19 @@ impl SangerCaller {
         Ok(())
     }
 
+    /// Block until the started call ends. Setting `cancelled` cancels it.
+    pub fn wait(
+        &mut self,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> Result<CalledDraft, String> {
+        let (id, _) = self.active.as_ref().ok_or("No call was started")?;
+        self.jobs
+            .wait(id, &|| cancelled.load(std::sync::atomic::Ordering::Acquire))
+            .map_err(|e| e.to_string())?;
+        self.poll()?
+            .ok_or_else(|| "Caller returned no draft".into())
+    }
+
     pub fn poll(&mut self) -> Result<Option<CalledDraft>, String> {
         let Some((id, _)) = &self.active else {
             return Ok(None);

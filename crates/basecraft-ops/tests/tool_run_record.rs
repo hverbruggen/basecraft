@@ -43,3 +43,60 @@ fn support_import_records_typed_contributions_and_input_run() {
         Vec::<String>::new()
     );
 }
+
+/// A run with a folder names it in the entry; the entry survives the journal
+/// and replays, and the parameters stay the tool's own.
+#[test]
+fn a_tool_run_names_its_run_folder_and_replays() {
+    crate::isolated_profile::isolate!();
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("gene.fasta");
+    std::fs::write(&file, ">gene\nACGT\n").unwrap();
+    let output = dir.path().join("result.fasta");
+    std::fs::write(&output, ">gene\nACGT\n").unwrap();
+    let mut session = Session::new(dir.path());
+    let doc = session.open(&file).unwrap();
+    let inputs = vec![(
+        "gene.fasta".to_string(),
+        session.snapshot_file(&file).unwrap(),
+    )];
+    let run = records::ArtifactRun::create(&output, "01M79REPLAYRUNFOLDER00000").unwrap();
+    session
+        .record_tool_run(
+            doc,
+            basecraft_protocol::Actor::Plugin {
+                id: "example".into(),
+                version: "1".into(),
+            },
+            basecraft_ops::session::ToolRunRecord {
+                run: Some(&run),
+                ..basecraft_ops::session::ToolRunRecord::new(
+                    ("example", "analyze"),
+                    serde_json::json!({"model":"p"}),
+                    &inputs,
+                    std::slice::from_ref(&output),
+                )
+            },
+        )
+        .unwrap();
+    session.save(doc, None).unwrap();
+
+    let entries = log::read_all(dir.path()).unwrap();
+    let link = entries
+        .iter()
+        .find_map(|entry| match &entry.op {
+            Op::ToolRun { run, params, .. } => {
+                assert_eq!(*params, serde_json::json!({"model":"p"}));
+                run.clone()
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(link.id, "01M79REPLAYRUNFOLDER00000");
+    assert_eq!(
+        dir.path().join(&link.folder).canonicalize().unwrap(),
+        run.directory().canonicalize().unwrap()
+    );
+    let report = records::replay(dir.path()).unwrap();
+    assert!(report.ok(), "{:?}", report.problems);
+}

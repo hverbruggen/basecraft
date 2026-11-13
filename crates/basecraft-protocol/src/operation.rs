@@ -219,25 +219,10 @@ pub struct OutputBinding {
     pub facts: OutputFacts,
 }
 
-// FACTS PLACEHOLDER. Lane facts adds `protocol/src/facts.rs` with the alphabet
-// and branch-length meaning. When it lands, delete `Alphabet` and
-// `BranchLengths` here and re-export `crate::facts::{Alphabet, BranchLengths}`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum Alphabet {
-    Nucleotide,
-    Protein,
-}
+pub use crate::facts::{Alphabet, BranchLengths};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum BranchLengths {
-    Substitutions,
-    Time,
-}
-
-/// Facts an output declares about its primary member. The companion writer
-/// records them once document facts exist (merge task for piece 2B).
+/// Facts an output declares about its primary member. The host writes them,
+/// marked as stated, into the member's companion file.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct OutputFacts {
@@ -324,6 +309,10 @@ pub struct InvocationContext {
     pub progress_file: String,
     #[serde(default)]
     pub input_evidence: BTreeMap<String, Vec<InvocationInputEvidence>>,
+    /// The alphabet of each alignment input: what the user or the file's
+    /// companion stated, or else the host's guess from the residues.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub alphabets: BTreeMap<String, Alphabet>,
 }
 
 /// Where a submitted input came from. In the invocation context its paths

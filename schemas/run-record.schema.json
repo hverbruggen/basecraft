@@ -10,9 +10,16 @@
       "minimum": 0
     },
     "descriptor_digest": {
-      "type": "string"
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "effective_parameters": true,
+    "environment": {
+      "description": "Where the plugin ran.",
+      "$ref": "#/$defs/RunEnvironment"
+    },
     "execution": {
       "anyOf": [
         {
@@ -44,24 +51,17 @@
       "type": "string"
     },
     "package_digest": {
-      "type": "string"
+      "description": "The plugin package and its operation descriptor, by content. Null for\nbasecraft's own tools, such as a Sanger stage.",
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "package_version": {
       "type": "string"
     },
     "process_instance": {
       "type": "string"
-    },
-    "runtime": {
-      "description": "The managed runtime the plugin ran in; null for the system Python and\nfor host workflows.",
-      "anyOf": [
-        {
-          "$ref": "#/$defs/RunRuntime"
-        },
-        {
-          "type": "null"
-        }
-      ]
     },
     "schema": {
       "type": "integer",
@@ -90,8 +90,7 @@
     "schema",
     "operation",
     "package_version",
-    "package_digest",
-    "descriptor_digest",
+    "environment",
     "initiator",
     "executor",
     "process_instance",
@@ -205,10 +204,48 @@
         "description"
       ]
     },
-    "RunRuntime": {
-      "description": "A managed plugin runtime, by content. No paths.",
+    "RunEnvironment": {
+      "description": "What a run needs to be repeated in the same environment. No paths.",
       "type": "object",
       "properties": {
+        "interpreter": {
+          "description": "As the plugin reported it, such as \"Python 3.12.4\". Null for host\nworkflows and plugins that run no interpreter.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "runtime": {
+          "description": "The managed runtime the plugin ran in; null for the system Python and\nfor host workflows.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunRuntime"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "RunRuntime": {
+      "description": "A managed plugin runtime: the conda specification it was made from and\nwhat was installed, by content.",
+      "type": "object",
+      "properties": {
+        "channels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "dependencies": {
+          "description": "Conda packages and their version constraints.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
         "executable_digests": {
           "type": "object",
           "additionalProperties": {
@@ -216,10 +253,17 @@
           }
         },
         "lock_digest": {
+          "description": "Hash of the solved Pixi lock.",
           "type": "string"
         },
         "manifest_digest": {
           "type": "string"
+        },
+        "pypi_dependencies": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
         },
         "reported_versions": {
           "type": "object",
@@ -230,6 +274,9 @@
       },
       "additionalProperties": false,
       "required": [
+        "channels",
+        "dependencies",
+        "pypi_dependencies",
         "lock_digest",
         "manifest_digest",
         "reported_versions",

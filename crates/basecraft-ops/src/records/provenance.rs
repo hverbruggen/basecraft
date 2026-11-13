@@ -1,7 +1,7 @@
 //! Inspectable portable save history. No bundle content is ever executed.
 use crate::{Result, error::invalid};
 use basecraft_protocol::{
-    Actor, DocState, LogEntry, Op, OpResult,
+    Actor, DocState, LogEntry, OpResult,
     provenance::{ArtifactRevision, Completeness, Publication},
 };
 use std::collections::BTreeMap;
@@ -14,36 +14,13 @@ pub fn companion(path: &Path) -> PathBuf {
     PathBuf::from(name)
 }
 
-/// Select the existing binding, companion or local history path.
+/// Select the existing binding or companion path.
 /// The final fallback is the original companion spelling, even if it does not
 /// exist. Selection does not validate content or establish complete provenance.
 pub fn bundle_for_result(result: &Path, project: Option<&crate::project::Project>) -> PathBuf {
     if let Ok(Some(hidden)) = crate::records::analysis_store::ArtifactRun::for_result(result)
         && hidden.join("manifest.json").is_file()
     {
-        // A support-only binding retains input evidence, while LocalOnly history
-        // is deliberately published in the private profile.
-        if read_record(&hidden.join("manifest.json"))
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<Publication>(&bytes).ok())
-            .is_some_and(|record| record.origin == "Saved Sanger review support")
-            && let Ok(paths) = basecraft_platform::paths::AppPaths::discover()
-            && basecraft_platform::settings::SettingsStore::new(paths.preferences())
-                .load()
-                .is_ok_and(|settings| {
-                    settings.files.provenance
-                        == basecraft_platform::settings::ProvenancePolicy::LocalOnly
-                })
-            && let Ok(absolute) = result.canonicalize()
-        {
-            let local = paths.state.join("provenance").join(
-                basecraft_io::hash_bytes(absolute.as_os_str().as_encoded_bytes())
-                    .trim_start_matches("b3:"),
-            );
-            if local.join("manifest.json").is_file() {
-                return local;
-            }
-        }
         return hidden;
     }
     let standalone = companion(result);
@@ -53,25 +30,11 @@ pub fn bundle_for_result(result: &Path, project: Option<&crate::project::Project
     let absolute = result
         .canonicalize()
         .unwrap_or_else(|_| result.to_path_buf());
-    // The project's bundle counts only when it holds history: LocalOnly
-    // history of a project file lives in the private profile instead.
+    // The project's bundle counts only when it holds history.
     if let Some(bundle) = project.and_then(|project| project.provenance_bundle(&absolute))
         && bundle.join("manifest.json").is_file()
     {
         return bundle;
-    }
-    if let Ok(paths) = basecraft_platform::paths::AppPaths::discover()
-        && let Ok(preferences) =
-            basecraft_platform::settings::SettingsStore::new(paths.preferences()).load()
-        && preferences.files.provenance == basecraft_platform::settings::ProvenancePolicy::LocalOnly
-    {
-        let local = paths.state.join("provenance").join(
-            basecraft_io::hash_bytes(absolute.as_os_str().as_encoded_bytes())
-                .trim_start_matches("b3:"),
-        );
-        if local.join("manifest.json").is_file() {
-            return local;
-        }
     }
     standalone
 }
@@ -142,6 +105,91 @@ pub(crate) fn read_record_from_open(
         });
     }
     Ok(bytes)
+}
+
+/// A file a run keeps, as its publication lists it: `<run id>:<label>`, the
+/// name shown, its bytes and where in the run folder they are.
+pub fn retained_file(
+    run: &crate::records::ArtifactRun,
+    label: &str,
+    logical_name: String,
+    path: &Path,
+    hash: String,
+) -> Result<ArtifactRevision> {
+    Ok(ArtifactRevision {
+        id: format!("{}:{label}", run.id()),
+        logical_name,
+        hash,
+        size: std::fs::metadata(path)?.len(),
+        retained: Some(crate::records::relative(run.directory(), path)?),
+        reference: None,
+    })
+}
+
+/// Copy a run's file to a new file in the project, never replacing one. The
+/// receipt names the new file's inode before the rename, so a later repair
+/// adopts only a file this run created.
+pub fn export_file(source: &Path, destination: &Path, hash: &str, receipt: &Path) -> Result<()> {
+    use basecraft_platform::files::identity;
+    let parent = destination
+        .parent()
+        .ok_or_else(|| invalid("missing destination parent"))?;
+    let pending = tempfile::Builder::new()
+        .prefix(".basecraft-export-")
+        .tempfile_in(parent)?;
+    std::fs::copy(source, pending.path())?;
+    if basecraft_io::hash_file(pending.path())? != hash {
+        return Err(invalid("member changed during export"));
+    }
+    pending.as_file().sync_all()?;
+    let (device, inode) = identity(pending.path())?;
+    crate::records::write_json(
+        receipt,
+        &serde_json::to_value(
+            basecraft_protocol::publication_records::MemberExportReceipt {
+                schema: 1,
+                destination: destination.to_path_buf(),
+                hash: hash.into(),
+                device,
+                inode,
+                size: pending.as_file().metadata()?.len(),
+            },
+        )?,
+    )?;
+    basecraft_platform::atomic::rename_noreplace(pending.path(), destination).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::AlreadyExists {
+            crate::access::AccessError::DestinationExists.into()
+        } else {
+            crate::Error::from(error)
+        }
+    })?;
+    basecraft_platform::files::sync_directory(parent)?;
+    Ok(())
+}
+
+/// Whether `destination` is still the file [`export_file`] created, with the
+/// same bytes. Matching bytes alone never authorize adopting another file.
+pub fn verify_export(destination: &Path, hash: &str, receipt: &Path) -> Result<()> {
+    use basecraft_platform::files::{identity, link_count};
+    let receipt: basecraft_protocol::publication_records::MemberExportReceipt =
+        serde_json::from_slice(&read_record(receipt)?)?;
+    let metadata = std::fs::symlink_metadata(destination)?;
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || link_count(destination)? != 1
+        || receipt.schema != 1
+        || receipt.destination != destination
+        || receipt.hash != hash
+        || (receipt.device, receipt.inode) != identity(destination)?
+        || receipt.size != metadata.len()
+        || basecraft_io::hash_file(destination)? != hash
+    {
+        return Err(crate::Error::Damaged {
+            path: destination.to_path_buf(),
+            detail: "output_conflict: member ownership or bytes changed; repair refused".into(),
+        });
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -404,9 +452,6 @@ fn link_selected_inputs(bundle: &Path, publication: &Publication) -> Result<()> 
         Vec::new();
     for event in &publication.events {
         let basecraft_protocol::Op::ToolRun {
-            plugin,
-            operation,
-            params,
             input_run,
             contributions,
             ..
@@ -414,12 +459,7 @@ fn link_selected_inputs(bundle: &Path, publication: &Publication) -> Result<()> 
         else {
             continue;
         };
-        if plugin == "basecraft.sanger-review" && operation == "reviewed_consensus_input" {
-            dependencies.push((
-                &event.id,
-                serde_json::from_value(params["sanger_input"].clone())?,
-            ));
-        } else if let Some(run) = input_run
+        if let Some(run) = input_run
             && (contributions.is_none() || retained.contains(event.id.as_str()))
         {
             dependencies.push((&event.id, run.clone()));
@@ -607,39 +647,22 @@ pub fn publish_run(
     Ok(publication)
 }
 
-/// Who ran an analysis: the external program its execution record names, or
-/// else the plugin. The recorded execution and tool are added to `params`.
-pub fn tool_actor(execution: &Path, plugin: Actor, params: &mut serde_json::Value) -> Actor {
-    let execution: serde_json::Value = std::fs::read(execution)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default();
-    if !execution["execution"].is_null() {
-        params["_execution"] = execution["execution"].clone();
-    }
-    if !execution["tool"].is_null() {
-        params["_observed_tool"] = execution["tool"].clone();
-    }
-    serde_json::from_value::<basecraft_protocol::plugin::ToolInfo>(execution["tool"].clone())
-        .map_or(plugin, |tool| Actor::Tool {
-            tool: tool.name,
-            version: tool.version,
-        })
-}
-
-/// The journal entry for a tool run that changed no open document; `doc`
-/// names the operation.
-pub fn tool_run_entry(
+/// The journal entry for a tool run that changed no open document, kept in
+/// the run's own publication; `doc` names the operation. The record's inputs
+/// are the publication's.
+pub fn file_run_entry(
+    record: crate::session::ToolRunRecord<'_>,
     publication: &Publication,
     started: &str,
     actor: Actor,
     doc: &str,
-    plugin: &str,
-    operation: &str,
-    params: serde_json::Value,
 ) -> LogEntry {
     let names =
         |artifacts: &[ArtifactRevision]| artifacts.iter().map(|a| a.logical_name.clone()).collect();
+    let root = record
+        .run
+        .map_or_else(PathBuf::new, |run| run.directory().to_path_buf());
+    let op = record.op(&root, names(&publication.outputs), None, None);
     LogEntry {
         v: basecraft_protocol::ops::LOG_VERSION,
         id: publication.id.clone(),
@@ -649,15 +672,7 @@ pub fn tool_run_entry(
         actor,
         doc: doc.into(),
         source: None,
-        op: Op::ToolRun {
-            plugin: plugin.into(),
-            operation: operation.into(),
-            params,
-            inputs: names(&publication.inputs),
-            outputs: names(&publication.outputs),
-            input_run: None,
-            contributions: None,
-        },
+        op,
         result: OpResult {
             notes: Vec::new(),
             hashes: publication

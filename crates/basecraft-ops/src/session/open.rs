@@ -292,6 +292,7 @@ impl Session {
                 .push((slot.origin_bundle.clone(), origin.clone()));
         }
         record.document.clone_from(&slot.key);
+        record.run_root = Some(self.root.clone());
         record.revision = format!("{}:{}:{}", self.id, id.0, slot.generation);
         record.unsaved = !slot.is_clean();
         if let Some(warning) = self.recovery_warning(id) {

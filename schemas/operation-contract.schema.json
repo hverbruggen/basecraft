@@ -28,10 +28,13 @@
   ],
   "$defs": {
     "Alphabet": {
+      "description": "The letters a sequence or alignment is written in.",
       "type": "string",
       "enum": [
-        "nucleotide",
-        "protein"
+        "dna",
+        "rna",
+        "protein",
+        "unknown"
       ]
     },
     "ArtifactVisibility": {
@@ -42,10 +45,45 @@
       ]
     },
     "BranchLengths": {
-      "type": "string",
-      "enum": [
-        "substitutions",
-        "time"
+      "description": "What a tree's branch lengths measure.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "unknown"
+          ]
+        },
+        {
+          "description": "Expected substitutions per site.",
+          "type": "string",
+          "const": "substitutions"
+        },
+        {
+          "description": "Time with no unit: the root is 1, or depths are only comparable.",
+          "type": "string",
+          "const": "relative_time"
+        },
+        {
+          "description": "Time in the stated unit, such as \"Ma\".",
+          "type": "object",
+          "properties": {
+            "absolute_time": {
+              "type": "object",
+              "properties": {
+                "unit": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "unit"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "absolute_time"
+          ]
+        }
       ]
     },
     "CallerKind": {
@@ -342,7 +380,7 @@
       ]
     },
     "OutputFacts": {
-      "description": "Facts an output declares about its primary member. The companion writer\nrecords them once document facts exist (merge task for piece 2B).",
+      "description": "Facts an output declares about its primary member. The host writes them,\nmarked as stated, into the member's companion file.",
       "type": "object",
       "properties": {
         "alphabet": {

@@ -663,12 +663,10 @@ impl Session {
             .collect::<Result<_>>()?;
         // History is staged first so its files sync alongside the journal
         // append. None becomes visible until the Save record is durable.
-        let history = (self.tracked
-            && self.provenance_policy != basecraft_platform::settings::ProvenancePolicy::None)
-            .then(|| {
-                self.history(id)
-                    .and_then(|history| history.save(target, &entry, &[], None))
-            });
+        let history = self.tracked.then(|| {
+            self.history(id)
+                .and_then(|history| history.save(target, &entry, &[], None))
+        });
         let (prepared, mut history_error) = match history {
             Some(Ok(prepared)) => (prepared, None),
             Some(Err(error)) => (crate::documents::PreparedWrite::default(), Some(error)),

@@ -88,33 +88,6 @@ fn a_project_file_packages_with_its_history() {
 }
 
 #[test]
-fn local_only_history_of_a_project_file_is_found() {
-    use basecraft_platform::settings::{Change, ProvenancePolicy, SettingsStore};
-    crate::isolated_profile::isolate!();
-    let paths = basecraft_platform::paths::AppPaths::discover().unwrap();
-    SettingsStore::new(paths.preferences())
-        .update(Change::Provenance(ProvenancePolicy::LocalOnly))
-        .unwrap();
-    let root = tempfile::tempdir().unwrap();
-    let chosen = root.path().join("project");
-    std::fs::create_dir(&chosen).unwrap();
-    let file = chosen.join("gene.fasta");
-    std::fs::write(&file, b">a\nACGT\n").unwrap();
-    let project = Project::new(&chosen).unwrap();
-    let mut session = Session::recoverable(&chosen)
-        .unwrap()
-        .in_project(Some(project.clone()));
-    edit_and_save(&mut session, &file);
-    assert!(!project.provenance_bundle(&file).unwrap().exists());
-    let publication = records::inspect(&file, Some(&project)).unwrap();
-    assert_ne!(publication.events.len(), 0);
-    assert_eq!(
-        records::verify(&file, Some(&project)).unwrap(),
-        Vec::<String>::new()
-    );
-}
-
-#[test]
 fn a_referenced_input_inside_the_project_keeps_its_history_link() {
     crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
