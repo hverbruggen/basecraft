@@ -153,6 +153,13 @@ fn reference(anchor: &Path, source: &Path) -> records::ArtifactRun {
     .unwrap()
 }
 
+/// `root/data` for inputs and `root/results` for results.
+fn data_and_results(root: &Path) -> PathBuf {
+    std::fs::create_dir_all(root.join("results")).unwrap();
+    std::fs::create_dir_all(root.join("data")).unwrap();
+    root.join("data")
+}
+
 fn index_files(folder: &Path) -> std::collections::BTreeSet<String> {
     let mut all = std::collections::BTreeSet::new();
     for path in files(&folder.join(".basecraft/analysis-index")) {
@@ -208,9 +215,7 @@ fn two_profiles_add_to_one_index_at_once() {
     let Some(root) = isolated_profile::enter(name) else {
         return;
     };
-    let data = root.join("data");
-    std::fs::create_dir_all(&data).unwrap();
-    std::fs::create_dir_all(root.join("results")).unwrap();
+    let data = data_and_results(&root);
     // Both writers add to one store, so they write the same index file.
     records::ArtifactRun::create(&root.join("results/out.txt"), "first").unwrap();
     let writers: Vec<_> = ["a", "b"]
@@ -246,9 +251,7 @@ fn a_sync_conflict_copy_of_the_index_still_counts() {
     else {
         return;
     };
-    let data = root.join("data");
-    std::fs::create_dir_all(&data).unwrap();
-    std::fs::create_dir_all(root.join("results")).unwrap();
+    let data = data_and_results(&root);
     let source = data.join("reads.fasta");
     std::fs::write(&source, b">a\nACGT\n").unwrap();
     let run = reference(&root.join("results/out.txt"), &source);
@@ -310,9 +313,7 @@ fn a_foreign_basecraft_file_beside_an_input_is_not_skipped() {
     else {
         return;
     };
-    let data = root.join("data");
-    std::fs::create_dir_all(&data).unwrap();
-    std::fs::create_dir_all(root.join("results")).unwrap();
+    let data = data_and_results(&root);
     std::fs::write(data.join(".basecraft"), b"another program").unwrap();
     let source = data.join("reads.fasta");
     std::fs::write(&source, b">a\nACGT\n").unwrap();

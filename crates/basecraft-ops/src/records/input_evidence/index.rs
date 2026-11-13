@@ -74,6 +74,26 @@ fn read<T: serde::de::DeserializeOwned>(path: &Path, version: fn(&T) -> u32) -> 
     Ok(record)
 }
 
+/// The record at `path` to add to, or `fresh` when there is none or it is
+/// being rebuilt. A damaged record is an error unless it is being rebuilt.
+fn existing<T: serde::de::DeserializeOwned>(
+    path: &Path,
+    version: fn(&T) -> u32,
+    replace: bool,
+    fresh: T,
+) -> Result<T> {
+    match read(path, version) {
+        Ok(record) if !replace => Ok(record),
+        Err(crate::Error::Io(error)) if error.kind() != std::io::ErrorKind::NotFound => {
+            Err(error.into())
+        }
+        Err(error @ (crate::Error::Damaged { .. } | crate::Error::Unsupported(_))) if !replace => {
+            Err(error)
+        }
+        _ => Ok(fresh),
+    }
+}
+
 fn write(path: &Path, value: &impl serde::Serialize) -> Result<()> {
     let mut bytes = serde_json::to_vec_pretty(value)?;
     bytes.push(b'\n');
@@ -230,22 +250,12 @@ fn update(
         let canonical = folder_path.canonicalize()?;
         let _lock = lock_beside(&canonical.join(".basecraft/analysis-index.lock"))?;
         let (path, relative) = shard(folder_path, store)?;
-        let mut index = match read(&path, |i: &AnalysisIndex| i.schema_version) {
-            Ok(index) if !replace => index,
-            Err(crate::Error::Io(error)) if error.kind() != std::io::ErrorKind::NotFound => {
-                return Err(error.into());
-            }
-            Err(error @ (crate::Error::Damaged { .. } | crate::Error::Unsupported(_)))
-                if !replace =>
-            {
-                return Err(error);
-            }
-            _ => AnalysisIndex {
-                schema_version: 1,
-                store: relative.clone(),
-                files: BTreeSet::new(),
-            },
+        let fresh = AnalysisIndex {
+            schema_version: 1,
+            store: relative,
+            files: BTreeSet::new(),
         };
+        let mut index = existing(&path, |i: &AnalysisIndex| i.schema_version, replace, fresh)?;
         let before = index.clone();
         index.files.extend(entries.iter().cloned());
         if index != before || replace {
@@ -287,23 +297,12 @@ fn list_folders(store: &Path, indexed: &BTreeSet<PathBuf>, replace: bool) -> Res
     let home = store_home(store);
     let _lock = lock_beside(&store.join("indexed-folders.lock"))?;
     let path = store.join("indexed-folders.json");
-    let mut list = match read(&path, |l: &IndexedFolders| l.schema_version) {
-        Ok(list) if !replace => list,
-        Err(crate::Error::Io(error)) if error.kind() != std::io::ErrorKind::NotFound => {
-            return Err(error.into());
-        }
-        Err(error @ (crate::Error::Damaged { .. } | crate::Error::Unsupported(_))) if !replace => {
-            return Err(error);
-        }
-        _ => IndexedFolders {
-            schema_version: 1,
-            folders: BTreeSet::new(),
-        },
+    let fresh = IndexedFolders {
+        schema_version: 1,
+        folders: BTreeSet::new(),
     };
+    let mut list = existing(&path, |l: &IndexedFolders| l.schema_version, replace, fresh)?;
     let before = list.clone();
-    if replace {
-        list.folders.clear();
-    }
     for folder in indexed {
         list.folders
             .insert(super::relative(home, folder)?.replace('\\', "/"));
@@ -347,14 +346,16 @@ pub(super) fn listed(source: &Path) -> Result<Vec<PathBuf>> {
     let Some((folder, entry)) = home(&lexical(source)) else {
         return Ok(Vec::new());
     };
-    let mut stores = Vec::new();
-    for path in copies(&shards(&folder), "")? {
-        let index = read(&path, |i: &AnalysisIndex| i.schema_version)?;
-        if index.files.contains(&entry) {
-            stores.push(lexical(&folder.join(&index.store)));
-        }
+    let mut inspection = super::Inspection::default();
+    let indexes = stores_beside(&folder, &mut inspection);
+    if let Some(issue) = inspection.issues.first() {
+        return Err(crate::error::invalid(issue.reason.clone()));
     }
-    Ok(stores)
+    Ok(indexes
+        .into_iter()
+        .filter(|(_, index)| index.files.contains(&entry))
+        .map(|(store, _)| store)
+        .collect())
 }
 
 /// Stores that can refer to `target`: those listed for it in the index beside
