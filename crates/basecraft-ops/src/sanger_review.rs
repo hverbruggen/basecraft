@@ -7,7 +7,7 @@ mod edit;
 pub use captured::CapturedInput;
 mod storage;
 use basecraft_docs::sanger::SangerDraftExt;
-pub use storage::{SangerRun, record_addition};
+pub use storage::{CheckedAddition, SangerRun, check_addition, record_addition};
 pub(crate) use storage::{is_review, relocate_package};
 
 use std::path::{Path, PathBuf};

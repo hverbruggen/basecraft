@@ -89,11 +89,12 @@ pub fn columns(text: &str) -> Result<Vec<usize>> {
 }
 
 /// The rows that add a reviewed consensus (`text`, named `name`) to
-/// `alignment`, checked against it, with the accepted review (`evidence`, from
-/// `SangerReview::addition_evidence`) recorded as the alignment's input. The
-/// caller adds the rows as they are or placed by MAFFT.
+/// `alignment`, checked against it and against the accepted review
+/// (`evidence`, from `SangerReview::addition_evidence`). Nothing is recorded:
+/// the caller adds the row, as it is or placed by MAFFT, then calls
+/// `record_consensus`.
 pub fn consensus_rows(
-    session: &mut Session,
+    session: &Session,
     alignment: DocId,
     evidence: &str,
     text: &str,
@@ -103,8 +104,20 @@ pub fn consensus_rows(
     if rows.len() != 1 {
         return Err(AdditionError::NotOneSpecimen.into());
     }
-    crate::sanger_review::record_addition(session, alignment, evidence, &rows[0].1)?;
+    crate::sanger_review::check_addition(evidence, &rows[0].1)?;
     Ok(rows)
+}
+
+/// Record the accepted review as the input of the consensus row just added
+/// to `alignment` (`sequence` is the row as reviewed, without placement
+/// gaps). If this fails, the caller undoes the row, so the two stay together.
+pub fn record_consensus(
+    session: &mut Session,
+    alignment: DocId,
+    evidence: &str,
+    sequence: &str,
+) -> Result<()> {
+    crate::sanger_review::record_addition(session, alignment, evidence, sequence)
 }
 
 /// Add the decided consensus of `review` to `alignment` as a new last row
@@ -121,6 +134,7 @@ pub fn add_consensus(
         .map_err(AdditionError::Evidence)?;
     let sequence = reviewed.resolved_sequence().unwrap_or_default();
     let rows = consensus_rows(session, alignment, &evidence, &sequence, label)?;
+    let sequence = rows[0].1.clone();
     crate::renames::apply_op(
         session,
         alignment,
@@ -128,7 +142,12 @@ pub fn add_consensus(
             rows,
             reference: None,
         },
-    )
+    )?;
+    if let Err(error) = record_consensus(session, alignment, &evidence, &sequence) {
+        session.undo(alignment)?;
+        return Err(error);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -241,11 +260,36 @@ mod tests {
             },
         )
         .unwrap();
+        // Checking a consensus, as before a MAFFT placement that may be
+        // cancelled, records nothing.
+        let runs = |session: &Session| {
+            session
+                .document_record(aln)
+                .unwrap()
+                .events
+                .iter()
+                .filter(|entry| matches!(entry.op, Op::ToolRun { .. }))
+                .count()
+        };
+        let evidence = session
+            .sanger_review(review)
+            .unwrap()
+            .addition_evidence(None)
+            .unwrap();
+        let sequence = session
+            .sanger_review(review)
+            .unwrap()
+            .resolved_sequence()
+            .unwrap();
+        consensus_rows(&session, aln, &evidence, &sequence, "HV1").unwrap();
+        assert_eq!(runs(&session), 0, "a checked consensus records no run");
         add_consensus(&mut session, review, aln, "HV1").unwrap();
+        assert_eq!(runs(&session), 1, "the added row and its run go together");
         let rows = session.alignment(aln).unwrap();
         assert_eq!(rows.row_count(), 3);
         assert_eq!(rows.row(2).name, "HV1");
         let again = add_consensus(&mut session, review, aln, "HV1").unwrap_err();
+        assert_eq!(runs(&session), 1, "a refused addition records no run");
         assert!(
             again.to_string().contains("already in the alignment"),
             "{again}"

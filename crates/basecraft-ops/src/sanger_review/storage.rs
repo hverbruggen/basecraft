@@ -1102,14 +1102,12 @@ impl SangerReview {
     }
 }
 
-/// Verify the exact accepted review before selecting it as an alignment input.
-/// The actual row mutation continues through the existing typed alignment op.
-pub fn record_addition(
-    session: &mut crate::Session,
-    doc: crate::DocId,
-    descriptor: &str,
-    sequence: &str,
-) -> crate::Result<()> {
+/// An accepted review checked as an alignment input; nothing is recorded yet.
+pub struct CheckedAddition(AdditionEvidence);
+
+/// Verify the exact accepted review before selecting it as an alignment
+/// input, writing nothing.
+pub fn check_addition(descriptor: &str, sequence: &str) -> crate::Result<CheckedAddition> {
     let evidence: AdditionEvidence = serde_json::from_str(descriptor)?;
     if evidence.schema_version != 1
         || evidence.sequence_hash != basecraft_io::hash_bytes(sequence.as_bytes())
@@ -1150,6 +1148,18 @@ pub fn record_addition(
     if !issues.is_empty() {
         return Err(invalid(issues.join("; ")));
     }
+    Ok(CheckedAddition(evidence))
+}
+
+/// Verify the accepted review again and record it as the input of the row
+/// just added to alignment `doc`. Call it only once the row is in.
+pub fn record_addition(
+    session: &mut crate::Session,
+    doc: crate::DocId,
+    descriptor: &str,
+    sequence: &str,
+) -> crate::Result<()> {
+    let CheckedAddition(evidence) = check_addition(descriptor, sequence)?;
     let hash = session.snapshot_file(&evidence.review)?;
     let inputs = [(evidence.review.to_string_lossy().into_owned(), hash)];
     let params = serde_json::to_value(ReviewedConsensus {
