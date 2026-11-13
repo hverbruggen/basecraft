@@ -237,6 +237,7 @@ fn annotation(start: u64) -> Op {
             ),
             qualifiers: Vec::new(),
         },
+        record: None,
     }
 }
 
@@ -282,7 +283,15 @@ fn annotation_runs_follow_partial_deletion_and_feature_ids_after_reopen() {
     let doc = session.open(&file).unwrap();
     annotate(&mut session, doc, "first-plugin", &[0, 4]);
     annotate(&mut session, doc, "second-plugin", &[8]);
-    session.apply(doc, Op::FeatureRemove { id: 0 }).unwrap();
+    session
+        .apply(
+            doc,
+            Op::FeatureRemove {
+                id: 0,
+                record: None,
+            },
+        )
+        .unwrap();
     let report = session.document_record(doc).unwrap().report().unwrap();
     assert!(report.methods.contains("first-plugin") && report.methods.contains("second-plugin"));
     let saved = dir.path().join("saved.fasta");
@@ -291,7 +300,15 @@ fn annotation_runs_follow_partial_deletion_and_feature_ids_after_reopen() {
     let mut session = Session::recoverable_with_paths(dir.path(), &paths(dir.path())).unwrap();
     let doc = session.open(&saved).unwrap();
     // Serialization compacted the deleted slot: first-plugin's survivor is ID 0.
-    session.apply(doc, Op::FeatureRemove { id: 0 }).unwrap();
+    session
+        .apply(
+            doc,
+            Op::FeatureRemove {
+                id: 0,
+                record: None,
+            },
+        )
+        .unwrap();
     let report = session.document_record(doc).unwrap().report().unwrap();
     assert!(
         !report.methods.contains("first-plugin"),
@@ -310,7 +327,15 @@ fn annotation_runs_follow_partial_deletion_and_feature_ids_after_reopen() {
             .contains("first-plugin")
     );
     session.redo(doc).unwrap();
-    session.apply(doc, Op::FeatureRemove { id: 1 }).unwrap();
+    session
+        .apply(
+            doc,
+            Op::FeatureRemove {
+                id: 1,
+                record: None,
+            },
+        )
+        .unwrap();
     assert!(
         !session
             .document_record(doc)
@@ -380,7 +405,7 @@ fn extraction_is_reference_first_and_packages_exact_source_and_mapping() {
     let mut session = Session::recoverable_with_paths(dir.path(), &paths(dir.path())).unwrap();
     let doc = session.open(&source).unwrap();
     session
-        .extract(doc, (1, 7), &[(1, 3), (5, 7)], true, &result)
+        .extract(doc, (1, 7), &[(1, 3), (5, 7)], true, &result, None)
         .unwrap();
     let publication = records::inspect(&result, None).unwrap();
     let conflicts = basecraft_ops::records::conflicts(&source).unwrap();

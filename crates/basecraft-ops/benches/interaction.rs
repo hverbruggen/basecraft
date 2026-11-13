@@ -178,6 +178,7 @@ fn run() -> Result<()> {
                 start: 0,
                 end: 1,
                 residues: "N".into(),
+                record: None,
             },
         )?;
         if session.doc(id)?.read(0, 1) != b"N" {

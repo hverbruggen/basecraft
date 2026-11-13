@@ -25,6 +25,7 @@ fn source(root: &Path, count: usize) -> Session {
                     start: 1,
                     end: 2,
                     residues: "T".into(),
+                    record: None,
                 },
             )
             .unwrap();
@@ -750,6 +751,7 @@ fn status_is_read_only_and_tracks_document_progress_without_slot_ids() {
                 start: 1,
                 end: 2,
                 residues: "T".into(),
+                record: None,
             },
         )
         .unwrap();
@@ -901,6 +903,7 @@ fn replaced_stage_directory_is_refused_with_file_identity_unchanged() {
                 start: 1,
                 end: 2,
                 residues: "T".into(),
+                record: None,
             },
         )
         .unwrap();

@@ -21,7 +21,10 @@ impl Alphabet {
     /// outside the IUPAC nucleotide codes, DNA when every letter is one of
     /// them, unknown with no letters. RNA is never guessed.
     pub fn guess(residues: &[u8]) -> Self {
-        let mut letters = residues.iter().filter(|b| b.is_ascii_alphabetic()).peekable();
+        let mut letters = residues
+            .iter()
+            .filter(|b| b.is_ascii_alphabetic())
+            .peekable();
         if letters.peek().is_none() {
             return Self::Unknown;
         }

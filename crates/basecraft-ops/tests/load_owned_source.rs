@@ -146,6 +146,7 @@ fn session_records_loaded_hash_and_refuses_edits_after_external_change() {
                     start: 0,
                     end: 1,
                     residues: "G".into(),
+                    record: None
                 }
             )
             .is_err()
@@ -185,6 +186,7 @@ fn companion_hash_remains_guarded_on_the_captured_path() {
                     start: 0,
                     end: 1,
                     residues: "G".into(),
+                    record: None
                 }
             )
             .is_err()
@@ -485,6 +487,7 @@ fn captured_companion_refusals_preserve_baseline_undo_and_journal() {
                             start: 0,
                             end: 1,
                             residues: "G".into(),
+                            record: None,
                         },
                     )
                     .map(|_| ())
@@ -538,6 +541,7 @@ fn captured_multirecord_writer_and_replay_inputs_match_legacy() {
                 start: 0,
                 end: 1,
                 residues: "G".into(),
+                record: None,
             },
         )
         .unwrap();
@@ -594,6 +598,7 @@ fn cold_recoverable_edit_reads_no_source_bytes_and_recovery_needs_the_originals(
                 start: 0,
                 end: 1,
                 residues: "G".into(),
+                record: None,
             },
         )
         .unwrap();

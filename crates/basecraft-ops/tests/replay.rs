@@ -27,6 +27,7 @@ fn replace(start: u64, end: u64, residues: &str) -> Op {
         start,
         end,
         residues: residues.into(),
+        record: None,
     }
 }
 
@@ -54,6 +55,7 @@ fn record_session(root: &Path) {
             d,
             Op::FeatureAdd {
                 feature: feature(5, 30),
+                record: None,
             },
         )
         .unwrap();
@@ -63,16 +65,24 @@ fn record_session(root: &Path) {
         Op::FeatureUpdate {
             id: fid,
             feature: feature(6, 31),
+            record: None,
         },
     )
     .unwrap();
     s.undo(d).unwrap();
     s.undo(d).unwrap();
     s.redo(d).unwrap();
-    s.apply(d, Op::FeatureRemove { id: 0 }).unwrap();
+    s.apply(
+        d,
+        Op::FeatureRemove {
+            id: 0,
+            record: None,
+        },
+    )
+    .unwrap();
     s.undo(d).unwrap();
     s.apply(d, replace(0, 3, "NNNN")).unwrap();
-    s.extract(d, (15, 50), &[], false, &root.join("seqs/part.gb"))
+    s.extract(d, (15, 50), &[], false, &root.join("seqs/part.gb"), None)
         .unwrap();
     // The CDS spliced, and the reverse-strand ori gene reverse-complemented.
     s.extract(
@@ -81,9 +91,10 @@ fn record_session(root: &Path) {
         &[(19, 40), (49, 70)],
         false,
         &root.join("seqs/cds.gb"),
+        None,
     )
     .unwrap();
-    s.extract(d, (90, 110), &[], true, &root.join("seqs/rc.gb"))
+    s.extract(d, (90, 110), &[], true, &root.join("seqs/rc.gb"), None)
         .unwrap();
     s.save(d, None).unwrap();
 }
@@ -132,7 +143,7 @@ fn extract_clips_annotations_and_marks_cuts_incomplete() {
     let mut s = Session::new(root);
     let d = s.open(&root.join("seqs/test.gb")).unwrap();
     // CDS join(20..40,50..70); extract 1-based 30..60.
-    s.extract(d, (29, 60), &[], false, &root.join("seqs/part.gb"))
+    s.extract(d, (29, 60), &[], false, &root.join("seqs/part.gb"), None)
         .unwrap();
     let text = std::fs::read_to_string(root.join("seqs/part.gb")).unwrap();
     let rec = &basecraft_io::genbank::parse(text.as_bytes()).unwrap()[0];
@@ -163,6 +174,7 @@ fn extracts_spliced_cds_and_reverse_complements() {
         &[(19, 40), (49, 70)],
         false,
         &root.join("seqs/cds.gb"),
+        None,
     )
     .unwrap();
     let rec = &basecraft_io::genbank::parse(&std::fs::read(root.join("seqs/cds.gb")).unwrap())
@@ -187,10 +199,11 @@ fn extracts_spliced_cds_and_reverse_complements() {
                 location: basecraft_protocol::Location::simple(79, 90, Strand::Reverse),
                 qualifiers: vec![],
             },
+            record: None,
         },
     )
     .unwrap();
-    s.extract(d, (79, 90), &[], true, &root.join("seqs/rc.gb"))
+    s.extract(d, (79, 90), &[], true, &root.join("seqs/rc.gb"), None)
         .unwrap();
     let rec =
         &basecraft_io::genbank::parse(&std::fs::read(root.join("seqs/rc.gb")).unwrap()).unwrap()[0];
@@ -230,6 +243,7 @@ fn grouped_operations_undo_together_and_replay() {
                 d,
                 Op::FeatureAdd {
                     feature: feature(i * 10, i * 10 + 5),
+                    record: None,
                 },
             )
             .unwrap();
@@ -239,6 +253,7 @@ fn grouped_operations_undo_together_and_replay() {
             d,
             Op::FeatureAdd {
                 feature: feature(50, 60),
+                record: None,
             },
         )
         .unwrap();
@@ -855,6 +870,7 @@ fn strict_sequence_proposals_stage_invalid_batches_and_replay_one_undo_group() {
         replace(0, 1, "T"),
         Op::FeatureAdd {
             feature: feature(1, 4),
+            record: None,
         },
     ];
     session

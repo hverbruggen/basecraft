@@ -266,6 +266,7 @@ fn alignment_interface_rejections_normalization_and_hashes() {
             start: 0,
             end: 1,
             residues: "T".into(),
+            record: None,
         },
         Op::AlnReplace {
             row: 99,

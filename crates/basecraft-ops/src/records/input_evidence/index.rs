@@ -516,6 +516,7 @@ mod tests {
                         start: 0,
                         end: 1,
                         residues: "T".into(),
+                        record: None,
                     },
                 )
                 .unwrap();
@@ -531,6 +532,7 @@ mod tests {
                             start: 0,
                             end: 1,
                             residues: "T".into(),
+                            record: None,
                         },
                     )
                     .unwrap();
@@ -566,6 +568,7 @@ mod tests {
                         start: 0,
                         end: 1,
                         residues: "T".into(),
+                        record: None,
                     },
                 )
                 .unwrap();
@@ -630,6 +633,7 @@ mod tests {
                                 start: 0,
                                 end: 1,
                                 residues: "T".into(),
+                                record: None,
                             },
                         )
                         .unwrap();
@@ -687,6 +691,7 @@ mod tests {
                                 start: 0,
                                 end: 1,
                                 residues: "T".into(),
+                                record: None,
                             },
                         )
                         .unwrap();

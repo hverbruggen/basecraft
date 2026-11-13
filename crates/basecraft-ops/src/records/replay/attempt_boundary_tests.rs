@@ -21,6 +21,7 @@ fn pre_session_refusal_discards_actual_consent() {
                 start: 0,
                 end: 1,
                 residues: "T".into(),
+                record: None,
             },
         )
         .unwrap();

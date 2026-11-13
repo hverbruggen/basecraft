@@ -146,6 +146,7 @@ fn a_sequence_with_a_stated_alphabet_saves_again_after_an_edit() {
         start: 0,
         end: 1,
         residues: "T".into(),
+        record: None,
     };
     session.apply(doc, edit).unwrap();
     session.save(doc, None).unwrap();

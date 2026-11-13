@@ -234,10 +234,12 @@ fn sequence() {
                     start: 0,
                     end: 3,
                     residues: "NNN".into(),
+                    record: None,
                 },
                 Op::FeatureUpdate {
                     id: second.1[0].0.0,
                     feature: second.1[0].1.clone(),
+                    record: None,
                 },
             ];
             (ops, [original, first, second])
@@ -623,7 +625,7 @@ fn wrong_kind_extraction_does_not_begin_tracking_or_publish_output() {
         (DocId(usize::MAX), "unknown_document"),
     ] {
         let error = session
-            .extract(id, (0, 1), &[], false, &output)
+            .extract(id, (0, 1), &[], false, &output, None)
             .unwrap_err();
         assert_eq!(error.code(), code);
         assert!(!output.exists());

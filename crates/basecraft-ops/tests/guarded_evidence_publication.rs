@@ -211,6 +211,7 @@ fn publication_worker() {
                     start: 1,
                     end: 2,
                     residues: "T".into(),
+                    record: None,
                 },
             )
             .unwrap();
@@ -422,6 +423,7 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
                     start: 1,
                     end: 2,
                     residues: "T".into(),
+                    record: None,
                 },
             )
             .unwrap();

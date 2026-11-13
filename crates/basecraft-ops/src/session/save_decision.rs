@@ -273,6 +273,7 @@ mod tests {
                     start: 1,
                     end: 2,
                     residues: "T".into(),
+                    record: None,
                 },
             )
             .unwrap();

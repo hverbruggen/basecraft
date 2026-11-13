@@ -173,10 +173,7 @@ fn stage_companion(
 }
 
 /// The hash of the companion a save writes for a stated alphabet, if any.
-fn facts_hash(
-    alphabet: Option<&Fact<Alphabet>>,
-    main: &str,
-) -> Result<Option<String>> {
+fn facts_hash(alphabet: Option<&Fact<Alphabet>>, main: &str) -> Result<Option<String>> {
     let Some(companion) = crate::files::facts_companion(alphabet, main) else {
         return Ok(None);
     };
@@ -218,6 +215,11 @@ pub(crate) trait Document {
     fn fingerprint(&self) -> DocState;
     /// Apply transactionally: an error must leave the payload unchanged.
     /// Session owns actor, history, journal and external input verification.
+    /// Check the record an edit names, and name the open record when the
+    /// edit leaves it out in a file of several records.
+    fn name_record(&self, _op: &mut Op) -> Result<()> {
+        Ok(())
+    }
     fn validate(&self, _op: &Op, _root: &Path, _live: bool) -> Result<()> {
         Ok(())
     }

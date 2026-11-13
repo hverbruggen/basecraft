@@ -106,6 +106,7 @@ fn corrupt_alias_shard_keeps_other_known_conflicts() {
                 start: 0,
                 end: 1,
                 residues: "T".into(),
+                record: None,
             },
         )
         .unwrap();

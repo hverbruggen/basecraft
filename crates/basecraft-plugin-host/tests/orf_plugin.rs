@@ -88,7 +88,7 @@ fn finds_orfs_and_maps_them_onto_a_newer_version() {
         )
         .unwrap();
     assert_eq!(result.ops.len(), 1, "{:?}", result.message);
-    let Op::FeatureAdd { feature } = &result.ops[0] else {
+    let Op::FeatureAdd { feature, .. } = &result.ops[0] else {
         panic!("not a feature.add")
     };
     let seg = &feature.location.segments[0];
@@ -102,6 +102,7 @@ fn finds_orfs_and_maps_them_onto_a_newer_version() {
                 start: 2,
                 end: 2,
                 residues: "GGGGG".into(),
+                record: None,
             },
         )
         .unwrap();

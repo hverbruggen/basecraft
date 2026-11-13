@@ -35,16 +35,24 @@ pub fn apply_proposals(
             .copied()
             .collect();
         let mapped = match op {
-            Op::FeatureAdd { feature } => {
-                map_feature(feature, &changes).map(|feature| Op::FeatureAdd { feature })
+            Op::FeatureAdd { feature, .. } => {
+                map_feature(feature, &changes).map(|feature| Op::FeatureAdd {
+                    feature,
+                    record: None,
+                })
             }
-            Op::FeatureUpdate { id, feature } => {
-                map_feature(feature, &changes).map(|feature| Op::FeatureUpdate { id, feature })
+            Op::FeatureUpdate { id, feature, .. } => {
+                map_feature(feature, &changes).map(|feature| Op::FeatureUpdate {
+                    id,
+                    feature,
+                    record: None,
+                })
             }
             Op::SeqReplace {
                 start,
                 end,
                 residues,
+                ..
             } => {
                 let s = map_through(&changes, start, Bias::Right);
                 let e = map_through(&changes, end, Bias::Left).max(s);
@@ -52,6 +60,7 @@ pub fn apply_proposals(
                     start: s,
                     end: e,
                     residues,
+                    record: None,
                 })
             }
             other => Some(other),
@@ -105,6 +114,7 @@ mod checked_access_tests {
                         start,
                         end: start + 1,
                         residues: residues.into(),
+                        record: None,
                     },
                 )
                 .unwrap();

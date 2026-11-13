@@ -14,6 +14,7 @@ fn fixture(root: &Path) -> (Session, DocId, PathBuf) {
                 start: 0,
                 end: 1,
                 residues: "T".into(),
+                record: None,
             },
         )
         .unwrap();
@@ -184,6 +185,7 @@ fn failed_save_journal_keeps_previous_history_and_recovers_written_data() {
                 start: 1,
                 end: 2,
                 residues: "A".into(),
+                record: None,
             },
         )
         .unwrap();

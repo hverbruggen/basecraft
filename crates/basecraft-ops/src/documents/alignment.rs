@@ -99,7 +99,12 @@ impl Document for OpenedAlignment {
         }
         let mut prepared = super::PreparedWrite::default();
         let hash = prepared.push(target, |w| files::write_alignment(&self.doc, w))?;
-        super::stage_companion(&mut prepared, target, super::stated(self.doc.alphabet()), &hash)?;
+        super::stage_companion(
+            &mut prepared,
+            target,
+            super::stated(self.doc.alphabet()),
+            &hash,
+        )?;
         Ok(prepared)
     }
 

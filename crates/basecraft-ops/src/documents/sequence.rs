@@ -71,6 +71,27 @@ impl Document for Opened {
     fn opening_warning(&self) -> Option<&str> {
         self.companion_warning.as_deref()
     }
+    fn name_record(&self, op: &mut Op) -> Result<()> {
+        let Some(record) = op.record() else {
+            return Ok(());
+        };
+        if !self.others.repeated_names.is_empty() {
+            return Err(crate::Error::RecordNamesRepeat(
+                self.others.repeated_names.clone(),
+            ));
+        }
+        let open = &self.doc.name;
+        match record {
+            Some(name) if name != open => Err(invalid(format!(
+                "{name} is not the open record; only {open} can be edited"
+            ))),
+            None if self.others.count > 1 => {
+                *record = Some(open.clone());
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
     fn apply(&mut self, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {
         if let Op::SetAlphabet { alphabet } = op {
             let before = super::stated(self.doc.alphabet()).cloned();
@@ -87,7 +108,7 @@ impl Document for Opened {
         undo_sequence(&mut self.doc, inverse)
     }
     fn reapply(&mut self, op: &Op, inverse: &Inverse) -> Result<Inverse> {
-        if let (Op::FeatureAdd { feature }, Inverse::Feature { id, .. }) = (op, inverse) {
+        if let (Op::FeatureAdd { feature, .. }, Inverse::Feature { id, .. }) = (op, inverse) {
             self.doc.restore_feature(*id, Some(feature.clone()));
             Ok(Inverse::Feature {
                 id: *id,
@@ -127,7 +148,12 @@ impl Document for Opened {
                 Ok(())
             })?;
         }
-        super::stage_companion(&mut prepared, target, super::stated(self.doc.alphabet()), &hash)?;
+        super::stage_companion(
+            &mut prepared,
+            target,
+            super::stated(self.doc.alphabet()),
+            &hash,
+        )?;
         Ok(prepared)
     }
     fn saved_hashes(
@@ -144,7 +170,10 @@ impl Document for Opened {
             r?;
             out.push(hw.hash());
         }
-        out.extend(super::facts_hash(super::stated(self.doc.alphabet()), &main)?);
+        out.extend(super::facts_hash(
+            super::stated(self.doc.alphabet()),
+            &main,
+        )?);
         Ok(out)
     }
     fn merge(&self, previous: &Op, next: &Op) -> Option<Op> {
@@ -154,13 +183,16 @@ impl Document for Opened {
                     start,
                     end,
                     residues,
+                    record,
                 },
                 Op::SeqReplace {
                     start: next_start,
                     end: next_end,
                     residues: next_residues,
+                    record: next_record,
                 },
             ) if next_start == next_end
+                && record == next_record
                 && !next_residues.is_empty()
                 && *next_start == start + residues.len() as u64 =>
             {
@@ -168,6 +200,7 @@ impl Document for Opened {
                     start: *start,
                     end: *end,
                     residues: format!("{residues}{}", next_residues.to_ascii_uppercase()),
+                    record: record.clone(),
                 })
             }
             _ => None,
@@ -193,6 +226,7 @@ pub(crate) fn execute_sequence(
             start,
             end,
             residues,
+            ..
         } => {
             if start > end || *end > doc.len() {
                 return Err(invalid(format!(
@@ -210,7 +244,7 @@ pub(crate) fn execute_sequence(
                 None,
             ))
         }
-        Op::FeatureAdd { feature } => {
+        Op::FeatureAdd { feature, .. } => {
             check_location(feature, doc.len())?;
             let fid = doc.add_feature(feature.clone());
             Ok((
@@ -221,7 +255,7 @@ pub(crate) fn execute_sequence(
                 Some(fid),
             ))
         }
-        Op::FeatureRemove { id } => {
+        Op::FeatureRemove { id, .. } => {
             let fid = FeatureId(*id);
             let before = doc
                 .remove_feature(fid)
@@ -234,7 +268,7 @@ pub(crate) fn execute_sequence(
                 None,
             ))
         }
-        Op::FeatureUpdate { id, feature } => {
+        Op::FeatureUpdate { id, feature, .. } => {
             check_location(feature, doc.len())?;
             let fid = FeatureId(*id);
             if doc.feature(fid).is_none() {
@@ -351,13 +385,18 @@ mod tests {
                 start: 0,
                 end: 5,
                 residues: "A".into(),
+                record: None,
             },
             Op::SeqReplace {
                 start: 0,
                 end: 1,
                 residues: "?".into(),
+                record: None,
             },
-            Op::FeatureRemove { id: 900 },
+            Op::FeatureRemove {
+                id: 900,
+                record: None,
+            },
         ] {
             assert!(document.apply(&op).is_err());
             assert_eq!(
@@ -424,6 +463,7 @@ mod tests {
                     start: 2,
                     end: 4,
                     residues: "n".into(),
+                    record: None,
                 })
                 .unwrap();
             assert_ne!(
@@ -489,6 +529,7 @@ mod tests {
                     start: 60,
                     end: 60,
                     residues: "a".into(),
+                    record: None,
                 },
             )
             .unwrap();
@@ -499,6 +540,7 @@ mod tests {
                     start: 61,
                     end: 61,
                     residues: "tg".into(),
+                    record: None,
                 },
             )
             .unwrap();

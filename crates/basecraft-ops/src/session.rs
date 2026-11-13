@@ -97,10 +97,10 @@ const EVENTS_IN_MEMORY: usize = 4_096;
 impl Slot {
     /// Settle the oldest undo steps beyond the limit, whole groups at a time.
     /// At least one step stays, so the saved mark still tells an edited
-    /// document from a clean one.
-    fn settle(&mut self) {
+    /// document from a clean one. Returns the groups of the settled steps.
+    fn settle(&mut self) -> Vec<u64> {
         if self.undo.len() <= UNDO_STEPS + UNDO_STEPS / 4 {
-            return;
+            return Vec::new();
         }
         let mut count = self.undo.len() - UNDO_STEPS;
         while count + 1 < self.undo.len()
@@ -109,12 +109,30 @@ impl Slot {
         {
             count += 1;
         }
+        let mut groups = Vec::new();
         self.settled.extend(self.undo.drain(..count).map(|applied| {
+            groups.extend(applied.group);
             basecraft_protocol::provenance::EditActivity {
                 id: applied.entry_id,
                 operation: applied.op,
             }
         }));
+        groups
+    }
+
+    /// A new edit ends redo; returns the groups of the dropped steps.
+    fn clear_redo(&mut self) -> Vec<u64> {
+        self.redo
+            .drain(..)
+            .filter_map(|applied| applied.group)
+            .collect()
+    }
+
+    fn holds(&self, group: u64) -> bool {
+        self.undo
+            .iter()
+            .chain(&self.redo)
+            .any(|applied| applied.group == Some(group))
     }
 
     /// The undo stack, or the redo stack.
@@ -638,6 +656,7 @@ fn typing(op: &Op) -> bool {
             start,
             end,
             residues,
+            ..
         } => start == end && !residues.is_empty(),
         Op::AlnReplace {
             start,

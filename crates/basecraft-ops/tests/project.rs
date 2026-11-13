@@ -15,6 +15,7 @@ fn edit_and_save(session: &mut Session, file: &Path) {
                 start: 0,
                 end: 1,
                 residues: "T".into(),
+                record: None,
             },
         )
         .unwrap();

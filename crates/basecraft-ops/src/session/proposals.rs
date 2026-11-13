@@ -104,7 +104,9 @@ impl Session {
         let mut edits = Vec::with_capacity(ops.len());
         let mut entries = Vec::with_capacity(ops.len());
         for op in ops {
-            let (inverse, feature) = candidate.as_document_mut().apply_proposal(op)?;
+            let mut op = op.clone();
+            candidate.as_document().name_record(&mut op)?;
+            let (inverse, feature) = candidate.as_document_mut().apply_proposal(&op)?;
             let mut entry = self.entry(
                 id,
                 actor.clone(),
@@ -117,7 +119,7 @@ impl Session {
             );
             entry.state = candidate.as_document().fingerprint();
             edits.push(PreparedEdit {
-                op: op.clone(),
+                op,
                 inverse,
                 entry_id: entry.id.clone(),
             });
@@ -171,9 +173,10 @@ impl Session {
         let slot = &mut self.docs[doc.0];
         *slot.content_mut() = candidate;
         slot.generation = next_generation;
-        slot.redo.clear();
+        let mut dropped = slot.clear_redo();
         slot.undo.extend(applied);
-        slot.settle();
+        dropped.extend(slot.settle());
+        self.forget_groups(dropped);
         self.next_group = next_group;
         Ok(ids)
     }
@@ -406,6 +409,7 @@ mod tests {
             start: 0,
             end: 1,
             residues: "T".into(),
+            record: None,
         };
         let actor = Actor::Agent {
             model: "proposal-test".into(),
@@ -437,6 +441,7 @@ mod tests {
                 doc,
                 Op::FeatureAdd {
                     feature: feature.clone(),
+                    record: None,
                 },
             )
             .unwrap()
@@ -455,8 +460,12 @@ mod tests {
                     Op::FeatureUpdate {
                         id: fid.0,
                         feature: changed,
+                        record: None,
                     },
-                    Op::FeatureRemove { id: fid.0 },
+                    Op::FeatureRemove {
+                        id: fid.0,
+                        record: None,
+                    },
                 ],
                 &actor,
             )

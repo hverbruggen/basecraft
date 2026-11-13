@@ -16,6 +16,7 @@ fn undo_redo_and_branching_follow_the_saved_revision() {
         start: 0,
         end: 1,
         residues: base.into(),
+        record: None,
     };
     assert!(!session.document_record(doc).unwrap().unsaved);
     session.apply(doc, edit("T")).unwrap();

@@ -16,6 +16,7 @@ fn edit() -> Op {
         start: 1,
         end: 2,
         residues: "T".into(),
+        record: None,
     }
 }
 
@@ -341,6 +342,7 @@ fn unsaved_recovery_reconstructs_exact_state_without_cache() {
                     start: 2,
                     end: 3,
                     residues: "A".into(),
+                    record: None,
                 },
             )
             .unwrap();
@@ -381,6 +383,7 @@ fn reopen_and_save_as_preserve_contributing_ancestry() {
                     start: 2,
                     end: 3,
                     residues: "A".into(),
+                    record: None,
                 },
             )
             .unwrap();
@@ -478,6 +481,7 @@ fn ancestor_only_artifacts_and_duplicate_parent_references_are_checked() {
                 start: 2,
                 end: 3,
                 residues: "A".into(),
+                record: None,
             },
         )
         .unwrap();
@@ -566,6 +570,7 @@ fn reopened_ancestry_survives_multiple_saves_and_changed_disk_records() {
             start: 2,
             end: 3,
             residues: "A".into(),
+            record: None,
         },
     )
     .unwrap();
@@ -576,6 +581,7 @@ fn reopened_ancestry_survives_multiple_saves_and_changed_disk_records() {
             start: 3,
             end: 4,
             residues: "C".into(),
+            record: None,
         },
     )
     .unwrap();
@@ -819,6 +825,7 @@ fn typing_bursts_undo_together_and_every_keystroke_recovers() {
         start: at,
         end: at,
         residues: residues.into(),
+        record: None,
     };
     let recovery;
     {
@@ -872,6 +879,7 @@ fn undo_reaches_a_fixed_depth_and_settled_edits_stay_in_effect() {
                     start: 0,
                     end: 1,
                     residues: residue.into(),
+                    record: None,
                 },
             )
             .unwrap();

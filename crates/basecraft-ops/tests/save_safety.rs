@@ -27,6 +27,7 @@ fn replace(start: u64, residues: &str) -> Op {
         start,
         end: start + residues.len() as u64,
         residues: residues.into(),
+        record: None,
     }
 }
 
@@ -106,7 +107,7 @@ fn export_and_extract_refuse_an_open_documents_own_file() {
         assert!(error.contains("open document"), "{error}");
         assert!(!wrote);
         let error = session
-            .extract(doc, (0, 4), &[], false, &target)
+            .extract(doc, (0, 4), &[], false, &target, None)
             .unwrap_err()
             .to_string();
         assert!(error.contains("open document"), "{error}");
@@ -269,6 +270,7 @@ fn full_disk_journal_append_rolls_back_and_keeps_a_recoverable_prefix() {
             start: 4,
             end: 4,
             residues: long,
+            record: None,
         },
     );
     eprintln!("full-disk journal error: {error:?}");

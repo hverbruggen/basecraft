@@ -17,6 +17,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 start: p,
                 end: p,
                 residues: c.to_string(),
+                record: None,
             },
         )?;
     }
@@ -26,6 +27,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             start: 2000,
             end: 2400,
             residues: String::new(),
+            record: None,
         },
     )?;
     s.undo(d)?;

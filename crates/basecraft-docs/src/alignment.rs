@@ -1189,7 +1189,10 @@ mod tests {
             dna.add_sequences(&[("iupac".into(), "RYKMSWBDHVN".into())], None)
                 .is_ok()
         );
-        assert_eq!(aln(&["NNRYKMSW", "NNBDHVRY"]).alphabet().value, Alphabet::Dna);
+        assert_eq!(
+            aln(&["NNRYKMSW", "NNBDHVRY"]).alphabet().value,
+            Alphabet::Dna
+        );
         let protein = aln(&["MKLVE", "MKLIE"]);
         assert!(
             protein
@@ -1398,8 +1401,14 @@ mod tests {
 
     #[test]
     fn protein_detection() {
-        assert_eq!(aln(&["ACGTNACGT-", "ACG-TACGT"]).alphabet().value, Alphabet::Dna);
-        assert_eq!(aln(&["MKLVWQERST", "MKLI-QERST"]).alphabet().value, Alphabet::Protein);
+        assert_eq!(
+            aln(&["ACGTNACGT-", "ACG-TACGT"]).alphabet().value,
+            Alphabet::Dna
+        );
+        assert_eq!(
+            aln(&["MKLVWQERST", "MKLI-QERST"]).alphabet().value,
+            Alphabet::Protein
+        );
     }
 
     /// Random edits, undone in reverse, give back the original exactly.

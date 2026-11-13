@@ -44,7 +44,15 @@ fn new_sequence_validates_before_creating_and_replays_unsaved_edits() {
         qualifiers: vec![],
     };
     assert_eq!(session.record_revision(id).unwrap(), before);
-    session.apply(id, Op::FeatureAdd { feature }).unwrap();
+    session
+        .apply(
+            id,
+            Op::FeatureAdd {
+                feature,
+                record: None,
+            },
+        )
+        .unwrap();
     session.undo(id).unwrap();
     assert_eq!(session.doc(id).unwrap().features().count(), 0);
     session.redo(id).unwrap();

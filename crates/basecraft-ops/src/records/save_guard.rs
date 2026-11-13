@@ -153,6 +153,7 @@ mod tests {
             start: 1,
             end: 2,
             residues: "T".into(),
+            record: None,
         };
         session.apply(doc, edit).unwrap();
         // Another saver holds the target through its whole save.

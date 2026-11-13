@@ -314,6 +314,7 @@ fn installed_snapshot_proposals_commit_in_owner_and_stale_jobs_preserve_edits() 
                 start: 0,
                 end: 1,
                 residues: "T".into(),
+                record: None,
             },
         )
         .unwrap();

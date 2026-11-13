@@ -198,7 +198,8 @@ fn loaded_hash_and_first_durable_action_guards_are_preserved() {
                     Op::SeqReplace {
                         start: 0,
                         end: 1,
-                        residues: "G".into()
+                        residues: "G".into(),
+                        record: None
                     }
                 )
                 .is_err()
