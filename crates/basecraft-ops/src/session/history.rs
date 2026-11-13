@@ -280,6 +280,7 @@ impl Session {
             self.root(),
             matches!(self.replay_mode, ReplayMode::Live),
         )?;
+        content.as_document().name_record(&mut op)?;
         if let Op::SangerUpdate { review } = &mut op {
             *review =
                 self.retain_review_record(&crate::sanger_review::read_journal_record(review)?)?;
@@ -317,12 +318,14 @@ impl Session {
         if checkpoints {
             self.track(doc)?;
         }
-        let displaced = crate::documents::tree::displaced(&self.docs[doc.0].content);
+        let before = crate::documents::tree::displaced(&self.docs[doc.0].content);
+        let mut notes = crate::documents::tree::placement_notes(&self.docs[doc.0].content, &op);
         let (inverse, feature) = self.docs[doc.0]
             .content_mut()
             .as_document_mut()
             .apply(&op)?;
-        let notes = crate::documents::tree::moved_labels(&self.docs[doc.0].content, &displaced);
+        let displaced = crate::documents::tree::newly_displaced(&self.docs[doc.0].content, &before);
+        notes.extend(displaced.iter().map(crate::documents::tree::displaced_note));
         if !checkpoints && let Err(error) = self.track(doc) {
             restore_inverse(self.docs[doc.0].content_mut(), &inverse)?;
             return Err(error);
@@ -347,22 +350,26 @@ impl Session {
             group: group.unwrap_or_default(),
             last: Instant::now(),
         });
-        if let Some(group) = group {
+        // Only an explicit group can span documents.
+        if let Some(group) = self.group {
             self.group_docs.entry(group).or_default().insert(doc.0);
         }
         let slot = &mut self.docs[doc.0];
-        slot.redo.clear();
+        let mut dropped = slot.clear_redo();
         slot.undo.push(Applied {
             entry_id: entry_id.clone(),
             op,
             inverse,
             group,
         });
-        slot.settle();
+        let settled = slot.settle();
+        dropped.extend(self.settle_members(settled));
+        self.forget_groups(dropped);
         Ok(Outcome {
             entry_id,
             feature,
             notes,
+            displaced,
         })
     }
 
@@ -449,6 +456,47 @@ impl Session {
             }
         }
         Ok(last)
+    }
+
+    /// Settle every member's part of groups one document settled, with the
+    /// older steps beneath it, so no group stays half undoable. Returns
+    /// every group settled.
+    pub(super) fn settle_members(&mut self, mut pending: Vec<u64>) -> Vec<u64> {
+        let mut settled = Vec::new();
+        while let Some(group) = pending.pop() {
+            settled.push(group);
+            let members = self.group_docs.get(&group).cloned().unwrap_or_default();
+            for member in members {
+                let slot = &mut self.docs[member];
+                if let Some(last) = slot.undo.iter().rposition(|a| a.group == Some(group)) {
+                    pending.extend(slot.settle_oldest(last + 1));
+                }
+            }
+        }
+        settled
+    }
+
+    /// Forget the documents of groups no document can undo or redo any more.
+    pub(super) fn forget_groups(&mut self, mut dropped: Vec<u64>) {
+        dropped.sort_unstable();
+        dropped.dedup();
+        for group in dropped {
+            let held = self.group_docs.get(&group).is_some_and(|members| {
+                members.iter().any(|&member| self.docs[member].holds(group))
+            });
+            if !held {
+                self.group_docs.remove(&group);
+            }
+        }
+    }
+
+    /// Every label of tree `id` that no longer marks the group it was made
+    /// for, and whether `tree.place_label` can offer `exact` for it (D11).
+    pub fn displaced_labels(
+        &self,
+        id: DocId,
+    ) -> Result<Vec<basecraft_protocol::tree::DisplacedLabel>> {
+        Ok(self.tree(id)?.displaced_labels())
     }
 
     /// Other documents changed by the newest step of `id` that are not
@@ -610,6 +658,23 @@ impl Session {
             .content_mut()
             .as_document_mut()
             .reapply(&applied.op, &applied.inverse)
+    }
+}
+
+impl super::Slot {
+    /// A new edit ends redo; returns the groups of the dropped steps.
+    pub(super) fn clear_redo(&mut self) -> Vec<u64> {
+        self.redo
+            .drain(..)
+            .filter_map(|applied| applied.group)
+            .collect()
+    }
+
+    pub(super) fn holds(&self, group: u64) -> bool {
+        self.undo
+            .iter()
+            .chain(&self.redo)
+            .any(|applied| applied.group == Some(group))
     }
 }
 

@@ -151,6 +151,13 @@
               "format": "uint64",
               "minimum": 0
             },
+            "record": {
+              "description": "The record, by name, in a file that holds several. Absent means\nthe open record.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "residues": {
               "type": "string"
             },
@@ -184,6 +191,13 @@
           "properties": {
             "feature": {
               "$ref": "#/$defs/Feature"
+            },
+            "record": {
+              "description": "The record, by name, in a file that holds several. Absent means\nthe open record.",
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           "required": [
@@ -210,6 +224,13 @@
               "type": "integer",
               "format": "uint32",
               "minimum": 0
+            },
+            "record": {
+              "description": "The record, by name, in a file that holds several. Absent means\nthe open record.",
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           "required": [
@@ -239,6 +260,13 @@
               "type": "integer",
               "format": "uint32",
               "minimum": 0
+            },
+            "record": {
+              "description": "The record, by name, in a file that holds several. Absent means\nthe open record.",
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           "required": [
@@ -270,6 +298,13 @@
             },
             "path": {
               "type": "string"
+            },
+            "record": {
+              "description": "The record, by name, in a file that holds several. Absent means\nthe open record.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "reverse": {
               "description": "Write the reverse complement, so a reverse-strand annotation\nreads 5' to 3' in the new file.",
@@ -1081,7 +1116,39 @@
       ]
     },
     {
-      "description": "A set of support values, such as bootstraps from another analysis:\none per internal node in preorder, as text.",
+      "description": "A set of support values, such as bootstraps from another analysis:\none per internal node in preorder, as text.\nSettle labels a reroot left on another group of tips (D11): each goes\nwhere `choice` says. Empty `labels` means every displaced label. One\nundo step; refused as a whole when one label can't be placed.",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "tree.place_label"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "choice": {
+              "$ref": "#/$defs/LabelPlacement"
+            },
+            "labels": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              }
+            }
+          },
+          "required": [
+            "choice"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
       "type": "object",
       "properties": {
         "op": {
@@ -3594,6 +3661,26 @@
         "failed",
         "cancelled",
         "unavailable"
+      ]
+    },
+    "LabelPlacement": {
+      "description": "Where `tree.place_label` puts a label a reroot left on another group of\ntips (D11).",
+      "oneOf": [
+        {
+          "description": "On the clade that holds exactly the label's tips; refused when none does.",
+          "type": "string",
+          "const": "exact"
+        },
+        {
+          "description": "On the smallest clade that holds all of the label's tips.",
+          "type": "string",
+          "const": "smallest"
+        },
+        {
+          "description": "Remove the label.",
+          "type": "string",
+          "const": "remove"
+        }
       ]
     },
     "Location": {

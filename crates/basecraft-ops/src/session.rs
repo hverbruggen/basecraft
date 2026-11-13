@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use basecraft_docs::alignment::Undo as AlnUndo;
 use basecraft_docs::{AlignmentDoc, EditResult, FeatureId, SequenceDoc, TreeDoc};
+use basecraft_protocol::facts::{Alphabet, Fact};
 use basecraft_protocol::ops::LOG_VERSION;
 use basecraft_protocol::{Actor, DocState, Feature, LogEntry, Op, OpResult};
 
@@ -97,10 +98,10 @@ const EVENTS_IN_MEMORY: usize = 4_096;
 impl Slot {
     /// Settle the oldest undo steps beyond the limit, whole groups at a time.
     /// At least one step stays, so the saved mark still tells an edited
-    /// document from a clean one.
-    fn settle(&mut self) {
+    /// document from a clean one. Returns the groups of the settled steps.
+    fn settle(&mut self) -> Vec<u64> {
         if self.undo.len() <= UNDO_STEPS + UNDO_STEPS / 4 {
-            return;
+            return Vec::new();
         }
         let mut count = self.undo.len() - UNDO_STEPS;
         while count + 1 < self.undo.len()
@@ -109,12 +110,20 @@ impl Slot {
         {
             count += 1;
         }
+        self.settle_oldest(count)
+    }
+
+    /// Settle the oldest `count` undo steps; returns their groups.
+    fn settle_oldest(&mut self, count: usize) -> Vec<u64> {
+        let mut groups = Vec::new();
         self.settled.extend(self.undo.drain(..count).map(|applied| {
+            groups.extend(applied.group);
             basecraft_protocol::provenance::EditActivity {
                 id: applied.entry_id,
                 operation: applied.op,
             }
         }));
+        groups
     }
 
     /// The undo stack, or the redo stack.
@@ -152,6 +161,8 @@ pub struct Outcome {
     pub feature: Option<FeatureId>,
     /// Things the user should hear about, such as a label a reroot moved.
     pub notes: Vec<String>,
+    /// Labels this edit displaced; the window asks where each goes (D11).
+    pub displaced: Vec<basecraft_protocol::tree::DisplacedLabel>,
 }
 
 /// Target-save and evidence locks held while writing an export or extract.
@@ -433,32 +444,13 @@ impl Session {
 
     /// The letters an alignment or sequence is written in: what the user
     /// said, kept in its companion, or else a guess from its residues.
-    pub fn alphabet(
-        &self,
-        id: DocId,
-    ) -> Result<basecraft_protocol::facts::Fact<basecraft_protocol::facts::Alphabet>> {
-        use basecraft_protocol::facts::{Alphabet, Fact, FactSource};
+    pub fn alphabet(&self, id: DocId) -> Result<Fact<Alphabet>> {
         let content = &self.slot(id)?.content;
-        let guessed = |value| Fact {
-            value,
-            source: FactSource::Guessed,
-        };
-        if let Some(opened) = content.alignment() {
-            return Ok(opened.alphabet.clone().unwrap_or_else(|| {
-                guessed(if opened.doc.is_protein() {
-                    Alphabet::Protein
-                } else {
-                    Alphabet::Dna
-                })
-            }));
-        }
-        let opened = content
-            .sequence()
-            .ok_or_else(|| invalid("only alignments and sequences have an alphabet"))?;
-        Ok(opened
-            .alphabet
-            .clone()
-            .unwrap_or_else(|| guessed(Alphabet::Unknown)))
+        let alphabet = content.alignment().map(|opened| opened.doc.alphabet());
+        alphabet
+            .or_else(|| content.sequence().map(|opened| opened.doc.alphabet()))
+            .cloned()
+            .ok_or_else(|| invalid("only alignments and sequences have an alphabet"))
     }
 
     pub fn is_alignment(&self, id: DocId) -> bool {
@@ -496,6 +488,11 @@ impl Session {
         } else {
             Vec::new()
         };
+        if let Some(molecule) = crate::blast::stated_molecule(opened.doc.alphabet(), None) {
+            for query in &mut queries {
+                query.source["molecule"] = molecule.as_str().into();
+            }
+        }
         let mut current = crate::blast::from_doc(&opened.doc, None, None)?;
         current.source["session"] = serde_json::json!(self.id());
         current.source["generation"] = serde_json::json!(self.generation(id)?);
@@ -647,6 +644,7 @@ fn typing(op: &Op) -> bool {
             start,
             end,
             residues,
+            ..
         } => start == end && !residues.is_empty(),
         Op::AlnReplace {
             start,

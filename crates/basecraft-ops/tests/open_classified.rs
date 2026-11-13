@@ -191,18 +191,7 @@ fn loaded_hash_and_first_durable_action_guards_are_preserved() {
         } else {
             std::fs::write(&path, b">a\nTTTTT\n").unwrap();
         }
-        assert!(
-            session
-                .apply(
-                    id,
-                    Op::SeqReplace {
-                        start: 0,
-                        end: 1,
-                        residues: "G".into()
-                    }
-                )
-                .is_err()
-        );
+        assert!(session.apply(id, Op::seq_replace(0, 1, "G")).is_err());
         assert_eq!(session.doc(id).unwrap().read(0, 4), b"ACGT");
     }
 }

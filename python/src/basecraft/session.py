@@ -411,15 +411,33 @@ class Session:
         """
         return self.call("file_record", {"path": str(path)})
 
-    def extract(self, document, path, start, end, *, version, segments=(), reverse=False):
+    def extract(self, document, path, start, end, *, version, segments=(), reverse=False,
+                record=None):
         """Extract a sequence revision to a new GenBank file with source ancestry.
 
         Coordinates are zero-based, half-open; segments are in biological order,
         followed by optional reverse complement. Pass the inspected version.
+        ``record`` optionally checks the name of the open (first) record of a
+        file of several; other records can't be extracted yet.
         """
-        return self.call("extract", {"document": document, "version": version,
-                                    "path": str(path), "start": start, "end": end,
-                                    "segments": list(segments), "reverse": reverse})
+        args = {"document": document, "version": version, "path": str(path),
+                "start": start, "end": end, "segments": list(segments), "reverse": reverse}
+        if record is not None:
+            args["record"] = record
+        return self.call("extract", args)
+
+    def place_labels(self, document, version, choice, labels=()):
+        """Settle labels a reroot left on another group of tips, as one undo step.
+
+        ``choice`` is ``"exact"`` (the clade holding exactly the label's tips;
+        offered when the label's ``exact`` is true), ``"smallest"`` (the
+        smallest clade holding all its tips) or ``"remove"``. ``labels`` lists
+        label ids from the tree state's ``displaced_labels``; empty means all.
+        """
+        params = {"choice": choice}
+        if labels:
+            params["labels"] = list(labels)
+        return self.apply(document, version, {"op": "tree.place_label", "params": params})
 
     def import_support(self, document, path, name=""):
         """Add the support values of another project tree file to an open tree.

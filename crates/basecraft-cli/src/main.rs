@@ -153,6 +153,10 @@ enum Command {
         segments: String,
         #[arg(long)]
         reverse: bool,
+        /// Check that this is the open (first) record of a file of several.
+        /// Other records can't be extracted yet.
+        #[arg(long)]
+        record: Option<String>,
     },
     /// Index a FASTA file (or load its cached index) and print a summary.
     Index { file: PathBuf },
@@ -400,6 +404,11 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             save_options.save(&mut session, doc, None, false)?;
+            // A reroot can leave labels on other groups; place them with tree.place_label.
+            if session.is_tree(doc) {
+                let displaced = session.displaced_labels(doc)?;
+                println!("{}", serde_json::json!({ "displaced_labels": displaced }));
+            }
         }
         Command::ImportSupport { tree, source, name } => {
             let tree = tree.canonicalize()?;
@@ -423,6 +432,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             output,
             segments,
             reverse,
+            record,
         } => {
             let file = file.canonicalize()?;
             if output.try_exists()? {
@@ -438,7 +448,14 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let mut session =
                 script_session(file.parent().ok_or("File has no parent")?, project.as_ref())?;
             let doc = session.open(&file)?;
-            session.extract(doc, (start, end), &segments, reverse, &output)?;
+            session.extract(
+                doc,
+                (start, end),
+                &segments,
+                reverse,
+                &output,
+                record.as_deref(),
+            )?;
             println!(
                 "{}",
                 serde_json::json!({"output":output,"hash":basecraft_io::hash_file(&output)?})

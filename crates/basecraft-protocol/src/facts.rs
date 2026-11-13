@@ -16,6 +16,34 @@ pub enum Alphabet {
     Unknown,
 }
 
+impl Alphabet {
+    /// Basecraft's one guess from residues: protein when any letter falls
+    /// outside the IUPAC nucleotide codes, DNA when every letter is one of
+    /// them, unknown with no letters. RNA is never guessed.
+    pub fn guess(residues: &[u8]) -> Self {
+        let mut letters = residues
+            .iter()
+            .filter(|b| b.is_ascii_alphabetic())
+            .peekable();
+        if letters.peek().is_none() {
+            return Self::Unknown;
+        }
+        if letters.any(|b| !b"ACGTUNRYKMSWBDHV".contains(&b.to_ascii_uppercase())) {
+            Self::Protein
+        } else {
+            Self::Dna
+        }
+    }
+
+    /// The guess as a fact, for a document whose side file states nothing.
+    pub fn guessed(residues: &[u8]) -> Fact<Self> {
+        Fact {
+            value: Self::guess(residues),
+            source: FactSource::Guessed,
+        }
+    }
+}
+
 /// What a tree's branch lengths measure.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -57,4 +85,18 @@ pub enum FactSource {
 pub struct Fact<T> {
     pub value: T,
     pub source: FactSource,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Alphabet;
+
+    #[test]
+    fn guess_reads_letters_only() {
+        assert_eq!(Alphabet::guess(b"acgt-NRYKMSW"), Alphabet::Dna);
+        assert_eq!(Alphabet::guess(b"ACGU"), Alphabet::Dna);
+        assert_eq!(Alphabet::guess(b"MKLV*"), Alphabet::Protein);
+        assert_eq!(Alphabet::guess(b"ACGTX"), Alphabet::Protein);
+        assert_eq!(Alphabet::guess(b"--??"), Alphabet::Unknown);
+    }
 }

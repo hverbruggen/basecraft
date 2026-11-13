@@ -295,7 +295,7 @@ fn export_and_extraction_cannot_bypass_known_input_guard() {
     ));
     assert!(!wrote);
     assert!(matches!(
-        session.extract(doc, (0, 4), &[], false, &source),
+        session.extract(doc, (0, 4), &[], false, &source, None),
         Err(basecraft_ops::Error::EvidenceConflict(_))
     ));
     assert_eq!(std::fs::read_to_string(source).unwrap(), original);

@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use basecraft_docs::FeatureId;
 use basecraft_docs::tree::TreeDoc;
+use basecraft_protocol::tree::{DisplacedLabel, LabelPlacement};
 use basecraft_protocol::{DocState, Op};
 
 use super::Document;
@@ -24,6 +25,7 @@ impl Document for OpenedTree {
                 | Op::TreeRenameTip { .. }
                 | Op::TreeSetBranchLengths { .. }
                 | Op::TreeAnnotate { .. }
+                | Op::TreePlaceLabel { .. }
                 | Op::TreeAddSupport { .. }
                 | Op::TreeRemoveSupport { .. }
                 | Op::TreeStyle { .. }
@@ -140,22 +142,45 @@ pub(crate) fn displaced(content: &files::Loaded) -> Vec<u32> {
         .map_or_else(Vec::new, |tree| tree.doc.displaced_annotations())
 }
 
-/// A note for each label an edit moved onto another group, such as by a reroot.
-pub(crate) fn moved_labels(content: &files::Loaded, before: &[u32]) -> Vec<String> {
+/// The labels an edit, such as a reroot, displaced: displaced now and not
+/// `before`.
+pub(crate) fn newly_displaced(content: &files::Loaded, before: &[u32]) -> Vec<DisplacedLabel> {
     let Some(tree) = content.tree() else {
         return Vec::new();
     };
-    tree.doc
-        .displaced_annotations()
-        .into_iter()
-        .filter(|id| !before.contains(id))
-        .map(|id| {
-            format!(
-                "Label {:?} no longer marks the group it was made for",
-                tree.doc.annotations()[&id].label
-            )
-        })
+    let mut labels = tree.doc.displaced_labels();
+    labels.retain(|label| !before.contains(&label.id));
+    labels
+}
+
+/// History notes for each label `tree.place_label` places, taken before it
+/// runs so a removed label keeps its name in History.
+pub(crate) fn placement_notes(content: &files::Loaded, op: &Op) -> Vec<String> {
+    let (Some(tree), Op::TreePlaceLabel { labels, choice }) = (content.tree(), op) else {
+        return Vec::new();
+    };
+    let ids = if labels.is_empty() {
+        displaced(content)
+    } else {
+        labels.clone()
+    };
+    let done = match choice {
+        LabelPlacement::Exact => "moved to the clade holding exactly its tips",
+        LabelPlacement::Smallest => "moved to the smallest clade holding its tips",
+        LabelPlacement::Remove => "removed",
+    };
+    ids.iter()
+        .filter_map(|id| tree.doc.annotations().get(id))
+        .map(|a| format!("Label {:?} {done}", a.label))
         .collect()
+}
+
+/// The note for a label an edit displaced.
+pub(crate) fn displaced_note(label: &DisplacedLabel) -> String {
+    format!(
+        "Label {:?} no longer marks the group it was made for",
+        label.label
+    )
 }
 
 pub(crate) fn execute_tree(doc: &mut TreeDoc, op: &Op) -> Result<basecraft_docs::tree::TreeUndo> {

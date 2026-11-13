@@ -8,18 +8,7 @@ fn changed_original_is_rejected_before_editing() {
     let mut session = Session::new(dir.path());
     let doc = session.open(&path).unwrap();
     std::fs::write(&path, b">sequence\nTTTT\n").unwrap();
-    assert!(
-        session
-            .apply(
-                doc,
-                Op::SeqReplace {
-                    start: 0,
-                    end: 1,
-                    residues: "G".into()
-                }
-            )
-            .is_err()
-    );
+    assert!(session.apply(doc, Op::seq_replace(0, 1, "G")).is_err());
     assert!(!session.can_undo(doc).unwrap());
     assert!(!session.document_record(doc).unwrap().unsaved);
 }
@@ -38,11 +27,7 @@ fn recovery_starts_at_completed_save() {
     let mut session = Session::new(&source);
     session.provenance_policy = basecraft_platform::settings::ProvenancePolicy::None;
     let doc = session.open(&path).unwrap();
-    let replace = |start, residues: &str| Op::SeqReplace {
-        start,
-        end: start + 1,
-        residues: residues.into(),
-    };
+    let replace = |start, residues: &str| Op::seq_replace(start, start + 1, residues);
     session.apply(doc, replace(0, "T")).unwrap();
     session.save(doc, None).unwrap();
     session.apply(doc, replace(1, "A")).unwrap();
@@ -87,11 +72,7 @@ fn recovery_checkpoints_external_edits_and_undo_and_needs_replaced_originals() {
             let mut session = Session::recoverable(&source).unwrap();
             session.provenance_policy = basecraft_platform::settings::ProvenancePolicy::None;
             let doc = session.open(&path).unwrap();
-            let replace = |start, residue: &str| Op::SeqReplace {
-                start,
-                end: start + 1,
-                residues: residue.into(),
-            };
+            let replace = |start, residue: &str| Op::seq_replace(start, start + 1, residue);
             session.apply(doc, replace(0, "T")).unwrap();
             let expected: &[u8] = match scenario {
                 "replace" => {
@@ -189,11 +170,7 @@ fn cross_device_recovery_after_save_as_and_interrupted_save() {
         } else {
             session.open(&path).unwrap()
         };
-        let edit = |start, text: &str| Op::SeqReplace {
-            start,
-            end: start + 1,
-            residues: text.into(),
-        };
+        let edit = |start, text: &str| Op::seq_replace(start, start + 1, text);
         session.apply(doc, edit(0, "T")).unwrap();
         let expected = if scenario.ends_with("rename") {
             // Process loss before the data rename, or after it but before the
@@ -253,16 +230,7 @@ fn recovery_uses_an_immutable_object_after_the_original_changes() {
     std::fs::create_dir_all(&objects).unwrap();
     let object = objects.join(basecraft_io::hash_bytes(original).trim_start_matches("b3:"));
     std::fs::write(&object, original).unwrap();
-    session
-        .apply(
-            doc,
-            Op::SeqReplace {
-                start: 0,
-                end: 1,
-                residues: "T".into(),
-            },
-        )
-        .unwrap();
+    session.apply(doc, Op::seq_replace(0, 1, "T")).unwrap();
     assert!(session.recovery_warning(doc).is_none());
     std::fs::write(&path, b">outside\nCCCC\n").unwrap();
     assert_eq!(std::fs::read(&object).unwrap(), original);
@@ -299,17 +267,15 @@ fn recovery_after_save_keeps_feature_ids_and_external_save_as() {
         .unwrap()
         .1
         .clone();
-    session.apply(doc, Op::FeatureRemove { id: 0 }).unwrap();
+    session.apply(doc, Op::feature_remove(0)).unwrap();
     let saved = other.join("copy.gb");
     session.save(doc, Some(&saved)).unwrap();
     let added = session
-        .apply(doc, Op::FeatureAdd { feature })
+        .apply(doc, Op::feature_add(feature))
         .unwrap()
         .feature
         .unwrap();
-    session
-        .apply(doc, Op::FeatureRemove { id: added.0 })
-        .unwrap();
+    session.apply(doc, Op::feature_remove(added.0)).unwrap();
     let expected = session.doc(doc).unwrap().to_genbank();
     let outputs =
         crate::records::replay::recover(session.recovery_root(), &root.join("recovered")).unwrap();
@@ -331,11 +297,7 @@ fn external_document_checkpoint_stays_inside_recovery_storage() {
     let mut session = Session::recoverable(&project).unwrap();
     session.provenance_policy = basecraft_platform::settings::ProvenancePolicy::None;
     let doc = session.open(&source).unwrap();
-    let edit = |start, residues: &str| Op::SeqReplace {
-        start,
-        end: start + 1,
-        residues: residues.into(),
-    };
+    let edit = |start, residues: &str| Op::seq_replace(start, start + 1, residues);
     session.apply(doc, edit(0, "G")).unwrap();
     std::fs::write(&source, b">outside\nCCCC\n").unwrap();
     session.apply(doc, edit(1, "T")).unwrap();
@@ -359,16 +321,7 @@ fn missing_cross_device_document_does_not_block_other_recovery() {
         let path = source.path().join(format!("{name}.fa"));
         std::fs::write(&path, format!(">{name}\nAAAA\n")).unwrap();
         let doc = session.open(&path).unwrap();
-        session
-            .apply(
-                doc,
-                Op::SeqReplace {
-                    start: 0,
-                    end: 1,
-                    residues: "G".into(),
-                },
-            )
-            .unwrap();
+        session.apply(doc, Op::seq_replace(0, 1, "G")).unwrap();
     }
     std::fs::remove_file(source.path().join("missing.fa")).unwrap();
     let recovery = session.recovery_root().to_path_buf();
@@ -382,4 +335,52 @@ fn missing_cross_device_document_does_not_block_other_recovery() {
         before,
         serde_json::to_vec(&crate::log::read_all(&recovery).unwrap()).unwrap()
     );
+}
+
+#[test]
+fn a_long_grouped_session_keeps_its_group_table_bounded() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::new(dir.path());
+    session.provenance_policy = basecraft_platform::settings::ProvenancePolicy::None;
+    let a = session.create_sequence("a", "ACGT").unwrap();
+    let b = session.create_sequence("b", "ACGT").unwrap();
+    let edit = || Op::seq_replace(0, 1, "G");
+    for i in 0..=UNDO_STEPS + UNDO_STEPS / 4 {
+        session.begin_group();
+        session.apply(a, edit()).unwrap();
+        if i % 1000 == 0 {
+            session.apply(b, edit()).unwrap();
+        }
+        session.end_group();
+        // A group undone and then replaced by a new edit can't come back.
+        if i % 1000 == 1 {
+            session.undo(a).unwrap();
+            session.apply(a, edit()).unwrap();
+        }
+    }
+    session.begin_group();
+    session.apply(a, edit()).unwrap();
+    session.apply(b, edit()).unwrap();
+    session.end_group();
+    assert!(
+        session.docs[a.0].undo.len() <= UNDO_STEPS + 1,
+        "old steps settled"
+    );
+    // The table keeps exactly the groups some document can still undo or
+    // redo: none for settled or dropped steps.
+    let held: std::collections::BTreeSet<u64> = session
+        .docs
+        .iter()
+        .flat_map(|slot| slot.undo.iter().chain(&slot.redo))
+        .filter_map(|applied| applied.group)
+        .collect();
+    assert!(session.group_docs.keys().copied().eq(held));
+    // A group settled in one document is settled in every member, so none
+    // is left half undoable.
+    for (group, members) in &session.group_docs {
+        assert!(members.iter().all(|&m| session.docs[m].holds(*group)));
+    }
+    // What stays still undoes as one step in both documents.
+    session.undo(a).unwrap();
+    assert!(session.can_redo(b).unwrap());
 }

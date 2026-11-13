@@ -78,6 +78,7 @@
         "save_decision_stale",
         "published_with_failure",
         "nothing_to_do",
+        "record_names_repeat",
         "changed_on_disk",
         "wrong_document_kind",
         "unknown_document",

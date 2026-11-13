@@ -190,7 +190,7 @@ fn embedded_activity_original_records() {
     let doc = session.create_sequence("sample", "ACGTACGT").unwrap();
     let extracted = root.path().join("extracted.fa");
     session
-        .extract(doc, (1, 5), &[], false, &extracted)
+        .extract(doc, (1, 5), &[], false, &extracted, None)
         .unwrap();
     let bundle = basecraft_ops::records::bundle_for_result(&extracted, None);
     let input = basecraft_ops::records::read_input(&bundle).unwrap();

@@ -100,6 +100,9 @@ impl Server {
         let version = self.session.revision(doc)?;
         let mut state = json!({"document":doc.0,"path":self.session.doc_key(doc)?,"kind":kind,"version":version,"generation":self.session.generation(doc)?,
             "state":self.session.state(doc)?,"can_undo":self.session.can_undo(doc)?,"can_redo":self.session.can_redo(doc)?});
+        if self.session.is_tree(doc) {
+            state["displaced_labels"] = json!(self.session.displaced_labels(doc)?);
+        }
         if let Ok(review) = self.session.sanger_review(doc) {
             state["call_sets"] = json!(review.call_sets());
             state["selected_call_set"] = json!(review.draft_sha256);
@@ -275,6 +278,10 @@ impl Server {
                     &segments,
                     args["reverse"].as_bool().unwrap_or(false),
                     &target,
+                    match args.get("record") {
+                        None | Some(serde_json::Value::Null) => None,
+                        Some(record) => Some(record.as_str().ok_or("record must be a string")?),
+                    },
                 )?;
                 Ok(json!({"output":target,"hash":basecraft_io::hash_file(&target)?}))
             }
@@ -628,7 +635,7 @@ fn tools() -> Value {
         }}), &["document"]),
         tool("save_check","Inspect a save without writing. Returns a single-attempt token owned by this live Session; newer checks supersede it. Known policy and incomplete acknowledgement are separate.",json!({"document":doc,"path":string}), &["document"]),
         tool("file_record","Read history and methods for a saved project file as it is on disk, including saved Sanger reviews. Same output as `basecraft history --json`; writes nothing.",json!({"path":string}), &["path"]),
-        tool("extract","Extract the inspected sequence revision to a new GenBank file with source ancestry. Coordinates are zero-based, half-open; optional splice segments are in biological order, followed by optional reverse complement. Existing destinations are refused.",json!({"document":doc,"version":{"type":"integer","minimum":0},"path":string,"start":{"type":"integer","minimum":0},"end":{"type":"integer","minimum":0},"segments":{"type":"array","items":{"type":"array","items":{"type":"integer","minimum":0},"minItems":2,"maxItems":2}},"reverse":{"type":"boolean"}}), &["document","version","path","start","end"]),
+        tool("extract","Extract the inspected sequence revision to a new GenBank file with source ancestry. Coordinates are zero-based, half-open; optional splice segments are in biological order, followed by optional reverse complement. Existing destinations are refused.",json!({"document":doc,"version":{"type":"integer","minimum":0},"path":string,"start":{"type":"integer","minimum":0},"end":{"type":"integer","minimum":0},"segments":{"type":"array","items":{"type":"array","items":{"type":"integer","minimum":0},"minItems":2,"maxItems":2}},"reverse":{"type":"boolean"},"record":{"type":"string","description":"Optional check: the name of the open (first) record of a file of several. Other records can't be extracted yet."}}), &["document","version","path","start","end"]),
         tool("delimitation_linked_alignment","Inspect the loaded species workspace's unverified alignment hint. Returns path:string|null, preserving an explicit empty string; does not read or validate that path or authorize analysis.",json!({"document":doc}), &["document"]),
         tool("delimitation_candidates","Inspect saved species hypotheses in recommendation order, without writing records.",json!({"paths":{"type":"array","items":{"type":"string"}}}), &["paths"]),
         tool("delimitation_name","Suggest a free combined SPART filename beside the last input; writes nothing.",json!({"paths":{"type":"array","items":{"type":"string"}}}), &["paths"]),

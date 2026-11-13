@@ -90,21 +90,7 @@ pub fn reverse_complement(calls: &[u8]) -> Vec<u8> {
     calls
         .iter()
         .rev()
-        .map(|&base| match base {
-            b'A' => b'T',
-            b'C' => b'G',
-            b'G' => b'C',
-            b'T' => b'A',
-            b'R' => b'Y',
-            b'Y' => b'R',
-            b'K' => b'M',
-            b'M' => b'K',
-            b'B' => b'V',
-            b'V' => b'B',
-            b'D' => b'H',
-            b'H' => b'D',
-            other => other,
-        })
+        .map(|&base| basecraft_docs::sequence::complement(base))
         .collect()
 }
 
