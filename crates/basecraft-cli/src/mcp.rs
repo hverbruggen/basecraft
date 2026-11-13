@@ -67,7 +67,8 @@ impl Server {
             // D16: name the recent project that holds it, without choosing it.
             let holder = basecraft_ops::project::Project::recent_holding(
                 &resolved,
-                &crate::recent_projects(),
+                self.session.project(),
+                &basecraft_viewmodel::projects::recent(),
             )
             .map(|p| {
                 format!(

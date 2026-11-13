@@ -150,10 +150,10 @@ pub struct JobIndexSource {
     pub path: String,
 }
 
-/// Lightweight `.basecraft/jobs/<id>/manifest.json` of the run's project or
-/// folder. The pointed-to
-/// `OperationOutcome` in runtime.json stays authoritative; this is not `JobRecord`.
-/// Existing selected-field readers and owner/receipt checks remain unchanged.
+/// Lightweight `.basecraft/jobs/<id>/manifest.json` of the run's home (its
+/// project, or the folder that holds the run). Every path is relative to that
+/// home and `/`-separated. The pointed-to `OperationOutcome` in runtime.json
+/// stays authoritative; this is not `JobRecord`.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct LocalJobIndex {
     pub schema_version: u32,

@@ -429,13 +429,21 @@ impl SangerRun {
             status,
             operation: self.operation.clone(),
             started: self.started.clone(),
+            // Paths relative to the home, so the record travels with it.
             source: SangerJobSource {
-                path: self.evidence.sources.first().map(|s| s.path.clone()),
+                path: self
+                    .evidence
+                    .sources
+                    .first()
+                    .map(|s| inputs::relative(&self.base, &s.location()?).map(PathBuf::from))
+                    .transpose()?,
             },
             outputs: std::collections::BTreeMap::new(),
-            primary_output: result.map(Path::to_path_buf),
+            primary_output: result
+                .map(|path| inputs::relative(&self.base, path).map(PathBuf::from))
+                .transpose()?,
             diagnostics: diagnostic.map(str::to_owned),
-            artifact_run: Some(self.run.directory().to_path_buf()),
+            artifact_run: Some(inputs::relative(&self.base, self.run.directory())?.into()),
             extra: std::collections::BTreeMap::new(),
         })?;
         let path = self.job_path();

@@ -46,10 +46,6 @@ pub mod qobject {
         /// projects. Returns `path`, or "" with `project_error` set.
         #[qinvokable]
         fn select_project(self: Pin<&mut AppSettings>, path: &QString) -> QString;
-        /// The recent project that holds `file` when the chosen one does
-        /// not, else "" (D16).
-        #[qinvokable]
-        fn recent_project_of(self: &AppSettings, file: &QString) -> QString;
         #[qinvokable]
         fn project_picker_directory(self: &AppSettings) -> QString;
         #[qinvokable]
@@ -203,7 +199,7 @@ fn change(key: &str, value: &serde_json::Value) -> Result<Change, String> {
 impl qobject::AppSettings {
     fn select_project(mut self: Pin<&mut Self>, path: &QString) -> QString {
         let chosen = path.to_string();
-        let result = history_path().and_then(|file| {
+        let result = projects::history_file().and_then(|file| {
             projects::choose(
                 &mut self.as_mut().rust_mut().project_picker,
                 Path::new(&chosen),
@@ -213,20 +209,6 @@ impl qobject::AppSettings {
         let accepted = result.is_ok();
         self.show_projects(result);
         QString::from(if accepted { chosen.as_str() } else { "" })
-    }
-    fn recent_project_of(&self, file: &QString) -> QString {
-        let file = PathBuf::from(file.to_string());
-        let chosen = crate::chosen_project::chosen().ok().flatten();
-        if chosen.is_some_and(|project| project.contains(&file)) {
-            return QString::default();
-        }
-        basecraft_ops::project::Project::recent_holding(
-            &file,
-            &load_project_history().unwrap_or_default(),
-        )
-        .map_or_else(QString::default, |p| {
-            QString::from(p.root().to_string_lossy().as_ref())
-        })
     }
     /// Publish the recent projects, or keep the shown ones and say why not.
     fn show_projects(mut self: Pin<&mut Self>, result: Result<Vec<PathBuf>, String>) {
@@ -311,12 +293,8 @@ impl qobject::AppSettings {
     }
 }
 
-fn history_path() -> Result<PathBuf, String> {
-    basecraft_ops::project::recent_projects_file().map_err(|e| e.to_string())
-}
-
 pub(crate) fn load_project_history() -> Result<Vec<PathBuf>, String> {
-    let path = history_path()?;
+    let path = projects::history_file()?;
     projects::load_history(&path)
 }
 

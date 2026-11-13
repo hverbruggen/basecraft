@@ -834,6 +834,10 @@ fn job_records_stay_with_the_data_when_the_private_folder_is_deleted() {
     let state = basecraft_platform::paths::AppPaths::discover()
         .unwrap()
         .state;
+    assert!(
+        !state.join("jobs").exists(),
+        "a job record went to the private folder"
+    );
     if state.exists() {
         std::fs::remove_dir_all(&state).unwrap();
     }

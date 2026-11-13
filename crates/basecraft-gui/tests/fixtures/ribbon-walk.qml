@@ -600,7 +600,7 @@ Main {
         list.push(() => {
             openPath(folder + "/rooted.nwk")
             check(asked().opened && documentTabs().count === 0, "a file in another recent project opened without asking")
-            check(asked().file.project === folder, "the question names " + asked().file.project + ", not the file's project")
+            check(asked().file.root === folder && asked().file.name === folder.split("/").pop(), "the question names " + asked().file.root + ", not the file's project")
             press("openOnItsOwn")
         })
         list.push(until(() => tabOf(folder + "/rooted.nwk") >= 0, "Open on its own did not open the file"))

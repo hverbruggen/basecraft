@@ -30,14 +30,17 @@ fn job_records(folders: &[&Path], previous: bool, owner: &str) -> crate::Result<
     let mut budget = TaskReadBudget(64 << 20);
     let mut warnings = Vec::new();
     let mut listings = Vec::new();
-    for folder in folders {
+    for &folder in folders {
+        // The folder is `<home>/.basecraft/jobs`; its records' paths are
+        // relative to the home.
+        let home = folder.parent().and_then(Path::parent).unwrap_or(folder);
         match std::fs::read_dir(folder) {
-            Ok(listing) => listings.push(listing),
+            Ok(listing) => listings.push(listing.map(move |entry| (home, entry))),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(e.into()),
         }
     }
-    for (index, entry) in listings.into_iter().flatten().enumerate() {
+    for (index, (home, entry)) in listings.into_iter().flatten().enumerate() {
         if index >= 4096 {
             warnings.push("Showing at most 4096 retained runs".into());
             break;
@@ -57,7 +60,9 @@ fn job_records(folders: &[&Path], previous: bool, owner: &str) -> crate::Result<
                     || !run["id"].is_string()
                     || !run["status"].is_string()
                     || !run["operation"].is_string()
-                    || !run["source"]["path"].is_string()
+                    || !run["source"]["path"]
+                        .as_str()
+                        .is_some_and(|p| Path::new(p).is_relative())
                     || !run["outputs"].is_object()
                 {
                     warnings.push(format!(
@@ -70,8 +75,16 @@ fn job_records(folders: &[&Path], previous: bool, owner: &str) -> crate::Result<
                 if !previous && !current {
                     continue;
                 }
+                let source = home.join(run["source"]["path"].as_str().unwrap_or_default());
+                run["source"]["path"] = serde_json::json!(source);
+                // A Sanger stage's own pointers; one outside the home is dropped.
+                for field in ["primary_output", "artifact_run"] {
+                    if let Some(path) = run.get(field).and_then(serde_json::Value::as_str) {
+                        run[field] = serde_json::json!(inside(home, path));
+                    }
+                }
                 if run.get("runtime_record").is_some()
-                    && let Err(error) = reconcile_task_receipt(&mut run, &mut budget)
+                    && let Err(error) = reconcile_task_receipt(&mut run, home, &mut budget)
                 {
                     let notice = format!(
                         "Canonical task receipt unavailable or unsupported for {}: {error}",
@@ -134,23 +147,28 @@ impl TaskReadBudget {
     }
 }
 
+/// A path a job record names, relative to its home and inside it.
+fn inside(home: &Path, path: &str) -> Option<PathBuf> {
+    normal_task_path(Path::new(path)).then(|| home.join(path))
+}
+
 fn reconcile_task_receipt(
     run: &mut serde_json::Value,
+    home: &Path,
     budget: &mut TaskReadBudget,
 ) -> crate::Result<()> {
     use basecraft_protocol::operation::OperationOutcome;
+    // The pointer is relative to the record's home, so a copied project reads
+    // its own receipt. Listing never searches for or rewrites evidence.
     let path = run["runtime_record"]
         .as_str()
-        .filter(|path| !path.is_empty())
-        .ok_or_else(|| crate::error::invalid("invalid runtime receipt pointer"))?;
-    // Registered writers store an absolute pointer. A moved project requires
-    // explicit relinking; listing never searches for or rewrites its evidence.
-    if !Path::new(path).is_absolute() {
-        return Err(crate::error::invalid(
-            "runtime receipt pointer must be absolute",
-        ));
-    }
-    let outcome: OperationOutcome = serde_json::from_slice(&budget.read(Path::new(path))?)?;
+        .and_then(|path| inside(home, path))
+        .ok_or_else(|| {
+            crate::error::invalid("runtime receipt pointer must be a path inside the record's home")
+        })?;
+    run["runtime_record"] = serde_json::json!(path);
+    let path = path.as_path();
+    let outcome: OperationOutcome = serde_json::from_slice(&budget.read(path)?)?;
     if outcome.schema != 1 {
         return Err(crate::error::invalid(
             "unsupported operation receipt schema",
@@ -159,7 +177,7 @@ fn reconcile_task_receipt(
     if run["id"] != outcome.run_id || run["operation"] != outcome.operation {
         return Err(crate::error::invalid("operation receipt identity mismatch"));
     }
-    let primary = task_primary_output(&outcome, Path::new(path), budget);
+    let primary = task_primary_output(&outcome, path, budget);
     run["status"] = serde_json::to_value(outcome.state)?;
     run["effective_parameters"] = outcome.effective_parameters;
     run["outputs"] = serde_json::to_value(
@@ -294,7 +312,7 @@ mod tests {
         root: &Path,
         state: &str,
     ) -> (std::path::PathBuf, std::path::PathBuf, serde_json::Value) {
-        let jobs = root.join("jobs");
+        let jobs = root.join(".basecraft/jobs");
         let receipt = root.join("run/runtime.json");
         std::fs::create_dir_all(receipt.parent().unwrap()).unwrap();
         std::fs::create_dir_all(jobs.join("registered")).unwrap();
@@ -306,7 +324,7 @@ mod tests {
         std::fs::write(&receipt, outcome.to_string()).unwrap();
         let index = serde_json::json!({"schema_version":1,"id":"registered","status":"completed","operation":"test/run@1",
             "owner_instance":"current","source":{"path":"input.afa"},"outputs":{"stale.nwk":"stale"},
-            "primary_output":"stale.nwk","diagnostics":"stale error","runtime_record":receipt});
+            "primary_output":"stale.nwk","diagnostics":"stale error","runtime_record":"run/runtime.json"});
         std::fs::write(jobs.join("registered/manifest.json"), index.to_string()).unwrap();
         (jobs, receipt, outcome)
     }
@@ -556,7 +574,12 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         const CHILD: &str = "BASECRAFT_TASK_FIFO_CHILD";
         if let Some(root) = std::env::var_os(CHILD) {
-            let rows = job_records(&[&Path::new(&root).join("jobs")], false, "current").unwrap();
+            let rows = job_records(
+                &[&Path::new(&root).join(".basecraft/jobs")],
+                false,
+                "current",
+            )
+            .unwrap();
             let text = rows.to_string();
             assert!(text.contains("not a regular file"), "{text}");
             assert!(!text.contains("reading limit"), "{text}");
@@ -657,7 +680,7 @@ mod tests {
         );
         assert_eq!(
             rows.iter().find(|row| row["id"] == "sanger").unwrap()["primary_output"],
-            "called.fa"
+            serde_json::json!(temp.path().join("called.fa"))
         );
         assert_eq!(std::fs::read_dir(&jobs).unwrap().count(), 3);
         assert_eq!(job_records(&[&jobs], false, "current").unwrap(), first);
@@ -688,9 +711,40 @@ mod tests {
     }
 
     #[test]
+    fn a_moved_home_reads_its_own_receipt_and_absolute_pointers_are_refused() {
+        let temp = tempfile::tempdir().unwrap();
+        let (_, receipt, _) = registered_fixture(&temp.path().join("a"), "completed");
+        let moved = temp.path().join("b");
+        std::fs::rename(temp.path().join("a"), &moved).unwrap();
+        let jobs = moved.join(".basecraft/jobs");
+        let row = &job_records(&[&jobs], false, "current").unwrap()["jobs"][0];
+        assert_eq!(row["receipt_confirmed"], true, "{row}");
+        assert_eq!(
+            row["runtime_record"],
+            serde_json::json!(moved.join("run/runtime.json"))
+        );
+        assert_eq!(
+            row["source"]["path"],
+            serde_json::json!(moved.join("input.afa"))
+        );
+        let index = jobs.join("registered/manifest.json");
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&index).unwrap()).unwrap();
+        value["runtime_record"] = serde_json::json!(receipt);
+        std::fs::write(&index, value.to_string()).unwrap();
+        let row = &job_records(&[&jobs], false, "current").unwrap()["jobs"][0];
+        assert_eq!(row["receipt_confirmed"], false, "{row}");
+        value["runtime_record"] = serde_json::json!("../a/run/runtime.json");
+        value["source"]["path"] = serde_json::json!(moved.join("input.afa"));
+        std::fs::write(&index, value.to_string()).unwrap();
+        let rows = job_records(&[&jobs], false, "current").unwrap();
+        assert_eq!(rows["jobs"], serde_json::json!([]), "{rows}");
+    }
+
+    #[test]
     fn task_records_handle_missing_malformed_and_previous_owners() {
         let dir = tempfile::tempdir().unwrap();
-        let jobs = dir.path().join("jobs");
+        let jobs = dir.path().join(".basecraft/jobs");
         assert_eq!(
             job_records(&[&jobs], false, "current").unwrap()["jobs"],
             serde_json::json!([])

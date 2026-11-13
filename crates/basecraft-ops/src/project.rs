@@ -72,11 +72,14 @@ impl Project {
             .map(Path::to_path_buf)
     }
 
-    /// The project on the recent-projects list `recent` that holds `file`,
-    /// comparing canonical paths; the innermost one when they nest (D16).
-    /// Only the list is consulted: basecraft never searches the disk for a
-    /// project.
-    pub fn recent_holding(file: &Path, recent: &[PathBuf]) -> Option<Self> {
+    /// The project on the recent-projects list `recent` that holds `file`
+    /// when the `chosen` project does not, comparing canonical paths; the
+    /// innermost one when they nest (D16). Only the list is consulted:
+    /// basecraft never searches the disk for a project.
+    pub fn recent_holding(file: &Path, chosen: Option<&Self>, recent: &[PathBuf]) -> Option<Self> {
+        if chosen.is_some_and(|project| project.contains(file)) {
+            return None;
+        }
         recent
             .iter()
             .filter_map(|root| Self::new(root).ok())
@@ -96,14 +99,6 @@ impl Project {
     }
 }
 
-/// The recent-projects list the desktop app keeps in basecraft's private
-/// folder.
-pub fn recent_projects_file() -> crate::Result<PathBuf> {
-    let paths = basecraft_platform::paths::AppPaths::discover()
-        .map_err(|e| crate::error::invalid(e.to_string()))?;
-    Ok(paths.state.join("recent-projects.json"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::Project;
@@ -119,7 +114,7 @@ mod tests {
         std::fs::write(&file, b">a\nA\n").unwrap();
         let recent = [outer.clone(), inner.clone(), root.path().join("gone")];
         let holder = |file: &std::path::Path, recent: &[std::path::PathBuf]| {
-            Project::recent_holding(file, recent).map(|p| p.root().to_path_buf())
+            Project::recent_holding(file, None, recent).map(|p| p.root().to_path_buf())
         };
         let inner = inner.canonicalize().unwrap();
         assert_eq!(holder(&file, &recent), Some(inner.clone()));
@@ -135,6 +130,12 @@ mod tests {
         let loose = root.path().join("unlisted/c.fasta");
         assert_eq!(holder(&loose, &recent), None);
         assert_eq!(holder(&file, &[]), None);
+        // A chosen project that holds the file names none; one that does not
+        // leaves the answer as it was.
+        let chosen = |root: &std::path::Path| Project::new(root).unwrap();
+        assert!(Project::recent_holding(&file, Some(&chosen(&outer)), &recent).is_none());
+        let other = root.path().join("unlisted");
+        assert!(Project::recent_holding(&file, Some(&chosen(&other)), &recent).is_some());
     }
 
     #[test]

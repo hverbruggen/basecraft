@@ -265,26 +265,17 @@ pub(crate) fn script_session(
 }
 
 /// A file used without --project that lies in a recent project: say which,
-/// without choosing it (D16).
+/// without choosing it (D16; with --project the decision asks nothing).
 fn name_recent_project(path: &std::path::Path, project: Option<&basecraft_ops::project::Project>) {
+    let recent = basecraft_viewmodel::projects::recent();
     if project.is_none()
-        && let Some(holder) =
-            basecraft_ops::project::Project::recent_holding(path, &recent_projects())
+        && let Some(holder) = basecraft_ops::project::Project::recent_holding(path, None, &recent)
     {
         let root = holder.root().display();
         eprintln!(
             "This file is in the recent project {root}. Without --project it is used as a loose file; add --project {root} to use the project."
         );
     }
-}
-
-/// The desktop app's recent projects. A missing or unreadable list is empty:
-/// it only serves to name a project, never to choose one.
-pub(crate) fn recent_projects() -> Vec<PathBuf> {
-    basecraft_ops::project::recent_projects_file()
-        .ok()
-        .and_then(|file| basecraft_viewmodel::projects::load_history(&file).ok())
-        .unwrap_or_default()
 }
 
 /// A CLI session for a command whose folder argument is the project.

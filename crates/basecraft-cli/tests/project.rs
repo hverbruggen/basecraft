@@ -83,7 +83,7 @@ fn a_file_in_a_recent_project_names_that_project_without_choosing_it() {
     let file = project.join("gene.fasta");
     std::fs::write(&file, b">a\nACGT\n").unwrap();
     let canonical = project.canonicalize().unwrap();
-    let list = basecraft_ops::project::recent_projects_file().unwrap();
+    let list = basecraft_viewmodel::projects::history_file().unwrap();
     std::fs::create_dir_all(list.parent().unwrap()).unwrap();
     std::fs::write(
         &list,

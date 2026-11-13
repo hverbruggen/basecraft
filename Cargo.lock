@@ -420,6 +420,7 @@ version = "0.5.0"
 dependencies = [
  "basecraft-docs",
  "basecraft-io",
+ "basecraft-platform",
  "basecraft-protocol",
  "serde",
  "serde_json",

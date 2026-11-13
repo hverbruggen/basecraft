@@ -41,8 +41,10 @@ pub mod qobject {
         );
         #[qinvokable]
         fn clear_notifications(self: Pin<&mut AppProvenance>);
+        /// `folders` (a JSON list) adds the folders of the open files, whose
+        /// `.basecraft` holds the runs on loose files.
         #[qinvokable]
-        fn retained_jobs(self: &AppProvenance) -> QString;
+        fn retained_jobs(self: &AppProvenance, folders: &QString) -> QString;
         #[qinvokable]
         fn start(
             self: Pin<&mut AppProvenance>,
@@ -213,8 +215,12 @@ impl qobject::AppProvenance {
         self.set_notifications(QString::from("[]"));
     }
     /// Runs from earlier sessions, from their records. None can be cancelled.
-    fn retained_jobs(&self) -> QString {
-        report_json(record_roots().and_then(|roots| {
+    fn retained_jobs(&self, folders: &QString) -> QString {
+        report_json(record_roots().and_then(|mut roots| {
+            roots.extend(
+                serde_json::from_str::<Vec<std::path::PathBuf>>(&folders.to_string())
+                    .unwrap_or_default(),
+            );
             basecraft_ops::records::jobs(true, &roots)
                 .map(|data| data.to_string())
                 .map_err(|e| e.to_string())
