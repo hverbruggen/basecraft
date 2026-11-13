@@ -1819,13 +1819,17 @@ ApplicationWindow {
             source = window.current
             sourcePath = source.file_path
             inSelection = selectionOnly
-            const code = source.genetic_code()
+            // Where the record states no code, Prodigal's usual inputs
+            // (bacteria, archaea, plastids) use table 11, not the standard
+            // code: its start rule differs.
+            const stated = source.genetic_code_source() !== "default"
+            const code = stated ? source.genetic_code() : 11
             let i = -1
             for (let k = 0; k < geneticCodes.count; k++)
                 if (geneticCodes.get(k).code === code) i = k
             codeBox.currentIndex = i
             suggested = i
-            suggestedFrom = source.genetic_code_source()
+            suggestedFrom = stated ? source.genetic_code_source() : "usual for bacteria, archaea and plastids"
             open()
         }
         property int suggested: -1

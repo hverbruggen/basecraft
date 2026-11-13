@@ -1068,6 +1068,12 @@ pub fn export(
     submitter: &Submitter,
 ) -> Result<PackageSummary> {
     let sub = checked(session, doc)?.clone();
+    // Its records would be read in no frame and exported with no code.
+    if matches!(sub.batch.marker, Marker::Coding { .. }) && sub.batch.genetic_code.is_none() {
+        return Err(invalid(
+            "Choose the genetic code for this coding marker before export",
+        ));
+    }
     let directory = if directory.is_absolute() {
         directory.to_path_buf()
     } else {

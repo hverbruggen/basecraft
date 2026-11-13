@@ -249,8 +249,16 @@ fn coding_marker_without_a_genetic_code_is_blocked() {
         "{:?}",
         review.prepared.issues
     );
-    // No record is read in any frame until the code is chosen.
+    // No record is read in any frame until the code is chosen, and nothing
+    // is exported.
     assert_eq!(review.prepared.records.len(), 0);
+    let error =
+        submission::export(&mut s, doc, Path::new("submissions/rbcL"), &submitter()).unwrap_err();
+    assert!(
+        error.to_string().contains("Choose the genetic code"),
+        "{error}"
+    );
+    assert!(!root.join("submissions/rbcL").exists());
     let fresh = submission::create(
         &mut s,
         Path::new("submissions/fresh.submission.json"),
