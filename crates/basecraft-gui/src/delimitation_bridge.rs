@@ -575,7 +575,10 @@ impl qobject::DelimitationController {
         if let Some(Op::DelimitationEdit { edit }) =
             crate::document_open::take_refused(&candidate.path)
         {
-            let _ = self.as_mut().edit(*edit);
+            // After the install: opening never changes the document it opens.
+            let _ = self.qt_thread().queue(move |mut this| {
+                let _ = this.as_mut().edit(*edit);
+            });
         }
         Ok(())
     }

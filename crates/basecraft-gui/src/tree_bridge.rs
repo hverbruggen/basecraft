@@ -1146,7 +1146,10 @@ impl qobject::TreeController {
         self.as_mut().set_dirty(false);
         self.as_mut().notify(&warning);
         if let Some(op) = crate::document_open::take_refused(&path) {
-            let _ = self.as_mut().edit(op);
+            // After the install: opening never changes the document it opens.
+            let _ = self.qt_thread().queue(move |mut this| {
+                let _ = this.as_mut().edit(op);
+            });
         }
         self.refresh();
         Ok(())

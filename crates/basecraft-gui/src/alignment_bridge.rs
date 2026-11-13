@@ -997,7 +997,11 @@ impl qobject::AlignmentController {
         self.as_mut()
             .set_alphabet_question(QString::from(&question.unwrap_or_default()));
         if let Some(op) = crate::document_open::take_refused(&path) {
-            self.as_mut().edit(op);
+            // After the install: opening never changes the document it opens.
+            let _ = self.qt_thread().queue(move |mut this| {
+                this.as_mut().edit(op);
+                this.refresh();
+            });
         }
         self.refresh();
         Ok(())

@@ -29,6 +29,7 @@ FocusScope {
         function onMessageChanged() {
             if (notificationSink && ctl.message.length)
                 notificationSink.notification(ctl.file_path, ctl.message, ctl.message_kind)
+            if (ctl.message.startsWith("read_only_folder:")) doc.readOnlyFolder(doc.path)
         }
     }
 
@@ -42,6 +43,8 @@ FocusScope {
     readonly property string kind: "trace"
     property string specimenId: ctl.proposed_name
     signal copyText(string text)
+    // The review cannot be kept in this read's folder (D13).
+    signal readOnlyFolder(string path)
     signal redraft(var paths, string reference, var target, int cutoff)
     property string reviewReference: ""
     property bool sourceInitialized: false

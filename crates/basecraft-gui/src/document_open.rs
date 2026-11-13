@@ -72,7 +72,8 @@ impl From<basecraft_ops::Error> for OpenError {
 impl std::fmt::Display for OpenError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Admission(error) => error.fmt(f),
+            // A folder that cannot hold recovery says so with its code (D13).
+            Self::Admission(error) => f.write_str(&edit_failure(error)),
             Self::Cancelled => f.write_str("Opening cancelled"),
             Self::Queue => f.write_str("Could not deliver the opened document to the interface"),
             Self::Spawn(error) => write!(f, "Could not start document opening: {error}"),

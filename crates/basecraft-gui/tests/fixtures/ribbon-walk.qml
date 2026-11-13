@@ -208,6 +208,112 @@ Main {
             }
             ribbonNavigation.stop(false)
         })
+        // D13, before a project is chosen: with one, every session keeps its
+        // recovery in the project's .basecraft. Here the files are loose.
+        // The first edit in a folder that cannot hold .basecraft is refused.
+        // The window offers a copy; Cancel leaves the file unedited; Save a copy
+        // copies it where the user chooses, opens the copy in its place and
+        // redoes the edit there. Every kind of editor makes the offer.
+        const locked = folder + "-locked/locked.afa"
+        const copied = folder + "/copied.afa"
+        const offer = () => dialog("readOnlyCopyDialog")
+        const tabPaths = () => { const out = []; for (let i = 0; i < documentTabs().count; i++) { const d = documentAt(i); out.push(d && d.controller ? d.controller.file_path : "?") } return out.join(", ") }
+        const opened = path => until(() => tabOf(path) >= 0 && documentAt(tabOf(path)).controller, path + " did not open; open: " + tabPaths())
+        const lockedTabs = {}
+        list.push(() => { lockedTabs.count = documentTabs().count; openPath(locked) })
+        list.push(opened(locked))
+        list.push(() => {
+            show(tabOf(locked))
+            const ctl = documentAt(tabOf(locked)).controller
+            ctl.select_block(0, 0, 0, 0)
+            ctl.insert_gap()
+            check(offer() && offer().opened && !ctl.dirty, "a refused edit in a read-only folder did not offer a copy")
+            offer().reject()
+            check(!offer().opened && ctl.refused_edit === "" && !ctl.dirty, "cancelling the copy offer did not leave the file unedited")
+            ctl.insert_gap()
+            check(offer().opened, "the offer did not come back for the next edit")
+            find(offer().contentItem, i => i.objectName === "saveEditableCopy").clicked()
+            const save = dialog("saveDocumentDialog")
+            check(save && save.visible, "Save a copy did not open the file dialog")
+            // The Quick file dialog accepts what its own name field holds, so
+            // the journey hands the chosen path to the dialog's continuation.
+            const next = save.continuation
+            save.reject()
+            // The file dialog is its own window; a desktop reactivates ours after it.
+            walk.requestActivate()
+            next(copied)
+        })
+        list.push(opened(copied))
+        list.push(() => {
+            const ctl = documentAt(tabOf(copied)).controller
+            check(tabOf(locked) < 0 && ctl.dirty && ctl.refused_edit === "", "the copy did not replace the original with the edit redone")
+            show(tabOf(copied))
+            currentView.forceActiveFocus()
+            currentView.pressKey(Qt.Key_S, Qt.ControlModifier, "")
+            edited.controller = ctl
+        })
+        list.push(until(() => !edited.controller.dirty, "the edited copy did not save"))
+        // Cancelling the close question keeps the tab; Discard closes it.
+        list.push(() => {
+            edited.controller.insert_gap()
+            currentView.pressKey(Qt.Key_W, Qt.ControlModifier, "")
+            const ask = dialog("closeDocumentDialog")
+            check(ask && ask.opened, "closing unsaved work did not ask")
+            ask.reject()
+            check(tabOf(copied) >= 0 && edited.controller.dirty, "cancelling the close question closed the tab")
+            currentView.pressKey(Qt.Key_W, Qt.ControlModifier, "")
+            dialog("closeDocumentDialog").discarded()
+            check(tabOf(copied) < 0, "discarding did not close the tab")
+        })
+        // The sequence and tree editors make the same offer.
+        for (const [name, edit] of [["locus.gb", ctl => ctl.delete_feature(0)],
+                                    ["time.nwk", ctl => { ctl.select_clade(JSON.stringify(["specimen_01", "specimen_02"])); const a = JSON.parse(ctl.annotation_json()); a.label = "AB"; ctl.set_annotation(JSON.stringify(a)) }]]) {
+            const path = folder + "-locked/" + name
+            list.push(() => openPath(path))
+            list.push(opened(path))
+            list.push(() => {
+                show(tabOf(path))
+                const ctl = documentAt(tabOf(path)).controller
+                edit(ctl)
+                check(offer().opened && !ctl.dirty, name + ": a refused edit did not offer a copy")
+                offer().reject()
+                check(!ctl.dirty, name + ": cancelling edited the file")
+                closeTab(tabOf(path))
+            })
+        }
+        // A trace review in a read-only folder is refused when it is created;
+        // the offer reopens the review on a copy.
+        const trace = folder + "-locked/forward.ab1"
+        const traceCopy = folder + "/forward-copy.ab1"
+        list.push(until(() => documentAt(4) && !documentAt(4).controller.busy, "the first trace did not finish processing"))
+        list.push(() => openPath(trace))
+        list.push(until(() => offer() && offer().opened, "a refused trace review did not offer a copy; tabs " + tabPaths()))
+        list.push(() => {
+            find(offer().contentItem, i => i.objectName === "saveEditableCopy").clicked()
+            const save = dialog("saveDocumentDialog")
+            const next = save.continuation
+            save.reject()
+            // The file dialog is its own window; a desktop reactivates ours after it.
+            walk.requestActivate()
+            next(traceCopy)
+        })
+        list.push(until(() => documentTabs().count === lockedTabs.count + 1 && !offer().opened, "the trace copy did not replace the original"))
+        list.push(() => closeTab(documentTabs().count - 1))
+        // D12: a sequence basecraft cannot place asks what it is, once.
+        const unclear = folder + "/unclear.fasta"
+        list.push(() => openPath(unclear))
+        list.push(opened(unclear))
+        list.push(() => {
+            show(tabOf(unclear))
+            const ask = dialog("alphabetDialog")
+            check(ask && ask.opened && ask.question.includes("unclear.fasta"), "an undetermined sequence did not ask what it is")
+            find(ask.contentItem, i => i.objectName === "alphabetDna").clicked()
+            const ctl = documentAt(tabOf(unclear)).controller
+            check(!ask.opened && ctl.alphabet_question === "" && ctl.dirty, "stating DNA was not recorded")
+            check(documentAt(1).controller.status.includes("DNA (guessed)"), "the alignment status does not name its guessed alphabet: " + documentAt(1).controller.status)
+            currentView.pressKey(Qt.Key_W, Qt.ControlModifier, "")
+            dialog("closeDocumentDialog").discarded()
+        })
         // Sequence commands: defaults, a remapped shortcut, document context.
         list.push(() => {
             show(0)
@@ -437,99 +543,6 @@ Main {
         list.push(() => {
             const ctl = documentAt(tabOf(aligned)).controller
             check(ctl !== edited.controller && !ctl.dirty && textOf(ctl) === edited.text, "the reopened alignment lost the saved gap")
-        })
-        // D13: the first edit in a folder that cannot hold .basecraft is refused.
-        // The window offers a copy; Cancel leaves the file unedited; Save a copy
-        // copies it where the user chooses, opens the copy in its place and
-        // redoes the edit there. Every kind of editor makes the offer.
-        const locked = folder + "/locked/locked.afa"
-        const copied = folder + "/copied.afa"
-        const offer = () => dialog("readOnlyCopyDialog")
-        const opened = path => until(() => tabOf(path) >= 0 && documentAt(tabOf(path)).controller, path + " did not open")
-        list.push(() => openPath(locked))
-        list.push(opened(locked))
-        list.push(() => {
-            show(tabOf(locked))
-            const ctl = documentAt(tabOf(locked)).controller
-            ctl.select_block(0, 0, 0, 0)
-            ctl.insert_gap()
-            check(offer() && offer().opened && !ctl.dirty, "a refused edit in a read-only folder did not offer a copy")
-            offer().reject()
-            check(!offer().opened && ctl.refused_edit === "" && !ctl.dirty, "cancelling the copy offer did not leave the file unedited")
-            ctl.insert_gap()
-            check(offer().opened, "the offer did not come back for the next edit")
-            find(offer().contentItem, i => i.objectName === "saveEditableCopy").clicked()
-            const save = dialog("saveDocumentDialog")
-            check(save && save.visible, "Save a copy did not open the file dialog")
-            save.selectedFile = dialog("shell").local_file_url(copied)
-            save.accept()
-        })
-        list.push(opened(copied))
-        list.push(() => {
-            const ctl = documentAt(tabOf(copied)).controller
-            check(tabOf(locked) < 0 && ctl.dirty && ctl.refused_edit === "", "the copy did not replace the original with the edit redone")
-            show(tabOf(copied))
-            currentView.forceActiveFocus()
-            currentView.pressKey(Qt.Key_S, Qt.ControlModifier, "")
-            edited.controller = ctl
-        })
-        list.push(until(() => !edited.controller.dirty, "the edited copy did not save"))
-        // Cancelling the close question keeps the tab; Discard closes it.
-        list.push(() => {
-            edited.controller.insert_gap()
-            currentView.pressKey(Qt.Key_W, Qt.ControlModifier, "")
-            const ask = dialog("closeDocumentDialog")
-            check(ask && ask.opened, "closing unsaved work did not ask")
-            ask.reject()
-            check(tabOf(copied) >= 0 && edited.controller.dirty, "cancelling the close question closed the tab")
-            currentView.pressKey(Qt.Key_W, Qt.ControlModifier, "")
-            dialog("closeDocumentDialog").discarded()
-            check(tabOf(copied) < 0, "discarding did not close the tab")
-        })
-        // The sequence and tree editors make the same offer.
-        for (const [name, edit] of [["locus.gb", ctl => ctl.delete_feature(0)],
-                                    ["time.nwk", ctl => { ctl.select_clade(JSON.stringify(["specimen_01", "specimen_02"])); const a = JSON.parse(ctl.annotation_json()); a.label = "AB"; ctl.set_annotation(JSON.stringify(a)) }]]) {
-            const path = folder + "/locked/" + name
-            list.push(() => openPath(path))
-            list.push(opened(path))
-            list.push(() => {
-                show(tabOf(path))
-                const ctl = documentAt(tabOf(path)).controller
-                edit(ctl)
-                check(offer().opened && !ctl.dirty, name + ": a refused edit did not offer a copy")
-                offer().reject()
-                check(!ctl.dirty, name + ": cancelling edited the file")
-                closeTab(tabOf(path))
-            })
-        }
-        // A trace review in a read-only folder is refused when it is created;
-        // the offer reopens the review on a copy.
-        const trace = folder + "/locked/forward.ab1"
-        const traceCopy = folder + "/forward-copy.ab1"
-        list.push(() => openPath(trace, true))
-        list.push(until(() => offer() && offer().opened, "a refused trace review did not offer a copy"))
-        list.push(() => {
-            find(offer().contentItem, i => i.objectName === "saveEditableCopy").clicked()
-            const save = dialog("saveDocumentDialog")
-            save.selectedFile = dialog("shell").local_file_url(traceCopy)
-            save.accept()
-        })
-        list.push(until(() => tabOf(trace) < 0 && documentTabs().count === edited.tabs + 1, "the trace copy did not replace the original"))
-        list.push(() => closeTab(documentTabs().count - 1))
-        // D12: a sequence basecraft cannot place asks what it is, once.
-        const unclear = folder + "/unclear.fasta"
-        list.push(() => openPath(unclear))
-        list.push(opened(unclear))
-        list.push(() => {
-            show(tabOf(unclear))
-            const ask = dialog("alphabetDialog")
-            check(ask && ask.opened && ask.question.includes("unclear.fasta"), "an undetermined sequence did not ask what it is")
-            find(ask.contentItem, i => i.objectName === "alphabetDna").clicked()
-            const ctl = documentAt(tabOf(unclear)).controller
-            check(!ask.opened && ctl.alphabet_question === "" && ctl.dirty, "stating DNA was not recorded")
-            check(documentAt(1).controller.status.includes("DNA (guessed)"), "the alignment status does not name its guessed alphabet: " + documentAt(1).controller.status)
-            currentView.pressKey(Qt.Key_W, Qt.ControlModifier, "")
-            dialog("closeDocumentDialog").discarded()
         })
         // 6.2 background completion: an annotator run on the sequence finishes
         // while another tab is active, without moving the tab or the focus. A

@@ -137,7 +137,9 @@ fn ribbon_journey() {
     // The project the journey switches to last.
     std::fs::create_dir(folder.path().join("second")).unwrap();
     // A folder the journey cannot save into, and a plugin whose run never ends.
-    let locked = folder.path().join("locked");
+    // Outside the chosen project: a project file keeps its recovery in the
+    // project's `.basecraft`, so only a loose file meets a read-only folder.
+    let locked = std::path::PathBuf::from(format!("{}-locked", folder.path().display()));
     std::fs::create_dir(&locked).unwrap();
     std::fs::copy(
         folder.path().join("homologues.afa"),

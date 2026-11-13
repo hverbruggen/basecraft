@@ -118,7 +118,10 @@ ApplicationWindow {
             if (index < 0) return
             const path = documentOpens.path_at(index)
             window.removeDocument(index)
-            provenance.notification(path, message, "fail")
+            // A trace review created in a read-only folder (D13): offer a copy.
+            // A review created in a read-only folder (D13): offer a copy.
+            if (message.startsWith("read_only_folder:")) readOnlyCopy.dialog().offered = {file: path, review: true, row: -1}
+            else provenance.notification(path, message, "fail")
         }
         onActivated: (token, review, installedPath) => {
             const index = documentOpens.index_of(token)
@@ -457,7 +460,6 @@ ApplicationWindow {
         function onLabel_questionChanged() { labelPlacement.dialog().controller = window.current }
         function onRefused_editChanged() { readOnlyCopy.dialog().owner = window.current }
         function onAlphabet_questionChanged() { alphabetQuestion.dialog().controller = window.current }
-        function onMessageChanged() { readOnlyCopy.dialog().owner = window.current }
         function onTaxaSelected(names) {
             for (let i = 0; i < docs.count; i++) {
                 const d = window.documentAt(i)
@@ -1901,7 +1903,7 @@ ApplicationWindow {
     // D13: copy the file whose folder refused the edit to where the user chooses,
     // open the copy in place of the unedited original and redo the edit there.
     function saveCopy(refused) {
-        const row = tabs.currentIndex
+        const row = refused.row !== undefined ? refused.row : tabs.currentIndex
         saveDialog.dialog().target = null
         saveDialog.dialog().continuation = path => {
             const error = documentOpens.copy_for_editing(JSON.stringify(refused), path)
@@ -2211,6 +2213,7 @@ ApplicationWindow {
                                 fileUrls: shell
                                 onCopyText: (text) => clipboard.put(text)
                                 onRedraft: (paths, reference, target, cutoff) => window.startTraceReview(paths, reference, target, cutoff, true)
+                                onReadOnlyFolder: path => readOnlyCopy.dialog().offered = {file: path, review: true, row: index}
                                 onDirtyChanged: documentOpens.set_dirty(index, dirty)
                                 onWorkingChanged: documentOpens.set_working(index, working)
                             }
