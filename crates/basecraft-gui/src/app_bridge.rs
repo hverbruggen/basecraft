@@ -83,12 +83,7 @@ pub mod qobject {
         /// Unless `on_its_own`, a file in a recent project the chosen one
         /// does not hold returns `other_project` and opens nothing (D16).
         #[qinvokable]
-        fn open(
-            self: Pin<&mut DocumentOpens>,
-            path: &QString,
-            review: bool,
-            on_its_own: bool,
-        ) -> QString;
+        fn open(self: Pin<&mut DocumentOpens>, path: &QString, on_its_own: bool) -> QString;
         #[qinvokable]
         fn add_tab(self: Pin<&mut DocumentOpens>, path: &QString, kind: &QString) -> i32;
         #[qinvokable]
@@ -125,7 +120,7 @@ pub mod qobject {
         #[qinvokable]
         fn close(self: &DocumentOpens, index: i32) -> QString;
         #[qinvokable]
-        fn quit(self: Pin<&mut DocumentOpens>, drafts: bool) -> QString;
+        fn quit(self: Pin<&mut DocumentOpens>) -> QString;
         /// D13: copy the file `refused` names to `target` and keep its
         /// refused edit for when the copy opens. "" or why it failed.
         #[qinvokable]
@@ -135,7 +130,6 @@ pub mod qobject {
         /// the steps that finish the switch carry it as `open`.
         fn switch_project(
             self: Pin<&mut DocumentOpens>,
-            drafts: bool,
             folder: &QString,
             current: &QString,
             open: &QString,
@@ -171,7 +165,7 @@ pub mod qobject {
             names: &QString,
         );
         #[qinvokable]
-        fn request(self: Pin<&mut DocumentOpens>, path: &QString, review: bool) -> QString;
+        fn request(self: Pin<&mut DocumentOpens>, path: &QString) -> QString;
         #[qinvokable]
         fn start(self: Pin<&mut DocumentOpens>, token: &QString);
         #[qinvokable]
@@ -206,12 +200,7 @@ pub mod qobject {
         #[qsignal]
         fn failed(self: Pin<&mut DocumentOpens>, token: QString, message: QString);
         #[qsignal]
-        fn activated(
-            self: Pin<&mut DocumentOpens>,
-            token: QString,
-            review: bool,
-            installed_path: QString,
-        );
+        fn activated(self: Pin<&mut DocumentOpens>, token: QString, installed_path: QString);
     }
 }
 #[derive(Default)]
@@ -247,12 +236,10 @@ fn targets(consent: &QString) -> Vec<Target> {
         })
         .collect()
 }
-/// A quit step for QML: `drafts`, `ask` (with `error`), `save`, `stay`,
-/// `choose`, `refuse` or `leave`. `drafts` and `leave` carry `project` during a
-/// project switch.
+/// A quit step for QML: `ask` (with `error`), `save`, `stay`, `choose`,
+/// `refuse` or `leave`. `leave` carries `project` during a project switch.
 fn quit_json(step: &Quit, open: Option<&serde_json::Value>) -> QString {
     let mut value = match step {
-        Quit::Drafts { project } => serde_json::json!({"drafts": true, "project": project}),
         Quit::Ask { targets, error } => serde_json::json!({
             "ask": targets.iter().map(target_json).collect::<Vec<_>>(), "error": error
         }),
@@ -269,8 +256,7 @@ fn quit_json(step: &Quit, open: Option<&serde_json::Value>) -> QString {
         Quit::Choose(_)
         | Quit::Leave {
             project: Some(_), ..
-        }
-        | Quit::Drafts { project: Some(_) },
+        },
     ) = (open, step)
     {
         value["open"] = open.clone();
@@ -282,7 +268,6 @@ fn quit_json(step: &Quit, open: Option<&serde_json::Value>) -> QString {
 /// project that the `chosen` one is not.
 fn other_project(
     path: &str,
-    review: bool,
     chosen: Option<&basecraft_ops::project::Project>,
     recent: &[std::path::PathBuf],
 ) -> Option<serde_json::Value> {
@@ -296,9 +281,7 @@ fn other_project(
         .file_name()
         .unwrap_or(root.as_os_str())
         .to_string_lossy();
-    Some(
-        serde_json::json!({"other_project": {"root": root, "name": name, "path": path, "review": review}}),
-    )
+    Some(serde_json::json!({"other_project": {"root": root, "name": name, "path": path}}))
 }
 fn row(index: i32) -> Option<usize> {
     usize::try_from(index).ok()
@@ -362,8 +345,9 @@ impl qobject::DocumentOpens {
     }
 
     /// Open `path`: switch to its tab, open it on a worker in a new tab, add a
-    /// tab for the views that open themselves, or name the project dialog.
-    fn open(mut self: Pin<&mut Self>, path: &QString, review: bool, on_its_own: bool) -> QString {
+    /// tab for the views that open themselves (`view`), or name the project
+    /// dialog.
+    fn open(mut self: Pin<&mut Self>, path: &QString, on_its_own: bool) -> QString {
         let text = path.to_string();
         let worker = crate::document_open::eligible(&text);
         let kind = if worker {
@@ -375,24 +359,22 @@ impl qobject::DocumentOpens {
         if !on_its_own && !matches!(decision, Open::Switch(_)) {
             let chosen = crate::chosen_project::chosen().ok().flatten();
             let recent = basecraft_viewmodel::projects::recent();
-            if let Some(step) = other_project(&text, review, chosen.as_ref(), &recent) {
+            if let Some(step) = other_project(&text, chosen.as_ref(), &recent) {
                 return json(&step);
             }
         }
         if !worker {
             return match decision {
                 Open::Project => json(&serde_json::json!({"project": kind})),
-                Open::Switch(index) => {
-                    json(&serde_json::json!({"switch": index, "review": review}))
-                }
+                Open::Switch(index) => json(&serde_json::json!({"switch": index, "view": true})),
                 Open::New => {
                     let index = self.as_mut().add_tab(path, &QString::from(kind));
-                    json(&serde_json::json!({"new": index, "review": review}))
+                    json(&serde_json::json!({"new": index, "view": true}))
                 }
             };
         }
-        // The worker's request carries the review flag and focus either way.
-        let token = self.as_mut().request(path, review);
+        // The worker's request carries focus either way.
+        let token = self.as_mut().request(path);
         let Some(id) = self::token(&token) else {
             return json(&serde_json::json!({"error": "Could not allocate an open request"}));
         };
@@ -549,9 +531,9 @@ impl qobject::DocumentOpens {
             None => json(&serde_json::json!({})),
         }
     }
-    fn quit(mut self: Pin<&mut Self>, drafts: bool) -> QString {
+    fn quit(mut self: Pin<&mut Self>) -> QString {
         self.as_mut().rust_mut().open_after_switch = None;
-        quit_json(&self.as_mut().rust_mut().documents.quit(drafts), None)
+        quit_json(&self.as_mut().rust_mut().documents.quit(), None)
     }
     fn copy_for_editing(&self, refused: &QString, target: &QString) -> QString {
         let target = std::path::PathBuf::from(target.to_string());
@@ -562,7 +544,6 @@ impl qobject::DocumentOpens {
     /// A running listed job, from a tab or not, refuses the switch first.
     fn switch_project(
         mut self: Pin<&mut Self>,
-        drafts: bool,
         folder: &QString,
         current: &QString,
         open: &QString,
@@ -571,7 +552,6 @@ impl qobject::DocumentOpens {
         let mut state = self.as_mut().rust_mut();
         state.open_after_switch = open;
         let step = state.documents.switch_project(
-            drafts,
             crate::jobs::working(),
             folder.to_string(),
             &current.to_string(),
@@ -761,7 +741,7 @@ impl qobject::DocumentOpens {
         self.renamed(id, &path.to_string());
     }
 
-    fn request(mut self: Pin<&mut Self>, path: &QString, review: bool) -> QString {
+    fn request(mut self: Pin<&mut Self>, path: &QString) -> QString {
         let undelivered: Vec<_> = self
             .rust()
             .opens
@@ -773,12 +753,7 @@ impl qobject::DocumentOpens {
         for id in undelivered {
             self.as_mut().reject(id, &OpenError::Queue);
         }
-        match self
-            .as_mut()
-            .rust_mut()
-            .opens
-            .begin(path.to_string(), review)
-        {
+        match self.as_mut().rust_mut().opens.begin(path.to_string()) {
             Ok((id, _)) => QString::from(id.to_string()),
             Err(_) => QString::default(),
         }
@@ -1016,7 +991,7 @@ impl qobject::DocumentOpens {
         if !self.rust().opens.wants_focus(id) {
             return;
         }
-        let (review, installed_path) = {
+        let installed_path = {
             let mut state = self.as_mut().rust_mut();
             let Some(request) = state.opens.requests.get_mut(&id) else {
                 return;
@@ -1024,12 +999,9 @@ impl qobject::DocumentOpens {
             if request.phase != Phase::Ready {
                 return;
             }
-            (
-                std::mem::take(&mut request.review),
-                request.installed_path.clone(),
-            )
+            request.installed_path.clone()
         };
-        self.activated(value.clone(), review, QString::from(installed_path));
+        self.activated(value.clone(), QString::from(installed_path));
     }
 
     fn retire(mut self: Pin<&mut Self>, value: &QString) {
@@ -1198,26 +1170,23 @@ mod other_project_tests {
         std::fs::write(&file, b">a\nA\n").unwrap();
         let recent = [root.clone()];
         let path = file.to_str().unwrap();
-        let step = super::other_project(path, true, None, &recent).unwrap();
+        let step = super::other_project(path, None, &recent).unwrap();
         let asked = &step["other_project"];
         assert_eq!(asked["name"], "barcodes");
         assert_eq!(
             asked["root"],
             serde_json::json!(root.canonicalize().unwrap())
         );
-        assert_eq!(
-            (asked["path"].as_str(), asked["review"].as_bool()),
-            (Some(path), Some(true))
-        );
+        assert_eq!(asked["path"].as_str(), Some(path));
         let chosen = Project::new(&root).unwrap();
-        assert!(super::other_project(path, false, Some(&chosen), &recent).is_none());
-        assert!(super::other_project(path, false, None, &[]).is_none());
+        assert!(super::other_project(path, Some(&chosen), &recent).is_none());
+        assert!(super::other_project(path, None, &[]).is_none());
     }
 
     #[test]
     fn the_steps_that_finish_a_switch_carry_the_file() {
         use basecraft_viewmodel::workspace::Quit;
-        let open = serde_json::json!({"path": "/p/a.fasta", "review": false});
+        let open = serde_json::json!({"path": "/p/a.fasta"});
         let carried = |step: &Quit| {
             let text = super::quit_json(step, Some(&open)).to_string();
             serde_json::from_str::<serde_json::Value>(&text).unwrap()["open"] == open
@@ -1225,9 +1194,6 @@ mod other_project_tests {
         assert!(carried(&Quit::Choose("/p".into())));
         assert!(carried(&Quit::Leave {
             drafts: Vec::new(),
-            project: Some("/p".into())
-        }));
-        assert!(carried(&Quit::Drafts {
             project: Some("/p".into())
         }));
         assert!(!carried(&Quit::Leave {

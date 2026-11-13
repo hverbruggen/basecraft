@@ -33,10 +33,9 @@ ApplicationWindow {
     // Closing the window (or Ctrl+Q) asks about unsaved changes first; the
     // open documents decide what to ask and in which order to save.
     property bool closeConfirmed: false
-    property bool discardAuthoredOnQuit: false
     onClosing: (close) => {
         if (closeConfirmed) { documentOpens.shutdown(); return }
-        const step = JSON.parse(documentOpens.quit(!discardAuthoredOnQuit && !!documentRecord.item && documentRecord.item.unsavedDrafts().length > 0))
+        const step = JSON.parse(documentOpens.quit())
         if (step.leave) { leave(step.leave); documentOpens.shutdown(); return }
         close.accepted = false
         quitStep(step)
@@ -49,15 +48,14 @@ ApplicationWindow {
         }
     }
     function quitStep(step) {
-        if (step.drafts) { draftQuitDialog.dialog().project = step.project || ""; draftQuitDialog.dialog().then = step.open ? JSON.stringify(step.open) : ""; draftQuitDialog.dialog().open() }
-        else if (step.ask) quitDialog.dialog().ask(step.ask, step.error)
+        if (step.ask) quitDialog.dialog().ask(step.ask, step.error)
         else if (step.save) saveTarget(documentTarget(documentOpens.target_index(step.save.token, step.save.path)), "",
             success => quitStep(JSON.parse(documentOpens.quit_saved(success))))
         else if (step.refuse) preferences.project_error = step.refuse
         else if (step.choose) chooseProject(step.choose, step.open)
         else if (step.leave && !step.project) { leave(step.leave); closeConfirmed = true; window.close() }
         else if (step.leave) { // A switch: every tab closes, ending its session at once; then the project is chosen.
-            leave(step.leave); discardAuthoredOnQuit = false
+            leave(step.leave)
             while (documentOpens.count > 0) removeDocument(documentOpens.count - 1)
             chooseProject(step.project, step.open); refreshCurrent()
         }
@@ -65,7 +63,7 @@ ApplicationWindow {
     // A switch made to open a file in its project (D16) carries the file.
     function chooseProject(folder, file) {
         preferences.project_error = shell.choose_project(folder)
-        if (file && !preferences.project_error.length) Qt.callLater(() => openPath(file.path, file.review, true))
+        if (file && !preferences.project_error.length) Qt.callLater(() => openPath(file.path, true))
     }
 
     palette.window: shell.background
@@ -130,7 +128,7 @@ ApplicationWindow {
             window.removeDocument(index)
             provenance.notification(path, message, "fail")
         }
-        onActivated: (token, review, installedPath) => {
+        onActivated: (token, installedPath) => {
             const index = documentOpens.index_of(token)
             const document = index >= 0 ? window.documentAt(index) : null
             if (!document || !document.controller || document.controller.file_path !== installedPath) return
@@ -138,9 +136,6 @@ ApplicationWindow {
             tabs.currentIndex = index
             window.focusOpenedDocument = true
             window.refreshCurrent()
-            if (review && window.current === document.controller && window.currentPath === document.path
-                    && documentRecord.dialog().controller === document.controller && documentRecord.dialog().documentPath === document.path)
-                documentRecord.dialog().showPage(2)
             window.applyingOpenFocus = false
         }
     }
@@ -206,7 +201,7 @@ ApplicationWindow {
     // A task still running in the old project, from a tab or not, refuses it first.
     function selectProject(path, then = "") {
         const chosen = preferences.select_project(path)
-        if (chosen.length) quitStep(JSON.parse(documentOpens.switch_project(!discardAuthoredOnQuit && !!documentRecord.item && documentRecord.item.unsavedDrafts().length > 0, chosen, shell.project_dir, then)))
+        if (chosen.length) quitStep(JSON.parse(documentOpens.switch_project(chosen, shell.project_dir, then)))
     }
     property bool preferencesReady: false
     AppSettings {
@@ -309,7 +304,7 @@ ApplicationWindow {
             Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: otherProjectItem.file ? "This file is in project " + otherProjectItem.file.name + ". Switch to that project, or open it on its own?" : "" }
             RowLayout {
                 AppButton { id: switchProject; objectName: "switchToProject"; text: "&Switch project"; onClicked: { otherProjectItem.close(); window.selectProject(otherProjectItem.file.root, JSON.stringify(otherProjectItem.file)) } }
-                AppButton { objectName: "openOnItsOwn"; text: "&Open on its own"; onClicked: { otherProjectItem.close(); window.openPath(otherProjectItem.file.path, otherProjectItem.file.review, true) } }
+                AppButton { objectName: "openOnItsOwn"; text: "&Open on its own"; onClicked: { otherProjectItem.close(); window.openPath(otherProjectItem.file.path, true) } }
             }
         }
     } } }
@@ -336,8 +331,8 @@ ApplicationWindow {
     Shortcut { sequence: "Shift+F6"; onActivated: window.focusRegion(true) }
 
     // Open a file in a tab, or switch to its tab if it's already open.
-    function openPath(path, reviewMethods = false, onItsOwn = false) {
-        const step = JSON.parse(documentOpens.open(path, reviewMethods, onItsOwn))
+    function openPath(path, onItsOwn = false) {
+        const step = JSON.parse(documentOpens.open(path, onItsOwn))
         if (step.other_project) { otherProject.dialog().file = step.other_project; otherProject.dialog().open(); return }
         if (step.error) { provenance.notification(path, step.error, "fail"); return }
         if (step.project) {
@@ -349,7 +344,7 @@ ApplicationWindow {
             return
         }
         const index = step.new !== undefined ? step.new : step.switch
-        if (step.review === undefined) {
+        if (!step.view) {
             // Opened on a worker: the tab shows once the document arrives.
             applyingOpenFocus = true
             tabs.currentIndex = index
@@ -362,19 +357,6 @@ ApplicationWindow {
         focusOpenedDocument = true
         tabs.currentIndex = index
         if (step.switch !== undefined) Qt.callLater(refreshCurrent)
-        if (reviewMethods) reviewLegacyDocument(index, path)
-    }
-    function reviewLegacyDocument(index, path) {
-        const document = window.documentAt(index)
-        const token = documentOpens.request(path, true)
-        // Legacy trace acquisition retains its existing deferred completion.
-        // The continuation still checks its original view/token and actual owner.
-        Qt.callLater(() => {
-            const row = documentOpens.index_of(token)
-            if (row < 0 || window.documentAt(row) !== document || !document || !document.controller.file_path.length) return
-            documentOpens.path_changed(token, path, document.controller.file_path)
-            documentOpens.activate(token)
-        })
     }
 
     // The controller the species dialog was opened for; the open documents
@@ -521,6 +503,8 @@ ApplicationWindow {
         commandId: "file.new-sequence"
         iconName: "new-file"
         defaultShortcut: "Ctrl+N"
+        // D21: a new document's recovery lives in the chosen project.
+        enabled: shell.project_dir.length > 0
         onTriggered: newSequenceDialog.dialog().prepare("", "")
     }
     Command {
@@ -667,9 +651,6 @@ ApplicationWindow {
     }
     AppJobs { id: jobService }
     property string frozenReport: ""
-    property string frozenDraft: ""
-    property string frozenDraftRevision: ""
-    property string frozenDraftKey: ""
     OnDemand { id: documentRecord; sourceComponent: Component { DocumentRecordDialog {
         id: documentRecordItem
         service: provenance
@@ -677,7 +658,6 @@ ApplicationWindow {
         controller: window.current
         onCopyText: text => clipboard.put(text)
         onExportReport: snapshot => { window.frozenReport = snapshot; reportFolder.dialog().open() }
-        onSaveDraft: (text, revision) => { window.frozenDraft = text; window.frozenDraftRevision = revision; window.frozenDraftKey = documentRecordItem.draftKey; authoredFile.dialog().open() }
         onVerify: verifyProvenanceCommand.trigger()
         onPackageRecord: packageCommand.trigger()
         onOpenRecordFolder: showProvenanceCommand.trigger()
@@ -689,16 +669,6 @@ ApplicationWindow {
         onAccepted: { provenance.export_report(window.frozenReport, shell.local_file_path(selectedFolder)); provenanceDialog.dialog().open() }
     } } }
 
-    OnDemand { id: authoredFile; sourceComponent: Component { FileDialog {
-        id: authoredFileItem
-        title: "Save authored methods draft"
-        fileMode: FileDialog.SaveFile
-        nameFilters: ["Markdown (*.md)"]
-        onAccepted: {
-            if (provenance.save_authored(shell.local_file_path(selectedFile), window.frozenDraft, window.frozenDraftRevision))
-                documentRecord.dialog().markDraftSaved(window.frozenDraftKey, window.frozenDraft)
-        }
-    } } }
     OnDemand {
         id: tasksWindow
         sourceComponent: Component {
@@ -1507,12 +1477,12 @@ ApplicationWindow {
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
                         title: "Zenodo"
-                        RibbonButton { commandId: "export.zenodo"; iconName: "save-as"; tip: shell.project_dir.length ? "Prepare selected saved files for a Zenodo draft" : "Choose a project folder first"; enabled: shell.project_dir.length > 0; onInvoked: { const zenodo = zenodoWindow.item; if (zenodo && (zenodo.ready || zenodoJobs.busy || zenodo.attempted)) zenodo.open(); else zenodoPicker.dialog().open() } }
+                        RibbonButton { commandId: "export.zenodo"; iconName: "save-as"; tip: "Prepare selected saved files for a Zenodo draft"; enabled: shell.project_dir.length > 0; onInvoked: { const zenodo = zenodoWindow.item; if (zenodo && (zenodo.ready || zenodoJobs.busy || zenodo.attempted)) zenodo.open(); else zenodoPicker.dialog().open() } }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
                         title: "Specimens"
-                        RibbonButton { commandId: "metadata.table"; iconName: "matrix"; tip: shell.project_dir.length ? "The project's specimens, identifications and collection data" : "Choose a project folder first"; enabled: shell.project_dir.length > 0; onInvoked: specimenTable.dialog().open() }
+                        RibbonButton { commandId: "metadata.table"; iconName: "matrix"; tip: "The project's specimens, identifications and collection data"; enabled: shell.project_dir.length > 0; onInvoked: specimenTable.dialog().open() }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
@@ -1933,7 +1903,7 @@ ApplicationWindow {
             const error = documentOpens.copy_for_editing(JSON.stringify(refused), path)
             if (error.length) { provenance.notification(refused.file, error, "fail"); return }
             removeDocument(row)
-            openPath(path, !!refused.review)
+            openPath(path)
         }
         saveDialog.dialog().selectedFile = shell.local_file_url(refused.file)
         saveDialog.dialog().open()
@@ -2671,32 +2641,11 @@ ApplicationWindow {
         }
     } } }
 
-    OnDemand { id: draftQuitDialog; sourceComponent: Component { AppContentDialog {
-        id: draftQuitDialogItem
-        title: "Unsaved methods drafts"
-        standardButtons: Dialog.Discard | Dialog.Cancel
-        body: ColumnLayout {
-            Label { text: "Save or copy your authored methods before quitting."; Layout.fillWidth: true; wrapMode: Text.Wrap }
-            Repeater {
-                model: draftQuitDialogItem.visible && documentRecord.item ? documentRecord.item.unsavedDrafts() : []
-                AppButton {
-                    required property string modelData
-                    text: "Review " + window.fileName(modelData)
-                    onClicked: { draftQuitDialogItem.close(); window.openPath(modelData, true) }
-                }
-            }
-        }
-        property string project: ""
-        property string then: ""
-        onDiscarded: { window.discardAuthoredOnQuit = true; if (project.length) window.selectProject(project, then); else window.close() }
-    } } }
-
     // Quitting with unsaved changes: save them all, throw them away, or
     // stay.
     OnDemand { id: quitDialog; sourceComponent: Component { AppFormDialog {
         id: quitDialogItem
         objectName: "quitDocumentsDialog"
-        onRejected: window.discardAuthoredOnQuit = false
         property var unsaved: []
         title: "Save changes before closing?"
         standardButtons: Dialog.Save | Dialog.Discard | Dialog.Cancel

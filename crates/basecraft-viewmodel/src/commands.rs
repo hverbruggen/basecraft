@@ -1118,14 +1118,22 @@ pub struct Context {
     pub unresolved: bool,
 }
 
+/// Why a command that needs a project is unavailable: new documents (D21),
+/// project data, submissions and Zenodo.
+pub const NEEDS_PROJECT: &str = "Choose a project first (File > Project)";
+
 /// Why command `id` is unavailable in `context`, for its tooltip.
 pub fn disabled_reason(id: &str, context: &Context) -> &'static str {
+    let needs_project = ["file.new-sequence", "export.zenodo"].contains(&id)
+        || id.starts_with("metadata.")
+        || id.starts_with("submission.");
+    if needs_project && !context.project {
+        return NEEDS_PROJECT;
+    }
     let alignment = context.kind == "alignment";
     let trace = context.kind == "trace";
     if id.starts_with("metadata.") || id.starts_with("submission.") {
-        return if !context.project {
-            "Choose a project folder with File > Project to use project data"
-        } else if ["metadata.import-headers", "metadata.template"].contains(&id) {
+        return if ["metadata.import-headers", "metadata.template"].contains(&id) {
             "Open a FASTA file to use its records"
         } else if id == "submission.new" {
             "Open a marker alignment to start a submission"
@@ -1368,10 +1376,15 @@ mod tests {
             disabled_reason("file.save", &none),
             "Open a document to use this command"
         );
-        assert_eq!(
-            disabled_reason("metadata.table", &none),
-            "Choose a project folder with File > Project to use project data"
-        );
+        // D21: one text wherever a project is missing.
+        for id in [
+            "file.new-sequence",
+            "export.zenodo",
+            "metadata.table",
+            "submission.new",
+        ] {
+            assert_eq!(disabled_reason(id, &none), NEEDS_PROJECT, "{id}");
+        }
         let busy = Context {
             document: true,
             busy: true,

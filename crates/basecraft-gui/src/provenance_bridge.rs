@@ -24,13 +24,6 @@ pub mod qobject {
         #[qinvokable]
         fn saved_report(self: &AppProvenance, path: &QString) -> QString;
         #[qinvokable]
-        fn save_authored(
-            self: Pin<&mut AppProvenance>,
-            path: &QString,
-            text: &QString,
-            revision: &QString,
-        ) -> bool;
-        #[qinvokable]
         fn export_report(self: Pin<&mut AppProvenance>, snapshot: &QString, directory: &QString);
         #[qinvokable]
         fn notification(
@@ -67,12 +60,10 @@ pub struct ProvenanceRust {
     notices: Vec<serde_json::Value>,
 }
 /// Folders whose `.basecraft` holds the records the window lists from earlier
-/// sessions (recovery, jobs): the chosen project, the recent ones and the
-/// scratch folder of new sequences.
+/// sessions (recovery, jobs): the chosen project and the recent ones.
 fn record_roots() -> Result<Vec<std::path::PathBuf>, String> {
     let mut roots = crate::settings_bridge::load_project_history().unwrap_or_default();
     roots.extend(crate::chosen_project::chosen()?.map(|p| p.root().to_path_buf()));
-    roots.extend(basecraft_platform::paths::AppPaths::discover().map(|p| p.scratch));
     Ok(roots)
 }
 fn run(
@@ -114,7 +105,7 @@ fn run(
                 let publication = records::inspect(result, project)?;
                 records::write_reports(destination, &publication)?;
                 Ok(format!(
-                    "Generated reports: {}\nUser-authored methods.md is preserved.",
+                    "Generated reports: {}",
                     destination.join("reports").display()
                 ))
             }
@@ -161,26 +152,6 @@ impl qobject::AppProvenance {
         )
     }
 
-    fn save_authored(
-        self: Pin<&mut Self>,
-        path: &QString,
-        text: &QString,
-        revision: &QString,
-    ) -> bool {
-        let contents = format!("<!-- Basecraft source revision: {revision} -->\n\n{text}");
-        let result = basecraft_io::write_atomic(Path::new(&path.to_string()), |w| {
-            w.write_all(contents.as_bytes())
-        });
-        let success = result.is_ok();
-        self.set_message(QString::from(
-            match result {
-                Ok(()) => "done: Authored draft saved".into(),
-                Err(e) => format!("fail: Could not save authored draft: {e}"),
-            }
-            .as_str(),
-        ));
-        success
-    }
     fn export_report(self: Pin<&mut Self>, snapshot: &QString, directory: &QString) {
         let snapshot = snapshot.to_string();
         let directory = std::path::PathBuf::from(directory.to_string());
@@ -384,7 +355,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn gui_provenance_exports_preserve_authored_methods_and_report_changed_results() {
+    fn gui_provenance_exports_keep_other_report_files_and_report_changed_results() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
         let paths = basecraft_platform::paths::AppPaths {
@@ -392,7 +363,6 @@ mod tests {
             data: root.join("data"),
             state: root.join("state"),
             cache: root.join("cache"),
-            scratch: root.join("scratch"),
             home: None,
         };
         let file = root.join("sequence.fasta");

@@ -104,9 +104,6 @@ pub enum Close {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Quit {
-    /// Methods drafts in the document record are unsaved. `project` is the
-    /// folder being switched to, when the documents close for a project switch.
-    Drafts { project: Option<String> },
     /// These tabs have unsaved changes; `error` says why the question repeats.
     Ask {
         targets: Vec<Target>,
@@ -335,11 +332,10 @@ impl Workspace {
         }
     }
 
-    /// The window is closing. `drafts` is true when the document record holds
-    /// unsaved methods drafts the user has not agreed to drop.
-    pub fn quit(&mut self, drafts: bool) -> Quit {
+    /// The window is closing.
+    pub fn quit(&mut self) -> Quit {
         self.switching = None;
-        self.leave_or_ask(drafts)
+        self.leave_or_ask()
     }
 
     /// The user chose project `folder` while `current` ("" for none) is
@@ -349,13 +345,7 @@ impl Workspace {
     /// is true while a task works in the current project, such as a plugin
     /// run from a tab or a records, submission or service task: the switch is
     /// refused before any question, so no tab closes for nothing.
-    pub fn switch_project(
-        &mut self,
-        drafts: bool,
-        tasks: bool,
-        folder: String,
-        current: &str,
-    ) -> Quit {
+    pub fn switch_project(&mut self, tasks: bool, folder: String, current: &str) -> Quit {
         self.switching = None;
         let canonical = |path: &str| std::fs::canonicalize(path).ok();
         if folder == current || canonical(&folder).is_some_and(|f| Some(f) == canonical(current)) {
@@ -371,16 +361,11 @@ impl Workspace {
             return Quit::Choose(folder);
         }
         self.switching = Some(folder);
-        self.leave_or_ask(drafts)
+        self.leave_or_ask()
     }
 
-    fn leave_or_ask(&mut self, drafts: bool) -> Quit {
+    fn leave_or_ask(&mut self) -> Quit {
         self.saving.clear();
-        if drafts {
-            return Quit::Drafts {
-                project: self.switching.clone(),
-            };
-        }
         let targets = self.unsaved();
         if targets.is_empty() {
             self.leave()
@@ -652,14 +637,13 @@ mod tests {
     }
 
     #[test]
-    fn quitting_asks_about_drafts_then_unsaved_tabs_then_leaves() {
+    fn quitting_asks_about_unsaved_tabs_then_leaves() {
         let mut w = workspace(&[
             ("/a.gb", Kind::Canvas, true),
             ("/b.gb", Kind::Canvas, false),
         ]);
-        assert_eq!(w.quit(true), Quit::Drafts { project: None });
         assert_eq!(
-            w.quit(false),
+            w.quit(),
             Quit::Ask {
                 targets: vec![target(1, "/a.gb")],
                 error: ""
@@ -669,7 +653,7 @@ mod tests {
         w.add(3, "/w.spart".into(), Kind::Delimitation);
         w.mark_draft(3);
         assert_eq!(
-            w.quit(false),
+            w.quit(),
             Quit::Leave {
                 drafts: vec![3],
                 project: None
@@ -685,24 +669,17 @@ mod tests {
         ]);
         // Choosing the current project again closes nothing; without a
         // chosen project the open files hold none and stay open.
+        assert_eq!(w.switch_project(false, "/p".into(), "/p"), Quit::Stay);
         assert_eq!(
-            w.switch_project(false, false, "/p".into(), "/p"),
-            Quit::Stay
-        );
-        assert_eq!(
-            w.switch_project(true, false, "/q".into(), ""),
+            w.switch_project(false, "/q".into(), ""),
             Quit::Choose("/q".into())
         );
         assert_eq!(
-            workspace(&[]).switch_project(true, false, "/q".into(), "/p"),
+            workspace(&[]).switch_project(false, "/q".into(), "/p"),
             Quit::Choose("/q".into())
         );
         let next = || Some("/q".to_owned());
-        assert_eq!(
-            w.switch_project(true, false, "/q".into(), "/p"),
-            Quit::Drafts { project: next() }
-        );
-        let ask = w.switch_project(false, false, "/q".into(), "/p");
+        let ask = w.switch_project(false, "/q".into(), "/p");
         assert_eq!(
             ask,
             Quit::Ask {
@@ -725,7 +702,7 @@ mod tests {
         );
         // Discarding instead also switches.
         w.set_dirty(0, true);
-        w.switch_project(false, false, "/q".into(), "/p");
+        w.switch_project(false, "/q".into(), "/p");
         assert_eq!(
             w.discard_all(&[target(1, "/a.gb")]),
             Quit::Leave {
@@ -735,23 +712,23 @@ mod tests {
         );
         // A task outside the tabs refuses the switch before any question.
         assert_eq!(
-            w.switch_project(false, true, "/q".into(), "/p"),
+            w.switch_project(true, "/q".into(), "/p"),
             Quit::Refuse(TASKS_RUNNING)
         );
         // The same folder spelled differently is not a switch.
         let folder = tempfile::tempdir().unwrap();
         let plain = folder.path().to_str().unwrap();
         assert_eq!(
-            w.switch_project(false, false, format!("{plain}/"), plain),
+            w.switch_project(false, format!("{plain}/"), plain),
             Quit::Stay
         );
         assert_eq!(
-            w.switch_project(false, false, format!("{plain}/./"), plain),
+            w.switch_project(false, format!("{plain}/./"), plain),
             Quit::Stay
         );
         // Closing the window after a cancelled switch closes the window.
         assert_eq!(
-            w.quit(false),
+            w.quit(),
             Quit::Ask {
                 targets: vec![target(1, "/a.gb")],
                 error: ""

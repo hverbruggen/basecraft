@@ -534,7 +534,6 @@ fn application_starts_offscreen_and_draws_its_window() {
         .env("BASECRAFT_PROFILE_DIR", root.path().join("profile"))
         .env("BASECRAFT_STATE_DIR", root.path().join("profile/state"))
         .env("BASECRAFT_CACHE_DIR", root.path().join("profile/cache"))
-        .env("BASECRAFT_SCRATCH_DIR", root.path().join("scratch"))
         .env("HOME", root.path())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1017,11 +1016,6 @@ fn main() {
         "reorder",
         "cancel-reopen",
         "save-as",
-        "review-new",
-        "review-duplicate",
-        "review-supersede",
-        "review-cancel",
-        "review-fail",
         "fail-spawn",
         "fail-worker",
         "fail-queue",
@@ -1072,14 +1066,7 @@ fn main() {
                 fault,
             );
         }
-        if matches!(
-            scenario,
-            "reorder"
-                | "cancel-reopen"
-                | "review-supersede"
-                | "review-cancel"
-                | "fail-construction"
-        ) {
+        if matches!(scenario, "reorder" | "cancel-reopen" | "fail-construction") {
             app_bridge::barriers::configure(
                 folder
                     .path()
@@ -1118,15 +1105,7 @@ fn main() {
                 0
             } else if matches!(
                 scenario,
-                "cancel-reopen"
-                    | "review-new"
-                    | "review-duplicate"
-                    | "review-cancel"
-                    | "review-fail"
-                    | "fail-spawn"
-                    | "fail-worker"
-                    | "fail-queue"
-                    | "fail-construction"
+                "cancel-reopen" | "fail-spawn" | "fail-worker" | "fail-queue" | "fail-construction"
             ) {
                 1
             } else {

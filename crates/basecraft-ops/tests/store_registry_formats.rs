@@ -28,7 +28,6 @@ fn store_writer_bytes_and_validation() {
             .env("BASECRAFT_PROFILE_DIR", root.path().join("profile"))
             .env("BASECRAFT_STATE_DIR", root.path().join("profile/state"))
             .env("BASECRAFT_CACHE_DIR", root.path().join("profile/cache"))
-            .env("BASECRAFT_SCRATCH_DIR", root.path())
             .status()
             .unwrap();
         assert!(status.success());

@@ -719,7 +719,7 @@ pub(crate) fn stage(
     Ok(prepared)
 }
 
-/// Deterministic evidence-based reports. User-authored methods.md is untouched.
+/// Deterministic evidence-based reports.
 pub fn write_reports(output: &Path, publication: &Publication) -> Result<()> {
     let mut prepared = crate::documents::PreparedWrite::default();
     stage_reports(&mut prepared, output, publication)?;

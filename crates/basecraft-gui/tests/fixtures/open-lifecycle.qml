@@ -15,11 +15,6 @@ Main {
     property int stage: 0
     property var original: null
     property string originalPage: ""
-    function recordDialog() {
-        for (const item of test.contentData)
-            if (item && item.objectName === "documentRecordDialog") return item
-        return null
-    }
     function check(ok, message) {
         if (!ok) { console.error("OPEN_LIFECYCLE " + scenario + ": " + message); Qt.exit(2) }
     }
@@ -42,13 +37,6 @@ Main {
             } else if (stage === 1 && currentKind === "trace" && current.review_mode) {
                 current.cancel_calls()
                 check(currentPath === folder + "/trace.submission.json", "JSON trace lost submission-name precedence")
-                stage = 2
-                openPath(folder + "/trace.submission.json", true)
-            } else if (stage === 2) {
-                const dialog = recordDialog()
-                if (!dialog || !dialog.visible) return
-                check(dialog.controller === current && dialog.page === 2, "legacy authored continuation lost owner")
-                dialog.close()
                 stage = 3
                 openPath(folder + "/trace.ab1")
             } else if (stage === 3 && currentKind === "trace" && current.review_mode && currentPath === folder + "/trace.ab1") {
@@ -64,36 +52,6 @@ Main {
             check(second === null, "failed request retained a pending slot")
             check(first.controller === current && !current.dirty, "failure changed surviving document")
             finish()
-        } else if (scenario.startsWith("review-")) {
-            const dialog = recordDialog()
-            check(dialog !== null, "real document record dialog not found")
-            if (scenario === "review-supersede") {
-                if (!first || !second || currentPath !== folder + "/tree.nwk") return
-                check(!dialog.visible, "superseded review opened another document draft")
-                finish()
-            } else if (scenario === "review-cancel") {
-                if (!first || currentPath !== folder + "/tree.nwk") return
-                check(!dialog.visible, "cancelled review opened tree draft")
-                finish()
-            } else if (scenario === "review-fail") {
-                if (!first || currentPath !== folder + "/tree.nwk") return
-                check(!dialog.visible, "failed review opened tree draft")
-                finish()
-            } else {
-                if (!first || currentPath !== folder + "/sequence.gb") return
-                if (scenario === "review-duplicate" && stage === 0) {
-                    stage = 1
-                    check(!dialog.visible, "ordinary open showed record dialog")
-                    openPath(folder + "/sequence.gb", true)
-                }
-                check(dialog.visible && dialog.page === 2, "review did not show authored draft page")
-                check(dialog.controller === current && dialog.documentPath === currentPath, "review has wrong document")
-                dialog.draftText = "Keep this authored draft"
-                dialog.rememberDraft()
-                dialog.close()
-                check(dialog.unsavedDrafts().length === 1, "authored text discarded")
-                finish()
-            }
         } else if (scenario === "reorder") {
             if (!first || !second || currentPath !== folder + "/tree.nwk") return
             check(first.kind === "sequence" && second.kind === "tree", "request order changed")
@@ -141,10 +99,7 @@ Main {
     function begin() {
         began = true
         if (scenario === "legacy") { openPath(folder + "/hypotheses.spart"); return }
-        if (scenario === "review-fail") openPath(folder + "/missing.gb", true)
-        else openPath(folder + "/sequence.gb", scenario.startsWith("review-") && scenario !== "review-duplicate")
-        if (scenario === "review-cancel") { closeTab(0); openPath(folder + "/tree.nwk") }
-        if (scenario === "review-supersede" || scenario === "review-fail") openPath(folder + "/tree.nwk")
+        openPath(folder + "/sequence.gb")
         if (scenario === "reorder" || scenario.startsWith("fail-")) openPath(folder + "/tree.nwk")
         if (scenario === "cancel-reopen") { closeTab(0); openPath(folder + "/sequence.gb") }
     }

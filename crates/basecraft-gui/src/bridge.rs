@@ -917,19 +917,13 @@ impl qobject::GenomeController {
         }
         let result = (|| {
             // A new sequence has no file yet: it lives in the chosen project,
-            // or in basecraft's own scratch folder until Save As.
-            let project = crate::chosen_project::chosen()?;
-            let root = match &project {
-                Some(project) => project.root().to_path_buf(),
-                None => {
-                    basecraft_platform::paths::AppPaths::discover()
-                        .map_err(|e| e.to_string())?
-                        .scratch
-                }
-            };
+            // with its recovery in the project's `.basecraft` (D21).
+            let project = crate::chosen_project::chosen()?
+                .ok_or_else(|| basecraft_viewmodel::commands::NEEDS_PROJECT.to_owned())?;
+            let root = project.root().to_path_buf();
             let mut session = Session::recoverable(&root)
                 .map_err(|e| e.to_string())?
-                .in_project(project);
+                .in_project(Some(project));
             let doc = session
                 .create_sequence(&name.to_string(), &text.to_string())
                 .map_err(|e| e.to_string())?;
