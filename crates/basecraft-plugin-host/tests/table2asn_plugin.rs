@@ -290,7 +290,7 @@ fn real_table2asn_on_fixture_packages() {
                             .into(),
                     },
                     organelle: Some(Organelle::Chloroplast),
-                    genetic_code: 11,
+                    genetic_code: Some(11),
                     ..BatchSettings::default()
                 },
             },
@@ -323,7 +323,7 @@ fn real_table2asn_on_fixture_packages() {
                         product: "cytochrome c oxidase subunit I".into(),
                     },
                     organelle: Some(Organelle::Mitochondrion),
-                    genetic_code: 5,
+                    genetic_code: Some(5),
                     ..BatchSettings::default()
                 },
             },

@@ -12,7 +12,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// The submission format version this crate reads and writes.
-pub const SUBMISSION_VERSION: u32 = 1;
+pub const SUBMISSION_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Submission {
@@ -156,8 +156,10 @@ pub struct BatchSettings {
     /// The organelle the marker is from; none for nuclear markers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub organelle: Option<Organelle>,
-    /// NCBI genetic code (translation table) number.
-    pub genetic_code: u8,
+    /// NCBI genetic code (translation table) number. None until someone
+    /// chooses one: a coding marker can't be checked or exported without it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub genetic_code: Option<u8>,
     #[serde(default)]
     pub ends: EndPolicy,
 }
@@ -170,7 +172,7 @@ impl Default for BatchSettings {
             },
             mol_type: MolType::GenomicDna,
             organelle: None,
-            genetic_code: 1,
+            genetic_code: None,
             ends: EndPolicy::Auto,
         }
     }
@@ -552,7 +554,7 @@ mod tests {
 
     #[test]
     fn unknown_fields_survive() {
-        let json = r#"{"version":1,"batch":{"marker":{"kind":"rrna","product":"18S ribosomal RNA"},"genetic_code":1},"later":[1]}"#;
+        let json = r#"{"version":2,"batch":{"marker":{"kind":"rrna","product":"18S ribosomal RNA"},"genetic_code":1},"later":[1]}"#;
         let sub: Submission = serde_json::from_str(json).unwrap();
         assert!(sub.export.trim_terminal_unknown);
         assert_eq!(sub.extra["later"], serde_json::json!([1]));

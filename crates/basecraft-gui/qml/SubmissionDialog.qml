@@ -137,7 +137,7 @@ AppDialog {
         const out = {
             marker: marker,
             mol_type: molType.currentIndex === 1 ? "genomic_rna" : "genomic_dna",
-            genetic_code: geneticCodes.length ? geneticCodes[geneticCode.currentIndex].id : 1,
+            genetic_code: geneticCode.currentIndex >= 0 ? geneticCodes[geneticCode.currentIndex].id : null,
             ends: endPolicies[ends.currentIndex][0]
         };
         const location = organelles[organelle.currentIndex][0];
@@ -902,7 +902,9 @@ AppDialog {
                                 objectName: "geneticCode"
                                 Accessible.name: "Genetic code"
                                 model: dialog.geneticCodes.map(c => c.name)
-                                currentIndex: Math.max(0, dialog.geneticCodes.findIndex(c => dialog.batch && c.id === dialog.batch.genetic_code))
+                                // No code chosen yet shows none: there is no default.
+                                currentIndex: dialog.geneticCodes.findIndex(c => dialog.batch && c.id === dialog.batch.genetic_code)
+                                displayText: currentIndex < 0 ? "Choose a code" : currentText
                                 onActivated: dialog.saveBatch()
                             }
                         }

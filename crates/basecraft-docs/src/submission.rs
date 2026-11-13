@@ -100,11 +100,10 @@ pub fn validate(sub: &Submission) -> Result<(), EditError> {
         ));
     }
     let batch = &sub.batch;
-    if genetic_code::code(batch.genetic_code).is_none() {
-        return Err(err(format!(
-            "genetic code {} is not supported",
-            batch.genetic_code
-        )));
+    if let Some(id) = batch.genetic_code
+        && genetic_code::code(id).is_none()
+    {
+        return Err(err(format!("genetic code {id} is not supported")));
     }
     match &batch.marker {
         Marker::Coding { gene, product } => {
@@ -817,7 +816,8 @@ struct Context<'a> {
     sub: &'a Submission,
     meta: &'a ProjectMetadata,
     document: &'a str,
-    code: &'static GeneticCode,
+    /// The batch's genetic code; a coding marker always has one.
+    code: Option<&'static GeneticCode>,
     masked: &'a BTreeSet<u64>,
 }
 
@@ -832,13 +832,25 @@ pub fn prepare(
     document: &str,
 ) -> Prepared {
     let mut out = Prepared::default();
-    let Some(code) = genetic_code::code(sub.batch.genetic_code) else {
-        out.issues.push(Issue::local(
-            Severity::Blocking,
-            "genetic_code",
-            format!("genetic code {} is not supported", sub.batch.genetic_code),
-        ));
-        return out;
+    // The batch's own code, never a default: a coding marker needs one.
+    let code = match (sub.batch.genetic_code, &sub.batch.marker) {
+        (Some(id), _) => match genetic_code::resolve(Some(id), None, &[]) {
+            Ok((code, _)) => Some(code),
+            Err(message) => {
+                out.issues
+                    .push(Issue::local(Severity::Blocking, "genetic_code", message));
+                return out;
+            }
+        },
+        (None, Marker::Coding { .. }) => {
+            out.issues.push(Issue::local(
+                Severity::Blocking,
+                "genetic_code",
+                "Choose the genetic code for this coding marker",
+            ));
+            return out;
+        }
+        (None, _) => None,
     };
     batch_issues(sub, &mut out.issues);
     let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
@@ -1150,17 +1162,20 @@ fn feature(cx: &Context<'_>, record: &mut PreparedRecord, seq: &[u8], issues: &m
     let policy = cx.sub.batch.ends;
     let (kind, qualifiers, gene) = match &cx.sub.batch.marker {
         Marker::Coding { gene, product } => {
-            let frame = frame_report(cx, &record.record, seq, issues);
+            let Some(code) = cx.code else {
+                return;
+            };
+            let frame = frame_report(cx, code, &record.record, seq, issues);
             let Some(start) = frame.effective else {
                 record.frame = Some(frame);
                 return;
             };
             let offset = usize::from(start - 1);
             let rest = &seq[offset.min(seq.len())..];
-            let starts = rest.get(..3).is_some_and(|c| cx.code.is_start(c));
+            let starts = rest.get(..3).is_some_and(|c| code.is_start(c));
             let stops = rest.len().is_multiple_of(3)
                 && rest.len() >= 3
-                && cx.code.is_stop(&rest[rest.len() - 3..]);
+                && code.is_stop(&rest[rest.len() - 3..]);
             let (partial5, partial3) = match policy {
                 EndPolicy::Auto => (!(start == 1 && starts), !stops),
                 EndPolicy::Partial => (true, true),
@@ -1198,7 +1213,7 @@ fn feature(cx: &Context<'_>, record: &mut PreparedRecord, seq: &[u8], issues: &m
                 qualifiers: vec![
                     ("product".into(), product.clone()),
                     ("codon_start".into(), start.to_string()),
-                    ("transl_table".into(), cx.code.id.to_string()),
+                    ("transl_table".into(), code.id.to_string()),
                 ],
             });
             return;
@@ -1225,9 +1240,15 @@ fn feature(cx: &Context<'_>, record: &mut PreparedRecord, seq: &[u8], issues: &m
     });
 }
 
-fn frame_report(cx: &Context<'_>, name: &str, seq: &[u8], issues: &mut Vec<Issue>) -> FrameReport {
+fn frame_report(
+    cx: &Context<'_>,
+    table: &GeneticCode,
+    name: &str,
+    seq: &[u8],
+    issues: &mut Vec<Issue>,
+) -> FrameReport {
     let candidates: Vec<u8> = (1..=3)
-        .filter(|&f| usize::from(f) + 2 <= seq.len() && stops(cx.code, seq, f).is_empty())
+        .filter(|&f| usize::from(f) + 2 <= seq.len() && stops(table, seq, f).is_empty())
         .collect();
     let detected = (candidates.len() == 1).then(|| candidates[0]);
     let chosen = cx
@@ -1237,7 +1258,7 @@ fn frame_report(cx: &Context<'_>, name: &str, seq: &[u8], issues: &mut Vec<Issue
         .find(|f| f.record == name)
         .map(|f| f.codon_start);
     let effective = chosen.or(detected);
-    let code = cx.code.id;
+    let code = table.id;
     match (chosen, candidates.as_slice()) {
         (None, []) => issues.push(Issue::local(
             Severity::Blocking,
@@ -1262,8 +1283,8 @@ fn frame_report(cx: &Context<'_>, name: &str, seq: &[u8], issues: &mut Vec<Issue
     let (translation, internal_stops) = effective.map_or((String::new(), Vec::new()), |f| {
         let offset = usize::from(f - 1).min(seq.len());
         (
-            String::from_utf8_lossy(&cx.code.translate(&seq[offset..])).into_owned(),
-            stops(cx.code, seq, f),
+            String::from_utf8_lossy(&table.translate(&seq[offset..])).into_owned(),
+            stops(table, seq, f),
         )
     });
     if let (Some(f), false) = (chosen, internal_stops.is_empty()) {
@@ -1443,7 +1464,7 @@ mod tests {
             }),
             batch: BatchSettings {
                 marker,
-                genetic_code: code,
+                genetic_code: Some(code),
                 ..BatchSettings::default()
             },
             publication: basecraft_protocol::submission::Publication {
@@ -1924,7 +1945,7 @@ mod redesign_tests {
     }
     #[test]
     fn legacy_details_link_by_default_and_disabled_custom_values_survive() {
-        let mut sub: Submission = serde_json::from_str(r#"{"version":1,"batch":{"marker":{"kind":"rrna","product":"18S"},"genetic_code":1},"publication":{"title":"Legacy","authors":[{"first":"A.","last":"Doe"}]}}"#).unwrap();
+        let mut sub: Submission = serde_json::from_str(r#"{"version":2,"batch":{"marker":{"kind":"rrna","product":"18S"},"genetic_code":1},"publication":{"title":"Legacy","authors":[{"first":"A.","last":"Doe"}]}}"#).unwrap();
         assert_eq!(sub.submission_citation(), sub.publication_citation());
         let submission = Publication {
             title: "Sequences".into(),
