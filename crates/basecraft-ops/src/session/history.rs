@@ -326,6 +326,7 @@ impl Session {
         if checkpoints {
             self.track(doc)?;
         }
+        let alphabet = matches!(op, Op::SetAlphabet { .. }).then(|| self.docs[doc.0].is_clean());
         let before = crate::documents::tree::displaced(&self.docs[doc.0].content);
         let mut notes = crate::documents::tree::placement_notes(&self.docs[doc.0].content, &op);
         let (inverse, feature) = self.docs[doc.0]
@@ -378,6 +379,11 @@ impl Session {
         let settled = slot.settle();
         dropped.extend(self.settle_members(settled));
         self.forget_groups(dropped);
+        if let Some(was_clean) = alphabet
+            && let Err(error) = self.write_alphabet_now(doc, was_clean)
+        {
+            notes.push(format!("The answer is kept until the next save: {error}"));
+        }
         Ok(Outcome {
             entry_id,
             feature,
@@ -561,6 +567,7 @@ impl Session {
         self.docs.get(id.0).ok_or(Error::UnknownDocument { id })?;
         self.track(id)?;
         self.typing = None;
+        let was_clean = self.docs[id.0].is_clean();
         let group = whole
             .then(|| self.docs[id.0].stack(undo).last().and_then(|a| a.group))
             .flatten();
@@ -609,6 +616,14 @@ impl Session {
         if let Err(error) = self.write_steps(id, &entries, &undone) {
             self.unstep(id, undo, entries.len())?;
             return Err(error);
+        }
+        let moved = self.docs[id.0].stack(!undo).iter().rev().take(undone.len());
+        let alphabet = moved
+            .into_iter()
+            .any(|step| matches!(step.op, Op::SetAlphabet { .. }));
+        // An answer the side file can't take now still reaches it on save.
+        if alphabet {
+            let _ = self.write_alphabet_now(id, was_clean);
         }
         Ok(undone.pop().unwrap_or_default())
     }

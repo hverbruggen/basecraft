@@ -55,6 +55,9 @@ pub enum StatedAlphabet {
     Dna,
     Rna,
     Protein,
+    /// The user declined to say (D22): basecraft does not ask again, and
+    /// what needs the alphabet still refuses.
+    Undetermined,
 }
 
 impl From<StatedAlphabet> for Alphabet {
@@ -63,6 +66,7 @@ impl From<StatedAlphabet> for Alphabet {
             StatedAlphabet::Dna => Alphabet::Dna,
             StatedAlphabet::Rna => Alphabet::Rna,
             StatedAlphabet::Protein => Alphabet::Protein,
+            StatedAlphabet::Undetermined => Alphabet::Undetermined,
         }
     }
 }

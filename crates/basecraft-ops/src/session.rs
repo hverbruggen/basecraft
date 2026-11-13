@@ -23,6 +23,7 @@ use crate::error::invalid;
 use crate::files::{self, Loaded, Opened};
 use crate::log::LogWriter;
 
+mod alphabet;
 mod creation;
 mod extraction;
 mod history;

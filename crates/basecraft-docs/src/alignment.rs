@@ -317,6 +317,21 @@ pub fn alphabet_refusal<'a>(
     ))
 }
 
+/// The refusal for a document whose alphabet is `fact`: none once the user
+/// or the file states one, but still one when the user declined (D22).
+pub(crate) fn refusal_for<'a>(
+    fact: &Fact<Alphabet>,
+    sequences: impl IntoIterator<Item = (&'a str, Alphabet)>,
+) -> Option<String> {
+    match (fact.source, fact.value) {
+        (FactSource::Guessed, _) => alphabet_refusal(sequences),
+        (_, Alphabet::Undetermined) => Some(alphabet_refusal(sequences).unwrap_or_else(|| {
+            "This file is marked as of undetermined sequence type. State the alphabet first.".into()
+        })),
+        _ => None,
+    }
+}
+
 impl AlignmentDoc {
     /// An alignment from rows. Rows shorter than the longest are padded with
     /// trailing gaps, as reading a ragged alignment file does.
@@ -459,14 +474,11 @@ impl AlignmentDoc {
     /// basecraft can't tell apart, or rows of different kinds. None when the
     /// alphabet is stated or every row agrees.
     pub fn alphabet_refusal(&self) -> Option<String> {
-        if self.alphabet().source != FactSource::Guessed {
-            return None;
-        }
-        alphabet_refusal(
-            self.rows
-                .iter()
-                .map(|row| (row.name.as_str(), row.alphabet())),
-        )
+        let rows = self
+            .rows
+            .iter()
+            .map(|row| (row.name.as_str(), row.alphabet()));
+        refusal_for(&self.alphabet(), rows)
     }
 
     pub fn read(&self, row: usize, start: u64, end: u64) -> Vec<u8> {

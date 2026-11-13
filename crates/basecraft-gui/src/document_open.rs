@@ -505,6 +505,14 @@ pub(crate) fn offer_copy<T: DocumentEditor>(
     }
 }
 
+/// Whether the editor's document has unsaved edits: after an edit, the
+/// session says, since an alphabet answer is saved at once (D22).
+pub(crate) fn unsaved(session: Option<&Session>, doc: Option<basecraft_ops::DocId>) -> bool {
+    session
+        .zip(doc)
+        .is_none_or(|(session, doc)| session.is_unsaved(doc))
+}
+
 /// State the alphabet the user chose in the question (D12).
 pub(crate) fn state_alphabet<T: DocumentEditor>(
     mut this: std::pin::Pin<&mut T>,

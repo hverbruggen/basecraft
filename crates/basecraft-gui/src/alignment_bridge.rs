@@ -746,7 +746,9 @@ impl qobject::AlignmentController {
         crate::document_open::offer_copy(self.as_mut(), refused_now);
         match result {
             Ok(()) => {
-                self.as_mut().set_dirty(true);
+                let dirty =
+                    crate::document_open::unsaved(self.rust().session.as_ref(), self.rust().doc);
+                self.as_mut().set_dirty(dirty);
                 self.as_mut().notify("");
                 true
             }
@@ -1221,7 +1223,9 @@ impl qobject::AlignmentController {
         };
         match result {
             Ok(_) => {
-                self.as_mut().set_dirty(true);
+                let dirty =
+                    crate::document_open::unsaved(self.rust().session.as_ref(), self.rust().doc);
+                self.as_mut().set_dirty(dirty);
                 // Undoing or redoing makes the last message stale.
                 self.as_mut().notify("");
             }

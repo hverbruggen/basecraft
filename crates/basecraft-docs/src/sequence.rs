@@ -192,10 +192,8 @@ impl SequenceDoc {
 
     /// Why something that needs the alphabet can't run yet (D12).
     pub fn alphabet_refusal(&self) -> Option<String> {
-        if self.alphabet().source != FactSource::Guessed {
-            return None;
-        }
-        crate::alignment::alphabet_refusal([(self.name.as_str(), self.counts.alphabet())])
+        let sequence = [(self.name.as_str(), self.counts.alphabet())];
+        crate::alignment::refusal_for(&self.alphabet(), sequence)
     }
 
     pub fn from_genbank(rec: genbank::Record) -> Self {

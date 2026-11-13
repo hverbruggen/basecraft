@@ -114,7 +114,14 @@ fn scenario<T: Debug + PartialEq>(
     drop(session);
 
     let entries = log::read_all(dir.path()).unwrap();
-    assert_eq!(entries.len(), 6, "open, two edits, undo, redo, save");
+    // D22: an alphabet answer is in the side file at once, so its save has
+    // nothing to write and logs nothing.
+    let saved = !matches!(ops[0], Op::SetAlphabet { .. });
+    assert_eq!(
+        entries.len(),
+        5 + usize::from(saved),
+        "open, two edits, undo, redo, save"
+    );
     assert!(matches!(entries[0].op, Op::Open { .. }));
     assert_eq!(entries[1].op, ops[0]);
     assert_eq!(entries[2].op, ops[1]);
@@ -132,8 +139,10 @@ fn scenario<T: Debug + PartialEq>(
             of: second.entry_id
         }
     );
-    assert!(matches!(entries[5].op, Op::Save { .. }));
-    assert_ne!(entries[5].result.hashes, Vec::new());
+    if saved {
+        assert!(matches!(entries[5].op, Op::Save { .. }));
+        assert_ne!(entries[5].result.hashes, Vec::new());
+    }
     assert!(
         entries
             .iter()

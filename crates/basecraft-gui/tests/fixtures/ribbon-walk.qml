@@ -303,16 +303,29 @@ Main {
         const unclear = folder + "/unclear.fasta"
         list.push(() => openPath(unclear))
         list.push(opened(unclear))
+        // D22: Cancel means not now; the question comes back only on reopen.
         list.push(() => {
             show(tabOf(unclear))
             const ask = dialog("alphabetDialog")
             check(ask && ask.opened && ask.question.includes("unclear"), "an undetermined sequence did not ask what it is")
+            ask.reject()
+            show(0)
+            show(tabOf(unclear))
+            check(!dialog("alphabetDialog").opened, "a cancelled question came back while the file stayed open")
+            closeTab(tabOf(unclear))
+        })
+        list.push(() => openPath(unclear))
+        list.push(opened(unclear))
+        list.push(() => {
+            show(tabOf(unclear))
+            const ask = dialog("alphabetDialog")
+            check(ask && ask.opened && ask.question.includes("unclear"), "reopening did not ask again after Cancel")
             find(ask.contentItem, i => i.objectName === "alphabetDna").clicked()
             const ctl = documentAt(tabOf(unclear)).controller
-            check(!ask.opened && ctl.alphabet_question === "" && ctl.dirty, "stating DNA was not recorded")
+            // D22: the answer is in the side file at once, so nothing is left to save.
+            check(!ask.opened && ctl.alphabet_question === "" && !ctl.dirty, "stating DNA was not recorded at once")
             check(documentAt(1).controller.status.includes("DNA (guessed)"), "the alignment status does not name its guessed alphabet: " + documentAt(1).controller.status)
             currentView.pressKey(Qt.Key_W, Qt.ControlModifier, "")
-            dialog("closeDocumentDialog").discarded()
         })
         // Sequence commands: defaults, a remapped shortcut, document context.
         list.push(() => {
