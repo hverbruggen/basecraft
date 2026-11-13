@@ -20,7 +20,6 @@ fn recoverable_open_requested_heap() {
             .env("BASECRAFT_PROFILE_DIR", root.path().join("profile"))
             .env("BASECRAFT_STATE_DIR", root.path().join("profile/state"))
             .env("BASECRAFT_CACHE_DIR", root.path().join("profile/cache"))
-            .env("BASECRAFT_SCRATCH_DIR", root.path())
             .env("TMPDIR", root.path())
             .output()
             .unwrap();

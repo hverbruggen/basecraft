@@ -7,7 +7,6 @@ pub struct AppPaths {
     pub data: PathBuf,
     pub state: PathBuf,
     pub cache: PathBuf,
-    pub scratch: PathBuf,
     /// The user's home folder, for desktop settings the app follows (theme,
     /// fonts). None when the environment does not name one.
     pub home: Option<PathBuf>,
@@ -48,7 +47,6 @@ impl AppPaths {
                 data: profile.join("data"),
                 state: absolute("BASECRAFT_STATE_DIR")?.unwrap_or_else(|| profile.join("state")),
                 cache: absolute("BASECRAFT_CACHE_DIR")?.unwrap_or_else(|| profile.join("cache")),
-                scratch: absolute("BASECRAFT_SCRATCH_DIR")?.unwrap_or_else(std::env::temp_dir),
             });
         }
         let user = home.clone().ok_or_else(|| {
@@ -93,7 +91,6 @@ impl AppPaths {
             data,
             state: absolute("BASECRAFT_STATE_DIR")?.unwrap_or(state),
             cache: absolute("BASECRAFT_CACHE_DIR")?.unwrap_or(cache),
-            scratch: absolute("BASECRAFT_SCRATCH_DIR")?.unwrap_or_else(std::env::temp_dir),
         })
     }
 

@@ -16,7 +16,6 @@ pub fn enter(name: &str) -> Option<PathBuf> {
         .env("BASECRAFT_PROFILE_DIR", root.path().join("profile"))
         .env("BASECRAFT_STATE_DIR", root.path().join("profile/state"))
         .env("BASECRAFT_CACHE_DIR", root.path().join("profile/cache"))
-        .env("BASECRAFT_SCRATCH_DIR", root.path().join("scratch"))
         .env("TMPDIR", root.path())
         .env("TMP", root.path())
         .env("TEMP", root.path())

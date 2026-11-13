@@ -1118,8 +1118,14 @@ pub struct Context {
     pub unresolved: bool,
 }
 
+/// Why a new document cannot be made: it needs a chosen project (D21).
+pub const NEEDS_PROJECT: &str = "Choose a project first";
+
 /// Why command `id` is unavailable in `context`, for its tooltip.
 pub fn disabled_reason(id: &str, context: &Context) -> &'static str {
+    if id == "file.new-sequence" && !context.project {
+        return NEEDS_PROJECT;
+    }
     let alignment = context.kind == "alignment";
     let trace = context.kind == "trace";
     if id.starts_with("metadata.") || id.starts_with("submission.") {
@@ -1372,6 +1378,8 @@ mod tests {
             disabled_reason("metadata.table", &none),
             "Choose a project folder with File > Project to use project data"
         );
+        // D21: a new document needs a chosen project.
+        assert_eq!(disabled_reason("file.new-sequence", &none), NEEDS_PROJECT);
         let busy = Context {
             document: true,
             busy: true,

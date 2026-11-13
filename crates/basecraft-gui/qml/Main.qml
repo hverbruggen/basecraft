@@ -481,6 +481,8 @@ ApplicationWindow {
         commandId: "file.new-sequence"
         iconName: "new-file"
         defaultShortcut: "Ctrl+N"
+        // D21: a new document's recovery lives in the chosen project.
+        enabled: shell.project_dir.length > 0
         onTriggered: newSequenceDialog.dialog().prepare("", "")
     }
     Command {

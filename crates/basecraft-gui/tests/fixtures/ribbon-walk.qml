@@ -317,7 +317,9 @@ Main {
         // Sequence commands: defaults, a remapped shortcut, document context.
         list.push(() => {
             show(0)
-            check(command("file.new-sequence").shortcut === "Ctrl+N", "new sequence lost Ctrl+N")
+            const newSequence = command("file.new-sequence")
+            check(newSequence.shortcut === "Ctrl+N", "new sequence lost Ctrl+N")
+            check(!newSequence.enabled && newSequence.effectiveTooltip === "Choose a project first", "new sequence available without a project")
             const annotate = command("ribbon.annotate-the-selection")
             check(annotate.shortcut === "Ctrl+Shift+N" && annotate.enabled, "annotate not ready on a sequence")
             persistPreference("shortcut", {id: "ribbon.annotate-the-selection", value: "Ctrl+J"})
@@ -343,6 +345,7 @@ Main {
             check(dialog("preferences").project_error.includes("/missing") && metadataProject !== folder + "/missing", "missing project accepted")
             selectProject(folder)
             check(metadataProject === folder && dialog("preferences").recent_projects.includes(folder) && dialog("preferences").project_error === "", "project not chosen")
+            check(command("file.new-sequence").enabled, "new sequence still disabled with a project")
         })
         // Figure export options: PNG width, selection for alignments only.
         list.push(() => { show(1); exportSvg("png") })

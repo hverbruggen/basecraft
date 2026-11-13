@@ -534,7 +534,6 @@ fn application_starts_offscreen_and_draws_its_window() {
         .env("BASECRAFT_PROFILE_DIR", root.path().join("profile"))
         .env("BASECRAFT_STATE_DIR", root.path().join("profile/state"))
         .env("BASECRAFT_CACHE_DIR", root.path().join("profile/cache"))
-        .env("BASECRAFT_SCRATCH_DIR", root.path().join("scratch"))
         .env("HOME", root.path())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

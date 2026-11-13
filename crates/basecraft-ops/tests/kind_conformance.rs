@@ -52,7 +52,6 @@ fn scenario<T: Debug + PartialEq>(
             .env("BASECRAFT_PROFILE_DIR", isolated.path().join("profile"))
             .env("BASECRAFT_STATE_DIR", isolated.path().join("state"))
             .env("BASECRAFT_CACHE_DIR", isolated.path().join("cache"))
-            .env("BASECRAFT_SCRATCH_DIR", isolated.path().join("scratch"))
             .env("TMPDIR", isolated.path())
             .env("TMP", isolated.path())
             .env("TEMP", isolated.path())

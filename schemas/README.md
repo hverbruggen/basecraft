@@ -20,9 +20,7 @@ disposable caches only. Until the open items below close, they still hold:
 - job records of plugin runs in `state/jobs` and `state/operation-jobs`
   (card j3sxh item 3);
 - LocalOnly history, and the history of a Sanger review whose source folder is
-  read-only, in `state/provenance` (j3sxh item 4);
-- recovery of a new sequence made without a project, under the scratch folder
-  until it is saved (`<scratch>/.basecraft/recovery`).
+  read-only, in `state/provenance` (j3sxh item 4).
 
 | Path inside `.basecraft` | What it holds | Format |
 |---|---|---|

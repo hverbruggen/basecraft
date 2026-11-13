@@ -187,11 +187,10 @@ impl qobject::AppProvenance {
     fn recovery_sessions(mut self: Pin<&mut Self>) -> QString {
         let result = (|| -> Result<String, String> {
             // Recovery lives in each project's `.basecraft`: look in the
-            // chosen project, the recent ones and the scratch folder of new
-            // sequences. A loose file's recovery is offered when it is opened.
+            // chosen project and the recent ones. A loose file's recovery is
+            // offered when it is opened.
             let mut roots = crate::settings_bridge::load_project_history().unwrap_or_default();
             roots.extend(crate::chosen_project::chosen()?.map(|p| p.root().to_path_buf()));
-            roots.extend(basecraft_platform::paths::AppPaths::discover().map(|p| p.scratch));
             let mut sessions = Vec::new();
             for folder in
                 basecraft_ops::records::recovery_sessions(&roots).map_err(|e| e.to_string())?
@@ -355,7 +354,6 @@ mod tests {
             data: root.join("data"),
             state: root.join("state"),
             cache: root.join("cache"),
-            scratch: root.join("scratch"),
             home: None,
         };
         let file = root.join("sequence.fasta");
