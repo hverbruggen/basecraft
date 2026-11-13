@@ -194,17 +194,18 @@ pub enum Op {
         id: u32,
         annotation: Option<CladeAnnotation>,
     },
-    /// A set of support values, such as bootstraps from another analysis:
-    /// one per internal node in preorder, as text.
     /// Settle labels a reroot left on another group of tips (D11): each goes
-    /// where `choice` says. Empty `labels` means every displaced label. One
-    /// undo step; refused as a whole when one label can't be placed.
+    /// where `choice` says. One undo step; refused as a whole when one label
+    /// can't be placed. Given without `labels`, the session fills in every
+    /// label displaced now, so the log always names them.
     #[serde(rename = "tree.place_label")]
     TreePlaceLabel {
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[serde(default)]
         labels: Vec<u32>,
         choice: crate::tree::LabelPlacement,
     },
+    /// A set of support values, such as bootstraps from another analysis:
+    /// one per internal node in preorder, as text.
     #[serde(rename = "tree.add_support")]
     TreeAddSupport {
         name: String,

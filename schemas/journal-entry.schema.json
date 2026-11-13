@@ -1116,7 +1116,7 @@
       ]
     },
     {
-      "description": "A set of support values, such as bootstraps from another analysis:\none per internal node in preorder, as text.\nSettle labels a reroot left on another group of tips (D11): each goes\nwhere `choice` says. Empty `labels` means every displaced label. One\nundo step; refused as a whole when one label can't be placed.",
+      "description": "Settle labels a reroot left on another group of tips (D11): each goes\nwhere `choice` says. One undo step; refused as a whole when one label\ncan't be placed. Given without `labels`, the session fills in every\nlabel displaced now, so the log always names them.",
       "type": "object",
       "properties": {
         "op": {
@@ -1131,6 +1131,7 @@
             },
             "labels": {
               "type": "array",
+              "default": [],
               "items": {
                 "type": "integer",
                 "format": "uint32",
@@ -1149,6 +1150,7 @@
       ]
     },
     {
+      "description": "A set of support values, such as bootstraps from another analysis:\none per internal node in preorder, as text.",
       "type": "object",
       "properties": {
         "op": {
