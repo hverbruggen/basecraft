@@ -101,11 +101,17 @@ pub fn verify_completed_result(
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
         return Err(Error::Protocol("unsafe completed run directory".into()));
     }
-    let execution: RunRecord = basecraft_protocol::records::decode(
+    let (execution, writer) = basecraft_protocol::records::decode_written::<RunRecord>(
         &basecraft_ops::records::read_record(&directory.join("execution.json"))?,
     )?;
-    if execution.schema != RUN_RECORD_SCHEMA
-        || execution.operation != query.operation
+    if execution.schema != RUN_RECORD_SCHEMA {
+        return Err(Error::Protocol(basecraft_protocol::records::other_format(
+            &writer,
+            execution.schema,
+            RUN_RECORD_SCHEMA,
+        )));
+    }
+    if execution.operation != query.operation
         || execution.package_digest.as_ref() != Some(&query.pins.package_digest)
         || execution.descriptor_digest.as_ref() != Some(&query.pins.descriptor_digest)
         || execution.effective_parameters != query.effective_parameters
@@ -189,13 +195,15 @@ pub fn lookup_completed_result(
             continue;
         } // Input ledgers and domain runs have no runtime receipt.
         let candidate = (|| -> Result<Option<VerifiedOperationResult>> {
-            let outcome: OperationOutcome = basecraft_protocol::records::decode(
+            let (outcome, writer) = basecraft_protocol::records::decode_written::<OperationOutcome>(
                 &basecraft_ops::records::read_record(&receipt)?,
             )?;
             if outcome.schema != 1 {
-                return Err(Error::Protocol(
-                    "unsupported operation receipt version".into(),
-                ));
+                return Err(Error::Protocol(basecraft_protocol::records::other_format(
+                    &writer,
+                    outcome.schema,
+                    1,
+                )));
             }
             if !query.matches(&outcome)
                 || outcome.state != basecraft_protocol::operation::RuntimeState::Completed
@@ -582,10 +590,9 @@ impl PreparedOperation {
             return Err(Error::Protocol("undeclared extra staged outputs".into()));
         }
         if self.lifecycle.external() {
-            let plan: Value =
-                basecraft_protocol::records::decode(&basecraft_ops::records::read_record(
-                    &self.run.artifact("query-preparation.json")?,
-                )?)?;
+            let plan: Value = serde_json::from_slice(&basecraft_ops::records::read_record(
+                &self.run.artifact("query-preparation.json")?,
+            )?)?;
             self.lifecycle.validate_receipt(
                 result,
                 &self.run_path(&self.context.outputs["receipt"]),

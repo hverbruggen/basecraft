@@ -14,14 +14,17 @@ Every JSON record basecraft writes goes through `basecraft_protocol::records::en
 indented JSON, keys sorted, a final newline, and the version of basecraft that wrote
 it under `"basecraft"` (`0.5.0`, or `0.5.0+20261113.1a2b3c4d5` on a nightly build).
 Journal lines carry the same field in their envelope. The record types do not hold
-the field; `records::decode` reads it, and when a record does not fit this build the
-error names the version that wrote it and the version reading it. Lists inside a run
+the field; `records::decode` reads it, refuses a record that names no version (rule 5,
+D15), and when a record does not fit this build the error names the version that wrote
+it and the version reading it. Replay writes a journal's saves again as the version
+that logged them. The records' own format versions are unchanged: the stamp marks this
+change, and the generations in `tests/writer_record_formats.rs` count goldens only. Lists inside a run
 or report folder (`validated-artifacts.json`, `stages.json`, `source-map.json`,
 `citations.json`), plugin data and plain values are written unchanged; the run's or
 report's own record names the writer. A record written by a later basecraft opens
-normally. A save that would drop fields this build does not know (side files,
-submissions, metadata manifests, Sanger reviews) is refused with error
-`newer_fields_dropped`, naming both versions, until the caller allows it
+normally. A save that would drop fields this build does not know, or remove such a file
+(side files, submissions, metadata manifests, Sanger reviews), is refused with error
+`newer_fields_dropped`, naming every such file and both versions, until the caller allows it
 (`Session::drop_newer_fields`, CLI `--drop-newer-fields`, MCP and Python
 `drop_newer_fields`). Golden fixtures hold `<version>` in place of the version.
 

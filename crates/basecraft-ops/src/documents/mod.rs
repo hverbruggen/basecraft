@@ -57,9 +57,18 @@ impl PreparedWrite {
     }
     /// Note the fields a later basecraft wrote into the record at `path`
     /// that `T` would drop when this save replaces it (D14).
-    pub fn check_record<T: serde::Serialize + serde::de::DeserializeOwned>(&mut self, path: &Path) {
+    pub fn check_record<T: basecraft_protocol::records::RecordFormat>(&mut self, path: &Path) {
         if let Ok(bytes) = std::fs::read(path)
             && let Some(unknown) = basecraft_protocol::records::unknown_fields::<T>(&bytes)
+        {
+            self.unknown.push((path.into(), unknown));
+        }
+    }
+    /// Note what removing the record at `path` would drop when a later
+    /// basecraft wrote it (D14).
+    pub fn check_removal(&mut self, path: &Path) {
+        if let Ok(bytes) = std::fs::read(path)
+            && let Some(unknown) = basecraft_protocol::records::removed_fields(&bytes)
         {
             self.unknown.push((path.into(), unknown));
         }
@@ -238,12 +247,12 @@ fn stage_companion(
     main: &str,
 ) -> Result<()> {
     let path = crate::files::tree_sidecar(target);
-    match crate::files::facts_companion(alphabet, main) {
-        Some(companion) => {
-            prepared.check_record::<Companion>(&path);
-            prepared.push(&path, |w| companion.write(w))?;
-        }
-        None => prepared.remove_stale(&path),
+    if let Some(companion) = crate::files::facts_companion(alphabet, main) {
+        prepared.check_record::<Companion>(&path);
+        prepared.push(&path, |w| companion.write(w))?;
+    } else {
+        prepared.check_removal(&path);
+        prepared.remove_stale(&path);
     }
     Ok(())
 }

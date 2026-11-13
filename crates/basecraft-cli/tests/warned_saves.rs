@@ -70,7 +70,7 @@ fn headless_save_conformance() {
         std::fs::create_dir_all(&bucket).unwrap();
         std::fs::write(
             bucket.join(format!("distant-{name}.json")),
-            serde_json::to_vec_pretty(&json!({
+            basecraft_protocol::records::encode(&json!({
                 "schema_version": 1,
                 "store": "../.basecraft/analyses-v1",
                 "files": [name],

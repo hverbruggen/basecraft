@@ -180,7 +180,6 @@
           "type": "string"
         }
       },
-      "additionalProperties": false,
       "required": [
         "generation",
         "package_digest",

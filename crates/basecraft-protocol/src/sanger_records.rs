@@ -200,6 +200,15 @@ pub struct SangerPlacement {
     pub parameters: Vec<String>,
 }
 
+/// The saved review format this build writes.
+pub const SAVED_REVIEW_VERSION: u32 = 3;
+
+impl crate::records::RecordFormat for SavedCallSets {
+    fn is_current(&self) -> bool {
+        self.version == SAVED_REVIEW_VERSION
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -210,12 +219,15 @@ mod tests {
             include_str!("../../../testdata/fixtures/sanger-review/single.json"),
             include_str!("../../../testdata/fixtures/sanger-review/multi.json"),
         ] {
-            let record: SavedCallSets = serde_json::from_str(bytes).unwrap();
+            let record: SavedCallSets = crate::records::decode(bytes.as_bytes()).unwrap();
             assert_eq!(record.version, 3);
-            assert_eq!(
-                serde_json::to_value(record).unwrap(),
-                serde_json::from_str::<serde_json::Value>(bytes).unwrap()
-            );
+            // The record type does not hold the stamp; everything else survives.
+            let mut original: serde_json::Value = serde_json::from_str(bytes).unwrap();
+            original
+                .as_object_mut()
+                .unwrap()
+                .remove(crate::records::WRITTEN_BY);
+            assert_eq!(serde_json::to_value(record).unwrap(), original);
         }
     }
 }

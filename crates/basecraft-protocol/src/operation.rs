@@ -286,7 +286,6 @@ pub struct Effects {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct OperationRequest {
     pub operation: String,
     #[serde(default)]
@@ -306,7 +305,7 @@ pub struct OperationRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum InputReference {
     File {
         path: String,
@@ -319,7 +318,6 @@ pub enum InputReference {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct OperationPins {
     pub generation: String,
     pub package_digest: String,
@@ -329,7 +327,6 @@ pub struct OperationPins {
 /// What the host allocated for one run, sent with every invocation. Paths are
 /// relative to `run_root`; an input outside the run folder is absolute.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct InvocationContext {
     pub schema: u32,
     pub operation: String,
@@ -353,7 +350,6 @@ pub struct InvocationContext {
 /// follow the context's rule; in the run record they are relative to the run
 /// folder.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct InvocationInputEvidence {
     pub original_path: Option<String>,
     pub source_hash: Option<String>,

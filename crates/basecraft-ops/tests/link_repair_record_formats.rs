@@ -55,7 +55,8 @@ fn selected_guard_fields_keep_existing_acceptance_and_view_refusal() {
     let origin = records::sidecar(&tree);
     let view = records::view_sidecar(&tree);
     let valid = include_bytes!("../../../testdata/fixtures/records-v1/link-snapshot-inferred.json");
-    std::fs::write(&origin, valid).unwrap();
+    let link: Value = serde_json::from_slice(valid).unwrap();
+    std::fs::write(&origin, basecraft_protocol::records::encode(&link).unwrap()).unwrap();
     for reason in ["", "unavailable test"] {
         for recovery in [
             None,
@@ -74,7 +75,7 @@ fn selected_guard_fields_keep_existing_acceptance_and_view_refusal() {
                 if let Some(schema) = schema {
                     value["schema"] = schema;
                 }
-                let before = serde_json::to_vec(&value).unwrap();
+                let before = basecraft_protocol::records::encode(&value).unwrap();
                 std::fs::write(&view, &before).unwrap();
                 let error = AlignmentLink::read_view(&tree).unwrap_err();
                 let expected = if value["recovery"].is_string() {
@@ -95,7 +96,7 @@ fn selected_guard_fields_keep_existing_acceptance_and_view_refusal() {
     for unavailable in [Value::Null, json!(false), json!(42), json!({})] {
         let mut value: Value = serde_json::from_slice(valid).unwrap();
         value["unavailable"] = unavailable;
-        std::fs::write(&view, serde_json::to_vec(&value).unwrap()).unwrap();
+        std::fs::write(&view, basecraft_protocol::records::encode(&value).unwrap()).unwrap();
         assert!(
             AlignmentLink::read_view(&tree).is_ok(),
             "nonstring guard falls through"

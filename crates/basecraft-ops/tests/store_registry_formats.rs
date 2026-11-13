@@ -54,12 +54,15 @@ fn store_writer_bytes_and_validation() {
         json!({}),
         json!([]),
     ] {
-        std::fs::write(&marker, serde_json::to_vec(&bad).unwrap()).unwrap();
+        // Objects carry the stamp; a list can't, and is refused for that.
+        let bytes = basecraft_protocol::records::encode(&bad)
+            .unwrap_or_else(|_| serde_json::to_vec(&bad).unwrap());
+        std::fs::write(&marker, bytes).unwrap();
+        let error = ArtifactRun::validate_store(store).unwrap_err().to_string();
         assert!(
-            ArtifactRun::validate_store(store)
-                .unwrap_err()
-                .to_string()
-                .contains("foreign or unsupported analysis namespace; nothing was migrated")
+            error.contains("foreign or unsupported analysis namespace; nothing was migrated")
+                || error.contains("names no basecraft version"),
+            "{error}"
         );
     }
     std::fs::write(&marker, vec![b' '; 4097]).unwrap();
@@ -69,7 +72,10 @@ fn store_writer_bytes_and_validation() {
             .to_string()
             .contains("unsafe marker")
     );
-    let extended_marker = b"{\"format\":\"basecraft.analysis-store\",\"future\":{\"enabled\":true},\"schema_version\":1}\n";
+    let extended_marker = &basecraft_protocol::records::encode(
+        &json!({"format":"basecraft.analysis-store","future":{"enabled":true},"schema_version":1}),
+    )
+    .unwrap();
     std::fs::write(&marker, extended_marker).unwrap();
     ArtifactRun::validate_store(store).unwrap();
     capture("store-extended.json", extended_marker);

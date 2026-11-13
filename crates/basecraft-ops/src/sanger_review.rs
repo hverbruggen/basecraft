@@ -283,9 +283,11 @@ impl SangerReview {
     }
 
     pub(crate) fn decode(bytes: &[u8], path: &Path) -> Result<Self, String> {
-        let value: serde_json::Value =
-            basecraft_protocol::records::decode(bytes).map_err(|e| e.to_string())?;
+        let (value, writer) =
+            basecraft_protocol::records::decode_written::<serde_json::Value>(bytes)
+                .map_err(|e| e.to_string())?;
         Self::decode_value(value, path)
+            .map_err(|e| basecraft_protocol::records::unreadable(&writer, &e).to_string())
     }
 
     fn decode_value(value: serde_json::Value, path: &Path) -> Result<Self, String> {

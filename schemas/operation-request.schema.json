@@ -58,7 +58,6 @@
       ]
     }
   },
-  "additionalProperties": false,
   "required": [
     "operation",
     "parameters",
@@ -78,7 +77,6 @@
               "type": "string"
             }
           },
-          "additionalProperties": false,
           "required": [
             "kind",
             "path"
@@ -105,7 +103,6 @@
               "minimum": 0
             }
           },
-          "additionalProperties": false,
           "required": [
             "kind",
             "doc",
@@ -128,7 +125,6 @@
           "type": "string"
         }
       },
-      "additionalProperties": false,
       "required": [
         "generation",
         "package_digest",

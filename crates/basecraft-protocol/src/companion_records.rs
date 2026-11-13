@@ -74,3 +74,9 @@ pub struct DelimitationCompanion {
     pub path_base: Option<PathBuf>,
     pub workspace: crate::delimitation::DelimitationWorkspace,
 }
+
+impl crate::records::RecordFormat for Companion {
+    fn is_current(&self) -> bool {
+        self.version == COMPANION_VERSION
+    }
+}

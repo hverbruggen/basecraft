@@ -925,11 +925,11 @@ pub(crate) fn relocate_package(
     paths: &BTreeMap<PathBuf, String>,
 ) -> crate::Result<()> {
     let bytes = crate::records::provenance::read_record(copied)?;
-    let value: serde_json::Value = basecraft_protocol::records::decode(&bytes)?;
-    let mut stored: super::StoredCallSets = serde_json::from_value(value)?;
+    let (mut stored, writer) =
+        basecraft_protocol::records::decode_written::<super::StoredCallSets>(&bytes)?;
     if stored.version != 3 {
         return Err(crate::Error::Unsupported(
-            "Unsupported Sanger review version".into(),
+            basecraft_protocol::records::other_format(&writer, stored.version, 3),
         ));
     }
     for set in &mut stored.sets {

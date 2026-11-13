@@ -42,18 +42,15 @@ pub enum Error {
         .0.join(", ")
     )]
     RecordNamesRepeat(Vec<String>),
-    /// D14: a save would drop fields a later basecraft wrote. Save As, or
-    /// save again after `Session::drop_newer_fields`.
+    /// D14: a save would drop fields a later basecraft wrote, in each of
+    /// these files. Save As, or save again after `Session::drop_newer_fields`.
     #[error(
-        "{} was written by basecraft {writer}, and basecraft {} does not know its fields {}. \
-         Saving would drop them. Save as another file instead, or save anyway to drop them.",
-        path.display(), basecraft_protocol::VERSION, fields.join(", ")
+        "{} Basecraft {} does not know these fields, so saving would drop them. \
+         Save as another file instead, or save anyway to drop them.",
+        newer_files(.0),
+        basecraft_protocol::VERSION
     )]
-    NewerFieldsDropped {
-        path: PathBuf,
-        writer: String,
-        fields: Vec<String>,
-    },
+    NewerFieldsDropped(Vec<(PathBuf, basecraft_protocol::records::UnknownFields)>),
     #[error("invalid operation: {0}")]
     Invalid(String),
     #[error("{0}")]
@@ -79,6 +76,22 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// "a.json was written by basecraft 0.6.0, with fields x, y." for each file.
+fn newer_files(files: &[(PathBuf, basecraft_protocol::records::UnknownFields)]) -> String {
+    files
+        .iter()
+        .map(|(path, unknown)| {
+            format!(
+                "{} was written by basecraft {}, with fields {}.",
+                path.display(),
+                unknown.writer,
+                unknown.fields.join(", ")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 pub(crate) fn invalid(msg: impl Into<String>) -> Error {
     Error::Invalid(msg.into())
 }
@@ -95,7 +108,7 @@ impl Error {
             Self::Limit { .. } => Code::Limit,
             Self::Unsupported(_) => Code::Unsupported,
             Self::RecordNamesRepeat(_) => Code::RecordNamesRepeat,
-            Self::NewerFieldsDropped { .. } => Code::NewerFieldsDropped,
+            Self::NewerFieldsDropped(_) => Code::NewerFieldsDropped,
             Self::Busy(_) => Code::Busy,
             Self::UnknownDocument { .. } => Code::UnknownDocument,
             Self::WrongKind { .. } => Code::WrongDocumentKind,

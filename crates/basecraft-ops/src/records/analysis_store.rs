@@ -154,14 +154,16 @@ impl ArtifactRun {
         if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 4096 {
             return Err(invalid("analysis namespace has an unsafe marker"));
         }
-        let value: serde_json::Value =
-            basecraft_protocol::records::decode(&std::fs::read(marker)?)?;
+        let (value, writer) = basecraft_protocol::records::decode_written::<serde_json::Value>(
+            &std::fs::read(marker)?,
+        )?;
         if value["format"] != "basecraft.analysis-store" || value["schema_version"] != 1 {
-            return Err(invalid(
-                "foreign or unsupported analysis namespace; nothing was migrated",
-            ));
+            return Err(invalid(format!(
+                "foreign or unsupported analysis namespace; nothing was migrated ({})",
+                basecraft_protocol::records::other_format(&writer, &value["schema_version"], 1)
+            )));
         }
-        let _: StoreMarker = serde_json::from_value(value)?;
+        let _: StoreMarker = basecraft_protocol::records::convert(value, &writer)?;
         Ok(())
     }
 

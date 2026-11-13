@@ -31,11 +31,16 @@ impl ReplayReport {
 }
 
 pub fn replay(root: &Path) -> Result<ReplayReport> {
-    let entries = log::read_all(root)?;
+    let written = log::read_all_written(root)?;
+    // Saves are written again as the build that logged them wrote them.
+    let writers: HashMap<&str, &str> = written
+        .iter()
+        .map(|(e, writer)| (e.id.as_str(), writer.as_str()))
+        .collect();
     let mut report = ReplayReport::default();
     let mut order: Vec<&str> = Vec::new();
     let mut by_session: HashMap<&str, Vec<&LogEntry>> = HashMap::new();
-    for e in &entries {
+    for (e, _) in &written {
         let list = by_session.entry(&e.session).or_default();
         if list.is_empty() {
             order.push(&e.session);
@@ -44,12 +49,17 @@ pub fn replay(root: &Path) -> Result<ReplayReport> {
     }
     for sid in order {
         report.sessions += 1;
-        replay_session(root, &by_session[sid], &mut report)?;
+        replay_session(root, &by_session[sid], &writers, &mut report)?;
     }
     Ok(report)
 }
 
-fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut ReplayReport) -> Result<()> {
+fn replay_session(
+    root: &Path,
+    entries: &[&LogEntry],
+    writers: &HashMap<&str, &str>,
+    report: &mut ReplayReport,
+) -> Result<()> {
     let work = tempfile::tempdir()?;
     let mut session = Session::replay_session(work.path());
     let source_root = recorded_source_root(root, entries.iter().copied());
@@ -177,7 +187,13 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut ReplayReport)
         match &e.op {
             // Species metadata records the original folder as its relocation
             // base. Hash against that destination, not replay's disposable root.
-            Op::Save { path, .. } => match session.save_hashes_at(doc, &source_root.join(path)) {
+            Op::Save { path, .. } => match basecraft_protocol::records::writing_as(
+                writers
+                    .get(e.id.as_str())
+                    .copied()
+                    .unwrap_or(basecraft_protocol::VERSION),
+                || session.save_hashes_at(doc, &source_root.join(path)),
+            ) {
                 Ok(got) => {
                     let want: Vec<&String> = e.result.hashes.iter().map(|(_, h)| h).collect();
                     if got.iter().collect::<Vec<_>>() != want {
@@ -1293,7 +1309,13 @@ mod tests {
         attempts.push(divergent_create);
         for attempt in attempts {
             let mut report = ReplayReport::default();
-            replay_session(root.path(), &[baseline, &attempt, edit], &mut report).unwrap();
+            replay_session(
+                root.path(),
+                &[baseline, &attempt, edit],
+                &HashMap::new(),
+                &mut report,
+            )
+            .unwrap();
             if attempt.id == baseline.id && attempt.op == baseline.op {
                 // A missing original is not a problem: the baseline and the
                 // edit after it are not checkable.

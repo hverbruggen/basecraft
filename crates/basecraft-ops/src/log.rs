@@ -86,7 +86,7 @@ impl LogWriter {
             let value = serde_json::to_value(entry)?;
             let checksum = basecraft_io::hash_bytes(&serde_json::to_vec(&value)?);
             let value = serde_json::to_value(basecraft_protocol::records::JournalEntry {
-                basecraft: basecraft_protocol::VERSION.into(),
+                basecraft: basecraft_protocol::records::writing_version(),
                 checksum,
                 sequence: self.sequence + offset as u64,
                 entry: value,
@@ -162,16 +162,25 @@ impl LogWriter {
 /// Every entry under a project's log directory, from all hosts. Within a
 /// host's stream, file order is kept: it is the order of events.
 pub fn read_all(root: &Path) -> Result<Vec<LogEntry>> {
+    Ok(read_all_written(root)?
+        .into_iter()
+        .map(|(e, _)| e)
+        .collect())
+}
+
+/// [`read_all`], with the basecraft version that wrote each entry.
+pub fn read_all_written(root: &Path) -> Result<Vec<(LogEntry, String)>> {
     Ok(read_entries(root, false)?.0)
 }
 
 /// Like `read_all`, but lines that can't be read are skipped and counted
 /// instead of failing the whole read.
 pub fn read_readable(root: &Path) -> Result<(Vec<LogEntry>, usize)> {
-    read_entries(root, true)
+    let (entries, skipped) = read_entries(root, true)?;
+    Ok((entries.into_iter().map(|(e, _)| e).collect(), skipped))
 }
 
-fn read_entries(root: &Path, lenient: bool) -> Result<(Vec<LogEntry>, usize)> {
+fn read_entries(root: &Path, lenient: bool) -> Result<(Vec<(LogEntry, String)>, usize)> {
     let mut entries = Vec::new();
     let mut skipped = 0;
     let mut total_bytes = 0u64;
@@ -222,7 +231,8 @@ fn read_entries(root: &Path, lenient: bool) -> Result<(Vec<LogEntry>, usize)> {
                                 }
                                 *expected += 1;
                             }
-                            entries.push(e);
+                            let writer = value[basecraft_protocol::records::WRITTEN_BY].as_str();
+                            entries.push((e, writer.unwrap_or_default().to_owned()));
                         }
                         Err(_) if lenient => skipped += 1,
                         Err(e) => {
@@ -363,15 +373,14 @@ pub fn verified_session_prefix(root: &Path) -> Result<VerifiedPrefix> {
 
 /// Verify the current journal envelope before decoding its operation.
 pub fn parse_entry(line: &str) -> serde_json::Result<LogEntry> {
-    use basecraft_protocol::records::unreadable;
     let record: basecraft_protocol::records::JournalEntry<serde_json::Value> =
-        serde_json::from_str(line).map_err(|e| unreadable(None, &e))?;
+        serde_json::from_str(line)?;
     if record.checksum != basecraft_io::hash_bytes(&serde_json::to_vec(&record.entry)?) {
         return Err(<serde_json::Error as serde::de::Error>::custom(
             "journal checksum mismatch",
         ));
     }
-    serde_json::from_value(record.entry).map_err(|e| unreadable(Some(&record.basecraft), &e))
+    basecraft_protocol::records::convert(record.entry, &record.basecraft)
 }
 
 /// A readable account of what happened in the projects under `roots` since

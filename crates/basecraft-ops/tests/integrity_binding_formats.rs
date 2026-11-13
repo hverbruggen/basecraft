@@ -44,19 +44,35 @@ fn result_binding_writer_bytes_and_selective_reader() {
         // the hash on discovery, while checked access verifies exact bytes.
         let mut extended = original.clone();
         extended["future"] = json!({"z":[null,{"a":true}]});
-        std::fs::write(&binding, serde_json::to_vec(&extended).unwrap()).unwrap();
+        std::fs::write(
+            &binding,
+            basecraft_protocol::records::encode(&extended).unwrap(),
+        )
+        .unwrap();
         assert!(ArtifactRun::for_result_checked(&result).unwrap().is_some());
         let mut no_hash = extended.clone();
         no_hash.as_object_mut().unwrap().remove("result_hash");
-        std::fs::write(&binding, serde_json::to_vec(&no_hash).unwrap()).unwrap();
+        std::fs::write(
+            &binding,
+            basecraft_protocol::records::encode(&no_hash).unwrap(),
+        )
+        .unwrap();
         assert!(ArtifactRun::for_result(&result).unwrap().is_some());
         assert!(ArtifactRun::for_result_checked(&result).is_err());
         let mut missing_run = original.clone();
         missing_run["run"] = json!("absent");
-        std::fs::write(&binding, serde_json::to_vec(&missing_run).unwrap()).unwrap();
+        std::fs::write(
+            &binding,
+            basecraft_protocol::records::encode(&missing_run).unwrap(),
+        )
+        .unwrap();
         assert!(ArtifactRun::for_result(&result).unwrap().is_none());
         assert!(ArtifactRun::for_result_checked(&result).is_err());
-        std::fs::write(&binding, serde_json::to_vec(&extended).unwrap()).unwrap();
+        std::fs::write(
+            &binding,
+            basecraft_protocol::records::encode(&extended).unwrap(),
+        )
+        .unwrap();
         std::fs::write(&result, b"changed").unwrap();
         assert!(ArtifactRun::for_result(&result).unwrap().is_some());
         assert!(ArtifactRun::for_result_checked(&result).is_err());
@@ -65,7 +81,7 @@ fn result_binding_writer_bytes_and_selective_reader() {
             json!({"schema_version":2,"result":name}),
             json!({"schema_version":1,"result":name,"run":"../escape"}),
         ] {
-            std::fs::write(&binding, serde_json::to_vec(&bad).unwrap()).unwrap();
+            std::fs::write(&binding, basecraft_protocol::records::encode(&bad).unwrap()).unwrap();
             assert!(ArtifactRun::for_result(&result).is_err());
         }
         std::fs::write(&binding, b"{broken").unwrap();

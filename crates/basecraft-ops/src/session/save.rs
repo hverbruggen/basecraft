@@ -131,6 +131,12 @@ impl Session {
                 .save_history_record(id)
                 .map(|()| SaveOutcome::default());
         }
+        // The permission to drop newer fields covers this attempt only,
+        // whether or not it gets as far as writing.
+        let drop_newer_fields = self
+            .docs
+            .get_mut(id.0)
+            .is_some_and(|slot| std::mem::take(&mut slot.drop_newer_fields));
         let valid_consent = decision
             .as_ref()
             .map(|decision| self.consume_save_check(decision))
@@ -176,15 +182,10 @@ impl Session {
             &self.storage_root,
             &self.write_publication,
         )?;
-        let drop_newer_fields = std::mem::take(&mut self.docs[id.0].drop_newer_fields);
-        if let Some((path, unknown)) = prepared.unknown.drain(..).next()
-            && !drop_newer_fields
-        {
-            return Err(Error::NewerFieldsDropped {
-                path,
-                writer: unknown.writer,
-                fields: unknown.fields,
-            });
+        if !prepared.unknown.is_empty() && !drop_newer_fields {
+            return Err(Error::NewerFieldsDropped(std::mem::take(
+                &mut prepared.unknown,
+            )));
         }
         let expected: Vec<_> = prepared
             .hashes()

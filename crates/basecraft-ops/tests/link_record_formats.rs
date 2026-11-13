@@ -68,23 +68,35 @@ fn reader_keeps_extensions_and_existing_version_and_missing_field_checks() {
     let bytes = include_bytes!("../../../testdata/fixtures/records-v1/link-snapshot-extra.json");
     let mut value: serde_json::Value = serde_json::from_slice(bytes).unwrap();
     // Reader retains extras and tolerates missing source; evidence use checks it later.
-    std::fs::write(&metadata, serde_json::to_vec(&value).unwrap()).unwrap();
+    std::fs::write(
+        &metadata,
+        basecraft_protocol::records::encode(&value).unwrap(),
+    )
+    .unwrap();
     let link = AlignmentLink::read(&tree).unwrap();
     assert_eq!(link.extra["future"], value["future"]);
     for version in [0, 3, u32::MAX] {
         value["schema"] = version.into();
-        std::fs::write(&metadata, serde_json::to_vec(&value).unwrap()).unwrap();
+        std::fs::write(
+            &metadata,
+            basecraft_protocol::records::encode(&value).unwrap(),
+        )
+        .unwrap();
         assert!(
             AlignmentLink::read(&tree)
                 .unwrap_err()
                 .to_string()
-                .contains("unsupported tree–alignment link version")
+                .contains("reads format version 1 or 2")
         );
     }
     value["schema"] = 1.into();
     value.as_object_mut().unwrap().remove("inferred");
     assert!(serde_json::from_value::<AlignmentLink>(value.clone()).is_err());
-    std::fs::write(&metadata, serde_json::to_vec(&value).unwrap()).unwrap();
+    std::fs::write(
+        &metadata,
+        basecraft_protocol::records::encode(&value).unwrap(),
+    )
+    .unwrap();
     assert!(AlignmentLink::read(&tree).is_err());
     std::fs::write(&metadata, b"broken JSON").unwrap();
     assert!(AlignmentLink::read(&tree).is_err());
