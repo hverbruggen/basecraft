@@ -774,11 +774,17 @@ fn a_display_tree_is_attached_once_with_its_file_as_evidence() {
 
     basecraft_ops::delimitation::attach_display_tree(&mut session, doc, &tree).unwrap();
     let shown = session.delimitation(doc).unwrap().view.display_tree.clone();
-    assert_eq!(shown.as_deref(), tree.to_str());
+    assert_eq!(shown.as_deref(), tree.canonicalize().unwrap().to_str());
     let again = basecraft_ops::delimitation::display_tree(&session, doc, &tree).unwrap();
     assert!(
         again.edit.is_none(),
         "the attached tree is not attached again"
+    );
+    let respelled = dir.path().join(".").join("time.nwk");
+    let again = basecraft_ops::delimitation::display_tree(&session, doc, &respelled).unwrap();
+    assert!(
+        again.edit.is_none(),
+        "nor under another spelling of its path"
     );
     assert!(
         basecraft_ops::delimitation::checked_display_tree(session.delimitation(doc).unwrap())

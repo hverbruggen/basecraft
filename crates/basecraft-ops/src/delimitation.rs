@@ -377,11 +377,17 @@ pub struct DisplayTreeFile {
 /// MCP attach a display tree through this.
 pub fn display_tree(session: &Session, doc: DocId, named: &Path) -> Result<DisplayTreeFile> {
     let work = session.delimitation(doc)?;
-    let same = work.view.display_tree.as_deref() == named.to_str();
+    // The same file under another spelling (relative, `..`, a symlink) is
+    // the tree already attached, not a new one.
+    let canonical = |path: &Path| std::fs::canonicalize(path).ok();
+    let same = work.view.display_tree.as_deref().is_some_and(|stored| {
+        Some(stored) == named.to_str()
+            || canonical(Path::new(stored)).is_some_and(|s| Some(s) == canonical(named))
+    });
     let path = if same {
         checked_display_tree(work)?.unwrap_or_else(|| named.to_path_buf())
     } else {
-        named.to_path_buf()
+        named.canonicalize()?
     };
     let bytes = std::fs::read(&path)?;
     let text = std::str::from_utf8(&bytes).map_err(|_| DisplayTreeError::NotText(path.clone()))?;
