@@ -37,7 +37,11 @@ fn check_tree(path: &Path, method: &str, multi: bool) {
                 .iter()
                 .all(|set| set.kind == SupportKind::Unknown)
         );
-        assert!(!basecraft_ops::files::tree_sidecar(path).exists());
+        // The companion states only what the branch lengths measure.
+        assert_eq!(
+            tree.branch_lengths().map(|fact| &fact.value),
+            Some(&basecraft_protocol::facts::BranchLengths::Substitutions)
+        );
     } else {
         assert_eq!(tree.supports().len(), 1);
         let support = &tree.supports()[0];
@@ -112,13 +116,11 @@ fn run_cases(root: &Path) {
         std::fs::create_dir(&moved).unwrap();
         let moved_tree = moved.join("tree.nwk");
         std::fs::copy(&exported, &moved_tree).unwrap();
-        if !multi {
-            std::fs::copy(
-                exported.with_file_name("tree.nwk.basecraft.json"),
-                moved.join("tree.nwk.basecraft.json"),
-            )
-            .unwrap();
-        }
+        std::fs::copy(
+            exported.with_file_name("tree.nwk.basecraft.json"),
+            moved.join("tree.nwk.basecraft.json"),
+        )
+        .unwrap();
         check_tree(&moved_tree, label, multi);
         assert_eq!(
             basecraft_ops::records::verify(&retained, None).unwrap(),

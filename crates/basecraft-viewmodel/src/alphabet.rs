@@ -1,7 +1,7 @@
 //! How the window names a document's alphabet (D12), honestly: what was
 //! stated or guessed, or that basecraft cannot tell, or that the sequences
 //! are of more than one kind.
-use basecraft_protocol::facts::{Alphabet, Fact, FactSource};
+use basecraft_protocol::facts::{Alphabet, Fact, FactSource, StatedAlphabet};
 
 /// The alphabet as the status line names it.
 pub fn text(fact: &Fact<Alphabet>) -> String {
@@ -36,11 +36,11 @@ pub fn question(fact: &Fact<Alphabet>, file: &str) -> Option<String> {
 }
 
 /// The alphabet a user states, from the dialog's answer.
-pub fn stated(answer: &str) -> Option<Alphabet> {
+pub fn stated(answer: &str) -> Option<StatedAlphabet> {
     Some(match answer {
-        "dna" => Alphabet::Dna,
-        "rna" => Alphabet::Rna,
-        "protein" => Alphabet::Protein,
+        "dna" => StatedAlphabet::Dna,
+        "rna" => StatedAlphabet::Rna,
+        "protein" => StatedAlphabet::Protein,
         _ => return None,
     })
 }
@@ -80,7 +80,7 @@ mod tests {
         for value in [Alphabet::Dna, Alphabet::Mixed, Alphabet::Unknown] {
             assert!(question(&fact(value, FactSource::Guessed), "a.fasta").is_none());
         }
-        assert_eq!(stated("rna"), Some(Alphabet::Rna));
+        assert_eq!(stated("rna"), Some(StatedAlphabet::Rna));
         assert_eq!(stated("mixed"), None);
     }
 }

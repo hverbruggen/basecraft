@@ -327,10 +327,14 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
             if !binding.alphabets.is_empty()
                 && !matches!(
                     binding.view,
-                    InputView::AlignedFasta | InputView::UngappedFasta
+                    InputView::AlignedFasta
+                        | InputView::UngappedFasta
+                        | InputView::SequenceSnapshot
                 )
             {
-                return Err(invalid("only alignment inputs declare alphabets"));
+                return Err(invalid(
+                    "only alignment and sequence inputs declare alphabets",
+                ));
             }
         }
         for (name, binding) in &descriptor.outputs {
@@ -448,15 +452,21 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
             .values()
             .flat_map(|output| &output.tree_support)
         {
-            use basecraft_protocol::operation::ParameterCondition;
-            if let Some(
-                ParameterCondition::Equals { parameter, .. }
-                | ParameterCondition::Positive { parameter },
-            ) = &rule.when
-                && !properties.contains_key(parameter)
+            if rule
+                .when
+                .as_ref()
+                .is_some_and(|when| !properties.contains_key(when.parameter()))
             {
                 return Err(invalid("tree support condition is not a parameter"));
             }
+        }
+        if descriptor
+            .outputs
+            .values()
+            .filter_map(|output| output.facts.when.as_ref())
+            .any(|when| !properties.contains_key(when.parameter()))
+        {
+            return Err(invalid("output facts condition is not a parameter"));
         }
         if let Some(workflow) = &descriptor.host_workflow {
             let stages = &needs.workflow_stages;

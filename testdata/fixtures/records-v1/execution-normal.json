@@ -5,6 +5,26 @@
     "include_newlines": true,
     "mode": "normal"
   },
+  "environment": {
+    "interpreter": "Python 3.12.1",
+    "runtime": {
+      "channels": [
+        "conda-forge"
+      ],
+      "dependencies": {
+        "python": "3.12.*"
+      },
+      "executable_digests": {
+        "python": "b3:python"
+      },
+      "lock_digest": "b3:lock",
+      "manifest_digest": "b3:manifest",
+      "pypi_dependencies": {},
+      "reported_versions": {
+        "python": "3.12.1"
+      }
+    }
+  },
   "execution": {
     "argv": [
       "fixture",
@@ -38,17 +58,7 @@
   "package_digest": "b3:c51fd51e9dbde319ce13762cb0d9ac81a5941f1432b3a1e1414a062831e62746",
   "package_version": "1.0.0",
   "process_instance": "1234:2026-01-01T00:00:00.000Z",
-  "runtime": {
-    "executable_digests": {
-      "python": "b3:python"
-    },
-    "lock_digest": "b3:lock",
-    "manifest_digest": "b3:manifest",
-    "reported_versions": {
-      "python": "3.12.1"
-    }
-  },
-  "schema": 2,
+  "schema": 3,
   "stderr": "",
   "stdout": "",
   "tool": {

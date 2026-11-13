@@ -60,11 +60,7 @@ fn save_streams_small_and_large_documents_once() {
             let mut session = Session::new(&root);
             let id = session.open(&path).unwrap();
             let edit = if kind == "sequence" {
-                Op::SeqReplace {
-                    start: 0,
-                    end: 1,
-                    residues: "T".into(),
-                }
+                Op::seq_replace(0, 1, "T")
             } else {
                 Op::AlnReplace {
                     row: 0,

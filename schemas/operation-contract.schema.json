@@ -28,10 +28,31 @@
   ],
   "$defs": {
     "Alphabet": {
-      "type": "string",
-      "enum": [
-        "nucleotide",
-        "protein"
+      "description": "The letters a sequence or alignment is written in.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "dna",
+            "rna",
+            "protein"
+          ]
+        },
+        {
+          "description": "No letters to judge by: gaps, N, X and ? only.",
+          "type": "string",
+          "const": "unknown"
+        },
+        {
+          "description": "A guess only: a few protein-only letters, 1% or fewer. The user has\nto say what the sequence is before anything that needs it runs.",
+          "type": "string",
+          "const": "undetermined"
+        },
+        {
+          "description": "A document only: its sequences are not all of one kind.",
+          "type": "string",
+          "const": "mixed"
+        }
       ]
     },
     "ArtifactVisibility": {
@@ -42,10 +63,45 @@
       ]
     },
     "BranchLengths": {
-      "type": "string",
-      "enum": [
-        "substitutions",
-        "time"
+      "description": "What a tree's branch lengths measure.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "unknown"
+          ]
+        },
+        {
+          "description": "Expected substitutions per site.",
+          "type": "string",
+          "const": "substitutions"
+        },
+        {
+          "description": "Time with no unit: the root is 1, or depths are only comparable.",
+          "type": "string",
+          "const": "relative_time"
+        },
+        {
+          "description": "Time in the stated unit, such as \"Ma\".",
+          "type": "object",
+          "properties": {
+            "absolute_time": {
+              "type": "object",
+              "properties": {
+                "unit": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "unit"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "absolute_time"
+          ]
+        }
       ]
     },
     "CallerKind": {
@@ -112,7 +168,7 @@
       "type": "object",
       "properties": {
         "alphabets": {
-          "description": "Residue alphabets the operation accepts. Empty accepts any. The host\nrefuses other alignments before launch.",
+          "description": "Residue alphabets the operation accepts. Empty accepts any. The host\nrefuses other documents before launch, and undetermined or mixed ones\nuntil the user states the alphabet (D12).",
           "type": "array",
           "items": {
             "$ref": "#/$defs/Alphabet"
@@ -342,23 +398,25 @@
       ]
     },
     "OutputFacts": {
-      "description": "Facts an output declares about its primary member. The companion writer\nrecords them once document facts exist (merge task for piece 2B).",
+      "description": "Facts an output declares about its primary member. The host writes them,\nmarked as stated, into the member's companion file.",
       "type": "object",
       "properties": {
-        "alphabet": {
+        "branch_lengths": {
+          "description": "What a tree's branch lengths measure.",
           "anyOf": [
             {
-              "$ref": "#/$defs/Alphabet"
+              "$ref": "#/$defs/BranchLengths"
             },
             {
               "type": "null"
             }
           ]
         },
-        "branch_lengths": {
+        "when": {
+          "description": "The facts hold only for runs whose parameters meet this, such as a\ncorrected distance model.",
           "anyOf": [
             {
-              "$ref": "#/$defs/BranchLengths"
+              "$ref": "#/$defs/ParameterCondition"
             },
             {
               "type": "null"
@@ -387,6 +445,28 @@
             "test",
             "parameter",
             "value"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "parameter": {
+              "type": "string"
+            },
+            "test": {
+              "type": "string",
+              "const": "one_of"
+            },
+            "values": {
+              "type": "array",
+              "items": true
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "test",
+            "parameter",
+            "values"
           ]
         },
         {

@@ -152,8 +152,37 @@ pub struct TreeSupportRule {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "test", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ParameterCondition {
-    Equals { parameter: String, value: Value },
-    Positive { parameter: String },
+    Equals {
+        parameter: String,
+        value: Value,
+    },
+    OneOf {
+        parameter: String,
+        values: Vec<Value>,
+    },
+    Positive {
+        parameter: String,
+    },
+}
+
+impl ParameterCondition {
+    pub fn parameter(&self) -> &str {
+        match self {
+            Self::Equals { parameter, .. }
+            | Self::OneOf { parameter, .. }
+            | Self::Positive { parameter } => parameter,
+        }
+    }
+
+    /// Whether the effective parameters meet the condition.
+    pub fn holds(&self, params: &Value) -> bool {
+        let value = params.get(self.parameter());
+        match self {
+            Self::Equals { value: wanted, .. } => value == Some(wanted),
+            Self::OneOf { values, .. } => value.is_some_and(|value| values.contains(value)),
+            Self::Positive { .. } => value.and_then(Value::as_u64).is_some_and(|n| n > 0),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -181,7 +210,8 @@ pub struct InputBinding {
     pub min: usize,
     pub max: usize,
     /// Residue alphabets the operation accepts. Empty accepts any. The host
-    /// refuses other alignments before launch.
+    /// refuses other documents before launch, and undetermined or mixed ones
+    /// until the user states the alphabet (D12).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub alphabets: Vec<Alphabet>,
     /// Check the input's retained evidence before the run, as for a reused
@@ -219,32 +249,20 @@ pub struct OutputBinding {
     pub facts: OutputFacts,
 }
 
-// FACTS PLACEHOLDER. Lane facts adds `protocol/src/facts.rs` with the alphabet
-// and branch-length meaning. When it lands, delete `Alphabet` and
-// `BranchLengths` here and re-export `crate::facts::{Alphabet, BranchLengths}`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum Alphabet {
-    Nucleotide,
-    Protein,
-}
+pub use crate::facts::{Alphabet, BranchLengths};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum BranchLengths {
-    Substitutions,
-    Time,
-}
-
-/// Facts an output declares about its primary member. The companion writer
-/// records them once document facts exist (merge task for piece 2B).
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+/// Facts an output declares about its primary member. The host writes them,
+/// marked as stated, into the member's companion file.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct OutputFacts {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub alphabet: Option<Alphabet>,
+    /// What a tree's branch lengths measure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch_lengths: Option<BranchLengths>,
+    /// The facts hold only for runs whose parameters meet this, such as a
+    /// corrected distance model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<ParameterCondition>,
 }
 
 impl OutputFacts {
@@ -324,6 +342,11 @@ pub struct InvocationContext {
     pub progress_file: String,
     #[serde(default)]
     pub input_evidence: BTreeMap<String, Vec<InvocationInputEvidence>>,
+    /// The alphabet of each alignment or sequence input: what the user or the
+    /// file's companion stated, or else the host's guess from the residues
+    /// (D12).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub alphabets: BTreeMap<String, Alphabet>,
 }
 
 /// Where a submitted input came from. In the invocation context its paths

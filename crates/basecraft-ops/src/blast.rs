@@ -15,32 +15,36 @@ const NUCLEOTIDE_RESIDUES: &[u8] = b"ACGTURYSWKMBDHVN";
 
 /// A presentation default, never permission to submit or bypass validation.
 /// A stated alphabet or the document's molecule wins over the letters.
-/// Unlabelled input is guessed with `Alphabet::guess`; unknown is nucleotide.
-pub fn suggested_alphabet(queries: &[Query]) -> &'static str {
-    if queries.iter().any(|query| {
+/// Unlabelled input is guessed (D12); no suggestion when a query can't be
+/// told apart, so the user chooses.
+pub fn suggested_alphabet(queries: &[Query]) -> Option<&'static str> {
+    let mut protein = false;
+    for query in queries {
         let molecule = query.source["molecule"]
             .as_str()
             .unwrap_or("")
             .to_ascii_lowercase();
-        if molecule.contains("protein") || molecule == "aa" {
-            true
+        let kind = if molecule.contains("protein") || molecule == "aa" {
+            Alphabet::Protein
         } else if molecule.contains("dna") || molecule.contains("rna") {
-            false
+            Alphabet::Dna
         } else {
-            Alphabet::guess(query.sequence.as_bytes()) == Alphabet::Protein
+            Alphabet::guess(query.sequence.as_bytes())
+        };
+        match kind {
+            Alphabet::Protein => protein = true,
+            Alphabet::Undetermined | Alphabet::Mixed => return None,
+            _ => {}
         }
-    }) {
-        "protein"
-    } else {
-        "nucleotide"
     }
+    Some(if protein { "protein" } else { "nucleotide" })
 }
 
 pub use basecraft_protocol::query_records::{Query, QueryPlan as Plan};
 
-/// The molecule a query states: the alphabet the user or the side file gave,
-/// else the GenBank molecule. A guessed alphabet states nothing.
-pub fn stated_molecule(alphabet: &Fact<Alphabet>, genbank: Option<&str>) -> Option<String> {
+/// The molecule a query states: the alphabet the user, the side file or the
+/// file itself gave. A guessed alphabet states nothing.
+pub fn stated_molecule(alphabet: &Fact<Alphabet>) -> Option<String> {
     let stated = match (alphabet.source, alphabet.value) {
         (FactSource::Guessed, _)
         | (_, Alphabet::Unknown | Alphabet::Undetermined | Alphabet::Mixed) => None,
@@ -48,7 +52,7 @@ pub fn stated_molecule(alphabet: &Fact<Alphabet>, genbank: Option<&str>) -> Opti
         (_, Alphabet::Rna) => Some("RNA"),
         (_, Alphabet::Protein) => Some("protein"),
     };
-    stated.or(genbank).map(str::to_owned)
+    stated.map(str::to_owned)
 }
 
 pub fn from_fasta(bytes: &[u8], source: &str) -> Result<Vec<Query>> {
@@ -109,7 +113,7 @@ pub fn from_alignment(
     {
         return Err(invalid("BLAST selection is empty or outside the alignment"));
     }
-    let molecule = stated_molecule(doc.alphabet(), None);
+    let molecule = stated_molecule(&doc.alphabet());
     (rows.0..rows.1).map(|row| {
         let mut source = json!({"document":doc.name,"revision":doc.version(),"record":row,"ranges":[columns],"strand":"+"});
         if let Some(molecule) = &molecule {
@@ -176,7 +180,7 @@ pub fn from_doc(
             |f| f.label().unwrap_or(&f.kind).to_owned(),
         ),
         sequence: String::from_utf8(sequence).map_err(|_| invalid("Non-ASCII query"))?,
-        source: json!({"document":doc.name,"revision":doc.version(),"ranges":segments,"strand":if reverse {"-"} else {"+"},"molecule":stated_molecule(doc.alphabet(), doc.genbank.as_ref().map(|meta| meta.molecule.as_str()))}),
+        source: json!({"document":doc.name,"revision":doc.version(),"ranges":segments,"strand":if reverse {"-"} else {"+"},"molecule":stated_molecule(&doc.alphabet())}),
     })
 }
 
@@ -408,27 +412,30 @@ mod tests {
             )],
         );
         let queries = from_alignment(&doc, (0, 1), (0, 8)).unwrap();
-        assert_eq!(suggested_alphabet(&queries), "nucleotide");
+        assert_eq!(suggested_alphabet(&queries), Some("nucleotide"));
         doc.set_alphabet(Some(Fact {
             value: Alphabet::Protein,
             source: FactSource::User,
         }));
         let queries = from_alignment(&doc, (0, 1), (0, 8)).unwrap();
-        assert_eq!(suggested_alphabet(&queries), "protein");
+        assert_eq!(suggested_alphabet(&queries), Some("protein"));
         assert!(prepare(&queries, &settings("nucleotide")).is_err());
     }
 
     #[test]
     fn presentation_default_respects_metadata_and_keeps_validation() {
         let mut q = query("ACGTNNRY---".into());
-        assert_eq!(suggested_alphabet(&[q.clone()]), "nucleotide");
+        assert_eq!(suggested_alphabet(&[q.clone()]), Some("nucleotide"));
+        // One E in 201 letters can't be told apart: the user chooses.
+        let unclear = query(format!("{}E", "ACGT".repeat(50)));
+        assert_eq!(suggested_alphabet(&[unclear]), None);
         q.source = json!({"molecule":"protein"});
-        assert_eq!(suggested_alphabet(&[q.clone()]), "protein");
+        assert_eq!(suggested_alphabet(&[q.clone()]), Some("protein"));
         q.sequence = "MELKQ".into();
         q.source = Value::Null;
-        assert_eq!(suggested_alphabet(&[q.clone()]), "protein");
+        assert_eq!(suggested_alphabet(&[q.clone()]), Some("protein"));
         q.source = json!({"molecule":"DNA"});
-        assert_eq!(suggested_alphabet(&[q.clone()]), "nucleotide");
+        assert_eq!(suggested_alphabet(&[q.clone()]), Some("nucleotide"));
         assert!(prepare(&[q], &settings("nucleotide")).is_err());
         let mixed = vec![
             query("ACGT".into()),
@@ -440,7 +447,7 @@ mod tests {
         // An inferred default never makes conflicting explicit metadata valid.
         let mut mixed = mixed;
         mixed[0].source = json!({"molecule":"DNA"});
-        assert!(prepare(&mixed, &settings(suggested_alphabet(&mixed))).is_err());
+        assert!(prepare(&mixed, &settings(suggested_alphabet(&mixed).unwrap())).is_err());
     }
 
     #[test]

@@ -1,7 +1,12 @@
 //! Publication ownership, collision and retry behavior.
 use super::*;
 use crate::registry::{Registry, RegistryConfig};
+use basecraft_ops::records::{
+    export_file as export_member, verify_export as verify_member_receipt,
+};
+use basecraft_platform::files::identity;
 use basecraft_protocol::operation::{OperationPins, RuntimeState};
+use serde_json::json;
 
 fn bytes(value: &Value) -> Vec<u8> {
     let mut bytes = serde_json::to_vec_pretty(value).unwrap();
@@ -472,7 +477,7 @@ fn publication_invalid_native_paths_return_json_at_producer_boundary() {
     let receipt = temp.path().join("receipt");
     std::fs::write(&receipt, b"old receipt").unwrap();
     let error = export_member(&source, &destination, &hash, &receipt).unwrap_err();
-    assert!(matches!(error, Error::Json(_)), "{error}");
+    assert!(matches!(error, basecraft_ops::Error::Json(_)), "{error}");
     assert_eq!(std::fs::read(&receipt).unwrap(), b"old receipt");
     assert_eq!(std::fs::read(&source).unwrap(), b"native");
     assert!(!destination.exists());

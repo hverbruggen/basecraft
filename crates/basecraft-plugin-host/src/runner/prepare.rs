@@ -5,7 +5,7 @@ use super::{
     PathBuf, PreparedOperation, RegisteredOperation, Result, SequenceTarget, SessionPolicy, Value,
     captures, contract, records, sources_from_upstream,
 };
-use basecraft_protocol::operation::QueryPreparation;
+use basecraft_protocol::operation::{Alphabet, QueryPreparation};
 
 struct GeneratedInput {
     position: usize,
@@ -15,59 +15,55 @@ struct GeneratedInput {
     dependencies: Vec<PathBuf>,
 }
 
-/// The input view of a session document's current revision.
-/// Refuse an alignment whose residues are not an alphabet the input accepts.
+/// Refuse a document whose alphabet the input does not accept, or that
+/// basecraft can't tell yet (D12): `refusal` says why. Record the alphabet
+/// for the plugin. One binding holds one alphabet.
 fn check_alphabet(
     operation: &RegisteredOperation,
     name: &str,
-    alignment: &basecraft_docs::AlignmentDoc,
+    (found, refusal): (Alphabet, Option<String>),
     shown: &str,
+    alphabets: &mut BTreeMap<String, Alphabet>,
 ) -> Result<()> {
-    use basecraft_protocol::operation::Alphabet;
     let accepted = &operation.descriptor.inputs[name].alphabets;
     if !accepted.is_empty()
-        && let Some(refusal) = alignment.alphabet_refusal()
+        && let Some(refusal) = refusal
     {
         return Err(Error::Protocol(format!(
             "unsupported_input: {shown}: {refusal}"
         )));
     }
-    let found = if alignment.is_protein() {
-        Alphabet::Protein
-    } else {
-        Alphabet::Nucleotide
-    };
-    if accepted.is_empty() || accepted.contains(&found) {
-        return Ok(());
+    if !accepted.is_empty() && !accepted.contains(&found) {
+        let wanted: Vec<_> = accepted.iter().map(Alphabet::to_string).collect();
+        return Err(Error::Protocol(format!(
+            "unsupported_input: {} needs {} sequences, and {shown} holds {found} sequences",
+            operation.descriptor.title,
+            wanted.join(" or "),
+        )));
     }
-    let word = |alphabet: &Alphabet| match alphabet {
-        Alphabet::Nucleotide => "nucleotide",
-        Alphabet::Protein => "protein",
-    };
-    let wanted: Vec<_> = accepted.iter().map(word).collect();
-    Err(Error::Protocol(format!(
-        "unsupported_input: {} needs a {} alignment, and {shown} holds {} sequences",
-        operation.descriptor.title,
-        wanted.join(" or "),
-        word(&found),
-    )))
+    if *alphabets.entry(name.into()).or_insert(found) != found {
+        return Err(Error::Protocol(format!(
+            "unsupported_input: {} needs the documents in {name} to share one alphabet",
+            operation.descriptor.title
+        )));
+    }
+    Ok(())
 }
 
+/// The input view of a session document's current revision.
 fn document_view(
     session: &basecraft_ops::Session,
     doc: basecraft_ops::DocId,
     operation: &RegisteredOperation,
     name: &str,
+    alphabets: &mut BTreeMap<String, Alphabet>,
 ) -> Result<(Vec<u8>, &'static str, &'static str)> {
     let mut bytes = Vec::new();
     let view = operation.descriptor.inputs[name].view;
     if session.is_alignment(doc) {
-        check_alphabet(
-            operation,
-            name,
-            session.alignment(doc)?,
-            "the open alignment",
-        )?;
+        let alignment = session.alignment(doc)?;
+        let alphabet = (alignment.alphabet().value, alignment.alphabet_refusal());
+        check_alphabet(operation, name, alphabet, "the open alignment", alphabets)?;
     }
     match view {
         InputView::AlignedFasta if session.is_alignment(doc) => {
@@ -101,6 +97,7 @@ struct PreparationInputs {
     generated: BTreeMap<String, Vec<GeneratedInput>>,
     accepted_hashes: BTreeMap<PathBuf, String>,
     bindings: crate::policy::ResolvedBindings,
+    alphabets: BTreeMap<String, Alphabet>,
 }
 
 /// Validate input bindings against the owning session's current revisions and
@@ -116,6 +113,7 @@ fn prepare_inputs(
     let mut input_record = basecraft_ops::records::DocumentRecord::empty("Inputs");
     let mut generated: BTreeMap<String, Vec<GeneratedInput>> = BTreeMap::new();
     let mut accepted_hashes: BTreeMap<PathBuf, String> = BTreeMap::new();
+    let mut alphabets = BTreeMap::new();
     let bindings =
         if operation.descriptor.family == ExecutionFamily::SequenceProposal {
             let session = session.as_deref_mut().ok_or_else(|| {
@@ -176,6 +174,14 @@ fn prepare_inputs(
                 }
             };
             let checked = session.checked_sequence(doc)?;
+            let alphabet = (checked.alphabet().value, checked.alphabet_refusal());
+            check_alphabet(
+                operation,
+                name,
+                alphabet,
+                "the open sequence",
+                &mut alphabets,
+            )?;
             sequence = Some(SequenceTarget {
                 doc,
                 session: session.id().into(),
@@ -249,7 +255,7 @@ fn prepare_inputs(
                             accepted_hashes.insert(path, hash);
                         } else {
                             let (bytes, transformation, extension) =
-                                document_view(session, id, operation, &name)?;
+                                document_view(session, id, operation, &name, &mut alphabets)?;
                             generated
                                 .entry(name.clone())
                                 .or_default()
@@ -284,6 +290,7 @@ fn prepare_inputs(
         generated,
         accepted_hashes,
         bindings,
+        alphabets,
     })
 }
 
@@ -354,12 +361,51 @@ fn normalised_request(
     Ok(recorded)
 }
 
-/// The request a run folder recorded, with its file inputs resolved against
-/// the folder wherever it now is, ready to run again.
-pub fn recorded_request(run: &Path) -> Result<OperationRequest> {
+/// The request a run folder recorded, ready to run again: inputs resolved
+/// against the folder's current place, pinned to the package and descriptor
+/// the run used. A different installed runtime is refused, naming both locks.
+pub fn recorded_request(
+    run: &Path,
+    registry: &crate::registry::Registry,
+) -> Result<OperationRequest> {
     let mut request: OperationRequest = serde_json::from_slice(
         &basecraft_ops::records::read_record(&run.join("request.json"))?,
     )?;
+    let record: basecraft_protocol::records::RunRecord = serde_json::from_slice(
+        &basecraft_ops::records::read_record(&run.join("execution.json"))?,
+    )?;
+    let (Some(package_digest), Some(descriptor_digest)) =
+        (record.package_digest, record.descriptor_digest)
+    else {
+        return Err(Error::Protocol(
+            "the run record names no plugin package to run again".into(),
+        ));
+    };
+    let pins = basecraft_protocol::operation::OperationPins {
+        generation: registry.generation.clone(),
+        package_digest,
+        descriptor_digest,
+    };
+    let operation = registry.resolve(&request.operation, Some(&pins))?;
+    let installed = operation
+        .package
+        .manifest
+        .managed_runtime
+        .as_ref()
+        .map(|runtime| runtime.lock_digest.as_str());
+    let recorded = record
+        .environment
+        .runtime
+        .as_ref()
+        .map(|r| r.lock_digest.as_str());
+    if installed != recorded {
+        return Err(Error::Protocol(format!(
+            "plugin_changed: the run used runtime lock {}, and the installed runtime has {}",
+            recorded.unwrap_or("none"),
+            installed.unwrap_or("none")
+        )));
+    }
+    request.pins = Some(pins);
     for reference in request
         .inputs
         .values_mut()
@@ -524,6 +570,7 @@ impl PreparedOperation {
             cancel_file: wire(&run.artifact("cancel")?),
             progress_file: wire(&run.artifact("progress")?),
             input_evidence,
+            alphabets: inputs.alphabets.clone(),
         };
         records::write_json(&run.artifact("descriptor.json")?, &operation.descriptor)?;
         records::write_json(
@@ -540,6 +587,7 @@ impl PreparedOperation {
             run,
             request,
             granted_parameters: std::sync::Mutex::new(parameters.clone()),
+            tool: std::sync::Mutex::default(),
             parameters,
             context,
             policy,
@@ -548,6 +596,7 @@ impl PreparedOperation {
             initiator,
             started: basecraft_platform::now_rfc3339(),
             workflow_registry,
+            project,
             _scratch: frozen.scratch,
         };
         if let Some((target, save)) = target {
@@ -599,6 +648,7 @@ fn freeze_inputs(
         generated,
         accepted_hashes,
         bindings,
+        alphabets,
         ..
     } = inputs;
     let scratch = tempfile::Builder::new()
@@ -671,7 +721,9 @@ fn freeze_inputs(
                         || source.display().to_string(),
                         |file| file.to_string_lossy().into_owned(),
                     );
-                    check_alphabet(operation, &name, &alignment.doc, &shown)?;
+                    let doc = &alignment.doc;
+                    let alphabet = (doc.alphabet().value, doc.alphabet_refusal());
+                    check_alphabet(operation, &name, alphabet, &shown, alphabets)?;
                     if binding.view == InputView::AlignedFasta {
                         alignment
                             .doc
@@ -767,18 +819,11 @@ fn allocate_run(
         .values()
         .find_map(|destination| Path::new(destination).file_name())
         .map(|name| name.to_string_lossy().into_owned());
+    // The run folder is basecraft's record and always goes under the
+    // project's `.basecraft`; `artifact_write` governs the user's files only.
     let anchor = policy
         .root
         .join(exported_name.as_deref().unwrap_or("operation"));
-    let anchor = if policy.artifact_write {
-        anchor
-    } else {
-        let paths = basecraft_platform::paths::AppPaths::discover()
-            .map_err(|error| Error::Protocol(error.to_string()))?;
-        let directory = paths.state.join("operation-jobs").join(&run_id);
-        std::fs::create_dir_all(&directory)?;
-        directory.join("operation")
-    };
     // Freeze/serialize before locking. Publication rechecks each exact original
     // hash and keeps ownership, exemptions and primary links under one guard.
     let sequence_payload = sequence
@@ -900,14 +945,13 @@ impl AllocatedRun {
     fn retain(&mut self, name: &str, role: &str, bytes: &[u8]) -> Result<PathBuf> {
         let path = self.run.artifact(name)?;
         basecraft_io::write_atomic(&path, |w| std::io::Write::write_all(w, bytes))?;
-        self.ledger_inputs.push(ArtifactRevision {
-            id: format!("{}:{role}", self.run.id()),
-            logical_name: name.into(),
-            hash: basecraft_io::hash_bytes(bytes),
-            size: bytes.len() as u64,
-            retained: Some(name.into()),
-            reference: None,
-        });
+        self.ledger_inputs.push(records::retained_file(
+            &self.run,
+            role,
+            name.into(),
+            &path,
+            basecraft_io::hash_bytes(bytes),
+        )?);
         Ok(path)
     }
 

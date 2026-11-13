@@ -116,26 +116,15 @@ pub enum DataColorScheme {
     DesktopTheme,
     ColorBlindFriendly,
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "kebab-case")]
-pub enum ProvenancePolicy {
-    #[default]
-    Portable,
-    LocalOnly,
-    None,
-}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Files {
-    pub provenance: ProvenancePolicy,
     pub recovery: bool,
 }
+
 impl Default for Files {
     fn default() -> Self {
-        Self {
-            provenance: ProvenancePolicy::Portable,
-            recovery: true,
-        }
+        Self { recovery: true }
     }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -484,7 +473,6 @@ pub enum Change {
     TickBoxSize(u32),
     InputBoxHeight(u32),
     CpuThreads(u32),
-    Provenance(ProvenancePolicy),
     Recovery(bool),
     Shortcut {
         id: String,
@@ -556,7 +544,6 @@ impl Change {
             Self::TickBoxSize(v) => prefs.ui.tick_box_size = v,
             Self::InputBoxHeight(v) => prefs.ui.input_box_height = v,
             Self::CpuThreads(v) => prefs.compute.local_cpu_threads = v,
-            Self::Provenance(v) => prefs.files.provenance = v,
             Self::Recovery(v) => prefs.files.recovery = v,
             Self::Shortcut { id, value } => {
                 if let Some(v) = value {

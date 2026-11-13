@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::{CladeAnnotation, CladeRef, Feature, SupportKind, TreeStyle};
 
 /// Log format version, written into every entry.
-pub const LOG_VERSION: u32 = 1;
+pub const LOG_VERSION: u32 = 2;
 
 /// A change to a document. Coordinates are 0-based, half-open.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -186,7 +186,9 @@ pub enum Op {
     /// one companion, so in a multi-record FASTA or GenBank file this states
     /// the alphabet of every record in the file, not only the open one.
     #[serde(rename = "doc.set_alphabet")]
-    SetAlphabet { alphabet: crate::facts::Alphabet },
+    SetAlphabet {
+        alphabet: crate::facts::StatedAlphabet,
+    },
     /// Add, change (same `id`) or, with no annotation, remove a clade
     /// annotation.
     #[serde(rename = "tree.annotate")]
@@ -247,6 +249,9 @@ pub enum Op {
         /// The document edits this activity made, such as imported values.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         contributions: Option<crate::records::ActivityContributions>,
+        /// The run folder whose `execution.json` says how the tool ran.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        run: Option<RunLink>,
     },
     /// An atomic species-hypothesis edit against a workspace.
     #[serde(rename = "delimitation.edit")]
@@ -339,6 +344,21 @@ impl Op {
             | Op::Extract { record, .. } => Some(record),
             _ => None,
         }
+    }
+
+    /// For a `tool.run`, its operation and run link; None for other operations.
+    pub fn tool_run(&self) -> Option<(&str, Option<&RunLink>)> {
+        match self {
+            Op::ToolRun { operation, run, .. } => Some((operation, run.as_ref())),
+            _ => None,
+        }
+    }
+
+    /// Whether this is the `tool.run` of the run with this id.
+    pub fn is_run(&self, id: &str) -> bool {
+        self.tool_run()
+            .and_then(|(_, run)| run)
+            .is_some_and(|run| run.id == id)
     }
 
     pub fn name(&self) -> &'static str {
@@ -688,4 +708,13 @@ mod tests {
             Op::AlnRemoveGapColumns {}
         );
     }
+}
+
+/// Where a tool run's own record is: the run's id and its folder, relative
+/// to the project root, or to the document's own folder for a loose file.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RunLink {
+    pub id: String,
+    pub folder: String,
 }

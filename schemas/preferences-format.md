@@ -76,9 +76,8 @@ currently unavailable. Visibility changes target one ID under the preferences
 lock so concurrent changes to unrelated commands survive. Files are limited to 1 MiB. CPU threads range from
 1 to 65536; ORF minimum codons range from 1 to 1000000.
 
-Recovery and provenance policies are consumed by lazy document sessions and
-saved-result publication. Persistent workspace storage and browsing indexes remain
-reserved policies without an exposed GUI toggle. No recent-document list belongs in this
+Recovery is consumed by lazy document sessions. History and provenance always go
+to the project's `.basecraft`, or beside a loose file; there is no setting for it. No recent-document list belongs in this
 file. Passive preference reads create no file-specific record. The GUI emits
 property change notifications for its preference snapshot; external process
 changes are observed on reload and always before a targeted write.

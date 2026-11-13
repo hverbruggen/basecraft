@@ -178,6 +178,9 @@ pub struct SangerRun {
     evidence: ReviewEvidence,
     operation: String,
     anchor: PathBuf,
+    /// What the stage's run link is relative to: the project root, or the
+    /// anchor's folder outside a project.
+    base: PathBuf,
     terminal: std::cell::Cell<bool>,
     started: String,
 }
@@ -324,9 +327,16 @@ impl SangerRun {
             .filter_map(|s| s.ledger.clone())
             .collect();
         dependencies.extend_from_slice(ancestors);
+        // Sources relative to the run folder, so the request moves with it.
+        let sources = paths
+            .iter()
+            .map(|path| {
+                inputs::relative(run.directory(), &std::path::absolute(path)?).map(PathBuf::from)
+            })
+            .collect::<crate::Result<_>>()?;
         let payload = serde_json::to_vec(&serde_json::to_value(SangerRequest {
             operation: operation.into(),
-            sources: paths.to_vec(),
+            sources,
         })?)?;
         inputs::write_json(
             &run.artifact("request.json")?,
@@ -340,19 +350,17 @@ impl SangerRun {
             evidence,
             operation: operation.into(),
             anchor: std::path::absolute(anchor)?,
+            base: crate::project::Project::base_of(project, anchor)?,
             terminal: std::cell::Cell::new(false),
             started: basecraft_platform::now_rfc3339(),
         };
+        result.write_run_record()?;
         result.status(SangerJobStatus::Running, None, None)?;
         Ok(result)
     }
 
     pub fn captured_inputs(&self) -> &[crate::sanger_review::CapturedInput] {
         &self.captures
-    }
-
-    pub fn parameters(&self, value: &serde_json::Value) -> crate::Result<()> {
-        inputs::write_json(&self.run.artifact("parameters.json")?, value)
     }
 
     pub fn review_snapshot(&self, session: &SangerReview) -> crate::Result<PathBuf> {
@@ -369,7 +377,43 @@ impl SangerRun {
     }
 
     fn job_path(&self) -> crate::Result<PathBuf> {
-        job_path(self.run.id())
+        crate::records::job_index_path(self.run.id())
+    }
+
+    /// The stage's run record, as every tool run has one: its sources with
+    /// paths relative to the run folder and their hashes. A stage records no
+    /// settings yet, so `effective_parameters` is null and methods say so.
+    fn write_run_record(&self) -> crate::Result<()> {
+        let folder = self.run.directory();
+        let sources = self
+            .evidence
+            .sources
+            .iter()
+            .map(|source| {
+                let hash = format!("sha256:{}", source.sha256);
+                Ok(basecraft_protocol::operation::InvocationInputEvidence {
+                    original_path: Some(inputs::relative(folder, &source.location()?)?),
+                    source_hash: Some(hash.clone()),
+                    submitted_hash: hash,
+                    transformation: "identity-v1".into(),
+                    run_directory: match &source.ledger {
+                        Some(ledger) => inputs::relative(folder, ledger)?,
+                        None => ".".into(),
+                    },
+                })
+            })
+            .collect::<crate::Result<_>>()?;
+        let record = basecraft_protocol::records::RunRecord {
+            initiator: "basecraft".into(),
+            process_instance: basecraft_platform::process_instance().into(),
+            inputs: std::collections::BTreeMap::from([("sources".into(), sources)]),
+            ..basecraft_protocol::records::RunRecord::new(
+                format!("{SANGER_TOOL}/{}", self.operation),
+                env!("CARGO_PKG_VERSION").into(),
+                SANGER_TOOL.into(),
+            )
+        };
+        inputs::write_json(&self.run.artifact("execution.json")?, &record)
     }
 
     fn status(
@@ -394,7 +438,6 @@ impl SangerRun {
             artifact_run: Some(self.run.directory().to_path_buf()),
             extra: std::collections::BTreeMap::new(),
         })?;
-        inputs::write_json(&self.run.artifact("execution.json")?, &value)?;
         let path = self.job_path()?;
         std::fs::create_dir_all(path.parent().ok_or_else(|| invalid("job has no parent"))?)?;
         inputs::write_json(&path, &value)
@@ -425,11 +468,6 @@ impl SangerRun {
             return Err(invalid("Sanger run terminated or has no declared outputs"));
         }
         let mut artifacts = vec![retained(&self.run, &self.run.artifact("request.json")?, 0)?];
-        let mut paths = paths.to_vec();
-        let parameters = self.run.artifact("parameters.json")?;
-        if parameters.is_file() {
-            paths.push(parameters);
-        }
         for (index, path) in paths.iter().enumerate() {
             artifacts.push(retained(&self.run, path, index + 1)?);
         }
@@ -450,14 +488,35 @@ impl SangerRun {
                 source.checked()?;
             }
         }
-        crate::records::provenance::publish(
-            self.directory(),
-            &publication(
-                &self.run,
-                &format!("Sanger {} support; not accepted consensus", self.operation),
-                artifacts,
-            ),
+        let mut publication = publication(
+            &self.run,
+            &format!("Sanger {} support; not accepted consensus", self.operation),
+            artifacts,
+        );
+        let inputs: Vec<_> = publication
+            .inputs
+            .iter()
+            .map(|input| (input.logical_name.clone(), input.hash.clone()))
+            .collect();
+        let record = crate::session::ToolRunRecord {
+            run: Some(&self.run),
+            ..crate::session::ToolRunRecord::new(
+                (SANGER_TOOL, &self.operation),
+                serde_json::Value::Object(serde_json::Map::new()),
+                &inputs,
+                &[],
+            )
+        };
+        let entry = crate::records::provenance::file_run_entry(
+            record,
+            &self.base,
+            &publication,
+            &self.started,
+            sanger_actor(),
+            &self.operation,
         )?;
+        publication.events.push(entry);
+        crate::records::provenance::publish(self.directory(), &publication)?;
         self.evidence.runs.push(self.directory().into());
         self.status(SangerJobStatus::SupportRetained, None, None)?;
         self.terminal.set(true);
@@ -477,12 +536,6 @@ impl Drop for SangerRun {
             );
         }
     }
-}
-
-fn job_path(id: &str) -> crate::Result<PathBuf> {
-    let paths =
-        basecraft_platform::paths::AppPaths::discover().map_err(|e| invalid(e.to_string()))?;
-    Ok(paths.state.join("jobs").join(id).join("manifest.json"))
 }
 
 fn unavailable_sources(evidence: &ReviewEvidence, record: &mut Publication) {
@@ -1098,7 +1151,47 @@ pub fn record_addition(
         return Err(invalid(issues.join("; ")));
     }
     let hash = session.snapshot_file(&evidence.review)?;
-    session.record_tool_run(doc, basecraft_protocol::Actor::Plugin {id:"basecraft.sanger-review".into(),version:"1".into()}, crate::session::ToolRunRecord { referenced: true, ..crate::session::ToolRunRecord::new(("basecraft.sanger-review","reviewed_consensus_input"), serde_json::json!({"sanger_input":{"schema_version":1,"id":evidence.id,"hash":evidence.hash},"review_hash":evidence.review_hash,"sequence_hash":evidence.sequence_hash}), &[(evidence.review.to_string_lossy().into_owned(),hash)], &[]) })
+    let inputs = [(evidence.review.to_string_lossy().into_owned(), hash)];
+    let params = serde_json::to_value(ReviewedConsensus {
+        review_hash: &evidence.review_hash,
+        sequence_hash: &evidence.sequence_hash,
+    })?;
+    session.record_tool_run(
+        doc,
+        sanger_actor(),
+        crate::session::ToolRunRecord {
+            referenced: true,
+            // The run that retains the reviewed consensus.
+            input_run: Some(basecraft_protocol::records::ActivityInputRun {
+                schema_version: 1,
+                id: evidence.id.clone(),
+                hash: evidence.hash.clone(),
+                extra: std::collections::BTreeMap::new(),
+            }),
+            ..crate::session::ToolRunRecord::new(
+                (SANGER_TOOL, "reviewed_consensus_input"),
+                params,
+                &inputs,
+                &[],
+            )
+        },
+    )
+}
+
+const SANGER_TOOL: &str = "basecraft.sanger-review";
+
+fn sanger_actor() -> basecraft_protocol::Actor {
+    basecraft_protocol::Actor::Plugin {
+        id: SANGER_TOOL.into(),
+        version: "1".into(),
+    }
+}
+
+/// What a reviewed consensus entry records about the review it came from.
+#[derive(serde::Serialize)]
+struct ReviewedConsensus<'a> {
+    review_hash: &'a str,
+    sequence_hash: &'a str,
 }
 
 impl SangerReview {
@@ -1496,6 +1589,22 @@ mod tests {
         let reads = run.artifact("reads.align.fa").unwrap();
         std::fs::write(&reads, ">r1\nAC\n>r2\nAC\n").unwrap();
         let run = run.finish(&[evidence.clone(), reads]).unwrap();
+        // The stage leaves exactly one tool run, which points at its run record.
+        let publication: Publication =
+            serde_json::from_slice(&std::fs::read(run.directory().join("manifest.json")).unwrap())
+                .unwrap();
+        let tool_runs: Vec<_> = publication
+            .events
+            .iter()
+            .filter_map(|e| e.op.tool_run())
+            .collect();
+        assert_eq!(tool_runs.len(), 1);
+        assert_eq!(tool_runs[0].0, "consensus");
+        assert!(publication.events.iter().any(|e| e.op.is_run(run.run.id())));
+        let record: basecraft_protocol::records::RunRecord =
+            serde_json::from_slice(&std::fs::read(run.directory().join("execution.json")).unwrap())
+                .unwrap();
+        assert_eq!(record.operation, "basecraft.sanger-review/consensus");
         let mut review = ReviewSession::new(&SangerReview::new(&evidence).unwrap());
         review.attach_run(&run).unwrap();
         edit(&mut review);

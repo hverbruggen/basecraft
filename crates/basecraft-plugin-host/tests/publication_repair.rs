@@ -224,8 +224,7 @@ fn assert_reopened_completion(workspace: &std::path::Path, run_id: &str, hypothe
         record
             .events
             .iter()
-            .filter(|event| matches!(&event.op,
-        basecraft_protocol::Op::ToolRun { params, .. } if params["run_id"] == run_id))
+            .filter(|event| event.op.is_run(run_id))
             .count(),
         1
     );

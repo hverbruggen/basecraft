@@ -145,7 +145,12 @@ fn sanger_invocation_original_records() {
             golden(name, &bytes);
         }
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(value["operation"], "fixture");
+        let operation = if file == "execution.json" {
+            "basecraft.sanger-review/fixture"
+        } else {
+            "fixture"
+        };
+        assert_eq!(value["operation"], operation);
     }
     run.failed("fixture failure").unwrap();
 }

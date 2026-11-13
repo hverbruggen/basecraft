@@ -54,9 +54,13 @@ fn complete_multiple_documents_publish_once_without_rewriting() {
     };
     let session = source(&root, 2);
     let destination = root.join("recovered");
-    let mut attempt =
-        records::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
-            .unwrap();
+    let mut attempt = records::prepare_recovery(
+        session.recovery_root(),
+        &destination,
+        RecoveryMode::Strict,
+        None,
+    )
+    .unwrap();
     let check = attempt.check(0).unwrap();
     let stage = check.target().parent().unwrap().to_path_buf();
     attempt.advance(0, None).unwrap();
@@ -87,12 +91,14 @@ fn receipts_are_single_use_session_document_and_phase_bound() {
         session.recovery_root(),
         &root.join("a"),
         RecoveryMode::Strict,
+        None,
     )
     .unwrap();
     let mut b = records::prepare_recovery(
         session.recovery_root(),
         &root.join("b"),
         RecoveryMode::Strict,
+        None,
     )
     .unwrap();
     let old = a.check(0).unwrap();
@@ -141,6 +147,7 @@ fn same_bytes_replacement_and_cancel_preserve_originals() {
         session.recovery_root(),
         &root.join("out"),
         RecoveryMode::Strict,
+        None,
     )
     .unwrap();
     let target = attempt.check(0).unwrap().target().to_path_buf();
@@ -178,9 +185,13 @@ fn destination_competitors_and_replaced_parent_fail_closed() {
     let session = source(&root, 1);
     for kind in 0..3 {
         let destination = root.join(format!("competitor-{kind}"));
-        let mut attempt =
-            records::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
-                .unwrap();
+        let mut attempt = records::prepare_recovery(
+            session.recovery_root(),
+            &destination,
+            RecoveryMode::Strict,
+            None,
+        )
+        .unwrap();
         attempt.advance(0, None).unwrap();
         match kind {
             0 => std::fs::write(&destination, b"competitor").unwrap(),
@@ -193,8 +204,13 @@ fn destination_competitors_and_replaced_parent_fail_closed() {
         assert!(attempt.publish().is_err());
         assert!(std::fs::symlink_metadata(&destination).is_ok());
         assert!(
-            records::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
-                .is_err()
+            records::prepare_recovery(
+                session.recovery_root(),
+                &destination,
+                RecoveryMode::Strict,
+                None
+            )
+            .is_err()
         );
     }
     let parent = root.join("parent");
@@ -203,6 +219,7 @@ fn destination_competitors_and_replaced_parent_fail_closed() {
         session.recovery_root(),
         &parent.join("out"),
         RecoveryMode::Strict,
+        None,
     )
     .unwrap();
     attempt.advance(0, None).unwrap();
@@ -210,19 +227,6 @@ fn destination_competitors_and_replaced_parent_fail_closed() {
     std::fs::create_dir(&parent).unwrap();
     assert!(attempt.publish().is_err());
     assert!(!parent.join("out").exists());
-}
-
-fn reference(anchor: &Path, source: &Path) -> basecraft_ops::records::ArtifactRun {
-    std::fs::create_dir_all(anchor.parent().unwrap()).unwrap();
-    basecraft_ops::records::reference_input_with_dependencies(
-        anchor,
-        source,
-        &basecraft_io::hash_file(source).unwrap(),
-        &[],
-        "recovery test",
-        None,
-    )
-    .unwrap()
 }
 
 #[test]
@@ -234,9 +238,22 @@ fn nested_delimitation_registers_only_final_stores_and_reopens() {
     };
     let original = root.join("source");
     std::fs::create_dir_all(original.join("nested")).unwrap();
-    let external_input = root.join("external.fasta");
+    // The project is `root`; its input sits in a subfolder.
+    std::fs::create_dir_all(root.join("data")).unwrap();
+    let project = basecraft_ops::project::Project::new(&root).unwrap();
+    let external_input = root.join("data/external.fasta");
     std::fs::write(&external_input, b">external\nAAAA\n").unwrap();
-    let external = reference(&root.join("external-store/result"), &external_input);
+    let anchor = root.join("external-store/result");
+    std::fs::create_dir_all(anchor.parent().unwrap()).unwrap();
+    let external = basecraft_ops::records::reference_input_with_dependencies(
+        &anchor,
+        &external_input,
+        &basecraft_io::hash_file(&external_input).unwrap(),
+        &[],
+        "recovery test",
+        Some(&project),
+    )
+    .unwrap();
     let ledger_path = external.directory().join("input.json");
     let mut ledger: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&ledger_path).unwrap()).unwrap();
@@ -291,9 +308,13 @@ fn nested_delimitation_registers_only_final_stores_and_reopens() {
             .unwrap();
     }
     let destination = root.join("final");
-    let mut attempt =
-        records::prepare_recovery(source.recovery_root(), &destination, RecoveryMode::Strict)
-            .unwrap();
+    let mut attempt = records::prepare_recovery(
+        source.recovery_root(),
+        &destination,
+        RecoveryMode::Strict,
+        Some(&project),
+    )
+    .unwrap();
     let stage = attempt
         .check(0)
         .unwrap()
@@ -322,6 +343,14 @@ fn nested_delimitation_registers_only_final_stores_and_reopens() {
     let registered = indexes(&root);
     let stage_name = stage.file_name().unwrap().to_str().unwrap();
     assert!(!registered.contains(stage_name), "{registered}");
+    // Recovered into a project subfolder, its stores are indexed at the
+    // project's root, keyed by project-relative path; never beside the input.
+    assert!(registered.contains("\"final/"), "{registered}");
+    assert!(
+        registered.contains("\"data/external.fasta\""),
+        "{registered}"
+    );
+    assert!(!root.join("data/.basecraft").exists());
     assert!(!stage.exists());
     for file in complete.outputs {
         let work = basecraft_ops::files::load_delimitation(&file).unwrap();
@@ -388,12 +417,13 @@ fn damaged_journal_requires_explicit_prefix_and_preserves_bytes() {
         .write_all(b"{torn")
         .unwrap();
     let bytes = std::fs::read(&journal).unwrap();
-    assert!(records::recover(session.recovery_root(), &root.join("strict")).is_err());
+    assert!(records::recover(session.recovery_root(), &root.join("strict"), None).is_err());
     assert!(!root.join("strict").exists());
     let mut prefix = records::prepare_recovery(
         session.recovery_root(),
         &root.join("prefix"),
         RecoveryMode::VerifiedPrefix,
+        None,
     )
     .unwrap();
     assert!(prefix.damage().is_some());
@@ -421,9 +451,13 @@ fn status_is_read_only_and_tracks_document_progress_without_slot_ids() {
     let reopened = session.open(&root.join("source/0.fasta")).unwrap();
     session.apply(reopened, Op::seq_replace(1, 2, "T")).unwrap();
     let destination = root.join("out");
-    let mut attempt =
-        records::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
-            .unwrap();
+    let mut attempt = records::prepare_recovery(
+        session.recovery_root(),
+        &destination,
+        RecoveryMode::Strict,
+        None,
+    )
+    .unwrap();
     let check = attempt.check(0).unwrap();
     assert_ne!(check.document(), 0);
     let initial = attempt.status().unwrap();
@@ -500,15 +534,24 @@ fn unix_dangling_destination_is_occupied() {
     };
     let session = source(&root, 1);
     let destination = root.join("out");
-    let mut attempt =
-        records::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
-            .unwrap();
+    let mut attempt = records::prepare_recovery(
+        session.recovery_root(),
+        &destination,
+        RecoveryMode::Strict,
+        None,
+    )
+    .unwrap();
     attempt.advance(0, None).unwrap();
     std::os::unix::fs::symlink("missing", &destination).unwrap();
     assert!(attempt.publish().is_err());
     assert!(
-        records::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
-            .is_err()
+        records::prepare_recovery(
+            session.recovery_root(),
+            &destination,
+            RecoveryMode::Strict,
+            None
+        )
+        .is_err()
     );
     assert_eq!(
         std::fs::read_link(&destination).unwrap(),
@@ -533,15 +576,24 @@ fn windows_reparse_destinations_are_occupied() {
     std::fs::write(external.join("owned"), b"external").unwrap();
     for junction in [false, true] {
         let destination = root.join(if junction { "junction" } else { "dangling" });
-        let mut attempt =
-            records::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
-                .unwrap();
+        let mut attempt = records::prepare_recovery(
+            session.recovery_root(),
+            &destination,
+            RecoveryMode::Strict,
+            None,
+        )
+        .unwrap();
         attempt.advance(0, None).unwrap();
         recovery_windows::competitor(&destination, &external, junction);
         assert!(attempt.publish().is_err());
         assert!(
-            records::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
-                .is_err()
+            records::prepare_recovery(
+                session.recovery_root(),
+                &destination,
+                RecoveryMode::Strict,
+                None
+            )
+            .is_err()
         );
         recovery_windows::assert_reparse(&destination);
         assert_eq!(std::fs::read(external.join("owned")).unwrap(), b"external");
@@ -563,9 +615,13 @@ fn replaced_stage_directory_is_refused_with_file_identity_unchanged() {
     let doc = session.open(&file).unwrap();
     session.apply(doc, Op::seq_replace(1, 2, "T")).unwrap();
     let destination = root.join("out");
-    let mut attempt =
-        records::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
-            .unwrap();
+    let mut attempt = records::prepare_recovery(
+        session.recovery_root(),
+        &destination,
+        RecoveryMode::Strict,
+        None,
+    )
+    .unwrap();
     let stage = attempt
         .check(0)
         .unwrap()
@@ -616,9 +672,13 @@ fn failed_recovery_write_spends_its_decision_and_publishes_nothing() {
     };
     let session = source(&root, 1);
     let destination = root.join("out");
-    let mut attempt =
-        records::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
-            .unwrap();
+    let mut attempt = records::prepare_recovery(
+        session.recovery_root(),
+        &destination,
+        RecoveryMode::Strict,
+        None,
+    )
+    .unwrap();
     let check = attempt.check(0).unwrap();
     let stage = check.target().parent().unwrap().to_path_buf();
     // A full disk or a permission error stops the write into the stage.

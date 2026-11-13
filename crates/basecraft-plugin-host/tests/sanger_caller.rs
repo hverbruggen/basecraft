@@ -37,15 +37,18 @@ for name in ("calls", "primers"):
 plugin.run()
 "#;
 
+/// A caller that hangs is cancelled after 60 s and fails the test.
 fn called(caller: &mut SangerCaller) -> Result<CalledDraft, String> {
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let watchdog = cancel.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(60));
+        watchdog.store(true, std::sync::atomic::Ordering::Release);
+    });
     let started = std::time::Instant::now();
-    loop {
-        if let Some(called) = caller.poll()? {
-            return Ok(called);
-        }
-        assert!(started.elapsed().as_secs() < 60, "caller timeout");
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
+    let called = caller.wait(&cancel);
+    assert!(started.elapsed().as_secs() < 60, "caller timeout");
+    called
 }
 
 #[test]
@@ -194,7 +197,7 @@ fn the_caller_service_returns_checks_reuses_and_refuses_drafts() {
     // and a changed source is refused before a run starts.
     assert!(caller.start(&source, &sha256, 19).unwrap().is_none());
     caller.cancel().unwrap();
-    assert!(caller.poll().unwrap().is_none());
+    assert!(called(&mut caller).is_err());
     assert!(caller.start(&source, &sha256, 18).unwrap().is_none());
     std::fs::write(&source, "source replaced while the caller ran").unwrap();
     assert!(called(&mut caller).is_err());

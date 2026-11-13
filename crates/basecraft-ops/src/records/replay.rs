@@ -443,8 +443,12 @@ pub fn recovery_sessions(roots: &[std::path::PathBuf]) -> Result<Vec<std::path::
 /// error names how many events [`recover_verified_prefix`] would keep.
 /// This conservative wrapper drops its attempt on refusal. A returned check is
 /// advisory only; continuations must use [`prepare_recovery`] on a live attempt.
-pub fn recover(root: &Path, destination: &Path) -> Result<Vec<std::path::PathBuf>> {
-    let mut attempt = prepare_recovery(root, destination, RecoveryMode::Strict)?;
+pub fn recover(
+    root: &Path,
+    destination: &Path,
+    project: Option<&crate::project::Project>,
+) -> Result<Vec<std::path::PathBuf>> {
+    let mut attempt = prepare_recovery(root, destination, RecoveryMode::Strict, project)?;
     for document in 0..attempt.len() {
         attempt.advance(document, None)?;
     }
@@ -458,10 +462,13 @@ pub enum RecoveryMode {
     VerifiedPrefix,
 }
 
+/// `project` is the project the user chose, if any: records of recovered
+/// files inside it are indexed at its root.
 pub fn prepare_recovery(
     root: &Path,
     destination: &Path,
     mode: RecoveryMode,
+    project: Option<&crate::project::Project>,
 ) -> Result<RecoveryAttempt> {
     recover_checked(root, destination)?;
     let (entries, damage) = match mode {
@@ -471,7 +478,7 @@ pub fn prepare_recovery(
             (prefix.entries, prefix.problem)
         }
     };
-    recover_entries(root, destination, entries, damage)
+    recover_entries(root, destination, entries, damage, project)
 }
 
 fn strict_entries(root: &Path) -> Result<Vec<LogEntry>> {
@@ -496,8 +503,9 @@ fn strict_entries(root: &Path) -> Result<Vec<LogEntry>> {
 pub fn recover_verified_prefix(
     root: &Path,
     destination: &Path,
+    project: Option<&crate::project::Project>,
 ) -> Result<(Vec<std::path::PathBuf>, Option<String>)> {
-    let mut attempt = prepare_recovery(root, destination, RecoveryMode::VerifiedPrefix)?;
+    let mut attempt = prepare_recovery(root, destination, RecoveryMode::VerifiedPrefix, project)?;
     for document in 0..attempt.len() {
         attempt.advance(document, None)?;
     }
@@ -527,6 +535,7 @@ fn recover_entries(
     destination: &Path,
     mut entries: Vec<LogEntry>,
     damage: Option<String>,
+    project: Option<&crate::project::Project>,
 ) -> Result<RecoveryAttempt> {
     if entries.is_empty() {
         return Err(crate::error::invalid(
@@ -547,7 +556,7 @@ fn recover_entries(
     let staging = tempfile::Builder::new()
         .prefix(".basecraft-recover-")
         .tempdir_in(&parent)?;
-    let mut session = Session::unlogged(staging.path());
+    let mut session = Session::unlogged(staging.path()).in_project(project.cloned());
     let source_root = recorded_source_root(root, entries.iter());
     let pending_path = root.join("pending-save.json");
     if pending_path.is_file() {
@@ -1303,6 +1312,7 @@ mod tests {
                 root.path(),
                 &destination,
                 vec![baseline.clone(), attempt, edit.clone()],
+                None,
                 None,
             );
             if escapes {

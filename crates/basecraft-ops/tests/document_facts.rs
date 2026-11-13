@@ -5,7 +5,7 @@ mod isolated_profile;
 
 use basecraft_ops::{Session, files};
 use basecraft_protocol::Op;
-use basecraft_protocol::facts::{Alphabet, FactSource};
+use basecraft_protocol::facts::{Alphabet, FactSource, StatedAlphabet};
 
 #[test]
 fn a_plain_open_and_save_writes_no_companion() {
@@ -41,7 +41,7 @@ fn a_stated_alphabet_survives_save_and_reopen_for_sequences_too() {
         .apply(
             doc,
             Op::SetAlphabet {
-                alphabet: Alphabet::Rna,
+                alphabet: StatedAlphabet::Rna,
             },
         )
         .unwrap();
@@ -68,7 +68,7 @@ fn an_edit_made_elsewhere_sets_the_companion_aside_with_a_warning() {
         .apply(
             doc,
             Op::SetAlphabet {
-                alphabet: Alphabet::Protein,
+                alphabet: StatedAlphabet::Protein,
             },
         )
         .unwrap();
@@ -111,7 +111,7 @@ fn an_undone_alphabet_does_not_come_back_on_reopen() {
         .apply(
             doc,
             Op::SetAlphabet {
-                alphabet: Alphabet::Protein,
+                alphabet: StatedAlphabet::Protein,
             },
         )
         .unwrap();
@@ -137,7 +137,7 @@ fn a_sequence_with_a_stated_alphabet_saves_again_after_an_edit() {
         .apply(
             doc,
             Op::SetAlphabet {
-                alphabet: Alphabet::Dna,
+                alphabet: StatedAlphabet::Dna,
             },
         )
         .unwrap();
@@ -161,65 +161,75 @@ fn open(dir: &std::path::Path, name: &str, text: &str) -> (Session, basecraft_op
 }
 
 #[test]
-fn the_guess_follows_d12_per_sequence() {
+fn files_report_undetermined_and_mixed_sequences() {
     crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
-    let dna = "ACGTACGTAC".repeat(100);
-    let one_e = format!("{}E", &dna[1..]);
-    for (name, text, expected) in [
-        (
-            "x.afa",
-            format!(">a\n{dna}\n>b\nACGTX{}\n", &dna[5..]),
-            Alphabet::Dna,
-        ),
-        (
-            "iupac.afa",
-            ">a\nACGRYKMSWBDHVN\n>b\nRYKMSWACGTNNNN\n".into(),
-            Alphabet::Dna,
-        ),
-        (
-            "rna.afa",
-            ">a\nACGUACGU\n>b\nUUGCA-GU\n".into(),
-            Alphabet::Rna,
-        ),
-        (
-            "rare-e.fasta",
-            format!(">s\n{one_e}\n"),
-            Alphabet::Undetermined,
-        ),
-        (
-            "mixed.afa",
-            format!(">dna\n{}\n>protein\nMKLVEFIQPA\n", &dna[..10]),
-            Alphabet::Mixed,
-        ),
-    ] {
-        let (session, doc) = open(dir.path(), name, &text);
-        let alphabet = session.alphabet(doc).unwrap();
-        assert_eq!((name, alphabet.value), (name, expected));
-        assert_eq!(alphabet.source, FactSource::Guessed);
-    }
-    let (session, doc) = open(
-        dir.path(),
-        "mixed2.afa",
-        ">dna\nACGTACGTAC\n>protein\nMKLVEFIQPA\n",
+    // One E in 1,000 letters: basecraft can't tell.
+    let one_e = format!("{}E", "ACGTACGTAC".repeat(100).split_off(1));
+    let (session, doc) = open(dir.path(), "rare-e.fasta", &format!(">s\n{one_e}\n"));
+    assert_eq!(session.alphabet(doc).unwrap().value, Alphabet::Undetermined);
+    let mixed = ">dna\nACGTACGTAC\n>protein\nMKLVEFIQPA\n";
+    let (session, doc) = open(dir.path(), "mixed.afa", mixed);
+    let alphabet = session.alphabet(doc).unwrap();
+    assert_eq!(
+        (alphabet.value, alphabet.source),
+        (Alphabet::Mixed, FactSource::Guessed)
     );
     let rows: Vec<_> = session
         .sequence_alphabets(doc)
         .unwrap()
         .into_iter()
-        .map(|s| (s.name, s.alphabet))
+        .map(|s| s.alphabet)
         .collect();
-    assert_eq!(
-        rows,
-        [
-            ("dna".into(), Alphabet::Dna),
-            ("protein".into(), Alphabet::Protein)
-        ]
-    );
+    assert_eq!(rows, [Alphabet::Dna, Alphabet::Protein]);
 }
 
 #[test]
-fn undetermined_or_mixed_sequences_are_named_until_an_alphabet_is_stated() {
+fn the_guess_follows_edits_and_plugins_see_the_same_value() {
+    crate::isolated_profile::isolate!();
+    let dir = tempfile::tempdir().unwrap();
+    let protein = (0..20)
+        .map(|i| format!(">p{i}\nMKLVEFIQPA\n"))
+        .collect::<Vec<_>>()
+        .concat();
+    let (mut session, doc) = open(
+        dir.path(),
+        "rows.afa",
+        &format!("{protein}>odd\nACGTACGTAC\n"),
+    );
+    let refusal = session.alignment(doc).unwrap().alphabet_refusal().unwrap();
+    assert!(refusal.contains("1 DNA: odd; 20 protein"), "{refusal}");
+    session
+        .apply(
+            doc,
+            Op::AlnRemoveRows {
+                rows: vec![(20, 21)],
+            },
+        )
+        .unwrap();
+    let alignment = session.alignment(doc).unwrap();
+    assert_eq!(alignment.alphabet().value, Alphabet::Protein);
+    assert!(alignment.is_protein());
+    assert_eq!(alignment.alphabet_refusal(), None);
+    session.undo(doc).unwrap();
+    assert_eq!(session.alphabet(doc).unwrap().value, Alphabet::Mixed);
+    // Typing protein over the DNA row settles it too.
+    session
+        .apply(
+            doc,
+            Op::AlnReplace {
+                row: 20,
+                start: 0,
+                end: 10,
+                residues: "MKLVEFIQPA".into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(session.alphabet(doc).unwrap().value, Alphabet::Protein);
+}
+
+#[test]
+fn undetermined_sequences_are_named_until_an_alphabet_is_stated() {
     crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let dna = "ACGTACGTAC".repeat(100);
@@ -227,27 +237,65 @@ fn undetermined_or_mixed_sequences_are_named_until_an_alphabet_is_stated() {
     let (mut session, doc) = open(dir.path(), "rows.afa", &text);
     let refusal = session.alignment(doc).unwrap().alphabet_refusal().unwrap();
     assert!(
-        refusal.contains("can't tell") && refusal.contains("unclear (Undetermined)"),
+        refusal.contains("can't tell") && refusal.contains(": unclear."),
         "{refusal}"
     );
-    assert!(!refusal.contains("clear (Dna)"), "{refusal}");
-    session
-        .apply(
-            doc,
-            Op::SetAlphabet {
-                alphabet: Alphabet::Dna,
-            },
-        )
-        .unwrap();
+    let dna_stated = Op::SetAlphabet {
+        alphabet: StatedAlphabet::Dna,
+    };
+    session.apply(doc, dna_stated).unwrap();
     assert_eq!(session.alignment(doc).unwrap().alphabet_refusal(), None);
-    assert!(
-        session
-            .apply(
-                doc,
-                Op::SetAlphabet {
-                    alphabet: Alphabet::Mixed
-                }
-            )
-            .is_err()
+}
+
+#[test]
+fn genbank_files_state_their_molecule_and_every_record_counts() {
+    crate::isolated_profile::isolate!();
+    let dir = tempfile::tempdir().unwrap();
+    let record = |name: &str, unit: &str, molecule: &str, residues: &str| {
+        format!(
+            "LOCUS       {name:<16} {len:>11} {unit} {molecule:<7} linear   SYN 10-OCT-2026\nORIGIN\n        1 {residues}\n//\n",
+            len = residues.len()
+        )
+    };
+    // GenBank writes mRNA with T; the molecule type says RNA.
+    let (session, doc) = open(dir.path(), "m.gb", &record("m", "bp", "mRNA", "acgtacgtac"));
+    let alphabet = session.alphabet(doc).unwrap();
+    assert_eq!(
+        (alphabet.value, alphabet.source),
+        (Alphabet::Rna, FactSource::Stated)
     );
+    let both = record("d", "bp", "DNA", "acgtacgtac") + &record("p", "aa", "", "mklvefiqpa");
+    let (session, doc) = open(dir.path(), "two.gb", &both);
+    assert_eq!(session.alphabet(doc).unwrap().value, Alphabet::Mixed);
+    let records: Vec<_> = session
+        .sequence_alphabets(doc)
+        .unwrap()
+        .into_iter()
+        .map(|s| (s.name, s.alphabet))
+        .collect();
+    assert_eq!(
+        records,
+        [("d".into(), Alphabet::Dna), ("p".into(), Alphabet::Protein)]
+    );
+    // A GenPept record first: "aa" states protein even when its residues
+    // hold no protein-only letters, and the file's own default says nothing.
+    let peptide = record("p", "aa", "", "mkvasghmkvasghmkvas") + &record("d", "bp", "DNA", "acgt");
+    let (genpept, first) = open(dir.path(), "first.gb", &peptide);
+    let records: Vec<_> = genpept
+        .sequence_alphabets(first)
+        .unwrap()
+        .into_iter()
+        .map(|s| s.alphabet)
+        .collect();
+    assert_eq!(records, [Alphabet::Protein, Alphabet::Dna]);
+    let alphabet = genpept.alphabet(first).unwrap();
+    assert_eq!(
+        (alphabet.value, alphabet.source),
+        (Alphabet::Mixed, FactSource::Stated)
+    );
+    // A plain open and save writes no side file for what the file says.
+    let mut session = session;
+    session.apply(doc, Op::seq_replace(0, 1, "G")).unwrap();
+    session.save(doc, None).unwrap();
+    assert!(!files::tree_sidecar(&dir.path().join("two.gb")).exists());
 }

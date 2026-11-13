@@ -8,10 +8,8 @@ mod prepare;
 pub use prepare::recorded_request;
 
 use basecraft_ops::records::AlignmentLinkExt;
-use basecraft_platform::files::{identity, link_count};
-use basecraft_protocol::publication_records::{
-    CollectionExportIntent, CollectionIntent, MemberExportReceipt,
-};
+use basecraft_platform::files::link_count;
+use basecraft_protocol::publication_records::{CollectionExportIntent, CollectionIntent};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{
@@ -33,7 +31,7 @@ use basecraft_protocol::{
     provenance::{ArtifactRevision, Publication},
     records::{JobIndexPlugin, JobIndexSource, LocalJobIndex, RUN_RECORD_SCHEMA, RunRecord},
 };
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::{
     Error, PluginProcess, Result, contract, file_tool, policy::SessionPolicy,
@@ -108,8 +106,8 @@ pub fn verify_completed_result(
     )?)?;
     if execution.schema != RUN_RECORD_SCHEMA
         || execution.operation != query.operation
-        || execution.package_digest != query.pins.package_digest
-        || execution.descriptor_digest != query.pins.descriptor_digest
+        || execution.package_digest.as_ref() != Some(&query.pins.package_digest)
+        || execution.descriptor_digest.as_ref() != Some(&query.pins.descriptor_digest)
         || execution.effective_parameters != query.effective_parameters
     {
         return Err(Error::Protocol(
@@ -267,6 +265,8 @@ pub struct PreparedOperation {
     pub request: OperationRequest,
     pub parameters: Value,
     granted_parameters: std::sync::Mutex<Value>,
+    /// The external tool the run record names, once it is written.
+    tool: std::sync::Mutex<Option<basecraft_protocol::plugin::ToolInfo>>,
     pub context: InvocationContext,
     pub policy: SessionPolicy,
     pub ledger_inputs: Vec<ArtifactRevision>,
@@ -275,6 +275,9 @@ pub struct PreparedOperation {
     pub initiator: String,
     started: String,
     workflow_registry: Option<Arc<crate::registry::Registry>>,
+    /// The session's project: the history of results and the analysis index
+    /// live at its root.
+    pub(crate) project: Option<basecraft_ops::project::Project>,
     _scratch: tempfile::TempDir,
 }
 
@@ -298,7 +301,7 @@ impl PreparedOperation {
             .collect();
         // Preserve leaves and delegate the primary ledger under one boundary:
         // a cooperating save must not invalidate the primary before its rewrite.
-        let mutation = records::Mutation::begin()?;
+        let mutation = records::Mutation::begin_in(self.project.as_ref())?;
         for (binding, records) in &self.context.input_evidence {
             if !retained_bindings.contains(binding) {
                 continue;
@@ -349,14 +352,13 @@ impl PreparedOperation {
                     continue;
                 }
                 let hash = file_tool::freeze_file(&root.join(&*path), &retained)?;
-                self.ledger_inputs.push(ArtifactRevision {
-                    id: format!("{}:{name}", self.run.id()),
-                    logical_name: name.clone(),
+                self.ledger_inputs.push(records::retained_file(
+                    &self.run,
+                    &name,
+                    name.clone(),
+                    &retained,
                     hash,
-                    size: std::fs::metadata(&retained)?.len(),
-                    retained: Some(name.clone()),
-                    reference: None,
-                });
+                )?);
                 *path = name;
             }
         }
@@ -365,7 +367,7 @@ impl PreparedOperation {
 
     /// Inherit a workflow stage's original ledgers, avoiding a parent/child cycle.
     pub(crate) fn inherit_input_ancestry(&self, parent: &Path) -> Result<()> {
-        let mutation = records::Mutation::begin()?;
+        let mutation = records::Mutation::begin_in(self.project.as_ref())?;
         let dependencies = sources_from_upstream(parent)?;
         let mut ledgers = BTreeSet::from([self.run.directory().to_path_buf()]);
         ledgers.extend(
@@ -422,8 +424,10 @@ impl PreparedOperation {
                     continue;
                 }
                 if let Some(artifact) = stage.artifacts.first() {
-                    let publication =
-                        basecraft_ops::records::inspect(Path::new(&artifact.path), None)?;
+                    let publication = basecraft_ops::records::inspect(
+                        Path::new(&artifact.path),
+                        self.project.as_ref(),
+                    )?;
                     record.include_input(
                         &basecraft_ops::records::DocumentRecord::from_publication(&publication),
                     );
@@ -504,53 +508,60 @@ impl PreparedOperation {
             let hash = basecraft_io::hash_file(&path)?;
             validated.push((artifact.role.clone(), path, hash));
         }
-        // Add the producer's support semantics before sealing the collection so
-        // retained results, explicit exports, verification and repair agree.
-        if let Some((name, kind)) =
-            file_tool::producer_support(&self.operation.descriptor, &self.parameters)
-        {
-            let trees: Vec<_> = validated
-                .iter()
-                .filter(|(role, path, _)| {
-                    role == "artifacts"
-                        && path
-                            .extension()
-                            .is_some_and(|extension| extension.eq_ignore_ascii_case("nwk"))
-                })
-                .map(|(_, path, _)| path.clone())
-                .collect();
-            for tree in trees {
-                let sidecar = basecraft_ops::files::tree_sidecar(&tree);
-                match std::fs::symlink_metadata(&sidecar) {
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    Ok(_) => {
-                        return Err(Error::Protocol(
-                            "support sidecar already exists in staged output".into(),
-                        ));
-                    }
-                    Err(error) => return Err(error.into()),
+        // Add what the producer states about its results before sealing the
+        // collection so retained results, explicit exports, verification and
+        // repair agree.
+        let support = file_tool::producer_support(&self.operation.descriptor, &self.parameters);
+        let stated: Vec<_> = validated
+            .iter()
+            .filter(|(_, path, _)| file_tool::is_tree(path))
+            .filter_map(|(role, path, _)| {
+                let binding = &self.operation.descriptor.outputs[role];
+                let primary = binding
+                    .primary
+                    .as_ref()
+                    .map_or(!binding.collection, |member| {
+                        *path == self.run_path(&self.context.outputs[role]).join(member)
+                    });
+                let lengths = primary
+                    .then(|| file_tool::stated_branch_lengths(binding, &self.parameters))
+                    .flatten();
+                let support = support.filter(|_| role == "artifacts");
+                (support.is_some() || lengths.is_some())
+                    .then(|| (role.clone(), path.clone(), lengths, support))
+            })
+            .collect();
+        for (role, path, lengths, support) in stated {
+            let sidecar = basecraft_ops::files::tree_sidecar(&path);
+            match std::fs::symlink_metadata(&sidecar) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Ok(_) => {
+                    return Err(Error::Protocol(
+                        "companion already exists in staged output".into(),
+                    ));
                 }
-                if let Some(sidecar) = file_tool::write_support_sidecar(&tree, name, kind)? {
-                    if !paths.insert(sidecar.clone()) {
-                        return Err(Error::Protocol("duplicate support sidecar".into()));
-                    }
-                    *counts.entry("artifacts".into()).or_default() += 1;
-                    let hash = basecraft_io::hash_file(&sidecar)?;
-                    // Bound tree reads use the run-root sidecar; the collection
-                    // member carries the same initial metadata when exported.
-                    let hidden = self.run.artifact(
-                        sidecar
-                            .file_name()
-                            .and_then(|file| file.to_str())
-                            .ok_or_else(|| Error::Protocol("support sidecar filename".into()))?,
-                    )?;
-                    basecraft_io::write_atomic(&hidden, |writer| {
-                        let mut input = std::fs::File::open(&sidecar)?;
-                        std::io::copy(&mut input, writer)?;
-                        Ok(())
-                    })?;
-                    validated.push(("artifacts".into(), sidecar, hash));
+                Err(error) => return Err(error.into()),
+            }
+            if let Some(sidecar) = file_tool::write_tree_companion(&path, support, lengths)? {
+                if !paths.insert(sidecar.clone()) {
+                    return Err(Error::Protocol("duplicate companion".into()));
                 }
+                *counts.entry(role.clone()).or_default() += 1;
+                let hash = basecraft_io::hash_file(&sidecar)?;
+                // Bound tree reads use the run-root companion; the collection
+                // member carries the same facts when exported.
+                let hidden = self.run.artifact(
+                    sidecar
+                        .file_name()
+                        .and_then(|file| file.to_str())
+                        .ok_or_else(|| Error::Protocol("companion filename".into()))?,
+                )?;
+                basecraft_io::write_atomic(&hidden, |writer| {
+                    let mut input = std::fs::File::open(&sidecar)?;
+                    std::io::copy(&mut input, writer)?;
+                    Ok(())
+                })?;
+                validated.push((role, sidecar, hash));
             }
         }
         for (role, binding) in &self.operation.descriptor.outputs {
@@ -686,13 +697,16 @@ impl PreparedOperation {
 
     /// An exported tree gets what the retained member has: its run binding,
     /// producer support semantics and the link to the alignment it came from.
-    fn finalise_exported_tree(&self, tree: &Path) -> Result<()> {
+    fn finalise_exported_tree(&self, role: &str, tree: &Path) -> Result<()> {
         self.run.bind(tree)?;
-        if let Some((name, kind)) =
-            file_tool::producer_support(&self.operation.descriptor, &self.parameters)
-        {
-            file_tool::write_support_sidecar(tree, name, kind)?;
-        }
+        file_tool::write_tree_companion(
+            tree,
+            file_tool::producer_support(&self.operation.descriptor, &self.parameters),
+            file_tool::stated_branch_lengths(
+                &self.operation.descriptor.outputs[role],
+                &self.parameters,
+            ),
+        )?;
         let Some(frozen) = self
             .context
             .inputs
@@ -730,20 +744,41 @@ impl PreparedOperation {
         Ok(())
     }
 
-    pub(crate) fn tool_activity(
-        &self,
-        outcome: &OperationOutcome,
-    ) -> Result<(basecraft_protocol::Actor, Value)> {
+    /// Who ran this operation, and what its `tool.run` entry records: the
+    /// requested parameters and the run folder. Everything else about the run
+    /// is in the folder's `execution.json`.
+    pub(crate) fn tool_run<'a>(
+        &'a self,
+        inputs: &'a [(String, String)],
+        outputs: &'a [PathBuf],
+    ) -> (
+        basecraft_protocol::Actor,
+        basecraft_ops::session::ToolRunRecord<'a>,
+    ) {
         let manifest = &self.operation.package.manifest;
-        let mut params = json!({"requested":self.request.parameters,"effective":outcome.effective_parameters,
-        "operation":self.operation.id,"pins":outcome.pins,"initiator":self.initiator,"run_id":outcome.run_id});
         let plugin = basecraft_protocol::Actor::Plugin {
             id: manifest.id.clone(),
             version: manifest.version.clone(),
         };
-        let execution = self.run.artifact("execution.json")?;
-        let actor = basecraft_ops::records::tool_actor(&execution, plugin, &mut params);
-        Ok((actor, params))
+        let record = basecraft_ops::session::ToolRunRecord {
+            run: Some(&self.run),
+            ..basecraft_ops::session::ToolRunRecord::new(
+                (&manifest.id, &self.operation.descriptor.implementation),
+                self.request.parameters.clone(),
+                inputs,
+                outputs,
+            )
+        };
+        let tool = self
+            .tool
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let actor = tool.map_or(plugin, |tool| basecraft_protocol::Actor::Tool {
+            tool: tool.name,
+            version: tool.version,
+        });
+        (actor, record)
     }
 
     /// A context path: relative to the run folder, or absolute outside it.
@@ -767,10 +802,6 @@ impl PreparedOperation {
     /// state. This one only points at the run's own `runtime.json`, which
     /// stays the authoritative record.
     fn write_task_index(&self, outcome: &OperationOutcome, runtime: &Path) -> Result<()> {
-        let paths = basecraft_platform::paths::AppPaths::discover()
-            .map_err(|error| Error::Protocol(error.to_string()))?;
-        let directory = paths.state.join("jobs").join(self.run.id());
-        std::fs::create_dir_all(&directory)?;
         let source = self.document.as_ref().map_or_else(
             || {
                 self.context
@@ -810,7 +841,9 @@ impl PreparedOperation {
             diagnostics: outcome.errors.first().map(|error| error.message.clone()),
             runtime_record: runtime.into(),
         })?;
-        records::write_json(&directory.join("manifest.json"), &index)?;
+        let path = records::job_index_path(self.run.id())?;
+        std::fs::create_dir_all(path.parent().unwrap_or(&path))?;
+        records::write_json(&path, &index)?;
         Ok(())
     }
 }
@@ -876,65 +909,6 @@ fn verify_collection(root: &Path, expected: &BTreeMap<PathBuf, String>) -> Resul
     }
     Ok(())
 }
-/// A pre-rename inode receipt proves which file this run created. Matching
-/// bytes alone never authorize adopting somebody else's existing file.
-fn verify_member_receipt(destination: &Path, hash: &str, intent: &Path) -> Result<()> {
-    let receipt: MemberExportReceipt =
-        serde_json::from_slice(&basecraft_ops::records::read_record(intent)?)?;
-    let metadata = std::fs::symlink_metadata(destination)?;
-    if !metadata.is_file()
-        || metadata.file_type().is_symlink()
-        || link_count(destination)? != 1
-        || receipt.schema != 1
-        || receipt.destination != destination
-        || receipt.hash != hash
-        || (receipt.device, receipt.inode) != identity(destination)?
-        || receipt.size != metadata.len()
-        || basecraft_io::hash_file(destination)? != hash
-    {
-        return Err(Error::Protocol(
-            "output_conflict: member ownership or bytes changed; repair refused".into(),
-        ));
-    }
-    Ok(())
-}
-
-/// Copy one validated collection member to a new file; never replaces one.
-fn export_member(source: &Path, destination: &Path, hash: &str, intent: &Path) -> Result<()> {
-    let parent = destination
-        .parent()
-        .ok_or_else(|| Error::Protocol("missing destination parent".into()))?;
-    let pending = tempfile::Builder::new()
-        .prefix(".basecraft-export-")
-        .tempfile_in(parent)?;
-    std::fs::copy(source, pending.path())?;
-    if basecraft_io::hash_file(pending.path())? != hash {
-        return Err(Error::Protocol("member changed during export".into()));
-    }
-    pending.as_file().sync_all()?;
-    let metadata = pending.as_file().metadata()?;
-    records::write_json(
-        intent,
-        &serde_json::to_value(MemberExportReceipt {
-            schema: 1,
-            destination: destination.to_path_buf(),
-            hash: hash.into(),
-            device: identity(pending.path())?.0,
-            inode: identity(pending.path())?.1,
-            size: metadata.len(),
-        })?,
-    )?;
-    basecraft_platform::atomic::rename_noreplace(pending.path(), destination).map_err(|error| {
-        if error.kind() == std::io::ErrorKind::AlreadyExists {
-            Error::Protocol("output_conflict: destination exists".into())
-        } else {
-            error.into()
-        }
-    })?;
-    basecraft_platform::files::sync_directory(parent)?;
-    Ok(())
-}
-
 fn export_collection(
     source: &Path,
     destination: &Path,

@@ -125,7 +125,15 @@
           ],
           "bootstrap_exports": true,
           "facts": {
-            "branch_lengths": "substitutions"
+            "branch_lengths": "substitutions",
+            "when": {
+              "test": "one_of",
+              "parameter": "model",
+              "values": [
+                "jc69",
+                "k2p"
+              ]
+            }
           }
         }
       },

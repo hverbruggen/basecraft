@@ -66,6 +66,10 @@ pub struct PluginInfo {
     pub id: String,
     pub version: String,
     pub operations: Vec<String>,
+    /// The interpreter the plugin runs in, such as "Python 3.12.4". None for a
+    /// plugin that runs no interpreter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interpreter: Option<String>,
 }
 
 /// A sequence snapshot: two Arrow IPC streams in shared memory.

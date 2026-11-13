@@ -14,7 +14,7 @@ fn place(labels: &[u32], choice: LabelPlacement) -> Op {
     }
 }
 
-fn displaced(session: &Session, tree: DocId) -> Vec<(u32, bool)> {
+fn displaced_now(session: &Session, tree: DocId) -> Vec<(u32, bool)> {
     let labels = session.tree(tree).unwrap().displaced_labels();
     labels.iter().map(|l| (l.id, l.exact)).collect()
 }
@@ -50,7 +50,7 @@ fn a_reroot_reports_each_displaced_label_and_whether_an_exact_clade_exists() {
         .map(|l| (l.id, l.label.as_str(), l.exact))
         .collect();
     assert_eq!(report, [(1, "All", true), (2, "AB", false)]);
-    assert_eq!(displaced(&session, tree), [(1, true), (2, false)]);
+    assert_eq!(displaced_now(&session, tree), [(1, true), (2, false)]);
 }
 
 #[test]
@@ -69,12 +69,12 @@ fn labels_are_placed_one_undo_step_at_a_time_and_replay() {
             .apply(tree, place(&[], LabelPlacement::Exact))
             .is_err()
     );
-    assert_eq!(displaced(&session, tree), [(1, true), (2, false)]);
+    assert_eq!(displaced_now(&session, tree), [(1, true), (2, false)]);
 
     session
         .apply(tree, place(&[1], LabelPlacement::Exact))
         .unwrap();
-    assert_eq!(displaced(&session, tree), [(2, false)]);
+    assert_eq!(displaced_now(&session, tree), [(2, false)]);
     assert!(
         session
             .apply(tree, place(&[1], LabelPlacement::Remove))
@@ -87,7 +87,7 @@ fn labels_are_placed_one_undo_step_at_a_time_and_replay() {
         outcome.notes,
         ["Label \"AB\" moved to the smallest clade holding its tips"]
     );
-    assert_eq!(displaced(&session, tree), []);
+    assert_eq!(displaced_now(&session, tree), []);
     let annotations = session.tree(tree).unwrap().annotations();
     assert_eq!(
         annotations[&2].tips.len(),
@@ -96,12 +96,12 @@ fn labels_are_placed_one_undo_step_at_a_time_and_replay() {
     );
 
     session.undo(tree).unwrap();
-    assert_eq!(displaced(&session, tree), [(2, false)]);
+    assert_eq!(displaced_now(&session, tree), [(2, false)]);
     session.undo(tree).unwrap();
-    assert_eq!(displaced(&session, tree), [(1, true), (2, false)]);
+    assert_eq!(displaced_now(&session, tree), [(1, true), (2, false)]);
     session.redo(tree).unwrap();
     session.redo(tree).unwrap();
-    assert_eq!(displaced(&session, tree), []);
+    assert_eq!(displaced_now(&session, tree), []);
 
     let report = records::replay(dir.path()).unwrap();
     assert!(report.ok(), "{:#?}", report.problems);
@@ -113,17 +113,17 @@ fn labels_are_placed_one_undo_step_at_a_time_and_replay() {
     drop(session);
     let mut reopened = Session::new(dir.path());
     let tree = reopened.open(&dir.path().join("t.nwk")).unwrap();
-    assert_eq!(displaced(&reopened, tree), []);
+    assert_eq!(displaced_now(&reopened, tree), []);
     assert_eq!(reopened.tree(tree).unwrap().annotations()[&2].tips.len(), 4);
 }
 
-#[test]
-fn a_reroot_keeps_labels_made_unrooted_on_their_surviving_split() {
-    crate::isolated_profile::isolate!();
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("t.nwk"), "((a,b),(c,d));\n").unwrap();
-    let mut session = Session::new(dir.path());
-    let tree = session.open(&dir.path().join("t.nwk")).unwrap();
+/// A tree written as `text`, labelled "AB" on a and b, then rooted on b:
+/// a and b now sit on either side of the root, while the split ab|cd
+/// survives as the clade c, d.
+fn rerooted_split(root: &std::path::Path, text: &str) -> (Session, DocId, Vec<DisplacedLabel>) {
+    std::fs::write(root.join("t.nwk"), text).unwrap();
+    let mut session = Session::new(root);
+    let tree = session.open(&root.join("t.nwk")).unwrap();
     let annotation = Some(CladeAnnotation::new(vec!["a".into(), "b".into()], "AB"));
     session
         .apply(tree, Op::TreeAnnotate { id: 1, annotation })
@@ -131,14 +131,45 @@ fn a_reroot_keeps_labels_made_unrooted_on_their_surviving_split() {
     let reroot = Op::TreeReroot {
         clade: vec!["b".into()],
     };
-    // a and b now sit on either side of the root, but the split ab|cd
-    // survives as the clade c, d: the label moves there and is not displaced.
-    assert_eq!(session.apply(tree, reroot).unwrap().displaced, []);
+    let displaced = session.apply(tree, reroot).unwrap().displaced;
+    (session, tree, displaced)
+}
+
+/// The tips the label marks now, and the tips it was made for.
+fn marked(session: &Session, tree: DocId) -> (Vec<String>, Vec<String>) {
     let doc = session.tree(tree).unwrap();
     let label = &doc.annotations()[&1];
-    let marked = doc.clade_tips(&label.clade).unwrap();
-    assert_eq!(marked.iter().collect::<Vec<_>>(), ["c", "d"]);
-    assert_eq!(label.tips.iter().collect::<Vec<_>>(), ["a", "b"]);
+    let now = doc.clade_tips(&label.clade).unwrap().into_iter().collect();
+    (now, label.tips.iter().cloned().collect())
+}
+
+#[test]
+fn on_a_tree_marked_unrooted_a_label_follows_its_surviving_split() {
+    crate::isolated_profile::isolate!();
+    let dir = tempfile::tempdir().unwrap();
+    let (session, tree, displaced) = rerooted_split(dir.path(), "[&U] ((a,b),(c,d));\n");
+    assert_eq!(displaced, []);
+    assert_eq!(
+        marked(&session, tree),
+        (vec!["c".into(), "d".into()], vec!["a".into(), "b".into()])
+    );
+}
+
+#[test]
+fn on_an_untagged_tree_the_user_is_asked_and_exact_offers_the_split() {
+    crate::isolated_profile::isolate!();
+    let dir = tempfile::tempdir().unwrap();
+    let (mut session, tree, displaced) = rerooted_split(dir.path(), "((a,b),(c,d));\n");
+    let report: Vec<_> = displaced.iter().map(|l| (l.id, l.exact)).collect();
+    assert_eq!(report, [(1, true)]);
+    session
+        .apply(tree, place(&[1], LabelPlacement::Exact))
+        .unwrap();
+    assert_eq!(displaced_now(&session, tree), []);
+    assert_eq!(
+        marked(&session, tree),
+        (vec!["c".into(), "d".into()], vec!["a".into(), "b".into()])
+    );
 }
 
 #[test]
@@ -166,7 +197,7 @@ fn removing_every_displaced_label_is_one_step_named_in_history() {
             .unwrap();
     assert!(history.contains("Label \"AB\" removed"), "{history}");
     session.undo(tree).unwrap();
-    assert_eq!(displaced(&session, tree), [(1, true), (2, false)]);
+    assert_eq!(displaced_now(&session, tree), [(1, true), (2, false)]);
     session.save(tree, None).unwrap();
     let report = records::replay(dir.path()).unwrap();
     assert!(report.ok(), "{:#?}", report.problems);

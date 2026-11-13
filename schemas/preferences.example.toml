@@ -23,7 +23,6 @@ orf_min_codons = 100
 alignment_insert = true
 
 [files]
-provenance = "portable"
 recovery = true
 
 [compute]

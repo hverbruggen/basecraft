@@ -61,11 +61,12 @@ pub struct RunRecord {
     pub schema: u32,
     pub operation: String,
     pub package_version: String,
-    pub package_digest: String,
-    pub descriptor_digest: String,
-    /// The managed runtime the plugin ran in; null for the system Python and
-    /// for host workflows.
-    pub runtime: Option<RunRuntime>,
+    /// The plugin package and its operation descriptor, by content. Null for
+    /// basecraft's own tools, such as a Sanger stage.
+    pub package_digest: Option<String>,
+    pub descriptor_digest: Option<String>,
+    /// Where the plugin ran.
+    pub environment: RunEnvironment,
     /// Caller label, such as `gui` or `mcp`.
     pub initiator: String,
     pub executor: String,
@@ -80,12 +81,55 @@ pub struct RunRecord {
     pub execution: Option<crate::plugin::ExecutionInfo>,
 }
 
-pub const RUN_RECORD_SCHEMA: u32 = 2;
+pub const RUN_RECORD_SCHEMA: u32 = 3;
 
-/// A managed plugin runtime, by content. No paths.
+impl RunRecord {
+    /// A record with nothing run yet: no package digests, environment,
+    /// inputs, settings, output or tool. Callers fill what they know.
+    pub fn new(operation: String, package_version: String, executor: String) -> Self {
+        Self {
+            schema: RUN_RECORD_SCHEMA,
+            operation,
+            package_version,
+            package_digest: None,
+            descriptor_digest: None,
+            environment: RunEnvironment::default(),
+            initiator: String::new(),
+            executor,
+            process_instance: String::new(),
+            inputs: BTreeMap::new(),
+            effective_parameters: Value::Null,
+            cpu_threads: 1,
+            stdout: String::new(),
+            stderr: String::new(),
+            tool: None,
+            execution: None,
+        }
+    }
+}
+
+/// What a run needs to be repeated in the same environment. No paths.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RunEnvironment {
+    /// As the plugin reported it, such as "Python 3.12.4". Null for host
+    /// workflows and plugins that run no interpreter.
+    pub interpreter: Option<String>,
+    /// The managed runtime the plugin ran in; null for the system Python and
+    /// for host workflows.
+    pub runtime: Option<RunRuntime>,
+}
+
+/// A managed plugin runtime: the conda specification it was made from and
+/// what was installed, by content.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RunRuntime {
+    pub channels: Vec<String>,
+    /// Conda packages and their version constraints.
+    pub dependencies: BTreeMap<String, String>,
+    pub pypi_dependencies: BTreeMap<String, String>,
+    /// Hash of the solved Pixi lock.
     pub lock_digest: String,
     pub manifest_digest: String,
     pub reported_versions: BTreeMap<String, String>,

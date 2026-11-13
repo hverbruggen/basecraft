@@ -1008,7 +1008,7 @@ impl qobject::GenomeController {
                 .zip(self.rust().doc)
                 .and_then(|(session, doc)| {
                     basecraft_viewmodel::alphabet::question(
-                        session.doc(doc).ok()?.alphabet(),
+                        &session.doc(doc).ok()?.alphabet(),
                         &crate::bridge::file_name(&path),
                     )
                 });

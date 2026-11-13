@@ -276,7 +276,7 @@ fn full_disk_journal_append_rolls_back_and_keeps_a_recoverable_prefix() {
     assert!(prefix.problem.is_none(), "{:?}", prefix.problem);
     std::fs::remove_file(filler).unwrap();
     let recovered = dir.path().join("recovered");
-    let outputs = records::recover(&root, &recovered).unwrap();
+    let outputs = records::recover(&root, &recovered, None).unwrap();
     assert!(
         std::fs::read_to_string(&outputs[0])
             .unwrap()
@@ -314,12 +314,14 @@ fn damaged_journal_recovery_names_the_salvage_and_never_skips_events() {
     torn.extend_from_slice(b"{\"v\":1,\"id\":\"incomplete");
     std::fs::write(&journal, &torn).unwrap();
     let strict = dir.path().join("strict");
-    let error = records::recover(&root, &strict).unwrap_err().to_string();
+    let error = records::recover(&root, &strict, None)
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("--verified-prefix"), "{error}");
     assert!(error.contains("3 verified journal events"), "{error}");
     assert!(!strict.exists());
     let salvaged = dir.path().join("salvaged");
-    let (outputs, problem) = records::recover_verified_prefix(&root, &salvaged).unwrap();
+    let (outputs, problem) = records::recover_verified_prefix(&root, &salvaged, None).unwrap();
     assert!(problem.unwrap().contains("torn"));
     assert!(
         std::fs::read_to_string(&outputs[0])
@@ -335,7 +337,7 @@ fn damaged_journal_recovery_names_the_salvage_and_never_skips_events() {
     lines[1] = &damaged;
     std::fs::write(&journal, format!("{}\n", lines.join("\n"))).unwrap();
     let partial = dir.path().join("partial");
-    let (outputs, problem) = records::recover_verified_prefix(&root, &partial).unwrap();
+    let (outputs, problem) = records::recover_verified_prefix(&root, &partial, None).unwrap();
     assert!(problem.unwrap().contains("checksum"));
     assert!(
         outputs.is_empty()

@@ -9,16 +9,7 @@ use std::path::{Path, PathBuf};
 
 fn edit(session: &mut Session, path: &Path, residue: &str) -> basecraft_ops::DocId {
     let doc = session.open(path).unwrap();
-    session
-        .apply(
-            doc,
-            Op::SeqReplace {
-                start: 0,
-                end: 1,
-                residues: residue.into(),
-            },
-        )
-        .unwrap();
+    session.apply(doc, Op::seq_replace(0, 1, residue)).unwrap();
     doc
 }
 
@@ -85,7 +76,7 @@ fn deleting_private_folders_keeps_index_history_and_recovery() {
     assert!(bundle.join("manifest.json").is_file());
     // The unsaved edit is recovered from the project.
     let recovered = root.join("recovered");
-    let outputs = records::recover(session.recovery_root(), &recovered).unwrap();
+    let outputs = records::recover(session.recovery_root(), &recovered, None).unwrap();
     let unsaved_copy = outputs
         .iter()
         .find(|p| p.ends_with("unsaved.fasta"))
@@ -118,14 +109,7 @@ fn recovery_writes_edits_not_copies() {
     assert!(!folder.join(".basecraft").exists());
     for position in 0..20 {
         session
-            .apply(
-                doc,
-                Op::SeqReplace {
-                    start: position,
-                    end: position + 1,
-                    residues: "C".into(),
-                },
-            )
+            .apply(doc, Op::seq_replace(position, position + 1, "C"))
             .unwrap();
     }
     let recovery = session.recovery_root().to_path_buf();
@@ -407,16 +391,7 @@ fn the_first_edit_in_a_folder_that_cannot_hold_recovery_is_refused() {
     std::fs::write(&file, b">a\nACGT\n").unwrap();
     let mut session = Session::recoverable(&folder).unwrap();
     let doc = session.open(&file).unwrap();
-    let error = session
-        .apply(
-            doc,
-            Op::SeqReplace {
-                start: 0,
-                end: 1,
-                residues: "G".into(),
-            },
-        )
-        .unwrap_err();
+    let error = session.apply(doc, Op::seq_replace(0, 1, "G")).unwrap_err();
     let basecraft_ops::Error::ReadOnlyFolder { folder: named, .. } = &error else {
         panic!("{error:?}");
     };
@@ -464,4 +439,26 @@ fn a_hard_link_in_a_project_subfolder_is_still_matched() {
     };
     assert_eq!(conflict.analyses[0].run, run.directory());
     assert_eq!(std::fs::read(&source).unwrap(), b">a\nACGT\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_basecraft_is_named_as_a_link() {
+    let Some(root) = isolated_profile::enter("a_symlinked_basecraft_is_named_as_a_link") else {
+        return;
+    };
+    let folder = root.join("linked");
+    std::fs::create_dir_all(root.join("elsewhere")).unwrap();
+    std::fs::create_dir(&folder).unwrap();
+    std::os::unix::fs::symlink(root.join("elsewhere"), folder.join(".basecraft")).unwrap();
+    let file = folder.join("gene.fasta");
+    std::fs::write(&file, b">a\nACGT\n").unwrap();
+    let mut session = Session::recoverable(&folder).unwrap();
+    let doc = session.open(&file).unwrap();
+    let error = session.apply(doc, Op::seq_replace(0, 1, "G")).unwrap_err();
+    assert!(error.to_string().contains("symbolic link"), "{error}");
+    assert_eq!(
+        std::fs::read_dir(root.join("elsewhere")).unwrap().count(),
+        0
+    );
 }

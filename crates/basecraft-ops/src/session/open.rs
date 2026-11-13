@@ -300,9 +300,9 @@ impl Session {
         if self.log.is_none() || self.storage_root == self.root || self.storage_root.is_dir() {
             return Ok(());
         }
-        let hidden = self.root.join(".basecraft");
-        let reason = if std::fs::symlink_metadata(&hidden).is_ok_and(|m| !m.is_dir()) {
-            "its .basecraft is a file that belongs to another program".to_owned()
+        let foreign = crate::records::input_evidence::foreign_basecraft(&self.root);
+        let reason = if let Some(reason) = foreign {
+            reason.to_owned()
         } else {
             match recovery_directory(&self.storage_root) {
                 Ok(()) => return Ok(()),
@@ -349,6 +349,7 @@ impl Session {
                 .push((slot.origin_bundle.clone(), origin.clone()));
         }
         record.document.clone_from(&slot.key);
+        record.run_root = Some(self.run_base(id)?);
         record.revision = format!("{}:{}:{}", self.id, id.0, slot.generation);
         record.unsaved = !slot.is_clean();
         if let Some(warning) = self.recovery_warning(id) {

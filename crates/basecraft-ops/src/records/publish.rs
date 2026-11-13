@@ -1,7 +1,6 @@
 //! Provenance publication from a session's document history.
 use crate::error::invalid;
 use crate::{Error, Result};
-use basecraft_platform::settings::ProvenancePolicy;
 use basecraft_protocol::provenance::Publication;
 use basecraft_protocol::{Actor, LogEntry, Op};
 use std::collections::BTreeMap;
@@ -10,12 +9,10 @@ use std::path::{Path, PathBuf};
 /// What publication reads from a session about one document.
 pub(crate) struct History<'a> {
     pub(crate) session: &'a str,
-    pub(crate) policy: ProvenancePolicy,
     pub(crate) tracked: bool,
     pub(crate) root: &'a Path,
     pub(crate) project: Option<&'a crate::project::Project>,
     pub(crate) storage_root: &'a Path,
-    pub(crate) local_root: &'a Path,
     pub(crate) events: Vec<LogEntry>,
     pub(crate) pending: &'a [LogEntry],
     pub(crate) key: &'a str,
@@ -35,7 +32,7 @@ impl History<'_> {
         snapshot: &crate::records::document_record::DocumentRecord,
     ) -> Result<()> {
         let _scope = crate::records::input_evidence::lock_in(self.project)?;
-        if !self.tracked || self.policy == ProvenancePolicy::None {
+        if !self.tracked {
             return Ok(());
         }
         let mut activity = self
@@ -63,28 +60,17 @@ impl History<'_> {
     ) -> Result<crate::documents::PreparedWrite> {
         use basecraft_protocol::provenance::{ArtifactRevision, Completeness, EditActivity};
         let _scope = crate::records::input_evidence::lock_in(self.project)?;
-        let bundle = match self.policy {
-            ProvenancePolicy::Portable => {
-                if let Some(hidden) =
-                    crate::records::analysis_store::ArtifactRun::for_result(target)?
-                {
-                    hidden
-                } else if let Some(bundle) = self
-                    .project
-                    .and_then(|project| project.provenance_bundle(target))
-                {
-                    bundle
-                } else {
-                    crate::records::provenance::companion(target)
-                }
-            }
-            ProvenancePolicy::LocalOnly => self.local_root.join(
-                basecraft_io::hash_bytes(target.as_os_str().as_encoded_bytes())
-                    .trim_start_matches("b3:"),
-            ),
-            ProvenancePolicy::None => {
-                return Ok(crate::documents::PreparedWrite::default());
-            }
+        let bundle = if let Some(hidden) =
+            crate::records::analysis_store::ArtifactRun::for_result(target)?
+        {
+            hidden
+        } else if let Some(bundle) = self
+            .project
+            .and_then(|project| project.provenance_bundle(target))
+        {
+            bundle
+        } else {
+            crate::records::provenance::companion(target)
         };
         std::fs::create_dir_all(bundle.join("artifacts"))?;
         let source_bundle = snapshot.and_then(|r| r.origins.first()).map_or_else(
@@ -483,11 +469,7 @@ impl History<'_> {
             .events
             .iter()
             .rev()
-            .find(|event| {
-                event.doc == self.key
-                    && matches!(&event.op,
-                Op::ToolRun { params, .. } if params["run_id"].as_str() == Some(run.id()))
-            })
+            .find(|event| event.doc == self.key && event.op.is_run(run.id()))
             .ok_or_else(|| invalid("analysis has no recorded activity"))?
             .clone();
         snapshot.publish_operation_activity(run, &activity)
@@ -506,23 +488,11 @@ impl History<'_> {
     ) -> Result<()> {
         use basecraft_protocol::provenance::{ArtifactRevision, Completeness, InputReference};
         let _scope = crate::records::input_evidence::lock_in(self.project)?;
-        if !self.tracked || self.policy == ProvenancePolicy::None {
+        if !self.tracked {
             return Ok(());
         }
-        let run = if self.policy == ProvenancePolicy::Portable {
-            Some(crate::records::ArtifactRun::create(path, &activity.id)?)
-        } else {
-            None
-        };
-        let bundle = run.as_ref().map_or_else(
-            || {
-                self.local_root.join(
-                    basecraft_io::hash_bytes(path.as_os_str().as_encoded_bytes())
-                        .trim_start_matches("b3:"),
-                )
-            },
-            |r| r.directory().to_path_buf(),
-        );
+        let run = crate::records::ArtifactRun::create(path, &activity.id)?;
+        let bundle = run.directory().to_path_buf();
         std::fs::create_dir_all(&bundle)?;
         let (reference, hash, size, logical_name) = if let Some((source, stamp, hash)) = source {
             let size = stamp.size;
@@ -588,15 +558,13 @@ impl History<'_> {
             extra: BTreeMap::from([("extraction".into(), serde_json::to_value(extraction)?)]),
         };
         crate::records::write_json(&bundle.join("input.json"), &input)?;
-        if let Some(run) = &run {
-            run.write_run(
-                basecraft_protocol::records::AnalysisRunStatus::Saved,
-                path.file_name()
-                    .and_then(|name| name.to_str())
-                    .map(str::to_owned),
-            )?;
-            crate::records::register(run)?;
-        }
+        run.write_run(
+            basecraft_protocol::records::AnalysisRunStatus::Saved,
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_owned),
+        )?;
+        crate::records::register(&run)?;
         let artifact = ArtifactRevision {
             id: format!("{}:source", activity.id),
             logical_name,
@@ -636,9 +604,7 @@ impl History<'_> {
             report_template_version: 2,
         };
         crate::records::publish(&bundle, &publication)?;
-        if let Some(run) = &run {
-            run.bind(path)?;
-        }
+        run.bind(path)?;
         Ok(())
     }
 }

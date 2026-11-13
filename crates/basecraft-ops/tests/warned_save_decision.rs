@@ -77,7 +77,7 @@ fn assert_recovery(session: &mut Session, root: &Path) {
     // Recovery writes into a new private folder that no analysis can refer to,
     // so the damaged ledger does not concern it. The retained journal
     // reconstructs exactly the accepted edit, not changed disk bytes.
-    let outputs = records::recover(session.recovery_root(), &root.join("recovered")).unwrap();
+    let outputs = records::recover(session.recovery_root(), &root.join("recovered"), None).unwrap();
     assert_eq!(std::fs::read(&outputs[0]).unwrap(), b">gene\nATGT\n");
 }
 

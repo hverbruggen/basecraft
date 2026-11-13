@@ -36,6 +36,18 @@ impl Project {
         &self.root
     }
 
+    /// What a file's run links are relative to: the root of `project` when it
+    /// holds the file, else the file's own folder.
+    pub fn base_of(project: Option<&Self>, file: &Path) -> crate::Result<PathBuf> {
+        match project.filter(|project| project.contains(file)) {
+            Some(project) => Ok(project.root.clone()),
+            None => std::path::absolute(file)?
+                .parent()
+                .map(Path::to_path_buf)
+                .ok_or_else(|| crate::error::invalid("the file has no folder")),
+        }
+    }
+
     /// Whether another clone of this project is alive, such as the project
     /// of an open session.
     pub fn in_use(&self) -> bool {

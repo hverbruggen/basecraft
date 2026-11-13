@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import mmap
 import os
+import platform
 import socket
 import sys
 from collections.abc import Callable
@@ -127,6 +128,11 @@ class Context:
                    for record in records]
             for name, records in raw.get("input_evidence", {}).items()
         }
+        #: The alphabet of each alignment or sequence input ("dna", "rna",
+        #: "protein", "unknown", "undetermined" or "mixed"), as the user or the
+        #: file stated it or the host guessed it. An input that lists the
+        #: alphabets it accepts gets only one of those.
+        self.alphabets: dict[str, str] = dict(raw.get("alphabets", {}))
 
     def input(self, name: str) -> str | None:
         """The one file bound to ``name``, or None when the binding is empty."""
@@ -161,13 +167,16 @@ class Context:
         return dict(record, path=stable) if stable else dict(record)
 
 
-def local_context(root, inputs: dict, outputs: dict, run_id: str = "local", snapshot=None) -> Context:
+def local_context(root, inputs: dict, outputs: dict, run_id: str = "local", snapshot=None,
+                  alphabets: dict | None = None) -> Context:
     """A context for calling a handler directly, as a plugin's own tests do.
     ``inputs`` maps bindings to lists of paths; ``outputs`` maps roles to
-    paths relative to ``root``."""
+    paths relative to ``root``; ``alphabets`` maps alignment and sequence
+    bindings to their alphabet."""
     return Context({"schema": PROTOCOL_VERSION, "operation": "local", "run_id": run_id, "run_root": str(root),
                     "inputs": inputs, "outputs": outputs, "cpu_threads": 1,
-                    "cancel_file": "cancel", "progress_file": "progress"}, snapshot)
+                    "cancel_file": "cancel", "progress_file": "progress",
+                    "alphabets": alphabets or {}}, snapshot)
 
 
 def _artifacts(context: Context) -> list[dict]:
@@ -278,7 +287,7 @@ class Plugin:
     def _dispatch(self, method: str | None, params: Any, fds: list[int]) -> Any:
         if method == "initialize":
             return {"protocol": PROTOCOL_VERSION, "id": self.id, "version": self.version,
-                    "operations": sorted(self._ops)}
+                    "operations": sorted(self._ops), "interpreter": "Python " + platform.python_version()}
         if method in ("ping", "shutdown"):
             return None
         if method == "query":

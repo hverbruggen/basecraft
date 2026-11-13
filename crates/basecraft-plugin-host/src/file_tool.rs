@@ -60,39 +60,59 @@ pub(crate) fn producer_support<'a>(
     descriptor: &'a basecraft_protocol::operation::OperationDescriptor,
     params: &serde_json::Value,
 ) -> Option<(&'a str, basecraft_protocol::SupportKind)> {
-    use basecraft_protocol::operation::ParameterCondition;
     descriptor
         .outputs
         .values()
         .flat_map(|output| &output.tree_support)
-        .find(|rule| match &rule.when {
-            None => true,
-            Some(ParameterCondition::Equals { parameter, value }) => {
-                params.get(parameter) == Some(value)
-            }
-            Some(ParameterCondition::Positive { parameter }) => params
-                .get(parameter)
-                .and_then(serde_json::Value::as_u64)
-                .is_some_and(|n| n > 0),
-        })
+        .find(|rule| rule.when.as_ref().is_none_or(|when| when.holds(params)))
         .map(|rule| (rule.name.as_str(), rule.kind))
 }
 
-/// Persist producer semantics only when the parsed tree has exactly one support
-/// field. Slash-separated external/combined values need their own verified order.
-pub(crate) fn write_support_sidecar(
-    tree: &Path,
-    name: &str,
-    kind: basecraft_protocol::SupportKind,
+/// What an output's trees' branch lengths measure, when the producer states
+/// it for runs with these parameters.
+pub(crate) fn stated_branch_lengths<'a>(
+    output: &'a basecraft_protocol::operation::OutputBinding,
+    params: &serde_json::Value,
+) -> Option<&'a basecraft_protocol::facts::BranchLengths> {
+    let facts = &output.facts;
+    facts
+        .branch_lengths
+        .as_ref()
+        .filter(|_| facts.when.as_ref().is_none_or(|when| when.holds(params)))
+}
+
+/// Write what the producer states about an output tree into its companion:
+/// the support semantics (only when it has exactly one support field;
+/// slash-separated values need their own verified order) and the
+/// branch-length meaning. None when nothing is stated.
+pub(crate) fn write_tree_companion(
+    path: &Path,
+    support: Option<(&str, basecraft_protocol::SupportKind)>,
+    branch_lengths: Option<&basecraft_protocol::facts::BranchLengths>,
 ) -> Result<Option<PathBuf>> {
-    let mut doc = basecraft_ops::files::load_tree(tree)?.doc;
-    if doc.supports().len() != 1 {
+    use basecraft_protocol::facts::{Fact, FactSource};
+    let mut doc = basecraft_ops::files::load_tree(path)?.doc;
+    let support = support.filter(|_| doc.supports().len() == 1);
+    if support.is_none() && branch_lengths.is_none() {
         return Ok(None);
     }
-    let old = doc.supports()[0].name.clone();
-    doc.rename_support(&old, name);
-    doc.set_support_kind(name, kind);
-    Ok(Some(basecraft_ops::files::save_tree_companion(tree, &doc)?))
+    if let Some((name, kind)) = support {
+        let old = doc.supports()[0].name.clone();
+        doc.rename_support(&old, name);
+        doc.set_support_kind(name, kind);
+    }
+    if let Some(meaning) = branch_lengths {
+        doc.restore_branch_lengths(Some(Fact {
+            value: meaning.clone(),
+            source: FactSource::Stated,
+        }));
+    }
+    Ok(Some(basecraft_ops::files::save_tree_companion(path, &doc)?))
+}
+
+pub(crate) fn is_tree(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("nwk"))
 }
 
 pub(crate) struct CancellationRegistration(String);

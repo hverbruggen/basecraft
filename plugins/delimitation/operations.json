@@ -60,7 +60,8 @@
           "min": 1,
           "max": 1,
           "alphabets": [
-            "nucleotide"
+            "dna",
+            "rna"
           ]
         }
       },
@@ -425,7 +426,8 @@
           "min": 0,
           "max": 1,
           "alphabets": [
-            "nucleotide"
+            "dna",
+            "rna"
           ]
         }
       },
@@ -549,7 +551,8 @@
           "min": 0,
           "max": 1,
           "alphabets": [
-            "nucleotide"
+            "dna",
+            "rna"
           ]
         }
       },
@@ -826,7 +829,8 @@
           "min": 0,
           "max": 1,
           "alphabets": [
-            "nucleotide"
+            "dna",
+            "rna"
           ]
         }
       },
@@ -934,7 +938,8 @@
           "min": 0,
           "max": 1,
           "alphabets": [
-            "nucleotide"
+            "dna",
+            "rna"
           ]
         }
       },
@@ -1082,7 +1087,8 @@
           "min": 1,
           "max": 1,
           "alphabets": [
-            "nucleotide"
+            "dna",
+            "rna"
           ]
         }
       },
@@ -1204,7 +1210,8 @@
           "min": 1,
           "max": 1,
           "alphabets": [
-            "nucleotide"
+            "dna",
+            "rna"
           ]
         },
         "mapping": {
@@ -1219,7 +1226,8 @@
           "min": 0,
           "max": 1,
           "alphabets": [
-            "nucleotide"
+            "dna",
+            "rna"
           ]
         }
       },
@@ -1373,7 +1381,8 @@
           "min": 1,
           "max": 1,
           "alphabets": [
-            "nucleotide"
+            "dna",
+            "rna"
           ]
         },
         "groups": {

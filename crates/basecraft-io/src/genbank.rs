@@ -15,6 +15,9 @@ use crate::error::parse_error;
 pub struct Record {
     pub name: String,
     pub molecule: String,
+    /// What the LOCUS line states the residues are: see [`locus_alphabet`].
+    /// Not written back; `molecule` and the residues are.
+    pub alphabet: Option<basecraft_protocol::facts::Alphabet>,
     pub circular: bool,
     pub division: String,
     pub date: String,
@@ -197,6 +200,28 @@ fn unterminated(line: usize) -> crate::Error {
     )
 }
 
+/// The alphabet a LOCUS line states (D12): "aa" means protein; after "bp",
+/// a molecule type naming DNA or RNA (mRNA included). None when it states
+/// neither, so the residues decide.
+pub fn locus_alphabet(line: &str) -> Option<basecraft_protocol::facts::Alphabet> {
+    use basecraft_protocol::facts::Alphabet;
+    let parts: Vec<&str> = line.split_whitespace().collect();
+    match parts.iter().position(|p| *p == "bp" || *p == "aa") {
+        Some(i) if parts[i] == "aa" => Some(Alphabet::Protein),
+        Some(i) => {
+            let molecule = parts.get(i + 1)?.to_ascii_lowercase();
+            if molecule.contains("rna") {
+                Some(Alphabet::Rna)
+            } else if molecule.contains("dna") {
+                Some(Alphabet::Dna)
+            } else {
+                None
+            }
+        }
+        None => None,
+    }
+}
+
 fn parse_locus(line: &str) -> Record {
     let parts: Vec<&str> = line.split_whitespace().collect();
     let name = parts.get(1).copied().unwrap_or("").to_string();
@@ -216,6 +241,7 @@ fn parse_locus(line: &str) -> Record {
     Record {
         name,
         molecule: after_bp.first().copied().unwrap_or("DNA").to_string(),
+        alphabet: locus_alphabet(line),
         circular,
         division: after_bp.get(1).copied().unwrap_or("UNK").to_string(),
         date: after_bp

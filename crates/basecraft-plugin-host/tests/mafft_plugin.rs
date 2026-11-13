@@ -81,21 +81,24 @@ fn realigns_with_mafft_and_logs_the_run() {
     let runs = common::tool_run_events(&session, doc);
     assert_eq!(runs.len(), 1);
     assert!(matches!(&runs[0].actor, Actor::Tool { tool, .. } if tool == "mafft"));
-    let Op::ToolRun { params, .. } = &runs[0].op else {
+    let Op::ToolRun {
+        run: Some(link), ..
+    } = &runs[0].op
+    else {
         unreachable!()
     };
-    assert_eq!(params["run_id"], outcome.run_id.as_str());
-    assert_eq!(params["operation"], "basecraft.mafft/align@1");
+    assert_eq!(link.id, outcome.run_id.as_str());
+    assert_eq!(
+        common::run_record(&session, &runs[0]).operation,
+        "basecraft.mafft/align@1"
+    );
     // The opened result inherits the producing activity, including tool
     // version, execution arguments and citations; reopen/export must retain it.
     let result_record = session.document_record(out).unwrap();
     let producing = result_record
         .events
         .iter()
-        .find(|event| {
-            matches!(&event.op,
-        Op::ToolRun { params, .. } if params["run_id"] == outcome.run_id)
-        })
+        .find(|event| event.op.is_run(&outcome.run_id))
         .unwrap();
     assert_eq!(producing.actor, runs[0].actor);
     let methods = result_record.report().unwrap();

@@ -8,7 +8,6 @@
 #[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
 mod isolated_profile;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
 use basecraft_ops::Session;
 use basecraft_ops::metadata::{self, ImportOptions, SheetImport};
@@ -168,18 +167,18 @@ fn validate(
             "test",
         )
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(120);
-    let outcome = loop {
-        let outcome = jobs.get(&accepted.run_id).unwrap();
-        if outcome.state.terminal() {
-            break outcome;
-        }
-        assert!(Instant::now() < deadline, "job did not finish");
-        std::thread::sleep(Duration::from_millis(20));
-    };
+    let outcome = jobs.wait(&accepted.run_id, None, &|| false).unwrap();
+    let folder = outcome.evidence.clone().unwrap();
     let outcome = serde_json::to_value(outcome).unwrap();
-    submission::record_validation(root, Path::new(name), &outcome)
-        .unwrap_or_else(|e| panic!("{e}: {outcome:#}"))
+    let summary = submission::record_validation(root, Path::new(name), &outcome)
+        .unwrap_or_else(|e| panic!("{e}: {outcome:#}"));
+    // The validation leaves exactly one tool run: the runner's, in its run.
+    let manifest = std::fs::read(Path::new(&folder).join("manifest.json")).unwrap();
+    let publication: basecraft_protocol::provenance::Publication =
+        serde_json::from_slice(&manifest).unwrap();
+    let tool_runs = publication.events.iter().filter_map(|e| e.op.tool_run());
+    assert_eq!(tool_runs.filter(|(_, run)| run.is_some()).count(), 1);
+    summary
 }
 
 fn its_edits() -> Vec<SubmissionEdit> {

@@ -202,17 +202,32 @@ pub fn visible(root: &Path) -> Vec<String> {
 
 /// The parameters of every `tool.run` the session recorded for `doc`.
 pub fn tool_runs(session: &Session, doc: DocId) -> Vec<Value> {
-    session
-        .document_record(doc)
-        .unwrap()
-        .events
+    tool_run_events(session, doc)
         .iter()
-        .cloned()
-        .filter_map(|event| match event.op {
-            basecraft_protocol::Op::ToolRun { params, .. } => Some(params),
-            _ => None,
+        .map(|event| {
+            let basecraft_protocol::Op::ToolRun { params, run, .. } = &event.op else {
+                unreachable!()
+            };
+            let record = run_record(session, event);
+            let mut view = serde_json::Map::new();
+            view.insert("run_id".into(), run.as_ref().unwrap().id.clone().into());
+            view.insert("requested".into(), params.clone());
+            view.insert("effective".into(), record.effective_parameters);
+            Value::Object(view)
         })
         .collect()
+}
+
+/// The run record a `tool.run` entry points at.
+pub fn run_record(
+    session: &Session,
+    event: &basecraft_protocol::LogEntry,
+) -> basecraft_protocol::records::RunRecord {
+    let basecraft_protocol::Op::ToolRun { run: Some(run), .. } = &event.op else {
+        panic!("the tool run names no run folder")
+    };
+    let folder = session.root().join(&run.folder);
+    serde_json::from_slice(&std::fs::read(folder.join("execution.json")).unwrap()).unwrap()
 }
 
 /// Every `tool.run` the session recorded for `doc`.

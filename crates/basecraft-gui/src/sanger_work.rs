@@ -268,19 +268,15 @@ fn execute(
                     let source = &draft.inputs[0];
                     let mut caller = basecraft_plugin_host::sanger_calls::SangerCaller::default()
                         .with_task_cancellation();
-                    let mut called =
+                    let started =
                         caller.start_captured(session.captured_inputs()?.remove(0), threshold)?;
-                    while called.is_none() {
-                        if cancelled.load(Ordering::Acquire) {
-                            caller.cancel()?;
-                            check(cancelled)?;
-                        }
-                        called = caller.poll()?;
-                        if called.is_none() {
-                            std::thread::sleep(std::time::Duration::from_millis(20));
-                        }
-                    }
-                    let called = called.ok_or("Caller returned no draft")?;
+                    let called = if let Some(called) = started {
+                        called
+                    } else {
+                        let called = caller.wait(cancelled);
+                        check(cancelled)?;
+                        called?
+                    };
                     let mut alternate = SangerReview::from_draft(called.draft, &source.path)?;
                     alternate.use_captured_inputs(session.captured_inputs()?)?;
                     alternate.attach_operation_run(&called.run)?;

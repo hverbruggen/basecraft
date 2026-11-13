@@ -16,7 +16,7 @@ use std::{
 };
 
 /// The counting fixture, installed; `edit` may change its contract first.
-fn registry(root: &Path, edit: impl FnOnce(&mut Value)) -> Registry {
+fn installed(root: &Path, edit: impl FnOnce(&mut Value)) -> Registry {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/registry-plugin");
     let package = root.join("package");
@@ -35,6 +35,21 @@ fn registry(root: &Path, edit: impl FnOnce(&mut Value)) -> Registry {
     };
     registry::install(&config, &package).unwrap();
     Registry::load(&config).unwrap()
+}
+
+/// The fixture installed, and a project folder holding `file` with `bytes`.
+fn setup(
+    edit: impl FnOnce(&mut Value),
+    file: &str,
+    bytes: &[u8],
+) -> (tempfile::TempDir, Registry, PathBuf) {
+    let temp = tempfile::tempdir().unwrap();
+    let registry = installed(temp.path(), edit);
+    let project = temp.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    let project = project.canonicalize().unwrap();
+    std::fs::write(project.join(file), bytes).unwrap();
+    (temp, registry, project)
 }
 
 /// A request to count the bytes of `file`, relative to the project.
@@ -78,12 +93,7 @@ fn digests(outcome: &OperationOutcome) -> Vec<String> {
 
 #[test]
 fn a_moved_run_folder_resolves_and_its_request_runs_again_to_the_same_hashes() {
-    let temp = tempfile::tempdir().unwrap();
-    let registry = registry(temp.path(), |_| {});
-    let project = temp.path().join("project");
-    std::fs::create_dir(&project).unwrap();
-    let project = project.canonicalize().unwrap();
-    std::fs::write(project.join("input.txt"), b"ab\nc\n").unwrap();
+    let (_temp, registry, project) = setup(|_| {}, "input.txt", b"ab\nc\n");
     let request = count("input.txt");
     let first = run(&registry, &project, request);
     let folder = PathBuf::from(first.evidence.clone().unwrap());
@@ -102,26 +112,66 @@ fn a_moved_run_folder_resolves_and_its_request_runs_again_to_the_same_hashes() {
     assert_eq!(std::fs::read(original).unwrap(), b"ab\nc\n");
     assert!(folder.join(&source.run_directory).is_dir());
 
-    let again = run(&registry, &moved, recorded_request(&folder).unwrap());
+    let again = run(
+        &registry,
+        &moved,
+        recorded_request(&folder, &registry).unwrap(),
+    );
     assert_eq!(digests(&again), digests(&first));
+
+    // A different installed package is refused, not run with other results.
+    let other = tempfile::tempdir().unwrap();
+    let changed = installed(other.path(), |contract| {
+        contract["operations"][0]["description"] = Value::from("Changed");
+    });
+    let refused = recorded_request(&folder, &changed).unwrap_err().to_string();
+    assert!(refused.contains("plugin_changed"), "{refused}");
+}
+
+#[test]
+fn a_file_run_leaves_one_tool_run_that_points_at_its_run_record() {
+    let (_temp, registry, project) = setup(|_| {}, "input.txt", b"abc\n");
+    let outcome = run(&registry, &project, count("input.txt"));
+    let folder = PathBuf::from(outcome.evidence.clone().unwrap());
+    let publication: basecraft_protocol::provenance::Publication =
+        serde_json::from_slice(&std::fs::read(folder.join("manifest.json")).unwrap()).unwrap();
+    let tool_runs: Vec<_> = publication
+        .events
+        .iter()
+        .filter_map(|event| match &event.op {
+            basecraft_protocol::Op::ToolRun { params, run, .. } => Some((params, run)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(tool_runs.len(), 1);
+    let (params, link) = tool_runs[0];
+    // The entry holds the tool's own parameters; the rest is in the run record.
+    assert_eq!(*params, count("input.txt").parameters);
+    assert_eq!(link.as_ref().unwrap().id, outcome.run_id);
+    let record: RunRecord =
+        serde_json::from_slice(&std::fs::read(folder.join("execution.json")).unwrap()).unwrap();
+    assert_eq!(record.effective_parameters, outcome.effective_parameters);
+    assert!(
+        record
+            .environment
+            .interpreter
+            .unwrap()
+            .starts_with("Python 3.")
+    );
 }
 
 #[test]
 fn an_input_with_the_wrong_alphabet_is_refused_before_launch() {
-    let temp = tempfile::tempdir().unwrap();
-    let registry = registry(temp.path(), |contract| {
-        contract["operations"][0]["inputs"]["sources"] = json!({
-            "view":"aligned_fasta","media_type":"text/x-fasta","min":1,"max":8,
-            "alphabets":["nucleotide"]
-        });
-    });
-    let project = temp.path().join("project");
-    std::fs::create_dir(&project).unwrap();
-    std::fs::write(
-        project.join("proteins.fasta"),
+    let (_temp, registry, project) = setup(
+        |contract| {
+            contract["operations"][0]["inputs"]["sources"] = json!({
+                "view":"aligned_fasta","media_type":"text/x-fasta","min":1,"max":8,
+                "alphabets":["dna"]
+            });
+        },
+        "proteins.fasta",
         b">a\nMKWVTFISLLFLFSSAYS\n>b\nMKWVTFISLLFLFSSAYS\n",
-    )
-    .unwrap();
+    );
     let request = count("proteins.fasta");
     let mut jobs = JobManager::default();
     let policy = SessionPolicy::new(&project, true).unwrap();
@@ -131,9 +181,30 @@ fn an_input_with_the_wrong_alphabet_is_refused_before_launch() {
         .to_string();
     assert!(
         error.contains(
-            "Count bytes needs a nucleotide alignment, and proteins.fasta holds protein sequences"
+            "Count bytes needs DNA sequences, and proteins.fasta holds protein sequences"
         ),
         "{error}"
     );
     assert!(!project.join(".basecraft").exists());
+}
+
+/// A cancel request while a caller waits ends the run as cancelled quickly.
+#[test]
+fn a_cancel_during_a_wait_ends_the_run() {
+    let (_temp, registry, project) = setup(|_| {}, "input.txt", b"abc\n");
+    let mut request = count("input.txt");
+    request.parameters = serde_json::from_str(r#"{"mode":"slow"}"#).unwrap();
+    let mut jobs = JobManager::default();
+    let policy = SessionPolicy::new(&project, true).unwrap();
+    let accepted = jobs
+        .submit(&registry, request, policy, "cancel test")
+        .unwrap();
+    let started = Instant::now();
+    let outcome = jobs
+        .wait(&accepted.run_id, None, &|| {
+            started.elapsed() > Duration::from_millis(300)
+        })
+        .unwrap();
+    assert_eq!(outcome.state, RuntimeState::Cancelled, "{outcome:?}");
+    assert!(started.elapsed() < Duration::from_secs(5));
 }

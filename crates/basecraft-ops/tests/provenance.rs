@@ -205,16 +205,16 @@ fn sidecar_failure_reports_partial_save_and_keeps_pending_recovery() {
     assert!(!session.recovery_root().join("pending-save.json").exists());
 }
 
+/// History has no off switch: without recovery, nothing goes to the private
+/// folders, and the history still goes beside the file.
 #[test]
-fn no_recovery_and_no_provenance_policy_leave_no_durable_lineage() {
-    use basecraft_platform::settings::{Change, ProvenancePolicy, SettingsStore};
+fn without_recovery_history_still_goes_beside_the_file_and_nothing_private() {
+    use basecraft_platform::settings::{Change, SettingsStore};
     crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let paths = paths(dir.path());
-    let store = SettingsStore::new(paths.preferences());
-    store.update(Change::Recovery(false)).unwrap();
-    store
-        .update(Change::Provenance(ProvenancePolicy::None))
+    SettingsStore::new(paths.preferences())
+        .update(Change::Recovery(false))
         .unwrap();
     let file = dir.path().join("gene.fasta");
     std::fs::write(&file, ">gene\nACGT\n").unwrap();
@@ -224,7 +224,7 @@ fn no_recovery_and_no_provenance_policy_leave_no_durable_lineage() {
     session.save(doc, None).unwrap();
     assert!(!paths.state.join("recovery").exists());
     assert!(!paths.state.join("provenance").exists());
-    assert!(!records::companion(&file).exists());
+    assert!(records::companion(&file).join("manifest.json").is_file());
 }
 
 #[test]
@@ -335,13 +335,13 @@ fn unsaved_recovery_reconstructs_exact_state_without_cache() {
     }
     assert!(recovery.is_dir());
     let destination = dir.path().join("restored");
-    let restored = basecraft_ops::records::recover(&recovery, &destination).unwrap();
+    let restored = basecraft_ops::records::recover(&recovery, &destination, None).unwrap();
     assert_eq!(restored, vec![destination.join("gene.fasta")]);
     assert_eq!(
         std::fs::read_to_string(&restored[0]).unwrap(),
         ">gene\nATGT\n"
     );
-    assert!(basecraft_ops::records::recover(&recovery, &destination).is_err());
+    assert!(basecraft_ops::records::recover(&recovery, &destination, None).is_err());
 }
 
 #[test]
@@ -418,7 +418,7 @@ fn recovery_rejects_traversal_and_skips_corrupt_retained_candidates() {
             .collect::<String>();
         std::fs::write(&journal, mutated).unwrap();
         assert!(
-            basecraft_ops::records::recover(recovery, &dir.path().join("output"))
+            basecraft_ops::records::recover(recovery, &dir.path().join("output"), None)
                 .unwrap_err()
                 .to_string()
                 .contains("unsafe")
@@ -434,7 +434,8 @@ fn recovery_rejects_traversal_and_skips_corrupt_retained_candidates() {
         "corrupt",
     )
     .unwrap();
-    let outputs = basecraft_ops::records::recover(recovery, &dir.path().join("output")).unwrap();
+    let outputs =
+        basecraft_ops::records::recover(recovery, &dir.path().join("output"), None).unwrap();
     assert_eq!(std::fs::read(&outputs[0]).unwrap(), b">gene\nATGT\n");
 }
 
@@ -709,31 +710,94 @@ fn provenance_works_with_recovery_disabled_and_preserves_frozen_reports() {
     assert!(!paths.state.join("recovery").exists());
 }
 
-#[test]
-fn methods_use_frozen_plugin_metadata_and_reject_unmatched_contribution() {
-    crate::isolated_profile::isolate!();
+/// A run's settings, tool and citations reach methods from its run record,
+/// wherever in the project the result sits. Returns the result's record.
+fn methods_come_from_the_run_record(folder: &str) -> records::DocumentRecord {
     let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("gene.fasta");
-    let output = dir.path().join("result.fasta");
+    let project = basecraft_ops::project::Project::new(dir.path()).unwrap();
+    let place = dir.path().join(folder);
+    std::fs::create_dir_all(&place).unwrap();
+    let file = place.join("gene.fasta");
+    let output = place.join("result.fasta");
     std::fs::write(&file, ">gene\nACGT\n").unwrap();
     std::fs::write(&output, ">gene\nACGT\n").unwrap();
-    let mut session = Session::recoverable_with_paths(dir.path(), &paths(dir.path())).unwrap();
+    let mut session = Session::recoverable_with_paths(dir.path(), &paths(dir.path()))
+        .unwrap()
+        .in_project(Some(project.clone()));
     let doc = session.open(&file).unwrap();
     let snapshot = session.document_record(doc).unwrap();
     let input_hash = session.snapshot_file(&file).unwrap();
-    let inputs = vec![("gene.fasta".into(), input_hash)];
-    session.record_tool_run(doc, basecraft_protocol::Actor::Tool { tool:"RecordedTool".into(),version:"1.2".into() }, basecraft_ops::session::ToolRunRecord::new(("example", "analyze"), serde_json::json!({"_execution":{"methods_template":"example.v1","methods":{"description":"Sequences were processed","citations":["A recorded citation"]},"resolved_parameters":{"seed":42}}}), &inputs, std::slice::from_ref(&output))).unwrap();
+    let inputs = vec![(
+        format!("{folder}/gene.fasta")
+            .trim_start_matches('/')
+            .to_string(),
+        input_hash,
+    )];
+    // How the tool ran is in the run folder's record, not in the parameters.
+    let run = records::ArtifactRun::create(&output, "01M79RUNRECORDMETHODS0000").unwrap();
+    let execution = basecraft_protocol::plugin::ExecutionInfo {
+        argv: Vec::new(),
+        resolved_parameters: serde_json::Map::from_iter([("seed".to_string(), 42.into())]),
+        preprocessing: Vec::new(),
+        environment: std::collections::BTreeMap::default(),
+        methods_template: Some("example.v1".into()),
+        methods: Some(Box::new(basecraft_protocol::plugin::MethodsInfo {
+            description: "Sequences were processed".into(),
+            citations: vec!["A recorded citation".into()],
+        })),
+    };
+    let record = basecraft_protocol::records::RunRecord {
+        execution: Some(execution),
+        ..basecraft_protocol::records::RunRecord::new(
+            "example/analyze@1".into(),
+            "1".into(),
+            "example".into(),
+        )
+    };
+    records::write_json(&run.directory().join("execution.json"), &record).unwrap();
+    let actor = basecraft_protocol::Actor::Tool {
+        tool: "RecordedTool".into(),
+        version: "1.2".into(),
+    };
+    let tool = basecraft_ops::session::ToolRunRecord::new(
+        ("example", "analyze"),
+        serde_json::Value::Null,
+        &inputs,
+        std::slice::from_ref(&output),
+    );
+    let tool = basecraft_ops::session::ToolRunRecord {
+        run: Some(&run),
+        ..tool
+    };
+    session.record_tool_run(doc, actor, tool).unwrap();
     session
         .publish_analysis_snapshot(doc, &output, &inputs, &snapshot)
         .unwrap();
-    let publication = records::inspect(&output, None).unwrap();
-    let mut record = basecraft_ops::records::DocumentRecord::from_publication(&publication);
-    let report = record.report().unwrap();
-    assert!(report.methods.contains("RecordedTool (version 1.2)"));
-    assert!(report.methods.contains("seed = 42"));
+    drop(session);
+    // Read as `basecraft report` reads it, with the project chosen.
+    let report = records::DocumentRecord::saved_report(&output, Some(&project)).unwrap();
+    assert!(
+        report.methods.contains("RecordedTool (version 1.2)"),
+        "{}",
+        report.methods
+    );
+    assert!(report.methods.contains("seed = 42"), "{}", report.methods);
     assert_eq!(report.citations, vec!["A recorded citation"]);
+    records::DocumentRecord::from_file(&output, Some(&project)).unwrap()
+}
+
+#[test]
+fn methods_use_frozen_plugin_metadata_and_reject_unmatched_contribution() {
+    crate::isolated_profile::isolate!();
+    let mut record = methods_come_from_the_run_record("");
     record.effective[0].id = "missing".into();
     assert!(record.report().is_err());
+}
+
+#[test]
+fn methods_find_the_run_record_of_a_result_in_a_project_subfolder() {
+    crate::isolated_profile::isolate!();
+    methods_come_from_the_run_record("genes");
 }
 
 #[test]
@@ -799,7 +863,7 @@ fn typing_bursts_undo_together_and_every_keystroke_recovers() {
         .count();
     assert_eq!(inserts, 6, "each keystroke is journaled");
     let destination = dir.path().join("restored");
-    let restored = records::recover(&recovery, &destination).unwrap();
+    let restored = records::recover(&recovery, &destination, None).unwrap();
     let gene = restored.iter().find(|p| p.ends_with("gene.fasta")).unwrap();
     assert_eq!(std::fs::read_to_string(gene).unwrap(), ">gene\nACGTTTC\n");
 }

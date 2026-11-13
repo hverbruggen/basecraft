@@ -533,7 +533,7 @@ fn tree_mcp_routes_share_hidden_storage() {
     }
     let record = client.call("document_record", json!({"document":0}));
     let record = record["result"]["structuredContent"].to_string();
-    assert_eq!(record.matches("params / run id").count(), 4, "{record}");
+    assert_eq!(record.matches("run / id").count(), 4, "{record}");
     // The descriptor, not a route-specific list, decides accepted settings.
     for (tool, parameters) in [
         ("basecraft.fasttree.tree.v1", json!({"threads":1})),

@@ -2,7 +2,7 @@
 //! lifetime; explicit cancellation and manager drop own worker teardown.
 use std::collections::BTreeMap;
 use std::sync::{
-    Arc, Mutex, Weak,
+    Arc, Condvar, Mutex, Weak,
     atomic::{AtomicBool, Ordering},
 };
 use std::thread::JoinHandle;
@@ -15,7 +15,6 @@ use basecraft_protocol::{
     },
     plugin::InvokeResult,
 };
-use serde_json::json;
 
 struct PendingProposals {
     result: InvokeResult,
@@ -59,6 +58,44 @@ struct Job {
     started: std::time::Instant,
     worker: Mutex<Option<JoinHandle<()>>>,
     proposals: Mutex<Option<PendingProposals>>,
+    // Set when the worker thread stops; a waiter blocks on it.
+    stopped: (Mutex<bool>, Condvar),
+}
+
+/// How soon a waiter sees a cancel request that comes from outside, such as
+/// Ctrl-C. Everything else wakes it at once.
+const CANCEL_CHECK: std::time::Duration = std::time::Duration::from_millis(100);
+
+impl Job {
+    fn stop(&self) {
+        *self
+            .stopped
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = true;
+        self.stopped.1.notify_all();
+    }
+
+    /// Block until the worker stops, at most `CANCEL_CHECK`; whether it has.
+    fn wait_for_worker(&self) -> bool {
+        let (stopped, wake) = &self.stopped;
+        let stopped = stopped
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (stopped, _) = wake
+            .wait_timeout_while(stopped, CANCEL_CHECK, |stopped| !*stopped)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *stopped
+    }
+}
+
+/// Signals the worker's stop even when the worker panics.
+struct StopOnDrop(Arc<Job>);
+
+impl Drop for StopOnDrop {
+    fn drop(&mut self) {
+        self.0.stop();
+    }
 }
 
 #[derive(Default)]
@@ -194,8 +231,27 @@ impl JobManager {
         session: &mut basecraft_ops::Session,
         interrupted: &dyn Fn() -> bool,
     ) -> Result<OperationOutcome> {
+        self.wait(id, Some(session), interrupted)
+    }
+
+    /// Block until the job is terminal, driving `session` between waits when
+    /// the job needs it. `interrupted` requests cancellation. A worker that
+    /// stops without a final state is an error, not a wait.
+    pub fn wait(
+        &self,
+        id: &str,
+        mut session: Option<&mut basecraft_ops::Session>,
+        interrupted: &dyn Fn() -> bool,
+    ) -> Result<OperationOutcome> {
+        let job = self
+            .jobs
+            .get(id)
+            .ok_or_else(|| Error::Protocol("unknown job in this session".into()))?;
+        let mut stopped = false;
         loop {
-            self.poll_session(session);
+            if let Some(session) = session.as_deref_mut() {
+                self.poll_session(session);
+            }
             if interrupted() {
                 self.cancel(id)?;
             }
@@ -203,7 +259,13 @@ impl JobManager {
             if outcome.state.terminal() {
                 return Ok(outcome);
             }
-            std::thread::sleep(std::time::Duration::from_millis(25));
+            if stopped {
+                return Err(Error::Protocol(format!(
+                    "job {id} stopped without a final state ({:?})",
+                    outcome.state
+                )));
+            }
+            stopped = job.wait_for_worker();
         }
     }
     pub fn target_document(&self, id: &str) -> Option<basecraft_ops::DocId> {
@@ -395,10 +457,21 @@ impl JobManager {
             let snapshot_path = job.prepared.run.artifact("snapshot.arrow-pair");
             let activity = snapshot_path.and_then(|path| {
                 let hash = basecraft_io::hash_file(&path)?;
-                let key = basecraft_ops::records::relative(session.root(),&path)?;
-                let params = json!({"requested":job.prepared.request.parameters,"effective":outcome.effective_parameters,
-                    "operation":job.prepared.operation.id,"pins":outcome.pins,"initiator":job.prepared.initiator,"run_id":outcome.run_id});
-                session.record_tool_run(target.doc, basecraft_protocol::Actor::Plugin {id:job.prepared.operation.package.manifest.id.clone(),version:job.prepared.operation.package.manifest.version.clone()}, basecraft_ops::session::ToolRunRecord { edits: Some(&edit_ids[..]), ..basecraft_ops::session::ToolRunRecord::new((&job.prepared.operation.package.manifest.id,&job.prepared.operation.descriptor.implementation), params, &[(key,hash)], &[]) })?;
+                let key = basecraft_ops::records::relative(session.root(), &path)?;
+                let inputs = [(key, hash)];
+                let (_, record) = job.prepared.tool_run(&inputs, &[]);
+                let plugin = basecraft_protocol::Actor::Plugin {
+                    id: job.prepared.operation.package.manifest.id.clone(),
+                    version: job.prepared.operation.package.manifest.version.clone(),
+                };
+                session.record_tool_run(
+                    target.doc,
+                    plugin,
+                    basecraft_ops::session::ToolRunRecord {
+                        edits: Some(&edit_ids[..]),
+                        ..record
+                    },
+                )?;
                 Ok(())
             });
             if let Err(error) = activity {
@@ -517,11 +590,13 @@ impl JobManager {
             started: std::time::Instant::now(),
             worker: Mutex::new(None),
             proposals: Mutex::new(None),
+            stopped: (Mutex::new(false), Condvar::new()),
         });
         let task = job.clone();
         let worker = std::thread::Builder::new()
             .name(format!("operation-{}", outcome.run_id))
             .spawn(move || {
+                let _stop = StopOnDrop(task.clone());
                 let result =
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| execute(&task)));
                 if result.is_err() {
@@ -891,10 +966,7 @@ fn finalize_document(
             .document_record(target.doc)?
             .events
             .iter()
-            .any(|event| {
-                matches!(&event.op, basecraft_protocol::Op::ToolRun { params, .. }
-                if params["run_id"].as_str() == Some(outcome.run_id.as_str()))
-            });
+            .any(|event| event.op.is_run(&outcome.run_id));
         if !recorded {
             record_document_run(job, target, outcome, session)?;
         }
@@ -975,34 +1047,22 @@ fn record_document_run(
             "input document was closed or replaced before the run was recorded".into(),
         ));
     }
-    let manifest = &job.prepared.operation.package.manifest;
-    let (actor, params) = job.prepared.tool_activity(outcome)?;
     let outputs: Vec<_> = outcome
         .artifacts
         .iter()
         .map(|artifact| std::path::PathBuf::from(&artifact.path))
         .collect();
-    let operation = (
-        manifest.id.as_str(),
-        job.prepared.operation.descriptor.implementation.as_str(),
-    );
-    let inputs = std::slice::from_ref(&target.input);
-    if target.saved.is_some() {
-        session.record_tool_run(
-            target.doc,
-            actor,
-            basecraft_ops::session::ToolRunRecord {
-                referenced: true,
-                ..basecraft_ops::session::ToolRunRecord::new(operation, params, inputs, &outputs)
-            },
-        )?;
-    } else {
-        session.record_tool_run(
-            target.doc,
-            actor,
-            basecraft_ops::session::ToolRunRecord::new(operation, params, inputs, &outputs),
-        )?;
-    }
+    let (actor, record) = job
+        .prepared
+        .tool_run(std::slice::from_ref(&target.input), &outputs);
+    session.record_tool_run(
+        target.doc,
+        actor,
+        basecraft_ops::session::ToolRunRecord {
+            referenced: target.saved.is_some(),
+            ..record
+        },
+    )?;
     Ok(())
 }
 

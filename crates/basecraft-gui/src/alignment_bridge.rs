@@ -990,7 +990,7 @@ impl qobject::AlignmentController {
                 .zip(self.rust().doc)
                 .and_then(|(session, doc)| {
                     basecraft_viewmodel::alphabet::question(
-                        session.alignment(doc).ok()?.alphabet(),
+                        &session.alignment(doc).ok()?.alphabet(),
                         &crate::bridge::file_name(&path),
                     )
                 });

@@ -41,6 +41,7 @@ fn context() -> basecraft_protocol::operation::InvocationContext {
         cancel_file: "cancel".into(),
         progress_file: "progress".into(),
         input_evidence: std::collections::BTreeMap::new(),
+        alphabets: std::collections::BTreeMap::new(),
     }
 }
 
@@ -55,6 +56,7 @@ fn record(dir: &Path) -> std::path::PathBuf {
     let rec = basecraft_io::genbank::Record {
         name: "orftest".into(),
         molecule: "DNA".into(),
+        alphabet: None,
         circular: false,
         division: "SYN".into(),
         date: "10-OCT-2026".into(),

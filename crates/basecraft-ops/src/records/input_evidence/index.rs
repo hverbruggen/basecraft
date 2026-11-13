@@ -26,6 +26,19 @@ fn home(source: &Path, project: Option<&Path>) -> Option<(PathBuf, String)> {
     Some((source.parent()?.into(), name.into()))
 }
 
+/// Why basecraft will not use `folder`'s `.basecraft`, when it is there but
+/// is not an ordinary folder. A symbolic link is not followed.
+pub(crate) fn foreign_basecraft(folder: &Path) -> Option<&'static str> {
+    let metadata = std::fs::symlink_metadata(folder.join(".basecraft")).ok()?;
+    if metadata.file_type().is_symlink() {
+        Some("its .basecraft is a symbolic link, which basecraft does not follow")
+    } else if metadata.is_dir() {
+        None
+    } else {
+        Some("its .basecraft is a file that belongs to another program")
+    }
+}
+
 fn index_root(home: &Path) -> PathBuf {
     home.join(".basecraft").join("analysis-index")
 }
@@ -285,11 +298,8 @@ fn update(
             home.display()
         ))
     };
-    let hidden = home.join(".basecraft");
-    if std::fs::symlink_metadata(&hidden).is_ok_and(|m| !m.is_dir()) {
-        return Err(unwritable(
-            "its .basecraft is a file that belongs to another program".into(),
-        ));
+    if let Some(reason) = foreign_basecraft(home) {
+        return Err(unwritable(reason.into()));
     }
     let result = (|| -> Result<()> {
         folder(&index_root(home))?;
@@ -426,12 +436,11 @@ pub(super) fn select(
     }
     let mut selected = BTreeSet::new();
     for (home, entry) in places {
-        let hidden = home.join(".basecraft");
-        if std::fs::symlink_metadata(&hidden).is_ok_and(|m| !m.is_dir()) {
+        if let Some(reason) = foreign_basecraft(&home) {
             inspection.issue(
                 super::InspectionCode::RegistryUnavailable,
-                &hidden,
-                "this .basecraft belongs to another program; analyses of files here cannot be checked",
+                &home.join(".basecraft"),
+                format!("{reason}; analyses of files here cannot be checked"),
             );
             continue;
         }

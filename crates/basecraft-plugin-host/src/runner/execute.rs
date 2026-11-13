@@ -3,7 +3,7 @@ use super::{
     Arc, AtomicBool, Error, InvokeResult, Ordering, PluginArtifact, PluginProcess,
     PreparedOperation, Result, Value, contract, link_count, records,
 };
-use basecraft_protocol::records::{RUN_RECORD_SCHEMA, RunRecord, RunRuntime};
+use basecraft_protocol::records::{RunEnvironment, RunRecord, RunRuntime};
 
 impl PreparedOperation {
     pub fn execute(&self, cancelled: Arc<AtomicBool>) -> Result<InvokeResult> {
@@ -30,6 +30,7 @@ impl PreparedOperation {
             &self.policy.credentials_for(&self.operation),
         )?;
         self.lifecycle.configure(&mut process, cancelled);
+        let interpreter = process.info.interpreter.clone();
         let mut context = self.context.clone();
         context.cpu_threads = permit.threads();
         let effective = Value::Object(crate::compute::parameters_for(
@@ -89,18 +90,23 @@ impl PreparedOperation {
         }
         let (stdout, stderr) = process.captured_output();
         let mut record = self.run_record(effective, context.cpu_threads)?;
-        record.runtime = self
-            .operation
-            .package
-            .manifest
-            .managed_runtime
-            .as_ref()
-            .map(|runtime| RunRuntime {
-                lock_digest: runtime.0.lock_digest.clone(),
-                manifest_digest: runtime.0.manifest_digest.clone(),
-                reported_versions: runtime.0.reported_versions.clone(),
-                executable_digests: runtime.0.executable_digests.clone(),
-            });
+        let manifest = &self.operation.package.manifest;
+        record.environment = RunEnvironment {
+            interpreter,
+            runtime: manifest
+                .managed_runtime
+                .as_ref()
+                .zip(manifest.runtime.as_ref())
+                .map(|(runtime, spec)| RunRuntime {
+                    channels: spec.channels.clone(),
+                    dependencies: spec.dependencies.clone(),
+                    pypi_dependencies: spec.pypi_dependencies.clone(),
+                    lock_digest: runtime.0.lock_digest.clone(),
+                    manifest_digest: runtime.0.manifest_digest.clone(),
+                    reported_versions: runtime.0.reported_versions.clone(),
+                    executable_digests: runtime.0.executable_digests.clone(),
+                }),
+        };
         record.stdout = stdout;
         record.stderr = stderr;
         if let Ok(result) = &result {
@@ -222,27 +228,28 @@ impl PreparedOperation {
             }
             record.run_directory = relative(&record.run_directory)?;
         }
+        let manifest = &self.operation.package.manifest;
         Ok(RunRecord {
-            schema: RUN_RECORD_SCHEMA,
-            operation: self.operation.id.clone(),
-            package_version: self.operation.package.manifest.version.clone(),
-            package_digest: self.operation.package.digest.clone(),
-            descriptor_digest: self.operation.descriptor_digest.clone(),
-            runtime: None,
+            package_digest: Some(self.operation.package.digest.clone()),
+            descriptor_digest: Some(self.operation.descriptor_digest.clone()),
             initiator: self.initiator.clone(),
-            executor: self.operation.package.manifest.id.clone(),
             process_instance: basecraft_platform::process_instance().into(),
             inputs,
             effective_parameters,
             cpu_threads,
-            stdout: String::new(),
-            stderr: String::new(),
-            tool: None,
-            execution: None,
+            ..RunRecord::new(
+                self.operation.id.clone(),
+                manifest.version.clone(),
+                manifest.id.clone(),
+            )
         })
     }
 
     fn write_run_record(&self, record: &RunRecord) -> Result<()> {
+        self.tool
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone_from(&record.tool);
         records::write_json(
             &self.run.artifact("execution.json")?,
             &serde_json::to_value(record)?,

@@ -21,7 +21,6 @@ from basecraft.plugin import Plugin
 
 plugin = Plugin("basecraft.fasttree", "0.1.0")
 
-NUCLEOTIDES = set("ACGTUNRYKMSWBDHV")
 # Model name to FastTree's flag; JC and JTT are its defaults, so they need none.
 DNA_MODELS = {"GTR": ["-gtr"], "JC": []}
 PROTEIN_MODELS = {"LG": ["-lg"], "WAG": ["-wag"], "JTT": []}
@@ -62,13 +61,6 @@ def read_fasta(path: Path) -> list[tuple[str, str]]:
     return [(name, "".join(parts)) for name, parts in records]
 
 
-def is_nucleotide(records: list[tuple[str, str]]) -> bool:
-    letters = [c for _, seq in records for c in seq.upper() if c.isalpha()]
-    if not letters:
-        return True
-    return sum(c in NUCLEOTIDES for c in letters) / len(letters) > 0.9
-
-
 def quote(name: str) -> str:
     """A name as Newick writes it: quoted when it holds reserved characters."""
     if name and not re.search(r"[()\[\]',:;=\s]", name):
@@ -84,7 +76,11 @@ def tree(params, context):
     records = read_fasta(source)
     if len(records) < 3:
         raise ValueError("FastTree needs at least three sequences")
-    nucleotide = is_nucleotide(records)
+    # The host refuses an unknown, undetermined or mixed alignment first (D12).
+    alphabet = context.alphabets.get("alignment", "unknown")
+    if alphabet not in ("dna", "rna", "protein"):
+        raise ValueError("FastTree needs to know whether the alignment is DNA or protein")
+    nucleotide = alphabet in ("dna", "rna")
     models = DNA_MODELS if nucleotide else PROTEIN_MODELS
     model = params.get("model") or ("GTR" if nucleotide else "LG")
     if model not in models:
