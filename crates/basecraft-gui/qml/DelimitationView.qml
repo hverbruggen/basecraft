@@ -111,6 +111,8 @@ FocusScope {
         implicitWidth: Math.max(50, buttonMetrics.advanceWidth(text) + leftPadding + rightPadding)
     }
     signal openFile(string path)
+    // A tree refused as not ultrametric, to smooth with penalised likelihood (D17).
+    signal smoothingRequested(string path)
     DelimitationController { id: ctl }
     // Ordering, flips and style are the tree editor's own edits, kept with
     // this workspace.
@@ -145,6 +147,13 @@ FocusScope {
             workingText: ctl.message || "Running species analysis"
             onDetailsRequested: detailsDialog.open()
             onCancelRequested: ctl.cancel_job()
+        }
+        AppButton {
+            objectName: "makeUltrametric"
+            visible: ctl.smoothing_tree.length > 0 && ctl.message_kind === "error"
+            text: "Make the tree ultrametric with penalised likelihood…"
+            Layout.leftMargin: 8
+            onClicked: doc.smoothingRequested(ctl.smoothing_tree)
         }
         RowLayout {
             objectName: "thresholdCut"

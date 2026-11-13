@@ -2261,6 +2261,7 @@ ApplicationWindow {
                                 overviewEnabled: window.overviewEnabled
                                 notificationSink: provenance
                                 onOpenFile: (path) => window.openPath(path)
+                                onSmoothingRequested: path => operationWindow.dialog().showOperation(shell.project_dir.length ? shell.project_dir : shell.local_file_path(shell.parent_folder_url(path)), path, false, "basecraft.sanderson/date_tree@1")
                                 onDirtyChanged: documentOpens.set_dirty(index, dirty)
                             }
                         }

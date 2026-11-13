@@ -31,6 +31,8 @@ pub mod qobject {
         #[qproperty(QString, message)]
         #[qproperty(QString, message_kind)]
         #[qproperty(QString, message_details)]
+        /// The tree a "not ultrametric" refusal offers to smooth (D17), else "".
+        #[qproperty(QString, smoothing_tree)]
         #[qproperty(bool, dirty)]
         /// The copy offer for an edit a read-only folder refused (D13), or "".
         #[qproperty(QString, refused_edit)]
@@ -258,6 +260,9 @@ pub struct DelimitationRust {
     message: QString,
     message_kind: QString,
     message_details: QString,
+    smoothing_tree: QString,
+    /// The tree the latest analysis or attach used.
+    analysis_tree: String,
     dirty: bool,
     refused_edit: QString,
     busy: bool,
@@ -307,6 +312,8 @@ impl Default for DelimitationRust {
             message: QString::default(),
             message_kind: QString::default(),
             message_details: QString::default(),
+            smoothing_tree: QString::default(),
+            analysis_tree: String::new(),
             dirty: false,
             refused_edit: QString::default(),
             busy: false,
@@ -407,6 +414,13 @@ impl qobject::DelimitationController {
     }
 
     fn fail(mut self: Pin<&mut Self>, text: &str) {
+        // A tree that is not ultrametric: offer to smooth it (D17).
+        let offer = if text.contains(basecraft_delimitation::time_tree::SMOOTHING_OPERATION) {
+            QString::from(&self.rust().analysis_tree)
+        } else {
+            QString::default()
+        };
+        self.as_mut().set_smoothing_tree(offer);
         let summary = crate::bridge::error_summary(text);
         let details = if summary == text.trim() {
             ""
@@ -695,6 +709,7 @@ impl qobject::DelimitationController {
         if !self.as_mut().workspace_available() {
             return false;
         }
+        self.as_mut().rust_mut().analysis_tree = path.to_string();
         let result = (|| -> Result<_, Box<dyn std::error::Error>> {
             let mut p = PathBuf::from(path.to_string());
             if let Some((session, doc)) = self.rust().session.as_ref().zip(self.rust().doc) {
@@ -713,7 +728,7 @@ impl qobject::DelimitationController {
             // A manual cut works on the tree as drawn, so it needs ultrametric
             // ages but not a rooting assertion or a bifurcating tree. The
             // tolerance allows Newick lengths printed to six decimals.
-            let time = basecraft_delimitation::time_tree::validate(&tree, true, 1e-4, false);
+            let time = basecraft_delimitation::time_tree::validate(&tree, true, false);
             let hash = basecraft_io::hash_bytes(&bytes);
             Ok((p, tree, time, hash, bytes))
         })();
@@ -1735,6 +1750,7 @@ impl qobject::DelimitationController {
         if self.rust().busy {
             return;
         }
+        self.as_mut().rust_mut().analysis_tree = input.to_string();
         let display_job = method.to_string().starts_with("display_");
         let display_rooted = method.to_string() == "display_upgma";
         let result = (|| -> Result<_, String> {

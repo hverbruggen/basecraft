@@ -382,6 +382,16 @@ fn run(
         .get(request.tree_index)
         .ok_or("selected tree index outside file")?;
     let tree = basecraft_docs::TreeDoc::from_parsed(&parsed.name, parsed);
+    // The request can state the tree rooted; otherwise the tree's own
+    // reading decides: its tag, or two clades at the base (D18).
+    let rooting = tree.rooting();
+    let rooted = request.rooted || rooting.value == basecraft_protocol::facts::Rooting::Rooted;
+    if !request.rooted && rooted && rooting.source == basecraft_protocol::facts::FactSource::Guessed
+    {
+        result.job.diagnostics.push(
+            "the tree has two clades at its base and no rooting tag, so it was read as rooted (a guess; state it with tree.set_rooting)".into(),
+        );
+    }
     result
         .metrics
         .insert("tree_count".into(), trees.len().into());
@@ -403,13 +413,12 @@ fn run(
             result.metrics.insert(
                 "tips".into(),
                 serde_json::to_value(basecraft_delimitation::time_tree::substitution_tips(
-                    &tree,
-                    request.rooted,
+                    &tree, rooted,
                 )?)?,
             );
         }
         "ptp" | "mptp" => {
-            basecraft_delimitation::time_tree::substitution_tips(&tree, request.rooted)?;
+            basecraft_delimitation::time_tree::substitution_tips(&tree, rooted)?;
             let groups: Vec<std::collections::BTreeSet<String>> = serde_json::from_value(
                 request
                     .parameters
@@ -436,9 +445,8 @@ fn run(
             }
         }
         "validate_time_tree" | "manual_cut" => {
-            let time =
-                basecraft_delimitation::time_tree::validate(&tree, request.rooted, 1e-8, true)?;
-            result.job.diagnostics.clone_from(&time.diagnostics);
+            let time = basecraft_delimitation::time_tree::validate(&tree, rooted, true)?;
+            result.job.diagnostics.extend(time.diagnostics.clone());
             if request.method == "manual_cut" {
                 let threshold = request
                     .parameters
@@ -469,8 +477,7 @@ fn run(
                 .insert("time_tree".into(), serde_json::to_value(time)?);
         }
         "relative_time" => {
-            let converted =
-                basecraft_delimitation::time_tree::convert(&tree, request.rooted, 10_000)?;
+            let converted = basecraft_delimitation::time_tree::convert(&tree, rooted, 10_000)?;
             if !converted.converged {
                 return Err("relative-time optimization did not converge".into());
             }
@@ -490,8 +497,7 @@ fn run(
                 .insert("conversion".into(), serde_json::to_value(converted)?);
         }
         "gmyc_single" | "gmyc_multiple" | "gmyc_exhaustive" => {
-            let mut time =
-                basecraft_delimitation::time_tree::validate(&tree, request.rooted, 1e-8, true)?;
+            let mut time = basecraft_delimitation::time_tree::validate(&tree, rooted, true)?;
             let clamp = request
                 .parameters
                 .get("reference_age_clamp")
@@ -503,12 +509,7 @@ fn run(
             let mut merged = BTreeMap::new();
             let tree = match basecraft_delimitation::gmyc::collapse_zero_age(full, &time)? {
                 Some((collapsed, groups)) if !clamp => {
-                    time = basecraft_delimitation::time_tree::validate(
-                        &collapsed,
-                        request.rooted,
-                        1e-8,
-                        true,
-                    )?;
+                    time = basecraft_delimitation::time_tree::validate(&collapsed, rooted, true)?;
                     let tips: usize = groups.values().map(std::collections::BTreeSet::len).sum();
                     time.diagnostics.push(format!(
                         "{tips} tips in {} zero-age tree clades (zero distance within each clade); each clade was fitted as one tip and its members restored; no exact sequence identity is inferred",

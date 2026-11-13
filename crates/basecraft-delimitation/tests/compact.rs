@@ -42,7 +42,7 @@ fn compact_substitution_fixture_passes_rooted_method_validation() {
     assert_eq!(tips.keys().cloned().collect::<BTreeSet<_>>(), expected);
     // Rooting and units are assertions supplied by the workflow, not Newick metadata.
     assert!(basecraft_delimitation::time_tree::substitution_tips(&tree, false).is_err());
-    assert!(basecraft_delimitation::time_tree::validate(&tree, true, 1e-12, true).is_err());
+    assert!(basecraft_delimitation::time_tree::validate(&tree, true, true).is_err());
     let polytomy = basecraft_docs::TreeDoc::from_newick(
         "polytomy",
         include_str!("../../../testdata/fixtures/compact/species-delimitation/time.nwk"),

@@ -113,7 +113,7 @@ fn display_tree(session: &Session, doc: DocId) -> Result<DisplayTree, String> {
         return Err("Choose a file containing exactly one display tree".into());
     }
     let tree = basecraft_docs::tree::TreeDoc::from_parsed(&trees[0].name, &trees[0]);
-    let time = basecraft_delimitation::time_tree::validate(&tree, true, 1e-4, false).ok();
+    let time = basecraft_delimitation::time_tree::validate(&tree, true, false).ok();
     Ok(DisplayTree {
         path,
         tree,

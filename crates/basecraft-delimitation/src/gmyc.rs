@@ -1033,7 +1033,7 @@ mod tests {
     fn root_age_ties_keep_null_and_admissible_mixed_partitions() {
         for newick in ["((a:1,b:1):0,c:1);", "(((a:0.2,b:0.2):0.8,c:1):0,d:1);"] {
             let tree = TreeDoc::from_newick("root tie", newick).unwrap();
-            let time = crate::time_tree::validate(&tree, true, 1e-8, true).unwrap();
+            let time = crate::time_tree::validate(&tree, true, true).unwrap();
             let fit = single(&tree, &time, None).unwrap();
             assert_eq!(fit.profile.len(), if time.tips.len() == 3 { 1 } else { 2 });
             assert!(fit.profile.iter().all(|fit| fit.log_likelihood.is_finite()));
@@ -1047,7 +1047,7 @@ mod tests {
             "(((a:0.2,b:0.2):0,c:0.2):0.8,(d:0.1,e:0.1):0.9);",
         )
         .unwrap();
-        let time = crate::time_tree::validate(&tree, true, 1e-8, true).unwrap();
+        let time = crate::time_tree::validate(&tree, true, true).unwrap();
         let prepared = prepare(&tree, &time, &roots_at(&tree, &time, 0.2)).unwrap();
         let likelihood = prepared.likelihood([1.0, 1.0]).unwrap();
         // After the root: (coal,div)=(0,2),(2,1),(6,1),(8,0),
@@ -1071,7 +1071,7 @@ mod tests {
             "(((b:0,a:0):0,'c d':0):2,((e:1,f:1):0.5,(g:0,h:0):1.5):0.5);",
         )
         .unwrap();
-        let time = crate::time_tree::validate(&tree, true, 1e-8, true).unwrap();
+        let time = crate::time_tree::validate(&tree, true, true).unwrap();
         assert!(validate_events(&time).is_err());
         let (collapsed, merged) = collapse_zero_age(&tree, &time).unwrap().unwrap();
         let tips: Vec<_> = collapsed
@@ -1082,11 +1082,11 @@ mod tests {
         assert_eq!(tips, ["a", "e", "f", "g"]);
         assert_eq!(merged["a"], ["a", "b", "c d"].map(String::from).into());
         assert_eq!(merged["g"], ["g", "h"].map(String::from).into());
-        let time = crate::time_tree::validate(&collapsed, true, 1e-8, true).unwrap();
+        let time = crate::time_tree::validate(&collapsed, true, true).unwrap();
         validate_events(&time).unwrap();
         assert!((time.root_height - 2.0).abs() < 1e-12);
         let tidy = TreeDoc::from_newick("t", "((a:1,b:1):1,(c:2,d:2):0);").unwrap();
-        let time = crate::time_tree::validate(&tidy, true, 1e-8, true).unwrap();
+        let time = crate::time_tree::validate(&tidy, true, true).unwrap();
         assert!(collapse_zero_age(&tidy, &time).unwrap().is_none());
     }
     #[test]
@@ -1096,9 +1096,9 @@ mod tests {
             "(((b:0,'a quoted':0):0,c:0):2,((e:1,f:1):0.5,(g:0,h:0):1.5):0.5);",
         )
         .unwrap();
-        let original = crate::time_tree::validate(&tree, true, 1e-8, true).unwrap();
+        let original = crate::time_tree::validate(&tree, true, true).unwrap();
         let (collapsed, _) = collapse_zero_age(&tree, &original).unwrap().unwrap();
-        let retained = crate::time_tree::validate(&collapsed, true, 1e-8, true).unwrap();
+        let retained = crate::time_tree::validate(&collapsed, true, true).unwrap();
         assert_eq!(original.root_height, retained.root_height);
         let positive: Vec<_> = original
             .events
@@ -1140,11 +1140,11 @@ mod tests {
         let short =
             TreeDoc::from_newick("short", "((a:0.000000001,b:0.000000001):0.999999999,c:1);")
                 .unwrap();
-        let time = crate::time_tree::validate(&short, true, 1e-8, true).unwrap();
+        let time = crate::time_tree::validate(&short, true, true).unwrap();
         assert!(collapse_zero_age(&short, &time).unwrap().is_none());
         let all_zero = TreeDoc::from_newick("zero", "((a:0,b:0):0,c:0);").unwrap();
         assert!(
-            crate::time_tree::validate(&all_zero, true, 1e-8, true)
+            crate::time_tree::validate(&all_zero, true, true)
                 .unwrap_err()
                 .0
                 .contains("positive finite root height")
@@ -1158,7 +1158,7 @@ mod tests {
             "(((a:0.15,b:0.15):0.05,c:0.2):0.8,(d:0.1,e:0.1):0.9);",
         )
         .unwrap();
-        let time = crate::time_tree::validate(&tree, true, 1e-8, true).unwrap();
+        let time = crate::time_tree::validate(&tree, true, true).unwrap();
         let fit = |workers| {
             rayon::ThreadPoolBuilder::new()
                 .num_threads(workers)
@@ -1197,7 +1197,7 @@ mod tests {
             "(((a:0.2,b:0.2):0,c:0.2):0.8,(d:0.1,e:0.1):0.9);",
         )
         .unwrap();
-        let time = crate::time_tree::validate(&tree, true, 1e-8, true).unwrap();
+        let time = crate::time_tree::validate(&tree, true, true).unwrap();
         let roots = [
             tree.node(time.tips["a"]).parent.unwrap(),
             tree.node(time.tips["d"]).parent.unwrap(),
@@ -1222,7 +1222,7 @@ mod tests {
             "(((a:0.2,b:0.2):0.8,c:1):0,d:1);",
         ] {
             let tree = TreeDoc::from_newick("nested", newick).unwrap();
-            let time = crate::time_tree::validate(&tree, true, 1e-8, true).unwrap();
+            let time = crate::time_tree::validate(&tree, true, true).unwrap();
             assert!(single(&tree, &time, None).is_ok());
             for error in [
                 multiple(&tree, &time, 100, None).unwrap_err(),
@@ -1237,7 +1237,7 @@ mod tests {
             "(((a:0.199999999,b:0.199999999):0.000000001,c:0.2):0.8,(d:0.1,e:0.1):0.9);",
         ] {
             let tree = TreeDoc::from_newick("supported", newick).unwrap();
-            let time = crate::time_tree::validate(&tree, true, 1e-8, true).unwrap();
+            let time = crate::time_tree::validate(&tree, true, true).unwrap();
             assert!(multiple(&tree, &time, 100, None).is_ok());
             assert!(exhaustive(&tree, &time, 100, None).is_ok());
         }
@@ -1255,7 +1255,7 @@ mod tests {
     fn reference_versions_report_distinct_summary_conventions() {
         let tree =
             TreeDoc::from_newick("fixture", "((a:0.1,b:0.1):0.9,(c:0.2,d:0.2):0.8);").unwrap();
-        let time = crate::time_tree::validate(&tree, true, 1e-8, true).unwrap();
+        let time = crate::time_tree::validate(&tree, true, true).unwrap();
         let mut fit = single(&tree, &time, None).unwrap();
         assert_eq!(fit.lr_degrees_of_freedom, 2);
         let old = fit.lr_p_value;
@@ -1279,7 +1279,7 @@ mod tests {
             include_str!("../../../testdata/fixtures/delimitation/gmyc-ladder.nwk"),
         )
         .unwrap();
-        let time = crate::time_tree::validate(&tree, true, 1e-8, true).unwrap();
+        let time = crate::time_tree::validate(&tree, true, true).unwrap();
         let fit = single(&tree, &time, None).unwrap();
         assert!(
             fit.warnings
@@ -1296,7 +1296,7 @@ mod tests {
         // equidistant, so UPGMA emits a zero-length internal branch.
         let fit = |newick: &str| {
             let tree = TreeDoc::from_newick("tie", newick).unwrap();
-            let time = crate::time_tree::validate(&tree, true, 1e-8, true).unwrap();
+            let time = crate::time_tree::validate(&tree, true, true).unwrap();
             let fit = single(&tree, &time, None).unwrap();
             let best = &fit.profile[fit.best];
             let groups: BTreeSet<_> = groups(&tree, &time, best).into_iter().collect();
@@ -1317,7 +1317,7 @@ mod tests {
     fn analytic_plugin_rates_and_waiting_likelihood() {
         let tree =
             TreeDoc::from_newick("fixture", "((a:0.1,b:0.1):0.9,(c:0.2,d:0.2):0.8);").unwrap();
-        let time = crate::time_tree::validate(&tree, true, 1e-8, true).unwrap();
+        let time = crate::time_tree::validate(&tree, true, true).unwrap();
         let roots = roots_at(&tree, &time, 0.2);
         let prepared = prepare(&tree, &time, &roots).unwrap();
         let l = prepared.likelihood([1.0, 1.0]).unwrap();
@@ -1347,7 +1347,7 @@ mod tests {
                 ),
             )
             .unwrap();
-            let time = crate::time_tree::validate(&tree, true, 1e-8, true).unwrap();
+            let time = crate::time_tree::validate(&tree, true, true).unwrap();
             let one = rayon::ThreadPoolBuilder::new()
                 .num_threads(1)
                 .build()
