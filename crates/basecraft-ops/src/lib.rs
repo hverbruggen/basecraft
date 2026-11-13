@@ -10,6 +10,7 @@ pub mod project;
 pub mod records;
 pub mod renames;
 pub mod requests;
+pub mod sanger_commands;
 pub mod sanger_review;
 pub mod session;
 pub mod submission;

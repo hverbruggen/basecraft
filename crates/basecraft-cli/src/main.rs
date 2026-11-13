@@ -4,6 +4,7 @@ mod delimitation;
 mod mcp;
 mod metadata;
 mod operations;
+mod sanger;
 mod save;
 mod submission;
 
@@ -58,6 +59,12 @@ enum Command {
     },
     /// Run one tool on files: input files in, new result files out.
     Run(operations::RunArgs),
+    /// Sanger reads: start a review from a read's calls, decide columns,
+    /// export the consensus.
+    Sanger {
+        #[command(subcommand)]
+        action: sanger::SangerCommand,
+    },
     /// Inspect versioned installed operations without executing plugins.
     Operations {
         #[command(subcommand)]
@@ -296,6 +303,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Command::Plugins { action } => operations::plugins(action)?,
         Command::Operations { action } => operations::operations(action)?,
         Command::Run(args) => operations::run_files(args)?,
+        Command::Sanger { action } => sanger::run(action, project.as_ref(), save_options)?,
         Command::Metadata { action } => metadata::run(action, save_options)?,
         Command::Submission { action } => submission::run(action, save_options)?,
         Command::History { file, json } => {

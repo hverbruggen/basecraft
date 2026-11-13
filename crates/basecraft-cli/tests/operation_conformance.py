@@ -195,6 +195,42 @@ def main():
         finally:
             client.close()
         record("Sanger CLI/MCP edits, common history, undo, redo and save")
+
+        # Sanger review decisions as commands (D1): the same read reviewed,
+        # decided and exported by the CLI and by MCP gives the same consensus.
+        reads = project / "reads"
+        reads.mkdir()
+        shutil.copy(Path(__file__).resolve().parents[3]
+                    / "testdata/fixtures/compact/sanger-review/forward.ab1", reads / "forward.ab1")
+        started, _ = cli("sanger", "review", str(reads / "forward.ab1"),
+                         "-o", str(reads / "cli.sanger-review.json"))
+        every = f"1-{started['columns']}"
+        cli("sanger", "decide", str(reads / "cli.sanger-review.json"), "--columns", every,
+            "--choice", "accept")
+        cli("sanger", "decide", str(reads / "cli.sanger-review.json"), "--columns", "1",
+            "--choice", "a")
+        cli("sanger", "export", str(reads / "cli.sanger-review.json"), "-o",
+            str(reads / "cli.fasta"), "--label", "HV1")
+        client = Mcp(binary, project, env)
+        try:
+            created = client.tool("sanger_review_create", {"read": "reads/forward.ab1",
+                                  "output": "reads/mcp.sanger-review.json"})
+            assert not created["isError"], created
+            document = created["structuredContent"]["document"]
+            for columns, choice in ((every, "accept"), ("1", "a")):
+                decided = client.tool("sanger_decide", {"document": document,
+                                      "columns": columns, "choice": choice})
+                assert not decided["isError"], decided
+            exported = client.tool("sanger_export", {"document": document,
+                                   "output": "reads/mcp.fasta", "label": "HV1"})
+            assert not exported["isError"], exported
+            refused = client.tool("sanger_decide", {"document": document, "columns": "1",
+                                  "choice": "maybe"})
+            assert refused["isError"], refused
+        finally:
+            client.close()
+        assert (reads / "cli.fasta").read_bytes() == (reads / "mcp.fasta").read_bytes()
+        record("Sanger review, decisions and consensus export: same result from CLI and MCP")
         if args.only_sanger:
             receipt["status"] = "passed"
             receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")

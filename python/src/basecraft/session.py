@@ -399,6 +399,28 @@ class Session:
         """Create an unsaved IUPAC DNA sequence; save it to a new .gb path."""
         return self.call("sequence_create", {"name": str(name), "sequence": str(sequence)})
 
+    def sanger_review_create(self, read, output=None):
+        """Start a review of a Sanger read (.ab1) from its instrument calls.
+
+        With ``output`` the review is saved there as a new review file. Returns
+        the review document's state.
+        """
+        arguments = {"read": str(read)}
+        if output is not None:
+            arguments["output"] = str(output)
+        return self.call("sanger_review_create", arguments)
+
+    def sanger_decide(self, document, columns, choice):
+        """Decide draft columns (from 1: "12", "12,15", "12-14"): accept,
+        reject, pending, or the base to put there."""
+        return self.call("sanger_decide", {"document": document, "columns": str(columns),
+                                           "choice": str(choice)})
+
+    def sanger_export(self, document, output, label):
+        """Export the decided consensus as FASTA under ``label``."""
+        return self.call("sanger_export", {"document": document, "output": str(output),
+                                           "label": str(label)})
+
     def document_record(self, document):
         """History and methods for this session's current revision, including unsaved edits."""
         return self.call("document_record", {"document": document})

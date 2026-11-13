@@ -1,0 +1,153 @@
+//! The Sanger review's decisions as commands (D1): start a review from a
+//! read's instrument calls, decide calls on draft columns, and (through
+//! `Session::export_sanger_consensus`) export the consensus. The window, the
+//! CLI and MCP all call these, so a decision means the same on every route.
+use std::path::Path;
+
+use basecraft_protocol::Op;
+use basecraft_protocol::sanger::{ReviewChoice, ReviewOp};
+
+use crate::{DocId, Error, Result, Session};
+
+/// A new review of `read` from its instrument calls, in `session`.
+pub fn review_read(session: &mut Session, read: &Path) -> Result<DocId> {
+    let review = crate::sanger_review::instrument_review(read).map_err(Error::Invalid)?;
+    session.create_sanger_review(&review)
+}
+
+/// Apply one review decision to the review's current call set.
+pub fn decide(session: &mut Session, review: DocId, edit: ReviewOp) -> Result<()> {
+    let call_set = session.sanger_review(review)?.draft_sha256.clone();
+    session.apply(
+        review,
+        Op::SangerReview {
+            call_set,
+            edit: Box::new(edit),
+        },
+    )?;
+    Ok(())
+}
+
+/// A decision as a person states it: `accept`, `reject`, `pending`, or the
+/// base to put there (IUPAC, or `-` for a gap).
+pub fn choice(text: &str) -> Result<ReviewChoice> {
+    match text.to_ascii_lowercase().as_str() {
+        "accept" => Ok(ReviewChoice::Accept),
+        "reject" => Ok(ReviewChoice::Reject),
+        "pending" => Ok(ReviewChoice::Pending),
+        base if base.chars().count() == 1 => {
+            let base = base.chars().next().unwrap_or('N').to_ascii_uppercase();
+            if base == '-' || "ACGTURYSWKMBDHVN".contains(base) {
+                Ok(ReviewChoice::Edit(base))
+            } else {
+                Err(Error::Invalid(format!(
+                    "{base} is not a base; give one of ACGT, an IUPAC code or -"
+                )))
+            }
+        }
+        other => Err(Error::Invalid(format!(
+            "{other} is not a decision; give accept, reject, pending or a base"
+        ))),
+    }
+}
+
+/// Draft columns as a person numbers them, from 1: `12`, `12,15` or `12-14`.
+pub fn columns(text: &str) -> Result<Vec<usize>> {
+    let number = |part: &str| {
+        part.trim()
+            .parse::<usize>()
+            .ok()
+            .filter(|n| *n > 0)
+            .ok_or_else(|| Error::Invalid(format!("{part} is not a column number (from 1)")))
+    };
+    let mut columns = Vec::new();
+    for part in text.split(',') {
+        match part.split_once('-') {
+            Some((from, to)) => {
+                let (from, to) = (number(from)?, number(to)?);
+                if from > to {
+                    return Err(Error::Invalid(format!("{part}: the range runs backwards")));
+                }
+                columns.extend(from - 1..to);
+            }
+            None => columns.push(number(part)? - 1),
+        }
+    }
+    columns.sort_unstable();
+    columns.dedup();
+    Ok(columns)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decisions_and_columns_read_as_a_person_writes_them() {
+        assert_eq!(choice("Accept").unwrap(), ReviewChoice::Accept);
+        assert_eq!(choice("g").unwrap(), ReviewChoice::Edit('G'));
+        assert_eq!(choice("-").unwrap(), ReviewChoice::Edit('-'));
+        assert!(choice("Z").unwrap_err().to_string().contains("not a base"));
+        assert!(
+            choice("maybe")
+                .unwrap_err()
+                .to_string()
+                .contains("not a decision")
+        );
+        assert_eq!(columns("3,1-2,3").unwrap(), vec![0, 1, 2]);
+        assert!(columns("0").is_err());
+        assert!(
+            columns("5-4")
+                .unwrap_err()
+                .to_string()
+                .contains("backwards")
+        );
+    }
+
+    #[test]
+    fn a_read_is_reviewed_decided_and_exported() {
+        let folder = tempfile::tempdir().unwrap();
+        let read = folder.path().join("forward.ab1");
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../testdata/fixtures/compact/sanger-review/forward.ab1"),
+            &read,
+        )
+        .unwrap();
+        let mut session = Session::new(folder.path());
+        let review = review_read(&mut session, &read).unwrap();
+        let before = session.sanger_review(review).unwrap().draft_sha256.clone();
+        let every = (0..session.sanger_review(review).unwrap().draft.columns.len()).collect();
+        decide(
+            &mut session,
+            review,
+            ReviewOp::Set {
+                columns: every,
+                choice: ReviewChoice::Accept,
+            },
+        )
+        .unwrap();
+        decide(
+            &mut session,
+            review,
+            ReviewOp::Set {
+                columns: vec![0],
+                choice: ReviewChoice::Edit('A'),
+            },
+        )
+        .unwrap();
+        let decided = session.sanger_review(review).unwrap();
+        assert_eq!(decided.draft_sha256, before, "decisions keep the call set");
+        assert_eq!(decided.decision(0), Some(&ReviewChoice::Edit('A')));
+        assert_eq!(decided.unresolved(), 0);
+        let consensus = folder.path().join("consensus.fasta");
+        session
+            .export_sanger_consensus(review, &consensus, "HV1")
+            .unwrap();
+        assert!(
+            std::fs::read_to_string(&consensus)
+                .unwrap()
+                .starts_with(">HV1")
+        );
+    }
+}
