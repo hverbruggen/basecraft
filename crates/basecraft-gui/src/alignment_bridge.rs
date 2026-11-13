@@ -42,6 +42,11 @@ pub mod qobject {
         #[qproperty(QString, mono_font)]
         #[qproperty(QString, file_path)]
         #[qproperty(bool, dirty)]
+        /// An edit the folder refused because it cannot hold recovery (D13),
+        /// as JSON for the window's copy offer, or "".
+        #[qproperty(QString, refused_edit)]
+        /// Asks what the document is when basecraft cannot tell (D12), or "".
+        #[qproperty(QString, alphabet_question)]
         #[qproperty(QString, zoom_text)]
         #[qproperty(f64, hscroll_pos)]
         #[qproperty(f64, hscroll_size)]
@@ -233,6 +238,9 @@ pub mod qobject {
         fn vscroll_to(self: Pin<&mut AlignmentController>, fraction: f64);
         #[qinvokable]
         fn undo(self: Pin<&mut AlignmentController>);
+        /// State what the document is: "dna", "rna" or "protein" (D12).
+        #[qinvokable]
+        fn state_alphabet(self: Pin<&mut AlignmentController>, answer: &QString) -> bool;
         #[qinvokable]
         fn redo(self: Pin<&mut AlignmentController>);
         #[qinvokable]
@@ -372,6 +380,8 @@ pub struct AlignmentRust {
     mono_font: QString,
     file_path: QString,
     dirty: bool,
+    refused_edit: QString,
+    alphabet_question: QString,
     zoom_text: QString,
     hscroll_pos: f64,
     hscroll_size: f64,
@@ -455,6 +465,8 @@ impl Default for AlignmentRust {
             mono_font: QString::default(),
             file_path: QString::default(),
             dirty: false,
+            refused_edit: QString::default(),
+            alphabet_question: QString::default(),
             zoom_text: QString::default(),
             hscroll_pos: 0.0,
             hscroll_size: 1.0,
@@ -686,19 +698,23 @@ impl qobject::AlignmentController {
         if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
             crate::bridge::checked_document!(sync self, session.alignment(doc));
         }
-        let result = {
+        let (result, refused_now) = {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
             let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
                 return false;
             };
-            let result = basecraft_ops::renames::apply_op(session, doc, op);
+            let (result, refused) =
+                crate::document_open::applying(session, doc, op, basecraft_ops::renames::apply_op);
             r.view.sync(crate::bridge::checked_document!(
                 access_thread,
                 session.alignment(doc)
             ));
-            result
+            (result, refused)
         };
+        if let Some(refused) = refused_now {
+            self.as_mut().set_refused_edit(refused);
+        }
         match result {
             Ok(()) => {
                 self.as_mut().set_dirty(true);
@@ -706,7 +722,7 @@ impl qobject::AlignmentController {
                 true
             }
             Err(e) => {
-                self.fail(&crate::document_open::edit_failure(&e));
+                self.fail(&e);
                 false
             }
         }
@@ -967,6 +983,22 @@ impl qobject::AlignmentController {
             .set_file_path(QString::from(path.to_string_lossy().as_ref()));
         self.as_mut().set_dirty(false);
         self.as_mut().notify("");
+        let question =
+            self.rust()
+                .session
+                .as_ref()
+                .zip(self.rust().doc)
+                .and_then(|(session, doc)| {
+                    basecraft_viewmodel::alphabet::question(
+                        session.alignment(doc).ok()?.alphabet(),
+                        &crate::bridge::file_name(&path),
+                    )
+                });
+        self.as_mut()
+            .set_alphabet_question(QString::from(&question.unwrap_or_default()));
+        if let Some(op) = crate::document_open::take_refused(&path) {
+            self.as_mut().edit(op);
+        }
         self.refresh();
         Ok(())
     }
@@ -1182,6 +1214,16 @@ impl qobject::AlignmentController {
             Err(e) => self.as_mut().fail(&e.to_string()),
         }
         self.refresh();
+    }
+
+    pub fn state_alphabet(mut self: Pin<&mut Self>, answer: &QString) -> bool {
+        let Some(alphabet) = basecraft_viewmodel::alphabet::stated(&answer.to_string()) else {
+            return false;
+        };
+        let stated = self.as_mut().edit(Op::SetAlphabet { alphabet });
+        self.as_mut().set_alphabet_question(QString::default());
+        self.refresh();
+        stated
     }
 
     pub fn undo(self: Pin<&mut Self>) {

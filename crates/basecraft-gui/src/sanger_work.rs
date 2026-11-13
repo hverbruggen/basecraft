@@ -394,7 +394,7 @@ impl ReviewDocument {
         let mut session = crate::chosen_project::session_for(review.storage_anchor())?;
         let id = session
             .create_sanger_review(review)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| crate::document_open::edit_failure(&e))?;
         Ok(Self { session, id })
     }
     pub fn open(path: &Path) -> Result<Self, String> {
@@ -432,7 +432,7 @@ impl ReviewDocument {
                 },
             )
             .map(|_| ())
-            .map_err(|e| e.to_string())
+            .map_err(|e| crate::document_open::edit_failure(&e))
     }
 
     pub fn save(&mut self, path: &Path) -> Result<(), String> {
@@ -454,7 +454,7 @@ impl ReviewDocument {
                 },
             )
             .map(|_| ())
-            .map_err(|e| e.to_string())
+            .map_err(|e| crate::document_open::edit_failure(&e))
     }
     pub fn export_consensus(&mut self, path: &Path, label: &str) -> Result<(), String> {
         self.session

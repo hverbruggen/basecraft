@@ -348,7 +348,10 @@ Main {
             check(loaders.length >= 50, "only " + loaders.length + " dialogs load on demand")
             for (const loader of loaders) check(loader.dialog(), "a dialog failed to build")
         })
-        // D11: a reroot that displaces clade labels asks where each goes.
+        // D11: a reroot that displaces clade labels asks where each goes. On the
+        // rooted tree [&R] ((a,b),(c,d)) labelled "All" and "AB", rooting on b
+        // leaves "All" with an exact clade (the root) and "AB" without one.
+        const rooted = folder + "/rooted.nwk"
         const tree = {}
         const button = name => find(dialog("labelPlacementDialog").contentItem, i => i.objectName === name)
         const labelClade = (tips, label) => {
@@ -357,24 +360,27 @@ Main {
             annotation.label = label
             check(tree.ctl.set_annotation(JSON.stringify(annotation)) === "", "could not label " + label)
         }
-        const reroot = () => { tree.ctl.select_clade(JSON.stringify(["specimen_03"])); tree.ctl.reroot() }
+        const reroot = () => { tree.ctl.select_clade(JSON.stringify(["b"])); tree.ctl.reroot() }
+        const question = () => tree.ctl.label_question.length ? JSON.parse(tree.ctl.label_question) : null
+        list.push(() => openPath(rooted))
+        list.push(until(() => tabOf(rooted) >= 0 && documentAt(tabOf(rooted)).controller, "the rooted tree did not open"))
         list.push(() => {
-            show(2)
-            tree.ctl = documentAt(2).controller
-            labelClade(["specimen_01", "specimen_08"], "All")
-            labelClade(["specimen_03", "specimen_05"], "C3")
+            show(tabOf(rooted))
+            tree.ctl = documentAt(tabOf(rooted)).controller
+            labelClade(["a", "d"], "All")
+            labelClade(["a", "b"], "AB")
             reroot()
             const ask = dialog("labelPlacementDialog")
-            const q = JSON.parse(tree.ctl.label_question)
-            check(ask && ask.opened && q.label === "All" && q.number === 1 && q.total === 2, "the reroot did not ask about its first displaced label")
+            const q = question()
+            check(ask && ask.opened && q && q.label === "All" && q.number === 1 && q.total === 2, "the reroot did not ask about its first displaced label: " + tree.ctl.label_question)
             check(button("labelExact").visible && button("labelPlacementAll").visible, "the exact clade or apply-to-all was not offered")
             check(!tree.ctl.status.includes("(moved)"), "labels are still marked as moved")
             button("labelExact").clicked()
-            const next = JSON.parse(tree.ctl.label_question)
-            check(ask.opened && next.label === "C3" && !button("labelExact").visible, "the second label offers an exact clade it does not have")
+            const next = question()
+            check(ask.opened && next && next.label === "AB" && !button("labelExact").visible, "the second label offers an exact clade it does not have")
             // Escape leaves the label where the reroot put it; the status line names it.
             ask.reject()
-            check(tree.ctl.label_question === "" && tree.ctl.status.includes("\"C3\"") && !tree.ctl.status.includes("\"All\""), "Escape did not leave C3 displaced and All placed")
+            check(tree.ctl.label_question === "" && tree.ctl.status.includes("\"AB\"") && !tree.ctl.status.includes("\"All\""), "Escape did not leave AB displaced and All placed")
             // Undo the placement and the reroot, then answer for every label at once.
             currentView.forceActiveFocus()
             currentView.pressKey(Qt.Key_Z, Qt.ControlModifier, "")
@@ -383,15 +389,18 @@ Main {
             reroot()
             check(ask.opened, "rerooting again did not ask")
             button("labelPlacementAll").checked = true
-            check(!button("labelExact").visible, "exact offered for every label though C3 has no exact clade")
+            check(!button("labelExact").visible, "exact offered for every label though AB has no exact clade")
             button("labelSmallest").clicked()
             check(!ask.opened && tree.ctl.label_question === "" && !tree.ctl.status.includes("moved labels"), "one answer did not place every label")
-            // Undo reroot from the question: the placement-free reroot is undone.
+            // Undo reroot from the question undoes the reroot.
             currentView.pressKey(Qt.Key_Z, Qt.ControlModifier, "")
             currentView.pressKey(Qt.Key_Z, Qt.ControlModifier, "")
             reroot()
             button("labelUndo").clicked()
             check(!ask.opened && !tree.ctl.status.includes("moved labels"), "Undo reroot left displaced labels")
+            currentView.pressKey(Qt.Key_W, Qt.ControlModifier, "")
+            dialog("closeDocumentDialog").discarded()
+            check(tabOf(rooted) < 0, "the rooted tree did not close")
         })
         // 6.1: open, edit, save, close and reopen an alignment, with undo, redo,
         // save and close from the keyboard (window shortcuts, through the
@@ -429,32 +438,98 @@ Main {
             const ctl = documentAt(tabOf(aligned)).controller
             check(ctl !== edited.controller && !ctl.dirty && textOf(ctl) === edited.text, "the reopened alignment lost the saved gap")
         })
-        // 6.1 error and cancellation: a save that fails keeps the work dirty,
-        // and cancelling the close question keeps the tab.
+        // D13: the first edit in a folder that cannot hold .basecraft is refused.
+        // The window offers a copy; Cancel leaves the file unedited; Save a copy
+        // copies it where the user chooses, opens the copy in its place and
+        // redoes the edit there. Every kind of editor makes the offer.
         const locked = folder + "/locked/locked.afa"
+        const copied = folder + "/copied.afa"
+        const offer = () => dialog("readOnlyCopyDialog")
+        const opened = path => until(() => tabOf(path) >= 0 && documentAt(tabOf(path)).controller, path + " did not open")
         list.push(() => openPath(locked))
-        list.push(until(() => tabOf(locked) >= 0 && documentAt(tabOf(locked)).controller, "the locked alignment did not open"))
+        list.push(opened(locked))
         list.push(() => {
             show(tabOf(locked))
             const ctl = documentAt(tabOf(locked)).controller
             ctl.select_block(0, 0, 0, 0)
             ctl.insert_gap()
-            edited.controller = ctl
-            edited.message = ctl.message
+            check(offer() && offer().opened && !ctl.dirty, "a refused edit in a read-only folder did not offer a copy")
+            offer().reject()
+            check(!offer().opened && ctl.refused_edit === "" && !ctl.dirty, "cancelling the copy offer did not leave the file unedited")
+            ctl.insert_gap()
+            check(offer().opened, "the offer did not come back for the next edit")
+            find(offer().contentItem, i => i.objectName === "saveEditableCopy").clicked()
+            const save = dialog("saveDocumentDialog")
+            check(save && save.visible, "Save a copy did not open the file dialog")
+            save.selectedFile = dialog("shell").local_file_url(copied)
+            save.accept()
+        })
+        list.push(opened(copied))
+        list.push(() => {
+            const ctl = documentAt(tabOf(copied)).controller
+            check(tabOf(locked) < 0 && ctl.dirty && ctl.refused_edit === "", "the copy did not replace the original with the edit redone")
+            show(tabOf(copied))
             currentView.forceActiveFocus()
             currentView.pressKey(Qt.Key_S, Qt.ControlModifier, "")
+            edited.controller = ctl
         })
-        list.push(until(() => edited.controller.message !== edited.message || !edited.controller.dirty, "the failed save reported nothing"))
+        list.push(until(() => !edited.controller.dirty, "the edited copy did not save"))
+        // Cancelling the close question keeps the tab; Discard closes it.
         list.push(() => {
-            check(edited.controller.dirty, "a save into a read-only folder was reported as saved")
+            edited.controller.insert_gap()
             currentView.pressKey(Qt.Key_W, Qt.ControlModifier, "")
             const ask = dialog("closeDocumentDialog")
             check(ask && ask.opened, "closing unsaved work did not ask")
             ask.reject()
-            check(tabOf(locked) >= 0 && edited.controller.dirty, "cancelling the close question closed the tab")
+            check(tabOf(copied) >= 0 && edited.controller.dirty, "cancelling the close question closed the tab")
             currentView.pressKey(Qt.Key_W, Qt.ControlModifier, "")
             dialog("closeDocumentDialog").discarded()
-            check(tabOf(locked) < 0, "discarding did not close the tab")
+            check(tabOf(copied) < 0, "discarding did not close the tab")
+        })
+        // The sequence and tree editors make the same offer.
+        for (const [name, edit] of [["locus.gb", ctl => ctl.delete_feature(0)],
+                                    ["time.nwk", ctl => { ctl.select_clade(JSON.stringify(["specimen_01", "specimen_02"])); const a = JSON.parse(ctl.annotation_json()); a.label = "AB"; ctl.set_annotation(JSON.stringify(a)) }]]) {
+            const path = folder + "/locked/" + name
+            list.push(() => openPath(path))
+            list.push(opened(path))
+            list.push(() => {
+                show(tabOf(path))
+                const ctl = documentAt(tabOf(path)).controller
+                edit(ctl)
+                check(offer().opened && !ctl.dirty, name + ": a refused edit did not offer a copy")
+                offer().reject()
+                check(!ctl.dirty, name + ": cancelling edited the file")
+                closeTab(tabOf(path))
+            })
+        }
+        // A trace review in a read-only folder is refused when it is created;
+        // the offer reopens the review on a copy.
+        const trace = folder + "/locked/forward.ab1"
+        const traceCopy = folder + "/forward-copy.ab1"
+        list.push(() => openPath(trace, true))
+        list.push(until(() => offer() && offer().opened, "a refused trace review did not offer a copy"))
+        list.push(() => {
+            find(offer().contentItem, i => i.objectName === "saveEditableCopy").clicked()
+            const save = dialog("saveDocumentDialog")
+            save.selectedFile = dialog("shell").local_file_url(traceCopy)
+            save.accept()
+        })
+        list.push(until(() => tabOf(trace) < 0 && documentTabs().count === edited.tabs + 1, "the trace copy did not replace the original"))
+        list.push(() => closeTab(documentTabs().count - 1))
+        // D12: a sequence basecraft cannot place asks what it is, once.
+        const unclear = folder + "/unclear.fasta"
+        list.push(() => openPath(unclear))
+        list.push(opened(unclear))
+        list.push(() => {
+            show(tabOf(unclear))
+            const ask = dialog("alphabetDialog")
+            check(ask && ask.opened && ask.question.includes("unclear.fasta"), "an undetermined sequence did not ask what it is")
+            find(ask.contentItem, i => i.objectName === "alphabetDna").clicked()
+            const ctl = documentAt(tabOf(unclear)).controller
+            check(!ask.opened && ctl.alphabet_question === "" && ctl.dirty, "stating DNA was not recorded")
+            check(documentAt(1).controller.status.includes("DNA (guessed)"), "the alignment status does not name its guessed alphabet: " + documentAt(1).controller.status)
+            currentView.pressKey(Qt.Key_W, Qt.ControlModifier, "")
+            dialog("closeDocumentDialog").discarded()
         })
         // 6.2 background completion: an annotator run on the sequence finishes
         // while another tab is active, without moving the tab or the focus. A

@@ -47,6 +47,9 @@ pub mod qobject {
         #[qproperty(QString, file_path)]
         #[qproperty(bool, busy)]
         #[qproperty(bool, dirty)]
+        /// An edit the folder refused because it cannot hold recovery (D13),
+        /// as JSON for the window's copy offer, or "".
+        #[qproperty(QString, refused_edit)]
         #[qproperty(QString, zoom_text)]
         #[qproperty(f64, hscroll_pos)]
         #[qproperty(f64, hscroll_size)]
@@ -333,6 +336,7 @@ pub struct TreeRust {
     mono_font: QString,
     file_path: QString,
     dirty: bool,
+    refused_edit: QString,
     busy: bool,
     zoom_text: QString,
     hscroll_pos: f64,
@@ -393,6 +397,7 @@ impl Default for TreeRust {
             mono_font: QString::default(),
             file_path: QString::default(),
             dirty: false,
+            refused_edit: QString::default(),
             busy: false,
             zoom_text: QString::default(),
             hscroll_pos: 0.0,
@@ -715,15 +720,22 @@ impl qobject::TreeController {
         let clears_selection =
             matches!(op, Op::TreeMidpointRoot {} | Op::TreeMinimumVarianceRoot {});
         let placing = matches!(op, Op::TreePlaceLabel { .. });
-        let result = {
+        let (result, refused_now) = {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
             let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
                 return Err("No tree open".into());
             };
-            let before = session.displaced_labels(doc).map_err(|e| e.to_string())?;
-            let result = basecraft_ops::renames::apply_op(session, doc, op);
-            let after = session.displaced_labels(doc).map_err(|e| e.to_string())?;
+            let before = session
+                .tree(doc)
+                .map_err(|e| e.to_string())?
+                .displaced_labels();
+            let (result, refused) =
+                crate::document_open::applying(session, doc, op, basecraft_ops::renames::apply_op);
+            let after = session
+                .tree(doc)
+                .map_err(|e| e.to_string())?
+                .displaced_labels();
             if result.is_ok() {
                 match (&mut r.labels, placing) {
                     (Some(questions), true) => questions.refresh(&after),
@@ -731,9 +743,12 @@ impl qobject::TreeController {
                 }
             }
             r.view.sync(session.tree(doc).map_err(|e| e.to_string())?);
-            result
+            (result, refused)
         };
         self.as_mut().ask_labels();
+        if let Some(refused) = refused_now {
+            self.as_mut().set_refused_edit(refused);
+        }
         match result {
             Ok(()) => {
                 if clears_selection {
@@ -746,8 +761,7 @@ impl qobject::TreeController {
                 self.refresh();
                 Ok(())
             }
-            Err(e) => {
-                let msg = e.to_string();
+            Err(msg) => {
                 let msg = msg
                     .strip_prefix("invalid operation: ")
                     .unwrap_or(&msg)
@@ -1131,6 +1145,9 @@ impl qobject::TreeController {
         self.as_mut().refresh_link();
         self.as_mut().set_dirty(false);
         self.as_mut().notify(&warning);
+        if let Some(op) = crate::document_open::take_refused(&path) {
+            let _ = self.as_mut().edit(op);
+        }
         self.refresh();
         Ok(())
     }

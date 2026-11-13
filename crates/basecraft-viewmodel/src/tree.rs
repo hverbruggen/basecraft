@@ -1766,7 +1766,8 @@ mod tests {
 
     #[test]
     fn a_label_a_reroot_moved_is_marked_and_named_in_the_status() {
-        let mut d = tree("((a,b),(c,d),e);");
+        // A rooted tree: an unrooted label follows its split through a reroot.
+        let mut d = tree("[&R] ((a,b),(c,d),e);");
         for (id, clade, label) in [(1, ["a", "b"], "AB"), (2, ["c", "d"], "CD")] {
             let annotation = Some(CladeAnnotation::new(clade.map(String::from).into(), label));
             d.apply_edit(&Op::TreeAnnotate { id, annotation }).unwrap();

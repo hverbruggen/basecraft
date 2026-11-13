@@ -384,6 +384,89 @@ pub(crate) fn recovery_notice(
         .map(cxx_qt_lib::QString::from)
 }
 
+/// The edit a folder that cannot hold `.basecraft` refused (D13), for the
+/// window to offer a copy: `{"file", "folder", "op"}`. None for other errors.
+pub(crate) fn refused_edit(
+    session: &Session,
+    doc: DocId,
+    op: &basecraft_protocol::Op,
+    error: &basecraft_ops::Error,
+) -> Option<cxx_qt_lib::QString> {
+    let basecraft_ops::Error::ReadOnlyFolder { folder, .. } = error else {
+        return None;
+    };
+    let file = session.root().join(session.doc_key(doc).ok()?);
+    let text = serde_json::json!({"file": file, "folder": folder, "op": op}).to_string();
+    Some(cxx_qt_lib::QString::from(&text))
+}
+
+/// Edits waiting for the copy they were moved to, by the copy's path.
+static PENDING: std::sync::Mutex<Vec<(PathBuf, basecraft_protocol::Op)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Copy the file a refused edit was made to, with its companion, to `target`
+/// in a folder the user chose, and keep the edit, if any (a refused trace
+/// review has none), for when the copy opens.
+pub(crate) fn copy_for_editing(refused: &str, target: &Path) -> Result<(), String> {
+    let refused: serde_json::Value = serde_json::from_str(refused).map_err(|e| e.to_string())?;
+    let source = PathBuf::from(refused["file"].as_str().ok_or("No refused edit")?);
+    let op: Option<basecraft_protocol::Op> =
+        serde_json::from_value(refused["op"].clone()).map_err(|e| e.to_string())?;
+    if target.exists() {
+        return Err(format!(
+            "{} already exists; choose a new name",
+            target.display()
+        ));
+    }
+    std::fs::copy(&source, target).map_err(|e| format!("Could not copy the file: {e}"))?;
+    let companion = |file: &Path| {
+        let mut name = file.file_name().unwrap_or_default().to_os_string();
+        name.push(".basecraft.json");
+        file.with_file_name(name)
+    };
+    if companion(&source).is_file() {
+        std::fs::copy(companion(&source), companion(target))
+            .map_err(|e| format!("Could not copy the file's companion: {e}"))?;
+    }
+    if let Some(op) = op {
+        let key = target.canonicalize().map_err(|e| e.to_string())?;
+        PENDING
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push((key, op));
+    }
+    Ok(())
+}
+
+/// The refused edit to redo on `path` now that its copy is open.
+pub(crate) fn take_refused(path: &Path) -> Option<basecraft_protocol::Op> {
+    let key = path.canonicalize().ok()?;
+    let mut pending = PENDING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let index = pending.iter().position(|(file, _)| *file == key)?;
+    Some(pending.remove(index).1)
+}
+
+/// Apply `op` with `apply` (`Session::apply`, `renames::apply_op`, ...), as
+/// every editor does: a failure comes back worded by [`edit_failure`], and a
+/// refusal for a folder that cannot hold recovery also as the copy offer.
+pub(crate) fn applying<T>(
+    session: &mut Session,
+    doc: DocId,
+    op: basecraft_protocol::Op,
+    apply: impl FnOnce(&mut Session, DocId, basecraft_protocol::Op) -> basecraft_ops::Result<T>,
+) -> (Result<T, String>, Option<cxx_qt_lib::QString>) {
+    let kept = op.clone();
+    match apply(session, doc, op) {
+        Ok(value) => (Ok(value), None),
+        Err(error) => (
+            Err(edit_failure(&error)),
+            refused_edit(session, doc, &kept, &error),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[allow(unused_imports)]

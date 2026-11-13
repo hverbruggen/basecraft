@@ -90,6 +90,11 @@ pub mod qobject {
         #[qproperty(QString, mono_font)]
         #[qproperty(QString, file_path)]
         #[qproperty(bool, dirty)]
+        /// An edit the folder refused because it cannot hold recovery (D13),
+        /// as JSON for the window's copy offer, or "".
+        #[qproperty(QString, refused_edit)]
+        /// Asks what the document is when basecraft cannot tell (D12), or "".
+        #[qproperty(QString, alphabet_question)]
         #[qproperty(QString, zoom_text)]
         #[qproperty(f64, scroll_pos)]
         #[qproperty(f64, overview_pos)]
@@ -185,6 +190,9 @@ pub mod qobject {
         /// Show residues `start..end`.
         #[qinvokable]
         fn undo(self: Pin<&mut GenomeController>);
+        /// State what the document is: "dna", "rna" or "protein" (D12).
+        #[qinvokable]
+        fn state_alphabet(self: Pin<&mut GenomeController>, answer: &QString) -> bool;
         #[qinvokable]
         fn redo(self: Pin<&mut GenomeController>);
         #[qinvokable]
@@ -476,6 +484,8 @@ pub struct ControllerRust {
     mono_font: QString,
     file_path: QString,
     dirty: bool,
+    refused_edit: QString,
+    alphabet_question: QString,
     zoom_text: QString,
     scroll_pos: f64,
     overview_pos: f64,
@@ -523,6 +533,8 @@ impl Default for ControllerRust {
             mono_font: QString::default(),
             file_path: QString::default(),
             dirty: false,
+            refused_edit: QString::default(),
+            alphabet_question: QString::default(),
             zoom_text: QString::default(),
             scroll_pos: 0.0,
             overview_pos: 0.0,
@@ -989,6 +1001,22 @@ impl qobject::GenomeController {
             .set_file_path(QString::from(path.to_string_lossy().as_ref()));
         self.as_mut().set_dirty(false);
         self.as_mut().notify("");
+        let question =
+            self.rust()
+                .session
+                .as_ref()
+                .zip(self.rust().doc)
+                .and_then(|(session, doc)| {
+                    basecraft_viewmodel::alphabet::question(
+                        session.doc(doc).ok()?.alphabet(),
+                        &crate::bridge::file_name(&path),
+                    )
+                });
+        self.as_mut()
+            .set_alphabet_question(QString::from(&question.unwrap_or_default()));
+        if let Some(op) = crate::document_open::take_refused(&path) {
+            self.as_mut().edit(op);
+        }
         self.refresh();
         Ok(())
     }
@@ -1202,14 +1230,19 @@ impl qobject::GenomeController {
     #[allow(clippy::cast_possible_truncation)]
     /// Apply an edit through the session and report failures.
     fn edit(mut self: Pin<&mut Self>, op: Op) -> Option<basecraft_ops::session::Outcome> {
-        let result = {
+        let (result, refused_now) = {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
             let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
                 return None;
             };
-            session.apply(doc, op)
+            let (result, refused) =
+                crate::document_open::applying(session, doc, op, Session::apply);
+            (result, refused)
         };
+        if let Some(refused) = refused_now {
+            self.as_mut().set_refused_edit(refused);
+        }
         match result {
             Ok(out) => {
                 self.as_mut().set_dirty(true);
@@ -1218,7 +1251,7 @@ impl qobject::GenomeController {
                 Some(out)
             }
             Err(e) => {
-                self.fail(&crate::document_open::edit_failure(&e));
+                self.fail(&e);
                 None
             }
         }
@@ -1401,6 +1434,16 @@ impl qobject::GenomeController {
         }
         self.as_mut().clamp_cursor();
         self.refresh();
+    }
+
+    pub fn state_alphabet(mut self: Pin<&mut Self>, answer: &QString) -> bool {
+        let Some(alphabet) = basecraft_viewmodel::alphabet::stated(&answer.to_string()) else {
+            return false;
+        };
+        let stated = self.as_mut().edit(Op::SetAlphabet { alphabet });
+        self.as_mut().set_alphabet_question(QString::default());
+        self.refresh();
+        stated.is_some()
     }
 
     pub fn undo(self: Pin<&mut Self>) {
@@ -1622,8 +1665,12 @@ impl qobject::GenomeController {
             let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
                 return QString::from("No document open");
             };
-            session.apply(doc, op)
+            crate::document_open::applying(session, doc, op, Session::apply)
         };
+        let (result, refused) = result;
+        if let Some(refused) = refused {
+            self.as_mut().set_refused_edit(refused);
+        }
         match result {
             Ok(out) => {
                 if let Some(fid) = out.feature {
@@ -1633,7 +1680,7 @@ impl qobject::GenomeController {
                 self.refresh();
                 QString::default()
             }
-            Err(e) => QString::from(&e.to_string()),
+            Err(e) => QString::from(&e),
         }
     }
 

@@ -139,6 +139,7 @@ ApplicationWindow {
     property var currentDocument: null
     property bool projectingDocument: false
     property var current: null
+    onCurrentChanged: alphabetQuestion.dialog().controller = current
     property var currentView: null
     readonly property var traceDocument: traceOpen ? currentDocument : null
     readonly property var alignmentDocument: alignmentOpen ? currentDocument : null
@@ -285,6 +286,8 @@ ApplicationWindow {
         textRepresentation.dialog().source = source
         textRepresentation.dialog().open()
     }
+    OnDemand { id: alphabetQuestion; objectName: "alphabetQuestion"; sourceComponent: Component { AlphabetDialog {} } }
+    OnDemand { id: readOnlyCopy; objectName: "readOnlyCopy"; sourceComponent: Component { ReadOnlyCopyDialog { onSaveCopy: refused => window.saveCopy(refused) } } }
     OnDemand { id: labelPlacement; objectName: "labelPlacement"; sourceComponent: Component { LabelPlacementDialog {} } }
     OnDemand { id: textRepresentation; objectName: "textRepresentation"; sourceComponent: Component { TextRepresentationDialog { id: textRepresentationItem } } }
 
@@ -452,6 +455,9 @@ ApplicationWindow {
         target: window.current
         ignoreUnknownSignals: true
         function onLabel_questionChanged() { labelPlacement.dialog().controller = window.current }
+        function onRefused_editChanged() { readOnlyCopy.dialog().owner = window.current }
+        function onAlphabet_questionChanged() { alphabetQuestion.dialog().controller = window.current }
+        function onMessageChanged() { readOnlyCopy.dialog().owner = window.current }
         function onTaxaSelected(names) {
             for (let i = 0; i < docs.count; i++) {
                 const d = window.documentAt(i)
@@ -1892,6 +1898,20 @@ ApplicationWindow {
         }
     }
     // Save the active tab under a new name; the tab then shows the new file.
+    // D13: copy the file whose folder refused the edit to where the user chooses,
+    // open the copy in place of the unedited original and redo the edit there.
+    function saveCopy(refused) {
+        const row = tabs.currentIndex
+        saveDialog.dialog().target = null
+        saveDialog.dialog().continuation = path => {
+            const error = documentOpens.copy_for_editing(JSON.stringify(refused), path)
+            if (error.length) { provenance.notification(refused.file, error, "fail"); return }
+            removeDocument(row)
+            openPath(path, !!refused.review)
+        }
+        saveDialog.dialog().selectedFile = shell.local_file_url(refused.file)
+        saveDialog.dialog().open()
+    }
     function saveAs(owner = documentTarget(tabs.currentIndex), continuation = null) {
         if (!owner) return
         const index = documentOpens.target_index(owner.token, owner.path)
@@ -1924,7 +1944,7 @@ ApplicationWindow {
             const next = continuation
             target = null
             continuation = null
-            window.saveTarget(owner, path, next)
+            if (owner) window.saveTarget(owner, path, next); else next(path)
         }
     } } }
 

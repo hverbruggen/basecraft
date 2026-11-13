@@ -116,6 +116,10 @@ pub mod qobject {
         fn close(self: &DocumentOpens, index: i32) -> QString;
         #[qinvokable]
         fn quit(self: Pin<&mut DocumentOpens>, drafts: bool) -> QString;
+        /// D13: copy the file `refused` names to `target` and keep its
+        /// refused edit for when the copy opens. "" or why it failed.
+        #[qinvokable]
+        fn copy_for_editing(self: &DocumentOpens, refused: &QString, target: &QString) -> QString;
         #[qinvokable]
         fn switch_project(
             self: Pin<&mut DocumentOpens>,
@@ -479,6 +483,12 @@ impl qobject::DocumentOpens {
     }
     fn quit(mut self: Pin<&mut Self>, drafts: bool) -> QString {
         quit_json(&self.as_mut().rust_mut().documents.quit(drafts))
+    }
+    fn copy_for_editing(&self, refused: &QString, target: &QString) -> QString {
+        let target = std::path::PathBuf::from(target.to_string());
+        crate::document_open::copy_for_editing(&refused.to_string(), &target)
+            .err()
+            .map_or_else(QString::default, |error| QString::from(&error))
     }
     /// A running listed job, from a tab or not, refuses the switch first.
     fn switch_project(

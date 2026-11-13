@@ -32,6 +32,9 @@ pub mod qobject {
         #[qproperty(QString, message_kind)]
         #[qproperty(QString, message_details)]
         #[qproperty(bool, dirty)]
+        /// An edit the folder refused because it cannot hold recovery (D13),
+        /// as JSON for the window's copy offer, or "".
+        #[qproperty(QString, refused_edit)]
         #[qproperty(bool, busy)]
         #[qproperty(bool, can_cut)]
         #[qproperty(f64, root_height)]
@@ -254,6 +257,7 @@ pub struct DelimitationRust {
     message_kind: QString,
     message_details: QString,
     dirty: bool,
+    refused_edit: QString,
     busy: bool,
     can_cut: bool,
     root_height: f64,
@@ -302,6 +306,7 @@ impl Default for DelimitationRust {
             message_kind: QString::default(),
             message_details: QString::default(),
             dirty: false,
+            refused_edit: QString::default(),
             busy: false,
             can_cut: false,
             root_height: 0.0,
@@ -466,19 +471,21 @@ impl qobject::DelimitationController {
         if !self.as_mut().workspace_available() {
             return Err(self.rust().message.to_string());
         }
-        let result = {
+        let (result, refused_now) = {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
             let s = r.session.as_mut().ok_or("No workspace open")?;
-            s.apply(
-                r.doc.ok_or("No workspace open")?,
-                Op::DelimitationEdit {
-                    edit: Box::new(edit),
-                },
-            )
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+            let doc = r.doc.ok_or("No workspace open")?;
+            let op = Op::DelimitationEdit {
+                edit: Box::new(edit),
+            };
+            let (result, refused) =
+                crate::document_open::applying(s, doc, op, basecraft_ops::Session::apply);
+            (result.map(|_| ()), refused)
         };
+        if let Some(refused) = refused_now {
+            self.as_mut().set_refused_edit(refused);
+        }
         match &result {
             Ok(()) => {
                 self.as_mut().set_statistics_json(QString::from("{}"));
@@ -565,6 +572,11 @@ impl qobject::DelimitationController {
         let revision = self.rust().display_revision + 1;
         self.as_mut().set_display_revision(revision);
         self.as_mut().update_bar_columns();
+        if let Some(Op::DelimitationEdit { edit }) =
+            crate::document_open::take_refused(&candidate.path)
+        {
+            let _ = self.as_mut().edit(*edit);
+        }
         Ok(())
     }
     /// A free `<common root>.combinedNN.spart` beside the last file.

@@ -144,6 +144,17 @@ fn ribbon_journey() {
         locked.join("locked.afa"),
     )
     .unwrap();
+    for file in ["locus.gb", "time.nwk", "forward.ab1"] {
+        std::fs::copy(folder.path().join(file), locked.join(file)).unwrap();
+    }
+    // A rooted tree for the label questions a reroot asks (D11).
+    std::fs::write(folder.path().join("rooted.nwk"), "[&R] ((a,b),(c,d));\n").unwrap();
+    // A few letters only proteins use, 1% or fewer: undetermined (D12).
+    std::fs::write(
+        folder.path().join("unclear.fasta"),
+        format!(">unclear\n{}E{}\n", "ACGT".repeat(25), "ACGT".repeat(25)),
+    )
+    .unwrap();
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
@@ -242,6 +253,20 @@ fn ribbon_journey() {
         std::fs::read(locked.join("locked.afa")).unwrap(),
         original.as_bytes()
     );
+    // D13: the copy holds the edit the read-only folder refused, and saved.
+    let copied = std::fs::read_to_string(folder.path().join("copied.afa")).unwrap();
+    assert_eq!(ungapped(records(&copied)), ungapped(records(&original)));
+    assert!(
+        gaps(&copied) > gaps(&original),
+        "the copy lacks the redone gap"
+    );
+    for file in ["locus.gb", "time.nwk", "forward.ab1"] {
+        assert_eq!(
+            std::fs::read(locked.join(file)).unwrap(),
+            std::fs::read(folder.path().join(file)).unwrap(),
+            "{file} in the read-only folder changed"
+        );
+    }
     let _ = folder.keep();
     println!("Every ribbon tab of every document kind showed its commands, without QML warnings");
 }

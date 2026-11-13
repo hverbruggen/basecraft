@@ -580,7 +580,8 @@ impl qobject::SubmissionController {
         }
         let ok = match result {
             Err(error) => {
-                self.as_mut().report("error", &error.to_string());
+                self.as_mut()
+                    .report("error", &crate::document_open::edit_failure(&error));
                 false
             }
             Ok(Err(error)) => {
