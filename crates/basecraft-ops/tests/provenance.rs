@@ -348,13 +348,13 @@ fn unsaved_recovery_reconstructs_exact_state_without_cache() {
     }
     assert!(recovery.is_dir());
     let destination = dir.path().join("restored");
-    let restored = basecraft_ops::records::recover(&recovery, &destination).unwrap();
+    let restored = basecraft_ops::records::recover(&recovery, &destination, None).unwrap();
     assert_eq!(restored, vec![destination.join("gene.fasta")]);
     assert_eq!(
         std::fs::read_to_string(&restored[0]).unwrap(),
         ">gene\nATGT\n"
     );
-    assert!(basecraft_ops::records::recover(&recovery, &destination).is_err());
+    assert!(basecraft_ops::records::recover(&recovery, &destination, None).is_err());
 }
 
 #[test]
@@ -440,7 +440,7 @@ fn recovery_rejects_traversal_and_skips_corrupt_retained_candidates() {
             .collect::<String>();
         std::fs::write(&journal, mutated).unwrap();
         assert!(
-            basecraft_ops::records::recover(recovery, &dir.path().join("output"))
+            basecraft_ops::records::recover(recovery, &dir.path().join("output"), None)
                 .unwrap_err()
                 .to_string()
                 .contains("unsafe")
@@ -456,7 +456,8 @@ fn recovery_rejects_traversal_and_skips_corrupt_retained_candidates() {
         "corrupt",
     )
     .unwrap();
-    let outputs = basecraft_ops::records::recover(recovery, &dir.path().join("output")).unwrap();
+    let outputs =
+        basecraft_ops::records::recover(recovery, &dir.path().join("output"), None).unwrap();
     assert_eq!(std::fs::read(&outputs[0]).unwrap(), b">gene\nATGT\n");
 }
 
@@ -850,7 +851,7 @@ fn typing_bursts_undo_together_and_every_keystroke_recovers() {
         .count();
     assert_eq!(inserts, 6, "each keystroke is journaled");
     let destination = dir.path().join("restored");
-    let restored = records::recover(&recovery, &destination).unwrap();
+    let restored = records::recover(&recovery, &destination, None).unwrap();
     let gene = restored.iter().find(|p| p.ends_with("gene.fasta")).unwrap();
     assert_eq!(std::fs::read_to_string(gene).unwrap(), ">gene\nACGTTTC\n");
 }

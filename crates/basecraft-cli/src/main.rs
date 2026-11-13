@@ -83,6 +83,10 @@ enum Command {
         session: PathBuf,
         #[arg(long)]
         output: PathBuf,
+        /// The project the recovered files belong to; their records are kept
+        /// in its `.basecraft`.
+        #[arg(long)]
+        project: Option<PathBuf>,
         /// After a crash damaged the journal: recover only the edits before the
         /// first damaged line. The journal itself is left unchanged.
         #[arg(long)]
@@ -320,17 +324,22 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Command::Recover {
             session,
             output,
+            project,
             verified_prefix,
         } => {
+            let project = project
+                .map(basecraft_ops::project::Project::new)
+                .transpose()?;
+            let project = project.as_ref();
             let restored = if verified_prefix {
                 let (restored, problem) =
-                    basecraft_ops::records::recover_verified_prefix(&session, &output)?;
+                    basecraft_ops::records::recover_verified_prefix(&session, &output, project)?;
                 if let Some(problem) = problem {
                     eprintln!("Recovered the verified edits before damage: {problem}");
                 }
                 restored
             } else {
-                basecraft_ops::records::recover(&session, &output)?
+                basecraft_ops::records::recover(&session, &output, project)?
             };
             for restored in restored {
                 println!("{}", restored.display());

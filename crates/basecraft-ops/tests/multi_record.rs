@@ -193,7 +193,8 @@ fn recovery_restores_every_record() {
     session.apply(doc, replace()).unwrap();
     let journal = session.recovery_root().to_path_buf();
     std::mem::forget(session);
-    let recovered = basecraft_ops::records::recover(&journal, &root.join("recovered")).unwrap();
+    let recovered =
+        basecraft_ops::records::recover(&journal, &root.join("recovered"), None).unwrap();
     let bytes = std::fs::read(&recovered[0]).unwrap();
     assert_eq!(after_first(&bytes), after_first(original.as_bytes()));
     assert_eq!(basecraft_io::genbank::parse(&bytes).unwrap().len(), 2);
@@ -306,7 +307,8 @@ fn companion_details_survive_and_conflicting_copies_refuse() {
     session.apply(doc, replace()).unwrap();
     let journal = session.recovery_root().to_path_buf();
     std::mem::forget(session);
-    let recovered = basecraft_ops::records::recover(&journal, &root.join("recovered")).unwrap();
+    let recovered =
+        basecraft_ops::records::recover(&journal, &root.join("recovered"), None).unwrap();
     let main = std::fs::read_to_string(&recovered[0]).unwrap();
     assert!(main.ends_with(">other\r\nGG\r\n"), "{main}");
 

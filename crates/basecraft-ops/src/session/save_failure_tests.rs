@@ -93,7 +93,7 @@ fn crash_before_and_after_replacement_recovers_the_edits() {
         }
         drop(session);
         let restored =
-            crate::records::replay::recover(&recovery, &folder.join("restored")).unwrap();
+            crate::records::replay::recover(&recovery, &folder.join("restored"), None).unwrap();
         assert_eq!(fs::read(&restored[0]).unwrap(), b">source\nTCGT\n");
     }
 }
@@ -199,7 +199,7 @@ fn failed_save_journal_keeps_previous_history_and_recovers_written_data() {
     assert_eq!(fs::read(&target).unwrap(), b">source\nTAGT\n");
     drop(session);
     let restored =
-        crate::records::replay::recover(&recovery, &root.path().join("restored")).unwrap();
+        crate::records::replay::recover(&recovery, &root.path().join("restored"), None).unwrap();
     assert_eq!(fs::read(&restored[0]).unwrap(), b">source\nTAGT\n");
 }
 
@@ -215,6 +215,7 @@ fn recovery_inspection_failure_retries_without_replacing_written_data() {
         session.recovery_root(),
         &root.join("recovered"),
         crate::records::replay::RecoveryMode::Strict,
+        None,
     )
     .unwrap();
     let path = recovery.check(0).unwrap().target().to_owned();

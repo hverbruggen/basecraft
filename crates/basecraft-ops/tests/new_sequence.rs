@@ -66,7 +66,7 @@ fn new_sequence_validates_before_creating_and_replays_unsaved_edits() {
         Vec::<String>::new()
     );
     let restored = root.path().join("restored");
-    let outputs = records::recover(&recovery, &restored).unwrap();
+    let outputs = records::recover(&recovery, &restored, None).unwrap();
     let mut recovered = Session::unlogged(&restored);
     let copy = recovered.open(&outputs[0]).unwrap();
     assert_eq!(

@@ -643,12 +643,13 @@ fn application_state_replay_handles_hidden_baseline_and_moved_original_folder() 
     assert_ne!(report.unchecked, 0);
     let recovered = parent.path().join("recovered");
     // Recovery needs the unchanged original.
-    assert!(records::recover(&moved, &recovered).is_err());
+    assert!(records::recover(&moved, &recovered, None).is_err());
     assert!(!recovered.exists());
     std::fs::rename(parent.path().join("unavailable"), &root).unwrap();
     let journal_before = basecraft_ops::log::read_all(&recovery).unwrap();
     let mut attempt =
-        records::prepare_recovery(&recovery, &recovered, records::RecoveryMode::Strict).unwrap();
+        records::prepare_recovery(&recovery, &recovered, records::RecoveryMode::Strict, None)
+            .unwrap();
     // A recovery stage is a new private folder: no analysis can depend on it.
     let check = attempt.check(0).unwrap();
     assert!(check.evidence().is_complete());

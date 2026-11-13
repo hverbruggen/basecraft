@@ -103,7 +103,7 @@ fn run(
     let outcome = (|| -> basecraft_ops::Result<String> {
         match operation {
             "recover" => {
-                let outputs = basecraft_ops::records::recover(result, destination)?;
+                let outputs = basecraft_ops::records::recover(result, destination, project)?;
                 Ok(format!(
                     "Recovered copies:\n{}\nOriginal files and recovery records are preserved.",
                     outputs

@@ -1,5 +1,6 @@
 //! Referenced-input lifecycle. Only known stores are inspected, never filesystem trees.
 mod index;
+pub(crate) use index::foreign_basecraft;
 
 use crate::records::links::AlignmentLinkExt;
 use std::collections::BTreeMap;

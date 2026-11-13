@@ -85,7 +85,7 @@ fn deleting_private_folders_keeps_index_history_and_recovery() {
     assert!(bundle.join("manifest.json").is_file());
     // The unsaved edit is recovered from the project.
     let recovered = root.join("recovered");
-    let outputs = records::recover(session.recovery_root(), &recovered).unwrap();
+    let outputs = records::recover(session.recovery_root(), &recovered, None).unwrap();
     let unsaved_copy = outputs
         .iter()
         .find(|p| p.ends_with("unsaved.fasta"))
@@ -464,4 +464,35 @@ fn a_hard_link_in_a_project_subfolder_is_still_matched() {
     };
     assert_eq!(conflict.analyses[0].run, run.directory());
     assert_eq!(std::fs::read(&source).unwrap(), b">a\nACGT\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_basecraft_is_named_as_a_link() {
+    let Some(root) = isolated_profile::enter("a_symlinked_basecraft_is_named_as_a_link") else {
+        return;
+    };
+    let folder = root.join("linked");
+    std::fs::create_dir_all(root.join("elsewhere")).unwrap();
+    std::fs::create_dir(&folder).unwrap();
+    std::os::unix::fs::symlink(root.join("elsewhere"), folder.join(".basecraft")).unwrap();
+    let file = folder.join("gene.fasta");
+    std::fs::write(&file, b">a\nACGT\n").unwrap();
+    let mut session = Session::recoverable(&folder).unwrap();
+    let doc = session.open(&file).unwrap();
+    let error = session
+        .apply(
+            doc,
+            Op::SeqReplace {
+                start: 0,
+                end: 1,
+                residues: "G".into(),
+            },
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("symbolic link"), "{error}");
+    assert_eq!(
+        std::fs::read_dir(root.join("elsewhere")).unwrap().count(),
+        0
+    );
 }
