@@ -275,8 +275,9 @@ pub struct PreparedOperation {
     pub initiator: String,
     started: String,
     workflow_registry: Option<Arc<crate::registry::Registry>>,
-    /// The session's project, for reading the history of results.
-    project: Option<basecraft_ops::project::Project>,
+    /// The session's project, for reading the history of results and, once
+    /// lane data's `Mutation::begin_in` lands, for the analysis index.
+    pub(crate) project: Option<basecraft_ops::project::Project>,
     _scratch: tempfile::TempDir,
 }
 

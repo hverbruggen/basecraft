@@ -57,7 +57,9 @@ impl AlignmentWorkflow<'_> {
         )?;
         self.stages.push(accepted.clone());
         self.persist()?;
-        let mut session = basecraft_ops::Session::detached(&root);
+        // Stages belong to the parent's project, so their records do too.
+        let mut session =
+            basecraft_ops::Session::detached(&root).in_project(self.parent.project.clone());
         let outcome = manager.wait_in_session(&accepted.run_id, &mut session, &|| {
             self.cancelled.load(Ordering::Acquire)
         })?;
