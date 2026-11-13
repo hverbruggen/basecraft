@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use basecraft_io::fasta::IndexedFasta;
-use basecraft_protocol::facts::{Alphabet, Fact};
+use basecraft_protocol::facts::{Alphabet, Fact, FactSource};
 
 use crate::piece::{PieceTable, Residues};
 use crate::sequence::FastaResidues;
@@ -254,12 +254,12 @@ impl AlignmentDoc {
             width: 0,
             preserve_unpadded_lengths,
             version: 0,
-            alphabet: Alphabet::guessed(&[]),
+            alphabet: Alphabet::guessed(Alphabet::Unknown),
             consensus: Mutex::new(ConsensusCache::default()),
             stats: Mutex::new(StatsCache::default()),
         };
         doc.square(&mut Vec::new());
-        doc.alphabet = Alphabet::guessed(&doc.sample());
+        doc.alphabet = Alphabet::guessed(Alphabet::common(doc.row_alphabets()));
         doc
     }
 
@@ -341,7 +341,8 @@ impl AlignmentDoc {
     /// Use the alphabet a side file or the user states; `None` guesses
     /// again from the residues. Consensus and colours follow it.
     pub fn set_alphabet(&mut self, stated: Option<Fact<Alphabet>>) {
-        let alphabet = stated.unwrap_or_else(|| Alphabet::guessed(&self.sample()));
+        let alphabet =
+            stated.unwrap_or_else(|| Alphabet::guessed(Alphabet::common(self.row_alphabets())));
         if alphabet.value != self.alphabet.value {
             self.edited();
         }
@@ -351,6 +352,49 @@ impl AlignmentDoc {
     /// Whether the alphabet, stated or guessed, is protein.
     pub fn is_protein(&self) -> bool {
         self.alphabet.value == Alphabet::Protein
+    }
+
+    /// Each row's guessed alphabet (D12), from its current residues.
+    pub fn row_alphabets(&self) -> Vec<Alphabet> {
+        self.rows
+            .iter()
+            .map(|row| crate::sequence::guess_alphabet(&row.seq))
+            .collect()
+    }
+
+    /// Why something that needs the alphabet can't run yet (D12): rows
+    /// basecraft can't tell apart, or rows of different kinds. None when the
+    /// alphabet is stated or every row agrees.
+    pub fn alphabet_refusal(&self) -> Option<String> {
+        if self.alphabet.source != FactSource::Guessed {
+            return None;
+        }
+        let rows = self.row_alphabets();
+        let named = |keep: &dyn Fn(Alphabet) -> bool| {
+            let names: Vec<String> = (rows.iter().zip(&self.rows))
+                .filter(|(a, _)| keep(**a))
+                .map(|(a, row)| format!("{} ({a:?})", row.name))
+                .collect();
+            let more = names.len().saturating_sub(10);
+            let list = names.into_iter().take(10).collect::<Vec<_>>().join(", ");
+            if more > 0 {
+                format!("{list} and {more} more")
+            } else {
+                list
+            }
+        };
+        if rows.contains(&Alphabet::Undetermined) {
+            return Some(format!(
+                "Basecraft can't tell whether these sequences are DNA, RNA or protein: {}. State the alphabet first.",
+                named(&|a| a == Alphabet::Undetermined)
+            ));
+        }
+        (Alphabet::common(rows.iter().copied()) == Alphabet::Mixed).then(|| {
+            format!(
+                "The sequences are not all of one kind: {}. State the alphabet, or split them by kind.",
+                named(&|a| a != Alphabet::Unknown)
+            )
+        })
     }
 
     pub fn read(&self, row: usize, start: u64, end: u64) -> Vec<u8> {
@@ -364,16 +408,6 @@ impl AlignmentDoc {
     /// Bytes held by edits, over all rows.
     pub fn edit_bytes(&self) -> usize {
         self.rows.iter().map(|r| r.seq.edit_bytes()).sum()
-    }
-
-    /// The residues the alphabet is guessed from: the first 2000 columns
-    /// of the first 20 rows.
-    fn sample(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
-        for i in 0..self.rows.len().min(20) {
-            self.read_into(i, 0, self.width.min(2000), &mut buf);
-        }
-        buf
     }
 
     /// Rows in `ranges`, ascending, without duplicates; checked against the
@@ -1309,7 +1343,7 @@ mod tests {
         assert_eq!(aln(&["A", "G"]).consensus_at(0).unwrap().residue, b'A');
         assert_eq!(aln(&["?", "?", "A"]).consensus_at(0).unwrap().residue, b'N');
         assert_eq!(
-            aln(&["E", "E", "F", "L", "V"])
+            aln(&["E", "E", "F", "L", "I"])
                 .consensus_at(0)
                 .unwrap()
                 .residue,

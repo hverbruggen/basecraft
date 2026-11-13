@@ -571,15 +571,7 @@ pub fn describe(op: &Op) -> String {
             id,
             annotation: None,
         } => format!("Removed clade annotation {id}"),
-        Op::TreePlaceLabel { choice, .. } => match choice {
-            basecraft_protocol::tree::LabelPlacement::Exact => {
-                "Moved displaced labels to the clades holding exactly their tips".into()
-            }
-            basecraft_protocol::tree::LabelPlacement::Smallest => {
-                "Moved displaced labels to the smallest clades holding their tips".into()
-            }
-            basecraft_protocol::tree::LabelPlacement::Remove => "Removed displaced labels".into(),
-        },
+        Op::TreePlaceLabel { .. } => "Placed displaced labels".into(),
         Op::TreeAddSupport { name, source, .. } if source.is_empty() => {
             format!("Added support values {name:?}")
         }

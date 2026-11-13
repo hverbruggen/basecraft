@@ -15,7 +15,7 @@ fn place(labels: &[u32], choice: LabelPlacement) -> Op {
 }
 
 fn displaced(session: &Session, tree: DocId) -> Vec<(u32, bool)> {
-    let labels = session.displaced_labels(tree).unwrap();
+    let labels = session.tree(tree).unwrap().displaced_labels();
     labels.iter().map(|l| (l.id, l.exact)).collect()
 }
 
@@ -106,6 +106,39 @@ fn labels_are_placed_one_undo_step_at_a_time_and_replay() {
     let report = records::replay(dir.path()).unwrap();
     assert!(report.ok(), "{:#?}", report.problems);
     assert_eq!(report.unchecked, 0);
+
+    // The side file keeps the placed labels' tips: nothing is displaced after
+    // a reopen.
+    session.save(tree, None).unwrap();
+    drop(session);
+    let mut reopened = Session::new(dir.path());
+    let tree = reopened.open(&dir.path().join("t.nwk")).unwrap();
+    assert_eq!(displaced(&reopened, tree), []);
+    assert_eq!(reopened.tree(tree).unwrap().annotations()[&2].tips.len(), 4);
+}
+
+#[test]
+fn a_reroot_keeps_labels_made_unrooted_on_their_surviving_split() {
+    crate::isolated_profile::isolate!();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("t.nwk"), "((a,b),(c,d));\n").unwrap();
+    let mut session = Session::new(dir.path());
+    let tree = session.open(&dir.path().join("t.nwk")).unwrap();
+    let annotation = Some(CladeAnnotation::new(vec!["a".into(), "b".into()], "AB"));
+    session
+        .apply(tree, Op::TreeAnnotate { id: 1, annotation })
+        .unwrap();
+    let reroot = Op::TreeReroot {
+        clade: vec!["b".into()],
+    };
+    // a and b now sit on either side of the root, but the split ab|cd
+    // survives as the clade c, d: the label moves there and is not displaced.
+    assert_eq!(session.apply(tree, reroot).unwrap().displaced, []);
+    let doc = session.tree(tree).unwrap();
+    let label = &doc.annotations()[&1];
+    let marked = doc.clade_tips(&label.clade).unwrap();
+    assert_eq!(marked.iter().collect::<Vec<_>>(), ["c", "d"]);
+    assert_eq!(label.tips.iter().collect::<Vec<_>>(), ["a", "b"]);
 }
 
 #[test]
@@ -114,13 +147,20 @@ fn removing_every_displaced_label_is_one_step_named_in_history() {
     let dir = tempfile::tempdir().unwrap();
     let (mut session, tree, _) = rerooted(dir.path());
     let outcome = session
-        .apply(tree, place(&[], LabelPlacement::Remove))
+        .apply(tree, place(&[2, 1, 2], LabelPlacement::Remove))
         .unwrap();
     assert_eq!(
         outcome.notes,
         ["Label \"All\" removed", "Label \"AB\" removed"]
     );
     assert!(session.tree(tree).unwrap().annotations().is_empty());
+    // The log names each label once.
+    let logged = basecraft_ops::log::read_all(dir.path()).unwrap();
+    assert!(
+        logged
+            .iter()
+            .any(|e| matches!(&e.op, Op::TreePlaceLabel { labels, .. } if labels == &[1, 2]))
+    );
     let history =
         basecraft_ops::log::activity_text(&[dir.path().to_path_buf()], "1970-01-01T00:00:00Z", 0)
             .unwrap();

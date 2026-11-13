@@ -166,6 +166,7 @@ impl TreeDoc {
                     *self = *before;
                     return Err(error);
                 }
+                self.repoint_split_labels();
                 Change::Root(before)
             }
             Op::TreeRootPosition { clade, fraction } => {

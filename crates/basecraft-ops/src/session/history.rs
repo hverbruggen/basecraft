@@ -281,6 +281,14 @@ impl Session {
             matches!(self.replay_mode, ReplayMode::Live),
         )?;
         content.as_document().name_record(&mut op)?;
+        // The log names every label placed, each once.
+        if let Op::TreePlaceLabel { labels, .. } = &mut op {
+            if labels.is_empty() {
+                *labels = crate::documents::tree::displaced(content);
+            }
+            labels.sort_unstable();
+            labels.dedup();
+        }
         if let Op::SangerUpdate { review } = &mut op {
             *review =
                 self.retain_review_record(&crate::sanger_review::read_journal_record(review)?)?;
@@ -325,7 +333,12 @@ impl Session {
             .as_document_mut()
             .apply(&op)?;
         let displaced = crate::documents::tree::newly_displaced(&self.docs[doc.0].content, &before);
-        notes.extend(displaced.iter().map(crate::documents::tree::displaced_note));
+        notes.extend(displaced.iter().map(|label| {
+            format!(
+                "Label {:?} no longer marks the group it was made for",
+                label.label
+            )
+        }));
         if !checkpoints && let Err(error) = self.track(doc) {
             restore_inverse(self.docs[doc.0].content_mut(), &inverse)?;
             return Err(error);
@@ -488,15 +501,6 @@ impl Session {
                 self.group_docs.remove(&group);
             }
         }
-    }
-
-    /// Every label of tree `id` that no longer marks the group it was made
-    /// for, and whether `tree.place_label` can offer `exact` for it (D11).
-    pub fn displaced_labels(
-        &self,
-        id: DocId,
-    ) -> Result<Vec<basecraft_protocol::tree::DisplacedLabel>> {
-        Ok(self.tree(id)?.displaced_labels())
     }
 
     /// Other documents changed by the newest step of `id` that are not

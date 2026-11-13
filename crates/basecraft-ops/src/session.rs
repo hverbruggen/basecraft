@@ -15,7 +15,6 @@ use std::time::{Duration, Instant};
 
 use basecraft_docs::alignment::Undo as AlnUndo;
 use basecraft_docs::{AlignmentDoc, EditResult, FeatureId, SequenceDoc, TreeDoc};
-use basecraft_protocol::facts::{Alphabet, Fact};
 use basecraft_protocol::ops::LOG_VERSION;
 use basecraft_protocol::{Actor, DocState, Feature, LogEntry, Op, OpResult};
 
@@ -443,17 +442,6 @@ impl Session {
             .map(|payload| payload.metadata_warning.as_deref())
     }
 
-    /// The letters an alignment or sequence is written in: what the user
-    /// said, kept in its companion, or else a guess from its residues.
-    pub fn alphabet(&self, id: DocId) -> Result<Fact<Alphabet>> {
-        let content = &self.slot(id)?.content;
-        let alphabet = content.alignment().map(|opened| opened.doc.alphabet());
-        alphabet
-            .or_else(|| content.sequence().map(|opened| opened.doc.alphabet()))
-            .cloned()
-            .ok_or_else(|| invalid("only alignments and sequences have an alphabet"))
-    }
-
     pub fn is_alignment(&self, id: DocId) -> bool {
         self.docs
             .get(id.0)
@@ -476,7 +464,7 @@ impl Session {
         self.docs.get(id.0).ok_or(Error::UnknownDocument { id })
     }
 
-    fn content(&self, id: DocId) -> Result<&Loaded> {
+    pub(crate) fn content(&self, id: DocId) -> Result<&Loaded> {
         Ok(&self.slot(id)?.content)
     }
 

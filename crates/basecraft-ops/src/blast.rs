@@ -42,7 +42,8 @@ pub use basecraft_protocol::query_records::{Query, QueryPlan as Plan};
 /// else the GenBank molecule. A guessed alphabet states nothing.
 pub fn stated_molecule(alphabet: &Fact<Alphabet>, genbank: Option<&str>) -> Option<String> {
     let stated = match (alphabet.source, alphabet.value) {
-        (FactSource::Guessed, _) | (_, Alphabet::Unknown) => None,
+        (FactSource::Guessed, _)
+        | (_, Alphabet::Unknown | Alphabet::Undetermined | Alphabet::Mixed) => None,
         (_, Alphabet::Dna) => Some("DNA"),
         (_, Alphabet::Rna) => Some("RNA"),
         (_, Alphabet::Protein) => Some("protein"),

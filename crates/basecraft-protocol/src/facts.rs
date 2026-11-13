@@ -12,36 +12,102 @@ pub enum Alphabet {
     Dna,
     Rna,
     Protein,
+    /// No letters to judge by: gaps, N, X and ? only.
     #[default]
     Unknown,
+    /// A guess only: a few protein-only letters, 1% or fewer. The user has
+    /// to say what the sequence is before anything that needs it runs.
+    Undetermined,
+    /// A document only: its sequences are not all of one kind.
+    Mixed,
+}
+
+/// Letter counts for basecraft's one guess (D12), so a long sequence can be
+/// read in pieces. Gaps, N, X and ? don't count.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AlphabetCounts {
+    letters: u64,
+    protein_only: u64,
+    t: bool,
+    u: bool,
+}
+
+impl AlphabetCounts {
+    pub fn add(&mut self, residues: &[u8]) {
+        for &b in residues {
+            let b = b.to_ascii_uppercase();
+            if matches!(b, b'N' | b'X') || !(b.is_ascii_alphabetic() || b == b'*') {
+                continue;
+            }
+            self.letters += 1;
+            match b {
+                b'E' | b'F' | b'I' | b'L' | b'P' | b'Q' | b'J' | b'O' | b'Z' | b'*' => {
+                    self.protein_only += 1;
+                }
+                b'T' => self.t = true,
+                b'U' => self.u = true,
+                _ => {}
+            }
+        }
+    }
+
+    /// No protein-only letters: DNA, or RNA when U appears without T (IUPAC
+    /// ambiguity codes count as nucleotides). Protein-only letters above 1%
+    /// of the counted letters: protein. Fewer: undetermined.
+    pub fn alphabet(&self) -> Alphabet {
+        if self.letters == 0 {
+            Alphabet::Unknown
+        } else if self.protein_only == 0 {
+            if self.u && !self.t {
+                Alphabet::Rna
+            } else {
+                Alphabet::Dna
+            }
+        } else if self.protein_only * 100 > self.letters {
+            Alphabet::Protein
+        } else {
+            Alphabet::Undetermined
+        }
+    }
 }
 
 impl Alphabet {
-    /// Basecraft's one guess from residues: protein when any letter falls
-    /// outside the IUPAC nucleotide codes, DNA when every letter is one of
-    /// them, unknown with no letters. RNA is never guessed.
+    /// Basecraft's one guess for one sequence (D12): see [`AlphabetCounts`].
     pub fn guess(residues: &[u8]) -> Self {
-        let mut letters = residues
-            .iter()
-            .filter(|b| b.is_ascii_alphabetic())
-            .peekable();
-        if letters.peek().is_none() {
-            return Self::Unknown;
-        }
-        if letters.any(|b| !b"ACGTUNRYKMSWBDHV".contains(&b.to_ascii_uppercase())) {
-            Self::Protein
-        } else {
-            Self::Dna
-        }
+        let mut counts = AlphabetCounts::default();
+        counts.add(residues);
+        counts.alphabet()
     }
 
-    /// The guess as a fact, for a document whose side file states nothing.
-    pub fn guessed(residues: &[u8]) -> Fact<Self> {
+    /// A document's alphabet from its sequences': their common value, or
+    /// mixed when they differ. Sequences with no letters don't count.
+    pub fn common(values: impl IntoIterator<Item = Alphabet>) -> Self {
+        let mut found = Alphabet::Unknown;
+        for value in values.into_iter().filter(|v| *v != Alphabet::Unknown) {
+            if found == Alphabet::Unknown {
+                found = value;
+            } else if found != value {
+                return Alphabet::Mixed;
+            }
+        }
+        found
+    }
+
+    /// A guess as a fact, for a document whose side file states nothing.
+    pub fn guessed(value: Alphabet) -> Fact<Self> {
         Fact {
-            value: Self::guess(residues),
+            value,
             source: FactSource::Guessed,
         }
     }
+}
+
+/// One sequence's guessed alphabet, as reported for a document whose
+/// sequences are not all of one kind.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SequenceAlphabet {
+    pub name: String,
+    pub alphabet: Alphabet,
 }
 
 /// What a tree's branch lengths measure.
@@ -91,12 +157,38 @@ pub struct Fact<T> {
 mod tests {
     use super::Alphabet;
 
+    fn with(base: &[u8], extra: &[u8], count: usize) -> Vec<u8> {
+        base.iter()
+            .copied()
+            .cycle()
+            .take(count)
+            .chain(extra.iter().copied())
+            .collect()
+    }
+
     #[test]
-    fn guess_reads_letters_only() {
-        assert_eq!(Alphabet::guess(b"acgt-NRYKMSW"), Alphabet::Dna);
-        assert_eq!(Alphabet::guess(b"ACGU"), Alphabet::Dna);
-        assert_eq!(Alphabet::guess(b"MKLV*"), Alphabet::Protein);
-        assert_eq!(Alphabet::guess(b"ACGTX"), Alphabet::Protein);
-        assert_eq!(Alphabet::guess(b"--??"), Alphabet::Unknown);
+    fn the_guess_follows_d12() {
+        assert_eq!(Alphabet::guess(b"ACGTACGTX--N?"), Alphabet::Dna);
+        assert_eq!(Alphabet::guess(b"ACGRYKMSWBDHVN"), Alphabet::Dna);
+        assert_eq!(Alphabet::guess(b"acguacgu"), Alphabet::Rna);
+        assert_eq!(Alphabet::guess(b"ACGUT"), Alphabet::Dna);
+        assert_eq!(
+            Alphabet::guess(&with(b"ACGT", b"E", 999)),
+            Alphabet::Undetermined
+        );
+        assert_eq!(
+            Alphabet::guess(&with(b"ACGT", b"EE", 98)),
+            Alphabet::Protein
+        );
+        assert_eq!(Alphabet::guess(b"MKLVEFIQ*"), Alphabet::Protein);
+        assert_eq!(Alphabet::guess(b"--??NNXX"), Alphabet::Unknown);
+    }
+
+    #[test]
+    fn a_document_has_an_alphabet_only_when_its_sequences_agree() {
+        use Alphabet::{Dna, Mixed, Protein, Unknown};
+        assert_eq!(Alphabet::common([Dna, Unknown, Dna]), Dna);
+        assert_eq!(Alphabet::common([Dna, Protein]), Mixed);
+        assert_eq!(Alphabet::common([]), Unknown);
     }
 }

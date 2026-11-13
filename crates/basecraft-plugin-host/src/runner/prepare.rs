@@ -25,6 +25,13 @@ fn check_alphabet(
 ) -> Result<()> {
     use basecraft_protocol::operation::Alphabet;
     let accepted = &operation.descriptor.inputs[name].alphabets;
+    if !accepted.is_empty()
+        && let Some(refusal) = alignment.alphabet_refusal()
+    {
+        return Err(Error::Protocol(format!(
+            "unsupported_input: {shown}: {refusal}"
+        )));
+    }
     let found = if alignment.is_protein() {
         Alphabet::Protein
     } else {

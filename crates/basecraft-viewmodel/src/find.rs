@@ -10,7 +10,7 @@
 
 use basecraft_docs::alignment::{dna_mask, is_gap};
 use basecraft_docs::{AlignmentDoc, SequenceDoc};
-use basecraft_protocol::facts::{Alphabet, FactSource};
+use basecraft_protocol::facts::{Alphabet, AlphabetCounts, FactSource};
 use std::collections::VecDeque;
 use std::sync::{
     Arc,
@@ -261,14 +261,14 @@ pub fn search(input: Input, query: &str, reverse: bool, cancel: &AtomicBool) -> 
             d.alphabet().value == Alphabet::Protein
         }
         Input::Sequence(d) => {
-            let protein = (0..d.len()).step_by(usize::from(CHUNK)).any(|start| {
-                let chunk = d.read(start, (start + u64::from(CHUNK)).min(d.len()));
-                cancel.load(Ordering::Relaxed) || Alphabet::guess(&chunk) == Alphabet::Protein
-            });
-            if cancel.load(Ordering::Relaxed) {
-                return Results::default();
+            let mut counts = AlphabetCounts::default();
+            for start in (0..d.len()).step_by(usize::from(CHUNK)) {
+                if cancel.load(Ordering::Relaxed) {
+                    return Results::default();
+                }
+                counts.add(&d.read(start, (start + u64::from(CHUNK)).min(d.len())));
             }
-            protein
+            counts.alphabet() == Alphabet::Protein
         }
         _ => false,
     };

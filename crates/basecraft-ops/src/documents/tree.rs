@@ -159,28 +159,16 @@ pub(crate) fn placement_notes(content: &files::Loaded, op: &Op) -> Vec<String> {
     let (Some(tree), Op::TreePlaceLabel { labels, choice }) = (content.tree(), op) else {
         return Vec::new();
     };
-    let ids = if labels.is_empty() {
-        displaced(content)
-    } else {
-        labels.clone()
-    };
     let done = match choice {
         LabelPlacement::Exact => "moved to the clade holding exactly its tips",
         LabelPlacement::Smallest => "moved to the smallest clade holding its tips",
         LabelPlacement::Remove => "removed",
     };
-    ids.iter()
+    labels
+        .iter()
         .filter_map(|id| tree.doc.annotations().get(id))
         .map(|a| format!("Label {:?} {done}", a.label))
         .collect()
-}
-
-/// The note for a label an edit displaced.
-pub(crate) fn displaced_note(label: &DisplacedLabel) -> String {
-    format!(
-        "Label {:?} no longer marks the group it was made for",
-        label.label
-    )
 }
 
 pub(crate) fn execute_tree(doc: &mut TreeDoc, op: &Op) -> Result<basecraft_docs::tree::TreeUndo> {

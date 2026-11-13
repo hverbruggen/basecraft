@@ -6,15 +6,27 @@ use std::sync::{Arc, Mutex};
 use basecraft_io::fasta::IndexedFasta;
 use basecraft_io::{genbank, gff3};
 use basecraft_protocol::Feature;
-use basecraft_protocol::facts::{Alphabet, Fact};
+use basecraft_protocol::facts::{Alphabet, AlphabetCounts, Fact};
 use basecraft_query::{IntervalIndex, SeqSummary};
 use serde::{Deserialize, Serialize};
 
 use crate::coord::{Change, map_location};
 use crate::piece::{PieceTable, Residues};
 
-/// Residues read to guess a sequence's alphabet.
-const GUESS_SAMPLE: u64 = 100_000;
+/// Basecraft's guess (D12) over every current residue, read in pieces.
+pub(crate) fn guess_alphabet(seq: &PieceTable) -> Alphabet {
+    const PIECE: u64 = 1 << 16;
+    let mut counts = AlphabetCounts::default();
+    let mut buf = Vec::new();
+    let mut start = 0;
+    while start < seq.len() {
+        buf.clear();
+        seq.read_into(start, (start + PIECE).min(seq.len()), &mut buf);
+        counts.add(&buf);
+        start += PIECE;
+    }
+    counts.alphabet()
+}
 
 /// Stable for the life of a document: removing a feature leaves a hole, so
 /// ids in the log, in selections and in plugin results stay valid.
@@ -124,7 +136,7 @@ impl SequenceDoc {
         circular: bool,
     ) -> Self {
         let seq = PieceTable::new(residues);
-        let alphabet = Alphabet::guessed(&seq.read(0, GUESS_SAMPLE));
+        let alphabet = Alphabet::guessed(guess_alphabet(&seq));
         Self {
             name: name.into(),
             circular,
@@ -144,11 +156,15 @@ impl SequenceDoc {
         &self.alphabet
     }
 
+    /// Basecraft's guess (D12) from the current residues.
+    pub fn guessed_alphabet(&self) -> Alphabet {
+        guess_alphabet(&self.seq)
+    }
+
     /// Use the alphabet a side file or the user states; `None` guesses
     /// again from the residues.
     pub fn set_alphabet(&mut self, stated: Option<Fact<Alphabet>>) {
-        self.alphabet =
-            stated.unwrap_or_else(|| Alphabet::guessed(&self.seq.read(0, GUESS_SAMPLE)));
+        self.alphabet = stated.unwrap_or_else(|| Alphabet::guessed(guess_alphabet(&self.seq)));
     }
 
     pub fn from_genbank(rec: genbank::Record) -> Self {
