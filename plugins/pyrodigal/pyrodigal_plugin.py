@@ -33,6 +33,9 @@ def cds(start, end, strand, partial_start, partial_end, code, label):
                 },
                 "qualifiers": [
                     {"key": "label", "value": label},
+                    # Prodigal's genes, partial ones too, span whole codons: an
+                    # edge start sits at the first whole codon in frame.
+                    {"key": "codon_start", "value": "1"},
                     {"key": "transl_table", "value": str(code)},
                     {
                         "key": "note",
@@ -49,7 +52,9 @@ def predict_genes(params, context):
     """Genes on both strands with genetic code `translation_table`,
     optionally only within `start`..`end` (0-based, end exclusive).
     Training uses the whole sequence."""
-    code = int(params.get("translation_table", 11))
+    if params.get("translation_table") is None:
+        raise ValueError("Gene prediction needs a genetic code (translation_table)")
+    code = int(params["translation_table"])
     if code not in pyrodigal.TRANSLATION_TABLES:
         raise ValueError(f"Prodigal doesn't support genetic code {code}")
     full = bytes(context.snapshot.residues)

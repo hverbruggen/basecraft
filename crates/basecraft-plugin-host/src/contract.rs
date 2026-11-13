@@ -129,6 +129,16 @@ impl BoundedSchema {
             return Err(invalid("validation work budget exceeded"));
         }
         self.validator.validate(value).map_err(|e| {
+            // A missing field is named by the schema, never by the value.
+            if let jsonschema::error::ValidationErrorKind::Required { property } = &e.kind {
+                let at = e.instance_path.to_string();
+                let name = property.as_str().unwrap_or("a field");
+                return invalid(if at.is_empty() {
+                    format!("{name} is required")
+                } else {
+                    format!("{name} is required at {at}")
+                });
+            }
             // Include the declared field's readable name without copying its
             // arbitrary instance value (which may contain private content).
             let pointer = e.instance_path.to_string();

@@ -311,7 +311,7 @@ mod tests {
                     session,
                     doc,
                     "basecraft.orf-finder/find_orfs@1",
-                    serde_json::json!({"min_codons":1}),
+                    serde_json::json!({"min_codons":1,"genetic_code":11}),
                     &[],
                 )
             },

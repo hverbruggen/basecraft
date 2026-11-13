@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "destination": "genbank",
   "source": {
     "document": "locus.afa",
@@ -17,7 +17,6 @@
       "product": ""
     },
     "mol_type": "genomic_dna",
-    "genetic_code": 1,
     "ends": "auto"
   },
   "frames": [
