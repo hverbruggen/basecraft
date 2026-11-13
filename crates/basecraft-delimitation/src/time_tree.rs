@@ -13,36 +13,139 @@ pub struct TimeTree {
     pub tips: BTreeMap<String, usize>,
     pub events: Vec<usize>,
     pub diagnostics: Vec<String>,
+    /// How the tips were evened out, when they needed it.
+    pub evened: Option<Evened>,
 }
 
-/// Rooting is an explicit input assertion: Newick topology alone cannot prove it.
-pub fn validate(tree: &TreeDoc, rooted: bool, tolerance: f64, binary: bool) -> Result<TimeTree> {
+/// The operation that makes a tree ultrametric, offered when one is not (D17).
+pub const SMOOTHING_OPERATION: &str = "basecraft.sanderson/date_tree@1";
+
+/// How the tip branches were evened out before use (D17): every tip now sits
+/// at `depth`, and no tip branch moved by more than `largest_change`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Evened {
+    pub depth: f64,
+    pub tips_changed: usize,
+    pub largest_change: f64,
+}
+
+/// Root-to-tip depths with the tips evened out, the tips by name, and how
+/// they were evened.
+type EvenedDepths = (Vec<f64>, BTreeMap<String, usize>, Option<Evened>);
+
+/// The one ultrametric check (D17), behind `validate`, which the tree view
+/// and every analysis use.
+///
+/// A tip's root-to-tip depth may differ from the true one by its bound: half
+/// a unit in the last written decimal of each branch on its path, plus the
+/// floating-point error of summing them (a length basecraft computed has no
+/// written decimals, so only the second part). The tree is ultrametric when
+/// one depth lies within every tip's bound and leaves no tip branch negative.
+/// The tips are then evened out to the depth in that range that changes the
+/// largest tip branch least.
+fn ultrametric(tree: &TreeDoc, binary: bool) -> Result<EvenedDepths> {
+    let (mut depths, tips) = depths(tree, binary)?;
+    let mut bounds = vec![0.0; depths.len()];
+    for i in tree.preorder() {
+        let node = tree.node(i);
+        if let Some(parent) = node.parent {
+            let rounding = node
+                .length_place
+                .map_or(0.0, |place| 0.5 * 10f64.powi(place));
+            bounds[i] = bounds[parent] + rounding + f64::EPSILON * depths[i];
+        }
+    }
+    let parent_depth = |i: usize| tree.node(i).parent.map_or(0.0, |p| depths[p]);
+    // The tips that set each end of the feasible range, and whether the
+    // lower end comes from a tip branch that cannot go below zero.
+    let (mut low, mut high) = ((f64::MIN, 0, false), (f64::MAX, 0));
+    let (mut shallow, mut deep) = (f64::MAX, f64::MIN);
+    for &i in tips.values() {
+        let rounded = depths[i] - bounds[i];
+        let floor = parent_depth(i);
+        if rounded.max(floor) > low.0 {
+            low = (rounded.max(floor), i, floor > rounded);
+        }
+        if depths[i] + bounds[i] < high.0 {
+            high = (depths[i] + bounds[i], i);
+        }
+        shallow = shallow.min(depths[i]);
+        deep = deep.max(depths[i]);
+    }
+    if low.0 > high.0 {
+        let name = |i: usize| tree.node(i).name.clone();
+        let reason = if low.2 {
+            format!(
+                "tip {} is at most {} from the root, but the branch to tip {} starts deeper, at {}, so evening the tips would make that branch negative",
+                name(high.1),
+                high.0,
+                name(low.1),
+                parent_depth(low.1),
+            )
+        } else {
+            format!(
+                "tip {} is {} from the root and tip {} is {}, further apart than the decimals written in the file allow",
+                name(high.1),
+                depths[high.1],
+                name(low.1),
+                depths[low.1],
+            )
+        };
+        return Err(Error(format!(
+            "the tree is not ultrametric: {reason}. Make it ultrametric with penalised likelihood (Sanderson rate smoothing, operation {SMOOTHING_OPERATION}) and use that tree"
+        )));
+    }
+    let (low, high) = (low.0, high.0);
+    let depth = f64::midpoint(shallow, deep).clamp(low, high);
+    let mut evened = Evened {
+        depth,
+        tips_changed: 0,
+        largest_change: 0.0,
+    };
+    for &i in tips.values() {
+        let change = (depth - depths[i]).abs();
+        if change > 0.0 {
+            evened.tips_changed += 1;
+            evened.largest_change = evened.largest_change.max(change);
+        }
+        depths[i] = depth;
+    }
+    Ok((depths, tips, (evened.tips_changed > 0).then_some(evened)))
+}
+
+/// Whether `tree` has usable lengths but is not ultrametric, so smoothing it
+/// with penalised likelihood is the way on (D17). Callers decide on this
+/// check, never on the refusal's text.
+pub fn needs_smoothing(tree: &TreeDoc) -> bool {
+    depths(tree, false).is_ok() && ultrametric(tree, false).is_err()
+}
+
+/// A rooted tree with ultrametric depths, its tips evened out (D17).
+pub fn validate(tree: &TreeDoc, rooted: bool, binary: bool) -> Result<TimeTree> {
     if !rooted {
-        return Err(Error("time-tree analysis requires explicit rooting".into()));
+        return Err(Error("time-tree analysis requires a rooted tree".into()));
     }
-    if !tolerance.is_finite() || tolerance <= 0.0 || tolerance >= 0.01 {
-        return Err(Error("invalid scale-relative ultrametric tolerance".into()));
-    }
-    let (depths, tips) = depths(tree, binary)?;
-    let height = tips.values().map(|&i| depths[i]).fold(0.0, f64::max);
+    let (depths, tips, evened) = ultrametric(tree, binary)?;
+    let height = evened.as_ref().map_or_else(
+        || tips.values().map(|&i| depths[i]).fold(0.0, f64::max),
+        |evened| evened.depth,
+    );
     if height <= 0.0 || !height.is_finite() {
         return Err(Error(
             "time tree requires positive finite root height".into(),
         ));
     }
-    if tips
-        .values()
-        .any(|&i| (depths[i] - height).abs() > tolerance * height)
-    {
-        return Err(Error(
-            "tree is not ultrametric within scale-relative tolerance".into(),
+    let ages: Vec<_> = depths
+        .iter()
+        .map(|depth| (height - depth).max(0.0))
+        .collect();
+    let mut diagnostics = Vec::new();
+    if let Some(evened) = &evened {
+        diagnostics.push(format!(
+            "tip branches evened out to a root-to-tip depth of {}: {} tips changed by at most {}, within the rounding of the written branch lengths",
+            evened.depth, evened.tips_changed, evened.largest_change
         ));
     }
-    let mut ages: Vec<_> = depths.iter().map(|depth| height - depth).collect();
-    for &tip in tips.values() {
-        ages[tip] = 0.0;
-    }
-    let mut diagnostics = Vec::new();
     for &i in tree.preorder().iter().skip(1) {
         if tree.node(i).length == Some(0.0) && !tree.node(i).is_tip() {
             // A binary encoding of a polytomy: nested events share one age and
@@ -64,6 +167,7 @@ pub fn validate(tree: &TreeDoc, rooted: bool, tolerance: f64, binary: bool) -> R
         tips,
         events,
         diagnostics,
+        evened,
     })
 }
 
@@ -274,7 +378,7 @@ mod tests {
                 ),
             )
             .unwrap();
-            let time = validate(&tree, true, 1e-8, true).unwrap();
+            let time = validate(&tree, true, true).unwrap();
             assert_eq!(cut(&tree, &time, scale).unwrap().len(), 2);
             let result = convert(&tree, true, 10_000).unwrap();
             assert!(result.converged);
@@ -285,22 +389,117 @@ mod tests {
     #[test]
     fn invalid_time_trees_are_rejected() {
         for newick in [
-            "(a:1,b:2);",
+            "(a:1.0,b:2.0);",
             "(a:-1,b:1);",
             "(a:0,b:0);",
             "(a:1,a:1);",
             "(a:1,b:1,c:1);",
         ] {
             let tree = TreeDoc::from_newick("bad", newick).unwrap();
-            assert!(validate(&tree, true, 1e-8, true).is_err(), "{newick}");
+            assert!(validate(&tree, true, true).is_err(), "{newick}");
         }
         let tree = TreeDoc::from_newick("good", "(a:1,b:1);").unwrap();
-        assert!(validate(&tree, false, 1e-8, true).is_err());
+        assert!(validate(&tree, false, true).is_err());
     }
+    #[test]
+    fn six_decimal_trees_pass_within_their_rounding_and_tips_are_evened_out() {
+        // As BEAST and TreeAnnotator write it: six decimals, so a and b differ
+        // by one unit in the last place.
+        let tree = TreeDoc::from_newick(
+            "beast",
+            "((a:0.123457,b:0.123456):0.876543,(c:0.333333,d:0.333333):0.666667);",
+        )
+        .unwrap();
+        let time = validate(&tree, true, true).unwrap();
+        let evened = time.evened.clone().unwrap();
+        assert!((evened.depth - 0.999_999_5).abs() < 1e-12, "{evened:?}");
+        assert!(evened.largest_change <= 5e-7 + 1e-12, "{evened:?}");
+        assert_eq!(time.root_height, evened.depth);
+        assert!(time.tips.values().all(|&tip| time.ages[tip] == 0.0));
+        assert!(
+            time.diagnostics
+                .iter()
+                .any(|d| d.starts_with("tip branches evened out"))
+        );
+        // An exactly ultrametric tree needs no evening.
+        let exact =
+            TreeDoc::from_newick("exact", "((a:0.5,b:0.5):0.5,(c:0.25,d:0.25):0.75);").unwrap();
+        assert!(validate(&exact, true, true).unwrap().evened.is_none());
+    }
+
+    #[test]
+    fn a_tree_off_by_more_than_its_rounding_is_refused_with_the_smoothing_offer() {
+        // a and b differ by 4 units in the sixth decimal; their paths allow 2.
+        let tree = TreeDoc::from_newick(
+            "off",
+            "((a:0.123460,b:0.123456):0.876543,(c:0.333333,d:0.333333):0.666667);",
+        )
+        .unwrap();
+        let error = validate(&tree, true, true).unwrap_err().0;
+        assert!(
+            error.contains("not ultrametric") && error.contains(SMOOTHING_OPERATION),
+            "{error}"
+        );
+        assert!(
+            error.contains("tip b") && error.contains("tip a"),
+            "{error}"
+        );
+        // A length written without a decimal point is exact (D17 refined),
+        // so whole-number trees get no rounding allowance.
+        for whole in ["(a:1,b:2);", "((a:3,b:1):1,(c:2,d:2):2);"] {
+            let tree = TreeDoc::from_newick("whole", whole).unwrap();
+            assert!(validate(&tree, true, true).is_err(), "{whole}");
+        }
+    }
+
+    #[test]
+    fn the_refusal_names_the_tips_in_conflict_and_a_branch_that_would_go_negative() {
+        // a sits deeper than b can reach; c, written to one decimal, is loose
+        // enough to fit either, so the refusal names a and b, not c.
+        let tree = TreeDoc::from_newick("mixed", "((a:0.500,b:0.400):0.500,c:1.0);").unwrap();
+        let error = validate(&tree, true, false).unwrap_err().0;
+        assert!(
+            error.contains("tip b") && error.contains("tip a") && !error.contains("tip c"),
+            "{error}"
+        );
+        // b's branch starts at 0.9, deeper than c can reach, so evening the
+        // tips would make it negative.
+        let tree = TreeDoc::from_newick(
+            "negative",
+            "((a:0.0001,(b:0.0001):0.9000):0.0000,c:0.0001);",
+        )
+        .unwrap();
+        let error = validate(&tree, true, false).unwrap_err().0;
+        assert!(error.contains("negative"), "{error}");
+    }
+
+    #[test]
+    fn exact_and_split_lengths_keep_their_precision() {
+        // Moving the root of an exact branch: exact pieces, floating-point
+        // bound only.
+        let mut tree = TreeDoc::from_newick("moved", "(a:1,b:1);").unwrap();
+        tree.set_root_position(&["a".into()], 0.4).unwrap();
+        assert!(validate(&tree, true, true).is_err());
+        tree.set_root_position(&["a".into()], 0.5).unwrap();
+        assert!(validate(&tree, true, true).unwrap().evened.is_none());
+        // A six-decimal tree still passes after midpoint rooting: the pieces
+        // of the split branch keep its six decimals (D17 refined).
+        let six = "((a:0.123457,b:0.123456):0.876543,(c:0.333333,d:0.333333):0.666667);";
+        let mut tree = TreeDoc::from_newick("beast", six).unwrap();
+        tree.midpoint_root().unwrap();
+        assert!(
+            tree.nodes()
+                .iter()
+                .skip(1)
+                .all(|n| n.length_place == Some(-6))
+        );
+        assert!(validate(&tree, true, true).is_ok());
+    }
+
     #[test]
     fn zero_length_internal_branch_is_a_tied_nested_event() {
         let tree = TreeDoc::from_newick("polytomy", "(((a:1,b:1):0,c:1):1,d:2);").unwrap();
-        let time = validate(&tree, true, 1e-8, true).unwrap();
+        let time = validate(&tree, true, true).unwrap();
         let ages: Vec<_> = time.events.iter().map(|&i| time.ages[i]).collect();
         assert_eq!(ages, [2.0, 1.0, 1.0]);
         assert!(
@@ -314,7 +513,7 @@ mod tests {
     #[test]
     fn tied_separate_events_and_constrained_nonclocklike_tree() {
         let tree = TreeDoc::from_newick("tied", "((a:1,b:1):1,(c:1,d:1):1);").unwrap();
-        let time = validate(&tree, true, 1e-8, true).unwrap();
+        let time = validate(&tree, true, true).unwrap();
         assert_eq!(cut(&tree, &time, 1.0).unwrap().len(), 2);
         assert_eq!(cut(&tree, &time, 0.9).unwrap().len(), 4);
         let nonclock =

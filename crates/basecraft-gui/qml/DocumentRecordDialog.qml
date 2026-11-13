@@ -18,56 +18,31 @@ AppDialog {
     property string token: ""
     property int page: 0
     property string selectedId: ""
-    property var drafts: ({})
-    property string draftKey: ""
-    property string savedDraftText: ""
-    property string draftText: ""
-    property string draftRevision: ""
+    // The document the report describes; another one clears the selection.
+    property string shownKey: ""
     readonly property string documentName: report.document || ""
     readonly property var historyRows: (report.history || []).filter(row => allEvents.checked || row.contributing || row.status === "Source" || row.status === "Saved checkpoint")
     signal copyText(string text)
     signal exportReport(string snapshot)
-    signal saveDraft(string text, string revision)
     signal verify()
     signal packageRecord()
     signal openRecordFolder()
     initialFocusItem: pages
 
-    function rememberDraft() {
-        if (draftKey.length) drafts[draftKey] = { text: draftText, revision: draftRevision, savedText: savedDraftText }
-    }
-    function unsavedDrafts() {
-        rememberDraft()
-        return Object.keys(drafts).filter(key => drafts[key].text !== drafts[key].savedText)
-    }
-    function markDraftSaved(key, text) {
-        if (drafts[key]) drafts[key].savedText = text
-        if (draftKey === key) savedDraftText = text
-    }
     function refreshReport() {
-        if (!controller) { rememberDraft(); report = ({}); token = ""; return }
+        if (!controller) { report = ({}); token = ""; return }
         const nextToken = controller.record_revision() + ":" + savedRevision
         if (nextToken === token && report.document) return
-        rememberDraft()
         token = nextToken
         const next = JSON.parse(savedRevision && service ? service.saved_report(documentPath) : controller.document_record())
         const nextKey = documentPath || next.document || ""
-        const changedDocument = nextKey !== draftKey
+        if (nextKey !== shownKey) { selectedId = ""; shownKey = nextKey }
         report = next
-        if (changedDocument) {
-            selectedId = ""
-            const draft = drafts[nextKey]
-            draftKey = nextKey
-            savedDraftText = draft ? draft.savedText || "" : ""
-            draftText = draft ? draft.text : ""
-            draftRevision = draft ? draft.revision : ""
-        }
     }
     function showPage(index) { page = index; token = ""; refreshReport(); open() }
     function showEvidence(id) { selectedId = id; allEvents.checked = true; page = 0 }
     onSavedRevisionChanged: { token = ""; if (visible) refreshReport() }
     onControllerChanged: { token = ""; if (visible) refreshReport() }
-    onClosed: rememberDraft()
     // The controller moves this with every edit and recorded run.
     readonly property string historyRevision: controller ? controller.history_revision : ""
     onHistoryRevisionChanged: if (visible) refreshReport()
@@ -96,10 +71,9 @@ AppDialog {
             Layout.fillWidth: true
             currentIndex: dialog.page
             onCurrentIndexChanged: dialog.page = currentIndex
-            AppTabButton { width: pages.width / 4; text: "Provenance" }
-            AppTabButton { width: pages.width / 4; text: "Methods" }
-            AppTabButton { width: pages.width / 4; text: "Authored draft" }
-            AppTabButton { width: pages.width / 4; text: "Raw record" }
+            AppTabButton { width: pages.width / 3; text: "Provenance" }
+            AppTabButton { width: pages.width / 3; text: "Methods" }
+            AppTabButton { width: pages.width / 3; text: "Raw record" }
         }
         StackLayout {
             Layout.minimumWidth: 0
@@ -164,29 +138,6 @@ AppDialog {
                             onClicked: dialog.showEvidence(modelData.activity_ids[0])
                         }
                     }
-                }
-            }
-            ColumnLayout {
-                Label {
-                    text: dialog.draftRevision && dialog.draftRevision !== dialog.report.revision ? "This draft describes an earlier revision. Review the current Methods before updating it." : "Your text is kept separate from generated Methods. Copy or save it before closing the application."
-                    Layout.fillWidth: true; wrapMode: Text.Wrap
-                }
-                AppButton {
-                    text: "Start from current Methods"
-                    enabled: !dialog.draftText.length
-                    onClicked: { dialog.draftText = dialog.report.methods || ""; dialog.draftRevision = dialog.report.revision || "" }
-                }
-                ScrollView {
-                    Layout.fillWidth: true; Layout.fillHeight: true
-                    TextArea {
-                        text: dialog.draftText; selectByMouse: true; wrapMode: TextEdit.Wrap
-                        Accessible.name: "Authored methods draft"
-                        onTextChanged: { dialog.draftText = text; dialog.rememberDraft() }
-                    }
-                }
-                RowLayout {
-                    AppButton { text: "Copy draft"; onClicked: dialog.copyText(dialog.draftText) }
-                    AppButton { text: "Save draft…"; enabled: dialog.draftText.length > 0; onClicked: dialog.saveDraft(dialog.draftText, dialog.draftRevision) }
                 }
             }
             ScrollView {

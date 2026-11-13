@@ -12,6 +12,8 @@ AppDialog {
     standardButtons: Dialog.Close
     property var service: null
     property var jobs: null
+    // The open documents: their folders hold the runs on loose files.
+    property var documents: null
     function resultPath(job) {
         if (job.primary_output !== undefined) return job.primary_output || ""
         return Object.keys(job.outputs || {})[0] || ""
@@ -19,7 +21,7 @@ AppDialog {
     function activeStatus(status) { return ["queued", "running", "cancelling", "finalizing"].includes(status) }
     // This session's jobs come from the job service; retained runs from
     // earlier sessions are read from their records only when asked for.
-    readonly property var retained: previousRuns.checked && service ? JSON.parse(service.retained_jobs()) : ({jobs: []})
+    readonly property var retained: previousRuns.checked && service ? JSON.parse(service.retained_jobs(documents ? documents.open_folders() : "[]")) : ({jobs: []})
     property var jobData: ({jobs: (jobs ? JSON.parse(jobs.jobs) : []).concat(retained.jobs || []), error: retained.error, warnings: retained.warnings})
     readonly property var notices: service && service.notifications.length ? JSON.parse(service.notifications) : []
     signal openDocument(string path)

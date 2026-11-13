@@ -431,8 +431,16 @@ enum ToolKind {
     Open,
     /// Report the saved table; nothing to open.
     Matrix,
-    /// Apply the placement MAFFT computed for added sequences.
-    Addition,
+    /// Apply the placement MAFFT computed for added sequences; a reviewed
+    /// consensus is recorded after its row is placed.
+    Addition(Option<Reviewed>),
+}
+
+/// A reviewed consensus waiting for its row: the accepted review's evidence
+/// and the sequence as reviewed.
+struct Reviewed {
+    evidence: String,
+    sequence: String,
 }
 
 impl Drop for ActiveTool {
@@ -1461,69 +1469,49 @@ impl qobject::AlignmentController {
         if self.rust().busy {
             return;
         }
-        let rows = match basecraft_ops::alignment_add::parse_sequences(
-            &text.to_string(),
-            &name.to_string(),
-        ) {
-            Ok(rows) => rows,
-            Err(e) => {
-                self.fail_addition(&e);
-                return;
-            }
-        };
-        match crate::bridge::checked_document!(
-            self.qt_thread(),
-            self.with_doc(|doc| doc.validate_additions(&rows))
-        ) {
-            Some(Ok(())) => {}
-            Some(Err(error)) => {
-                self.fail_addition(&error.to_string());
-                return;
-            }
-            None => {
-                self.fail_addition("No alignment open");
-                return;
-            }
-        }
-        let duplicates = crate::bridge::checked_document!(
-            self.qt_thread(),
-            self.with_doc(|doc| doc.duplicate_sequence_names(&rows))
-        )
-        .unwrap_or_default();
-        if !duplicates.is_empty() {
-            self.fail_addition(&format!(
-                "These sequence IDs are already in the alignment:\n\n{}",
-                duplicates
-                    .iter()
-                    .map(|n| format!("• {n}"))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            ));
+        if crate::bridge::checked_document!(self.qt_thread(), self.with_doc(|_| ())).is_none() {
+            self.fail_addition("No alignment open");
             return;
         }
-        if let Some(evidence) = evidence {
-            let result = (|| -> Result<(), String> {
-                if rows.len() != 1 {
-                    return Err("Select one reviewed specimen at a time".into());
-                }
-                let mut r = self.as_mut().rust_mut();
-                let r = &mut *r;
-                let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
-                    return Err("No alignment is open".into());
-                };
-                basecraft_ops::sanger_review::record_addition(session, doc, &evidence, &rows[0].1)
-                    .map_err(|e| e.to_string())
-            })();
-            if let Err(error) = result {
+        let (text, name) = (text.to_string(), name.to_string());
+        // A reviewed consensus is checked by the same call as `basecraft
+        // sanger add`, and its review recorded only once its row is in.
+        let rows = {
+            let r = self.rust();
+            let (Some(session), Some(doc)) = (&r.session, r.doc) else {
+                return;
+            };
+            match &evidence {
+                Some(evidence) => basecraft_ops::sanger_commands::consensus_rows(
+                    session, doc, evidence, &text, &name,
+                ),
+                None => session.alignment(doc).and_then(|alignment| {
+                    Ok(basecraft_ops::alignment_add::addition_rows(
+                        alignment, &text, &name,
+                    )?)
+                }),
+            }
+            .map_err(|e| e.to_string())
+        };
+        let rows = match rows {
+            Ok(rows) => rows,
+            Err(error) => {
                 self.fail_addition(&error);
                 return;
             }
-        }
+        };
+        let reviewed = evidence.map(|evidence| Reviewed {
+            evidence,
+            sequence: rows[0].1.clone(),
+        });
         if !mafft {
-            if self.as_mut().edit(Op::AlnAddSequences {
-                rows,
-                reference: None,
-            }) {
+            if self.as_mut().add_rows(
+                Op::AlnAddSequences {
+                    rows,
+                    reference: None,
+                },
+                reviewed.as_ref(),
+            ) {
                 self.as_mut().done("Added sequences");
                 self.as_mut().sequences_added();
             } else {
@@ -1546,11 +1534,47 @@ impl qobject::AlignmentController {
             working: "Adding sequences with MAFFT…".into(),
             params,
         };
-        self.start_tool(&tool, ToolKind::Addition);
+        self.start_tool(&tool, ToolKind::Addition(reviewed));
+    }
+
+    /// Apply an addition. A reviewed consensus is recorded once its row is
+    /// in, and the row is undone if that fails, so neither stays alone.
+    fn add_rows(mut self: Pin<&mut Self>, op: Op, reviewed: Option<&Reviewed>) -> bool {
+        if !self.as_mut().edit(op) {
+            return false;
+        }
+        let Some(reviewed) = reviewed else {
+            return true;
+        };
+        let recorded = {
+            let mut r = self.as_mut().rust_mut();
+            let r = &mut *r;
+            match (&mut r.session, r.doc) {
+                (Some(session), Some(doc)) => basecraft_ops::sanger_commands::record_consensus(
+                    session,
+                    doc,
+                    &reviewed.evidence,
+                    &reviewed.sequence,
+                )
+                .map_err(|e| e.to_string()),
+                _ => Err("No alignment open".into()),
+            }
+        };
+        if let Err(error) = recorded {
+            self.as_mut().undo();
+            self.as_mut().set_message(QString::from(&error));
+            return false;
+        }
+        true
     }
 
     /// Apply MAFFT's placement of added sequences, read from the run's result.
-    fn finish_addition(mut self: Pin<&mut Self>, outcome: &OperationOutcome, generation: u64) {
+    fn finish_addition(
+        mut self: Pin<&mut Self>,
+        outcome: &OperationOutcome,
+        generation: u64,
+        reviewed: Option<&Reviewed>,
+    ) {
         let result = (|| -> Result<serde_json::Value, String> {
             {
                 let r = self.rust();
@@ -1590,10 +1614,13 @@ impl qobject::AlignmentController {
             });
         match parsed {
             Ok((rows, reference)) => {
-                if self.as_mut().edit(Op::AlnAddSequences {
-                    rows,
-                    reference: Some(reference),
-                }) {
+                if self.as_mut().add_rows(
+                    Op::AlnAddSequences {
+                        rows,
+                        reference: Some(reference),
+                    },
+                    reviewed,
+                ) {
                     self.as_mut().done("Added sequences");
                     self.as_mut().sequences_added();
                 } else {
@@ -1747,7 +1774,7 @@ impl qobject::AlignmentController {
             let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
                 return Err("No alignment open".into());
             };
-            let (output, exports) = if matches!(kind, ToolKind::Addition) {
+            let (output, exports) = if matches!(kind, ToolKind::Addition(_)) {
                 (PathBuf::new(), Vec::new())
             } else {
                 let (suffix, ext) = (&tool.output.0, &tool.output.1);
@@ -1823,15 +1850,17 @@ impl qobject::AlignmentController {
         let name = &tool.name;
         if outcome.state != basecraft_protocol::operation::RuntimeState::Completed {
             let message = format!("{name}: {}", failure(&outcome));
-            if matches!(tool.kind, ToolKind::Addition) {
+            if matches!(tool.kind, ToolKind::Addition(_)) {
                 self.fail_addition(&message);
             } else {
                 self.fail(&message);
             }
             return;
         }
-        match tool.kind {
-            ToolKind::Addition => self.finish_addition(&outcome, tool.generation),
+        match &tool.kind {
+            ToolKind::Addition(reviewed) => {
+                self.finish_addition(&outcome, tool.generation, reviewed.as_ref());
+            }
             ToolKind::Matrix => self.as_mut().done(&format!(
                 "Done with {name}{}; saved {}",
                 took(tool.started),

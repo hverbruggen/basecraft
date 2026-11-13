@@ -8,7 +8,6 @@
   "basecraft": "<version>",
   "batch": {
     "ends": "auto",
-    "genetic_code": 1,
     "marker": {
       "kind": "rrna",
       "product": ""
@@ -45,5 +44,5 @@
     "document": "locus.afa",
     "hash": "b3:source"
   },
-  "version": 1
+  "version": 2
 }

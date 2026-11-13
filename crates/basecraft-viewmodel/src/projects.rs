@@ -129,6 +129,21 @@ struct ProjectHistory {
     projects: Vec<PathBuf>,
 }
 
+/// The recent-projects list in basecraft's private folder.
+pub fn history_file() -> Result<PathBuf, String> {
+    basecraft_platform::paths::AppPaths::discover()
+        .map(|paths| paths.state.join("recent-projects.json"))
+        .map_err(|e| e.to_string())
+}
+
+/// The recent projects, most recent first. A missing or unreadable list is
+/// empty: it only serves to name a project, never to choose one.
+pub fn recent() -> Vec<PathBuf> {
+    history_file()
+        .and_then(|file| load_history(&file))
+        .unwrap_or_default()
+}
+
 pub fn load_history(path: &Path) -> Result<Vec<PathBuf>, String> {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,

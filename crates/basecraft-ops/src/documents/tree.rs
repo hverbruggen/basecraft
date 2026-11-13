@@ -23,6 +23,7 @@ impl Document for OpenedTree {
                 | Op::TreeRotate { .. }
                 | Op::TreeLadderize { .. }
                 | Op::TreeRenameTip { .. }
+                | Op::TreeSetRooting { .. }
                 | Op::TreeSetBranchLengths { .. }
                 | Op::TreeAnnotate { .. }
                 | Op::TreePlaceLabel { .. }

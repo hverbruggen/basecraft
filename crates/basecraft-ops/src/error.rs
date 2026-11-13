@@ -72,6 +72,26 @@ pub enum Error {
         folder.display()
     )]
     ReadOnlyFolder { folder: PathBuf, reason: String },
+    /// A file a request names whose folder cannot be found or read.
+    #[error("{}: {reason}", folder.display())]
+    FolderUnavailable { folder: PathBuf, reason: String },
+    #[error("{} names no file", .0.display())]
+    NoFileName(PathBuf),
+    /// A Sanger decision or column as a person wrote it, not understood.
+    #[error(transparent)]
+    ReviewInput(#[from] crate::sanger_commands::InputError),
+    /// Sequences that cannot join an alignment, and why.
+    #[error(transparent)]
+    Addition(#[from] crate::alignment_add::AdditionError),
+    #[error(transparent)]
+    DisplayTree(#[from] crate::delimitation::DisplayTreeError),
+    #[error("This project has no specimen metadata")]
+    NoMetadata,
+    /// The work named needs a chosen project and there is none.
+    #[error("{0} needs a project; choose one (on the command line, --project)")]
+    NoProject(&'static str),
+    #[error("{0} is not a label field; give specimen, genus, species, accession or column:NAME")]
+    NotALabelField(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -103,7 +123,9 @@ impl Error {
         match self {
             Self::StaleRevision { .. } => Code::StaleRevision,
             Self::ChangedOnDisk { .. } => Code::ChangedOnDisk,
-            Self::NotFound { .. } => Code::NotFound,
+            Self::NotFound { .. } | Self::FolderUnavailable { .. } | Self::NoMetadata => {
+                Code::NotFound
+            }
             Self::Damaged { .. } => Code::Damaged,
             Self::Limit { .. } => Code::Limit,
             Self::Unsupported(_) => Code::Unsupported,
@@ -124,7 +146,20 @@ impl Error {
                 }
             }
             Self::Format(_) => Code::FormatError,
-            Self::Json(_) | Self::Invalid(_) => Code::InvalidArguments,
+            Self::Json(_)
+            | Self::Invalid(_)
+            | Self::NoFileName(_)
+            | Self::ReviewInput(_)
+            | Self::Addition(_)
+            | Self::DisplayTree(
+                crate::delimitation::DisplayTreeError::NotText(_)
+                | crate::delimitation::DisplayTreeError::NotOneTree { .. },
+            )
+            | Self::NotALabelField(_) => Code::InvalidArguments,
+            Self::NoProject(_)
+            | Self::DisplayTree(crate::delimitation::DisplayTreeError::NoneAttached) => {
+                Code::MissingChoice
+            }
             Self::UnknownFormat(_) => Code::UnknownFormat,
             Self::Empty(_) => Code::EmptyDocument,
             Self::EvidenceConflict(_) => Code::AnalysisInputConflict,

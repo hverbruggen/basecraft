@@ -1970,10 +1970,6 @@ pub fn package(
         original_id, publication.origin
     );
     crate::records::provenance::publish(&target_bundle, &publication)?;
-    let authored = bundle.join("reports/methods.md");
-    if authored.is_file() {
-        copy(&authored, &target_bundle.join("reports/methods.md"))?;
-    }
     let issues = crate::records::provenance::verify(&copied, None)?;
     if !issues.is_empty() {
         return Err(crate::Error::Damaged {

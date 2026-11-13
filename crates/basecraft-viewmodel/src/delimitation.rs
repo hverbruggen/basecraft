@@ -244,6 +244,80 @@ pub fn tip_columns(
         .collect()
 }
 
+/// The comparison figure of species workspace `work` on its display tree
+/// `tree` (drawing edits already applied), with the columns the workspace
+/// shows, or with the hypotheses `shown` names, in that order, shown or not.
+/// The window's export and `basecraft delimitation figures` both draw it here.
+#[must_use]
+pub fn comparison_figure(
+    work: &DelimitationWorkspace,
+    tree: &basecraft_docs::TreeDoc,
+    theme: &Theme,
+    font: &str,
+    shown: Option<&[String]>,
+) -> String {
+    let tips = tree
+        .tips_in_order()
+        .iter()
+        .map(|&i| tree.node(i).name.clone())
+        .collect();
+    let chosen;
+    let work = match shown {
+        Some(ids) => {
+            let mut copy = work.clone();
+            copy.view.visible = ids.to_vec();
+            chosen = copy;
+            &chosen
+        }
+        None => work,
+    };
+    let columns = tip_columns(work, &tips, &palette(theme));
+    let figure = crate::tree::figure_with_columns(tree, &columns, 900.0, 20.0, theme, font);
+    comparison_svg(work, &figure, font)
+}
+
+/// The batch figures of a species workspace on its display tree, as file
+/// names under `stem` and SVG text: `STEM.svg` with every hypothesis, then
+/// `STEM.ID.svg` for each hypothesis. Characters other than letters, digits,
+/// `-` and `_` in an ID become `_`; IDs that then clash get `-2`, `-3`, so
+/// no figure replaces another.
+#[must_use]
+pub fn batch_figures(
+    work: &DelimitationWorkspace,
+    tree: &basecraft_docs::TreeDoc,
+    theme: &Theme,
+    font: &str,
+    stem: &str,
+) -> Vec<(String, String)> {
+    let ids: Vec<String> = work.hypotheses.iter().map(|h| h.id.clone()).collect();
+    let mut taken = BTreeSet::from([format!("{stem}.svg")]);
+    let mut out = vec![(
+        format!("{stem}.svg"),
+        comparison_figure(work, tree, theme, font, Some(&ids)),
+    )];
+    for id in &ids {
+        let safe: String = id
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        let mut name = format!("{stem}.{safe}.svg");
+        let mut count = 1;
+        while !taken.insert(name.clone()) {
+            count += 1;
+            name = format!("{stem}.{safe}-{count}.svg");
+        }
+        let svg = comparison_figure(work, tree, theme, font, Some(std::slice::from_ref(id)));
+        out.push((name, svg));
+    }
+    out
+}
+
 /// The comparison figure: the tree with its bar columns, a letter above each
 /// column and a legend of the letters below.
 #[must_use]
@@ -440,6 +514,44 @@ mod tests {
                     .all(|band| colors.contains(&band.color))
             );
         }
+    }
+
+    #[test]
+    fn a_comparison_figure_shows_the_hypotheses_asked_for() {
+        let mut work = workspace();
+        let every: Vec<String> = work.hypotheses.iter().map(|h| h.id.clone()).collect();
+        work.view.visible = every[..1].to_vec();
+        let tree = TreeDoc::from_newick("t", "((a:1,c:1):1,(b:1,d:1):1);").unwrap();
+        let theme = Theme::publication();
+        let figure =
+            |shown: Option<&[String]>| comparison_figure(&work, &tree, &theme, "serif", shown);
+        let all = figure(Some(&every));
+        assert_ne!(
+            all,
+            figure(None),
+            "named hypotheses are drawn though hidden"
+        );
+        for id in &every {
+            let one = figure(Some(std::slice::from_ref(id)));
+            assert!(one.len() < all.len(), "{id}");
+        }
+        assert_ne!(figure(Some(&every[..1])), figure(Some(&every[1..2])));
+    }
+
+    #[test]
+    fn batch_figures_never_share_a_file_name() {
+        let mut work = workspace();
+        work.hypotheses[0].id = "a.b".into();
+        work.hypotheses[1].id = "a_b".into();
+        let tree = TreeDoc::from_newick("t", "((a:1,c:1):1,(b:1,d:1):1);").unwrap();
+        let figures = batch_figures(&work, &tree, &Theme::publication(), "serif", "species");
+        let names: Vec<&str> = figures.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(
+            names[..3],
+            ["species.svg", "species.a_b.svg", "species.a_b-2.svg"]
+        );
+        assert_eq!(figures.len(), 1 + work.hypotheses.len());
+        assert_ne!(figures[1].1, figures[2].1);
     }
 
     #[test]

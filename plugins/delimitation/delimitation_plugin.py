@@ -65,7 +65,7 @@ def invoke(method, params, context, source=None, target=None):
     input_hash = subprocess.check_output([engine, "--hash", str(snapshot)], text=True).strip()
     request = {"version": 1, "job_id": job_id, "generation": params.get("generation", 0),
                    "method": method, "input": str(snapshot), "input_hash": input_hash, "output": str(target.parent / (".delimitation-job-" + job_id) / "result.json"),
-                   "rooted": params.get("rooted", False), "tree_index": params.get("tree_index", 0),
+                   "rooted": params.get("rooted"), "tree_index": params.get("tree_index", 0),
                    "seed": params.get("seed", 1), "workers": workers,
                    "parameters": {k: v for k, v in {**params, **derived}.items() if k in ("threshold", "candidate_budget", "reference_version", "reference_age_clamp", "groups", "log_likelihood", "fitted_log_likelihood", "null_log_likelihood", "lrt_passed", "mptp_version", "command", "min_branch", "units", "diagnostics", "replicates", "partitions", "stream", "haplotypes", "haplotype_policy", "mapping_hash", "upstream", "tree_inference", "sequence_sampling", "alignment_input_hash", "alignment_snapshot", "deduplicate", "model", "min_overlap", "original_count", "retained_count", "progress_job_id")},
                    "progress": context.progress_file, "cancel_file": context.cancel_file}

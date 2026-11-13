@@ -11,12 +11,13 @@
       "parameters": {
         "type": "object",
         "additionalProperties": false,
+        "required": ["translation_table"],
         "properties": {
           "translation_table": {
+            "description": "NCBI genetic code (translation table). No default.",
             "type": "integer",
             "minimum": 1,
-            "maximum": 255,
-            "default": 11
+            "maximum": 255
           },
           "start": {
             "type": "integer",

@@ -330,7 +330,9 @@ Main {
         // Sequence commands: defaults, a remapped shortcut, document context.
         list.push(() => {
             show(0)
-            check(command("file.new-sequence").shortcut === "Ctrl+N", "new sequence lost Ctrl+N")
+            const newSequence = command("file.new-sequence")
+            check(newSequence.shortcut === "Ctrl+N", "new sequence lost Ctrl+N")
+            check(!newSequence.enabled && newSequence.effectiveTooltip === "Choose a project first (File > Project)", "new sequence available without a project")
             const annotate = command("ribbon.annotate-the-selection")
             check(annotate.shortcut === "Ctrl+Shift+N" && annotate.enabled, "annotate not ready on a sequence")
             persistPreference("shortcut", {id: "ribbon.annotate-the-selection", value: "Ctrl+J"})
@@ -356,6 +358,7 @@ Main {
             check(dialog("preferences").project_error.includes("/missing") && metadataProject !== folder + "/missing", "missing project accepted")
             selectProject(folder)
             check(metadataProject === folder && dialog("preferences").recent_projects.includes(folder) && dialog("preferences").project_error === "", "project not chosen")
+            check(command("file.new-sequence").enabled, "new sequence still disabled with a project")
         })
         // Figure export options: PNG width, selection for alignments only.
         list.push(() => { show(1); exportSvg("png") })
@@ -561,7 +564,7 @@ Main {
         list.push(() => {
             show(0)
             edited.controller = documentAt(0).controller
-            edited.controller.find_orfs(30, false)
+            edited.controller.find_orfs(30, 11, false)
             check(edited.controller.busy, "the ORF finder did not start")
             show(2)
             currentView.forceActiveFocus()
@@ -605,6 +608,26 @@ Main {
             const error = dialog("preferences").project_error
             check(metadataProject === folder + "/second" && error === "", "project did not switch after its documents closed: " + error)
         })
+        // D16: a file in a recent project other than the chosen one asks
+        // first. Open on its own keeps the project; Switch goes through the
+        // switch and then opens the file in its project.
+        const asked = () => dialog("otherProjectDialog")
+        const press = name => find(asked().contentItem, i => i.objectName === name).clicked()
+        list.push(() => {
+            openPath(folder + "/rooted.nwk")
+            check(asked().opened && documentTabs().count === 0, "a file in another recent project opened without asking")
+            check(asked().file.root === folder && asked().file.name === folder.split("/").pop(), "the question names " + asked().file.root + ", not the file's project")
+            press("openOnItsOwn")
+        })
+        list.push(until(() => tabOf(folder + "/rooted.nwk") >= 0, "Open on its own did not open the file"))
+        list.push(() => {
+            check(!asked().opened && metadataProject === folder + "/second", "opening on its own changed the project")
+            openPath(folder + "/locus.gb")
+            check(asked().opened, "the second file did not ask")
+            press("switchToProject")
+        })
+        list.push(until(() => metadataProject === folder && tabOf(folder + "/locus.gb") >= 0, "Switch did not choose the file's project and open the file"))
+        list.push(() => check(tabOf(folder + "/rooted.nwk") < 0 && dialog("preferences").project_error === "", "the switch left the other project's tabs open"))
         list.push(() => { console.log("RIBBON_WALK passed"); Qt.quit() })
         return list
     }

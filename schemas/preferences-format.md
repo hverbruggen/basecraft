@@ -36,13 +36,13 @@ most 32 characters) to the email that service receives; NCBI BLAST uses
 `blast`. A service without an entry uses `submitter.email`. Clearing an entry
 removes it.
 
-`basecraft_platform::paths::AppPaths` discovers native config, data, state, cache
-and scratch locations without creating them. On Linux these use XDG locations
+`basecraft_platform::paths::AppPaths` discovers native config, data, state and
+cache locations without creating them. On Linux these use XDG locations
 with the application directory `basecraft`; macOS uses Library application support
 and cache directories; Windows uses roaming config and local application data.
 `BASECRAFT_PROFILE_DIR` selects an isolated root containing config/data/state/cache.
-`BASECRAFT_STATE_DIR`, `BASECRAFT_CACHE_DIR` and `BASECRAFT_SCRATCH_DIR` override
-their respective locations. Overrides must be absolute native paths. Discovery
+`BASECRAFT_STATE_DIR` and `BASECRAFT_CACHE_DIR` override their respective
+locations. Overrides must be absolute native paths. Discovery
 never creates directories. Preferences live at `config/preferences.toml`.
 
 `SettingsStore::load` is read-only. `SettingsStore::update(Change)` creates the

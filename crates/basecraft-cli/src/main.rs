@@ -4,8 +4,10 @@ mod delimitation;
 mod mcp;
 mod metadata;
 mod operations;
+mod sanger;
 mod save;
 mod submission;
+mod tree;
 
 use basecraft_ops::records::ReportExt;
 use std::path::PathBuf;
@@ -55,6 +57,19 @@ enum Command {
     Plugins {
         #[command(subcommand)]
         action: operations::PluginsCommand,
+    },
+    /// Run one tool on files: input files in, new result files out.
+    Run(operations::RunArgs),
+    /// Tree edits by name: reroot on an outgroup, ladderize, rotate a clade.
+    Tree {
+        #[command(subcommand)]
+        action: tree::TreeCommand,
+    },
+    /// Sanger reads: start a review from a read's calls, decide columns,
+    /// export the consensus.
+    Sanger {
+        #[command(subcommand)]
+        action: sanger::SangerCommand,
     },
     /// Inspect versioned installed operations without executing plugins.
     Operations {
@@ -255,11 +270,60 @@ pub(crate) fn script_session(
     root: impl Into<PathBuf>,
     project: Option<&basecraft_ops::project::Project>,
 ) -> Result<basecraft_ops::Session, basecraft_ops::Error> {
+    let root = root.into();
+    name_recent_project(&root, project);
     let mut session = basecraft_ops::Session::recoverable(root)?.in_project(project.cloned());
     session.set_actor(basecraft_protocol::Actor::Script {
         client: "CLI".into(),
     });
     Ok(session)
+}
+
+/// A file used without --project that lies in a recent project: say which,
+/// without choosing it (D16; with --project the decision asks nothing).
+fn name_recent_project(path: &std::path::Path, project: Option<&basecraft_ops::project::Project>) {
+    let recent = basecraft_viewmodel::projects::recent();
+    if project.is_none()
+        && let Some(holder) = basecraft_ops::project::Project::recent_holding(path, None, &recent)
+    {
+        let root = holder.root().display();
+        eprintln!(
+            "This file is in the recent project {root}. Without --project it is used as a loose file; add --project {root} to use the project."
+        );
+    }
+}
+
+/// Apply typed edits to `file` and save it: `basecraft edit` and the readable
+/// edit commands such as `basecraft tree reroot` go through here.
+pub(crate) fn edit_file(
+    file: &std::path::Path,
+    operations: Vec<basecraft_protocol::Op>,
+    project: Option<&basecraft_ops::project::Project>,
+    save_options: save::Options,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let file = file.canonicalize()?;
+    let root = file.parent().unwrap_or(std::path::Path::new("."));
+    let mut session = script_session(root, project)?;
+    let doc = session.open(&file)?;
+    for operation in operations {
+        if matches!(
+            operation,
+            basecraft_protocol::Op::Undo { .. } | basecraft_protocol::Op::Redo { .. }
+        ) {
+            session.apply_history(doc, &operation)?;
+        } else {
+            basecraft_ops::renames::apply_op(&mut session, doc, operation)?;
+        }
+    }
+    save_options.save(&mut session, doc, None, false)?;
+    // A reroot can leave labels on other groups; place them with tree.place_label.
+    if let Ok(tree) = session.tree(doc)
+        && let displaced = tree.displaced_labels()
+        && !displaced.is_empty()
+    {
+        println!("{}", serde_json::json!({ "displaced_labels": displaced }));
+    }
+    Ok(())
 }
 
 /// A CLI session for a command whose folder argument is the project.
@@ -290,12 +354,17 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         .transpose()?;
     let save_options = cli.save_options;
     match cli.command {
-        Command::Delimitation { action } => delimitation::run(action)?,
+        Command::Delimitation { action } => {
+            delimitation::run(action, project.as_ref(), save_options)?;
+        }
         Command::Plugins { action } => operations::plugins(action)?,
         Command::Operations { action } => operations::operations(action)?,
+        Command::Run(args) => operations::run_files(args, project.as_ref())?,
+        Command::Sanger { action } => sanger::run(action, project.as_ref(), save_options)?,
         Command::Metadata { action } => metadata::run(action, save_options)?,
         Command::Submission { action } => submission::run(action, save_options)?,
         Command::History { file, json } => {
+            name_recent_project(&file, project.as_ref());
             let report =
                 basecraft_ops::records::DocumentRecord::saved_report(&file, project.as_ref())?;
             println!(
@@ -308,6 +377,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         Command::Methods { file, json, output } => {
+            name_recent_project(&file, project.as_ref());
             let report =
                 basecraft_ops::records::DocumentRecord::saved_report(&file, project.as_ref())?;
             if let Some(output) = output {
@@ -358,31 +428,40 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let done = basecraft_ops::records::reindex(&project)?;
             println!("{}", serde_json::to_string_pretty(&done)?);
         }
-        Command::Provenance { action } => match action {
-            ProvenanceCommand::Inspect { result } => {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&basecraft_ops::records::inspect(
-                        &result,
-                        project.as_ref()
-                    )?)?
-                );
-            }
-            ProvenanceCommand::Verify { result } => {
-                let issues = basecraft_ops::records::verify(&result, project.as_ref())?;
-                if !issues.is_empty() {
-                    return Err(issues.join("\n").into());
+        Command::Provenance { action } => {
+            let (ProvenanceCommand::Inspect { result }
+            | ProvenanceCommand::Verify { result }
+            | ProvenanceCommand::Methods { result, .. }
+            | ProvenanceCommand::Package { result, .. }) = &action;
+            name_recent_project(result, project.as_ref());
+            match action {
+                ProvenanceCommand::Inspect { result } => {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&basecraft_ops::records::inspect(
+                            &result,
+                            project.as_ref()
+                        )?)?
+                    );
                 }
-                println!("done: recorded hashes verified; replay verification is a separate check");
+                ProvenanceCommand::Verify { result } => {
+                    let issues = basecraft_ops::records::verify(&result, project.as_ref())?;
+                    if !issues.is_empty() {
+                        return Err(issues.join("\n").into());
+                    }
+                    println!(
+                        "done: recorded hashes verified; replay verification is a separate check"
+                    );
+                }
+                ProvenanceCommand::Methods { result, output } => {
+                    let publication = basecraft_ops::records::inspect(&result, project.as_ref())?;
+                    basecraft_ops::records::write_reports(&output, &publication)?;
+                }
+                ProvenanceCommand::Package { result, output } => {
+                    basecraft_ops::records::package(&result, &output, project.as_ref())?;
+                }
             }
-            ProvenanceCommand::Methods { result, output } => {
-                let publication = basecraft_ops::records::inspect(&result, project.as_ref())?;
-                basecraft_ops::records::write_reports(&output, &publication)?;
-            }
-            ProvenanceCommand::Package { result, output } => {
-                basecraft_ops::records::package(&result, &output, project.as_ref())?;
-            }
-        },
+        }
         Command::NewSequence {
             name,
             sequence,
@@ -415,33 +494,13 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         Command::Edit { file, operation } => {
-            let file = file.canonicalize()?;
-            let root = file.parent().unwrap_or(std::path::Path::new("."));
-            let mut session = script_session(root, project.as_ref())?;
-            let doc = session.open(&file)?;
             let operations = match serde_json::from_str::<EditOperations>(&operation)? {
                 EditOperations::One(op) => vec![*op],
                 EditOperations::Many(ops) => ops,
             };
-            for operation in operations {
-                if matches!(
-                    operation,
-                    basecraft_protocol::Op::Undo { .. } | basecraft_protocol::Op::Redo { .. }
-                ) {
-                    session.apply_history(doc, &operation)?;
-                } else {
-                    basecraft_ops::renames::apply_op(&mut session, doc, operation)?;
-                }
-            }
-            save_options.save(&mut session, doc, None, false)?;
-            // A reroot can leave labels on other groups; place them with tree.place_label.
-            if let Ok(tree) = session.tree(doc)
-                && let displaced = tree.displaced_labels()
-                && !displaced.is_empty()
-            {
-                println!("{}", serde_json::json!({ "displaced_labels": displaced }));
-            }
+            edit_file(&file, operations, project.as_ref(), save_options)?;
         }
+        Command::Tree { action } => tree::run(action, project.as_ref(), save_options)?,
         Command::ImportSupport { tree, source, name } => {
             let tree = tree.canonicalize()?;
             let mut session =

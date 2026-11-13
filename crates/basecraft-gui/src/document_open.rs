@@ -113,7 +113,12 @@ fn display_tree(session: &Session, doc: DocId) -> Result<DisplayTree, String> {
         return Err("Choose a file containing exactly one display tree".into());
     }
     let tree = basecraft_docs::tree::TreeDoc::from_parsed(&trees[0].name, &trees[0]);
-    let time = basecraft_delimitation::time_tree::validate(&tree, true, 1e-4, false).ok();
+    let time = basecraft_delimitation::time_tree::validate(
+        &tree,
+        tree.rooting().value == basecraft_protocol::facts::Rooting::Rooted,
+        false,
+    )
+    .ok();
     Ok(DisplayTree {
         path,
         tree,
@@ -260,7 +265,6 @@ pub(crate) struct Request {
     pub controller: usize,
     pub installed_path: String,
     pub focus: u64,
-    pub review: bool,
     pub cancelled: Arc<AtomicBool>,
     pub phase: Phase,
     pub candidate: Option<Candidate>,
@@ -279,9 +283,6 @@ pub(crate) struct Opens {
 }
 impl Opens {
     pub fn revoke_focus(&mut self) {
-        for request in self.requests.values_mut() {
-            request.review = false;
-        }
         if let Some(next) = self.focus.checked_add(1) {
             self.focus = next;
         } else {
@@ -290,14 +291,9 @@ impl Opens {
             }
         }
     }
-    pub fn begin(&mut self, path: String, review: bool) -> Result<(u64, bool), OpenError> {
+    pub fn begin(&mut self, path: String) -> Result<(u64, bool), OpenError> {
         if self.stopped {
             return Err(OpenError::Cancelled);
-        }
-        for request in self.requests.values_mut() {
-            if request.focus != self.focus || request.path != path {
-                request.review = false;
-            }
         }
         self.focus = self.focus.checked_add(1).ok_or(OpenError::Exhausted)?;
         if let Some((&token, request)) = self
@@ -306,7 +302,6 @@ impl Opens {
             .find(|(_, request)| request.path == path)
         {
             request.focus = self.focus;
-            request.review |= review;
             return Ok((token, false));
         }
         self.next = self.next.checked_add(1).ok_or(OpenError::Exhausted)?;
@@ -317,7 +312,6 @@ impl Opens {
                 controller: 0,
                 installed_path: String::new(),
                 focus: self.focus,
-                review,
                 cancelled: Arc::new(AtomicBool::new(false)),
                 phase: Phase::Queued,
                 candidate: None,
@@ -337,7 +331,6 @@ impl Opens {
                 controller: 0,
                 installed_path: String::new(),
                 focus: 0,
-                review: false,
                 cancelled: Arc::new(AtomicBool::new(false)),
                 phase: Phase::Ready,
                 candidate: None,
@@ -560,14 +553,13 @@ mod tests {
     #[test]
     fn duplicate_paths_order_focus_and_retirement() {
         let mut opens = Opens::default();
-        let (a, new) = opens.begin("A.fa".into(), false).unwrap();
+        let (a, new) = opens.begin("A.fa".into()).unwrap();
         assert!(new);
         let cancel_a = opens.requests[&a].cancelled.clone();
-        let (b, _) = opens.begin("B.gb".into(), false).unwrap();
+        let (b, _) = opens.begin("B.gb".into()).unwrap();
         assert!(!opens.wants_focus(a));
         assert!(opens.wants_focus(b));
-        assert_eq!(opens.begin("A.fa".into(), true).unwrap(), (a, false));
-        assert!(opens.requests[&a].review);
+        assert_eq!(opens.begin("A.fa".into()).unwrap(), (a, false));
         assert_eq!(
             opens.requests.keys().copied().collect::<Vec<_>>(),
             vec![a, b]
@@ -576,7 +568,7 @@ mod tests {
         assert!(!opens.wants_focus(a));
         opens.retire(a);
         assert!(cancel_a.load(Ordering::Acquire));
-        let (reopened, _) = opens.begin("A.fa".into(), false).unwrap();
+        let (reopened, _) = opens.begin("A.fa".into()).unwrap();
         assert!(reopened > b);
         assert!(!opens.requests.contains_key(&a));
         let cancel_reopened = opens.requests[&reopened].cancelled.clone();
@@ -584,7 +576,7 @@ mod tests {
         assert!(cancel_reopened.load(Ordering::Acquire));
         assert!(opens.requests.is_empty());
         assert!(matches!(
-            opens.begin("A.fa".into(), false),
+            opens.begin("A.fa".into()),
             Err(OpenError::Cancelled)
         ));
     }
@@ -592,12 +584,12 @@ mod tests {
     #[test]
     fn aliases_are_distinct_and_tokens_never_wrap() {
         let mut opens = Opens::default();
-        let (a, _) = opens.begin("A.fa".into(), false).unwrap();
-        let (alias, _) = opens.begin("./A.fa".into(), false).unwrap();
+        let (a, _) = opens.begin("A.fa".into()).unwrap();
+        let (alias, _) = opens.begin("./A.fa".into()).unwrap();
         assert_ne!(a, alias);
         opens.next = u64::MAX;
         assert!(matches!(
-            opens.begin("C.fa".into(), false),
+            opens.begin("C.fa".into()),
             Err(OpenError::Exhausted)
         ));
         assert_eq!(opens.requests.len(), 2);

@@ -71,3 +71,32 @@ fn new_sequence_cli_refuses_overwrite_and_mcp_uses_shared_creation() {
     let record = std::fs::read_to_string(root.path().join("mcp.gb")).unwrap();
     assert!(record.contains("mcp_sample"));
 }
+
+/// D21: a new document needs a target. The CLI refuses one without --output
+/// and the MCP server without a project folder; neither writes anything.
+#[test]
+fn new_documents_need_a_target_path_or_project() {
+    crate::isolated_profile::isolate!();
+    let root = tempfile::tempdir().unwrap();
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_basecraft"))
+            .args(args)
+            .current_dir(root.path())
+            .env("BASECRAFT_PROFILE_DIR", root.path().join("profile"))
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+    let cli = run(&["new-sequence", "--name", "sample", "--sequence", "acgt"]);
+    assert!(!cli.status.success());
+    assert!(String::from_utf8_lossy(&cli.stderr).contains("--output"));
+    let mcp = run(&["mcp"]);
+    assert!(!mcp.status.success());
+    assert!(String::from_utf8_lossy(&mcp.stderr).contains("<PROJECT>"));
+    let written: Vec<_> = std::fs::read_dir(root.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .filter(|name| name != "profile")
+        .collect();
+    assert!(written.is_empty(), "{written:?}");
+}

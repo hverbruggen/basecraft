@@ -196,7 +196,7 @@ fn every_annotation_route_keeps_the_same_invocation_evidence() {
         "inputs": {"sequence": [{"kind": "document", "doc": doc.0.to_string(),
             "generation": session.generation(doc).unwrap(),
             "revision": session.checked_sequence(doc).unwrap().version()}]},
-        "parameters": {"min_codons": 100}}))
+        "parameters": {"min_codons": 100, "genetic_code": 11}}))
     .unwrap();
     let policy = SessionPolicy::new(session.root(), true).unwrap();
     let accepted = jobs
@@ -218,6 +218,7 @@ fn every_annotation_route_keeps_the_same_invocation_evidence() {
             script.to_str().unwrap(),
             "find_orfs",
             "min_codons=100",
+            "genetic_code=11",
             "--save",
         ])
         .output()
@@ -236,7 +237,7 @@ fn every_annotation_route_keeps_the_same_invocation_evidence() {
         "basecraft.orf-finder.find_orfs.v1",
         &json!({"inputs":{"sequence":[{"kind":"document","doc":opened["document"].to_string(),
             "generation":opened["generation"],"revision":opened["version"]}]},
-            "parameters":{"min_codons":100}}),
+            "parameters":{"min_codons":100,"genetic_code":11}}),
     )["structuredContent"]
         .clone();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
@@ -265,6 +266,7 @@ fn every_annotation_route_keeps_the_same_invocation_evidence() {
 
     let expected = invocation(&gui, &tool_run(&gui, "basecraft.orf-finder"));
     assert_eq!(expected["effective"]["min_codons"], 100, "{expected}");
+    assert_eq!(expected["effective"]["genetic_code"], 11, "{expected}");
     assert_eq!(expected["snapshot"].as_array().unwrap().len(), 1);
     for (file, initiator) in [(&gui, "GUI"), (&script, "CLI"), (&agent, "mcp-client")] {
         let entry = tool_run(file, "basecraft.orf-finder");

@@ -163,6 +163,16 @@
           "description": "The folder cannot hold recovery of unsaved edits; copy the file first.",
           "type": "string",
           "const": "read_only_folder"
+        },
+        {
+          "description": "A choice the command needs and has no default for was not given (D1):\na setting, the project, or the display tree to draw on.",
+          "type": "string",
+          "const": "missing_choice"
+        },
+        {
+          "description": "A setting the operation does not have.",
+          "type": "string",
+          "const": "unknown_setting"
         }
       ]
     },

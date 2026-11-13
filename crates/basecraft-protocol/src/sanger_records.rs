@@ -76,6 +76,8 @@ pub enum SangerJobStatus {
 }
 
 /// Execution and job-index share this shape. Recovery omits `artifact_run`.
+/// In `.basecraft/jobs`, paths are relative to the home that holds that
+/// `.basecraft`, `/`-separated.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct SangerJobRecord {
     pub schema_version: u32,

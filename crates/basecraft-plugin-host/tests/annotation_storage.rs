@@ -38,7 +38,7 @@ fn run(
         "inputs": {"sequence": [{"kind": "document", "doc": doc.0.to_string(),
             "generation": session.generation(doc).unwrap(),
             "revision": session.checked_sequence(doc).unwrap().version()}]},
-        "parameters": {"min_codons": 100}}))
+        "parameters": {"min_codons": 100, "genetic_code": 11}}))
     .unwrap();
     let policy = SessionPolicy::new(session.root(), true).unwrap();
     let accepted = jobs
@@ -106,6 +106,14 @@ fn gui_annotation_keeps_its_invocation_in_the_hidden_store_and_skips_known_featu
     assert!(run.join("snapshot.arrow-pair").is_file());
     assert!(run.join("runtime.json").is_file());
 
+    // Methods names the genetic code the ORFs were read with.
+    let report = session.document_record(doc).unwrap().report().unwrap();
+    assert!(
+        report.methods.contains("genetic_code = 11"),
+        "{}",
+        report.methods
+    );
+
     session.save(doc, None).unwrap();
     // FASTA keeps its visible scientific GFF3 pair.
     assert!(basecraft_ops::files::gff_sidecar(&file).is_file());
@@ -138,4 +146,49 @@ fn gui_annotation_keeps_its_invocation_in_the_hidden_store_and_skips_known_featu
         panic!("not a sequence")
     };
     assert_eq!(reopened.doc.feature_count(), 1);
+}
+
+/// Finding ORFs and predicting genes have no default genetic code: a
+/// request without one is refused before the plugin starts, on every route
+/// that submits it.
+#[test]
+fn annotation_requests_without_a_genetic_code_are_refused() {
+    crate::isolated_profile::isolate!();
+    let temp = tempfile::tempdir().unwrap();
+    let registry = Registry::load(&RegistryConfig {
+        bundled: Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins"),
+        packages: temp.path().join("profile/plugins"),
+        index: temp.path().join("profile/index.json"),
+    })
+    .unwrap();
+    let file = temp.path().join("orf.fasta");
+    std::fs::write(&file, ">orf\nATGAAATAA\n").unwrap();
+    let mut session = Session::new(temp.path());
+    let doc = session.open(&file).unwrap();
+    for (operation, parameters, missing) in [
+        (
+            "basecraft.orf-finder/find_orfs@1",
+            json!({"min_codons": 1}),
+            "genetic_code is required",
+        ),
+        (
+            "basecraft.pyrodigal/predict_genes@1",
+            json!({}),
+            "translation_table is required",
+        ),
+    ] {
+        let request: OperationRequest = serde_json::from_value(json!({
+            "operation": operation,
+            "inputs": {"sequence": [{"kind": "document", "doc": doc.0.to_string(),
+                "generation": session.generation(doc).unwrap(),
+                "revision": session.checked_sequence(doc).unwrap().version()}]},
+            "parameters": parameters}))
+        .unwrap();
+        let policy = SessionPolicy::new(session.root(), true).unwrap();
+        let error = JobManager::default()
+            .submit_in_session(&registry, request, policy, "GUI", &mut session)
+            .unwrap_err();
+        assert!(error.to_string().contains(missing), "{error}");
+    }
+    assert_eq!(session.doc(doc).unwrap().feature_count(), 0);
 }

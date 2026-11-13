@@ -6,6 +6,8 @@
 //! offered. Every table here was checked against table2asn's translations
 //! (SCI-0012 validation notes).
 
+use basecraft_protocol::Feature;
+
 /// One NCBI translation table.
 #[derive(Clone, Copy, Debug)]
 pub struct GeneticCode {
@@ -167,6 +169,87 @@ pub fn code(id: u8) -> Option<&'static GeneticCode> {
     CODES.iter().find(|c| c.id == id)
 }
 
+/// The code GenBank assumes when a record says nothing: the standard code.
+/// Shown only as a default, never used for a saved result (rule 4.2).
+pub const DEFAULT: u8 = 1;
+
+/// Where a genetic code came from, highest precedence first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CodeSource {
+    /// Given by the person or the command.
+    Explicit,
+    /// The feature's `transl_table` qualifier.
+    Feature,
+    /// The `transl_table` every CDS of the record states.
+    Record,
+    /// Nothing states a code: [`DEFAULT`].
+    Default,
+}
+
+impl CodeSource {
+    /// How a display names the source: "default" when it is the default.
+    pub fn label(self) -> &'static str {
+        match self {
+            CodeSource::Explicit => "chosen",
+            CodeSource::Feature => "from the feature",
+            CodeSource::Record => "from the record's CDS",
+            CodeSource::Default => "default",
+        }
+    }
+}
+
+/// The genetic code to translate with and where it came from, in the one
+/// order of precedence: the code given, the feature's `transl_table`, the
+/// `transl_table` every CDS of the record states, else [`DEFAULT`]. A
+/// stated code basecraft doesn't support is an error, not a fallback.
+pub fn resolve(
+    explicit: Option<u8>,
+    feature: Option<&Feature>,
+    record: &[&Feature],
+) -> Result<(&'static GeneticCode, CodeSource), String> {
+    let stated = |feature: &Feature| {
+        feature.qualifier("transl_table").map(|value| {
+            value
+                .trim()
+                .parse::<u8>()
+                .map_err(|_| format!("transl_table {value:?} is not a genetic code number"))
+        })
+    };
+    let (id, source) = if let Some(id) = explicit {
+        (id, CodeSource::Explicit)
+    } else if let Some(id) = feature.and_then(stated) {
+        (id?, CodeSource::Feature)
+    } else if let Some(id) = record_code(record)? {
+        (id, CodeSource::Record)
+    } else {
+        (DEFAULT, CodeSource::Default)
+    };
+    code(id)
+        .map(|code| (code, source))
+        .ok_or_else(|| format!("genetic code {id} is not supported"))
+}
+
+/// The `transl_table` the record's CDS features state, when they all state
+/// the same one. CDS features without it, as GenBank allows for the
+/// standard code, make the record's code unknown.
+fn record_code(features: &[&Feature]) -> Result<Option<u8>, String> {
+    let mut found = None;
+    for feature in features.iter().filter(|f| f.kind == "CDS") {
+        let Some(value) = feature.qualifier("transl_table") else {
+            return Ok(None);
+        };
+        let id = value
+            .trim()
+            .parse::<u8>()
+            .map_err(|_| format!("transl_table {value:?} is not a genetic code number"))?;
+        if found.is_some_and(|other| other != id) {
+            return Ok(None);
+        }
+        found = Some(id);
+    }
+    Ok(found)
+}
+
 /// The unambiguous bases (as TCAG indices) an IUPAC nucleotide code stands
 /// for. `None` for anything else.
 fn bases(b: u8) -> Option<&'static [u8]> {
@@ -277,5 +360,53 @@ mod tests {
         // Plastid code: GTG starts, TGA stops.
         let plastid = code(11).unwrap();
         assert!(plastid.is_start(b"GTG") && plastid.is_stop(b"TGA"));
+    }
+
+    fn cds(table: Option<&str>) -> Feature {
+        Feature {
+            kind: "CDS".into(),
+            location: basecraft_protocol::Location::simple(
+                0,
+                3,
+                basecraft_protocol::Strand::Forward,
+            ),
+            qualifiers: table
+                .map(|t| basecraft_protocol::Qualifier::new("transl_table", t))
+                .into_iter()
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn resolve_follows_one_order_of_precedence() {
+        let four = cds(Some("4"));
+        let eleven = cds(Some("11"));
+        let plain = cds(None);
+        let id = |r: Result<(&GeneticCode, CodeSource), String>| r.map(|(c, s)| (c.id, s));
+        let both = [&eleven, &eleven];
+        assert_eq!(
+            id(resolve(Some(2), Some(&four), &both)),
+            Ok((2, CodeSource::Explicit))
+        );
+        assert_eq!(
+            id(resolve(None, Some(&four), &both)),
+            Ok((4, CodeSource::Feature))
+        );
+        assert_eq!(
+            id(resolve(None, Some(&plain), &both)),
+            Ok((11, CodeSource::Record))
+        );
+        // CDS that disagree, or one that states nothing, leave the record's
+        // code unknown: the default, labelled as such.
+        for record in [vec![&four, &eleven], vec![&eleven, &plain], vec![]] {
+            assert_eq!(
+                id(resolve(None, None, &record)),
+                Ok((DEFAULT, CodeSource::Default))
+            );
+        }
+        assert_eq!(CodeSource::Default.label(), "default");
+        assert!(resolve(Some(7), None, &[]).is_err());
+        assert!(resolve(None, Some(&cds(Some("x"))), &[]).is_err());
+        assert!(resolve(None, None, &[&cds(Some("99"))]).is_err());
     }
 }

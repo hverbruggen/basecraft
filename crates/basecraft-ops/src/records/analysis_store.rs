@@ -173,6 +173,10 @@ impl ArtifactRun {
     pub fn directory(&self) -> &Path {
         &self.directory
     }
+    /// The folder whose `.basecraft` holds this run.
+    pub fn working_directory(&self) -> &Path {
+        &self.working_directory
+    }
 
     pub fn artifact(&self, name: &str) -> Result<PathBuf> {
         self.destination(ArtifactDestination::Metadata, name)

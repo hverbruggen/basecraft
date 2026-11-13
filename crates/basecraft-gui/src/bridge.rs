@@ -256,13 +256,14 @@ pub mod qobject {
         #[qinvokable]
         fn delete_feature(self: Pin<&mut GenomeController>, id: i32);
         /// Run the ORF finder plugin and add the open reading frames of at
-        /// least `min_codons` codons it finds, in the whole sequence or only
-        /// the selection, as one undoable step. Returns a summary for the
-        /// status bar.
+        /// least `min_codons` codons it finds, ending at a stop codon of
+        /// genetic code `code`, in the whole sequence or only the selection,
+        /// as one undoable step. Returns a summary for the status bar.
         #[qinvokable]
         fn find_orfs(
             self: Pin<&mut GenomeController>,
             min_codons: i32,
+            code: i32,
             in_selection: bool,
         ) -> QString;
         /// Predict protein-coding genes with the Pyrodigal plugin, using
@@ -274,10 +275,19 @@ pub mod qobject {
             code: i32,
             in_selection: bool,
         ) -> QString;
-        /// The genetic code of the open file: the first CDS's
-        /// `transl_table`, else 11.
+        /// The genetic code to suggest for the open record
+        /// (`genetic_code::resolve`): the `transl_table` its CDS state, else
+        /// the default code. 0 when the record states a code basecraft
+        /// doesn't have.
         #[qinvokable]
         fn genetic_code(self: &GenomeController) -> i32;
+        /// Where that suggestion comes from, as a display says it:
+        /// "from the record's CDS" or "default".
+        #[qinvokable]
+        fn genetic_code_source(self: &GenomeController) -> QString;
+        /// The genetic codes basecraft has, as JSON `[{"id", "name"}]`.
+        #[qinvokable]
+        fn genetic_codes(self: &GenomeController) -> QString;
         /// The selected residues, for the clipboard.
         #[qinvokable]
         fn selection_text(self: &GenomeController) -> QString;
@@ -917,19 +927,13 @@ impl qobject::GenomeController {
         }
         let result = (|| {
             // A new sequence has no file yet: it lives in the chosen project,
-            // or in basecraft's own scratch folder until Save As.
-            let project = crate::chosen_project::chosen()?;
-            let root = match &project {
-                Some(project) => project.root().to_path_buf(),
-                None => {
-                    basecraft_platform::paths::AppPaths::discover()
-                        .map_err(|e| e.to_string())?
-                        .scratch
-                }
-            };
+            // with its recovery in the project's `.basecraft` (D21).
+            let project = crate::chosen_project::chosen()?
+                .ok_or_else(|| basecraft_viewmodel::commands::NEEDS_PROJECT.to_owned())?;
+            let root = project.root().to_path_buf();
             let mut session = Session::recoverable(&root)
                 .map_err(|e| e.to_string())?
-                .in_project(project);
+                .in_project(Some(project));
             let doc = session
                 .create_sequence(&name.to_string(), &text.to_string())
                 .map_err(|e| e.to_string())?;
@@ -1680,8 +1684,13 @@ impl qobject::GenomeController {
         self.refresh();
     }
 
-    pub fn find_orfs(self: Pin<&mut Self>, min_codons: i32, in_selection: bool) -> QString {
-        let params = json!({ "min_codons": min_codons.max(1) });
+    pub fn find_orfs(
+        self: Pin<&mut Self>,
+        min_codons: i32,
+        code: i32,
+        in_selection: bool,
+    ) -> QString {
+        let params = json!({ "min_codons": min_codons.max(1), "genetic_code": code });
         self.run_annotator(
             ("orf-finder", "find_orfs", "ORF finder"),
             params,
@@ -1701,18 +1710,41 @@ impl qobject::GenomeController {
     }
 
     pub fn genetic_code(&self) -> i32 {
+        self.suggested_code()
+            .map_or(0, |(code, _)| i32::from(code.id))
+    }
+
+    pub fn genetic_code_source(&self) -> QString {
+        QString::from(
+            self.suggested_code()
+                .map_or("not supported", |(_, source)| source.label()),
+        )
+    }
+
+    pub fn genetic_codes(&self) -> QString {
+        let codes: Vec<_> = basecraft_docs::genetic_code::CODES
+            .iter()
+            .map(|c| json!({"id": c.id, "name": format!("{}: {}", c.id, c.name)}))
+            .collect();
+        QString::from(&json!(codes).to_string())
+    }
+
+    /// The code `genetic_code::resolve` gives the open record, with its
+    /// source; the default when nothing is open.
+    fn suggested_code(
+        &self,
+    ) -> Option<(
+        &'static basecraft_docs::genetic_code::GeneticCode,
+        basecraft_docs::genetic_code::CodeSource,
+    )> {
         let access_thread = self.qt_thread();
         let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) else {
-            return 11;
+            return basecraft_docs::genetic_code::resolve(None, None, &[]).ok();
         };
-        // A refused read must not be confused with a sequence without a CDS
-        // annotation, for which the existing UI suggestion is code 11.
+        // A refused read must not be confused with a record that states no code.
         let sequence = crate::bridge::checked_document!(access_thread, session.doc(doc));
-        sequence
-            .features()
-            .filter(|(_, f)| f.kind == "CDS")
-            .find_map(|(_, f)| f.qualifier("transl_table")?.trim().parse().ok())
-            .unwrap_or(11)
+        let features: Vec<_> = sequence.features().map(|(_, f)| f).collect();
+        basecraft_docs::genetic_code::resolve(None, None, &features).ok()
     }
 
     /// Run an annotating plugin operation over the sequence or the

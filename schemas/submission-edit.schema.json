@@ -326,8 +326,11 @@
           "default": "auto"
         },
         "genetic_code": {
-          "description": "NCBI genetic code (translation table) number.",
-          "type": "integer",
+          "description": "NCBI genetic code (translation table) number. None until someone\nchooses one: a coding marker can't be checked or exported without it.",
+          "type": [
+            "integer",
+            "null"
+          ],
           "format": "uint8",
           "maximum": 255,
           "minimum": 0
@@ -352,8 +355,7 @@
         }
       },
       "required": [
-        "marker",
-        "genetic_code"
+        "marker"
       ]
     },
     "Decision": {

@@ -81,7 +81,7 @@ fn rbcl_batch() -> SubmissionEdit {
             },
             mol_type: MolType::GenomicDna,
             organelle: Some(Organelle::Chloroplast),
-            genetic_code: 11,
+            genetic_code: Some(11),
             ends: EndPolicy::Auto,
         },
     }
@@ -218,9 +218,54 @@ fn coding_review_frames_undo_save_reload_and_replay() {
         .unwrap();
     assert!(s.is_submission(doc));
     assert_eq!(s.submission(doc).unwrap().frames.len(), 2);
-    assert_eq!(s.submission(doc).unwrap().batch.genetic_code, 11);
+    assert_eq!(s.submission(doc).unwrap().batch.genetic_code, Some(11));
     let report = records::replay(root).unwrap();
     assert!(report.ok(), "{:#?}", report.problems);
+}
+
+/// A coding marker is read in one genetic code, which the batch states. A
+/// new submission has none, and nothing falls back to a default.
+#[test]
+fn coding_marker_without_a_genetic_code_is_blocked() {
+    crate::isolated_profile::isolate!();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    project(root);
+    let mut s = Session::new(root);
+    let doc = rbcl(&mut s);
+    let SubmissionEdit::SetBatch { mut batch } = rbcl_batch() else {
+        unreachable!()
+    };
+    batch.genetic_code = None;
+    submission::edit(&mut s, doc, SubmissionEdit::SetBatch { batch }).unwrap();
+    let review = submission::review(&s, doc, &submitter()).unwrap();
+    assert!(
+        review
+            .prepared
+            .issues
+            .iter()
+            .any(|issue| issue.code == "genetic_code"
+                && issue.message == "Choose the genetic code for this coding marker"),
+        "{:?}",
+        review.prepared.issues
+    );
+    // No record is read in any frame until the code is chosen, and nothing
+    // is exported.
+    assert_eq!(review.prepared.records.len(), 0);
+    let error =
+        submission::export(&mut s, doc, Path::new("submissions/rbcL"), &submitter()).unwrap_err();
+    assert!(
+        error.to_string().contains("Choose the genetic code"),
+        "{error}"
+    );
+    assert!(!root.join("submissions/rbcL").exists());
+    let fresh = submission::create(
+        &mut s,
+        Path::new("submissions/fresh.submission.json"),
+        Path::new("rbcL.afa"),
+    )
+    .unwrap();
+    assert_eq!(s.submission(fresh).unwrap().batch.genetic_code, None);
 }
 
 #[test]
@@ -551,7 +596,7 @@ fn rrna_its_and_coi_batches() {
                     product: "cytochrome c oxidase subunit I".into(),
                 },
                 organelle: Some(Organelle::Mitochondrion),
-                genetic_code: 5,
+                genetic_code: Some(5),
                 ..BatchSettings::default()
             },
         },

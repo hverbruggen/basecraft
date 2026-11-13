@@ -316,7 +316,7 @@ fn writer_versions(path: &Path) -> std::collections::BTreeMap<String, u32> {
         Ok(Format::Tree) => &[("newick", 1), ("companion", 2), ("alignment-link", 2)],
         Ok(Format::Delimitation) => &[("spart", 1), ("companion", 2)],
         Ok(Format::Metadata) => &[("metadata-manifest", 2), ("metadata-tsv", 1)],
-        Ok(Format::Submission) => &[("submission", 2)],
+        Ok(Format::Submission) => &[("submission", 3)],
         Ok(Format::SangerReview) => &[("sanger-review", 4)],
         Err(_) => &[],
     };

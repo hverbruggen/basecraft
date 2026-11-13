@@ -1324,6 +1324,95 @@ pub enum ConsumerRequest {
     },
 }
 
+/// The tree style that labels tree `doc`'s tips from the specimen metadata
+/// of `project`, by `fields` in order (no fields: the tips' own names again),
+/// and how many tips keep their own name because their link is missing or
+/// ambiguous. `project` is named by the caller (the window's chosen project,
+/// `--project`, the MCP session's project), since a tree opened loose has
+/// none of its own. The window and `basecraft tree labels` both label tips
+/// through this.
+pub fn tip_label_style(
+    session: &Session,
+    doc: crate::DocId,
+    project: &crate::project::Project,
+    fields: Vec<basecraft_protocol::metadata::LabelField>,
+) -> Result<(basecraft_protocol::TreeStyle, usize)> {
+    let tree = session.tree(doc)?;
+    let mut style = tree.style().clone();
+    style.tip_labels.clear();
+    style.extra.remove("metadata_labels");
+    if fields.is_empty() {
+        return Ok((style, 0));
+    }
+    // The table's records are kept in its project, so it is read there.
+    let mut reader = Session::unlogged(project.root()).in_project(Some(project.clone()));
+    let metadata = open(&mut reader, false)?.ok_or(crate::Error::NoMetadata)?;
+    let source = consumer_source(&reader, metadata)?;
+    verify_label_owner(tree.style(), &source)?;
+    let request = ConsumerRequest::Labels {
+        document: session
+            .root()
+            .join(session.doc_key(doc)?)
+            .to_string_lossy()
+            .into_owned(),
+        records: tree
+            .nodes()
+            .iter()
+            .filter(|n| n.is_tip())
+            .map(|n| n.name.clone())
+            .collect(),
+        fields,
+    };
+    let plan = consumer_plan(&reader, metadata, &request)?;
+    let labels: Vec<basecraft_protocol::metadata::ComposedLabel> =
+        serde_json::from_value(plan["labels"].clone())?;
+    let kept = labels.iter().filter(|l| l.issue.is_some()).count();
+    style.tip_labels = labels
+        .into_iter()
+        .filter(|l| l.issue.is_none())
+        .map(|l| (l.record, l.label))
+        .collect();
+    style.extra.insert("metadata_labels".into(), plan);
+    Ok((style, kept))
+}
+
+/// Label tree `doc`'s tips from the project's specimen metadata (see
+/// `tip_label_style`) as one style edit; how many tips keep their own name.
+pub fn label_tips(
+    session: &mut Session,
+    doc: crate::DocId,
+    project: &crate::project::Project,
+    fields: Vec<basecraft_protocol::metadata::LabelField>,
+) -> Result<usize> {
+    let (style, kept) = tip_label_style(session, doc, project, fields)?;
+    session.apply(
+        doc,
+        basecraft_protocol::Op::TreeStyle {
+            style,
+            remove_supports: Vec::new(),
+        },
+    )?;
+    Ok(kept)
+}
+
+/// A label field as a person writes it: `specimen`, `genus`, `species`,
+/// `accession`, or `column:NAME` for a column of the specimen table.
+pub fn label_field(text: &str) -> Result<basecraft_protocol::metadata::LabelField> {
+    use basecraft_protocol::metadata::LabelField;
+    Ok(match text.trim() {
+        "specimen" => LabelField::Specimen,
+        "genus" => LabelField::Genus,
+        "species" => LabelField::Species,
+        "accession" => LabelField::Accession,
+        other => match other.strip_prefix("column:") {
+            Some(name) if !name.trim().is_empty() => LabelField::Column {
+                name: name.trim().to_owned(),
+            },
+            _ => return Err(crate::Error::NotALabelField(other.to_owned())),
+        },
+    })
+}
+
 pub fn consumer_plan(
     session: &Session,
     doc: crate::DocId,

@@ -429,6 +429,11 @@ pub enum OperationErrorCode {
     EvidenceIncomplete,
     /// The folder cannot hold recovery of unsaved edits; copy the file first.
     ReadOnlyFolder,
+    /// A choice the command needs and has no default for was not given (D1):
+    /// a setting, the project, or the display tree to draw on.
+    MissingChoice,
+    /// A setting the operation does not have.
+    UnknownSetting,
 }
 
 impl OperationErrorCode {
@@ -469,6 +474,8 @@ impl OperationErrorCode {
             Self::PublicationIncomplete => "publication_incomplete",
             Self::EvidenceIncomplete => "evidence_incomplete",
             Self::ReadOnlyFolder => "read_only_folder",
+            Self::MissingChoice => "missing_choice",
+            Self::UnknownSetting => "unknown_setting",
         }
     }
 }

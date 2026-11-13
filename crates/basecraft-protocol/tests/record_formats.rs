@@ -131,7 +131,14 @@ fn current_records_round_trip() {
         };
         let original = std::fs::read(&path).unwrap();
         eprintln!("checking {name}");
-        let current = encoder(&original, sorted);
+        // JSON Lines hold one record per line.
+        let current = if path.extension().is_some_and(|ext| ext == "jsonl") {
+            (original.split_inclusive(|&b| b == b'\n'))
+                .flat_map(|line| encoder(line, sorted))
+                .collect()
+        } else {
+            encoder(&original, sorted)
+        };
         if std::env::var_os("BASECRAFT_UPDATE_RECORDS").is_some() {
             std::fs::write(&path, current).unwrap();
         } else {

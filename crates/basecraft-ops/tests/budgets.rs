@@ -122,7 +122,6 @@ fn child_profile(name: &str) -> Option<std::path::PathBuf> {
             .env("BASECRAFT_PROFILE_DIR", dir.path().join("profile"))
             .env("BASECRAFT_STATE_DIR", dir.path().join("profile/state"))
             .env("BASECRAFT_CACHE_DIR", dir.path().join("profile/cache"))
-            .env("BASECRAFT_SCRATCH_DIR", dir.path())
             .env("TMPDIR", dir.path())
             .env("TMP", dir.path())
             .env("TEMP", dir.path())

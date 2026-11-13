@@ -688,7 +688,7 @@ fn genbank_files(
     if let Some(organelle) = sub.batch.organelle {
         modifiers.push(("location".into(), organelle.as_str().into()));
     }
-    if matches!(sub.batch.marker, Marker::Coding { .. }) {
+    if let (Marker::Coding { .. }, Some(code)) = (&sub.batch.marker, sub.batch.genetic_code) {
         let name = if sub
             .batch
             .organelle
@@ -698,7 +698,7 @@ fn genbank_files(
         } else {
             "gcode"
         };
-        modifiers.push((name.into(), sub.batch.genetic_code.to_string()));
+        modifiers.push((name.into(), code.to_string()));
     }
     let mut fsa = Vec::new();
     ncbi::write_fsa(
@@ -1068,6 +1068,12 @@ pub fn export(
     submitter: &Submitter,
 ) -> Result<PackageSummary> {
     let sub = checked(session, doc)?.clone();
+    // Its records would be read in no frame and exported with no code.
+    if matches!(sub.batch.marker, Marker::Coding { .. }) && sub.batch.genetic_code.is_none() {
+        return Err(invalid(
+            "Choose the genetic code for this coding marker before export",
+        ));
+    }
     let directory = if directory.is_absolute() {
         directory.to_path_buf()
     } else {

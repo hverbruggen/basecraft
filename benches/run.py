@@ -148,7 +148,7 @@ def main():
             work.mkdir()
             child = dict(env, BASECRAFT_PROFILE_DIR=str(work / "profile"),
                          BASECRAFT_STATE_DIR=str(work / "profile/state"), BASECRAFT_CACHE_DIR=str(work / "profile/cache"),
-                         BASECRAFT_SCRATCH_DIR=str(work), TMPDIR=str(work), TMP=str(work), TEMP=str(work))
+                         TMPDIR=str(work), TMP=str(work), TEMP=str(work))
             result = subprocess.run([executable, name, str(work)], env=child, text=True, capture_output=True)
             (run / f"{name}-{index}.log").write_text(result.stdout + result.stderr)
             if result.returncode:

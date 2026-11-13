@@ -56,7 +56,6 @@ fn spawn(root: &Path, role: &str, mode: &str) -> (Worker, Barrier) {
         .env("BASECRAFT_PROFILE_DIR", root.join("profile"))
         .env("BASECRAFT_STATE_DIR", root.join("profile/state"))
         .env("BASECRAFT_CACHE_DIR", root.join("profile/cache"))
-        .env("BASECRAFT_SCRATCH_DIR", root.join("scratch"))
         .env("TMPDIR", root)
         .spawn()
         .unwrap();

@@ -154,6 +154,12 @@ def main():
         alias = copy.deepcopy(contract["operations"][0])
         alias["name"] = f"page_fixture_{index}"
         contract["operations"].append(alias)
+    # An operation with a setting that has no default, to refuse its absence.
+    needs = copy.deepcopy(contract["operations"][0])
+    needs["name"] = "needs_label"
+    needs["parameters"]["properties"]["label"] = {"type": "string"}
+    needs["parameters"]["required"] = ["label"]
+    contract["operations"].append(needs)
     contract_path.write_text(json.dumps(contract))
     project = root / "project"
     project.mkdir()
@@ -170,7 +176,9 @@ def main():
 
     def cli(*arguments):
         completed = subprocess.run([str(binary), *arguments], cwd=root, env=env,
-                                   capture_output=True, text=True, timeout=45, check=True)
+                                   capture_output=True, text=True, timeout=45, check=False)
+        if completed.returncode:
+            raise SystemExit(f"basecraft {' '.join(arguments)} failed:\n{completed.stderr}")
         return json.loads(completed.stdout), completed.stderr
 
     if not args.only_linked_alignment and not args.only_delimitation:
@@ -198,6 +206,195 @@ def main():
         finally:
             client.close()
         record("Sanger CLI/MCP edits, common history, undo, redo and save")
+
+        # Sanger review decisions as commands (D1): the same read reviewed,
+        # decided and exported by the CLI and by MCP gives the same consensus.
+        reads = project / "reads"
+        reads.mkdir()
+        shutil.copy(Path(__file__).resolve().parents[3]
+                    / "testdata/fixtures/compact/sanger-review/forward.ab1", reads / "forward.ab1")
+        started, _ = cli("sanger", "review", str(reads / "forward.ab1"),
+                         "-o", str(reads / "cli.sanger-review.json"))
+        every = f"1-{started['columns']}"
+        cli("sanger", "decide", str(reads / "cli.sanger-review.json"), "--columns", every,
+            "--choice", "accept")
+        cli("sanger", "decide", str(reads / "cli.sanger-review.json"), "--columns", "1",
+            "--choice", "a")
+        # A command's edit undoes like any other in an MCP session; the export
+        # below shows the extra rejection went. (Each CLI call is its own
+        # session, so the CLI has no undo of an earlier command.)
+        middle = str(started["columns"] // 2)
+        cli("sanger", "export", str(reads / "cli.sanger-review.json"), "-o",
+            str(reads / "cli.fasta"), "--label", "HV1")
+        for route in ("cli", "mcp"):
+            (reads / f"{route}-alignment.fasta").write_text(">a\nACGT\n>b\nACGA\n")
+        cli("sanger", "add", str(reads / "cli.sanger-review.json"), "--alignment",
+            str(reads / "cli-alignment.fasta"), "--label", "HV1")
+        client = Mcp(binary, project, env)
+        try:
+            created = client.tool("sanger_review_create", {"read": "reads/forward.ab1",
+                                  "output": "reads/mcp.sanger-review.json"})
+            assert not created["isError"], created
+            document = created["structuredContent"]["document"]
+            for columns, choice in ((every, "accept"), ("1", "a")):
+                decided = client.tool("sanger_decide", {"document": document,
+                                      "columns": columns, "choice": choice})
+                assert not decided["isError"], decided
+            rejected = client.tool("sanger_decide", {"document": document, "columns": middle,
+                                   "choice": "reject"})
+            assert not rejected["isError"], rejected
+            assert not client.tool("undo", {"document": document})["isError"]
+            exported = client.tool("sanger_export", {"document": document,
+                                   "output": "reads/mcp.fasta", "label": "HV1"})
+            assert not exported["isError"], exported
+            refused = client.tool("sanger_decide", {"document": document, "columns": "1",
+                                  "choice": "maybe"})
+            assert refused["isError"], refused
+            alignment = client.tool("open", {"path": "reads/mcp-alignment.fasta"})
+            alignment = alignment["structuredContent"]["document"]
+            added = client.tool("sanger_add", {"document": document, "alignment": alignment,
+                                "label": "HV1"})
+            assert not added["isError"], added
+            # Undone, the row is gone, so the same consensus adds again.
+            assert not client.tool("undo", {"document": alignment})["isError"]
+            readded = client.tool("sanger_add", {"document": document, "alignment": alignment,
+                                  "label": "HV1"})
+            assert not readded["isError"], readded
+            again = client.tool("sanger_add", {"document": document, "alignment": alignment,
+                                "label": "HV1"})
+            assert again["isError"] and "already in the alignment" in json.dumps(again), again
+            assert not client.tool("save", {"document": alignment})["isError"]
+        finally:
+            client.close()
+        assert (reads / "cli.fasta").read_bytes() == (reads / "mcp.fasta").read_bytes()
+        assert ((reads / "cli-alignment.fasta").read_bytes()
+                == (reads / "mcp-alignment.fasta").read_bytes())
+        assert (reads / "cli-alignment.fasta").read_text().count(">") == 3
+        record("Sanger review, decisions, consensus export and addition to an alignment: "
+               "same result from CLI and MCP")
+
+        # Tree edits by name (D1): the CLI's reroot and ladderize are the same
+        # edits MCP applies, and save the same tree.
+        for route in ("cli", "mcp"):
+            (project / f"{route}-tree.nwk").write_text("((a:1,b:1):1,(c:1,(d:1,e:1):1):1);\n")
+        cli_tree = str(project / "cli-tree.nwk")
+        subprocess.run([str(binary), "tree", "reroot", cli_tree, "--outgroup", "c"], env=env,
+                       check=True, timeout=45, capture_output=True)
+        subprocess.run([str(binary), "tree", "ladderize", cli_tree, "--order", "smallest-first"],
+                       env=env, check=True, timeout=45, capture_output=True)
+        subprocess.run([str(binary), "tree", "rotate", cli_tree, "--clade", "a", "--clade", "b"],
+                       env=env, check=True, timeout=45, capture_output=True)
+        client = Mcp(binary, project, env)
+        try:
+            opened = client.tool("open", {"path": "mcp-tree.nwk"})["structuredContent"]
+            version = opened["version"]
+            for operation in ({"op": "tree.reroot", "params": {"clade": ["c"]}},
+                              {"op": "tree.ladderize", "params": {"small_first": True}},
+                              {"op": "tree.rotate", "params": {"clade": ["a", "b"]}}):
+                applied = client.tool("apply", {"document": opened["document"], "version": version,
+                                      "operation": operation})
+                assert not applied["isError"], applied
+                version = client.tool("state", {"document": opened["document"]})["structuredContent"]["version"]
+            assert not client.tool("save", {"document": opened["document"]})["isError"]
+        finally:
+            client.close()
+        assert (project / "cli-tree.nwk").read_text() == (project / "mcp-tree.nwk").read_text()
+        record("tree reroot, ladderize and rotate by name: same tree from CLI and MCP")
+
+        # A display tree attached to a species workspace (D1): the CLI and MCP
+        # attach the same tree through the same call and save it.
+        species = project / "species"
+        species.mkdir()
+        fixtures = Path(__file__).resolve().parents[3] / "testdata/fixtures/compact/species-delimitation"
+        shutil.copy(fixtures / "time.nwk", species / "time.nwk")
+        for route in ("cli", "mcp"):
+            shutil.copy(fixtures / "hypotheses.spart", species / f"{route}.spart")
+        attached, _ = cli("delimitation", "display-tree", str(species / "cli.spart"),
+                          "--tree", str(species / "time.nwk"))
+        client = Mcp(binary, project, env)
+        try:
+            shown = {}
+            for route in ("mcp", "cli"):
+                opened = client.tool("open", {"path": f"species/{route}.spart"})
+                document = opened["structuredContent"]["document"]
+                if route == "mcp":
+                    done = client.tool("delimitation_display_tree",
+                                       {"document": document, "tree": "species/time.nwk"})
+                    assert not done["isError"], done
+                    assert not client.tool("undo", {"document": document})["isError"]
+                    undone = client.tool("read", {"document": document})["structuredContent"]
+                    assert undone["view"].get("display_tree") is None, undone["view"]
+                    assert not client.tool("redo", {"document": document})["isError"]
+                    assert not client.tool("save", {"document": document})["isError"]
+                read = client.tool("read", {"document": document})["structuredContent"]
+                shown[route] = read["view"]["display_tree"]
+        finally:
+            client.close()
+        assert shown["cli"] == shown["mcp"] == attached["display_tree"], (shown, attached)
+        record("display tree attached to a species workspace: same from CLI and MCP")
+
+        # Batch figures (D1): all hypotheses, then one each, the same from CLI and MCP.
+        drawn, _ = cli("delimitation", "figures", str(species / "cli.spart"),
+                       "-o", str(species / "cli-figures"))
+        client = Mcp(binary, project, env)
+        try:
+            opened = client.tool("open", {"path": "species/mcp.spart"})["structuredContent"]
+            made = client.tool("delimitation_figures", {"document": opened["document"],
+                               "output": "species/mcp-figures"})
+            assert not made["isError"], made
+        finally:
+            client.close()
+        cli_files = sorted(Path(f).name.removeprefix("cli") for f in drawn["figures"])
+        mcp_files = sorted(Path(f).name.removeprefix("mcp")
+                           for f in made["structuredContent"]["figures"])
+        assert cli_files == mcp_files and len(cli_files) == 3, (cli_files, mcp_files)
+        for name in cli_files:
+            assert ((species / "cli-figures" / f"cli{name}").read_bytes()
+                    == (species / "mcp-figures" / f"mcp{name}").read_bytes()), name
+        record("batch species figures: same files from CLI and MCP")
+
+        # Tip labels from the specimen table (D1): the CLI and MCP label the
+        # same tips through the same call.
+        for route in ("cli", "mcp"):
+            (project / f"labelled-{route}.nwk").write_text("(a:1,b:1,c:1);\n")
+        links = [{"document": f"labelled-{route}.nwk", "record": record, "specimen": specimen}
+                 for route in ("cli", "mcp") for record, specimen in (("a", "S1"), ("b", "S2"))]
+        client = Mcp(binary, project, env)
+        try:
+            opened = client.tool("metadata_open", {"create": True})
+            assert not opened["isError"], opened
+            table = opened["structuredContent"]
+            linked = client.tool("apply", {"document": table["document"], "version": table["version"],
+                                 "operation": {"op": "metadata.edit", "params": {"edit": {
+                                     "action": "apply", "changes": {"specimens": ["S1", "S2"],
+                                                                    "links": links}}}}})
+            assert not linked["isError"], linked
+            assert not client.tool("save", {"document": table["document"]})["isError"]
+        finally:
+            client.close()
+        labelled, _ = cli("--project", str(project), "tree", "labels",
+                          str(project / "labelled-cli.nwk"), "--fields", "specimen")
+        client = Mcp(binary, project, env)
+        try:
+            styles = {}
+            for route in ("mcp", "cli"):
+                tree = client.tool("open", {"path": f"labelled-{route}.nwk"})["structuredContent"]
+                if route == "mcp":
+                    done = client.tool("tree_labels", {"document": tree["document"],
+                                       "fields": ["specimen"]})
+                    assert not done["isError"], done
+                    assert done["structuredContent"]["kept_own_name"] == labelled["kept_own_name"] == 1
+                    assert not client.tool("undo", {"document": tree["document"]})["isError"]
+                    undone = client.tool("read", {"document": tree["document"]})["structuredContent"]
+                    assert not undone["style"].get("tip_labels"), undone["style"]
+                    assert not client.tool("redo", {"document": tree["document"]})["isError"]
+                    assert not client.tool("save", {"document": tree["document"]})["isError"]
+                read = client.tool("read", {"document": tree["document"]})["structuredContent"]
+                styles[route] = read["style"]["tip_labels"]
+        finally:
+            client.close()
+        assert styles["cli"] == styles["mcp"] == {"a": "S1", "b": "S2"}, styles
+        record("tip labels from the specimen table: same labels from CLI and MCP")
         if args.only_sanger:
             receipt["status"] = "passed"
             receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
@@ -513,6 +710,15 @@ def main():
                             cli("provenance", "inspect", str(project / "python.json"))[0])
         record("CLI/Python execute installed multi-input package with identical normalized data")
 
+        # One tool on files (D1): `basecraft run` builds the same request from
+        # input files, a result file and settings, and gets the same result.
+        run_outcome, _ = cli("run", op, "--project", str(project),
+                             "--input", f"sources={project / 'a.txt'}",
+                             "--input", f"sources={project / 'b.txt'}",
+                             "-o", f"report={project / 'run.json'}", "--param", "mode=normal")
+        assert check_result(run_outcome, "run.json") == expected
+        record("CLI run on input files matches the request route")
+
         mcp = Mcp(binary, project, env)
         try:
             tools = mcp.tools()
@@ -559,13 +765,14 @@ def main():
             assert not (project / "slow.json").exists()
             record("MCP parity, declared schemas, scoped IDs, responsive ping and cancellation")
             invalid_corpus = []
-            for parameters in ({"mode": "normal", "unknown_setting": True},
-                               {"mode": "not-a-mode"}, {"include_newlines": "yes"}):
+            for parameters, code in (({"mode": "normal", "unknown_setting": True}, "unknown_setting"),
+                                     ({"mode": "not-a-mode"}, "invalid_arguments"),
+                                     ({"include_newlines": "yes"}, "invalid_arguments")):
                 invalid = request("invalid.json")
                 invalid["parameters"] = parameters
                 rejected = run_request(request_path, invalid)
                 assert rejected["state"] == "failed", rejected
-                assert rejected["errors"][0]["code"] == "invalid_arguments", rejected
+                assert rejected["errors"][0]["code"] == code, rejected
                 assert python_error(operation=op, project=project, inputs=invalid["inputs"],
                                     parameters=parameters,
                                     destinations=invalid["destinations"]) == rejected
@@ -573,8 +780,26 @@ def main():
                 assert via_mcp["isError"] and via_mcp["structuredContent"] == rejected, via_mcp
                 invalid_corpus.append(rejected["errors"][0]["message"])
             assert len(set(invalid_corpus)) == 3, invalid_corpus
+            # A setting the operation does not have is named on every route (D1).
+            assert "no setting unknown_setting" in invalid_corpus[0], invalid_corpus
             assert not (project / "invalid.json").exists()
             record("invalid-parameter corpus: identical structured errors from CLI/Python/MCP")
+
+            # A setting the run needs and has no default for is refused by
+            # name and by code on every route (D1).
+            needs_op = "org.example.registry-fixture/needs_label@1"
+            lacking = request("lacking.json", operation=needs_op)
+            refused = run_request(request_path, lacking)
+            assert refused["state"] == "failed", refused
+            assert refused["errors"][0]["code"] == "missing_choice", refused
+            assert "needs the setting label" in refused["errors"][0]["message"], refused
+            assert python_error(operation=needs_op, project=project, inputs=lacking["inputs"],
+                                parameters=lacking["parameters"],
+                                destinations=lacking["destinations"]) == refused
+            via_mcp = mcp.tool(mcp_name(needs_op), lacking)
+            assert via_mcp["isError"] and via_mcp["structuredContent"] == refused, via_mcp
+            assert not (project / "lacking.json").exists()
+            record("missing setting: refused by name and code from CLI/Python/MCP")
 
             missing = "org.example.registry-fixture/missing@1"
             unknown = request("missing.json", operation=missing)

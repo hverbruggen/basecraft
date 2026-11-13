@@ -189,7 +189,7 @@ companions use their current formats; there are no older-format migration paths.
 
 Bindings select the hidden run for a primary/component basename. The run retains
 `execution.json`, a compact `run.json`, optional publication/reports and declared
-artifacts. Application-state job records point to the artifact run rather than
+artifacts. Job records in `.basecraft/jobs` point to the artifact run rather than
 retaining duplicate clean inputs. Optional provenance None/LocalOnly remains
 separate from the minimum analysis/evidence record needed for these protections.
 Complete export is explicit: it materializes the dependency closure in a new

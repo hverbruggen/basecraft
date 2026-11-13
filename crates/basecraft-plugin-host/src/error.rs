@@ -18,6 +18,8 @@ pub enum Error {
     Remote { code: i64, message: String },
     #[error("plugin protocol: {0}")]
     Protocol(String),
+    #[error("plugin protocol: {0}")]
+    Contract(#[from] crate::contract::ContractError),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
