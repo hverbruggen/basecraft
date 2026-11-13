@@ -24,13 +24,6 @@ pub mod qobject {
         #[qinvokable]
         fn saved_report(self: &AppProvenance, path: &QString) -> QString;
         #[qinvokable]
-        fn save_authored(
-            self: Pin<&mut AppProvenance>,
-            path: &QString,
-            text: &QString,
-            revision: &QString,
-        ) -> bool;
-        #[qinvokable]
         fn export_report(self: Pin<&mut AppProvenance>, snapshot: &QString, directory: &QString);
         #[qinvokable]
         fn notification(
@@ -103,7 +96,7 @@ fn run(
                 let publication = records::inspect(result, project)?;
                 records::write_reports(destination, &publication)?;
                 Ok(format!(
-                    "Generated reports: {}\nUser-authored methods.md is preserved.",
+                    "Generated reports: {}",
                     destination.join("reports").display()
                 ))
             }
@@ -150,26 +143,6 @@ impl qobject::AppProvenance {
         )
     }
 
-    fn save_authored(
-        self: Pin<&mut Self>,
-        path: &QString,
-        text: &QString,
-        revision: &QString,
-    ) -> bool {
-        let contents = format!("<!-- Basecraft source revision: {revision} -->\n\n{text}");
-        let result = basecraft_io::write_atomic(Path::new(&path.to_string()), |w| {
-            w.write_all(contents.as_bytes())
-        });
-        let success = result.is_ok();
-        self.set_message(QString::from(
-            match result {
-                Ok(()) => "done: Authored draft saved".into(),
-                Err(e) => format!("fail: Could not save authored draft: {e}"),
-            }
-            .as_str(),
-        ));
-        success
-    }
     fn export_report(self: Pin<&mut Self>, snapshot: &QString, directory: &QString) {
         let snapshot = snapshot.to_string();
         let directory = std::path::PathBuf::from(directory.to_string());
@@ -374,7 +347,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn gui_provenance_exports_preserve_authored_methods_and_report_changed_results() {
+    fn gui_provenance_exports_keep_other_report_files_and_report_changed_results() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
         let paths = basecraft_platform::paths::AppPaths {

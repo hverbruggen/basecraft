@@ -81,7 +81,7 @@ pub mod qobject {
         fn role_names(self: &DocumentOpens) -> QHash_i32_QByteArray;
 
         #[qinvokable]
-        fn open(self: Pin<&mut DocumentOpens>, path: &QString, review: bool) -> QString;
+        fn open(self: Pin<&mut DocumentOpens>, path: &QString) -> QString;
         #[qinvokable]
         fn add_tab(self: Pin<&mut DocumentOpens>, path: &QString, kind: &QString) -> i32;
         #[qinvokable]
@@ -115,7 +115,7 @@ pub mod qobject {
         #[qinvokable]
         fn close(self: &DocumentOpens, index: i32) -> QString;
         #[qinvokable]
-        fn quit(self: Pin<&mut DocumentOpens>, drafts: bool) -> QString;
+        fn quit(self: Pin<&mut DocumentOpens>) -> QString;
         /// D13: copy the file `refused` names to `target` and keep its
         /// refused edit for when the copy opens. "" or why it failed.
         #[qinvokable]
@@ -123,7 +123,6 @@ pub mod qobject {
         #[qinvokable]
         fn switch_project(
             self: Pin<&mut DocumentOpens>,
-            drafts: bool,
             folder: &QString,
             current: &QString,
         ) -> QString;
@@ -158,7 +157,7 @@ pub mod qobject {
             names: &QString,
         );
         #[qinvokable]
-        fn request(self: Pin<&mut DocumentOpens>, path: &QString, review: bool) -> QString;
+        fn request(self: Pin<&mut DocumentOpens>, path: &QString) -> QString;
         #[qinvokable]
         fn start(self: Pin<&mut DocumentOpens>, token: &QString);
         #[qinvokable]
@@ -193,12 +192,7 @@ pub mod qobject {
         #[qsignal]
         fn failed(self: Pin<&mut DocumentOpens>, token: QString, message: QString);
         #[qsignal]
-        fn activated(
-            self: Pin<&mut DocumentOpens>,
-            token: QString,
-            review: bool,
-            installed_path: QString,
-        );
+        fn activated(self: Pin<&mut DocumentOpens>, token: QString, installed_path: QString);
     }
 }
 #[derive(Default)]
@@ -232,12 +226,10 @@ fn targets(consent: &QString) -> Vec<Target> {
         })
         .collect()
 }
-/// A quit step for QML: `drafts`, `ask` (with `error`), `save`, `stay`,
-/// `choose`, `refuse` or `leave`. `drafts` and `leave` carry `project` during a
-/// project switch.
+/// A quit step for QML: `ask` (with `error`), `save`, `stay`, `choose`,
+/// `refuse` or `leave`. `leave` carries `project` during a project switch.
 fn quit_json(step: &Quit) -> QString {
     json(&match step {
-        Quit::Drafts { project } => serde_json::json!({"drafts": true, "project": project}),
         Quit::Ask { targets, error } => serde_json::json!({
             "ask": targets.iter().map(target_json).collect::<Vec<_>>(), "error": error
         }),
@@ -312,8 +304,9 @@ impl qobject::DocumentOpens {
     }
 
     /// Open `path`: switch to its tab, open it on a worker in a new tab, add a
-    /// tab for the views that open themselves, or name the project dialog.
-    fn open(mut self: Pin<&mut Self>, path: &QString, review: bool) -> QString {
+    /// tab for the views that open themselves (`view`), or name the project
+    /// dialog.
+    fn open(mut self: Pin<&mut Self>, path: &QString) -> QString {
         let text = path.to_string();
         let worker = crate::document_open::eligible(&text);
         let kind = if worker {
@@ -325,17 +318,15 @@ impl qobject::DocumentOpens {
         if !worker {
             return match decision {
                 Open::Project => json(&serde_json::json!({"project": kind})),
-                Open::Switch(index) => {
-                    json(&serde_json::json!({"switch": index, "review": review}))
-                }
+                Open::Switch(index) => json(&serde_json::json!({"switch": index, "view": true})),
                 Open::New => {
                     let index = self.as_mut().add_tab(path, &QString::from(kind));
-                    json(&serde_json::json!({"new": index, "review": review}))
+                    json(&serde_json::json!({"new": index, "view": true}))
                 }
             };
         }
-        // The worker's request carries the review flag and focus either way.
-        let token = self.as_mut().request(path, review);
+        // The worker's request carries focus either way.
+        let token = self.as_mut().request(path);
         let Some(id) = self::token(&token) else {
             return json(&serde_json::json!({"error": "Could not allocate an open request"}));
         };
@@ -481,8 +472,8 @@ impl qobject::DocumentOpens {
             None => json(&serde_json::json!({})),
         }
     }
-    fn quit(mut self: Pin<&mut Self>, drafts: bool) -> QString {
-        quit_json(&self.as_mut().rust_mut().documents.quit(drafts))
+    fn quit(mut self: Pin<&mut Self>) -> QString {
+        quit_json(&self.as_mut().rust_mut().documents.quit())
     }
     fn copy_for_editing(&self, refused: &QString, target: &QString) -> QString {
         let target = std::path::PathBuf::from(target.to_string());
@@ -491,14 +482,8 @@ impl qobject::DocumentOpens {
             .map_or_else(QString::default, |error| QString::from(&error))
     }
     /// A running listed job, from a tab or not, refuses the switch first.
-    fn switch_project(
-        mut self: Pin<&mut Self>,
-        drafts: bool,
-        folder: &QString,
-        current: &QString,
-    ) -> QString {
+    fn switch_project(mut self: Pin<&mut Self>, folder: &QString, current: &QString) -> QString {
         quit_json(&self.as_mut().rust_mut().documents.switch_project(
-            drafts,
             crate::jobs::working(),
             folder.to_string(),
             &current.to_string(),
@@ -685,7 +670,7 @@ impl qobject::DocumentOpens {
         self.renamed(id, &path.to_string());
     }
 
-    fn request(mut self: Pin<&mut Self>, path: &QString, review: bool) -> QString {
+    fn request(mut self: Pin<&mut Self>, path: &QString) -> QString {
         let undelivered: Vec<_> = self
             .rust()
             .opens
@@ -697,12 +682,7 @@ impl qobject::DocumentOpens {
         for id in undelivered {
             self.as_mut().reject(id, &OpenError::Queue);
         }
-        match self
-            .as_mut()
-            .rust_mut()
-            .opens
-            .begin(path.to_string(), review)
-        {
+        match self.as_mut().rust_mut().opens.begin(path.to_string()) {
             Ok((id, _)) => QString::from(id.to_string()),
             Err(_) => QString::default(),
         }
@@ -940,7 +920,7 @@ impl qobject::DocumentOpens {
         if !self.rust().opens.wants_focus(id) {
             return;
         }
-        let (review, installed_path) = {
+        let installed_path = {
             let mut state = self.as_mut().rust_mut();
             let Some(request) = state.opens.requests.get_mut(&id) else {
                 return;
@@ -948,12 +928,9 @@ impl qobject::DocumentOpens {
             if request.phase != Phase::Ready {
                 return;
             }
-            (
-                std::mem::take(&mut request.review),
-                request.installed_path.clone(),
-            )
+            request.installed_path.clone()
         };
-        self.activated(value.clone(), review, QString::from(installed_path));
+        self.activated(value.clone(), QString::from(installed_path));
     }
 
     fn retire(mut self: Pin<&mut Self>, value: &QString) {

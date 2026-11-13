@@ -1017,11 +1017,6 @@ fn main() {
         "reorder",
         "cancel-reopen",
         "save-as",
-        "review-new",
-        "review-duplicate",
-        "review-supersede",
-        "review-cancel",
-        "review-fail",
         "fail-spawn",
         "fail-worker",
         "fail-queue",
@@ -1072,14 +1067,7 @@ fn main() {
                 fault,
             );
         }
-        if matches!(
-            scenario,
-            "reorder"
-                | "cancel-reopen"
-                | "review-supersede"
-                | "review-cancel"
-                | "fail-construction"
-        ) {
+        if matches!(scenario, "reorder" | "cancel-reopen" | "fail-construction") {
             app_bridge::barriers::configure(
                 folder
                     .path()
@@ -1118,15 +1106,7 @@ fn main() {
                 0
             } else if matches!(
                 scenario,
-                "cancel-reopen"
-                    | "review-new"
-                    | "review-duplicate"
-                    | "review-cancel"
-                    | "review-fail"
-                    | "fail-spawn"
-                    | "fail-worker"
-                    | "fail-queue"
-                    | "fail-construction"
+                "cancel-reopen" | "fail-spawn" | "fail-worker" | "fail-queue" | "fail-construction"
             ) {
                 1
             } else {

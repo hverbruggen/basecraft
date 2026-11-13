@@ -366,7 +366,7 @@ impl DocumentRecord {
         })
     }
 
-    /// Export a frozen report snapshot. Authored methods.md is never overwritten.
+    /// Export a frozen report snapshot.
     pub fn export(&self, directory: &Path) -> crate::Result<()> {
         self.report()?.export(directory)
     }
@@ -438,7 +438,7 @@ fn presentation(op: &Op) -> bool {
     }
 }
 
-/// Files a report export writes. Authored `methods.md` is never among them.
+/// Files a report export writes.
 const REPORT_FILES: [&str; 8] = [
     "methods.generated.md",
     "history.md",
