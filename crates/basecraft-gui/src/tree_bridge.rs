@@ -76,11 +76,11 @@ pub mod qobject {
         #[qproperty(bool, display_only)]
         type TreeController = super::TreeRust;
 
-        /// Show the tree in `path` with `edits`, a JSON list of drawing
-        /// edits, replayed on it. Nothing is written.
         /// End the closed tab's session now (Main.qml `removeDocument`).
         #[qinvokable]
         fn close_session(self: Pin<&mut TreeController>);
+        /// Show the tree in `path` with `edits`, a JSON list of drawing
+        /// edits, replayed on it. Nothing is written.
         #[qinvokable]
         fn find_query(self: Pin<&mut TreeController>, query: &QString, reverse: bool);
         #[qinvokable]

@@ -55,7 +55,7 @@ ApplicationWindow {
             success => quitStep(JSON.parse(documentOpens.quit_saved(success))))
         else if (step.choose || step.refuse) preferences.project_error = step.refuse || shell.choose_project(step.choose)
         else if (step.leave && !step.project) { leave(step.leave); closeConfirmed = true; window.close() }
-        else if (step.leave) { // A switch: every tab closes; their sessions end as Qt deletes them, which the choice waits for.
+        else if (step.leave) { // A switch: every tab closes, ending its session at once; then the project is chosen.
             leave(step.leave); discardAuthoredOnQuit = false
             while (documentOpens.count > 0) removeDocument(documentOpens.count - 1)
             preferences.project_error = shell.choose_project(step.project); refreshCurrent()

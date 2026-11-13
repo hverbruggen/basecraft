@@ -381,16 +381,39 @@ fn execute(
 
 /// The editor owns a regular Session and its checked document handle.
 /// This adapter holds no history, checkpoint or save implementation.
+/// Why a review could not start. A folder that cannot hold recovery stays
+/// typed, so the window can offer a copy (D13).
+#[derive(Debug)]
+pub(super) enum ReviewFailure {
+    ReadOnlyFolder,
+    Failed(String),
+}
+impl ReviewFailure {
+    pub fn read_only(&self) -> bool {
+        matches!(self, Self::ReadOnlyFolder)
+    }
+}
+impl From<ReviewFailure> for String {
+    fn from(failure: ReviewFailure) -> Self {
+        match failure {
+            ReviewFailure::ReadOnlyFolder => crate::document_open::READ_ONLY_EDIT.into(),
+            ReviewFailure::Failed(message) => message,
+        }
+    }
+}
+
 pub(super) struct ReviewDocument {
     pub session: basecraft_ops::Session,
     pub id: basecraft_ops::DocId,
 }
 impl ReviewDocument {
-    pub fn new(review: &SangerReview) -> Result<Self, String> {
-        let mut session = crate::chosen_project::session_for(review.storage_anchor())?;
-        let id = session
-            .create_sanger_review(review)
-            .map_err(|e| crate::document_open::edit_failure(&e))?;
+    pub fn new(review: &SangerReview) -> Result<Self, ReviewFailure> {
+        let mut session = crate::chosen_project::session_for(review.storage_anchor())
+            .map_err(ReviewFailure::Failed)?;
+        let id = session.create_sanger_review(review).map_err(|e| match e {
+            basecraft_ops::Error::ReadOnlyFolder { .. } => ReviewFailure::ReadOnlyFolder,
+            e => ReviewFailure::Failed(e.to_string()),
+        })?;
         Ok(Self { session, id })
     }
     pub fn open(path: &Path) -> Result<Self, String> {

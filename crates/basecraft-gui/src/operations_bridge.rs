@@ -179,7 +179,12 @@ impl qobject::AppOperations {
             }
             let root = PathBuf::from(folder);
             let input = basecraft_ops::blast::record_queries(&root, &queries).map_err(|error| {
-                basecraft_plugin_host::Error::Protocol(crate::document_open::edit_failure(&error))
+                basecraft_plugin_host::Error::Protocol(match error {
+                    basecraft_ops::Error::ReadOnlyFolder { .. } => "Search refused: the folder is \
+                        read-only, so basecraft cannot keep the search's records there."
+                        .into(),
+                    error => error.to_string(),
+                })
             })?;
             Ok((
                 root,

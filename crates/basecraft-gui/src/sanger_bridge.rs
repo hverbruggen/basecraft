@@ -73,11 +73,11 @@ pub mod qobject {
         #[qproperty(QString, failed_reads)]
         type SangerController = super::SangerRust;
 
-        /// Prepare a review from `paths` (JSON list), oriented against
-        /// `reference` when it is not empty. False when one is already running.
         /// End the closed tab's session now (Main.qml `removeDocument`).
         #[qinvokable]
         fn close_session(self: Pin<&mut SangerController>);
+        /// Prepare a review from `paths` (JSON list), oriented against
+        /// `reference` when it is not empty. False when one is already running.
         #[qinvokable]
         fn start_review(
             self: Pin<&mut SangerController>,
@@ -1091,10 +1091,12 @@ impl qobject::SangerController {
             None => {}
         }
         let path = input;
-        let loaded = basecraft_ops::sanger_review::instrument_review(&path).and_then(|review| {
-            let view = session_view(&review)?;
-            Ok((work::ReviewDocument::new(&review)?, view))
-        });
+        let loaded = basecraft_ops::sanger_review::instrument_review(&path)
+            .map_err(work::ReviewFailure::Failed)
+            .and_then(|review| {
+                let view = session_view(&review).map_err(work::ReviewFailure::Failed)?;
+                Ok((work::ReviewDocument::new(&review)?, view))
+            });
         match loaded {
             Ok((session, mut view)) => {
                 self.as_mut().cancel_calls();
@@ -1121,8 +1123,8 @@ impl qobject::SangerController {
                 ));
                 true
             }
-            Err(error) => {
-                self.review_failed(&path, "fail", &error);
+            Err(failure) => {
+                self.review_failed(&path, "fail", failure);
                 false
             }
         }
@@ -1130,13 +1132,18 @@ impl qobject::SangerController {
 
     /// Report a review that could not start; one the read's folder cannot
     /// keep (D13) is also offered as a copy.
-    fn review_failed(mut self: std::pin::Pin<&mut Self>, path: &Path, kind: &str, error: &str) {
-        if error == crate::document_open::READ_ONLY_EDIT {
+    fn review_failed(
+        mut self: std::pin::Pin<&mut Self>,
+        path: &Path,
+        kind: &str,
+        failure: work::ReviewFailure,
+    ) {
+        if failure.read_only() {
             let refused = serde_json::json!({"file": path, "review": true}).to_string();
             self.as_mut().set_refused_edit(QString::from(&refused));
         }
         self.as_mut().set_message_kind(QString::from(kind));
-        self.set_message(QString::from(error));
+        self.set_message(QString::from(&String::from(failure)));
     }
 
     fn install_review_result(
@@ -1149,8 +1156,9 @@ impl qobject::SangerController {
         self.as_mut().rust_mut().stage = None;
         self.as_mut().set_busy(false);
         self.as_mut().set_calling(false);
-        let result =
-            result.and_then(|(view, review)| Ok((view, work::ReviewDocument::new(&review)?)));
+        let result = result
+            .map_err(work::ReviewFailure::Failed)
+            .and_then(|(view, review)| Ok((view, work::ReviewDocument::new(&review)?)));
         match result {
             Ok((mut review, session)) => {
                 self.as_mut().cancel_calls();
@@ -1172,8 +1180,8 @@ impl qobject::SangerController {
                 self.refresh();
                 true
             }
-            Err(error) => {
-                self.review_failed(path, "error", &error);
+            Err(failure) => {
+                self.review_failed(path, "error", failure);
                 false
             }
         }

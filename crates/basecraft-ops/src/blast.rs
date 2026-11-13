@@ -399,25 +399,17 @@ pub fn record_queries(folder: &Path, queries: &[Query]) -> Result<std::path::Pat
         .join(ulid::Ulid::generate().to_string())
         .join("query-source.json");
     let record = folder.join(&relative);
-    let written = record
-        .parent()
-        .map_or(Ok(()), std::fs::create_dir_all)
-        .and_then(|()| {
-            std::fs::write(
-                &record,
-                serde_json::to_vec_pretty(queries).map_err(std::io::Error::other)?,
-            )
+    // As for recovery: a folder where `.basecraft/blast` cannot be made, for
+    // whatever reason (permissions, a read-only mount, a `.basecraft` that is
+    // not basecraft's folder), is read-only for basecraft.
+    if let Err(error) = record.parent().map_or(Ok(()), std::fs::create_dir_all) {
+        return Err(crate::Error::ReadOnlyFolder {
+            folder: folder.to_path_buf(),
+            reason: error.to_string(),
         });
-    match written {
-        Ok(()) => Ok(relative),
-        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-            Err(crate::Error::ReadOnlyFolder {
-                folder: folder.to_path_buf(),
-                reason: error.to_string(),
-            })
-        }
-        Err(error) => Err(error.into()),
     }
+    crate::records::write_json(&record, &queries)?;
+    Ok(relative)
 }
 
 #[cfg(test)]
