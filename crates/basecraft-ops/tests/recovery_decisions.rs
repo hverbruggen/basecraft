@@ -352,8 +352,14 @@ fn nested_delimitation_registers_only_final_stores_and_reopens() {
                 .unwrap()
                 == external.directory()
         }));
+        // SPART inputs are kept under a SPART name.
+        let retained = if file.extension().is_some_and(|ext| ext == "xml") {
+            "submitted.spart.xml"
+        } else {
+            "submitted.spart"
+        };
         assert_eq!(
-            std::fs::read(run.join("submitted.fasta")).unwrap(),
+            std::fs::read(run.join(retained)).unwrap(),
             std::fs::read(&file).unwrap()
         );
         assert_eq!(std::fs::read(&ledger_path).unwrap(), ledger_bytes);

@@ -229,12 +229,11 @@ impl History<'_> {
                     &bundle.canonicalize()?,
                     &previous_bundle.canonicalize()?,
                 )?);
-            } else if previous_bundle.join("submitted.fasta").is_file() {
-                basecraft_io::write_atomic(&bundle.join("submitted.fasta"), |w| {
-                    std::io::copy(
-                        &mut std::fs::File::open(previous_bundle.join("submitted.fasta"))?,
-                        w,
-                    )?;
+            } else if let Some(previous) =
+                crate::records::analysis_store::submitted_input(previous_bundle)
+            {
+                basecraft_io::write_atomic(&bundle.join(previous.file_name().unwrap()), |w| {
+                    std::io::copy(&mut std::fs::File::open(&previous)?, w)?;
                     Ok(())
                 })?;
             }
@@ -534,7 +533,8 @@ impl History<'_> {
             // Unsaved edits need their exact current generated input. This is
             // not an automatic copy of an unchanged original.
             let bytes = current()?;
-            basecraft_io::write_atomic(&bundle.join("submitted.fasta"), |w| {
+            let submitted = crate::records::analysis_store::submitted_name(Path::new(self.key));
+            basecraft_io::write_atomic(&bundle.join(submitted), |w| {
                 std::io::Write::write_all(w, &bytes)
             })?;
             (
@@ -598,7 +598,9 @@ impl History<'_> {
             logical_name,
             hash,
             size,
-            retained: reference.is_none().then(|| "submitted.fasta".into()),
+            retained: reference.is_none().then(|| {
+                crate::records::analysis_store::submitted_name(Path::new(self.key)).into()
+            }),
             reference,
         };
         let (events, effective_edits) = portable_analysis_activity(snapshot, activity);
