@@ -129,7 +129,7 @@ fn a_file_run_leaves_one_tool_run_that_points_at_its_run_record() {
     assert_eq!(tool_runs.len(), 1);
     let (params, link) = tool_runs[0];
     // The entry holds the tool's own parameters; the rest is in the run record.
-    assert_eq!(*params, json!({"mode":"normal"}));
+    assert_eq!(*params, count("input.txt").parameters);
     assert_eq!(link.as_ref().unwrap().id, outcome.run_id);
     let record: RunRecord =
         serde_json::from_slice(&std::fs::read(folder.join("execution.json")).unwrap()).unwrap();

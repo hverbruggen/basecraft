@@ -209,9 +209,11 @@ pub fn tool_runs(session: &Session, doc: DocId) -> Vec<Value> {
                 unreachable!()
             };
             let record = run_record(session, event);
-            serde_json::json!({"run_id": run.as_ref().unwrap().id, "requested": params,
-                "effective": record.effective_parameters, "operation": record.operation,
-                "initiator": record.initiator})
+            let mut view = serde_json::Map::new();
+            view.insert("run_id".into(), run.as_ref().unwrap().id.clone().into());
+            view.insert("requested".into(), params.clone());
+            view.insert("effective".into(), record.effective_parameters);
+            Value::Object(view)
         })
         .collect()
 }
