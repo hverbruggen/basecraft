@@ -488,6 +488,13 @@ pub(crate) fn installed<T: DocumentEditor>(mut this: std::pin::Pin<&mut T>, path
     }
 }
 
+/// Where records of work on a document go, such as a BLAST search's: its
+/// session's folder, the project or the file's own folder ("" without one).
+pub(crate) fn record_folder(session: Option<&Session>) -> cxx_qt_lib::QString {
+    let folder = session.map(|s| s.root().to_string_lossy().into_owned());
+    cxx_qt_lib::QString::from(&folder.unwrap_or_default())
+}
+
 /// Offer a copy when [`applying`] reported a refusal for a read-only folder.
 pub(crate) fn offer_copy<T: DocumentEditor>(
     this: std::pin::Pin<&mut T>,

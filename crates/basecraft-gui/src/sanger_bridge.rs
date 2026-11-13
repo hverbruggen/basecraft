@@ -38,8 +38,7 @@ pub mod qobject {
         #[qproperty(QString, accent)]
         #[qproperty(QString, mono_font)]
         #[qproperty(QString, file_path)]
-        /// A review the read's folder cannot keep (D13), as JSON for the
-        /// window's copy offer, or "".
+        /// The copy offer for a review a read-only folder refused (D13), or "".
         #[qproperty(QString, refused_edit)]
         #[qproperty(QString, zoom_text)]
         #[qproperty(f64, trace_scroll_pos)]
@@ -76,8 +75,7 @@ pub mod qobject {
 
         /// Prepare a review from `paths` (JSON list), oriented against
         /// `reference` when it is not empty. False when one is already running.
-        /// The tab closed: end its document's session now, so a project
-        /// switch that follows sees the project free.
+        /// End the closed tab's session now (Main.qml `removeDocument`).
         #[qinvokable]
         fn close_session(self: Pin<&mut SangerController>);
         #[qinvokable]

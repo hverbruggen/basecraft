@@ -47,8 +47,7 @@ pub mod qobject {
         #[qproperty(QString, file_path)]
         #[qproperty(bool, busy)]
         #[qproperty(bool, dirty)]
-        /// An edit the folder refused because it cannot hold recovery (D13),
-        /// as JSON for the window's copy offer, or "".
+        /// The copy offer for an edit a read-only folder refused (D13), or "".
         #[qproperty(QString, refused_edit)]
         #[qproperty(QString, zoom_text)]
         #[qproperty(f64, hscroll_pos)]
@@ -79,8 +78,7 @@ pub mod qobject {
 
         /// Show the tree in `path` with `edits`, a JSON list of drawing
         /// edits, replayed on it. Nothing is written.
-        /// The tab closed: end its document's session now, so a project
-        /// switch that follows sees the project free.
+        /// End the closed tab's session now (Main.qml `removeDocument`).
         #[qinvokable]
         fn close_session(self: Pin<&mut TreeController>);
         #[qinvokable]

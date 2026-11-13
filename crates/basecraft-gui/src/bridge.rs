@@ -90,8 +90,7 @@ pub mod qobject {
         #[qproperty(QString, mono_font)]
         #[qproperty(QString, file_path)]
         #[qproperty(bool, dirty)]
-        /// An edit the folder refused because it cannot hold recovery (D13),
-        /// as JSON for the window's copy offer, or "".
+        /// The copy offer for an edit a read-only folder refused (D13), or "".
         #[qproperty(QString, refused_edit)]
         /// Asks what the document is when basecraft cannot tell (D12), or "".
         #[qproperty(QString, alphabet_question)]
@@ -102,12 +101,10 @@ pub mod qobject {
         #[qproperty(f64, scroll_size)]
         type GenomeController = super::ControllerRust;
 
-        /// The tab closed: end its document's session now, so a project
-        /// switch that follows sees the project free.
+        /// End the closed tab's session now (Main.qml `removeDocument`).
         #[qinvokable]
         fn close_session(self: Pin<&mut GenomeController>);
-        /// Where records of work on this document go, such as a BLAST
-        /// search's: its session's folder (the project, or the file's folder).
+        /// Where records of work on this document go (its session's folder).
         #[qinvokable]
         fn record_folder(self: &GenomeController) -> QString;
         #[qinvokable]
@@ -613,8 +610,7 @@ impl crate::document_open::DocumentEditor for qobject::GenomeController {
 
 impl qobject::GenomeController {
     pub fn record_folder(&self) -> QString {
-        let folder = self.rust().session.as_ref().map(|s| s.root().to_path_buf());
-        QString::from(folder.unwrap_or_default().to_string_lossy().as_ref())
+        crate::document_open::record_folder(self.rust().session.as_ref())
     }
 
     pub fn close_session(mut self: Pin<&mut Self>) {
