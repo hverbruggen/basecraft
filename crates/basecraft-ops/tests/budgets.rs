@@ -233,14 +233,15 @@ fn large_first_edit_records_the_original_without_reading() {
     assert_eq!(counters::snapshot().sync_all, 0);
     assert_eq!(counters::snapshot().sync_data, 1);
     drop(session);
-    let recovered = basecraft_ops::records::recover(&recovery, &root.join("recovered")).unwrap();
+    let recovered =
+        basecraft_ops::records::recover(&recovery, &root.join("recovered"), None).unwrap();
     let mut reopened = Session::unlogged(&root);
     let doc = reopened.open(&recovered[0]).unwrap();
     assert_eq!(reopened.doc(doc).unwrap().read(0, 4), b"CAAA");
     // No private copy is kept: without the original nothing is recovered.
     std::fs::remove_file(&file).unwrap();
     assert!(
-        basecraft_ops::records::recover(&recovery, &root.join("missing"))
+        basecraft_ops::records::recover(&recovery, &root.join("missing"), None)
             .map_or(true, |outputs| outputs.is_empty())
     );
 }

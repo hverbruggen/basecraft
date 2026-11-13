@@ -693,7 +693,7 @@ impl qobject::AlignmentController {
                 true
             }
             Err(e) => {
-                self.fail(&e.to_string());
+                self.fail(&crate::document_open::edit_failure(&e));
                 false
             }
         }

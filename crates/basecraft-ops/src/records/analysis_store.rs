@@ -470,6 +470,29 @@ impl ArtifactRun {
     }
 }
 
+/// The name a run or bundle keeps a generated input under, in the document's
+/// own format: SPART stays SPART, everything else is FASTA.
+pub(crate) fn submitted_name(document: &Path) -> &'static str {
+    if crate::files::Format::from_path(document).ok() != Some(crate::files::Format::Delimitation) {
+        "submitted.fasta"
+    } else if document
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("spart"))
+    {
+        "submitted.spart"
+    } else {
+        "submitted.spart.xml"
+    }
+}
+
+/// The generated input a run or bundle keeps, whatever its format.
+pub(crate) fn submitted_input(directory: &Path) -> Option<PathBuf> {
+    ["submitted.fasta", "submitted.spart", "submitted.spart.xml"]
+        .into_iter()
+        .map(|name| directory.join(name))
+        .find(|path| path.is_file())
+}
+
 pub(crate) fn retained_source(root: &Path, hash: &str) -> Result<Option<PathBuf>> {
     let store = root.join(".basecraft/analyses-v1");
     if !store.exists() {
@@ -497,7 +520,10 @@ pub(crate) fn retained_source(root: &Path, hash: &str) -> Result<Option<PathBuf>
         } else if input.state == basecraft_protocol::input_records::EvidenceState::Generated
             && input.submitted_hash == hash
         {
-            run.join("submitted.fasta")
+            match submitted_input(&run) {
+                Some(path) => path,
+                None => continue,
+            }
         } else {
             continue;
         };
@@ -548,7 +574,7 @@ pub(crate) fn publish_delimitation(
             origin_run: None,
             extra: std::collections::BTreeMap::new(),
         };
-        basecraft_io::write_atomic(&run.artifact("submitted.fasta")?, |w| {
+        basecraft_io::write_atomic(&run.artifact(submitted_name(target))?, |w| {
             std::io::copy(&mut std::fs::File::open(target)?, w)?;
             Ok(())
         })?;

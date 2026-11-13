@@ -41,6 +41,7 @@ mod save_failure_tests;
 #[cfg(test)]
 mod saved_mark_tests;
 mod tool_runs;
+pub use open::{objects_dir, recovery_folder};
 pub use save_decision::{EvidenceAction, SaveCheck, SaveDecision, SaveOutcome, SaveWarning};
 pub use tool_runs::ToolRunRecord;
 pub mod support_import;
@@ -79,7 +80,8 @@ struct Slot {
     saved_at: Option<SavedMark>,
     recovery_boundary: Option<String>,
     source_stamps: Vec<(PathBuf, Option<basecraft_protocol::provenance::FileStamp>)>,
-    recovery_changed: bool,
+    /// What the editor should say about this document's recovery.
+    recovery_notice: Option<String>,
     /// The previous Save As target this session wrote, so a partial Save As can retry it.
     saved_target: Option<(PathBuf, basecraft_protocol::provenance::FileStamp, String)>,
     absent_sidecars: Vec<String>,
@@ -238,8 +240,9 @@ impl Session {
         }
     }
 
-    /// A viewing session whose first edit starts recovery in application state,
-    /// never next to the source. Discovery creates no directories.
+    /// A viewing session whose first edit starts recovery in
+    /// `<root>/.basecraft/recovery/<session>`: the project's folder, or the
+    /// folder of a loose file. Nothing is created before the first edit.
     pub fn recoverable(root: impl Into<PathBuf>) -> Result<Self> {
         let paths =
             basecraft_platform::paths::AppPaths::discover().map_err(|e| invalid(e.to_string()))?;
@@ -254,7 +257,7 @@ impl Session {
             .load()
             .map_err(|e| invalid(e.to_string()))?;
         let mut session = Self::new(root);
-        session.storage_root = paths.state.join("recovery").join(&session.id);
+        session.storage_root = recovery_folder(&session.root).join(&session.id);
         session.local_provenance_root = paths.state.join("provenance");
         session.provenance_policy = preferences.files.provenance;
         session.log = preferences
@@ -271,9 +274,7 @@ impl Session {
 
     /// A session that logs nothing, for replay and tests.
     pub fn unlogged(root: impl Into<PathBuf>) -> Self {
-        let mut s = Self::new(root);
-        s.log = None;
-        s.store_objects = false;
+        let mut s = Self::detached(root);
         s.tracked = false;
         s
     }
@@ -592,19 +593,18 @@ impl Session {
     pub fn state(&self, id: DocId) -> Result<DocState> {
         Ok(self.slot(id)?.content.as_document().fingerprint())
     }
-
-    // Open and save.
-
-    // Operations.
 }
 
 impl Drop for Session {
+    /// Remove recovery once nothing is unsaved, then any emptied recovery and
+    /// `.basecraft` folder.
     fn drop(&mut self) {
-        if self.storage_root != self.root
-            && !self.storage_root.join("pending-save.json").exists()
-            && self.docs.iter().all(Slot::is_clean)
-        {
+        let unsaved = self.storage_root.join("pending-save.json").exists()
+            || !self.docs.iter().all(Slot::is_clean);
+        if self.storage_root != self.root && !unsaved {
             let _ = std::fs::remove_dir_all(&self.storage_root);
+            let _ = std::fs::remove_dir(recovery_folder(&self.root));
+            let _ = std::fs::remove_dir(self.root.join(".basecraft"));
         }
     }
 }
@@ -653,10 +653,6 @@ pub(crate) fn relative(root: &Path, path: &Path) -> String {
         |_| abs.to_string_lossy().into_owned(),
         |p| p.to_string_lossy().into_owned(),
     )
-}
-
-pub fn objects_dir(root: &Path) -> PathBuf {
-    root.join(".basecraft").join("objects")
 }
 
 /// Upper-case residues; reject anything that isn't a letter, `-` or `*`.

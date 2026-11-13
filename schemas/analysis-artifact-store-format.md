@@ -111,40 +111,77 @@ acknowledging an incomplete check does not select a policy for known analyses.
 Stale or reused decisions return a fresh check. Successful overrides retain the
 inspection issues as warnings. GUI, CLI, Python and MCP use the same typed result.
 
-The private index lives in the profile's state folder. `analysis-input-index.json`
-is a checksummed catalogue of indexed stores and source keys, used by writers.
-Below `analysis-inputs`, `sources/<hash of path>` lists the connected stores that
-may own or depend on an input path (recorded and canonical spellings),
-`files/<hash of device:inode>` lists the source paths recorded for one file, and
-`stores/<hash of store path>` holds each store's identity, sources and
-dependencies. Registration updates these records explicitly. A durable dirty
-marker records the direct-source paths a pending ledger change can introduce, so
-unrelated saves continue; pending dependency changes have unknown coverage until
-registration succeeds. The ledger directory is synced before the updated index
-can clear its marker.
+A project keeps one analysis index in its own `.basecraft/analysis-index/`,
+keyed by project-relative path. A file outside the writing session's project
+(rule 2.5: the project is the one the session holds) is indexed in a
+`.basecraft/analysis-index/` beside it, keyed by its name. Entries sit in 256
+buckets named by the first two hex digits of the BLAKE3 hash of the path, one
+file per store in each bucket, named by a hash of the store's relative path so
+a copied store gets its own file (schema
+[analysis-index.schema.json](analysis-index.schema.json)). Paths are
+`/`-separated and relative to the folder holding `.basecraft`:
 
-A save reads only the shards for its own target: its path spellings, its file
-identity (which finds a source that was moved or hard-linked on the same disk),
-any pending dirty markers, and the store records of `.basecraft/analyses-v1`
-folders in its ancestor folders. An ancestor store the index does not cover at
-that location (moved or never registered) is scanned in full; its identity
-retires the vanished old location. Only a target with more than one hard link
-reads the catalogue, to compare against every indexed source. No unrelated run
-or input ledger, and no store registry, is opened. A deleted source or store
-elsewhere does not concern the save. A damaged shard or dirty marker makes the
-check incomplete and never authorizes an unchecked save.
+    {
+      "schema_version": 1,
+      "store": "results/.basecraft/analyses-v1",
+      "files": [
+        "data/reads.fasta"
+      ]
+    }
+
+A writer adds its entries before it writes the ledger they cover, under the
+short lock `.basecraft/analysis-index.lock`, so writers with different
+profiles, user accounts or machines exclude each other. Ledger writers take the
+project from the session: the session's save, publication and analysis entry
+points open the evidence scope with it, and nested writers on that thread use
+it. Entries are never removed by ordinary writes: the index can list a store
+that no longer refers to a file, never miss one that does. Readers take the
+union of every file in a bucket, so a copy a sync tool makes on a conflict
+still counts. When a run's input changes, stores listed for its old input are
+also listed for the new one, so runs that depend on it stay covered. Recovery
+staging (`.basecraft/recovery`, `.basecraft-recover-*` and basecraft's own
+folders) is never indexed.
+
+Each store keeps `indexed-folders.json`, the index buckets that list it,
+relative to the folder holding the store's `.basecraft`. A save from a session
+that holds a project checks the project's root store: if it names the save's
+bucket while that bucket does not name the store, the index was lost, so the
+store is inspected and the save asks. When the project's whole index is
+missing, every store in the project is checked this way, once per process.
+`basecraft records reindex <project>` rebuilds the index of every store in
+the project from their ledgers; it holds each store's lock from before it
+reads the ledgers, and writers take that lock before adding entries.
+
+A folder that refuses new files gets no index: basecraft cannot save over a
+file there either. If only `.basecraft` cannot be written, or it is a file
+that belongs to another program, the analysis fails and names the folder, and
+a save of a file there is incomplete and asks.
+
+A save of a file inside the session's project reads its bucket of the
+project's index and its bucket of the index beside the file (a writer that did
+not know the project wrote there); a save of any other file reads only the
+index beside it. Both spellings of the path (as given and canonical) are
+looked up. Each listed store that still exists is then inspected in full. A
+target with several hard links also matches entries in its folder's index for
+files that are the same file. No machine-wide registry exists, and a save in
+one project never reads another project's stores. A damaged index file makes
+the check incomplete and never authorizes an unchecked save. Copying or moving
+a project keeps every relative path valid. A project file analysed in its
+project and then saved from a session without that project is a loose file
+(rule 2.5): only the index beside it is read, so that save does not see the
+analysis.
 
 Saves and mutations reserve source paths, file identities and affected stores.
 Conflicting operations return Busy and can retry; unrelated saves may overlap.
-A catalogue lock makes selection and reservation atomic with index publication.
-Direct-source updates scan outside it; ancestry updates retain it through ledger
-and index publication because their pending coverage is unknown. Large ancestry
-updates can therefore delay unrelated lookups until publication finishes. There is no filesystem journal or support for older record layouts.
+A save reserves its file before reading the index beside it, and a writer holds
+the same reservation while it adds an entry, so a save never misses a reference
+being made. The reservation lock files sit in the profile's `state/locks`
+folder; they coordinate running processes and hold no data. There is no filesystem journal or support for older record layouts.
 
 External editors cannot be intercepted. Verification reports changed/missing
 originals. Verified-original relink accepts only matching bytes and updates the
 read-only source location. No startup scan/hash of a filesystem occurs. Unknown
-input/reference/registry fields survive updates; future schema versions fail.
+input/reference fields survive updates; future schema versions fail.
 `upstream` entries reference immutable publication ID/hash/location. Bounded
 verification traverses declared records and their owning evidence decisions.
 Current inferred links refer to the owning run. Presentation and Save As guard

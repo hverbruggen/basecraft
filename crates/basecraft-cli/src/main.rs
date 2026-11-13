@@ -83,6 +83,10 @@ enum Command {
         session: PathBuf,
         #[arg(long)]
         output: PathBuf,
+        /// The project the recovered files belong to; their records are kept
+        /// in its `.basecraft`.
+        #[arg(long)]
+        project: Option<PathBuf>,
         /// After a crash damaged the journal: recover only the edits before the
         /// first damaged line. The journal itself is left unchanged.
         #[arg(long)]
@@ -92,6 +96,11 @@ enum Command {
     Provenance {
         #[command(subcommand)]
         action: ProvenanceCommand,
+    },
+    /// Maintain the records basecraft keeps in a project's `.basecraft` folders.
+    Records {
+        #[command(subcommand)]
+        action: RecordsCommand,
     },
     /// Serve a headless project session over MCP stdio (2025-11-25).
     Mcp {
@@ -196,6 +205,13 @@ enum Command {
         start: u64,
         end: u64,
     },
+}
+
+#[derive(Subcommand)]
+enum RecordsCommand {
+    /// Rebuild the analysis indexes from the project's analysis records, after
+    /// an index was damaged, deleted or left out of a copy.
+    Reindex { project: PathBuf },
 }
 
 #[derive(Subcommand)]
@@ -315,21 +331,32 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Command::Recover {
             session,
             output,
+            project,
             verified_prefix,
         } => {
+            let project = project
+                .map(basecraft_ops::project::Project::new)
+                .transpose()?;
+            let project = project.as_ref();
             let restored = if verified_prefix {
                 let (restored, problem) =
-                    basecraft_ops::records::recover_verified_prefix(&session, &output)?;
+                    basecraft_ops::records::recover_verified_prefix(&session, &output, project)?;
                 if let Some(problem) = problem {
                     eprintln!("Recovered the verified edits before damage: {problem}");
                 }
                 restored
             } else {
-                basecraft_ops::records::recover(&session, &output)?
+                basecraft_ops::records::recover(&session, &output, project)?
             };
             for restored in restored {
                 println!("{}", restored.display());
             }
+        }
+        Command::Records {
+            action: RecordsCommand::Reindex { project },
+        } => {
+            let done = basecraft_ops::records::reindex(&project)?;
+            println!("{}", serde_json::to_string_pretty(&done)?);
         }
         Command::Provenance { action } => match action {
             ProvenanceCommand::Inspect { result } => {
@@ -822,16 +849,12 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     schemars::schema_for!(basecraft_protocol::records::StoreMarker),
                 ),
                 (
-                    "analysis-input-index",
-                    schemars::schema_for!(
-                        basecraft_protocol::records::IndexFile<
-                            basecraft_protocol::records::AnalysisInputIndex,
-                        >
-                    ),
+                    "analysis-index",
+                    schemars::schema_for!(basecraft_protocol::records::AnalysisIndex),
                 ),
                 (
-                    "store-registry",
-                    schemars::schema_for!(basecraft_protocol::records::StoreRegistry),
+                    "indexed-folders",
+                    schemars::schema_for!(basecraft_protocol::records::IndexedFolders),
                 ),
                 (
                     "pending-save",
