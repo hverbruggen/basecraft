@@ -37,6 +37,15 @@ disposable caches only. Until the open items below close, they still hold:
 | `log/<host>/<month>-<stream>-<segment>.jsonl` | Journal of a session that records into the folder itself (CLI and scripts). | JSONL, RP03 |
 | `recovery/<session>/` | Unsaved edits of one open session: `.basecraft/log/<session>/…jsonl` (the edit journal, RP03), `.basecraft/objects/<hash>` (exact bytes the session needs: a checkpoint when an original changed on disk, a new document with no file yet, the input of an analysis started on unsaved edits), `pending-save.json` (a save in progress, RP02) and `recovery-integrity-error.json` (RP04). Removed when the session closes with nothing unsaved. | JSONL and JSON |
 
+Where a file's records are looked for: with a project, companions and
+alignment links are read only from the project's `.basecraft`; saved history
+is looked for first in the `.basecraft` beside the file, then in the
+project's. So a `.basecraft` moved into a project from outside, such as a
+package exported into a project folder, keeps its history readable but not
+its companions or links (D23 leaves moves outside basecraft to the user). A
+file at the project root has the same place either way, so its history is
+readable without `--project`.
+
 Editing needs recovery (decision D13). When the folder of a session cannot
 hold `.basecraft` (read-only, or `.basecraft` is a file of another program),
 the first edit is refused with the error `read_only_folder`, which names the

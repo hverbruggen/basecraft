@@ -323,11 +323,9 @@ fn complete_export_remaps_history_and_retains_original_records_without_store() {
         root.path().join("unavailable-store"),
     )
     .unwrap();
-    // A loose file's history is in that .basecraft too (D23), so it went
-    // with the store; move it only if it is still there.
-    if bundle.exists() {
-        std::fs::rename(bundle, root.path().join("unavailable-companion")).unwrap();
-    }
+    // A loose file's history is in that .basecraft too (D23): it went with
+    // the store.
+    assert!(!bundle.exists());
     assert_eq!(
         basecraft_ops::records::verify(&exported, None).unwrap(),
         Vec::<String>::new()

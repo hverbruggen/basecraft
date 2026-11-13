@@ -325,3 +325,29 @@ fn a_project_tree_keeps_its_alignment_link_in_the_project() {
     assert_eq!(beside, Vec::<String>::new());
     assert!(!folder.join(".basecraft").exists());
 }
+
+/// A copy made inside basecraft (D13) takes a tree's alignment link with it,
+/// and starts its own saved history.
+#[test]
+fn copying_a_linked_tree_carries_its_link() {
+    use basecraft_ops::records::{AlignmentLink, AlignmentLinkExt};
+    crate::isolated_profile::isolate!();
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().canonicalize().unwrap();
+    let tree = folder.join("tree.nwk");
+    std::fs::write(&tree, "((a:1,b:1):1,c:2);\n").unwrap();
+    let alignment = folder.join("genes.afa");
+    std::fs::write(&alignment, ">a\nACGT\n>b\nACGA\n>c\nACTT\n").unwrap();
+    let doc = files::load_tree(&tree).unwrap().doc;
+    AlignmentLink::associate(&tree, &doc, &alignment).unwrap();
+    std::fs::create_dir(folder.join("edit")).unwrap();
+    let copy = folder.join("edit/tree.nwk");
+    files::copy_document(None, &tree, &copy).unwrap();
+    let link = AlignmentLink::read_view(&copy).unwrap();
+    assert!(link.checked_snapshot(&copy, &doc).is_ok());
+    assert!(
+        !basecraft_ops::records::companion(&copy)
+            .join("manifest.json")
+            .exists()
+    );
+}

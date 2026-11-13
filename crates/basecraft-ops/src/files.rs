@@ -614,10 +614,12 @@ pub fn run_companion(run: &Path, file: &Path) -> PathBuf {
     run.join(run_companion_name(file))
 }
 
-/// Copy a document to a new `target` with its companion, which goes where
-/// `target`'s companion is kept. An existing target is refused and never
-/// replaced; a record left at the target's place by a file that is gone is
-/// replaced. If the companion can't be copied, the target is removed again.
+/// Copy a document to a new `target` with its companion and, for a tree,
+/// its alignment links, each going where `target`'s records are kept. The
+/// copy is a new document: it starts its own saved history. An existing
+/// target is refused and never replaced; a record left at the target's
+/// place by a file that is gone is replaced. If a record can't be copied,
+/// the target is removed again.
 pub fn copy_document(
     project: Option<&crate::project::Project>,
     source: &Path,
@@ -655,6 +657,15 @@ pub fn copy_document(
                 Ok(())
             })?;
         }
+        let linked = crate::records::links::metadata_present(&crate::records::links::sidecar_in(
+            project, source,
+        ))? || crate::records::links::metadata_present(
+            &crate::records::links::view_sidecar_in(project, source),
+        )?;
+        if linked {
+            crate::records::links::PreparedLinks::prepare(project, source, target)?
+                .publish(|| Ok(()))?;
+        }
         Ok(())
     })();
     if companion.is_err() {
@@ -673,6 +684,23 @@ pub(crate) fn settle_companion(
 ) -> Result<()> {
     let loose = crate::project::Project::document_record(None, document);
     let kept = companion_path(project, document);
+    // Only the companion is settled. A loose alignment link would need its
+    // snapshot path rewritten; none is made in a stage today, so one is an
+    // error to report, never a record to strand.
+    if loose != kept {
+        for link in [
+            crate::records::links::sidecar_in(None, document),
+            crate::records::links::view_sidecar_in(None, document),
+        ] {
+            if link.exists() {
+                return Err(crate::error::invalid(format!(
+                    "the recovered {} has an alignment link in {}; move it with the tree before reopening it",
+                    document.display(),
+                    link.display()
+                )));
+            }
+        }
+    }
     if loose == kept || !loose.is_file() {
         return Ok(());
     }
@@ -1816,5 +1844,14 @@ mod companion_tests {
         settle_companion(Some(&project), &document).unwrap();
         assert_eq!(std::fs::read_to_string(&kept).unwrap(), "recovered");
         assert!(!root.join("sub/.basecraft").exists());
+
+        // A loose alignment link can't be settled: it is reported and kept.
+        let link = crate::records::links::sidecar_in(None, &document);
+        std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+        std::fs::write(&link, "{}").unwrap();
+        std::fs::write(&loose, "again").unwrap();
+        let error = settle_companion(Some(&project), &document).unwrap_err();
+        assert!(error.to_string().contains("alignment link"), "{error}");
+        assert!(link.is_file() && loose.is_file());
     }
 }
