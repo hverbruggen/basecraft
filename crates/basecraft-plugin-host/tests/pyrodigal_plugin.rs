@@ -83,6 +83,25 @@ fn predicts_genes_with_the_mitochondrial_code() {
             && (s.start, s.end, s.strand) == (12541, 13528, Strand::Reverse)
     });
     assert!(nad1, "nad1 not predicted");
+    // Every gene records the code and the frame it was read in.
+    for op in &result.ops {
+        let Op::FeatureAdd { feature, .. } = op else {
+            panic!("not a feature.add")
+        };
+        assert_eq!(feature.qualifier("transl_table"), Some("4"));
+        assert!(
+            matches!(feature.qualifier("codon_start"), Some("1" | "2" | "3")),
+            "{feature:?}"
+        );
+    }
+    // Without a code, nothing is predicted.
+    let missing = p
+        .invoke("predict_genes", json!({}), context(), Some(&snap))
+        .unwrap_err();
+    assert!(
+        missing.to_string().contains("needs a genetic code"),
+        "{missing}"
+    );
 
     // Within a range, every gene stays inside it.
     let result = p

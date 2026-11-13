@@ -33,6 +33,10 @@ def cds(start, end, strand, partial_start, partial_end, code, label):
                 },
                 "qualifiers": [
                     {"key": "label", "value": label},
+                    {
+                        "key": "codon_start",
+                        "value": str(codon_start(start, end, strand, partial_start, partial_end)),
+                    },
                     {"key": "transl_table", "value": str(code)},
                     {
                         "key": "note",
@@ -44,12 +48,26 @@ def cds(start, end, strand, partial_start, partial_end, code, label):
     }
 
 
+def codon_start(start, end, strand, partial_left, partial_right):
+    """GenBank's `codon_start` for a gene from `start` to `end` (0-based, end
+    exclusive). A gene cut short only at its 5' end is read back from its
+    stop codon, so it begins inside a codon when its length is not a whole
+    number of codons; any other gene begins with a whole codon."""
+    five_prime_cut = partial_left if strand == "forward" else partial_right
+    three_prime_cut = partial_right if strand == "forward" else partial_left
+    if five_prime_cut and not three_prime_cut:
+        return (end - start) % 3 + 1
+    return 1
+
+
 @plugin.operation("predict_genes")
 def predict_genes(params, context):
     """Genes on both strands with genetic code `translation_table`,
     optionally only within `start`..`end` (0-based, end exclusive).
     Training uses the whole sequence."""
-    code = int(params.get("translation_table", 11))
+    if params.get("translation_table") is None:
+        raise ValueError("Gene prediction needs a genetic code (translation_table)")
+    code = int(params["translation_table"])
     if code not in pyrodigal.TRANSLATION_TABLES:
         raise ValueError(f"Prodigal doesn't support genetic code {code}")
     full = bytes(context.snapshot.residues)
