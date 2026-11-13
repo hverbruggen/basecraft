@@ -169,12 +169,12 @@ fn annotation_requests_without_a_genetic_code_are_refused() {
         (
             "basecraft.orf-finder/find_orfs@1",
             json!({"min_codons": 1}),
-            "genetic_code is required",
+            "needs the setting genetic_code",
         ),
         (
             "basecraft.pyrodigal/predict_genes@1",
             json!({}),
-            "translation_table is required",
+            "needs the setting translation_table",
         ),
     ] {
         let request: OperationRequest = serde_json::from_value(json!({
