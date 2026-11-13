@@ -72,8 +72,9 @@ def invoke(method, params, context, run_native):
     if problem:
         raise RuntimeError(problem)
     executable = executable_path(params)
-    if not params.get("rooted", False):
-        raise ValueError("PTP/mPTP requires an explicitly rooted substitution-length tree")
+    # Left out, the native step reads the tree's own rooting (D18).
+    if params.get("rooted") is False:
+        raise ValueError("PTP/mPTP requires a rooted substitution-length tree")
     minimum = params.get("min_branch", 0.0)
     if not isinstance(minimum, (int, float)) or isinstance(minimum, bool) or not math.isfinite(minimum) or minimum < 0:
         raise ValueError("Minimum branch length must be finite and nonnegative")

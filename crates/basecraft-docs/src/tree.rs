@@ -10,7 +10,7 @@ mod edit;
 mod rooting;
 pub use edit::TreeUndo;
 
-use basecraft_protocol::facts::{BranchLengths, Fact, Rooting};
+use basecraft_protocol::facts::{BranchLengths, Fact, FactSource, Rooting};
 use std::collections::{BTreeMap, BTreeSet};
 
 use basecraft_io::newick::{self, ParsedTree};
@@ -31,6 +31,11 @@ pub struct TreeNode {
     pub name: String,
     /// Length of the branch above.
     pub length: Option<f64>,
+    /// The power of ten of the last digit the file wrote for `length`; it
+    /// bounds the length's rounding. None for an exact length: one written
+    /// without a decimal point, or computed from exact lengths. A piece of a
+    /// split written length keeps its precision (D17 refined).
+    pub length_place: Option<i32>,
 }
 
 impl TreeNode {
@@ -160,7 +165,11 @@ pub struct TreeDoc {
     /// Member identity and rooting declared in the exchange, independent of
     /// the file name used for display. Unknown rooting stays unknown.
     pub exchange_name: String,
+    /// The `[&R]` or `[&U]` tag written with the tree; None when there is
+    /// none. See `rooting` for what basecraft takes the tree to be.
     pub rooted: Option<bool>,
+    /// Who set `rooted`: the file, or the user through an edit.
+    rooted_by: FactSource,
     nodes: Vec<TreeNode>,
     root: usize,
     supports: Vec<SupportSet>,
@@ -228,6 +237,7 @@ impl TreeDoc {
                 children: p.children.clone(),
                 name: p.name.clone(),
                 length: p.length,
+                length_place: p.length_place,
             })
             .collect();
         let support_label = |s: &str| {
@@ -288,6 +298,7 @@ impl TreeDoc {
             name: name.into(),
             exchange_name: parsed.name.clone(),
             rooted: parsed.rooted,
+            rooted_by: FactSource::Stated,
             nodes,
             root: 0,
             supports,
@@ -466,7 +477,7 @@ impl TreeDoc {
             .filter(|(_, a)| {
                 self.clade_tips(&a.clade).map_or(true, |now| {
                     now != a.tips
-                        && (a.rooting != Rooting::Unrooted
+                        && (self.reading(a) != Rooting::Unrooted
                             || all.difference(&now).cloned().collect::<BTreeSet<_>>() != a.tips)
                 })
             })
@@ -497,7 +508,7 @@ impl TreeDoc {
         };
         exact(&a.tips).or_else(|| {
             let other = self.tip_names().difference(&a.tips).cloned().collect();
-            (a.rooting != Rooting::Rooted).then(|| exact(&other))?
+            (self.reading(a) != Rooting::Rooted).then(|| exact(&other))?
         })
     }
 
@@ -532,7 +543,7 @@ impl TreeDoc {
     fn repoint_split_labels(&mut self) {
         for id in self.displaced_annotations() {
             let a = &self.annotations[&id];
-            if a.rooting == Rooting::Unrooted
+            if self.reading(a) == Rooting::Unrooted
                 && let Some(node) = self.exact_clade(a)
             {
                 let clade = self.clade_ref(node);
@@ -604,18 +615,65 @@ impl TreeDoc {
                 let node = self.smallest_clade(&a.tips)?;
                 a.clade = self.clade_ref(node);
                 a.tips = self.tips_under(node);
-                a.rooting = self.rooting();
+                a.rooting = self.label_rooting();
             }
         }
         Ok(Some(a))
     }
 
-    fn rooting(&self) -> Rooting {
-        match self.rooted {
-            Some(true) => Rooting::Rooted,
-            Some(false) => Rooting::Unrooted,
-            None => Rooting::Unknown,
+    /// Whether the tree is rooted, and who said so (D18). A `[&R]` or `[&U]`
+    /// tag, or the user, says so; without either, two clades at the base
+    /// read as rooted and three or more as unrooted, as a guess.
+    pub fn rooting(&self) -> Fact<Rooting> {
+        let (value, source) = match self.rooted {
+            Some(true) => (Rooting::Rooted, self.rooted_by),
+            Some(false) => (Rooting::Unrooted, self.rooted_by),
+            None => match self.nodes[self.root].children.len() {
+                2 => (Rooting::Rooted, FactSource::Guessed),
+                0 | 1 => (Rooting::Unknown, FactSource::Guessed),
+                _ => (Rooting::Unrooted, FactSource::Guessed),
+            },
+        };
+        Fact { value, source }
+    }
+
+    /// The rooting a new label records: the tree's reading when the file or
+    /// the user stated it. A guess records Unknown, and the label follows the
+    /// tree's reading until a reroot settles it (D18).
+    fn label_rooting(&self) -> Rooting {
+        let reading = self.rooting();
+        if reading.source == FactSource::Guessed {
+            Rooting::Unknown
+        } else {
+            reading.value
         }
+    }
+
+    /// Whether a label marks a clade or a split: its own rooting, or for one
+    /// made on a guess, the tree's reading now.
+    fn reading(&self, a: &CladeAnnotation) -> Rooting {
+        if a.rooting == Rooting::Unknown {
+            self.rooting().value
+        } else {
+            a.rooting
+        }
+    }
+
+    /// Before a reroot replaces the reading, labels that follow it take it.
+    pub(crate) fn settle_label_rooting(&mut self) {
+        let value = self.rooting().value;
+        for a in self.annotations.values_mut() {
+            if a.rooting == Rooting::Unknown {
+                a.rooting = value;
+            }
+        }
+    }
+
+    /// State whether the tree is rooted, as the user does (D18).
+    pub fn set_rooted(&mut self, rooted: bool) {
+        self.rooted = Some(rooted);
+        self.rooted_by = FactSource::User;
+        self.edited();
     }
 
     fn tip_names(&self) -> BTreeSet<String> {
@@ -692,9 +750,15 @@ impl TreeDoc {
         } else {
             return err("that clade isn't beside the root");
         };
+        // The pieces of the written root branch keep the coarser precision of
+        // its two parts (D17 refined); `max` ranks None, exact, finest.
+        let place = self.nodes[a].length_place.max(self.nodes[b].length_place);
         self.nodes[node].length = Some(length * fraction);
         self.nodes[other].length = Some(length * (1.0 - fraction));
+        self.nodes[node].length_place = place;
+        self.nodes[other].length_place = place;
         self.rooted = Some(true);
+        self.rooted_by = FactSource::User;
         self.edited();
         Ok(())
     }
@@ -757,7 +821,7 @@ impl TreeDoc {
                 // group it marks now. An edited label keeps its group.
                 if a.tips.is_empty() {
                     a.tips = tips;
-                    a.rooting = self.rooting();
+                    a.rooting = self.label_rooting();
                 }
                 self.annotations.insert(id, a);
             }
@@ -872,6 +936,7 @@ impl TreeDoc {
             let e = edges.len();
             edges.push(Edge {
                 length: node.length,
+                length_place: node.length_place,
                 support: (0..sets)
                     .map(|s| self.supports[s].values[i].clone())
                     .collect(),
@@ -892,7 +957,12 @@ impl TreeDoc {
                 })
                 .collect();
             let e = edges.len();
-            edges.push(Edge { length, support });
+            edges.push(Edge {
+                length,
+                // A merged edge takes the coarser precision of its parts.
+                length_place: self.nodes[a].length_place.max(self.nodes[b].length_place),
+                support,
+            });
             adj[a].push((b, e));
             adj[b].push((a, e));
         }
@@ -936,35 +1006,43 @@ impl TreeDoc {
             children: Vec::new(),
             name: String::new(),
             length: None,
+            length_place: None,
         });
         for v in &mut values {
             v.push(None);
         }
-        let half = edges[split].length.map(|l| l / 2.0);
-        // (old node, came from, new parent, length, support) to place.
-        let mut stack: Vec<(usize, usize, usize, Option<f64>, SupportValues)> = vec![
+        // Both halves keep the precision of the written length they split.
+        let half = (
+            edges[split].length.map(|l| l / 2.0),
+            edges[split].length_place,
+        );
+        // (old node, came from, new parent, length and its place, support).
+        let mut stack: Vec<(usize, usize, usize, Placed, SupportValues)> = vec![
             (other, target, 0, half, vec![None; sets]),
             (target, other, 0, half, edges[split].support.clone()),
         ];
-        while let Some((old, from, parent, length, support)) = stack.pop() {
+        while let Some((old, from, parent, (length, length_place), support)) = stack.pop() {
             let id = nodes.len();
             nodes.push(TreeNode {
                 parent: Some(parent),
                 children: Vec::new(),
                 name: self.nodes[old].name.clone(),
                 length,
+                length_place,
             });
             for (s, v) in values.iter_mut().enumerate() {
                 v.push(support[s].clone());
             }
             nodes[parent].children.push(id);
             for &(next, e) in order(old, from, &adj).iter().rev() {
-                stack.push((next, old, id, edges[e].length, edges[e].support.clone()));
+                let placed = (edges[e].length, edges[e].length_place);
+                stack.push((next, old, id, placed, edges[e].support.clone()));
             }
         }
         self.nodes = nodes;
         self.root = 0;
         self.rooted = Some(true);
+        self.rooted_by = FactSource::User;
         for (s, v) in values.into_iter().enumerate() {
             self.supports[s].values = v;
         }
@@ -1102,6 +1180,7 @@ impl TreeDoc {
                 };
                 if i == root {
                     node.length = None;
+                    node.length_place = None;
                 }
                 node.children = node.children.iter().map(|&c| mapping[c]).collect();
                 node
@@ -1162,7 +1241,7 @@ impl TreeDoc {
                 && let Some(length) = node.length
             {
                 out.write_all(b":")?;
-                out.write_all(newick::format_length(length).as_bytes())?;
+                out.write_all(newick::format_length(length, node.length_place).as_bytes())?;
             }
         }
         out.write_all(b";")?;
@@ -1211,8 +1290,12 @@ impl TreeDoc {
     }
 }
 
+/// A branch length and the place of its last written digit.
+type Placed = (Option<f64>, Option<i32>);
+
 struct Edge {
     length: Option<f64>,
+    length_place: Option<i32>,
     support: Vec<Option<String>>,
 }
 
@@ -1230,6 +1313,71 @@ mod tests {
 
     fn tree(text: &str) -> TreeDoc {
         TreeDoc::from_newick("t", text).unwrap()
+    }
+
+    #[test]
+    fn rooting_is_the_tag_or_a_guess_from_the_base_and_the_user_can_state_it() {
+        use FactSource::{Guessed, Stated, User};
+        let fact = |value, source| Fact { value, source };
+        assert_eq!(
+            tree("((a,b),(c,d));").rooting(),
+            fact(Rooting::Rooted, Guessed)
+        );
+        assert_eq!(
+            tree("(a,b,(c,d));").rooting(),
+            fact(Rooting::Unrooted, Guessed)
+        );
+        assert_eq!(
+            tree("[&U] ((a,b),(c,d));").rooting(),
+            fact(Rooting::Unrooted, Stated)
+        );
+        assert_eq!(
+            tree("[&R] (a,b,(c,d));").rooting(),
+            fact(Rooting::Rooted, Stated)
+        );
+        // A guess leaves the file without a tag; stating it writes one.
+        let mut stated = tree("((a,b),(c,d));");
+        assert!(!stated.to_newick_with_rooting().starts_with('['));
+        let undo = stated
+            .apply_edit(&basecraft_protocol::Op::TreeSetRooting { rooted: false })
+            .unwrap();
+        assert_eq!(stated.rooting(), fact(Rooting::Unrooted, User));
+        assert!(stated.to_newick_with_rooting().starts_with("[&U] "));
+        stated.undo_edit(&undo);
+        assert_eq!(stated.rooting(), fact(Rooting::Rooted, Guessed));
+    }
+
+    #[test]
+    fn a_label_on_a_guessed_reading_follows_the_rooting_the_user_states() {
+        use basecraft_protocol::Op;
+        let mut t = tree("((a,b),(c,d));");
+        let annotation = Some(CladeAnnotation::new(vec!["a".into(), "b".into()], "AB"));
+        t.apply_edit(&Op::TreeAnnotate { id: 1, annotation })
+            .unwrap();
+        assert_eq!(t.annotations()[&1].rooting, Rooting::Unknown);
+        // The guess said rooted; the user says unrooted, so the label marks a
+        // split and follows it through the reroot.
+        t.apply_edit(&Op::TreeSetRooting { rooted: false }).unwrap();
+        let undo = t
+            .apply_edit(&Op::TreeReroot {
+                clade: vec!["b".into()],
+            })
+            .unwrap();
+        assert_eq!(t.displaced_annotations(), Vec::<u32>::new());
+        assert_eq!(t.annotations()[&1].rooting, Rooting::Unrooted);
+        t.undo_edit(&undo);
+        assert_eq!(t.annotations()[&1].rooting, Rooting::Unknown);
+    }
+
+    #[test]
+    fn midpoint_and_variance_rooting_write_and_record_a_rooted_tree() {
+        for root in [TreeDoc::midpoint_root, TreeDoc::minimum_variance_root] {
+            let mut rooted = tree("[&U] (a:1,b:2,(c:3,d:4):1);");
+            root(&mut rooted).unwrap();
+            assert_eq!(rooted.rooting().value, Rooting::Rooted);
+            assert_eq!(rooted.rooting().source, FactSource::User);
+            assert!(rooted.to_newick_with_rooting().starts_with("[&R] "));
+        }
     }
 
     fn tip_names(t: &TreeDoc) -> Vec<String> {

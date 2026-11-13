@@ -290,6 +290,7 @@ pub(crate) fn execute_sequence(
         | Op::TreeRotate { .. }
         | Op::TreeLadderize { .. }
         | Op::TreeRenameTip { .. }
+        | Op::TreeSetRooting { .. }
         | Op::TreeSetBranchLengths { .. }
         | Op::TreeAnnotate { .. }
         | Op::TreePlaceLabel { .. }

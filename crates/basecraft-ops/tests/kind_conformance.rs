@@ -732,6 +732,26 @@ fn alignment_alphabet() {
 }
 
 #[test]
+fn tree_rooting() {
+    use basecraft_protocol::facts::Rooting;
+    crate::isolated_profile::isolate!();
+    // Untagged with two clades at the base: a guessed root (D18), which the
+    // user states unrooted and then rooted. The saved tag keeps the reading;
+    // reopened, the file states it.
+    scenario(
+        "tree_rooting",
+        |root| fixture(root, "t.nwk", b"((a:1,b:1):1,(c:1,d:1):1);\n"),
+        |s, d| s.tree(d).unwrap().rooting().value,
+        |_, _| {
+            (
+                [false, true].map(|rooted| Op::TreeSetRooting { rooted }),
+                [Rooting::Rooted, Rooting::Unrooted, Rooting::Rooted],
+            )
+        },
+    );
+}
+
+#[test]
 fn tree_branch_lengths() {
     use basecraft_protocol::facts::{BranchLengths, Fact, FactSource};
     crate::isolated_profile::isolate!();

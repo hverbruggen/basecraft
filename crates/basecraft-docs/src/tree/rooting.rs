@@ -5,6 +5,9 @@ use super::{EditError, TreeDoc, TreeNode, err};
 struct Branch {
     ends: [usize; 2],
     length: f64,
+    /// The written precision of the branch, kept by the pieces it is split
+    /// into; None for an exact length.
+    length_place: Option<i32>,
     support: Vec<Option<String>>,
 }
 
@@ -139,7 +142,7 @@ impl TreeDoc {
             let edge = graph.add_branch(
                 parent,
                 i,
-                node.length.unwrap_or(0.0),
+                (node.length.unwrap_or(0.0), node.length_place),
                 self.supports.iter().map(|s| s.values[i].clone()).collect(),
             );
             graph.incoming[i] = Some(edge);
@@ -150,10 +153,12 @@ impl TreeDoc {
             if !length.is_finite() {
                 return err("merged root branch length exceeds the supported numeric range");
             }
+            // A merged edge takes the coarser precision of its two parts.
+            let place = self.nodes[a].length_place.max(self.nodes[b].length_place);
             let edge = graph.add_branch(
                 a,
                 b,
-                length,
+                (length, place),
                 self.supports
                     .iter()
                     .map(|s| s.values[a].clone().or_else(|| s.values[b].clone()))
@@ -213,13 +218,14 @@ impl TreeDoc {
         let mut edge_node = vec![None; graph.edges.len()];
         let mut stack = Vec::new();
         if let Some(node) = endpoint {
-            stack.push((node, usize::MAX, None, None, None));
+            stack.push((node, usize::MAX, None, (None, None), None));
         } else {
             result.nodes.push(TreeNode {
                 parent: None,
                 children: Vec::new(),
                 name: String::new(),
                 length: None,
+                length_place: None,
             });
             for set in &mut result.supports {
                 set.values.push(None);
@@ -232,18 +238,18 @@ impl TreeDoc {
                 b,
                 a,
                 Some(0),
-                Some(branch.length - position),
+                (Some(branch.length - position), branch.length_place),
                 (carrier == b).then_some(edge),
             ));
             stack.push((
                 a,
                 b,
                 Some(0),
-                Some(position),
+                (Some(position), branch.length_place),
                 (carrier == a).then_some(edge),
             ));
         }
-        while let Some((old, from, parent, length, incoming)) = stack.pop() {
+        while let Some((old, from, parent, (length, length_place), incoming)) = stack.pop() {
             let id = result.nodes.len();
             mapping[old] = Some(id);
             result.nodes.push(TreeNode {
@@ -251,6 +257,7 @@ impl TreeDoc {
                 children: Vec::new(),
                 name: self.nodes[old].name.clone(),
                 length,
+                length_place,
             });
             if let Some(p) = parent {
                 result.nodes[p].children.push(id);
@@ -264,7 +271,9 @@ impl TreeDoc {
             }
             for &(next, e) in graph.adj[old].iter().rev() {
                 if next != from {
-                    stack.push((next, old, Some(id), Some(graph.edges[e].length), Some(e)));
+                    let branch = &graph.edges[e];
+                    let placed = (Some(branch.length), branch.length_place);
+                    stack.push((next, old, Some(id), placed, Some(e)));
                 }
             }
         }
@@ -311,6 +320,9 @@ impl TreeDoc {
                 );
             }
         }
+        // A root placed from branch lengths is a real root (D18).
+        result.rooted = Some(true);
+        result.rooted_by = basecraft_protocol::facts::FactSource::User;
         result.edited();
         *self = result;
         Ok(())
@@ -322,13 +334,14 @@ impl Graph {
         &mut self,
         a: usize,
         b: usize,
-        length: f64,
+        (length, length_place): (f64, Option<i32>),
         support: Vec<Option<String>>,
     ) -> usize {
         let edge = self.edges.len();
         self.edges.push(Branch {
             ends: [a, b],
             length,
+            length_place,
             support,
         });
         self.adj[a].push((b, edge));
