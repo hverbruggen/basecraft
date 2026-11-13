@@ -6,6 +6,7 @@
 use std::path::{Path, PathBuf};
 
 use basecraft_docs::FeatureId;
+use basecraft_protocol::facts::{Alphabet, Fact, FactSource};
 use basecraft_protocol::{DocState, Op};
 
 use crate::Result;
@@ -140,24 +141,25 @@ mod sequence;
 mod submission;
 pub(crate) mod tree;
 
-/// Set a stated alphabet; the inverse holds the one it replaces.
-fn set_alphabet(
-    alphabet: &mut Option<basecraft_protocol::facts::Fact<basecraft_protocol::facts::Alphabet>>,
-    value: basecraft_protocol::facts::Alphabet,
-) -> Inverse {
-    let stated = basecraft_protocol::facts::Fact {
+/// The user's alphabet, as the fact `doc.set_alphabet` records.
+fn user_alphabet(value: Alphabet) -> Fact<Alphabet> {
+    Fact {
         value,
-        source: basecraft_protocol::facts::FactSource::User,
-    };
-    Inverse::Alphabet(alphabet.replace(stated))
+        source: FactSource::User,
+    }
+}
+
+/// The alphabet a side file keeps: anything not guessed.
+fn stated(alphabet: &Fact<Alphabet>) -> Option<&Fact<Alphabet>> {
+    (alphabet.source != FactSource::Guessed).then_some(alphabet)
 }
 
 /// Stage the facts companion of an alignment or sequence: written when it
 /// states an alphabet, removed when it no longer does.
-fn stage_facts(
+fn stage_companion(
     prepared: &mut PreparedWrite,
     target: &Path,
-    alphabet: Option<&basecraft_protocol::facts::Fact<basecraft_protocol::facts::Alphabet>>,
+    alphabet: Option<&Fact<Alphabet>>,
     main: &str,
 ) -> Result<()> {
     let path = crate::files::tree_sidecar(target);
@@ -171,10 +173,7 @@ fn stage_facts(
 }
 
 /// The hash of the companion a save writes for a stated alphabet, if any.
-fn facts_hash(
-    alphabet: Option<&basecraft_protocol::facts::Fact<basecraft_protocol::facts::Alphabet>>,
-    main: &str,
-) -> Result<Option<String>> {
+fn facts_hash(alphabet: Option<&Fact<Alphabet>>, main: &str) -> Result<Option<String>> {
     let Some(companion) = crate::files::facts_companion(alphabet, main) else {
         return Ok(None);
     };
@@ -216,6 +215,11 @@ pub(crate) trait Document {
     fn fingerprint(&self) -> DocState;
     /// Apply transactionally: an error must leave the payload unchanged.
     /// Session owns actor, history, journal and external input verification.
+    /// Check the record an edit names, and name the open record when the
+    /// edit leaves it out in a file of several records.
+    fn name_record(&self, _op: &mut Op) -> Result<()> {
+        Ok(())
+    }
     fn validate(&self, _op: &Op, _root: &Path, _live: bool) -> Result<()> {
         Ok(())
     }

@@ -104,7 +104,9 @@ impl Session {
         let mut edits = Vec::with_capacity(ops.len());
         let mut entries = Vec::with_capacity(ops.len());
         for op in ops {
-            let (inverse, feature) = candidate.as_document_mut().apply_proposal(op)?;
+            let mut op = op.clone();
+            candidate.as_document().name_record(&mut op)?;
+            let (inverse, feature) = candidate.as_document_mut().apply_proposal(&op)?;
             let mut entry = self.entry(
                 id,
                 actor.clone(),
@@ -117,7 +119,7 @@ impl Session {
             );
             entry.state = candidate.as_document().fingerprint();
             edits.push(PreparedEdit {
-                op: op.clone(),
+                op,
                 inverse,
                 entry_id: entry.id.clone(),
             });
@@ -171,9 +173,11 @@ impl Session {
         let slot = &mut self.docs[doc.0];
         *slot.content_mut() = candidate;
         slot.generation = next_generation;
-        slot.redo.clear();
+        let mut dropped = slot.clear_redo();
         slot.undo.extend(applied);
-        slot.settle();
+        let settled = slot.settle();
+        dropped.extend(self.settle_members(settled));
+        self.forget_groups(dropped);
         self.next_group = next_group;
         Ok(ids)
     }
@@ -402,11 +406,7 @@ mod tests {
         let doc = session.open(&path).unwrap();
         session.track(doc).unwrap();
         let before = journal_bytes(dir.path());
-        let op = Op::SeqReplace {
-            start: 0,
-            end: 1,
-            residues: "T".into(),
-        };
+        let op = Op::seq_replace(0, 1, "T");
         let actor = Actor::Agent {
             model: "proposal-test".into(),
         };
@@ -433,12 +433,7 @@ mod tests {
             qualifiers: vec![],
         };
         let fid = session
-            .apply(
-                doc,
-                Op::FeatureAdd {
-                    feature: feature.clone(),
-                },
-            )
+            .apply(doc, Op::feature_add(feature.clone()))
             .unwrap()
             .feature
             .unwrap();
@@ -452,11 +447,8 @@ mod tests {
                 generation,
                 revision,
                 &[
-                    Op::FeatureUpdate {
-                        id: fid.0,
-                        feature: changed,
-                    },
-                    Op::FeatureRemove { id: fid.0 },
+                    Op::feature_update(fid.0, changed),
+                    Op::feature_remove(fid.0),
                 ],
                 &actor,
             )

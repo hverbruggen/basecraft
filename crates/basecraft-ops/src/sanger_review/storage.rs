@@ -1437,14 +1437,7 @@ mod tests {
         let mut session = crate::Session::new(&chosen).in_project(Some(project.clone()));
         let doc = session.open(&context).unwrap();
         session
-            .apply(
-                doc,
-                basecraft_protocol::Op::SeqReplace {
-                    start: 0,
-                    end: 1,
-                    residues: "T".into(),
-                },
-            )
+            .apply(doc, basecraft_protocol::Op::seq_replace(0, 1, "T"))
             .unwrap();
         session.save(doc, None).unwrap();
         let sha256 = basecraft_io::sha256_file(&context).unwrap();

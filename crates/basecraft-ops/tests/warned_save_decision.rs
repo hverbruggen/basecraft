@@ -44,16 +44,7 @@ fn reference(root: &Path, source: &Path) -> ArtifactRun {
 fn edited(root: &Path, file: &Path) -> (Session, DocId) {
     let mut session = Session::recoverable(root).unwrap();
     let doc = session.open(file).unwrap();
-    session
-        .apply(
-            doc,
-            Op::SeqReplace {
-                start: 1,
-                end: 2,
-                residues: "T".into(),
-            },
-        )
-        .unwrap();
+    session.apply(doc, Op::seq_replace(1, 2, "T")).unwrap();
     (session, doc)
 }
 
@@ -198,16 +189,7 @@ fn stale_document_target_issue_and_inventory_require_new_decisions() {
             let (mut session, doc, file) = setup(root);
             let damaged = damage(root, &file);
             let check = session.check_save(doc, None).unwrap();
-            session
-                .apply(
-                    doc,
-                    Op::SeqReplace {
-                        start: 2,
-                        end: 3,
-                        residues: "A".into(),
-                    },
-                )
-                .unwrap();
+            session.apply(doc, Op::seq_replace(2, 3, "A")).unwrap();
             assert!(matches!(
                 session.save_with_decision(doc, None, check.decide(SavePolicy::Cancel, true)),
                 Err(Error::SaveDecisionStale(_))

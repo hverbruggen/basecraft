@@ -12,11 +12,7 @@ fn paths(root: &Path) -> basecraft_platform::paths::AppPaths {
     .unwrap()
 }
 fn edit() -> Op {
-    Op::SeqReplace {
-        start: 1,
-        end: 2,
-        residues: "T".into(),
-    }
+    Op::seq_replace(1, 2, "T")
 }
 
 #[test]
@@ -334,16 +330,7 @@ fn unsaved_recovery_reconstructs_exact_state_without_cache() {
         recovery = session.recovery_root().to_path_buf();
         let doc = session.open(&file).unwrap();
         session.apply(doc, edit()).unwrap();
-        session
-            .apply(
-                doc,
-                Op::SeqReplace {
-                    start: 2,
-                    end: 3,
-                    residues: "A".into(),
-                },
-            )
-            .unwrap();
+        session.apply(doc, Op::seq_replace(2, 3, "A")).unwrap();
         session.undo(doc).unwrap();
     }
     assert!(recovery.is_dir());
@@ -374,16 +361,7 @@ fn reopen_and_save_as_preserve_contributing_ancestry() {
     {
         let mut session = Session::recoverable_with_paths(dir.path(), &paths(dir.path())).unwrap();
         let doc = session.open(&file).unwrap();
-        session
-            .apply(
-                doc,
-                Op::SeqReplace {
-                    start: 2,
-                    end: 3,
-                    residues: "A".into(),
-                },
-            )
-            .unwrap();
+        session.apply(doc, Op::seq_replace(2, 3, "A")).unwrap();
         session.save(doc, Some(&copy)).unwrap();
     }
     let publication = records::inspect(&copy, None).unwrap();
@@ -471,16 +449,7 @@ fn ancestor_only_artifacts_and_duplicate_parent_references_are_checked() {
     session.apply(doc, edit()).unwrap();
     session.save(doc, None).unwrap();
     let ancestor = records::inspect(&file, None).unwrap();
-    session
-        .apply(
-            doc,
-            Op::SeqReplace {
-                start: 2,
-                end: 3,
-                residues: "A".into(),
-            },
-        )
-        .unwrap();
+    session.apply(doc, Op::seq_replace(2, 3, "A")).unwrap();
     session.save(doc, None).unwrap();
     let bundle = records::companion(&file);
     assert!(
@@ -560,25 +529,9 @@ fn reopened_ancestry_survives_multiple_saves_and_changed_disk_records() {
     first.save(doc, None).unwrap();
     let mut next = Session::recoverable_with_paths(dir.path(), &paths).unwrap();
     let doc = next.open(&file).unwrap();
-    next.apply(
-        doc,
-        Op::SeqReplace {
-            start: 2,
-            end: 3,
-            residues: "A".into(),
-        },
-    )
-    .unwrap();
+    next.apply(doc, Op::seq_replace(2, 3, "A")).unwrap();
     next.save(doc, None).unwrap();
-    next.apply(
-        doc,
-        Op::SeqReplace {
-            start: 3,
-            end: 4,
-            residues: "C".into(),
-        },
-    )
-    .unwrap();
+    next.apply(doc, Op::seq_replace(3, 4, "C")).unwrap();
     next.save(doc, None).unwrap();
     assert_eq!(
         records::inspect(&file, None).unwrap().effective_edits.len(),
@@ -815,11 +768,7 @@ fn typing_bursts_undo_together_and_every_keystroke_recovers() {
     let other = dir.path().join("other.fasta");
     std::fs::write(&file, ">gene\nACGT\n").unwrap();
     std::fs::write(&other, ">other\nAAAA\n").unwrap();
-    let insert = |at: u64, residues: &str| Op::SeqReplace {
-        start: at,
-        end: at,
-        residues: residues.into(),
-    };
+    let insert = |at: u64, residues: &str| Op::seq_replace(at, at, residues);
     let recovery;
     {
         let mut session = Session::recoverable_with_paths(dir.path(), &paths(dir.path())).unwrap();
@@ -865,16 +814,7 @@ fn undo_reaches_a_fixed_depth_and_settled_edits_stay_in_effect() {
     let edits = 12_600;
     for i in 0..edits {
         let residue = ["C", "G"][i % 2];
-        session
-            .apply(
-                doc,
-                Op::SeqReplace {
-                    start: 0,
-                    end: 1,
-                    residues: residue.into(),
-                },
-            )
-            .unwrap();
+        session.apply(doc, Op::seq_replace(0, 1, residue)).unwrap();
     }
     // Every edit stays in the record, undoable or not.
     assert_eq!(session.document_record(doc).unwrap().effective.len(), edits);

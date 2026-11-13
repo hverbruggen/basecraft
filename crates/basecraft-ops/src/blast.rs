@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use basecraft_docs::SequenceDoc;
+use basecraft_protocol::facts::{Alphabet, Fact, FactSource};
 use basecraft_protocol::{Feature, Strand};
 use serde_json::{Value, json};
 
@@ -13,8 +14,8 @@ pub const PROTEIN_LIMIT: usize = 100_000;
 const NUCLEOTIDE_RESIDUES: &[u8] = b"ACGTURYSWKMBDHVN";
 
 /// A presentation default, never permission to submit or bypass validation.
-/// Document molecule metadata wins over ambiguous letters. Unlabelled input
-/// defaults to nucleotide unless it contains letters outside the IUPAC set.
+/// A stated alphabet or the document's molecule wins over the letters.
+/// Unlabelled input is guessed with `Alphabet::guess`; unknown is nucleotide.
 pub fn suggested_alphabet(queries: &[Query]) -> &'static str {
     if queries.iter().any(|query| {
         let molecule = query.source["molecule"]
@@ -26,9 +27,7 @@ pub fn suggested_alphabet(queries: &[Query]) -> &'static str {
         } else if molecule.contains("dna") || molecule.contains("rna") {
             false
         } else {
-            query.sequence.bytes().any(|b| {
-                b.is_ascii_alphabetic() && !NUCLEOTIDE_RESIDUES.contains(&b.to_ascii_uppercase())
-            })
+            Alphabet::guess(query.sequence.as_bytes()) == Alphabet::Protein
         }
     }) {
         "protein"
@@ -38,6 +37,18 @@ pub fn suggested_alphabet(queries: &[Query]) -> &'static str {
 }
 
 pub use basecraft_protocol::query_records::{Query, QueryPlan as Plan};
+
+/// The molecule a query states: the alphabet the user or the side file gave,
+/// else the GenBank molecule. A guessed alphabet states nothing.
+pub fn stated_molecule(alphabet: &Fact<Alphabet>, genbank: Option<&str>) -> Option<String> {
+    let stated = match (alphabet.source, alphabet.value) {
+        (FactSource::Guessed, _) | (_, Alphabet::Unknown) => None,
+        (_, Alphabet::Dna) => Some("DNA"),
+        (_, Alphabet::Rna) => Some("RNA"),
+        (_, Alphabet::Protein) => Some("protein"),
+    };
+    stated.or(genbank).map(str::to_owned)
+}
 
 pub fn from_fasta(bytes: &[u8], source: &str) -> Result<Vec<Query>> {
     let index = basecraft_io::fasta::FastaIndex::build(bytes)?;
@@ -97,11 +108,18 @@ pub fn from_alignment(
     {
         return Err(invalid("BLAST selection is empty or outside the alignment"));
     }
-    (rows.0..rows.1).map(|row| Ok(Query {
-        name:doc.row(row).name.clone(),
-        sequence:String::from_utf8(doc.read(row,columns.0,columns.1)).map_err(|_|invalid("Non-ASCII alignment query"))?,
-        source:json!({"document":doc.name,"revision":doc.version(),"record":row,"ranges":[columns],"strand":"+"}),
-    })).collect()
+    let molecule = stated_molecule(doc.alphabet(), None);
+    (rows.0..rows.1).map(|row| {
+        let mut source = json!({"document":doc.name,"revision":doc.version(),"record":row,"ranges":[columns],"strand":"+"});
+        if let Some(molecule) = &molecule {
+            source["molecule"] = molecule.as_str().into();
+        }
+        Ok(Query {
+            name:doc.row(row).name.clone(),
+            sequence:String::from_utf8(doc.read(row,columns.0,columns.1)).map_err(|_|invalid("Non-ASCII alignment query"))?,
+            source,
+        })
+    }).collect()
 }
 
 /// Reuse Extract's spliced/reverse behavior. Mixed-strand features are rejected
@@ -157,7 +175,7 @@ pub fn from_doc(
             |f| f.label().unwrap_or(&f.kind).to_owned(),
         ),
         sequence: String::from_utf8(sequence).map_err(|_| invalid("Non-ASCII query"))?,
-        source: json!({"document":doc.name,"revision":doc.version(),"ranges":segments,"strand":if reverse {"-"} else {"+"},"molecule":doc.genbank.as_ref().map(|meta| &meta.molecule)}),
+        source: json!({"document":doc.name,"revision":doc.version(),"ranges":segments,"strand":if reverse {"-"} else {"+"},"molecule":stated_molecule(doc.alphabet(), doc.genbank.as_ref().map(|meta| meta.molecule.as_str()))}),
     })
 }
 
@@ -379,6 +397,26 @@ mod tests {
             source: Value::Null,
         }
     }
+    #[test]
+    fn a_stated_alphabet_wins_over_the_letters() {
+        let mut doc = basecraft_docs::AlignmentDoc::new(
+            "a",
+            vec![basecraft_docs::alignment::AlnRow::new(
+                "r",
+                std::sync::Arc::new(b"ACGTACGT".to_vec()),
+            )],
+        );
+        let queries = from_alignment(&doc, (0, 1), (0, 8)).unwrap();
+        assert_eq!(suggested_alphabet(&queries), "nucleotide");
+        doc.set_alphabet(Some(Fact {
+            value: Alphabet::Protein,
+            source: FactSource::User,
+        }));
+        let queries = from_alignment(&doc, (0, 1), (0, 8)).unwrap();
+        assert_eq!(suggested_alphabet(&queries), "protein");
+        assert!(prepare(&queries, &settings("nucleotide")).is_err());
+    }
+
     #[test]
     fn presentation_default_respects_metadata_and_keeps_validation() {
         let mut q = query("ACGTNNRY---".into());

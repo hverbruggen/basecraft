@@ -623,27 +623,13 @@ fn record_names(path: &Path, bytes: Vec<u8>) -> Result<Vec<(usize, String)>> {
             .map(|r| Ok((offset(r.header_offset)? + 1, r.name)))
             .collect();
     }
-    // A GenBank record's name is the first word after LOCUS.
-    let mut names = Vec::new();
-    let mut at = 0;
-    for line in bytes.split_inclusive(|&b| b == b'\n') {
-        if let Some(rest) = line
-            .strip_prefix(b"LOCUS")
-            .filter(|rest| rest.first().is_some_and(u8::is_ascii_whitespace))
-        {
-            let start = 5 + rest.iter().take_while(|b| b.is_ascii_whitespace()).count();
-            let name = line[start..]
-                .iter()
-                .take_while(|b| !b.is_ascii_whitespace())
-                .copied()
-                .collect();
-            let name = String::from_utf8(name)
-                .map_err(|_| crate::error::invalid("record names must be UTF-8"))?;
-            names.push((at + start, name));
-        }
-        at += line.len();
-    }
-    Ok(names)
+    crate::files::locus_names(&bytes)
+        .map(|(at, name)| {
+            String::from_utf8(name.to_vec())
+                .map(|name| (at, name))
+                .map_err(|_| crate::error::invalid("record names must be UTF-8"))
+        })
+        .collect()
 }
 
 fn offset(at: u64) -> Result<usize> {

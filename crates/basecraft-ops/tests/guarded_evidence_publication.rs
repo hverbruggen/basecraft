@@ -204,16 +204,7 @@ fn publication_worker() {
     } else {
         let mut session = Session::recoverable(&root).unwrap();
         let doc = session.open(&source).unwrap();
-        session
-            .apply(
-                doc,
-                Op::SeqReplace {
-                    start: 1,
-                    end: 2,
-                    residues: "T".into(),
-                },
-            )
-            .unwrap();
+        session.apply(doc, Op::seq_replace(1, 2, "T")).unwrap();
         if mode != "save-first" {
             assert!(matches!(
                 session.save(doc, None),
@@ -415,16 +406,7 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
     } else {
         let mut session = Session::recoverable(root).unwrap();
         let doc = session.open(&source).unwrap();
-        session
-            .apply(
-                doc,
-                Op::SeqReplace {
-                    start: 1,
-                    end: 2,
-                    residues: "T".into(),
-                },
-            )
-            .unwrap();
+        session.apply(doc, Op::seq_replace(1, 2, "T")).unwrap();
         let save_first = mode == "retain-break" || mode == "retain-remove";
         if !save_first {
             assert!(matches!(

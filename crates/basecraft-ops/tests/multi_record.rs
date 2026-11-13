@@ -11,11 +11,13 @@ const LOCUS: &str =
     include_str!("../../../testdata/fixtures/compact/sequences-annotations/locus.gb");
 
 fn replace() -> Op {
-    Op::SeqReplace {
-        start: 0,
-        end: 1,
-        residues: "GG".into(),
-    }
+    Op::seq_replace(0, 1, "GG")
+}
+
+/// The fixture record under another name of the same length, as a second
+/// record must have: edits refuse files whose records share a name.
+fn named(name: &str) -> String {
+    LOCUS.replacen("LOCUS       locus", &format!("LOCUS       {name}"), 1)
 }
 
 /// The bytes after the first `//` line: the records the document does not show.
@@ -40,10 +42,11 @@ fn genbank_keeps_unseen_records_byte_for_byte() {
     let Some(root) = isolated_profile::enter("genbank_keeps_unseen_records_byte_for_byte") else {
         return;
     };
-    let crlf = LOCUS.replace('\n', "\r\n");
-    let open_ended = LOCUS.trim_end().trim_end_matches("//");
+    let crlf = named("other").replace('\n', "\r\n");
+    let third = named("third");
+    let open_ended = third.trim_end().trim_end_matches("//");
     let cases = [
-        ("two.gb", format!("{LOCUS}{LOCUS}"), 2),
+        ("two.gb", format!("{LOCUS}{}", named("other")), 2),
         ("three.gb", format!("{LOCUS}\n{crlf}{open_ended}\n\n\n"), 3),
     ];
     for (name, original, count) in cases {
@@ -186,7 +189,7 @@ fn recovery_restores_every_record() {
         return;
     };
     let path = root.join("two.gb");
-    let original = format!("{LOCUS}{LOCUS}");
+    let original = format!("{LOCUS}{}", named("other"));
     std::fs::write(&path, &original).unwrap();
     let mut session = Session::recoverable(&root).unwrap();
     let doc = session.open(&path).unwrap();

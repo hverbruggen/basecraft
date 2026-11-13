@@ -73,7 +73,7 @@ pub(crate) fn project(events: &[LogEntry], effective: &mut Vec<EditActivity>) {
             continue;
         }
         match &event.op {
-            Op::FeatureAdd { feature } => {
+            Op::FeatureAdd { feature, .. } => {
                 if let Some(id) = event.result.feature {
                     features.insert(
                         (&event.doc, id),
@@ -81,10 +81,10 @@ pub(crate) fn project(events: &[LogEntry], effective: &mut Vec<EditActivity>) {
                     );
                 }
             }
-            Op::FeatureRemove { id } => {
+            Op::FeatureRemove { id, .. } => {
                 features.remove(&(event.doc.as_str(), *id));
             }
-            Op::FeatureUpdate { id, feature } => {
+            Op::FeatureUpdate { id, feature, .. } => {
                 if let Some((owners, location)) = features.get_mut(&(event.doc.as_str(), *id)) {
                     owners.push(event.id.as_str());
                     *location = Some(feature.location.clone());
@@ -94,6 +94,7 @@ pub(crate) fn project(events: &[LogEntry], effective: &mut Vec<EditActivity>) {
                 start,
                 end,
                 residues,
+                ..
             } => {
                 let change = basecraft_docs::Change {
                     pos: *start,

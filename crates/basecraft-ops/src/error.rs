@@ -35,6 +35,13 @@ pub enum Error {
     Unsupported(String),
     #[error("{0}")]
     Busy(String),
+    /// Edits name their record, so a file whose records share names can't
+    /// be edited until they are numbered or renamed.
+    #[error(
+        "records in this file share the names {}; number them (.1, .2) or rename them by hand before editing",
+        .0.join(", ")
+    )]
+    RecordNamesRepeat(Vec<String>),
     #[error("invalid operation: {0}")]
     Invalid(String),
     #[error("{0}")]
@@ -68,6 +75,7 @@ impl Error {
             Self::Damaged { .. } => Code::Damaged,
             Self::Limit { .. } => Code::Limit,
             Self::Unsupported(_) => Code::Unsupported,
+            Self::RecordNamesRepeat(_) => Code::RecordNamesRepeat,
             Self::Busy(_) => Code::Busy,
             Self::UnknownDocument { .. } => Code::UnknownDocument,
             Self::WrongKind { .. } => Code::WrongDocumentKind,
