@@ -365,7 +365,7 @@ pub struct DisplayTreeFile {
     /// The file read: the one named, or for the tree already attached, its
     /// kept copy.
     pub path: PathBuf,
-    pub tree: basecraft_io::newick::ParsedTree,
+    pub tree: basecraft_docs::TreeDoc,
     pub hash: String,
     /// The workspace edit that attaches the tree, with the file kept as its
     /// evidence; `None` when the workspace already shows this tree.
@@ -385,7 +385,7 @@ pub fn display_tree(session: &Session, doc: DocId, named: &Path) -> Result<Displ
     };
     let bytes = std::fs::read(&path)?;
     let text = std::str::from_utf8(&bytes).map_err(|_| DisplayTreeError::NotText(path.clone()))?;
-    let mut trees = basecraft_io::newick::parse_trees(text)?;
+    let trees = basecraft_io::newick::parse_trees(text)?;
     if trees.len() != 1 {
         return Err(DisplayTreeError::NotOneTree {
             path,
@@ -411,7 +411,7 @@ pub fn display_tree(session: &Session, doc: DocId, named: &Path) -> Result<Displ
     };
     Ok(DisplayTreeFile {
         path,
-        tree: trees.remove(0),
+        tree: basecraft_docs::TreeDoc::from_parsed(&trees[0].name, &trees[0]),
         hash,
         edit,
     })

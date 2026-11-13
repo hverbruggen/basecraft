@@ -50,48 +50,26 @@ pub enum DelimitationCommand {
     },
 }
 
-/// The batch figures of species workspace `doc` in `folder`: the comparison
-/// of every hypothesis, then one per hypothesis, each recorded as an export.
-/// The window's figure export draws with the same `comparison_figure`.
+/// The batch figures of species workspace `doc` in `folder`
+/// (`basecraft_viewmodel::delimitation::batch_figures`), each recorded as an
+/// export.
 pub fn figures(
     session: &mut basecraft_ops::Session,
     doc: basecraft_ops::DocId,
     folder: &std::path::Path,
 ) -> Result<Vec<PathBuf>> {
-    let file = delimitation::attached_display_tree(session, doc)?;
-    let mut tree = basecraft_docs::TreeDoc::from_parsed(&file.tree.name, &file.tree);
+    let mut tree = delimitation::attached_display_tree(session, doc)?.tree;
     let work = session.delimitation(doc)?.clone();
     basecraft_ops::session::apply_drawing_edits(&mut tree, &work.view.tree_edits);
-    let theme = basecraft_viewmodel::Theme::publication();
     let stem = std::path::Path::new(session.doc_key(doc)?)
         .file_stem()
         .map_or_else(|| "species".into(), |s| s.to_string_lossy().into_owned());
-    let safe = |id: &str| -> String {
-        id.chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                    c
-                } else {
-                    '_'
-                }
-            })
-            .collect()
-    };
+    let theme = basecraft_viewmodel::Theme::publication();
     std::fs::create_dir_all(folder)?;
     let mut written = Vec::new();
-    let ids: Vec<String> = work.hypotheses.iter().map(|h| h.id.clone()).collect();
-    let every = std::iter::once((format!("{stem}.svg"), ids.clone()));
-    let each = ids
-        .iter()
-        .map(|id| (format!("{stem}.{}.svg", safe(id)), vec![id.clone()]));
-    for (name, shown) in every.chain(each) {
-        let svg = basecraft_viewmodel::delimitation::comparison_figure(
-            &work,
-            &tree,
-            &theme,
-            FONT,
-            Some(&shown),
-        );
+    for (name, svg) in
+        basecraft_viewmodel::delimitation::batch_figures(&work, &tree, &theme, FONT, &stem)
+    {
         let path = folder.join(name);
         session.export(doc, &path, "svg", |w| w.write_all(svg.as_bytes()))?;
         written.push(path);

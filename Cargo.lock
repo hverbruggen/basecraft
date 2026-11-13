@@ -242,7 +242,6 @@ dependencies = [
 name = "basecraft-cli"
 version = "0.5.0"
 dependencies = [
- "basecraft-docs",
  "basecraft-io",
  "basecraft-ops",
  "basecraft-platform",

@@ -15,7 +15,6 @@ basecraft-ops.workspace = true
 basecraft-plugin-host.workspace = true
 basecraft-protocol.workspace = true
 basecraft-viewmodel.workspace = true
-basecraft-docs.workspace = true
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true

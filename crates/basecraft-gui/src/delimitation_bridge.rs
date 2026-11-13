@@ -709,7 +709,7 @@ impl qobject::DelimitationController {
         };
         match result {
             Ok(file) => {
-                let tree = TreeDoc::from_parsed(&file.tree.name, &file.tree);
+                let tree = file.tree;
                 // A manual cut works on the tree as drawn, so it needs
                 // ultrametric ages but not a rooting assertion or a
                 // bifurcating tree. The tolerance allows Newick lengths
