@@ -51,17 +51,6 @@ pub struct StoreMarker {
     pub extra: BTreeMap<String, Value>,
 }
 
-/// Version-one `analysis-stores.json` in application state. These are LOCAL
-/// absolute machine paths, not portable project references. Runtime readers
-/// enforce version 1, the 1 MiB file bound and at most 4096 absolute paths.
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct StoreRegistry {
-    pub schema_version: u32,
-    pub stores: Vec<PathBuf>,
-    #[serde(flatten)]
-    pub extra: BTreeMap<String, Value>,
-}
-
 /// A run folder's `execution.json`: what ran, on what and how. Paths are
 /// relative to the run folder, so the folder can move with its project; an
 /// input outside the folder has a path that starts with `..`. The request
@@ -215,28 +204,15 @@ pub struct AlignmentLink {
     pub extra: BTreeMap<String, serde_json::Value>,
 }
 
-/// Current source catalogue. Per-source shards hold the affected store closure.
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct IndexFile<T> {
-    pub checksum: String,
-    pub value: T,
-}
-
-/// Local source and store locations, without unrelated run records.
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct AnalysisInputIndex {
+/// `.basecraft/analysis-index.json` in a folder whose files analyses used.
+/// For each such file, by name, the analysis stores (`.basecraft/analyses-v1`
+/// folders) whose runs depend on it, as `/`-separated paths relative to the
+/// folder that holds `.basecraft`. A save reads only the index beside its file.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AnalysisIndex {
     pub schema_version: u32,
-    pub stores: BTreeMap<PathBuf, String>,
-    pub sources: Vec<PathBuf>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct IndexedAnalysisStore {
-    pub identity: String,
-    pub sources: Vec<PathBuf>,
-    pub dependencies: Vec<PathBuf>,
-    #[serde(flatten)]
-    pub extra: BTreeMap<String, Value>,
+    pub files: BTreeMap<String, std::collections::BTreeSet<String>>,
 }
 
 /// Checksummed JSONL envelope. Its flattened entry already carries log version `v`.
@@ -271,13 +247,6 @@ pub struct ActivityInputRun {
     pub hash: String,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
-}
-
-/// Sources a pending ledger change can introduce. None means coverage is unknown.
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct IndexChange {
-    pub store: PathBuf,
-    pub sources: Option<std::collections::BTreeSet<PathBuf>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]

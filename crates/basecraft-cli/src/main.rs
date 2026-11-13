@@ -788,16 +788,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     schemars::schema_for!(basecraft_protocol::records::StoreMarker),
                 ),
                 (
-                    "analysis-input-index",
-                    schemars::schema_for!(
-                        basecraft_protocol::records::IndexFile<
-                            basecraft_protocol::records::AnalysisInputIndex,
-                        >
-                    ),
-                ),
-                (
-                    "store-registry",
-                    schemars::schema_for!(basecraft_protocol::records::StoreRegistry),
+                    "analysis-index",
+                    schemars::schema_for!(basecraft_protocol::records::AnalysisIndex),
                 ),
                 (
                     "pending-save",

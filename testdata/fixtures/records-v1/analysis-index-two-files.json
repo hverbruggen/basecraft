@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "files": {
+    "reads.fasta": [
+      "../results/.basecraft/analyses-v1"
+    ],
+    "tree.nwk": [
+      "../results/.basecraft/analyses-v1",
+      "species/.basecraft/analyses-v1"
+    ]
+  }
+}

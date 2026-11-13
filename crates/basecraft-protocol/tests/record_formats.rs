@@ -61,7 +61,7 @@ fn current_records_round_trip() {
             false,
         ),
         ("pending-save", encode::<PendingSave>, true),
-        ("store-registry", encode::<StoreRegistry>, true),
+        ("analysis-index", encode::<AnalysisIndex>, false),
         ("store", encode::<StoreMarker>, true),
         ("execution-", encode::<RunRecord>, true),
         ("job-index-", encode::<LocalJobIndex>, true),

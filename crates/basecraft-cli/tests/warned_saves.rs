@@ -51,23 +51,28 @@ fn headless_save_conformance() {
     let ledger = damaged.artifact("input.json").unwrap();
     let good = std::fs::read(&ledger).unwrap();
     std::fs::write(&ledger, b"damaged ledger").unwrap();
-    // The index refresh cannot read the damaged ledger, so its store's coverage
-    // stays unknown for every save until the marker is cleared by a repair.
-    records::register(&damaged).unwrap();
-    let store = damaged.directory().parent().unwrap().parent().unwrap();
-    let marker = basecraft_platform::paths::AppPaths::discover()
-        .unwrap()
-        .state
-        .join("analysis-inputs/dirty")
-        .join(
-            basecraft_io::hash_bytes(store.as_os_str().as_encoded_bytes())
-                .trim_start_matches("b3:"),
-        );
-    assert!(marker.is_file());
+    // List the damaged store beside every file the script saves, as a script
+    // may, so each save there has unknown relevance until the ledger is repaired.
+    let index_path = data.join(".basecraft/analysis-index.json");
+    let mut index: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&index_path).unwrap()).unwrap();
+    let names = "known preservation writefail cli-known cli-preservation fresh new other \
+        unknown cli-complete cli-permission cli-unknown complete complete-explicit inventory \
+        occupied permission replacement saveas scope"
+        .split_whitespace()
+        .map(|name| format!("{name}.fasta"))
+        .chain(["new.gb".into(), "occupied.gb".into()]);
+    for name in names {
+        let stores = index["files"][&name].as_array().cloned();
+        let mut stores = stores.unwrap_or_default();
+        stores.push(json!("../.basecraft/analyses-v1"));
+        index["files"][&name] = json!(stores);
+    }
+    std::fs::write(&index_path, serde_json::to_vec_pretty(&index).unwrap()).unwrap();
     let config = root.join("fixture.json");
     std::fs::write(
         &config,
-        json!({"known":known,"ledger":ledger,"marker":marker,"good":String::from_utf8(good).unwrap()}).to_string(),
+        json!({"known":known,"ledger":ledger,"good":String::from_utf8(good).unwrap()}).to_string(),
     )
     .unwrap();
     let output = Command::new("python3")
