@@ -21,7 +21,7 @@ impl Session {
             ));
         }
         let target = path.map_or_else(|| self.resolve(&self.docs[id.0].key), Path::to_path_buf);
-        let evidence = crate::records::input_evidence::check(&target)?;
+        let evidence = self.evidence_check(&target)?;
         let check = self.save_check_scope(id, &target, evidence, target_revision(&target)?)?;
         self.publish_save_check(id, check)
     }
@@ -89,7 +89,7 @@ impl Session {
         };
         let additional_evidence = publication
             .as_ref()
-            .map(|(target, _)| crate::records::input_evidence::check(target))
+            .map(|(target, _)| self.evidence_check(target))
             .transpose()?
             .into_iter()
             .collect();
@@ -149,6 +149,14 @@ impl Session {
         };
     }
 
+    /// The analysis check for a save of `target` from this session.
+    fn evidence_check(&self, target: &Path) -> Result<EvidenceCheck> {
+        crate::records::input_evidence::check_for(
+            target,
+            self.project.as_ref().map(crate::project::Project::root),
+        )
+    }
+
     /// Check only, not consent. Called under the evidence guard
     /// immediately after a successful write or authorized finalization.
     pub(crate) fn recovery_snapshot(&self, id: DocId) -> Result<SaveCheck> {
@@ -156,7 +164,7 @@ impl Session {
         let mut check = self.save_check_scope(
             id,
             &target,
-            crate::records::input_evidence::check(&target)?,
+            self.evidence_check(&target)?,
             target_revision(&target)?,
         )?;
         check.scope.finalization = true;

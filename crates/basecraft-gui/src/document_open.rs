@@ -148,6 +148,10 @@ impl Candidate {
         );
         let mut session = Session::recoverable(&root)?.in_project(project);
         let (doc, kind) = session.open_classified(&path)?;
+        // Offer recovery a crashed session left beside the file or in the
+        // project. Only a notice depends on it, so a failed look is no error.
+        let _ =
+            session.find_earlier_recovery(doc, &[crate::bridge::file_folder(&path), root.clone()]);
         if cancelled.load(Ordering::Acquire) {
             return Err(OpenError::Cancelled);
         }

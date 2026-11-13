@@ -15,9 +15,10 @@ All JSON records use the existing version 1. These fixtures are recovery state,
 not a promise about portable recovery roots or long-term format compatibility.
 
 store.json is compact plus newline; store-extended.json is an injected readable
-marker with unknown fields. analysis-index-two-files.json is a hand-written
-example of `.basecraft/analysis-index.json`, pretty plus newline, as
-input_evidence::index writes it.
+marker with unknown fields. analysis-index-results.json and
+indexed-folders-data.json are hand-written examples of
+`.basecraft/analysis-index/<key>.json` and a store's
+`indexed-folders.json`, pretty plus newline, as input_evidence::index writes them.
 
 Execution and local-index examples were captured from the ORIGINAL production
 writers before constructor substitutions (DATA-0018 baseline4). Process receipts

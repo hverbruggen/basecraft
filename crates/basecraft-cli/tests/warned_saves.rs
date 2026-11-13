@@ -53,22 +53,23 @@ fn headless_save_conformance() {
     std::fs::write(&ledger, b"damaged ledger").unwrap();
     // List the damaged store beside every file the script saves, as a script
     // may, so each save there has unknown relevance until the ledger is repaired.
-    let index_path = data.join(".basecraft/analysis-index.json");
-    let mut index: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&index_path).unwrap()).unwrap();
-    let names = "known preservation writefail cli-known cli-preservation fresh new other \
-        unknown cli-complete cli-permission cli-unknown complete complete-explicit inventory \
-        occupied permission replacement saveas scope"
+    let names: Vec<_> = "known preservation writefail cli-known cli-preservation fresh new \
+        other unknown cli-complete cli-permission cli-unknown complete complete-explicit \
+        inventory occupied permission replacement saveas scope"
         .split_whitespace()
         .map(|name| format!("{name}.fasta"))
-        .chain(["new.gb".into(), "occupied.gb".into()]);
-    for name in names {
-        let stores = index["files"][&name].as_array().cloned();
-        let mut stores = stores.unwrap_or_default();
-        stores.push(json!("../.basecraft/analyses-v1"));
-        index["files"][&name] = json!(stores);
-    }
-    std::fs::write(&index_path, serde_json::to_vec_pretty(&index).unwrap()).unwrap();
+        .chain(["new.gb".into(), "occupied.gb".into()])
+        .collect();
+    std::fs::write(
+        data.join(".basecraft/analysis-index/distant.json"),
+        serde_json::to_vec_pretty(&json!({
+            "schema_version": 1,
+            "store": "../.basecraft/analyses-v1",
+            "files": names,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
     let config = root.join("fixture.json");
     std::fs::write(
         &config,

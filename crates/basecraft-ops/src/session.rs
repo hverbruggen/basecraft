@@ -80,7 +80,8 @@ struct Slot {
     saved_at: Option<SavedMark>,
     recovery_boundary: Option<String>,
     source_stamps: Vec<(PathBuf, Option<basecraft_protocol::provenance::FileStamp>)>,
-    recovery_changed: bool,
+    /// What the editor should say about this document's recovery.
+    recovery_notice: Option<String>,
     /// The previous Save As target this session wrote, so a partial Save As can retry it.
     saved_target: Option<(PathBuf, basecraft_protocol::provenance::FileStamp, String)>,
     absent_sidecars: Vec<String>,
@@ -613,13 +614,12 @@ impl Session {
 }
 
 impl Drop for Session {
-    /// Nothing unsaved is left: remove this session's recovery, and the
-    /// recovery and `.basecraft` folders if that leaves them empty.
+    /// Remove recovery once nothing is unsaved, or when it was off (the folder
+    /// held only working copies), then any emptied recovery and `.basecraft`.
     fn drop(&mut self) {
-        if self.storage_root != self.root
-            && !self.storage_root.join("pending-save.json").exists()
-            && self.docs.iter().all(Slot::is_clean)
-        {
+        let unsaved = self.storage_root.join("pending-save.json").exists()
+            || !self.docs.iter().all(Slot::is_clean);
+        if self.storage_root != self.root && (self.recovery_off.is_some() || !unsaved) {
             let _ = std::fs::remove_dir_all(&self.storage_root);
             let _ = std::fs::remove_dir(recovery_folder(&self.root));
             let _ = std::fs::remove_dir(self.root.join(".basecraft"));

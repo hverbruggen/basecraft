@@ -253,7 +253,7 @@ impl Slot {
             recovery_boundary: None,
             saved_at: None,
             source_stamps: Vec::new(),
-            recovery_changed: false,
+            recovery_notice: None,
             saved_target: None,
             absent_sidecars: vec![],
             origin: None,

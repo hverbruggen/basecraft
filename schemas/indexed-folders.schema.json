@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "IndexedFolders",
+  "description": "`indexed-folders.json` in an analysis store: the folders whose analysis\nindex lists this store, relative to the folder holding the store's\n`.basecraft`. Lets a lost index be noticed and rebuilt.",
+  "type": "object",
+  "properties": {
+    "folders": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "schema_version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "folders"
+  ]
+}

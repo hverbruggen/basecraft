@@ -62,6 +62,7 @@ fn current_records_round_trip() {
         ),
         ("pending-save", encode::<PendingSave>, true),
         ("analysis-index", encode::<AnalysisIndex>, false),
+        ("indexed-folders", encode::<IndexedFolders>, false),
         ("store", encode::<StoreMarker>, true),
         ("execution-", encode::<RunRecord>, true),
         ("job-index-", encode::<LocalJobIndex>, true),

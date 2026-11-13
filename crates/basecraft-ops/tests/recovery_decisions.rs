@@ -38,7 +38,10 @@ fn indexes(root: &Path) -> String {
         let path = entry.path();
         if path.is_dir() {
             text += &indexes(&path);
-        } else if path.ends_with(".basecraft/analysis-index.json") {
+        } else if path
+            .parent()
+            .is_some_and(|p| p.ends_with(".basecraft/analysis-index"))
+        {
             text += &std::fs::read_to_string(path).unwrap();
         }
     }
@@ -627,4 +630,32 @@ fn replaced_stage_directory_is_refused_with_file_identity_unchanged() {
             .iter()
             .all(|doc| doc.written)
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn failed_recovery_write_spends_its_decision_and_publishes_nothing() {
+    use std::os::unix::fs::PermissionsExt;
+    let Some(root) =
+        isolated_profile::enter("failed_recovery_write_spends_its_decision_and_publishes_nothing")
+    else {
+        return;
+    };
+    let session = source(&root, 1);
+    let destination = root.join("out");
+    let mut attempt =
+        records::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
+            .unwrap();
+    let check = attempt.check(0).unwrap();
+    let stage = check.target().parent().unwrap().to_path_buf();
+    // A full disk or a permission error stops the write into the stage.
+    std::fs::set_permissions(&stage, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let failed = attempt.advance(0, Some(check.clone().decide(SavePolicy::Cancel, false)));
+    std::fs::set_permissions(&stage, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(matches!(failed, Err(Error::Format(_) | Error::Io(_))));
+    assert!(!destination.exists());
+    assert!(matches!(
+        attempt.advance(0, Some(check.decide(SavePolicy::Cancel, false))),
+        Err(Error::SaveDecisionStale(_))
+    ));
 }

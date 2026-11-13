@@ -839,10 +839,8 @@ fn artifacts(root: &Path) -> Result<Vec<ArtifactObservation>> {
             return Err(crate::error::invalid("unsafe recovery artifact"));
         };
         result.push(ArtifactObservation {
-            path: path
-                .strip_prefix(root)
-                .map_err(|_| crate::error::invalid("artifact outside recovery stage"))?
-                .into(),
+            path: basecraft_platform::files::inside(path, root)
+                .ok_or_else(|| crate::error::invalid("artifact outside recovery stage"))?,
             identity,
             revision,
         });

@@ -86,17 +86,35 @@ fn store_writer_bytes_and_validation() {
         None,
     )
     .unwrap();
-    let index = data.join(".basecraft/analysis-index.json");
+    let store = root.join("results/.basecraft/analyses-v1");
+    let shards = data.join(".basecraft/analysis-index");
+    let index = std::fs::read_dir(&shards)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
     let expected = r#"{
   "schema_version": 1,
-  "files": {
-    "reads.fasta": [
-      "../results/.basecraft/analyses-v1"
-    ]
-  }
+  "store": "../results/.basecraft/analyses-v1",
+  "files": [
+    "reads.fasta"
+  ]
 }
 "#;
     assert_eq!(std::fs::read_to_string(&index).unwrap(), expected);
+    // The store lists the folder, so a lost index can be noticed.
+    let folders = r#"{
+  "schema_version": 1,
+  "folders": [
+    "../data"
+  ]
+}
+"#;
+    assert_eq!(
+        std::fs::read_to_string(store.join("indexed-folders.json")).unwrap(),
+        folders
+    );
     // Nothing about the analysis is kept in basecraft's own folders.
     let state = AppPaths::discover().unwrap().state;
     for entry in walk(&state) {

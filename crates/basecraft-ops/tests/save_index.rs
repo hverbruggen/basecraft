@@ -73,7 +73,9 @@ fn damaged_index_cannot_hide_a_reference() {
     let source = root.join("source.fasta");
     std::fs::write(&source, b">a\nACGT\n").unwrap();
     reference(&root.join("known"), &source);
-    std::fs::write(root.join(".basecraft/analysis-index.json"), b"damaged").unwrap();
+    for entry in std::fs::read_dir(root.join(".basecraft/analysis-index")).unwrap() {
+        std::fs::write(entry.unwrap().path(), b"damaged").unwrap();
+    }
     assert!(!records::check(&source).unwrap().is_complete());
     let mut session = basecraft_ops::Session::new(&root);
     let doc = session.open(&source).unwrap();
@@ -365,11 +367,18 @@ fn completed_registration_needs_no_unrelated_ledger_reads() {
             .all(|p| !p.starts_with(root.join("analysis")))
     );
     // Registering again changes nothing.
-    let index = root.join(".basecraft/analysis-index.json");
-    let bytes = std::fs::read(&index).unwrap();
+    let index = root.join(".basecraft/analysis-index");
+    let shard = std::fs::read_dir(&index)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let bytes = std::fs::read(&shard).unwrap();
     let _lock = records::lock().unwrap();
     records::register(&run).unwrap();
-    assert_eq!(std::fs::read(index).unwrap(), bytes);
+    assert_eq!(std::fs::read(shard).unwrap(), bytes);
+    assert_eq!(std::fs::read_dir(index).unwrap().count(), 1);
 }
 
 #[cfg(unix)]
@@ -412,7 +421,7 @@ fn private_and_vanished_stores_do_not_concern_other_saves() {
     let staged = staging.join("tree.fasta");
     std::fs::write(&staged, b">a\nACGT\n").unwrap();
     reference(&staging, &staged);
-    assert!(!staging.join(".basecraft/analysis-index.json").exists());
+    assert!(!staging.join(".basecraft/analysis-index").exists());
     // A store deleted with its folder.
     let project = root.join("gone");
     std::fs::create_dir(&project).unwrap();

@@ -135,7 +135,7 @@ impl Session {
                     self.pending_baselines.push(entry);
                 }
                 self.refresh_source_stamps(id);
-                self.docs[id.0].recovery_changed = true;
+                self.note_changed_on_disk(id);
                 self.docs[id.0].baseline = None;
             }
             return Ok(());
@@ -201,18 +201,20 @@ impl Session {
         )?;
         let mut hashes = Vec::new();
         for (path, hash) in written {
-            let name = within(&path, stage.path()).ok_or_else(|| {
+            let name = basecraft_platform::files::inside(&path, stage.path()).ok_or_else(|| {
                 crate::Error::Unsupported("Recovery writer escaped its staging folder".into())
             })?;
             let name = if Path::new(key).is_absolute() {
                 original.parent().expect("source parent").join(
-                    within(&path, target.parent().expect("checkpoint parent")).ok_or_else(
-                        || {
-                            crate::Error::Unsupported(
-                                "Recovery writer escaped its document folder".into(),
-                            )
-                        },
-                    )?,
+                    basecraft_platform::files::inside(
+                        &path,
+                        target.parent().expect("checkpoint parent"),
+                    )
+                    .ok_or_else(|| {
+                        crate::Error::Unsupported(
+                            "Recovery writer escaped its document folder".into(),
+                        )
+                    })?,
                 )
             } else {
                 name
@@ -253,14 +255,44 @@ impl Session {
         })
     }
 
+    pub(super) fn note_changed_on_disk(&mut self, id: DocId) {
+        self.docs[id.0].recovery_notice = Some(
+            "The original changed on disk. Your current edits have been preserved in recovery; save them to a new file.".into(),
+        );
+    }
+
     pub fn recovery_warning(&self, id: DocId) -> Option<&str> {
         let slot = self.docs.get(id.0)?;
-        if let Some(message) = &self.recovery_off {
-            return Some(message);
+        self.recovery_off
+            .as_deref()
+            .or(slot.recovery_notice.as_deref())
+    }
+
+    /// Note recovery that an earlier session, for example one that crashed,
+    /// left for this document in the recovery folders of `roots`. The notice
+    /// says where it is; recovering it stays the user's choice.
+    pub fn find_earlier_recovery(&mut self, id: DocId, roots: &[PathBuf]) -> Result<()> {
+        let path = self.resolve(&self.slot(id)?.key);
+        let path = path.canonicalize().unwrap_or(path);
+        for folder in crate::records::recovery_sessions(roots)? {
+            let Ok(entries) = crate::log::read_all(&folder) else {
+                continue;
+            };
+            // The session's root holds `.basecraft/recovery/<session>`.
+            let root = folder.ancestors().nth(3).unwrap_or(&folder);
+            let names = |doc: &str| {
+                let named = root.join(doc);
+                named.canonicalize().unwrap_or(named) == path
+            };
+            if folder != self.storage_root && entries.iter().any(|entry| names(&entry.doc)) {
+                self.docs[id.0].recovery_notice = Some(format!(
+                    "Unsaved edits to this file from an earlier session are kept in recovery at {}. Recover them before you edit here.",
+                    folder.display()
+                ));
+                break;
+            }
         }
-        slot.recovery_changed.then_some(
-            "The original changed on disk. Your current edits have been preserved in recovery; save them to a new file.",
-        )
+        Ok(())
     }
 
     /// Make the recovery folder before the first edit is recorded. Recovery
@@ -416,7 +448,7 @@ impl Session {
             .transpose()
     }
 
-    pub fn snapshot_file(&self, path: &Path) -> Result<String> {
+    pub fn snapshot_file(&mut self, path: &Path) -> Result<String> {
         #[cfg(feature = "test-counters")]
         {
             let bytes = std::fs::read(path)?;
@@ -428,8 +460,11 @@ impl Session {
     }
 
     /// Hash and retain the exact immutable buffer consumed by an analysis.
-    pub fn snapshot_bytes(&self, bytes: &[u8]) -> Result<String> {
+    pub fn snapshot_bytes(&mut self, bytes: &[u8]) -> Result<String> {
         let hash = basecraft_io::hash_bytes(bytes);
+        if self.store_objects {
+            self.start_recovery();
+        }
         if self.store_objects {
             let dest = objects_dir(&self.storage_root).join(hash.trim_start_matches("b3:"));
             if !dest.exists() {
@@ -451,18 +486,6 @@ pub fn recovery_folder(root: &Path) -> PathBuf {
     root.join(".basecraft").join("recovery")
 }
 
-/// `path` relative to `base`. Writers may return another spelling of the same
-/// folder (on Windows a verbatim `\\?\` path, another drive-letter case or a
-/// short name), so a second try compares the canonical forms of both.
-fn within(path: &Path, base: &Path) -> Option<PathBuf> {
-    if let Ok(rest) = path.strip_prefix(base) {
-        return Some(rest.into());
-    }
-    let path = path.canonicalize().ok()?;
-    let base = base.canonicalize().ok()?;
-    path.strip_prefix(base).ok().map(Into::into)
-}
-
 /// Publish newly created directory entries before a synced journal can name them.
 fn recovery_directory(path: &Path) -> std::io::Result<()> {
     let missing: Vec<_> = path.ancestors().take_while(|dir| !dir.exists()).collect();
@@ -473,38 +496,4 @@ fn recovery_directory(path: &Path) -> std::io::Result<()> {
         }
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod within_tests {
-    use super::within;
-
-    #[test]
-    fn another_spelling_of_the_stage_is_inside_it() {
-        let root = tempfile::tempdir().unwrap();
-        let stage = root.path().join("stage");
-        std::fs::create_dir_all(stage.join("nested")).unwrap();
-        let file = stage.join("nested/a.fasta");
-        std::fs::write(&file, b">a\nA\n").unwrap();
-        // The form a writer that canonicalizes returns: verbatim on Windows.
-        let written = file.canonicalize().unwrap();
-        assert_eq!(
-            within(&written, &stage).unwrap(),
-            std::path::Path::new("nested/a.fasta")
-        );
-        #[cfg(unix)]
-        {
-            let alias = root.path().join("alias");
-            std::os::unix::fs::symlink(&stage, &alias).unwrap();
-            assert!(within(&alias.join("nested/a.fasta"), &stage).is_some());
-            assert!(within(&file, &alias).is_some());
-        }
-        #[cfg(windows)]
-        {
-            let text = stage.to_str().unwrap();
-            let other_case = format!("{}{}", &text[..1].to_lowercase(), &text[1..]);
-            assert!(within(&file, std::path::Path::new(&other_case)).is_some());
-        }
-        assert!(within(&root.path().join("outside.fasta"), &stage).is_none());
-    }
 }

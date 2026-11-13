@@ -719,11 +719,15 @@ impl Locks {
 pub(crate) struct SaveLock {
     _locks: Locks,
     check: Option<EvidenceCheck>,
+    project: Option<PathBuf>,
 }
 
 impl SaveLock {
     pub(crate) fn check(&mut self, target: &Path) -> Result<EvidenceCheck> {
-        self.check.take().map_or_else(|| check(target), Ok)
+        let project = self.project.clone();
+        self.check
+            .take()
+            .map_or_else(|| check_for(target, project.as_deref()), Ok)
     }
 }
 
@@ -735,18 +739,20 @@ pub(crate) fn lock_save(
     target: &Path,
     changes_stores: bool,
     writes: &[PathBuf],
+    project: Option<&Path>,
 ) -> Result<SaveLock> {
     let locks = lock()?;
     // Holding the target's keys stops any new reference to it, so the stores
     // the index beside it lists stay the right set.
     locks.reserve(writes.iter().cloned(), true)?;
     locks.source(target)?;
-    let (canonical, selected, inspection) = selection(target)?;
+    let (canonical, selected, inspection) = selection(target, project)?;
     locks.reserve(selected.iter().cloned(), changes_stores)?;
     let check = inspect(&canonical, &selected, inspection)?;
     Ok(SaveLock {
         _locks: locks,
         check: Some(check),
+        project: project.map(Path::to_path_buf),
     })
 }
 
@@ -824,6 +830,57 @@ fn stores_under(root: &Path) -> Result<Vec<PathBuf>> {
     Ok(stores)
 }
 
+/// What `reindex` rebuilt, and the ledgers it could not read.
+#[derive(Debug, Serialize)]
+pub struct Reindexed {
+    pub stores: usize,
+    pub folders: usize,
+    pub unreadable: Vec<PathBuf>,
+}
+
+/// Rebuild the analysis index of every folder that the stores in `project`
+/// use, from the stores' ledgers: the repair for a damaged or lost index.
+/// A store with an unreadable ledger only gains entries, since that ledger's
+/// inputs are unknown.
+pub fn reindex(project: &Path) -> Result<Reindexed> {
+    let locks = lock()?;
+    let mut done = Reindexed {
+        stores: 0,
+        folders: 0,
+        unreadable: Vec::new(),
+    };
+    for store in stores_under(project)? {
+        ArtifactRun::validate_store(&store)?;
+        let mut sources = std::collections::BTreeSet::new();
+        let mut complete = true;
+        for entry in std::fs::read_dir(store.join("runs"))? {
+            let run = entry?.path();
+            if !run.join("input.json").is_file() {
+                continue;
+            }
+            if let Ok(input) = read_input(&run) {
+                locks.input(
+                    &run,
+                    &input,
+                    &mut std::collections::BTreeSet::new(),
+                    &mut sources,
+                )?;
+            } else {
+                complete = false;
+                done.unreadable.push(run.join("input.json"));
+            }
+        }
+        done.folders += if complete {
+            index::rebuild(&store, &sources)?
+        } else {
+            index::add(&store, &sources)?;
+            0
+        };
+        done.stores += 1;
+    }
+    Ok(done)
+}
+
 /// Caller holds `lock`. List the run's store beside every input its ledger
 /// names, directly or through the runs it depends on.
 pub fn register(run: &ArtifactRun) -> Result<()> {
@@ -888,15 +945,21 @@ fn conservative(check: EvidenceCheck) -> Result<EvidenceConflict> {
 /// Side-effect-free full inspection; callers must recheck under `lock` before
 /// acting. Failure of the lock or of an actual write is never an inspection issue.
 pub fn check(target: &Path) -> Result<EvidenceCheck> {
-    let (canonical, selected, inspection) = selection(target)?;
+    check_for(target, None)
+}
+
+/// As [`check`], for a session that holds `project`: a lost index of a folder
+/// that the project's root store names makes the check incomplete.
+pub(crate) fn check_for(target: &Path, project: Option<&Path>) -> Result<EvidenceCheck> {
+    let (canonical, selected, inspection) = selection(target, project)?;
     inspect(&canonical, &selected, inspection)
 }
 
-fn selection(target: &Path) -> Result<(PathBuf, Vec<PathBuf>, Inspection)> {
+fn selection(target: &Path, project: Option<&Path>) -> Result<(PathBuf, Vec<PathBuf>, Inspection)> {
     let mut inspection = Inspection::default();
     let absolute = std::path::absolute(target)?;
     let canonical = absolute.canonicalize().unwrap_or_else(|_| absolute.clone());
-    let selected = index::select(&canonical, &absolute, &mut inspection);
+    let selected = index::select(&canonical, &absolute, project, &mut inspection);
     Ok((canonical, selected, inspection))
 }
 

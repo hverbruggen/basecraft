@@ -112,47 +112,58 @@ Stale or reused decisions return a fresh check. Successful overrides retain the
 inspection issues as warnings. GUI, CLI, Python and MCP use the same typed result.
 
 Each folder holding a file that an analysis used keeps
-`.basecraft/analysis-index.json` (schema
-[analysis-index.schema.json](analysis-index.schema.json)). For each such file,
-by name, it lists the stores (`.basecraft/analyses-v1` folders) whose runs
-depend on the file, directly or through runs they depend on, as `/`-separated
-paths relative to the folder holding `.basecraft`. It is pretty-printed JSON
-with sorted keys and a final newline:
+`.basecraft/analysis-index/`, one file per store whose runs depend on files
+there, named by a hash of the store's relative path, so a copied store gets
+its own file (schema
+[analysis-index.schema.json](analysis-index.schema.json)). Paths are
+`/`-separated and relative to the folder holding `.basecraft`. Pretty-printed
+JSON with a final newline:
 
     {
       "schema_version": 1,
-      "files": {
-        "reads.fasta": [
-          "../results/.basecraft/analyses-v1"
-        ]
-      }
+      "store": "../results/.basecraft/analyses-v1",
+      "files": [
+        "reads.fasta"
+      ]
     }
 
-A writer adds its store beside every input a ledger names before it writes
-that ledger, so the index is durable before the reference it covers. When a
-run's input changes, stores listed beside its old input are also listed beside
-the new one, so runs that depend on it stay covered. Entries are never removed:
-the index can list a store that no longer refers to a file, never miss one that
-does. Recovery staging (`.basecraft/recovery`, `.basecraft-recover-*` and
-basecraft's own folders) is never indexed. A folder that is read-only, or whose
-`.basecraft` is a file belonging to another program, gets no index; basecraft
-cannot keep records there.
+A writer adds its entries before it writes the ledger they cover, under the
+short lock `.basecraft/analysis-index.lock` beside the index, so writers with
+different profiles, user accounts or machines exclude each other. Entries are
+never removed by ordinary writes: the index can list a store that no longer
+refers to a file, never miss one that does. Readers take the union of every
+file in `analysis-index/`, so a copy a sync tool makes on a conflict still
+counts. When a run's input changes, stores listed beside its old input are
+also listed beside the new one, so runs that depend on it stay covered.
+Recovery staging (`.basecraft/recovery`, `.basecraft-recover-*` and
+basecraft's own folders) is never indexed.
+
+Each store keeps `indexed-folders.json`, the folders whose index lists it,
+relative to the folder holding the store's `.basecraft`. A save from a session
+that holds a project checks the project's root store: if it names the save's
+folder while that folder's index does not name the store, the index was lost,
+so the store is inspected and the save asks. `basecraft records reindex
+<project>` rebuilds every index the project's stores use from their ledgers.
+
+A folder that refuses new files gets no index: basecraft cannot save over a
+file there either. If only `.basecraft` cannot be written, or it is a file
+that belongs to another program, the analysis fails and names the folder, and
+a save of a file there is incomplete and asks.
 
 A save reads only the index beside its own file (under the path as given and
 its canonical path), then inspects in full each listed store that still
 exists. A target with several hard links also matches entries for files in the
 same folder that are the same file. No machine-wide registry exists, and a save
-in one project never reads another project's stores. A damaged index makes the
-check incomplete and never authorizes an unchecked save. Copying or moving a
-project keeps every relative path valid.
+in one project never reads another project's stores. A damaged index file makes
+the check incomplete and never authorizes an unchecked save. Copying or moving
+a project keeps every relative path valid.
 
 Saves and mutations reserve source paths, file identities and affected stores.
 Conflicting operations return Busy and can retry; unrelated saves may overlap.
 A save reserves its file before reading the index beside it, and a writer holds
 the same reservation while it adds an entry, so a save never misses a reference
-being made. Each index update takes a short lock of its own. Lock files sit in
-the profile's `state/locks` folder; they coordinate running processes and hold
-no data. There is no filesystem journal or support for older record layouts.
+being made. The reservation lock files sit in the profile's `state/locks`
+folder; they coordinate running processes and hold no data. There is no filesystem journal or support for older record layouts.
 
 External editors cannot be intercepted. Verification reports changed/missing
 originals. Verified-original relink accepts only matching bytes and updates the

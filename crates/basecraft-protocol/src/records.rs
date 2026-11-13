@@ -204,15 +204,27 @@ pub struct AlignmentLink {
     pub extra: BTreeMap<String, serde_json::Value>,
 }
 
-/// `.basecraft/analysis-index.json` in a folder whose files analyses used.
-/// For each such file, by name, the analysis stores (`.basecraft/analyses-v1`
-/// folders) whose runs depend on it, as `/`-separated paths relative to the
-/// folder that holds `.basecraft`. A save reads only the index beside its file.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+/// `.basecraft/analysis-index/<key>.json` in a folder whose files
+/// analyses used: one analysis store (`.basecraft/analyses-v1`) and the files
+/// here its runs depend on; `<key>` is a hash of the store's path. Paths are
+/// `/`-separated and relative to the folder holding `.basecraft`. Writers only add entries; readers take the union of
+/// every file in `analysis-index/`, copies a sync tool made included.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AnalysisIndex {
     pub schema_version: u32,
-    pub files: BTreeMap<String, std::collections::BTreeSet<String>>,
+    pub store: String,
+    pub files: std::collections::BTreeSet<String>,
+}
+
+/// `indexed-folders.json` in an analysis store: the folders whose analysis
+/// index lists this store, relative to the folder holding the store's
+/// `.basecraft`. Lets a lost index be noticed and rebuilt.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct IndexedFolders {
+    pub schema_version: u32,
+    pub folders: std::collections::BTreeSet<String>,
 }
 
 /// Checksummed JSONL envelope. Its flattened entry already carries log version `v`.

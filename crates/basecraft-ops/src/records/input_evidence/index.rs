@@ -1,44 +1,106 @@
 //! Analysis index beside the files analyses used. Each folder holding such a
-//! file keeps `.basecraft/analysis-index.json`: for each file name, the stores
-//! whose runs depend on it. A writer adds its store before it changes a ledger;
-//! entries are never removed, so the index may list more than is current, never
-//! less. A save reads only the index beside its own file.
+//! file keeps `.basecraft/analysis-index/`, one file per analysis store whose
+//! runs depend on files there. Writers only add entries, before they change a
+//! ledger, so the index may list more than is current, never less. Readers take
+//! the union of every file in that folder, copies a sync tool made included, so
+//! no writer's entry is lost to another writer or another machine. Each store
+//! lists the folders it is indexed in, so a lost index is noticed and rebuilt.
 use super::{Path, PathBuf, Result, lexical, stamp};
-use basecraft_protocol::records::AnalysisIndex;
+use basecraft_protocol::records::{AnalysisIndex, IndexedFolders};
 use fs4::fs_std::FileExt;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-pub(crate) const FILE: &str = "analysis-index.json";
-
-fn location(folder: &Path) -> PathBuf {
-    folder.join(".basecraft").join(FILE)
+/// The folder whose `.basecraft` indexes `source`, and the entry naming it
+/// there. Every index read and write goes through here, so placing the index
+/// elsewhere (for example at a project's root) changes only this function.
+fn home(source: &Path) -> Option<(PathBuf, String)> {
+    let name = source.file_name()?.to_str()?;
+    Some((source.parent()?.into(), name.into()))
 }
 
-fn read(path: &Path) -> Result<Option<AnalysisIndex>> {
-    let bytes = match std::fs::read(path) {
-        Ok(bytes) => bytes,
-        // No index, or a `.basecraft` file that belongs to another program.
+fn shards(folder: &Path) -> PathBuf {
+    folder.join(".basecraft").join("analysis-index")
+}
+
+/// Every copy of a record in `dir` whose name starts with `stem`: the record
+/// itself and any copy a sync tool made on a conflict. Locks and temporary
+/// files are left out.
+fn copies(dir: &Path, stem: &str) -> Result<Vec<PathBuf>> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
         Err(error)
             if matches!(
                 error.kind(),
                 std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
             ) =>
         {
-            return Ok(None);
+            return Ok(Vec::new());
         }
         Err(error) => return Err(error.into()),
     };
+    let mut found = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with(stem)
+            && !name.starts_with('.')
+            && Path::new(&name).extension().is_none_or(|ext| ext != "lock")
+            && entry.file_type()?.is_file()
+        {
+            if found.len() >= 4096 {
+                return Err(crate::Error::Limit {
+                    what: "analysis index files".into(),
+                    limit: 4096,
+                });
+            }
+            found.push(entry.path());
+        }
+    }
+    found.sort();
+    Ok(found)
+}
+
+fn read<T: serde::de::DeserializeOwned>(path: &Path, version: fn(&T) -> u32) -> Result<T> {
+    let bytes = std::fs::read(path)?;
     #[cfg(feature = "test-counters")]
     basecraft_io::counters::record_read(path, bytes.len() as u64);
-    let index: AnalysisIndex =
-        serde_json::from_slice(&bytes).map_err(|e| crate::Error::Damaged {
-            path: path.into(),
-            detail: e.to_string(),
-        })?;
-    if index.schema_version != 1 {
+    let record: T = serde_json::from_slice(&bytes).map_err(|e| crate::Error::Damaged {
+        path: path.into(),
+        detail: e.to_string(),
+    })?;
+    if version(&record) != 1 {
         return Err(crate::Error::Unsupported("analysis index version".into()));
     }
-    Ok(Some(index))
+    Ok(record)
+}
+
+fn write(path: &Path, value: &impl serde::Serialize) -> Result<()> {
+    let mut bytes = serde_json::to_vec_pretty(value)?;
+    bytes.push(b'\n');
+    basecraft_io::write_atomic(path, |w| w.write_all(&bytes))?;
+    // The entry must be durable before the ledger it covers changes.
+    basecraft_platform::files::sync_directory(path.parent().unwrap())?;
+    Ok(())
+}
+
+/// Create `path` and its missing parents, syncing each new entry.
+fn folder(path: &Path) -> Result<()> {
+    let missing: Vec<_> = path.ancestors().take_while(|p| !p.exists()).collect();
+    std::fs::create_dir_all(path)?;
+    for created in missing.into_iter().rev() {
+        basecraft_platform::files::sync_directory(created.parent().unwrap())?;
+    }
+    Ok(())
+}
+
+/// A short lock beside the record, held only for one read and write, never
+/// while waiting for anything else. It sits in the shared folder, so writers
+/// with different profiles or user accounts exclude each other too.
+fn lock_beside(path: &Path) -> Result<std::fs::File> {
+    let lock = super::open_lock(path)?;
+    lock.lock_exclusive()
+        .map_err(|e| crate::Error::Busy(e.to_string()))?;
+    Ok(lock)
 }
 
 /// The recorded spelling and, when it resolves, the canonical path. A folder
@@ -82,102 +144,230 @@ pub(super) fn store_of(ledger: &Path) -> Option<&Path> {
     (runs.file_name()? == "runs" && store.file_name()? == "analyses-v1").then_some(store)
 }
 
+/// The folder holding a store's `.basecraft`.
+fn store_home(store: &Path) -> &Path {
+    store.parent().and_then(Path::parent).unwrap_or(store)
+}
+
+/// The index file `folder` keeps for `store`, and the store's path as the
+/// file records it. Named by that path, so a copied store (which keeps its
+/// identity) gets its own file.
+fn shard(folder: &Path, store: &Path) -> Result<(PathBuf, String)> {
+    let relative = super::relative(folder, store)?.replace('\\', "/");
+    let key = basecraft_io::hash_bytes(relative.as_bytes());
+    let name = format!("{}.json", &key.trim_start_matches("b3:")[..32]);
+    Ok((shards(folder).join(name), relative))
+}
+
 /// List `store` in the index beside each of `sources`. The caller holds the
 /// sources' reservations, so no save of them is choosing stores meanwhile.
 pub(super) fn add(store: &Path, sources: &BTreeSet<PathBuf>) -> Result<()> {
+    record(store, sources, false).map(|_| ())
+}
+
+/// Rebuild `store`'s entries from `sources`: its file in each folder and its
+/// list of folders are replaced, and its file in folders no longer used is
+/// removed. Copies a sync tool made are left; they can only add entries.
+pub(super) fn rebuild(store: &Path, sources: &BTreeSet<PathBuf>) -> Result<usize> {
+    let store = std::path::absolute(store)?;
+    let before = indexed_folders(&store)?;
+    let after = record(&store, sources, true)?;
+    for gone in before.difference(&after) {
+        match std::fs::remove_file(shard(gone, &store)?.0) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                return Err(error.into());
+            }
+            _ => {}
+        }
+    }
+    Ok(after.len())
+}
+
+fn record(store: &Path, sources: &BTreeSet<PathBuf>, replace: bool) -> Result<BTreeSet<PathBuf>> {
     if is_private(store) {
-        return Ok(());
+        return Ok(BTreeSet::new());
     }
     let store = std::path::absolute(store)?;
-    let mut folders = std::collections::BTreeMap::<PathBuf, BTreeSet<String>>::new();
+    let mut folders = BTreeMap::<PathBuf, BTreeSet<String>>::new();
     for source in sources.iter().filter(|source| !is_private(source)) {
-        if let (Some(folder), Some(name)) = (source.parent(), source.file_name()) {
-            let name = name
-                .to_str()
-                .ok_or_else(|| crate::error::invalid("input file name is not UTF-8"))?;
-            folders
-                .entry(folder.into())
-                .or_default()
-                .insert(name.into());
+        if let Some((folder, entry)) = home(source) {
+            folders.entry(folder).or_default().insert(entry);
         }
     }
-    for (folder, names) in folders {
-        let relative = super::relative(&folder, &store)?.replace('\\', "/");
-        match update(&folder, &names, &relative) {
-            // Basecraft cannot save over a file in a folder it cannot write.
-            Err(crate::Error::Io(error))
-                if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ReadOnlyFilesystem
-                ) => {}
-            result => result?,
+    let mut indexed = BTreeSet::new();
+    for (folder, entries) in folders {
+        if update(&folder, &store, &entries, replace)? {
+            indexed.insert(folder);
         }
+    }
+    list_folders(&store, &indexed, replace)?;
+    Ok(indexed)
+}
+
+/// Write this store's file in `folder`'s index. False when the folder itself
+/// refuses new files: basecraft cannot save over a file there either.
+fn update(
+    folder_path: &Path,
+    store: &Path,
+    entries: &BTreeSet<String>,
+    replace: bool,
+) -> Result<bool> {
+    let unwritable = |detail: String| {
+        crate::error::invalid(format!(
+            "cannot record which analyses use files in {}: {detail}",
+            folder_path.display()
+        ))
+    };
+    let hidden = folder_path.join(".basecraft");
+    if std::fs::symlink_metadata(&hidden).is_ok_and(|m| !m.is_dir()) {
+        return Err(unwritable(
+            "its .basecraft is a file that belongs to another program".into(),
+        ));
+    }
+    let result = (|| -> Result<()> {
+        let dir = shards(folder_path);
+        folder(&dir)?;
+        let canonical = folder_path.canonicalize()?;
+        let _lock = lock_beside(&canonical.join(".basecraft/analysis-index.lock"))?;
+        let (path, relative) = shard(folder_path, store)?;
+        let mut index = match read(&path, |i: &AnalysisIndex| i.schema_version) {
+            Ok(index) if !replace => index,
+            Err(crate::Error::Io(error)) if error.kind() != std::io::ErrorKind::NotFound => {
+                return Err(error.into());
+            }
+            Err(error @ (crate::Error::Damaged { .. } | crate::Error::Unsupported(_)))
+                if !replace =>
+            {
+                return Err(error);
+            }
+            _ => AnalysisIndex {
+                schema_version: 1,
+                store: relative.clone(),
+                files: BTreeSet::new(),
+            },
+        };
+        let before = index.clone();
+        index.files.extend(entries.iter().cloned());
+        if index != before || replace {
+            write(&path, &index)?;
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => Ok(true),
+        Err(crate::Error::Io(error))
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ReadOnlyFilesystem
+            ) =>
+        {
+            if tempfile::tempfile_in(folder_path).is_err() {
+                Ok(false)
+            } else {
+                Err(unwritable(error.to_string()))
+            }
+        }
+        Err(crate::Error::Io(error)) => Err(unwritable(error.to_string())),
+        Err(error) => Err(error),
+    }
+}
+
+/// The folders whose index lists `store`, from every copy of its list.
+fn indexed_folders(store: &Path) -> Result<BTreeSet<PathBuf>> {
+    let home = store_home(store);
+    let mut folders = BTreeSet::new();
+    for path in copies(store, "indexed-folders")? {
+        let list = read(&path, |l: &IndexedFolders| l.schema_version)?;
+        folders.extend(list.folders.iter().map(|f| lexical(&home.join(f))));
+    }
+    Ok(folders)
+}
+
+fn list_folders(store: &Path, indexed: &BTreeSet<PathBuf>, replace: bool) -> Result<()> {
+    let home = store_home(store);
+    let _lock = lock_beside(&store.join("indexed-folders.lock"))?;
+    let path = store.join("indexed-folders.json");
+    let mut list = match read(&path, |l: &IndexedFolders| l.schema_version) {
+        Ok(list) if !replace => list,
+        Err(crate::Error::Io(error)) if error.kind() != std::io::ErrorKind::NotFound => {
+            return Err(error.into());
+        }
+        Err(error @ (crate::Error::Damaged { .. } | crate::Error::Unsupported(_))) if !replace => {
+            return Err(error);
+        }
+        _ => IndexedFolders {
+            schema_version: 1,
+            folders: BTreeSet::new(),
+        },
+    };
+    let before = list.clone();
+    if replace {
+        list.folders.clear();
+    }
+    for folder in indexed {
+        list.folders
+            .insert(super::relative(home, folder)?.replace('\\', "/"));
+    }
+    if list != before || replace {
+        write(&path, &list)?;
     }
     Ok(())
 }
 
-fn update(folder: &Path, names: &BTreeSet<String>, store: &str) -> Result<()> {
-    let hidden = folder.join(".basecraft");
-    // A `.basecraft` that is not a folder belongs to another program; basecraft
-    // keeps no records there, as with its analysis stores.
-    if std::fs::symlink_metadata(&hidden).is_ok_and(|m| !m.is_dir()) {
-        return Ok(());
+/// The index files beside `folder`, each with the store it names.
+fn stores_beside(
+    folder: &Path,
+    inspection: &mut super::Inspection,
+) -> Vec<(PathBuf, AnalysisIndex)> {
+    let found = match copies(&shards(folder), "") {
+        Ok(found) => found,
+        Err(error) => {
+            inspection.issue(
+                super::InspectionCode::RegistryUnavailable,
+                &shards(folder),
+                error,
+            );
+            return Vec::new();
+        }
+    };
+    let mut indexes = Vec::new();
+    for path in found {
+        match read(&path, |i: &AnalysisIndex| i.schema_version) {
+            Ok(index) => indexes.push((lexical(&folder.join(&index.store)), index)),
+            Err(error) => {
+                inspection.issue(super::InspectionCode::RegistryUnavailable, &path, error);
+            }
+        }
     }
-    let path = location(folder);
-    // Held only for this read and write, never while waiting for anything else.
-    let lock = super::open_lock(&super::lock_path(&path)?)?;
-    lock.lock_exclusive()
-        .map_err(|e| crate::Error::Busy(e.to_string()))?;
-    let mut index = read(&path)?.unwrap_or(AnalysisIndex {
-        schema_version: 1,
-        files: std::collections::BTreeMap::new(),
-    });
-    let mut changed = false;
-    for name in names {
-        changed |= index
-            .files
-            .entry(name.clone())
-            .or_default()
-            .insert(store.into());
-    }
-    if !changed {
-        return Ok(());
-    }
-    if !hidden.is_dir() {
-        std::fs::create_dir(&hidden)?;
-        basecraft_platform::files::sync_directory(folder)?;
-    }
-    let mut bytes = serde_json::to_vec_pretty(&index)?;
-    bytes.push(b'\n');
-    basecraft_io::write_atomic(&path, |w| w.write_all(&bytes))?;
-    // The entry must be durable before the ledger it covers changes.
-    basecraft_platform::files::sync_directory(&hidden)?;
-    Ok(())
+    indexes
 }
 
 /// The stores listed for `source` in the index beside it.
 pub(super) fn listed(source: &Path) -> Result<Vec<PathBuf>> {
-    let source = lexical(source);
-    let (Some(folder), Some(name)) = (source.parent(), source.file_name()) else {
+    let Some((folder, entry)) = home(&lexical(source)) else {
         return Ok(Vec::new());
     };
-    let index = read(&location(folder))?.unwrap_or_default();
-    Ok(name
-        .to_str()
-        .and_then(|name| index.files.get(name))
-        .into_iter()
-        .flatten()
-        .map(|store| lexical(&folder.join(store)))
-        .collect())
+    let mut stores = Vec::new();
+    for path in copies(&shards(&folder), "")? {
+        let index = read(&path, |i: &AnalysisIndex| i.schema_version)?;
+        if index.files.contains(&entry) {
+            stores.push(lexical(&folder.join(&index.store)));
+        }
+    }
+    Ok(stores)
 }
 
 /// Stores that can refer to `target`: those listed for it in the index beside
 /// it under either spelling, and, for a file with several hard links, those
-/// listed for any file there that is the same file. Stores that no longer exist
-/// are left out: their ledgers went with them.
+/// listed for any file there that is the same file. Stores that no longer
+/// exist are left out: their ledgers went with them. With the session's
+/// `project`, a store at the project's root that names the folder while the
+/// index there does not name the store means the index was lost: the store is
+/// inspected and the check is incomplete, so the save asks.
 pub(super) fn select(
     target: &Path,
     absolute: &Path,
+    project: Option<&Path>,
     inspection: &mut super::Inspection,
 ) -> Vec<PathBuf> {
     let linked = basecraft_platform::files::link_count(target).unwrap_or(1) > 1;
@@ -188,21 +378,49 @@ pub(super) fn select(
     let mut selected = BTreeSet::new();
     let spellings: BTreeSet<_> = [target.to_path_buf(), lexical(absolute)].into();
     for spelling in spellings {
-        let (Some(folder), Some(name)) = (spelling.parent(), spelling.file_name()) else {
+        let Some((folder, entry)) = home(&spelling) else {
             continue;
         };
-        let path = location(folder);
-        let index = match read(&path) {
-            Ok(Some(index)) => index,
-            Ok(None) => continue,
-            Err(error) => {
-                inspection.issue(super::InspectionCode::RegistryUnavailable, &path, error);
-                continue;
+        let hidden = folder.join(".basecraft");
+        if std::fs::symlink_metadata(&hidden).is_ok_and(|m| !m.is_dir()) {
+            inspection.issue(
+                super::InspectionCode::RegistryUnavailable,
+                &hidden,
+                "this .basecraft belongs to another program; analyses of files here cannot be checked",
+            );
+            continue;
+        }
+        let indexes = stores_beside(&folder, inspection);
+        for (store, index) in &indexes {
+            if index.files.contains(&entry)
+                || linked && index.files.iter().any(|f| same_file(&folder.join(f)))
+            {
+                selected.insert(store.clone());
             }
-        };
-        for (file, stores) in &index.files {
-            if std::ffi::OsStr::new(file) == name || (linked && same_file(&folder.join(file))) {
-                selected.extend(stores.iter().map(|store| lexical(&folder.join(store))));
+        }
+        if let Some(project) = project {
+            let store = project.join(".basecraft/analyses-v1");
+            let named = indexes.iter().any(|(listed, _)| listed == &store);
+            if !named && store.is_dir() {
+                match indexed_folders(&store) {
+                    Ok(folders) if folders.contains(&lexical(&folder)) => {
+                        selected.insert(store);
+                        inspection.issue(
+                            super::InspectionCode::RegistryUnavailable,
+                            &shards(&folder),
+                            format!(
+                                "the analysis index here is missing; `basecraft records reindex {}` rebuilds it",
+                                project.display()
+                            ),
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(error) => inspection.issue(
+                        super::InspectionCode::RegistryUnavailable,
+                        &store.join("indexed-folders.json"),
+                        error,
+                    ),
+                }
             }
         }
     }
@@ -288,7 +506,7 @@ mod tests {
         std::fs::write(&target, b">a\nACGT\n").unwrap();
         std::fs::write(&other, b">b\nACGT\n").unwrap();
         std::fs::hard_link(&target, &alias).unwrap();
-        let _first = super::super::lock_save(&target, false, &[]).unwrap();
+        let _first = super::super::lock_save(&target, false, &[], None).unwrap();
         std::thread::spawn(move || {
             let mut session = crate::Session::new(other.parent().unwrap());
             let id = session.open(&other).unwrap();

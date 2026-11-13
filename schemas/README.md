@@ -14,12 +14,22 @@ Everything basecraft records about a user's data sits in a `.basecraft` folder:
 the project's, or one beside a loose file. Copying the folder that holds it
 copies the records. All records are plain JSON or JSONL; paths in them are
 relative and `/`-separated unless a row says otherwise. Basecraft's own
-application folders hold settings, plugins, recent projects and disposable
-caches only: deleting them loses no record.
+application folders are meant to hold settings, plugins, recent projects and
+disposable caches only. Until the open items below close, they still hold:
+
+- job records of plugin runs in `state/jobs` and `state/operation-jobs`
+  (card j3sxh item 3);
+- LocalOnly history, and the history of a Sanger review whose source folder is
+  read-only, in `state/provenance` (j3sxh item 4);
+- recovery of a new sequence made without a project, under the scratch folder
+  until it is saved (`<scratch>/.basecraft/recovery`);
+- working copies of a session whose recovery is off, in a temporary folder
+  removed when the session closes (they hold nothing recoverable).
 
 | Path inside `.basecraft` | What it holds | Format |
 |---|---|---|
-| `analysis-index.json` | For each file in this folder that an analysis used, the analysis stores whose runs depend on it. A save reads only this file before deciding which stores to inspect. | JSON, [analysis-index.schema.json](analysis-index.schema.json), RP10 |
+| `analysis-index/<key>.json` | One analysis store and the files in this folder its runs depend on. Readers take the union of every file in `analysis-index/`, so copies a sync tool makes on a conflict still count. A save reads only this folder before deciding which stores to inspect. `analysis-index.lock` beside it is a lock with no content. | JSON, [analysis-index.schema.json](analysis-index.schema.json), RP10 |
+| `analyses-v1/indexed-folders.json` | The folders whose index lists this store. A save from a project session asks when the project's root store names a folder whose index is gone; `basecraft records reindex <project>` rebuilds the indexes. | JSON, [indexed-folders.schema.json](indexed-folders.schema.json), RP10 |
 | `analyses-v1/store.json`, `analyses-v1/identity` | Marks the folder as a basecraft analysis store; a random store identity. | JSON (RP08); plain text |
 | `analyses-v1/runs/<run>/` | One analysis run: `input.json` (the input it used, RP06), `run.json` (status and result, RP07), `execution.json` and `request.json` (what ran), `records/` (publications, RP05), and kept bytes: `submitted.fasta`, `submitted.spart` or `submitted.spart.xml` for a generated input, `preserved-input` for an original kept before a save replaced it. | JSON and the input's own format |
 | `analyses-v1/bindings/<hash>` | Which run produced a result file in this folder. | JSON, RP09 |
@@ -28,9 +38,11 @@ caches only: deleting them loses no record.
 | `log/<host>/<month>-<stream>-<segment>.jsonl` | Journal of a session that records into the folder itself (CLI and scripts). | JSONL, RP03 |
 | `recovery/<session>/` | Unsaved edits of one open session: `.basecraft/log/<session>/…jsonl` (the edit journal, RP03), `.basecraft/objects/<hash>` (exact bytes the session needs: a checkpoint when an original changed on disk, a new document with no file yet, the input of an analysis started on unsaved edits), `pending-save.json` (a save in progress, RP02) and `recovery-integrity-error.json` (RP04). Removed when the session closes with nothing unsaved. | JSONL and JSON |
 
-A folder that cannot be written (read-only, or with a `.basecraft` file that
-belongs to another program) gets no index and no recovery; basecraft says so
-when you edit there.
+A folder that refuses new files gets no index (basecraft cannot save over a
+file there either) and no recovery; basecraft says so when you edit there. If
+only its `.basecraft` cannot be written, or `.basecraft` is a file that belongs
+to another program, an analysis of a file there fails and names the folder,
+and a save of a file there asks.
 
 ## Reading the inventory
 
@@ -62,7 +74,7 @@ Basecraft builds is promised.
 | **RP07** `run.json`: id, result name, status and sometimes outputs | A | `ArtifactRun::write_run`, called by save, extraction, the `input_evidence` reference/generated helpers and runner `prepare` | `input_evidence::result_name`, `scan_run`; artifact binding | `schema_version: 1` | protocol `records::AnalysisRun` / [analysis-run.schema.json](analysis-run.schema.json) | Selective `Value` reads unchanged; typed round-trip retains unknown status/extras; outputs omitted or array, result null or string; fresh records |
 | **RP08** `store.json`: analysis namespace marker | `.basecraft/analyses-v1` | [analysis_store.rs](../crates/basecraft-ops/src/records/analysis_store.rs) `ArtifactRun::create`, compact JSON plus newline | `ArtifactRun::validate_store` | `format: basecraft.analysis-store`, `schema_version: 1` | protocol `StoreMarker` / [store-marker.schema.json](store-marker.schema.json) | Top-level extras kept by type; validation ignores extras; marker not rewritten |
 | **RP09** Result binding (hash-derived filename): run, result filename/hash | `.basecraft/analyses-v1` binding namespace | `ArtifactRun::bind` | `ArtifactRun::for_result` | `schema_version: 1` | protocol `records::ResultBinding` / [result-binding.schema.json](result-binding.schema.json) | Typed round-trip keeps extras; selective reads; fresh writes |
-| **RP10** `.basecraft/analysis-index.json`: for each file name in the folder, the stores whose runs depend on it | Beside analysed files | [input_evidence/index.rs](../crates/basecraft-ops/src/records/input_evidence/index.rs) `add`, called by `input_evidence::write_json` and `register` | `index::select` in save checks | `schema_version: 1` | protocol `records::AnalysisIndex` / [analysis-index.schema.json](analysis-index.schema.json) | Rejected |
+| **RP10** `.basecraft/analysis-index/<key>.json`: one store and the files beside it that its runs depend on; `analyses-v1/indexed-folders.json`: the folders that index a store | Beside analysed files; in each store | [input_evidence/index.rs](../crates/basecraft-ops/src/records/input_evidence/index.rs) `add`, `rebuild` (via `input_evidence::write_json`, `register`, `reindex`) | `index::select` in save checks | `schema_version: 1` | protocol `records::AnalysisIndex`, `records::IndexedFolders` / [analysis-index.schema.json](analysis-index.schema.json), [indexed-folders.schema.json](indexed-folders.schema.json) | Rejected |
 | **RP11** `artifacts/<hash>` with logical name `export-map.json`: old/new publication mapping | E packaged P | `input_evidence::export_history` | retained artifact inspection; no dedicated in-app deserializer | `schema_version: 1` | protocol `export_records::ProvenanceExportMap` / `ProvenanceExportMapping`; [provenance-export-map.schema.json](provenance-export-map.schema.json) | Generated artifact; original records also retained, no rewrite reader |
 | **RP12** `reports/manifest.json`: publication, template, output hashes, redactions, citations | P / A | `provenance::write_reports` | report consumer / inspection (no dedicated typed in-app reader) | `schema_version: 1`, `template_version: 2` | protocol `report_records::ProvenanceReportManifest` / [provenance-report-manifest.schema.json](provenance-report-manifest.schema.json) | Generated afresh |
 | **RP13** `reports/source-map.json`: paragraph/activity array | P / A | `provenance::write_reports` | report consumer / inspection | No version field | protocol `Vec<report_records::ReportSourceMapEntry>` / [report-source-map.schema.json](report-source-map.schema.json) | Generated afresh |

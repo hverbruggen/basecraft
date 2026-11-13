@@ -1,28 +1,29 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "AnalysisIndex",
-  "description": "`.basecraft/analysis-index.json` in a folder whose files analyses used.\nFor each such file, by name, the analysis stores (`.basecraft/analyses-v1`\nfolders) whose runs depend on it, as `/`-separated paths relative to the\nfolder that holds `.basecraft`. A save reads only the index beside its file.",
+  "description": "`.basecraft/analysis-index/<key>.json` in a folder whose files\nanalyses used: one analysis store (`.basecraft/analyses-v1`) and the files\nhere its runs depend on; `<key>` is a hash of the store's path. Paths are\n`/`-separated and relative to the folder holding `.basecraft`. Writers only add entries; readers take the union of\nevery file in `analysis-index/`, copies a sync tool made included.",
   "type": "object",
   "properties": {
     "files": {
-      "type": "object",
-      "additionalProperties": {
-        "type": "array",
-        "items": {
-          "type": "string"
-        },
-        "uniqueItems": true
-      }
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
     },
     "schema_version": {
       "type": "integer",
       "format": "uint32",
       "minimum": 0
+    },
+    "store": {
+      "type": "string"
     }
   },
   "additionalProperties": false,
   "required": [
     "schema_version",
+    "store",
     "files"
   ]
 }

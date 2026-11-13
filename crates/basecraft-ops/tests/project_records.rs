@@ -1,5 +1,6 @@
-//! Everything about a user's data lives in the project folder: deleting
-//! basecraft's private folders loses no record, history or recovery.
+//! Records about a user's data live in the project folder. Job records of
+//! plugin runs (`state/jobs`, card j3sxh item 3) and `LocalOnly` history
+//! (`state/provenance`, item 4) are not covered yet.
 #[path = "support/isolated_profile.rs"]
 mod isolated_profile;
 use basecraft_ops::{Session, project::Project, records};
@@ -34,8 +35,10 @@ fn files(folder: &Path) -> Vec<PathBuf> {
 }
 
 #[test]
-fn deleting_private_folders_loses_no_record() {
-    let Some(root) = isolated_profile::enter("deleting_private_folders_loses_no_record") else {
+fn deleting_private_folders_keeps_index_history_and_recovery() {
+    let Some(root) =
+        isolated_profile::enter("deleting_private_folders_keeps_index_history_and_recovery")
+    else {
         return;
     };
     let folder = root.join("project");
@@ -136,4 +139,195 @@ fn recovery_writes_edits_not_copies() {
     session.save(doc, None).unwrap();
     drop(session);
     assert!(!folder.join(".basecraft/recovery").exists());
+}
+
+fn reference(anchor: &Path, source: &Path) -> records::ArtifactRun {
+    records::reference_input_with_dependencies(
+        anchor,
+        source,
+        &basecraft_io::hash_file(source).unwrap(),
+        &[],
+        "analysis",
+        None,
+    )
+    .unwrap()
+}
+
+fn index_files(folder: &Path) -> std::collections::BTreeSet<String> {
+    let mut all = std::collections::BTreeSet::new();
+    for path in files(&folder.join(".basecraft/analysis-index")) {
+        let index: basecraft_protocol::records::AnalysisIndex =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        all.extend(index.files);
+    }
+    all
+}
+
+#[test]
+fn crashed_loose_session_is_found_and_offered() {
+    let Some(root) = isolated_profile::enter("crashed_loose_session_is_found_and_offered") else {
+        return;
+    };
+    let folder = root.join("loose");
+    std::fs::create_dir(&folder).unwrap();
+    let file = folder.join("gene.fasta");
+    std::fs::write(&file, b">a\nACGT\n").unwrap();
+    let mut crashed = Session::recoverable(&folder).unwrap();
+    edit(&mut crashed, &file, "G");
+    let recovery = crashed.recovery_root().to_path_buf();
+    // A crash: the session never closes.
+    std::mem::forget(crashed);
+    let found = records::recovery_sessions(std::slice::from_ref(&folder)).unwrap();
+    assert_eq!(found, std::slice::from_ref(&recovery));
+    let mut session = Session::recoverable(&folder).unwrap();
+    let doc = session.open(&file).unwrap();
+    session
+        .find_earlier_recovery(doc, std::slice::from_ref(&folder))
+        .unwrap();
+    let notice = session.recovery_warning(doc).unwrap();
+    assert!(notice.contains(&recovery.display().to_string()), "{notice}");
+    let other = folder.join("other.fasta");
+    std::fs::write(&other, b">a\nACGT\n").unwrap();
+    let doc = session.open(&other).unwrap();
+    session.find_earlier_recovery(doc, &[folder]).unwrap();
+    assert!(session.recovery_warning(doc).is_none());
+}
+
+#[test]
+fn two_profiles_add_to_one_index_at_once() {
+    let name = "two_profiles_add_to_one_index_at_once";
+    if let Some(who) = std::env::var_os("BASECRAFT_INDEX_WRITER") {
+        let data = PathBuf::from(std::env::var_os("BASECRAFT_INDEX_DATA").unwrap());
+        for i in 0..20 {
+            let source = data.join(format!("{}-{i}.fasta", who.to_string_lossy()));
+            std::fs::write(&source, b">a\nACGT\n").unwrap();
+            reference(&data.parent().unwrap().join("results/out.txt"), &source);
+        }
+        return;
+    }
+    let Some(root) = isolated_profile::enter(name) else {
+        return;
+    };
+    let data = root.join("data");
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::create_dir_all(root.join("results")).unwrap();
+    // Both writers add to one store, so they write the same index file.
+    records::ArtifactRun::create(&root.join("results/out.txt"), "first").unwrap();
+    let writers: Vec<_> = ["a", "b"]
+        .into_iter()
+        .map(|who| {
+            let profile = root.join(format!("profile-{who}"));
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", name, "--nocapture"])
+                .env("BASECRAFT_INDEX_WRITER", who)
+                .env("BASECRAFT_INDEX_DATA", &data)
+                .env("BASECRAFT_PROFILE_DIR", &profile)
+                .env("BASECRAFT_STATE_DIR", profile.join("state"))
+                .env("BASECRAFT_CACHE_DIR", profile.join("cache"))
+                .spawn()
+                .unwrap()
+        })
+        .collect();
+    for mut writer in writers {
+        assert!(writer.wait().unwrap().success());
+    }
+    assert_eq!(index_files(&data).len(), 40);
+    for entry in std::fs::read_dir(&data).unwrap().flatten() {
+        if entry.path().extension().is_some_and(|e| e == "fasta") {
+            let check = records::check(&entry.path()).unwrap();
+            assert_eq!(check.conflict.analyses.len(), 1, "{:?}", entry.path());
+        }
+    }
+}
+
+#[test]
+fn a_sync_conflict_copy_of_the_index_still_counts() {
+    let Some(root) = isolated_profile::enter("a_sync_conflict_copy_of_the_index_still_counts")
+    else {
+        return;
+    };
+    let data = root.join("data");
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::create_dir_all(root.join("results")).unwrap();
+    let source = data.join("reads.fasta");
+    std::fs::write(&source, b">a\nACGT\n").unwrap();
+    let run = reference(&root.join("results/out.txt"), &source);
+    // Another machine's version wins the name; ours becomes a conflict copy.
+    let shards = data.join(".basecraft/analysis-index");
+    let shard = files(&shards).pop().unwrap();
+    let copy = shards.join(
+        shard
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .replace(".json", ".sync-conflict-20261113-101010-ABCDEFG.json"),
+    );
+    std::fs::rename(&shard, &copy).unwrap();
+    let mut theirs: basecraft_protocol::records::AnalysisIndex =
+        serde_json::from_slice(&std::fs::read(&copy).unwrap()).unwrap();
+    theirs.files = ["their.fasta".into()].into();
+    std::fs::write(&shard, serde_json::to_vec_pretty(&theirs).unwrap()).unwrap();
+    let check = records::check(&source).unwrap();
+    assert!(check.is_complete(), "{:?}", check.issues);
+    assert_eq!(check.conflict.analyses[0].run, run.directory());
+}
+
+#[test]
+fn a_lost_index_makes_a_project_save_ask_until_reindexed() {
+    let Some(root) =
+        isolated_profile::enter("a_lost_index_makes_a_project_save_ask_until_reindexed")
+    else {
+        return;
+    };
+    let folder = root.join("project");
+    std::fs::create_dir_all(folder.join("data")).unwrap();
+    let source = folder.join("data/reads.fasta");
+    std::fs::write(&source, b">a\nACGT\n").unwrap();
+    // The analysis keeps its run in the project's own store.
+    let run = reference(&folder.join("summary.txt"), &source);
+    std::fs::remove_dir_all(folder.join("data/.basecraft")).unwrap();
+    let project = Project::new(&folder).unwrap();
+    let mut session = Session::new(&folder).in_project(Some(project));
+    let doc = edit(&mut session, &source, "T");
+    let check = match session.save(doc, None).unwrap_err() {
+        basecraft_ops::Error::SaveCheckRequired(check) => check,
+        other => panic!("{other:?}"),
+    };
+    assert!(!check.evidence().is_complete());
+    assert_eq!(check.evidence().conflict.analyses[0].run, run.directory());
+    assert_eq!(std::fs::read(&source).unwrap(), b">a\nACGT\n");
+    let done = records::reindex(&folder).unwrap();
+    assert_eq!((done.stores, done.folders), (1, 1));
+    let check = records::check(&source).unwrap();
+    assert!(check.is_complete(), "{:?}", check.issues);
+    assert_eq!(check.conflict.analyses.len(), 1);
+}
+
+#[test]
+fn a_foreign_basecraft_file_beside_an_input_is_not_skipped() {
+    let Some(root) =
+        isolated_profile::enter("a_foreign_basecraft_file_beside_an_input_is_not_skipped")
+    else {
+        return;
+    };
+    let data = root.join("data");
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::create_dir_all(root.join("results")).unwrap();
+    std::fs::write(data.join(".basecraft"), b"another program").unwrap();
+    let source = data.join("reads.fasta");
+    std::fs::write(&source, b">a\nACGT\n").unwrap();
+    let error = records::reference_input_with_dependencies(
+        &root.join("results/out.txt"),
+        &source,
+        &basecraft_io::hash_file(&source).unwrap(),
+        &[],
+        "analysis",
+        None,
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains(&data.display().to_string()),
+        "{error}"
+    );
+    assert!(!records::check(&source).unwrap().is_complete());
 }
