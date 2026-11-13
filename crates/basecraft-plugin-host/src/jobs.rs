@@ -76,22 +76,17 @@ impl Job {
         self.stopped.1.notify_all();
     }
 
-    /// Block until the worker stops, or for `CANCEL_CHECK`. Once a waiter has
-    /// seen the worker stop, it waits the full time.
-    fn wait_for_worker(&self, seen: &mut bool) {
-        let stopped = self
-            .stopped
-            .0
+    /// Block until the worker stops, or for `CANCEL_CHECK` once it has.
+    fn wait_for_worker(&self) {
+        let (stopped, wake) = &self.stopped;
+        let stopped = stopped
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if *stopped && !*seen {
-            *seen = true;
-            return;
-        }
-        let _ = self
-            .stopped
-            .1
-            .wait_timeout_while(stopped, CANCEL_CHECK, |stopped| !*stopped || *seen);
+        let _ = if *stopped {
+            wake.wait_timeout(stopped, CANCEL_CHECK)
+        } else {
+            wake.wait_timeout_while(stopped, CANCEL_CHECK, |stopped| !*stopped)
+        };
     }
 }
 
@@ -247,7 +242,6 @@ impl JobManager {
             .jobs
             .get(id)
             .ok_or_else(|| Error::Protocol("unknown job in this session".into()))?;
-        let mut seen = false;
         loop {
             if let Some(session) = session.as_deref_mut() {
                 self.poll_session(session);
@@ -259,7 +253,7 @@ impl JobManager {
             if outcome.state.terminal() {
                 return Ok(outcome);
             }
-            job.wait_for_worker(&mut seen);
+            job.wait_for_worker();
         }
     }
     pub fn target_document(&self, id: &str) -> Option<basecraft_ops::DocId> {

@@ -94,19 +94,22 @@ major. MCP spells the id `plugin_id.local_name.vMAJOR`.
 Inputs. A view is `bytes`, `aligned_fasta`, `ungapped_fasta`, `newick` or
 `sequence_snapshot`; it names the transformation the host applies when it
 freezes the input. An alignment input may list the `alphabets` it accepts
-(`nucleotide`, `protein`). The host refuses any other alignment before the
-plugin starts, for example "Distance tree needs a nucleotide alignment, and
-proteins.fasta holds protein sequences". `retain: true` keeps the submitted
+(`dna`, `rna`, `protein`). The alignment's alphabet is what the user or its
+companion file stated, or else the host's guess from the residues. The host
+refuses any other alignment before the plugin starts, for example "Distance
+tree needs a DNA alignment, and proteins.fasta holds protein sequences", and
+passes the alphabet of each alignment input to the plugin. `retain: true` keeps the submitted
 bytes with the run. `verify: true` checks the input's retained evidence before
 the run, as for a reused distance cache.
 
 Outputs. A single-file role has `max: 1`. A collection role is one folder;
 `primary` names the member that holds the main result, which the GUI opens and
 history reports. `facts` declares what is known about the primary member
-(`alphabet`, `branch_lengths`: `substitutions` or `time`); the IQ-TREE,
-FastTree and distance trees declare substitution lengths. The host checks the
-declaration; recording it in the result's companion file comes with document
-facts. `tree_support` says what support values on output trees mean, optionally
+(`alphabet`: `dna`, `rna` or `protein`; `branch_lengths`: `substitutions`,
+`relative_time` or `{"absolute_time": {"unit": "Ma"}}`); the IQ-TREE, FastTree
+and distance trees declare substitution lengths. The host writes the declared
+facts, marked as stated, into the primary member's companion file
+(`<file>.basecraft.json`), together with the tree's support semantics. `tree_support` says what support values on output trees mean, optionally
 only when a parameter has a value. `bootstrap_exports` lets a run export its
 `bootstrap-<run>.nex` trees beside the exported tree when
 `bootstrap_destination` is `working`. Output roles need `artifact_write`. File
@@ -155,6 +158,8 @@ absolute paths:
   collection (its parent folders are created).
 - `run_id`, `threads`, `cancel_file`, `progress_file`, `cancelled()`.
 - `snapshot`: the sequence a sequence proposal edits; `None` otherwise.
+- `alphabets[name]`: `dna`, `rna`, `protein` or `unknown` for each alignment
+  input. A plugin uses it instead of guessing from the residues.
 - `evidence[name]` lists where each submitted input came from;
   `source(name)` adds `path`, a stable copy for provenance.
 
@@ -188,7 +193,8 @@ The host sends this with every call:
   "cpu_threads": 4, "cancel_file": "cancel", "progress_file": "progress",
   "input_evidence": {"alignment": [{"original_path": "/project/seqs.fasta",
     "source_hash": "b3:...", "submitted_hash": "b3:...",
-    "transformation": "canonical-fasta-v1", "run_directory": "/project/..."}]}
+    "transformation": "canonical-fasta-v1", "run_directory": "/project/..."}]},
+  "alphabets": {"alignment": "dna"}
 }
 ```
 
@@ -202,12 +208,21 @@ Each run keeps:
 - `request.json`: the request as accepted, with file inputs relative to the
   run folder.
 - `descriptor.json`: the descriptor it ran under.
-- `execution.json`: the run record (`RunRecord`): operation, package version
-  and digests, `runtime` (the managed runtime by content: lock and manifest
-  digests, tool versions, executable digests), caller, effective parameters, CPU
-  threads, the submitted inputs with hashes and paths relative to the folder,
-  captured stdout and stderr, and the tool and command the plugin reported.
+- `execution.json`: the run record (`RunRecord`, schema 3): operation, package
+  version and digests, `environment` (the interpreter version the plugin
+  reported at start-up, and for a managed runtime the conda channels,
+  dependencies and PyPI dependencies it was solved from, the lock and manifest
+  digests, tool versions and executable digests), caller, effective
+  parameters, CPU threads, the submitted inputs with hashes and paths relative
+  to the folder, captured stdout and stderr, and the tool and command the
+  plugin reported. Basecraft's own tools, such as a Sanger stage, write the
+  same record with no package digests.
 - `runtime.json`: the outcome callers see.
+
+The document's history gets one `tool.run` entry per run. It holds the tool's
+own requested parameters and a `run` link (the run's id and its folder,
+relative to the folder of the log). History and methods read how the tool ran,
+its effective settings, preprocessing and citations, from `execution.json`.
 
 The record holds no absolute path and no interpreter path, so a project can
 move with its run folders. `runner::recorded_request(folder)` reads the

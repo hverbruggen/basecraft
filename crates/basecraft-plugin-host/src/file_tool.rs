@@ -82,7 +82,7 @@ pub(crate) fn producer_support<'a>(
 /// tree, the support semantics (only when it has exactly one support field;
 /// slash-separated values need their own verified order) and the branch-length
 /// meaning; for another file, its alphabet. None when nothing is stated.
-pub(crate) fn write_output_facts(
+pub(crate) fn write_output_companion(
     path: &Path,
     support: Option<(&str, basecraft_protocol::SupportKind)>,
     facts: &basecraft_protocol::operation::OutputFacts,

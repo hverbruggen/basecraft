@@ -773,15 +773,12 @@ fn methods_use_frozen_plugin_metadata_and_reject_unmatched_contribution() {
     let run = records::ArtifactRun::create(&output, "01M79RUNRECORDMETHODS0000").unwrap();
     std::fs::write(
         run.directory().join("execution.json"),
-        serde_json::json!({"schema":3,"operation":"example/analyze@1","package_version":"1",
-            "package_digest":null,"descriptor_digest":null,
-            "environment":{"interpreter":null,"runtime":null},"initiator":"test","executor":"example",
-            "process_instance":"test","inputs":{},"effective_parameters":{"seed":1},"cpu_threads":1,
-            "stdout":"","stderr":"","tool":{"name":"RecordedTool","version":"1.2"},
-            "execution":{"argv":[],"methods_template":"example.v1",
-                "methods":{"description":"Sequences were processed","citations":["A recorded citation"]},
-                "resolved_parameters":{"seed":42}}})
-        .to_string(),
+        r#"{"schema":3,"operation":"example/analyze@1","package_version":"1","package_digest":null,
+        "descriptor_digest":null,"environment":{"interpreter":null,"runtime":null},"initiator":"test",
+        "executor":"example","process_instance":"test","inputs":{},"effective_parameters":{},
+        "cpu_threads":1,"stdout":"","stderr":"","tool":{"name":"RecordedTool","version":"1.2"},
+        "execution":{"argv":[],"methods_template":"example.v1","resolved_parameters":{"seed":42},
+        "methods":{"description":"Sequences were processed","citations":["A recorded citation"]}}}"#,
     )
     .unwrap();
     let actor = basecraft_ops::session::run_actor(
@@ -799,7 +796,7 @@ fn methods_use_frozen_plugin_metadata_and_reject_unmatched_contribution() {
                 run: Some(&run),
                 ..basecraft_ops::session::ToolRunRecord::new(
                     ("example", "analyze"),
-                    serde_json::json!({}),
+                    serde_json::Value::Object(serde_json::Map::new()),
                     &inputs,
                     std::slice::from_ref(&output),
                 )

@@ -187,7 +187,7 @@ fn the_caller_service_returns_checks_reuses_and_refuses_drafts() {
     // and a changed source is refused before a run starts.
     assert!(caller.start(&source, &sha256, 19).unwrap().is_none());
     caller.cancel().unwrap();
-    assert!(caller.poll().unwrap().is_none());
+    assert!(called(&mut caller).is_err());
     assert!(caller.start(&source, &sha256, 18).unwrap().is_none());
     std::fs::write(&source, "source replaced while the caller ran").unwrap();
     assert!(called(&mut caller).is_err());

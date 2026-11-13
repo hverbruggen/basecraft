@@ -541,7 +541,7 @@ impl PreparedOperation {
                 }
                 Err(error) => return Err(error.into()),
             }
-            if let Some(sidecar) = file_tool::write_output_facts(&path, support, facts)? {
+            if let Some(sidecar) = file_tool::write_output_companion(&path, support, facts)? {
                 if !paths.insert(sidecar.clone()) {
                     return Err(Error::Protocol("duplicate companion".into()));
                 }
@@ -698,7 +698,7 @@ impl PreparedOperation {
     /// producer support semantics and the link to the alignment it came from.
     fn finalise_exported_tree(&self, role: &str, tree: &Path) -> Result<()> {
         self.run.bind(tree)?;
-        file_tool::write_output_facts(
+        file_tool::write_output_companion(
             tree,
             file_tool::producer_support(&self.operation.descriptor, &self.parameters),
             &self.operation.descriptor.outputs[role].facts,

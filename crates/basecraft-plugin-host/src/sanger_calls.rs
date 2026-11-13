@@ -260,23 +260,13 @@ impl SangerCaller {
         &mut self,
         cancelled: &std::sync::atomic::AtomicBool,
     ) -> Result<CalledDraft, String> {
-        let (id, _) = self.active.as_ref().ok_or("No call was started")?;
-        self.jobs
-            .wait(id, &|| cancelled.load(std::sync::atomic::Ordering::Acquire))
+        let (id, identity) = self.active.take().ok_or("No call was started")?;
+        let outcome = self
+            .jobs
+            .wait(&id, &|| {
+                cancelled.load(std::sync::atomic::Ordering::Acquire)
+            })
             .map_err(|e| e.to_string())?;
-        self.poll()?
-            .ok_or_else(|| "Caller returned no draft".into())
-    }
-
-    pub fn poll(&mut self) -> Result<Option<CalledDraft>, String> {
-        let Some((id, _)) = &self.active else {
-            return Ok(None);
-        };
-        let outcome = self.jobs.get(id).map_err(|e| e.to_string())?;
-        if !outcome.state.terminal() {
-            return Ok(None);
-        }
-        let (_, identity) = self.active.take().ok_or("Caller identity is missing")?;
         if outcome.state != RuntimeState::Completed {
             return Err(outcome.errors.first().map_or_else(
                 || "Alternative calling cancelled".into(),
@@ -285,6 +275,6 @@ impl SangerCaller {
         }
         let verified =
             verify_completed_result(&outcome, &identity.query).map_err(|e| e.to_string())?;
-        checked(verified, &identity).map(Some)
+        checked(verified, &identity)
     }
 }
