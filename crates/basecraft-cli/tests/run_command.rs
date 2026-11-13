@@ -130,5 +130,26 @@ fn a_tool_runs_on_files_like_its_request_and_refuses_with_what_to_give() {
         ],
     );
     assert!(!unpaired.status.success());
+    // A setting the tool does not have is named, with the ones it has.
+    let unknown_setting = basecraft(
+        &profile,
+        &[
+            "run",
+            "distance/tree",
+            text(&project.join("input.afa")),
+            "-o",
+            text(&project.join("other.nwk")),
+            "--param",
+            "colour=red",
+            "--project",
+            text(&project),
+        ],
+    );
+    let said = String::from_utf8_lossy(&unknown_setting.stderr);
+    assert!(!unknown_setting.status.success());
+    assert!(
+        said.contains("no setting colour") && said.contains("model"),
+        "{said}"
+    );
     assert!(String::from_utf8_lossy(&unpaired.stderr).contains("expected --input ROLE=FILE"));
 }

@@ -579,6 +579,8 @@ def main():
                 assert via_mcp["isError"] and via_mcp["structuredContent"] == rejected, via_mcp
                 invalid_corpus.append(rejected["errors"][0]["message"])
             assert len(set(invalid_corpus)) == 3, invalid_corpus
+            # A setting the operation does not have is named on every route (D1).
+            assert "no setting unknown_setting" in invalid_corpus[0], invalid_corpus
             assert not (project / "invalid.json").exists()
             record("invalid-parameter corpus: identical structured errors from CLI/Python/MCP")
 

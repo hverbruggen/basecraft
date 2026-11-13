@@ -533,8 +533,16 @@ pub fn normalize_parameters(descriptor: &OperationDescriptor, requested: &Value)
         .get("properties")
         .and_then(Value::as_object)
         .ok_or_else(|| invalid("missing parameter properties"))?;
-    if parameters.keys().any(|name| !properties.contains_key(name)) {
-        return Err(invalid("unknown parameter"));
+    let known = || properties.keys().cloned().collect::<Vec<_>>().join(", ");
+    if let Some(name) = parameters
+        .keys()
+        .find(|name| !properties.contains_key(*name))
+    {
+        return Err(invalid(format!(
+            "{} has no setting {name}; its settings are: {}",
+            descriptor.name,
+            known()
+        )));
     }
     for (name, definition) in properties {
         if !parameters.contains_key(name)
@@ -542,6 +550,21 @@ pub fn normalize_parameters(descriptor: &OperationDescriptor, requested: &Value)
         {
             parameters.insert(name.clone(), default.clone());
         }
+    }
+    // A choice the run needs and has no default for is refused by name (D1):
+    // basecraft never picks it silently.
+    let required = descriptor.parameters["required"]
+        .as_array()
+        .into_iter()
+        .flatten();
+    if let Some(name) = required
+        .filter_map(Value::as_str)
+        .find(|name| !parameters.contains_key(*name))
+    {
+        return Err(invalid(format!(
+            "{} needs the setting {name}, which has no default; give it",
+            descriptor.name
+        )));
     }
     let effective = Value::Object(parameters);
     BoundedSchema::compile(&descriptor.parameters)?.validate(&effective)?;
