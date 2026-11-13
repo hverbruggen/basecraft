@@ -1019,3 +1019,28 @@ fn agent_row_rename_moves_the_specimen_link() {
 fn project_of(file: &std::path::Path) -> basecraft_ops::project::Project {
     basecraft_ops::project::Project::new(file.parent().unwrap()).unwrap()
 }
+
+#[test]
+fn tip_labels_without_a_specimen_table_are_refused_by_name() {
+    crate::isolated_profile::isolate!();
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("tree.nwk"), "(a:1,b:1);\n").unwrap();
+    let replies = session(
+        d.path(),
+        true,
+        &[
+            request(1, "open", json!({"path":"tree.nwk"})),
+            request(
+                2,
+                "tree_labels",
+                json!({"document":0,"fields":["specimen"]}),
+            ),
+        ],
+    );
+    assert_eq!(replies[1]["result"]["isError"], true, "{}", replies[1]);
+    assert!(
+        replies[1].to_string().contains("no specimen metadata"),
+        "{}",
+        replies[1]
+    );
+}

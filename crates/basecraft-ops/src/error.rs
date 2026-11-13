@@ -78,6 +78,9 @@ pub enum Error {
     DisplayTree(#[from] crate::delimitation::DisplayTreeError),
     #[error("This project has no specimen metadata")]
     NoMetadata,
+    /// The work named needs a chosen project and there is none.
+    #[error("{0} needs a project; choose one (on the command line, --project)")]
+    NoProject(&'static str),
     #[error("{0} is not a label field; give specimen, genus, species, accession or column:NAME")]
     NotALabelField(String),
 }
@@ -123,7 +126,8 @@ impl Error {
             | Self::ReviewInput(_)
             | Self::Addition(_)
             | Self::DisplayTree(_)
-            | Self::NotALabelField(_) => Code::InvalidArguments,
+            | Self::NotALabelField(_)
+            | Self::NoProject(_) => Code::InvalidArguments,
             Self::UnknownFormat(_) => Code::UnknownFormat,
             Self::Empty(_) => Code::EmptyDocument,
             Self::EvidenceConflict(_) => Code::AnalysisInputConflict,

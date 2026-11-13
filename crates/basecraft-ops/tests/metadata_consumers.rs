@@ -502,7 +502,8 @@ fn tips_are_labelled_from_the_specimen_table_as_one_style_edit() {
         .iter()
         .map(|f| metadata::label_field(f).unwrap())
         .collect();
-    let kept = metadata::label_tips(&mut s, t, dir.path(), fields).unwrap();
+    let project = basecraft_ops::project::Project::new(dir.path()).unwrap();
+    let kept = metadata::label_tips(&mut s, t, &project, fields).unwrap();
     assert_eq!(kept, 1, "the unlinked tip keeps its own name");
     assert_eq!(
         s.tree(t).unwrap().style().tip_labels["r1"],
@@ -522,4 +523,51 @@ fn tips_are_labelled_from_the_specimen_table_as_one_style_edit() {
             .to_string()
             .contains("not a label field")
     );
+}
+
+#[test]
+fn a_loose_tree_is_labelled_from_the_project_named() {
+    crate::isolated_profile::isolate!();
+    let dir = tempfile::tempdir().unwrap();
+    let project = basecraft_ops::project::Project::new(dir.path()).unwrap();
+    // The table is saved in project mode, as the window and MCP save it.
+    let mut owner = Session::recoverable(dir.path())
+        .unwrap()
+        .in_project(Some(project.clone()));
+    let m = metadata::open(&mut owner, true).unwrap().unwrap();
+    metadata::apply_plan(
+        &mut owner,
+        m,
+        ChangeSet {
+            specimens: vec!["S1".into()],
+            links: vec![RecordLink {
+                document: "tree.nwk".into(),
+                record: "a".into(),
+                specimen: "S1".into(),
+            }],
+            ..ChangeSet::default()
+        },
+    )
+    .unwrap();
+    owner.save(m, None).unwrap();
+    drop(owner);
+
+    // The tree is opened without a project of its own.
+    std::fs::write(dir.path().join("tree.nwk"), "(a:1,b:1);").unwrap();
+    let mut loose = Session::new(dir.path());
+    let tree = loose.open(&dir.path().join("tree.nwk")).unwrap();
+    let kept =
+        metadata::label_tips(&mut loose, tree, &project, vec![LabelField::Specimen]).unwrap();
+    assert_eq!(kept, 1);
+    assert_eq!(loose.tree(tree).unwrap().style().tip_labels["a"], "S1");
+
+    // A tree outside the project names no file the table links.
+    let elsewhere = tempfile::tempdir().unwrap();
+    std::fs::write(elsewhere.path().join("tree.nwk"), "(a:1,b:1);").unwrap();
+    let mut other = Session::new(elsewhere.path());
+    let outside = other.open(&elsewhere.path().join("tree.nwk")).unwrap();
+    let refused = metadata::label_tips(&mut other, outside, &project, vec![LabelField::Specimen])
+        .unwrap_err()
+        .to_string();
+    assert!(refused.contains("outside the project"), "{refused}");
 }

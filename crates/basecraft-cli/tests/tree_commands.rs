@@ -104,6 +104,12 @@ fn tips_are_labelled_from_the_projects_specimen_table() {
     let none = labels("specimen");
     assert!(!none.status.success());
     assert!(String::from_utf8_lossy(&none.stderr).contains("no specimen metadata"));
+    let without = basecraft(
+        &profile,
+        &["tree", "labels", &path(&tree), "--fields", "specimen"],
+    );
+    assert!(!without.status.success());
+    assert!(String::from_utf8_lossy(&without.stderr).contains("needs a project"));
 
     let mut session = basecraft_ops::Session::new(&project);
     let metadata = basecraft_ops::metadata::open(&mut session, true)
@@ -138,6 +144,23 @@ fn tips_are_labelled_from_the_projects_specimen_table() {
     );
     let value: serde_json::Value = serde_json::from_slice(&done.stdout).unwrap();
     assert_eq!(value["kept_own_name"], 1, "{value}");
+    // A tree outside the project is refused: the table links files inside it.
+    let outside = temp.path().join("outside.nwk");
+    std::fs::write(&outside, "(a:1,b:1,c:1);\n").unwrap();
+    let refused = basecraft(
+        &profile,
+        &[
+            "--project",
+            &path(&project),
+            "tree",
+            "labels",
+            &path(&outside),
+            "--fields",
+            "specimen",
+        ],
+    );
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("outside the project"));
     let mut reader = basecraft_ops::Session::unlogged(&project);
     let opened = reader.open(&tree).unwrap();
     let style = reader.tree(opened).unwrap().style();

@@ -229,11 +229,8 @@ pub mod qobject {
         #[qinvokable]
         fn style_json(self: &TreeController) -> QString;
         #[qinvokable]
-        fn compose_metadata_labels(
-            self: Pin<&mut TreeController>,
-            project: &QString,
-            fields: &QString,
-        ) -> QString;
+        /// Label the tips from the chosen project's specimen table.
+        fn compose_metadata_labels(self: Pin<&mut TreeController>, fields: &QString) -> QString;
         /// Replace the style from JSON. Returns an error message, or empty.
         #[qinvokable]
         fn set_style(self: Pin<&mut TreeController>, json: &QString) -> QString;
@@ -1809,23 +1806,17 @@ impl qobject::TreeController {
         }
     }
 
-    pub fn compose_metadata_labels(
-        mut self: Pin<&mut Self>,
-        project: &QString,
-        fields: &QString,
-    ) -> QString {
-        // The same labels as `basecraft tree labels`.
+    pub fn compose_metadata_labels(mut self: Pin<&mut Self>, fields: &QString) -> QString {
+        // The same labels as `basecraft tree labels`, from the chosen
+        // project's table even when the tree was opened loose.
         let planned = (|| -> Result<(TreeStyle, usize), String> {
             let r = self.rust();
             let (session, doc) = r.session.as_ref().zip(r.doc).ok_or("No tree open")?;
             let fields = serde_json::from_str(&fields.to_string()).map_err(|e| e.to_string())?;
-            basecraft_ops::metadata::tip_label_style(
-                session,
-                doc,
-                Path::new(&project.to_string()),
-                fields,
-            )
-            .map_err(|e| e.to_string())
+            let project = crate::chosen_project::chosen()?
+                .ok_or_else(|| basecraft_ops::Error::NoProject(LABELLING).to_string())?;
+            basecraft_ops::metadata::tip_label_style(session, doc, &project, fields)
+                .map_err(|e| e.to_string())
         })();
         match planned {
             Err(error) => QString::from(error),
@@ -2213,3 +2204,6 @@ crate::editor_save::ordinary_save!(qobject::TreeController, busy);
 crate::editor_save::confirmed_save!(qobject::TreeController);
 
 crate::appearance::editor_follows_appearance!(qobject::TreeController);
+
+/// What needs the chosen project when tips are labelled from its table.
+const LABELLING: &str = "Labelling tips from the specimen table";

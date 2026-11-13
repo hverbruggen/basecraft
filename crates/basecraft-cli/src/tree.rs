@@ -63,9 +63,9 @@ pub fn run(
         ),
         TreeCommand::Rotate { file, clade } => (file, Op::TreeRotate { clade }),
         TreeCommand::Labels { file, fields } => {
-            let project = project.ok_or(
-                "tree labels needs --project: the project whose specimen table gives the labels",
-            )?;
+            let project = project.ok_or(basecraft_ops::Error::NoProject(
+                "Labelling tips from the specimen table",
+            ))?;
             let fields = fields
                 .iter()
                 .map(|field| basecraft_ops::metadata::label_field(field))
@@ -74,8 +74,7 @@ pub fn run(
             let root = file.parent().ok_or("the tree has no folder")?;
             let mut session = crate::script_session(root, Some(project))?;
             let doc = session.open(&file)?;
-            let kept =
-                basecraft_ops::metadata::label_tips(&mut session, doc, project.root(), fields)?;
+            let kept = basecraft_ops::metadata::label_tips(&mut session, doc, project, fields)?;
             save_options.save(&mut session, doc, None, false)?;
             println!(
                 "{}",

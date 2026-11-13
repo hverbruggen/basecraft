@@ -1324,14 +1324,16 @@ pub enum ConsumerRequest {
 }
 
 /// The tree style that labels tree `doc`'s tips from the specimen metadata
-/// of the project at `project`, by `fields` in order (no fields: the tips'
-/// own names again), and how many tips keep their own name because their
-/// link is missing or ambiguous. The window and `basecraft tree labels` both
-/// label tips through this.
+/// of `project`, by `fields` in order (no fields: the tips' own names again),
+/// and how many tips keep their own name because their link is missing or
+/// ambiguous. `project` is named by the caller (the window's chosen project,
+/// `--project`, the MCP session's project), since a tree opened loose has
+/// none of its own. The window and `basecraft tree labels` both label tips
+/// through this.
 pub fn tip_label_style(
     session: &Session,
     doc: crate::DocId,
-    project: &Path,
+    project: &crate::project::Project,
     fields: Vec<basecraft_protocol::metadata::LabelField>,
 ) -> Result<(basecraft_protocol::TreeStyle, usize)> {
     let tree = session.tree(doc)?;
@@ -1341,12 +1343,8 @@ pub fn tip_label_style(
     if fields.is_empty() {
         return Ok((style, 0));
     }
-    // The metadata's records are found the way they were saved: in the tree
-    // session's project when it is this one.
-    let same = session
-        .project()
-        .filter(|p| std::fs::canonicalize(p.root()).ok() == std::fs::canonicalize(project).ok());
-    let mut reader = Session::unlogged(project).in_project(same.cloned());
+    // The table's records are kept in its project, so it is read there.
+    let mut reader = Session::unlogged(project.root()).in_project(Some(project.clone()));
     let metadata = open(&mut reader, false)?.ok_or(crate::Error::NoMetadata)?;
     let source = consumer_source(&reader, metadata)?;
     verify_label_owner(tree.style(), &source)?;
@@ -1382,7 +1380,7 @@ pub fn tip_label_style(
 pub fn label_tips(
     session: &mut Session,
     doc: crate::DocId,
-    project: &Path,
+    project: &crate::project::Project,
     fields: Vec<basecraft_protocol::metadata::LabelField>,
 ) -> Result<usize> {
     let (style, kept) = tip_label_style(session, doc, project, fields)?;

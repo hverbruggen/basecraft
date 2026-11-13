@@ -215,9 +215,15 @@ impl Server {
                         Ok(basecraft_ops::metadata::label_field(field)?)
                     })
                     .collect::<Result<Vec<_>>>()?;
-                let root = self.session.root().to_path_buf();
+                let project =
+                    self.session
+                        .project()
+                        .cloned()
+                        .ok_or(basecraft_ops::Error::NoProject(
+                            "Labelling tips from the specimen table",
+                        ))?;
                 let kept =
-                    basecraft_ops::metadata::label_tips(&mut self.session, doc, &root, fields)?;
+                    basecraft_ops::metadata::label_tips(&mut self.session, doc, &project, fields)?;
                 let mut state = self.state(doc)?;
                 state["kept_own_name"] = json!(kept);
                 Ok(state)
