@@ -22,14 +22,6 @@ pub mod qobject {
         #[qinvokable]
         fn relink_run(self: Pin<&mut AppProvenance>, run: &QString, original: &QString) -> bool;
         #[qinvokable]
-        fn relink_input(
-            self: Pin<&mut AppProvenance>,
-            result: &QString,
-            original: &QString,
-        ) -> bool;
-        #[qinvokable]
-        fn cancel_run(self: Pin<&mut AppProvenance>, id: &QString);
-        #[qinvokable]
         fn saved_report(self: &AppProvenance, path: &QString) -> QString;
         #[qinvokable]
         fn save_authored(
@@ -50,7 +42,7 @@ pub mod qobject {
         #[qinvokable]
         fn clear_notifications(self: Pin<&mut AppProvenance>);
         #[qinvokable]
-        fn jobs(self: &AppProvenance, previous: bool) -> QString;
+        fn retained_jobs(self: &AppProvenance) -> QString;
         #[qinvokable]
         fn start(
             self: Pin<&mut AppProvenance>,
@@ -72,27 +64,6 @@ pub struct ProvenanceRust {
     notifications: QString,
     notices: Vec<serde_json::Value>,
 }
-fn request_task_cancellation(id: &str) -> String {
-    match basecraft_plugin_host::file_tool::cancel_run(id) {
-        Ok(()) => "notify: Cancellation requested".into(),
-        Err(error) => format!("fail: {error}"),
-    }
-}
-
-// The capability comes from the live owner, never from a retained receipt.
-fn task_capabilities(data: &mut serde_json::Value, previous: bool) {
-    if let Some(jobs) = data["jobs"].as_array_mut() {
-        for job in jobs {
-            job["cancellable"] = serde_json::json!(
-                !previous
-                    && job["id"]
-                        .as_str()
-                        .is_some_and(basecraft_plugin_host::file_tool::can_cancel_run)
-            );
-        }
-    }
-}
-
 fn run(
     operation: &str,
     result: &Path,
@@ -166,27 +137,6 @@ impl qobject::AppProvenance {
         ));
         success
     }
-    fn relink_input(self: Pin<&mut Self>, result: &QString, original: &QString) -> bool {
-        let result = (|| -> basecraft_ops::Result<()> {
-            let result = std::path::PathBuf::from(result.to_string());
-            let project = crate::chosen_project::chosen().map_err(basecraft_ops::Error::Invalid)?;
-            basecraft_ops::records::inspect(&result, project.as_ref())?;
-            let run = basecraft_ops::records::bundle_for_result(&result, project.as_ref());
-            basecraft_ops::records::relink(&run, Path::new(&original.to_string()))
-        })();
-        let success = result.is_ok();
-        self.set_message(QString::from(
-            match result {
-                Ok(()) => "done: Verified original relinked".into(),
-                Err(e) => format!("fail: {e}"),
-            }
-            .as_str(),
-        ));
-        success
-    }
-    fn cancel_run(self: Pin<&mut Self>, id: &QString) {
-        self.set_message(QString::from(&request_task_cancellation(&id.to_string())));
-    }
     fn saved_report(&self, path: &QString) -> QString {
         report_json(
             crate::chosen_project::chosen()
@@ -223,7 +173,7 @@ impl qobject::AppProvenance {
     fn export_report(self: Pin<&mut Self>, snapshot: &QString, directory: &QString) {
         let snapshot = snapshot.to_string();
         let directory = std::path::PathBuf::from(directory.to_string());
-        self.start_work(move || {
+        self.start_work("Export report", move || {
             let report: basecraft_ops::records::Report =
                 serde_json::from_str(&snapshot).map_err(|e| e.to_string())?;
             report
@@ -253,13 +203,11 @@ impl qobject::AppProvenance {
         self.as_mut().rust_mut().notices.clear();
         self.set_notifications(QString::from("[]"));
     }
-    fn jobs(&self, previous: bool) -> QString {
+    /// Runs from earlier sessions, from their records. None can be cancelled.
+    fn retained_jobs(&self) -> QString {
         report_json(
-            basecraft_ops::records::jobs(previous)
-                .map(|mut data| {
-                    task_capabilities(&mut data, previous);
-                    data.to_string()
-                })
+            basecraft_ops::records::jobs(true)
+                .map(|data| data.to_string())
                 .map_err(|e| e.to_string()),
         )
     }
@@ -331,10 +279,14 @@ impl qobject::AppProvenance {
                 return;
             }
         };
-        self.start_work(move || run(&operation, &result, &destination, project.as_ref()));
+        let label = format!("Records: {operation}");
+        self.start_work(&label, move || {
+            run(&operation, &result, &destination, project.as_ref())
+        });
     }
     fn start_work(
         mut self: Pin<&mut Self>,
+        label: &str,
         work: impl FnOnce() -> Result<String, String> + Send + 'static,
     ) {
         if *self.busy() {
@@ -343,27 +295,36 @@ impl qobject::AppProvenance {
         self.as_mut().set_busy(true);
         self.as_mut().set_text(QString::default());
         self.as_mut().set_message(QString::from("notify: Working…"));
-        let thread = self.qt_thread();
-        let spawn = std::thread::Builder::new().name("basecraft-provenance".into()).spawn(move || {
-            let result = work();
-            let _ = thread.queue(move |mut state| {
+        let listing = crate::jobs::Listing {
+            operation: label.into(),
+            source: String::new(),
+        };
+        let spawn = crate::jobs::start_listed(
+            self.qt_thread(),
+            listing,
+            move |_| work(),
+            |mut state, result| {
                 state.as_mut().set_busy(false);
                 match result {
                     Ok(mut text) => {
                         const LIMIT: usize = 1024 * 1024;
                         if text.len() > LIMIT {
                             let mut end = LIMIT;
-                            while !text.is_char_boundary(end) { end -= 1; }
+                            while !text.is_char_boundary(end) {
+                                end -= 1;
+                            }
                             text.truncate(end);
                             text.push_str("\nDisplay truncated. Inspect the readable provenance files for the full record.");
                         }
                         state.as_mut().set_text(QString::from(text.as_str()));
                         state.set_message(QString::from("done"));
                     }
-                    Err(error) => { state.set_message(QString::from(format!("fail: {error}").as_str())); }
+                    Err(error) => {
+                        state.set_message(QString::from(format!("fail: {error}").as_str()));
+                    }
                 }
-            });
-        });
+            },
+        );
         if let Err(error) = spawn {
             self.as_mut().set_busy(false);
             self.set_message(QString::from(
@@ -413,74 +374,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tasks_bridge_cancels_live_registered_run_and_refuses_retained_ids() {
-        use basecraft_plugin_host::{
-            jobs::JobManager,
-            policy::SessionPolicy,
-            registry::{Registry, RegistryConfig},
-        };
-        use basecraft_protocol::operation::RuntimeState;
-        use serde_json::json;
-        use std::time::{Duration, Instant};
-        let temp = tempfile::tempdir().unwrap();
-        for name in ["a.txt", "b.txt"] {
-            std::fs::write(temp.path().join(name), "a").unwrap();
-        }
-        let registry = Registry::load(&RegistryConfig {
-            bundled: Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures"),
-            packages: temp.path().join("plugins"),
-            index: temp.path().join("index.json"),
-        })
-        .unwrap();
-        let mut manager = JobManager::default().with_task_cancellation();
-        let request = serde_json::from_value(json!({
-            "operation":"org.example.registry-fixture/count@1",
-            "inputs":{"sources":[{"kind":"file","path":"a.txt"},{"kind":"file","path":"b.txt"}]},
-            "parameters":{"mode":"hang"},"destinations":{"report":"report.json"}
-        }))
-        .unwrap();
-        let accepted = manager
-            .submit(
-                &registry,
-                request,
-                SessionPolicy::new(temp.path(), true).unwrap(),
-                "GUI",
-            )
-            .unwrap();
-        let id = &accepted.run_id;
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while manager.get(id).unwrap().state == RuntimeState::Queued {
-            assert!(Instant::now() < deadline);
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        let mut rows = json!({"jobs":[{"id":id},{"id":"other-process"}]});
-        task_capabilities(&mut rows, false);
-        assert_eq!(rows["jobs"][0]["cancellable"], true);
-        assert_eq!(rows["jobs"][1]["cancellable"], false);
-        task_capabilities(&mut rows, true);
-        assert_eq!(rows["jobs"][0]["cancellable"], false);
-        assert!(request_task_cancellation("other-process").starts_with("fail:"));
-        assert_eq!(
-            request_task_cancellation(id),
-            "notify: Cancellation requested"
-        );
-        loop {
-            let outcome = manager.get(id).unwrap();
-            if outcome.state.terminal() {
-                assert_eq!(outcome.state, RuntimeState::Cancelled);
-                assert_eq!(outcome.artifacts, Vec::new());
-                break;
-            }
-            assert!(Instant::now() < deadline);
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        assert!(!temp.path().join("report.json").exists());
-        task_capabilities(&mut rows, false);
-        assert_eq!(rows["jobs"][0]["cancellable"], false);
-        assert!(request_task_cancellation(id).starts_with("fail:"));
-    }
-
-    #[test]
     fn gui_provenance_exports_preserve_authored_methods_and_report_changed_results() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
@@ -490,6 +383,7 @@ mod tests {
             state: root.join("state"),
             cache: root.join("cache"),
             scratch: root.join("scratch"),
+            home: None,
         };
         let file = root.join("sequence.fasta");
         std::fs::write(&file, ">example\nACGT\n").unwrap();

@@ -1,16 +1,11 @@
-//! Registered operations run on an open document. Each job runs on its own
-//! thread; the owning bridge polls it on the Qt thread so the session records
-//! the run in the document's history before it reports completion.
+//! Registered operations run on an open document. The run happens on a job
+//! thread that owns the document's Session, so the session records the run in
+//! the document's history before the window hears of its completion.
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 use basecraft_ops::{DocId, Session};
-use basecraft_plugin_host::{
-    jobs::JobManager,
-    policy::SessionPolicy,
-    registry::{Registry, RegistryConfig},
-};
+use basecraft_plugin_host::{jobs::JobManager, policy::SessionPolicy};
 use basecraft_protocol::operation::{InputReference, OperationOutcome, OperationRequest};
 
 pub(crate) struct DocumentJob {
@@ -23,21 +18,10 @@ pub(crate) fn bundled(plugin: &str, operation: &str) -> String {
     format!("basecraft.{plugin}/{operation}@1")
 }
 
-fn registry() -> Result<Registry, String> {
-    RegistryConfig::discover()
-        .and_then(|config| Registry::load(&config))
-        .map_err(|error| error.to_string())
-}
-
 /// The collection member that holds an operation's main result, such as
 /// `tree.nwk`, as its descriptor declares it.
 pub(crate) fn primary_member(operation: &str) -> Result<String, String> {
-    let registry = registry()?;
-    let descriptor = &registry
-        .resolve(operation, None)
-        .map_err(|error| error.to_string())?
-        .descriptor;
-    descriptor
+    crate::plugins::descriptor(operation)?
         .outputs
         .iter()
         .find_map(|(role, output)| Some(format!("{role}/{}", output.primary.as_ref()?)))
@@ -70,11 +54,8 @@ impl DocumentJob {
         parameters: serde_json::Value,
         exports: &[(String, PathBuf)],
     ) -> Result<Self, String> {
-        let registry = registry()?;
-        let input = registry
-            .resolve(operation, None)
-            .map_err(|error| error.to_string())?
-            .descriptor
+        let registry = crate::plugins::registry().map_err(|error| error.to_string())?;
+        let input = crate::plugins::descriptor(operation)?
             .inputs
             .keys()
             .next()
@@ -124,7 +105,7 @@ impl DocumentJob {
         parameters: serde_json::Value,
         exports: &[(String, PathBuf)],
     ) -> Result<Self, String> {
-        let registry = registry()?;
+        let registry = crate::plugins::registry().map_err(|error| error.to_string())?;
         let policy = SessionPolicy::new(session.root(), true).map_err(|error| error.to_string())?;
         let root = policy.root.clone();
         let destinations = exports
@@ -168,25 +149,37 @@ impl DocumentJob {
         })
     }
 
-    /// Let the session record finished work; the outcome once it is terminal.
-    pub fn poll(&self, session: &mut Session) -> Result<Option<OperationOutcome>, String> {
-        self.manager.poll_session(session);
-        let outcome = self
-            .manager
-            .get(&self.run_id)
-            .map_err(|error| error.to_string())?;
-        Ok(outcome.state.terminal().then_some(outcome))
+    /// Wait on the session's thread until the run is terminal; the session
+    /// records it on the way. Cancelling `work` cancels the run. `progress`
+    /// gets each new record from the plugin's progress file.
+    pub fn wait(
+        &self,
+        session: &mut Session,
+        work: &basecraft_ops::work::Work,
+        progress: impl FnMut(serde_json::Value),
+    ) -> Result<OperationOutcome, String> {
+        let file = self.progress_file();
+        let state = std::cell::RefCell::new((0u8, None, progress));
+        self.manager
+            .wait_in_session(&self.run_id, session, &|| {
+                let mut state = state.borrow_mut();
+                let (tick, shown, progress) = &mut *state;
+                *tick = tick.wrapping_add(1);
+                // The plugin rewrites its progress file a few times a second.
+                if *tick % 8 == 0
+                    && let Some(value) = file.as_deref().and_then(read_progress)
+                    && shown.as_ref() != Some(&value)
+                {
+                    *shown = Some(value.clone());
+                    progress(value);
+                }
+                work.cancelled()
+            })
+            .map_err(|error| error.to_string())
     }
 
     pub fn finalized_generation(&self) -> Option<u64> {
         self.manager.finalized_generation(&self.run_id)
-    }
-
-    pub fn cancel(&self) -> Result<(), String> {
-        self.manager
-            .cancel(&self.run_id)
-            .map(|_| ())
-            .map_err(|error| error.to_string())
     }
 
     /// The progress file the plugin updates while it runs.
@@ -202,12 +195,7 @@ impl DocumentJob {
 pub(crate) fn declared_parameters(
     operation: &str,
 ) -> Result<std::collections::BTreeSet<String>, String> {
-    let registry = registry()?;
-    let descriptor = &registry
-        .resolve(operation, None)
-        .map_err(|error| error.to_string())?
-        .descriptor;
-    Ok(descriptor
+    Ok(crate::plugins::descriptor(operation)?
         .parameters
         .get("properties")
         .and_then(serde_json::Value::as_object)
@@ -219,12 +207,7 @@ pub(crate) fn declared_parameters(
 /// whose view matches a tree or an alignment file.
 pub(crate) fn input_role(operation: &str, path: &Path) -> Result<String, String> {
     use basecraft_protocol::operation::InputView;
-    let registry = registry()?;
-    let inputs = &registry
-        .resolve(operation, None)
-        .map_err(|error| error.to_string())?
-        .descriptor
-        .inputs;
+    let inputs = &crate::plugins::descriptor(operation)?.inputs;
     let tree = basecraft_ops::files::Format::from_path(path).ok()
         == Some(basecraft_ops::files::Format::Tree);
     inputs
@@ -258,242 +241,78 @@ pub(crate) fn failure(outcome: &OperationOutcome) -> String {
     )
 }
 
-/// Callback transport for newly acquired owners. Initialization and task both
-/// execute inside the worker; completion may queue ownership onto Qt.
-pub(crate) fn background_initialized<T: Send + 'static, E: Send + 'static>(
-    name: &str,
-    initialize: impl FnOnce() -> Result<T, E> + Send + 'static,
-    interrupted: impl FnOnce() -> E + Send + 'static,
-    completed: impl FnOnce(Result<T, E>) + Send + 'static,
-) -> std::io::Result<()> {
-    std::thread::Builder::new()
-        .name(name.into())
-        .spawn(move || {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(initialize))
-                .unwrap_or_else(|_| Err(interrupted()));
-            completed(result);
-        })
-        .map(|_| ())
+/// A finished plugin run and the document generation the session recorded it at.
+pub(crate) struct Finished {
+    pub outcome: OperationOutcome,
+    pub generation: Option<u64>,
 }
 
-/// Transfer a document owner to a background continuation, including runner
-/// preparation and owner-session finalization. Failed thread creation returns
-/// the untouched session; a caught task panic also returns ownership. GUI
-/// bridges must reject replacement/edits until the session is returned.
-pub(crate) fn background_session<T: Send + 'static>(
-    session: Session,
-    task: impl FnOnce(&mut Session) -> Result<T, String> + Send + 'static,
-    completed: impl FnOnce(Session, Result<T, String>) + Send + 'static,
-) -> Result<(), (Box<Session>, String)> {
-    let owner = std::sync::Arc::new(std::sync::Mutex::new(Some(session)));
-    let worker_owner = owner.clone();
-    let spawned = background_initialized(
-        "document-operation",
-        move || {
-            let Some(mut session) = worker_owner
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .take()
-            else {
-                return Ok(None);
-            };
-            // Keep the owner outside the unwind boundary so an operation panic
-            // still returns the existing Session to its original controller.
-            let result =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| task(&mut session)))
-                    .unwrap_or_else(|_| {
-                        Err("Document operation interrupted by an internal failure".into())
-                    });
-            Ok(Some((session, result)))
-        },
-        || (),
-        move |result| {
-            if let Ok(Some((session, result))) = result {
-                completed(session, result);
-            }
-        },
-    );
-    if let Err(error) = spawned
-        && let Some(session) = owner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
-    {
-        return Err((Box::new(session), error.to_string()));
-    }
-    Ok(())
+/// Read the progress file a plugin keeps up to date while it runs.
+fn read_progress(path: &Path) -> Option<serde_json::Value> {
+    serde_json::from_slice(&std::fs::read(path).ok()?).ok()
 }
 
-/// Qt transport for the existing document runner. The owning Session moves to
-/// its worker for preparation, execution and finalization, then returns intact
-/// through poll. No operation state or publication logic is reimplemented here.
-type ReturnedDocument = (Session, Result<(OperationOutcome, Option<u64>), String>);
-pub(crate) struct BackgroundDocumentJob {
-    receiver: std::sync::mpsc::Receiver<ReturnedDocument>,
-    cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    progress: std::sync::Arc<std::sync::Mutex<Option<PathBuf>>>,
-    generation: std::cell::Cell<Option<u64>>,
-    pub started: Instant,
-}
-impl Drop for BackgroundDocumentJob {
-    fn drop(&mut self) {
-        self.cancelled
-            .store(true, std::sync::atomic::Ordering::Release);
-    }
-}
-impl BackgroundDocumentJob {
-    fn start(
-        session: &mut Option<Session>,
-        prepare: impl FnOnce(&mut Session) -> Result<DocumentJob, String> + Send + 'static,
-    ) -> Result<Self, String> {
-        use std::sync::{
-            Arc, Mutex,
-            atomic::{AtomicBool, Ordering},
-            mpsc,
-        };
-        let owned = session
-            .take()
-            .ok_or("Document is unavailable while another operation owns it")?;
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let flag = cancelled.clone();
-        let progress = Arc::new(Mutex::new(None));
-        let worker_progress = progress.clone();
-        let (sender, receiver) = mpsc::channel();
-        let spawned = background_session(
-            owned,
-            move |session| {
-                if flag.load(Ordering::Acquire) {
-                    return Err("Operation cancelled before preparation".into());
-                }
-                let job = prepare(session)?;
-                *worker_progress
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = job.progress_file();
-                loop {
-                    if flag.load(Ordering::Acquire) {
-                        job.cancel()?;
-                    }
-                    if let Some(outcome) = job.poll(session)? {
-                        return Ok((outcome, job.finalized_generation()));
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(25));
-                }
-            },
-            move |session, result| {
-                let _ = sender.send((session, result));
-            },
-        );
-        if let Err((owned, error)) = spawned {
-            *session = Some(*owned);
-            return Err(error);
-        }
-        Ok(Self {
-            receiver,
-            cancelled,
-            progress,
-            generation: std::cell::Cell::new(None),
-            started: Instant::now(),
-        })
-    }
-    pub fn submit(
-        session: &mut Option<Session>,
-        doc: DocId,
-        operation: &str,
-        parameters: serde_json::Value,
-        exports: &[(String, PathBuf)],
-    ) -> Result<Self, String> {
-        let operation = operation.to_owned();
-        let exports = exports.to_vec();
-        Self::start(session, move |session| {
-            DocumentJob::submit(session, doc, &operation, parameters, &exports)
-        })
-    }
-    pub fn submit_files(
-        session: &mut Option<Session>,
-        doc: DocId,
-        operation: &str,
-        inputs: BTreeMap<String, Vec<PathBuf>>,
-        parameters: serde_json::Value,
-        exports: &[(String, PathBuf)],
-    ) -> Result<Self, String> {
-        let operation = operation.to_owned();
-        let exports = exports.to_vec();
-        Self::start(session, move |session| {
-            DocumentJob::submit_files(session, doc, &operation, inputs, parameters, &exports)
-        })
-    }
-    pub fn poll(&self, session: &mut Option<Session>) -> Result<Option<OperationOutcome>, String> {
-        match self.receiver.try_recv() {
-            Ok((owned, result)) => {
-                if session.is_some() {
-                    return Err("Document owner replaced while an operation was running".into());
-                }
-                *session = Some(owned);
-                let (outcome, generation) = result?;
-                self.generation.set(generation);
-                Ok(Some(outcome))
+/// Run a registered operation on the document's Session off the window
+/// thread. `progress` receives each new progress record and `done` the
+/// outcome, both on the window thread of `owner`; `done` also gets the
+/// Session back. Cancelling the returned [`Work`] cancels the run.
+pub(crate) fn run_operation<T: 'static>(
+    owner: impl crate::jobs::Owner<T>,
+    listing: crate::jobs::Listing,
+    session: &mut Option<Session>,
+    prepare: impl FnOnce(&mut Session) -> Result<DocumentJob, String> + Send + 'static,
+    progress: fn(std::pin::Pin<&mut T>, &serde_json::Value),
+    done: impl FnOnce(std::pin::Pin<&mut T>, Session, Result<Finished, String>) + Send + 'static,
+) -> Result<basecraft_ops::work::Work, String> {
+    let reporter = owner.clone();
+    crate::jobs::with_session_listed(
+        owner,
+        listing,
+        session,
+        move |session, work| {
+            if work.cancelled() {
+                return Err("Operation cancelled before preparation".into());
             }
-            Err(std::sync::mpsc::TryRecvError::Empty) => Ok(None),
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                Err("Document operation worker disconnected".into())
-            }
-        }
-    }
-    pub fn finalized_generation(&self) -> Option<u64> {
-        self.generation.get()
-    }
-    pub fn cancel(&self) {
-        self.cancelled
-            .store(true, std::sync::atomic::Ordering::Release);
-    }
-    pub fn progress_file(&self) -> Option<PathBuf> {
-        self.progress
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+            let job = prepare(session)?;
+            let outcome = job.wait(session, work, |value| {
+                work.progress(value["phase"].as_str().unwrap_or_default());
+                reporter.deliver(move |owner| progress(owner, &value));
+            })?;
+            Ok(Finished {
+                outcome,
+                generation: job.finalized_generation(),
+            })
+        },
+        done,
+    )
+}
+
+impl crate::jobs::Outcome for Finished {
+    fn ended(&self) -> crate::jobs::Ended {
+        self.outcome.ended()
     }
 }
 
 #[cfg(test)]
-mod background_tests {
+#[allow(dead_code)] // harness=false application_bootstrap omits the test bodies.
+mod tests {
     #[allow(unused_imports)] // harness=false application_bootstrap includes this module.
     use super::*;
+    use std::sync::mpsc;
 
-    #[test]
-    fn background_session_returns_ownership_after_failure_without_blocking_submission() {
-        let temp = tempfile::tempdir().unwrap();
-        let session = Session::unlogged(temp.path());
-        let identity = session.id().to_owned();
-        let (gate, wait) = std::sync::mpsc::channel();
-        let (complete, result) = std::sync::mpsc::channel();
-        assert!(
-            background_session(
-                session,
-                move |_| {
-                    wait.recv_timeout(std::time::Duration::from_secs(5))
-                        .map_err(|e| e.to_string())?;
-                    Err::<(), _>("fixture failure".into())
-                },
-                move |session, outcome| {
-                    complete.send((session, outcome)).unwrap();
-                }
-            )
-            .is_ok()
-        );
-        assert!(
-            result.try_recv().is_err(),
-            "submission must return before the task completes"
-        );
-        gate.send(()).unwrap();
-        let (session, outcome) = result
-            .recv_timeout(std::time::Duration::from_secs(5))
-            .unwrap();
-        assert_eq!(session.id(), identity);
-        assert_eq!(outcome.unwrap_err(), "fixture failure");
+    struct Probe;
+    type Call = Box<dyn FnOnce(std::pin::Pin<&mut Probe>) + Send>;
+    #[derive(Clone)]
+    struct Window(mpsc::Sender<Call>);
+    impl crate::jobs::Owner<Probe> for Window {
+        fn deliver(&self, call: impl FnOnce(std::pin::Pin<&mut Probe>) + Send + 'static) -> bool {
+            self.0.send(Box::new(call)).is_ok()
+        }
     }
 
-    #[test]
-    fn background_document_job_returns_same_session_after_registered_finalization() {
+    /// Run the ORF finder on a fixture through `run_operation`; returns the
+    /// session that came back, the result, and the job list row's status.
+    fn orf_run(cancel: bool) -> (String, Session, Result<Finished, String>, &'static str) {
         let temp = tempfile::tempdir().unwrap();
         let file = temp.path().join("sequence.gb");
         std::fs::copy(
@@ -506,32 +325,77 @@ mod background_tests {
         let doc = owned.open(&file).unwrap();
         let identity = owned.id().to_owned();
         let mut session = Some(owned);
-        let job = BackgroundDocumentJob::submit(
+        let (calls, queue) = mpsc::channel::<Call>();
+        let (tx, rx) = mpsc::channel();
+        let label = format!("ORF fixture {cancel}");
+        let work = run_operation(
+            Window(calls),
+            crate::jobs::Listing {
+                operation: label.clone(),
+                source: file.display().to_string(),
+            },
             &mut session,
-            doc,
-            "basecraft.orf-finder/find_orfs@1",
-            serde_json::json!({"min_codons":1}),
-            &[],
+            move |session| {
+                DocumentJob::submit(
+                    session,
+                    doc,
+                    "basecraft.orf-finder/find_orfs@1",
+                    serde_json::json!({"min_codons":1}),
+                    &[],
+                )
+            },
+            |_, _| {},
+            move |_, session, result| tx.send((session, result)).unwrap(),
         )
         .unwrap();
-        assert!(
-            session.is_none(),
-            "worker exclusively owns document while running"
-        );
-        let started = Instant::now();
-        let outcome = loop {
-            if let Some(outcome) = job.poll(&mut session).unwrap() {
-                break outcome;
+        assert!(session.is_none(), "the job owns the session while it runs");
+        if cancel {
+            work.cancel();
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let (session, result) = loop {
+            if let Ok(call) = queue.recv_timeout(std::time::Duration::from_millis(100)) {
+                call(std::pin::Pin::new(&mut Probe));
             }
-            assert!(started.elapsed().as_secs() < 30);
-            std::thread::sleep(std::time::Duration::from_millis(10));
+            if let Ok(done) = rx.try_recv() {
+                break done;
+            }
+            assert!(std::time::Instant::now() < deadline);
         };
+        let status = crate::jobs::listed()
+            .into_iter()
+            .find(|e| e.operation_is(&label))
+            .unwrap()
+            .status;
+        drop(temp);
+        (identity, session, result, status)
+    }
+
+    #[test]
+    fn a_plugin_run_returns_the_session_and_finishes_in_the_job_list() {
+        let (identity, session, result, status) = orf_run(false);
+        assert_eq!(session.id(), identity);
+        let finished = result.unwrap();
         assert_eq!(
-            outcome.state,
+            finished.outcome.state,
             basecraft_protocol::operation::RuntimeState::Completed,
-            "{outcome:?}"
+            "{:?}",
+            finished.outcome
         );
-        assert_eq!(session.as_ref().unwrap().id(), identity);
-        assert!(session.as_ref().unwrap().checked_sequence(doc).is_ok());
+        assert_eq!(status, "completed");
+    }
+
+    #[test]
+    fn a_cancelled_plugin_run_returns_the_session_and_shows_cancelled() {
+        let (identity, session, result, status) = orf_run(true);
+        assert_eq!(session.id(), identity);
+        let cancelled = match result {
+            Err(_) => true,
+            Ok(finished) => {
+                finished.outcome.state == basecraft_protocol::operation::RuntimeState::Cancelled
+            }
+        };
+        assert!(cancelled, "a cancel before the run ends must stop it");
+        assert_eq!(status, "cancelled");
     }
 }

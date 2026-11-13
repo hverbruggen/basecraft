@@ -31,6 +31,10 @@ cxx-qt = "0.10"
 cxx-qt-lib = { version = "0.10", features = ["qt_full"] }
 cxx-qt-lib-extras = "=0.10.0"
 
+# Watches the desktop theme folders with inotify.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
 [[test]]
 name = "application_bootstrap"
 harness = false

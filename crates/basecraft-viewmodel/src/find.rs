@@ -15,7 +15,6 @@ use std::collections::VecDeque;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
-    mpsc,
 };
 
 /// Bound memory for extremely broad searches; the UI explicitly reports this.
@@ -372,18 +371,48 @@ pub fn search(input: Input, query: &str, reverse: bool, cancel: &AtomicBool) -> 
     s.result
 }
 
-/// A cancellable transient scan per view. Dropping the old receiver prevents
-/// stale query/document results from ever being accepted, even at equal versions.
+/// A cancellable transient scan per view. The caller runs each [`Scan`] away
+/// from the window thread and hands its [`Found`] back to [`Session::finish`];
+/// results of a stale query or document version are refused by token.
 #[derive(Default)]
 pub struct Session {
     revision: u64,
     query: String,
     reverse: bool,
     key: Option<String>,
-    pending: Option<(Arc<AtomicBool>, mpsc::Receiver<Results>)>,
+    pending: Option<(u64, Arc<AtomicBool>)>,
     pub results: Results,
     pub current: usize,
 }
+
+/// One scan to run off the window thread.
+pub struct Scan {
+    token: u64,
+    input: Input,
+    query: String,
+    reverse: bool,
+    stop: Arc<AtomicBool>,
+}
+
+/// The results of one [`Scan`].
+pub struct Found {
+    token: u64,
+    results: Results,
+}
+
+impl Scan {
+    /// Identifies this scan to [`Session::finish`] and [`Session::failed`].
+    pub fn token(&self) -> u64 {
+        self.token
+    }
+    pub fn run(self) -> Found {
+        Found {
+            token: self.token,
+            results: search(self.input, &self.query, self.reverse, &self.stop),
+        }
+    }
+}
+
 impl Session {
     pub fn revision(&self) -> u64 {
         self.revision
@@ -402,7 +431,7 @@ impl Session {
     }
     fn cancel(&mut self) {
         self.revision = self.revision.wrapping_add(1);
-        if let Some((stop, _)) = self.pending.take() {
+        if let Some((_, stop)) = self.pending.take() {
             stop.store(true, Ordering::Relaxed);
         }
         self.key = None;
@@ -416,60 +445,64 @@ impl Session {
             self.reverse = reverse;
         }
     }
+    /// True when the last scan covered another version of the document.
+    pub fn stale(&self, key: &str) -> bool {
+        self.key.as_deref().is_some_and(|old| old != key)
+    }
     pub fn invalidate(&mut self, key: &str) {
         if self.key.as_deref().is_some_and(|old| old != key) {
             self.cancel();
         }
     }
-    pub fn update(&mut self, key: String, snapshot: impl FnOnce() -> Input) {
+    /// The scan to run for document version `key`, unless one is already
+    /// current or no query is active.
+    pub fn update(&mut self, key: String, snapshot: impl FnOnce() -> Input) -> Option<Scan> {
         self.invalidate(&key);
         if !self.active() || self.key.is_some() {
-            return;
+            return None;
         }
         self.revision = self.revision.wrapping_add(1);
-        let input = snapshot();
-        let query = self.query.clone();
-        let reverse = self.reverse;
-        let (sender, receiver) = mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
-        let worker_stop = stop.clone();
         self.key = Some(key);
-        self.pending = Some((stop, receiver));
-        // A failed OS thread allocation is an ordinary visible error.
-        if let Err(error) = std::thread::Builder::new()
-            .name("document-find".into())
-            .spawn(move || {
-                let result = search(input, &query, reverse, &worker_stop);
-                if !worker_stop.load(Ordering::Relaxed) {
-                    let _ = sender.send(result);
-                }
-            })
-        {
-            self.pending = None;
-            self.results.explanation = format!("Cannot start Find: {error}");
-        }
+        self.pending = Some((self.revision, stop.clone()));
+        Some(Scan {
+            token: self.revision,
+            input: snapshot(),
+            query: self.query.clone(),
+            reverse: self.reverse,
+            stop,
+        })
     }
-    /// True only when a fresh scan completes; caller reveals its first hit.
-    pub fn poll(&mut self) -> bool {
-        let Some((_, receiver)) = &self.pending else {
+    /// Accept a finished scan. True only for the current scan; the caller
+    /// then reveals its first hit.
+    pub fn finish(&mut self, found: Found) -> bool {
+        if self
+            .pending
+            .as_ref()
+            .is_none_or(|(token, _)| *token != found.token)
+        {
             return false;
-        };
-        match receiver.try_recv() {
-            Ok(results) => {
-                self.revision = self.revision.wrapping_add(1);
-                self.pending = None;
-                self.results = results;
-                self.current = 0;
-                true
-            }
-            Err(mpsc::TryRecvError::Empty) => false,
-            Err(mpsc::TryRecvError::Disconnected) => {
-                self.revision = self.revision.wrapping_add(1);
-                self.pending = None;
-                self.results.explanation = "Find could not finish".into();
-                false
-            }
         }
+        self.revision = self.revision.wrapping_add(1);
+        self.pending = None;
+        self.results = found.results;
+        self.current = 0;
+        true
+    }
+    /// The scan `token` could not run; say so instead of staying busy. A
+    /// failure of a replaced scan changes nothing.
+    pub fn failed(&mut self, token: u64, explanation: String) -> bool {
+        if self
+            .pending
+            .as_ref()
+            .is_none_or(|(pending, _)| *pending != token)
+        {
+            return false;
+        }
+        self.revision = self.revision.wrapping_add(1);
+        self.pending = None;
+        self.results.explanation = explanation;
+        true
     }
     pub fn step(&mut self, backward: bool) {
         let n = self.results.hits.len();
@@ -508,6 +541,85 @@ pub fn outline(
     if current {
         frame.rect(x, y + h - 4.0, w, 2.0, theme.accent);
     }
+}
+
+pub fn rows_key(rows: &[Row], identity: &str) -> String {
+    let mut bytes = identity.as_bytes().to_vec();
+    for row in rows {
+        bytes.extend_from_slice(&row.id.to_le_bytes());
+        bytes.extend_from_slice(&row.name.len().to_le_bytes());
+        bytes.extend_from_slice(row.name.as_bytes());
+        bytes.extend_from_slice(&row.bases.len().to_le_bytes());
+        bytes.extend_from_slice(&row.bases);
+    }
+    basecraft_io::hash_bytes(&bytes)
+}
+
+/// The find bar's status line for an active query.
+pub fn status_text(find: &Session) -> String {
+    if find.busy() {
+        return "Finding…".into();
+    }
+    let results = &find.results;
+    let mut text = find.hit().map_or_else(
+        || "No matches".to_owned(),
+        |hit| {
+            let limited = if results.limited {
+                " (limit reached; narrow query)"
+            } else {
+                ""
+            };
+            let start = if hit.kind == Kind::Name {
+                String::new()
+            } else {
+                format!(" · {}", hit.start + 1)
+            };
+            let reverse = if hit.reverse { " · reverse" } else { "" };
+            format!(
+                "{} of {}{limited} · {}{start}{reverse}",
+                find.current + 1,
+                results.hits.len(),
+                hit.label
+            )
+        },
+    );
+    if !results.explanation.is_empty() {
+        text.push_str(" · ");
+        text.push_str(&results.explanation);
+    }
+    text
+}
+
+/// Rows of text-only name matches (species lists), as a JSON array.
+pub fn name_rows(find: &Session) -> String {
+    let rows: Vec<_> = find
+        .results
+        .hits
+        .iter()
+        .filter(|h| h.kind == Kind::Name)
+        .map(|h| h.row)
+        .collect();
+    serde_json::to_string(&rows).unwrap_or_else(|_| "[]".into())
+}
+
+/// Keep miniature payloads bounded while always including the current result.
+pub fn overview_marks(
+    find: &Session,
+    mut project: impl FnMut(&Hit) -> Option<crate::overview::MatchMark>,
+) -> String {
+    if !find.active() {
+        return "[]".into();
+    }
+    let stride = find.results.hits.len().div_ceil(4096).max(1);
+    let marks: Vec<_> = find
+        .results
+        .hits
+        .iter()
+        .step_by(stride)
+        .chain(find.hit())
+        .filter_map(&mut project)
+        .collect();
+    serde_json::to_string(&marks).unwrap_or_else(|_| "[]".into())
 }
 
 #[cfg(test)]
@@ -639,14 +751,13 @@ mod tests {
     fn find_late_query_document_and_edit_results_are_discarded() {
         let mut session = Session::default();
         session.set_query("AA".into(), false);
-        session.key = Some("document-a:version-0".into());
-        let (sender, receiver) = mpsc::channel();
-        let stop = Arc::new(AtomicBool::new(false));
-        session.pending = Some((stop.clone(), receiver));
+        let stale = session
+            .update("document-a:version-0".into(), || rows(b"AAAA"))
+            .unwrap();
+        let stop = stale.stop.clone();
         session.set_query("CC".into(), false);
         assert!(stop.load(Ordering::Relaxed));
-        assert!(sender.send(run(b"AAAA", "AA", false)).is_err());
-        assert!(!session.poll());
+        assert!(!session.finish(stale.run()));
         assert!(session.hit().is_none());
         for new_key in ["document-b:version-0", "document-a:version-1"] {
             session.key = Some("document-a:version-0".into());
@@ -655,6 +766,9 @@ mod tests {
             assert!(session.hit().is_none());
             assert!(session.busy());
         }
+        session.key = Some("document-a:version-0".into());
+        assert!(session.stale("document-a:version-1"));
+        assert!(!session.stale("document-a:version-0"));
         session.results = run(b"AAAA", "AA", false);
         session.step(true);
         assert_eq!(session.current, 2);
@@ -669,21 +783,29 @@ mod tests {
         let mut session = Session::default();
         session.set_query("AA".into(), false);
         let caller = std::thread::current().id();
-        session.update("document:0".into(), || {
-            Input::DeferredRows(Box::new(move |_| {
-                assert_ne!(std::thread::current().id(), caller);
-                vec![Row {
-                    id: 0,
-                    name: "consensus".into(),
-                    bases: b"AAAA".to_vec(),
-                }]
-            }))
-        });
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !session.poll() {
-            assert!(std::time::Instant::now() < deadline);
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
+        let scan = session
+            .update("document:0".into(), || {
+                Input::DeferredRows(Box::new(move |_| {
+                    assert_ne!(std::thread::current().id(), caller);
+                    vec![Row {
+                        id: 0,
+                        name: "consensus".into(),
+                        bases: b"AAAA".to_vec(),
+                    }]
+                }))
+            })
+            .unwrap();
+        assert!(session.busy());
+        assert!(
+            session
+                .update("document:0".into(), || unreachable!())
+                .is_none()
+        );
+        // A replaced scan's failure must not end the current scan.
+        assert!(!session.failed(scan.token().wrapping_add(7), "stale".into()));
+        assert!(session.busy());
+        let found = std::thread::spawn(move || scan.run()).join().unwrap();
+        assert!(session.finish(found));
         assert_eq!(session.results.hits.len(), 3);
         assert!(!session.busy());
         assert_eq!(
@@ -771,5 +893,67 @@ mod tests {
             started.elapsed()
         );
         assert_eq!(r.hits.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod presentation_tests {
+    use super::*;
+    use crate::overview::MatchMark;
+
+    #[test]
+    fn find_overview_bounds_payload_and_keeps_current_hit() {
+        let mut find = Session::default();
+        find.set_query("A".into(), false);
+        find.results.hits = (0..100_000)
+            .map(|i| Hit {
+                row: i,
+                start: 1,
+                end: 2,
+                kind: Kind::Sequence,
+                reverse: false,
+                label: "row".into(),
+            })
+            .collect();
+        find.current = 99_999;
+        let json = overview_marks(&find, |hit| {
+            Some(MatchMark {
+                x: 0.0,
+                y: f64::from(u32::try_from(hit.row).unwrap()) / 100_000.0,
+                width: 1.0,
+                height: 0.00001,
+            })
+        });
+        let marks: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
+        assert!(marks.len() <= 4097);
+        assert_eq!(marks.last().unwrap()["y"], serde_json::json!(0.99999));
+        find.set_query(String::new(), false);
+        assert_eq!(
+            overview_marks(&find, |_| panic!("closed search must not project hits")),
+            "[]"
+        );
+    }
+
+    #[test]
+    fn status_line_reads_busy_hits_and_explanations() {
+        let mut find = Session::default();
+        find.set_query("A".into(), false);
+        assert_eq!(status_text(&find), "Finding…");
+        let scan = find.update("doc".into(), || {
+            Input::Rows(vec![Row {
+                id: 0,
+                name: "Row".into(),
+                bases: b"CACC".to_vec(),
+            }])
+        });
+        assert!(find.finish(scan.unwrap().run()));
+        assert_eq!(status_text(&find), "1 of 1 · Row · 2");
+        assert_eq!(name_rows(&find), "[]");
+        find.results.hits.clear();
+        find.results.explanation = "Protein symbols match literally".into();
+        assert_eq!(
+            status_text(&find),
+            "No matches · Protein symbols match literally"
+        );
     }
 }

@@ -14,6 +14,9 @@ mod alignment_bridge;
 #[path = "../src/app_bridge.rs"]
 #[allow(unused_imports)] // harness=false omits pure predicate test bodies.
 mod app_bridge;
+#[path = "../src/appearance.rs"]
+#[allow(dead_code, unused_imports)] // harness=false omits the included module's test bodies.
+mod appearance;
 #[path = "../src/application.rs"]
 mod application;
 #[path = "../src/application_test_bridge.rs"]
@@ -22,9 +25,12 @@ mod application_test_bridge;
 #[allow(unused_imports)] // harness=false omits the included module's #[test] bodies.
 mod bridge;
 #[path = "../src/chosen_project.rs"]
+#[allow(dead_code)] // harness=false omits the included module's test bodies.
 mod chosen_project;
-#[path = "controller_theme/mod.rs"]
-mod controller_theme;
+#[path = "../src/command_bridge.rs"]
+mod command_bridge;
+#[path = "controller_appearance/mod.rs"]
+mod controller_appearance;
 #[path = "../src/delimitation_bridge.rs"]
 #[allow(unused_imports, dead_code)] // harness=false omits test bodies but retains their helpers.
 mod delimitation_bridge;
@@ -32,9 +38,6 @@ mod delimitation_bridge;
 mod document_jobs;
 #[path = "../src/document_open.rs"]
 mod document_open;
-#[path = "../src/editor_core.rs"]
-#[allow(unused_imports, dead_code)] // harness=false omits pure #[test] bodies.
-mod editor_core;
 #[path = "../src/editor_save.rs"]
 mod editor_save;
 #[path = "../src/figure_png.rs"]
@@ -43,6 +46,9 @@ mod figure_png;
 #[path = "../src/find_bridge.rs"]
 #[allow(unused_imports)] // harness=false omits the included module's #[test] bodies.
 mod find_bridge;
+#[path = "../src/jobs.rs"]
+#[allow(dead_code, unused_imports)] // harness=false omits the included module's test bodies.
+mod jobs;
 #[path = "../src/metadata_bridge.rs"]
 #[allow(unused_imports, dead_code)] // harness=false omits the included module's test bodies.
 mod metadata_bridge;
@@ -50,9 +56,14 @@ mod metadata_bridge;
 mod open_argv;
 #[path = "../src/operations_bridge.rs"]
 mod operations_bridge;
+#[path = "../src/plugins.rs"]
+#[allow(unused_imports, dead_code)] // harness=false omits the included module's test bodies.
+mod plugins;
 #[path = "../src/provenance_bridge.rs"]
 #[allow(unused_imports)] // harness=false omits the included module's #[test] bodies.
 mod provenance_bridge;
+#[path = "../src/release_check.rs"]
+mod release_check;
 #[path = "../src/sanger_bridge.rs"]
 mod sanger_bridge;
 #[path = "../src/settings_bridge.rs"]
@@ -78,6 +89,188 @@ use std::path::Path;
 unsafe extern "C" {
     fn g_set_prgname(name: *const std::ffi::c_char);
     fn g_get_prgname() -> *const std::ffi::c_char;
+}
+
+/// The production window in its own process, with one real document of each
+/// kind; see fixtures/ribbon-walk.qml. Exits with the event loop's code.
+fn ribbon_walk(folder: &str) -> ! {
+    bridge::qobject::configure_canvas_graphics();
+    let mut app = application::new(&["basecraft-gui".into()], true);
+    let mut app = app.as_mut().expect("Qt application");
+    let mut engine = QQmlApplicationEngine::new();
+    let source = include_str!("fixtures/ribbon-walk.qml").replace(
+        "RIBBON_TEST_FOLDER",
+        &serde_json::to_string(folder).unwrap(),
+    );
+    engine
+        .pin_mut()
+        .on_object_creation_failed(|_, _| std::process::exit(4))
+        .release();
+    engine
+        .pin_mut()
+        .load_data(&QByteArray::from(source.as_str()), &QUrl::default());
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_secs(180));
+        eprintln!("RIBBON_WALK did not finish within 180 seconds");
+        std::process::exit(5);
+    });
+    std::process::exit(app.as_mut().exec());
+}
+
+/// Every ribbon tab of every document kind on the real window, with no QML
+/// warning on the way.
+fn ribbon_journey() {
+    let profile = std::env::var_os("BASECRAFT_PROFILE_DIR").expect("isolated bootstrap profile");
+    let folder = tempfile::tempdir_in(&profile).unwrap();
+    let fixtures =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/compact");
+    for (set, file) in [
+        ("sequences-annotations", "locus.gb"),
+        ("alignment-editing", "homologues.afa"),
+        ("species-delimitation", "time.nwk"),
+        ("species-delimitation", "hypotheses.spart"),
+        ("species-delimitation", "specimens.afa"),
+        ("sanger-review", "forward.ab1"),
+    ] {
+        std::fs::copy(fixtures.join(set).join(file), folder.path().join(file)).unwrap();
+    }
+    // The project the journey switches to last.
+    std::fs::create_dir(folder.path().join("second")).unwrap();
+    // A folder the journey cannot save into, and a plugin whose run never ends.
+    // Outside the chosen project: a project file keeps its recovery in the
+    // project's `.basecraft`, so only a loose file meets a read-only folder.
+    let locked = std::path::PathBuf::from(format!("{}-locked", folder.path().display()));
+    std::fs::create_dir(&locked).unwrap();
+    std::fs::copy(
+        folder.path().join("homologues.afa"),
+        locked.join("locked.afa"),
+    )
+    .unwrap();
+    for file in ["locus.gb", "time.nwk", "forward.ab1"] {
+        std::fs::copy(folder.path().join(file), locked.join(file)).unwrap();
+    }
+    // A rooted tree for the label questions a reroot asks (D11).
+    std::fs::write(folder.path().join("rooted.nwk"), "[&R] ((a,b),(c,d));\n").unwrap();
+    // A few letters only proteins use, 1% or fewer: undetermined (D12).
+    std::fs::write(
+        folder.path().join("unclear.fasta"),
+        format!(">unclear\n{}E{}\n", "ACGT".repeat(25), "ACGT".repeat(25)),
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+    }
+    let plugin = folder.path().join("fixture-plugin");
+    std::fs::create_dir(&plugin).unwrap();
+    for file in ["plugin.toml", "operations.json", "plugin.py"] {
+        std::fs::copy(
+            fixtures.join("../registry-plugin").join(file),
+            plugin.join(file),
+        )
+        .unwrap();
+    }
+    basecraft_plugin_host::registry::register_editable(
+        &basecraft_plugin_host::registry::RegistryConfig::discover().unwrap(),
+        &plugin,
+    )
+    .unwrap();
+    let original = std::fs::read_to_string(folder.path().join("homologues.afa")).unwrap();
+    let run = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--ribbon-walk", folder.path().to_str().unwrap()])
+        .env("QT_FORCE_STDERR_LOGGING", "1")
+        .output()
+        .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let log = String::from_utf8_lossy(&run.stderr);
+    // Layout loops that predate this test: forms sized from their content and
+    // the Sanger review's canvas. Anything else fails the journey.
+    let known = |line: &str| {
+        line.contains("Dialog: Binding loop detected for property \"implicitWidth\"")
+            || line.contains("SangerView.qml")
+            || line.contains("QQuickAnchors: Binding loop detected for property \"bottomMargin\"")
+    };
+    let warnings: Vec<_> = log
+        .lines()
+        .filter(|line| {
+            [
+                "TypeError",
+                "ReferenceError",
+                "Binding loop",
+                "Unable to assign",
+                "is not a function",
+                "failed",
+            ]
+            .iter()
+            .any(|word| line.contains(word))
+                && !known(line)
+        })
+        .collect();
+    assert!(
+        run.status.success() && log.contains("RIBBON_WALK passed") && warnings.is_empty(),
+        "ribbon journey failed ({:?}); warnings: {warnings:#?}\n{log}",
+        run.status
+    );
+    // The journey saved one inserted gap: same records and residues, the text
+    // changed. Nothing reached the read-only folder.
+    let saved = std::fs::read_to_string(folder.path().join("homologues.afa")).unwrap();
+    let records = |text: &str| -> Vec<(String, String)> {
+        text.split('>')
+            .skip(1)
+            .map(|record| {
+                let (name, rows) = record.split_once('\n').unwrap_or((record, ""));
+                (
+                    name.trim().to_owned(),
+                    rows.chars().filter(|c| !c.is_whitespace()).collect(),
+                )
+            })
+            .collect()
+    };
+    let ungapped = |records: Vec<(String, String)>| -> Vec<(String, String)> {
+        records
+            .into_iter()
+            .map(|(name, row)| (name, row.replace('-', "")))
+            .collect()
+    };
+    assert_ne!(
+        records(&saved),
+        records(&original),
+        "the journey's save wrote nothing"
+    );
+    assert_eq!(ungapped(records(&saved)), ungapped(records(&original)));
+    let gaps = |text: &str| {
+        records(text)
+            .iter()
+            .map(|(_, row)| row.matches('-').count())
+            .sum::<usize>()
+    };
+    assert!(
+        gaps(&saved) > gaps(&original),
+        "the saved alignment has no new gap"
+    );
+    assert_eq!(
+        std::fs::read(locked.join("locked.afa")).unwrap(),
+        original.as_bytes()
+    );
+    // D13: the copy holds the edit the read-only folder refused, and saved.
+    let copied = std::fs::read_to_string(folder.path().join("copied.afa")).unwrap();
+    assert_eq!(ungapped(records(&copied)), ungapped(records(&original)));
+    assert!(
+        gaps(&copied) > gaps(&original),
+        "the copy lacks the redone gap"
+    );
+    for file in ["locus.gb", "time.nwk", "forward.ab1"] {
+        assert_eq!(
+            std::fs::read(locked.join(file)).unwrap(),
+            std::fs::read(folder.path().join(file)).unwrap(),
+            "{file} in the read-only folder changed"
+        );
+    }
+    let _ = folder.keep();
+    println!("Every ribbon tab of every document kind showed its commands, without QML warnings");
 }
 
 fn check_identity_case(case: &str) {
@@ -365,6 +558,46 @@ fn application_starts_offscreen_and_draws_its_window() {
     assert!(shot.is_file(), "no window was drawn: {stderr}");
 }
 
+/// Quitting while the release check waits on a server that never answers:
+/// the window's teardown drops the check, which must end the request well
+/// before its 10 s timeout and leave the application to exit cleanly.
+fn release_check_cancels_at_quit() -> ! {
+    #[derive(Clone)]
+    struct Gone;
+    impl jobs::Owner<()> for Gone {
+        fn deliver(&self, _: impl FnOnce(std::pin::Pin<&mut ()>) + Send + 'static) -> bool {
+            false
+        }
+    }
+    let app = application::new(&["basecraft-gui".into()], true);
+    let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/latest", server.local_addr().unwrap());
+    let (connected, accepted) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let held = server.accept().unwrap();
+        connected.send(()).unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(30));
+        drop(held);
+    });
+    let check = release_check::ReleaseCheck::start(Gone, url, |_, _| {
+        panic!("a cancelled check delivered a reply")
+    })
+    .expect("release check started");
+    accepted
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the request reached the server");
+    let quit = std::time::Instant::now();
+    drop(check);
+    let waited = quit.elapsed();
+    assert!(
+        waited < std::time::Duration::from_secs(2),
+        "quitting waited {waited:?}"
+    );
+    drop(app);
+    println!("RELEASE_QUIT {}", waited.as_millis());
+    std::process::exit(0);
+}
+
 fn main() {
     if std::env::args().nth(1).as_deref() == Some("--app-starts") {
         application_starts_offscreen_and_draws_its_window();
@@ -379,6 +612,12 @@ fn main() {
             "application_bootstrap requires QT_QPA_PLATFORM=offscreen and QT_QPA_PLATFORMTHEME="
         );
         std::process::exit(1);
+    }
+    if std::env::args().nth(1).as_deref() == Some("--release-quit") {
+        release_check_cancels_at_quit();
+    }
+    if std::env::args().nth(1).as_deref() == Some("--ribbon-walk") {
+        ribbon_walk(&std::env::args().nth(2).expect("document folder"));
     }
     if std::env::args().nth(1).as_deref() == Some("--startup-window") {
         let trace = startup_trace::Trace::from_env(std::time::Instant::now());
@@ -460,6 +699,18 @@ fn main() {
             "isolated identity case {case} failed"
         );
     }
+    let quit = std::process::Command::new(std::env::current_exe().unwrap())
+        .arg("--release-quit")
+        .output()
+        .unwrap();
+    let quit_log = String::from_utf8_lossy(&quit.stdout);
+    assert!(
+        quit.status.success() && quit_log.contains("RELEASE_QUIT"),
+        "{quit_log}{}",
+        String::from_utf8_lossy(&quit.stderr)
+    );
+    println!("Quitting during a slow release check ended the request and exited cleanly");
+    ribbon_journey();
     #[cfg(feature = "test-counters")]
     open_argv::spawn();
     let args = vec![
@@ -923,7 +1174,8 @@ fn main() {
     #[cfg(feature = "test-counters")]
     linked_taxa_journey(app.as_mut());
 
-    controller_theme::run();
+    controller_appearance::run(&app);
+    controller_appearance::closed_editor(&app);
 
     // Real QML-created controllers; inject invalid owned IDs without exposing
     // production invokables or constructing placeholder document payloads.
@@ -1004,7 +1256,6 @@ fn main() {
         property string manualDecision: ""
         property string manualMasks: ""
         function check(value, message) {{ if (!value) {{ console.error(message); Qt.exit(2) }} }}
-        Timer {{ interval: 10; repeat: true; running: sanger.busy; onTriggered: sanger.poll_stage() }}
         Connections {{
             target: sanger
             function onStageFinished(stage, success, payload) {{
@@ -1016,9 +1267,7 @@ fn main() {
                 check(sanger.mask_settings === manualMasks && sanger.dirty, "Failed pair changed masks or dirty state");
                 check(sanger.message_kind === "fail" && sanger.message.length > 0, "Pair error must be explicit");
                 const pairError = sanger.message;
-                sanger.poll_calls();
-                sanger.poll_stage();
-                check(sanger.message === pairError && !sanger.calling, "Late polling replaced pair failure");
+                check(sanger.message === pairError && !sanger.calling, "A late result replaced pair failure");
                 pairFailures++;
                 if (pairFailures === 1) {{
                     check(sanger.prepare_reads(JSON.stringify([pairFile, pairFile + ".missing"]), 20), "Retry must be accepted asynchronously");
@@ -1074,10 +1323,8 @@ fn main() {
             check(!sanger.calling, "Legacy validation must detach queued calling");
             const legacyError = sanger.message;
             check(legacyError.length > 0 && sanger.message_kind === "fail", "Legacy error must be explicit");
-            sanger.poll_calls();
-            sanger.poll_calls();
-            check(!sanger.calling, "Late legacy polling restarted calls");
-            check(sanger.message === legacyError && sanger.message_kind === "fail", "Late polling replaced legacy failure");
+            check(!sanger.calling, "Legacy failure restarted calls");
+            check(sanger.message === legacyError && sanger.message_kind === "fail", "Legacy failure message was replaced");
             check(sanger.file_path === file && sanger.review_mode, "Legacy failure changed document identity");
             check(sanger.record_revision() === legacyRevision, "Legacy failure changed review revision");
             check(sanger.review_decision === decision, "Legacy failure changed manual decision");
@@ -1091,8 +1338,7 @@ fn main() {
             check(!sanger.prepare_reads(JSON.stringify([file, file]), 0), "Invalid cutoff must fail");
             check(!sanger.calling, "Pair preparation must detach queued calling");
             const error = sanger.message;
-            sanger.poll_calls();
-            check(sanger.message === error, "Late first-read polling replaced pair failure");
+            check(sanger.message === error, "Pair failure message was replaced");
             // Restore a manual edit/mask, then fail preparation repeatedly.
             check(sanger.review_set("edit", "G"), "Second edit failed");
             check(sanger.mask_ends(2, sanger.consensus_columns - 1), "Second mask failed");
@@ -1183,7 +1429,8 @@ fn main() {
              OperationPickerDialog {{}} \
              OperationParameters {{ schema: ({{type: 'object', properties: {{age: {{type: 'number'}}}}, required: ['age']}}) }} \
              {sanger_qml} {figure_qml} {find_qml} \
-             Timer {{ interval: 1; running: sangerDone && speciesDone && findDone; onTriggered: Qt.quit() }} }}",
+             Timer {{ interval: 1; running: sangerDone && speciesDone && findDone; onTriggered: Qt.quit() }} \
+             }}",
         )),
         &QUrl::default(),
     );

@@ -17,7 +17,6 @@ Item {
         property int cancellations: 0
         function submit(project, request) { requests.push(JSON.parse(request)); busy = true; return true }
         function submit_zenodo(project, request, token) { runtimeToken = token; return submit(project, request) }
-        function poll() { }
         function cancel() { cancellations++ }
     }
     TestCase {

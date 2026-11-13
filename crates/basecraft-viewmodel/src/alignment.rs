@@ -1371,11 +1371,7 @@ impl AlignmentView {
             "{} rows × {} columns · {}",
             format_thousands(doc.row_count() as u64),
             format_thousands(doc.width()),
-            if doc.is_protein() {
-                "protein"
-            } else {
-                "nucleotide"
-            }
+            crate::alphabet::text(&doc.alphabet())
         )];
         if doc.row_count() > 0 {
             let (r, c) = self.cursor;

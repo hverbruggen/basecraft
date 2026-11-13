@@ -17,7 +17,9 @@ Control {
     property bool activeDocument: true
     property alias query: field.text
     property alias queryField: field
-    property var result: ({count: 0, current: 0, rows: []})
+    // The controller asks for a reveal by counting up `find_reveals`.
+    readonly property int reveals: opened && activeDocument && controller ? controller.find_reveals : 0
+    onRevealsChanged: if (reveals && !debounce.running) revealed({row: controller.find_row, y: controller.find_hit_y})
     signal revealed(var match)
     visible: opened
     height: opened ? implicitHeight : 0
@@ -35,34 +37,21 @@ Control {
         debounce.stop()
         controller.find_query("", false)
         opened = false
-        result = ({count: 0, current: 0, rows: []})
         if (documentFocusItem) documentFocusItem.forceActiveFocus(Qt.ShortcutFocusReason)
     }
     function submit() {
         controller.find_query(field.text, reverse.checked)
-        result = ({busy: field.text.length > 0, count: 0, current: 0, rows: []})
         debounce.restart()
-    }
-    function poll(direction) {
-        if (debounce.running) return
-        const previous = result
-        const reply = controller.find_poll(direction)
-        if (!reply.length) return
-        result = JSON.parse(reply)
-        if (result.count > 0 && (direction !== 0 || previous.busy || previous.current !== result.current))
-            revealed(result)
     }
     onControllerChanged: {
         if (previousController && previousController !== controller) previousController.find_query("", false)
         previousController = controller
-        result = ({count: 0, current: 0, rows: []})
         if (opened && controller) submit()
     }
     onOpenedChanged: if (opened) submit()
     Component.onDestruction: if (controller) controller.find_query("", false)
     Keys.onEscapePressed: event => { closeFind(); event.accepted = true }
-    Timer { id: debounce; interval: 160; onTriggered: bar.poll(0) }
-    Timer { interval: 80; repeat: true; running: bar.opened && bar.activeDocument && !debounce.running; onTriggered: bar.poll(0) }
+    Timer { id: debounce; interval: 160; onTriggered: bar.controller.find_step(0) }
 
     contentItem: ColumnLayout {
         spacing: metrics.height * 0.2
@@ -84,14 +73,14 @@ Control {
                 onTextEdited: bar.submit()
                 Keys.onPressed: event => {
                     if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-                        if (debounce.running) { debounce.stop(); bar.poll(0) }
-                        else bar.poll(event.modifiers & Qt.ShiftModifier ? -1 : 1)
+                        if (debounce.running) { debounce.stop(); bar.controller.find_step(0) }
+                        else bar.controller.find_step(event.modifiers & Qt.ShiftModifier ? -1 : 1)
                         event.accepted = true
                     }
                 }
             }
-            AppIconButton { iconName: "left"; description: "Previous match (Shift+Enter)"; Accessible.name: "Previous match"; enabled: bar.result.count > 0; onClicked: bar.poll(-1) }
-            AppIconButton { iconName: "right"; description: "Next match (Enter)"; Accessible.name: "Next match"; enabled: bar.result.count > 0; onClicked: bar.poll(1) }
+            AppIconButton { iconName: "left"; description: "Previous match (Shift+Enter)"; Accessible.name: "Previous match"; enabled: bar.controller.find_count > 0; onClicked: bar.controller.find_step(-1) }
+            AppIconButton { iconName: "right"; description: "Next match (Enter)"; Accessible.name: "Next match"; enabled: bar.controller.find_count > 0; onClicked: bar.controller.find_step(1) }
             AppIconButton { iconName: "close"; description: "Close Find (Escape)"; Accessible.name: "Close Find"; onClicked: bar.closeFind() }
         }
         RowLayout {
@@ -100,7 +89,7 @@ Control {
                 id: reverse
                 visible: bar.sequenceSearch
                 text: "Reverse complement"
-                enabled: bar.result.nucleotide === true || checked
+                enabled: bar.controller.find_nucleotide || checked
                 Accessible.name: "Also find reverse complement"
                 ToolTip.visible: hovered
                 ToolTip.text: "Also search the reverse complement; available for nucleotide sequences"
@@ -119,9 +108,7 @@ Control {
                 wrapMode: Text.Wrap
                 textFormat: Text.PlainText
                 text: !field.text.length ? (bar.sequenceSearch ? (bar.nameSearch ? "Names or motifs · IUPAC nucleotides; literal protein symbols" : "Motifs: IUPAC nucleotides") : "Taxon names: literal text, ignoring case")
-                    : bar.result.busy ? "Finding…"
-                    : (bar.result.count ? bar.result.current + " of " + bar.result.count + (bar.result.limited ? " (limit reached; narrow query)" : "") + " · " + bar.result.label + (bar.result.start ? " · " + bar.result.start : "") + (bar.result.reverse ? " · reverse" : "") : "No matches")
-                        + (bar.result.explanation ? " · " + bar.result.explanation : "")
+                    : bar.controller.find_status
                 Accessible.name: text
             }
         }

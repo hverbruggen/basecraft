@@ -6,17 +6,10 @@ use basecraft_docs::{
     sanger::{SangerDraft, SangerDraftExt},
 };
 use basecraft_io::abif;
-use basecraft_plugin_host::{
-    jobs::JobManager,
-    policy::SessionPolicy,
-    registry::{Registry, RegistryConfig},
-};
+use basecraft_plugin_host::{jobs::JobManager, policy::SessionPolicy};
 use basecraft_protocol::operation::{OperationOutcome, RuntimeState};
 use std::sync::Arc;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    mpsc,
-};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Explicit request evidence uses the shared preserve-copy ledger. The returned
 /// verified path outlives source-controller snapshots, failed stages and retries.
@@ -73,6 +66,16 @@ impl Request {
             Self::Primers(_) => "primers",
         }
     }
+    /// The file the stage reads, for the job list.
+    fn source(&self) -> String {
+        match self {
+            Self::Prepare(reads, _) => reads.first(),
+            Self::Orient(path) | Self::Place(path) => Some(path),
+            Self::Single(_) | Self::Primers(_) => None,
+        }
+        .map(|path| path.display().to_string())
+        .unwrap_or_default()
+    }
     pub fn message(&self) -> &'static str {
         match self {
             Self::Prepare(..) | Self::Single(_) => "Processing AB1 with Tracy",
@@ -87,14 +90,24 @@ pub(super) struct Completion {
     pub path: PathBuf,
     pub payload: String,
 }
+/// A running stage. Dropping it cancels the work; a replaced stage's result
+/// is ignored by its id.
+impl crate::jobs::Outcome for Completion {
+    fn ended(&self) -> crate::jobs::Ended {
+        crate::jobs::Ended {
+            error: None,
+            result: self.path.display().to_string(),
+        }
+    }
+}
 pub(super) struct Stage {
+    pub id: u64,
     pub name: &'static str,
-    pub receiver: mpsc::Receiver<Result<Completion, String>>,
-    pub cancelled: Arc<AtomicBool>,
+    pub work: basecraft_ops::work::Work,
 }
 impl Drop for Stage {
     fn drop(&mut self) {
-        self.cancelled.store(true, Ordering::Release);
+        self.work.cancel();
     }
 }
 fn check(cancelled: &AtomicBool) -> Result<(), String> {
@@ -113,9 +126,7 @@ fn operation(
     cancelled: &AtomicBool,
 ) -> Result<OperationOutcome, String> {
     check(cancelled)?;
-    let registry = RegistryConfig::discover()
-        .and_then(|config| Registry::load(&config))
-        .map_err(|e| e.to_string())?;
+    let registry = crate::plugins::registry().map_err(|e| e.to_string())?;
     let mut request = serde_json::json!({"operation": operation});
     request["inputs"] = inputs;
     request["parameters"] = parameters;
@@ -124,30 +135,28 @@ fn operation(
     let accepted = jobs
         .submit(&registry, request, policy, "GUI")
         .map_err(|e| e.to_string())?;
-    loop {
-        if cancelled.load(Ordering::Acquire) {
-            jobs.cancel(&accepted.run_id).map_err(|e| e.to_string())?;
-        }
-        let outcome = jobs.get(&accepted.run_id).map_err(|e| e.to_string())?;
-        if outcome.state.terminal() {
-            check(cancelled)?;
-            if outcome.state != RuntimeState::Completed {
-                return Err(format!(
-                    "{:?}: {}. Retained evidence: {}",
-                    outcome.state,
-                    outcome
-                        .errors
-                        .iter()
-                        .map(|e| e.message.as_str())
-                        .collect::<Vec<_>>()
-                        .join("; "),
-                    outcome.evidence.as_deref().unwrap_or("unavailable")
-                ));
-            }
-            return Ok(outcome);
-        }
-        std::thread::sleep(std::time::Duration::from_millis(20));
+    // The shared wait drives the run; a detached session owns no document.
+    let mut session = basecraft_ops::Session::detached(root);
+    let outcome = jobs
+        .wait_in_session(&accepted.run_id, &mut session, &|| {
+            cancelled.load(Ordering::Acquire)
+        })
+        .map_err(|e| e.to_string())?;
+    check(cancelled)?;
+    if outcome.state != RuntimeState::Completed {
+        return Err(format!(
+            "{:?}: {}. Retained evidence: {}",
+            outcome.state,
+            outcome
+                .errors
+                .iter()
+                .map(|e| e.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; "),
+            outcome.evidence.as_deref().unwrap_or("unavailable")
+        ));
     }
+    Ok(outcome)
 }
 fn artifact(outcome: &OperationOutcome, name: &str) -> Result<PathBuf, String> {
     outcome
@@ -185,28 +194,26 @@ fn evaluate(session: &mut SangerReview, view: &mut SangerReviewView) -> Result<(
     )
 }
 
-pub(super) fn start(request: Request, session: Option<SangerReview>) -> Result<Stage, String> {
+pub(super) fn start(
+    owner: cxx_qt::CxxQtThread<super::qobject::SangerController>,
+    request: Request,
+    session: Option<SangerReview>,
+) -> Result<Stage, String> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let id = NEXT.fetch_add(1, Ordering::Relaxed);
     let name = request.name();
-    let cancelled = Arc::new(AtomicBool::new(false));
-    let flag = cancelled.clone();
-    let (sender, receiver) = mpsc::channel();
-    std::thread::Builder::new()
-        .name(format!("sanger-{name}"))
-        .spawn(move || {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                execute(request, session, &flag)
-            }))
-            .unwrap_or_else(|_| {
-                Err("Sanger continuation interrupted; previous review preserved".into())
-            });
-            let _ = sender.send(result);
-        })
-        .map_err(|e| e.to_string())?;
-    Ok(Stage {
-        name,
-        receiver,
-        cancelled,
-    })
+    let listing = crate::jobs::Listing {
+        operation: request.message().into(),
+        source: request.source(),
+    };
+    let work = crate::jobs::start_listed(
+        owner,
+        listing,
+        move |work| execute(request, session, work.flag()),
+        move |this, result| this.stage_done(id, result),
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(Stage { id, name, work })
 }
 fn execute(
     request: Request,
@@ -374,16 +381,39 @@ fn execute(
 
 /// The editor owns a regular Session and its checked document handle.
 /// This adapter holds no history, checkpoint or save implementation.
+/// Why a review could not start. A folder that cannot hold recovery stays
+/// typed, so the window can offer a copy (D13).
+#[derive(Debug)]
+pub(super) enum ReviewFailure {
+    ReadOnlyFolder,
+    Failed(String),
+}
+impl ReviewFailure {
+    pub fn read_only(&self) -> bool {
+        matches!(self, Self::ReadOnlyFolder)
+    }
+}
+impl From<ReviewFailure> for String {
+    fn from(failure: ReviewFailure) -> Self {
+        match failure {
+            ReviewFailure::ReadOnlyFolder => crate::document_open::READ_ONLY_EDIT.into(),
+            ReviewFailure::Failed(message) => message,
+        }
+    }
+}
+
 pub(super) struct ReviewDocument {
     pub session: basecraft_ops::Session,
     pub id: basecraft_ops::DocId,
 }
 impl ReviewDocument {
-    pub fn new(review: &SangerReview) -> Result<Self, String> {
-        let mut session = crate::chosen_project::session_for(review.storage_anchor())?;
-        let id = session
-            .create_sanger_review(review)
-            .map_err(|e| e.to_string())?;
+    pub fn new(review: &SangerReview) -> Result<Self, ReviewFailure> {
+        let mut session = crate::chosen_project::session_for(review.storage_anchor())
+            .map_err(ReviewFailure::Failed)?;
+        let id = session.create_sanger_review(review).map_err(|e| match e {
+            basecraft_ops::Error::ReadOnlyFolder { .. } => ReviewFailure::ReadOnlyFolder,
+            e => ReviewFailure::Failed(e.to_string()),
+        })?;
         Ok(Self { session, id })
     }
     pub fn open(path: &Path) -> Result<Self, String> {
@@ -421,7 +451,7 @@ impl ReviewDocument {
                 },
             )
             .map(|_| ())
-            .map_err(|e| e.to_string())
+            .map_err(|e| crate::document_open::edit_failure(&e))
     }
 
     pub fn save(&mut self, path: &Path) -> Result<(), String> {
@@ -443,7 +473,7 @@ impl ReviewDocument {
                 },
             )
             .map(|_| ())
-            .map_err(|e| e.to_string())
+            .map_err(|e| crate::document_open::edit_failure(&e))
     }
     pub fn export_consensus(&mut self, path: &Path, label: &str) -> Result<(), String> {
         self.session
@@ -565,14 +595,15 @@ mod tests {
         let original_hash = basecraft_io::hash_file(&reference).unwrap();
         let frozen = retain_reference(&reads[0], &reference).unwrap();
         let flag = AtomicBool::new(false);
-        let preparation = start(Request::Prepare(reads.clone(), 20), None).unwrap();
+        let request = Request::Prepare(reads.clone(), 20);
+        let preparation =
+            std::thread::spawn(move || execute(request, None, &AtomicBool::new(false)));
         // Dispose the alignment-owned snapshot before observing first completion.
         std::fs::remove_file(&reference).unwrap();
         assert_eq!(basecraft_io::hash_file(&frozen).unwrap(), original_hash);
         assert_eq!(retain_reference(&reads[0], &frozen).unwrap(), frozen);
         let prepared = preparation
-            .receiver
-            .recv()
+            .join()
             .unwrap()
             .unwrap_or_else(|e| panic!("prepare: {e}"));
         assert_eq!(prepared.session.draft.inputs.len(), 2);

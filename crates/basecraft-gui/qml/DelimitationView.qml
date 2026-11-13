@@ -6,7 +6,7 @@ import Basecraft
 FocusScope {
     id: doc
     property alias findBar: findBar
-    readonly property var findRows: new Set(findBar.result.rows || [])
+    readonly property var findRows: new Set(JSON.parse(findBar.controller.find_rows))
     function openFind() { findBar.openFind() }
     FindBar {
         id: findBar
@@ -56,9 +56,6 @@ FocusScope {
     property var treeTaxa: []
     // Edits change only manual hypotheses and edited copies.
     readonly property bool activeEditable: activeHypothesis !== null && !["imported", "inferred"].includes(activeHypothesis.origin)
-    property var pendingDisplay: null
-    // PTP on an IQ-TREE tree built here: the fit waits for inference.
-    property var pendingFit: null
     // Created by an analysis request; discarded on close if nothing came of it.
     property bool draft: false
     property bool ribbonInitialized: false
@@ -68,34 +65,20 @@ FocusScope {
     readonly property color foreground: tree.foreground
 
     function act(name, args) { ctl.action(name, JSON.stringify(args || {})) }
-    function nextSpeciesLabel() {
-        const used = new Set(((activeHypothesis || {}).groups || []).map(g => g.label))
-        let n = ((activeHypothesis || {}).groups || []).length + 1
-        while (used.has("Species " + n)) n++
-        return "Species " + n
-    }
     // Ribbon commands.
     function newHypothesis(source) { newDialog.show(source || "") }
-    function groupSelection() { if (selection.length) act("group", {label: nextSpeciesLabel()}) }
+    function groupSelection() { if (selection.length) act("group") }
     function unassign() { if (selection.length) act("unassign") }
-    // The species of the edited hypothesis that is exactly the selection, if any.
-    function selectedSpecies() {
-        const chosen = new Set(selection)
-        return ((activeHypothesis || {}).groups || []).find(g => g.members.length === chosen.size && g.members.every(m => chosen.has(m))) || null
-    }
     // Rename the selected species, or make the selection a species with this
     // name; either way the names show beside the bars.
     function nameSpecies(label) {
         if (!activeHypothesis || !selection.length) return
-        const existing = selectedSpecies()
-        if (existing) act("rename_group", {group: existing.id, label: label})
-        else act("group", {label: label})
+        act("name_species", {label: label})
         const style = (workspace.view.columns || {})[activeHypothesis.id] || {}
         if (!style.names) act("style", {hypothesis: activeHypothesis.id, names: true})
     }
     function askSpeciesName() {
-        const existing = selectedSpecies()
-        textDialog.ask("Name species", "Species name", existing ? existing.label : nextSpeciesLabel(), value => doc.nameSpecies(value))
+        textDialog.ask("Name species", "Species name", ctl.species_name_suggestion(), value => doc.nameSpecies(value))
     }
     function flipSubtree() { tree.rotate() }
     function setTool(name) {
@@ -114,63 +97,9 @@ FocusScope {
         if (fresh) tree.fit()
     }
 
-    function startAnalysis(method, input, rooted, settings, displayMethod) {
-        if (ctl.busy) return
-        if (method === "manual" || method === "view") {
-            if (method === "manual") {
-                act("create", {name: "Manual species hypothesis"})
-                const created = JSON.parse(ctl.workspace_json).hypotheses || []
-                if (created.length) ctl.activate(created[created.length - 1].id)
-            }
-            if (["upgma", "nj", "iqtree"].includes(displayMethod)) {
-                showGroups = false
-                ctl.run_analysis("display_" + displayMethod, input, false, settings)
-            } else if (displayMethod === "existing") { ctl.attach_tree(input, rooted); showGroups = false }
-            else showGroups = true
-            return
-        }
-        // Both PTP inputs share rooting and failure gating. Inference is the
-        // only asynchronous extra step for an alignment input.
-        if (method === "ptp" || method === "mptp") {
-            const fitSettings = JSON.parse(settings)
-            const rooting = fitSettings.rooting || (displayMethod === "iqtree" ? "midpoint" : "keep")
-            delete fitSettings.rooting
-            delete fitSettings.iqtree_model
-            const fit = {method: method, settings: JSON.stringify(fitSettings), rooting: rooting}
-            if (displayMethod === "iqtree") {
-                pendingFit = fit
-                ctl.run_analysis("display_iqtree", input, false, settings)
-            } else if ((rooting !== "keep" || rooted) && ctl.attach_tree(input, false)) {
-                fitPtpTree(fit)
-            }
-            return
-        }
-        // The display tree only illustrates ASAP's result, so build it after
-        // ASAP succeeds; a failed run then leaves no tree behind.
-        if (method === "asap" && (["upgma", "nj", "iqtree"].includes(displayMethod)))
-            pendingDisplay = {method: "display_" + displayMethod, input: input, settings: settings}
-        else
-            showGroups = displayMethod === "none"
-        ctl.run_analysis(method, input, rooted, settings)
-    }
-    function fitPtpTree(fit) {
-        if (fit.rooting !== "keep" && !ctl.root_display_tree(fit.rooting)) return
-        showGroups = false
-        ctl.run_analysis(fit.method, ctl.display_path, true, fit.settings)
-    }
     Connections {
         target: ctl
-        function onDisplayTreeReady(success) {
-            if (success) doc.showGroups = false
-            const fit = doc.pendingFit
-            doc.pendingFit = null
-            if (success && fit) doc.fitPtpTree(fit)
-        }
-        function onAnalysisFinished(success) {
-            const pending = doc.pendingDisplay
-            doc.pendingDisplay = null
-            if (success && pending) ctl.run_analysis(pending.method, pending.input, false, pending.settings)
-        }
+        function onGroupsShown(show) { doc.showGroups = show }
     }
     // Hidden menu items take no space.
     component TreeMenuItem: MenuItem { height: visible ? implicitHeight : 0 }
@@ -181,18 +110,13 @@ FocusScope {
         implicitHeight: Math.max(32, implicitContentHeight + topPadding + bottomPadding)
         implicitWidth: Math.max(50, buttonMetrics.advanceWidth(text) + leftPadding + rightPadding)
     }
-    Timer { interval: 250; running: ctl.busy && ctl.analysis_running(); repeat: true; onTriggered: ctl.poll_job() }
     signal openFile(string path)
     DelimitationController { id: ctl }
     // Ordering, flips and style are the tree editor's own edits, kept with
     // this workspace.
     TreeController { id: tree; display_only: true }
     readonly property var treeGeometry: JSON.parse(tree.canvas_geometry)
-    Component.onCompleted: {
-        tree.check_theme()
-        ctl.check_theme()
-        ctl.open_file(path)
-    }
+    Component.onCompleted: ctl.open_file(path)
     Connections { target: ctl
         function onDisplay_revisionChanged() { doc.showTree(true) }
         // The hypotheses as bar columns beside the tips.
@@ -407,7 +331,7 @@ FocusScope {
                                 required property var modelData
                                 required property int index
                                 property bool found: findBar.opened && findBar.controller === ctl && doc.findRows.has(index)
-                                background: Rectangle { visible: parent.found; color: "transparent"; border.color: doc.foreground; border.width: findBar.result.row === parent.index ? 2 : 1 }
+                                background: Rectangle { visible: parent.found; color: "transparent"; border.color: doc.foreground; border.width: findBar.controller.find_row === parent.index ? 2 : 1 }
                                 text: modelData.label
                                 checked: doc.selection.includes(modelData.id)
                                 onClicked: ctl.highlight_taxa(JSON.stringify(checked ? doc.selection.concat([modelData.id]) : doc.selection.filter(id => id !== modelData.id)))
@@ -541,8 +465,10 @@ FocusScope {
         id: treeMenu
         objectName: "speciesTreeMenu"
         property var info: ({})
+        property bool species: false
         function openFor(info) {
             treeMenu.info = info || {}
+            treeMenu.species = ctl.selection_is_species()
             popup()
         }
         readonly property bool canEdit: doc.activeEditable && doc.selection.length > 0 && !ctl.busy
@@ -552,7 +478,7 @@ FocusScope {
         }
         MenuSeparator {}
         TreeMenuItem { text: "Group selection"; objectName: "groupSelection"; enabled: treeMenu.canEdit; onTriggered: doc.groupSelection() }
-        TreeMenuItem { text: doc.selectedSpecies() ? "Rename species…" : "Name species…"; objectName: "nameSpecies"; enabled: treeMenu.canEdit; onTriggered: doc.askSpeciesName() }
+        TreeMenuItem { text: treeMenu.species ? "Rename species…" : "Name species…"; objectName: "nameSpecies"; enabled: treeMenu.canEdit; onTriggered: doc.askSpeciesName() }
         TreeMenuItem { text: "Unassign"; objectName: "unassign"; enabled: treeMenu.canEdit; onTriggered: doc.unassign() }
         TreeMenuItem { text: "Edit a copy…"; visible: doc.activeHypothesis !== null && !doc.activeEditable; onTriggered: doc.newHypothesis(doc.activeHypothesis.id) }
         MenuSeparator { visible: treeMenu.info.node === true; height: visible ? implicitHeight : 0 }

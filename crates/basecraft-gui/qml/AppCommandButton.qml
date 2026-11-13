@@ -6,6 +6,8 @@ AppRibbonButton {
     id: button
     required property string commandId
     property var customization: ({shortcuts: {}, ribbon_hidden: []})
+    property string hintScope: ""
+    property string defaultKeyHint: ""
     property alias contextVisible: command.contextVisible
     readonly property alias commandAction: command
     signal invoked()
@@ -16,6 +18,8 @@ AppRibbonButton {
         id: command
         commandId: button.commandId
         customization: button.customization
+        hintScope: button.hintScope
+        defaultKeyHint: button.defaultKeyHint
         text: button.text.length ? button.text : button.tip
         tooltip: button.tip
         disabledReason: button.inheritedDisabledReason || button.disabledReason

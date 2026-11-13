@@ -5,6 +5,12 @@ import QtTest
 import "../../qml"
 
 Item {
+    QtObject {
+        id: captionSource
+        readonly property var captions: ({"ribbon.root-the-tree-on-the-branch-above-the-selection": "Reroot", "tree.midpoint_root": "Midpoint", "tree.minimum_variance_root": "MRTTV", "ribbon.name-the-selected-clade-with-a-bar-or-a": "Annotate", "ribbon.reverse-the-order-of-the-branches-in-the-selected": "Flip", "ribbon.associate-an-imported-tree-with-an-alignment-after-validating": "Link", "ribbon.extract-aligned-rows-without-realigning-ctrl-click-to-select": "Clade"})
+        function caption(id) { return captions[id] || "" }
+        function tip(id) { return "" }
+    }
     id: host
     width: 1200
     height: 300
@@ -32,10 +38,10 @@ Item {
         width: 1000
         height: implicitHeight
         RibbonPage {
-            TreeRootingGroup { id: root; controller: controller; treeOpen: true }
-            TreeCladeGroup { id: clade; controller: controller; onAnnotateRequested: host.annotations++ }
+            TreeRootingGroup { id: root; controller: controller; treeOpen: true; captions: captionSource }
+            TreeCladeGroup { id: clade; controller: controller; captions: captionSource; onAnnotateRequested: host.annotations++ }
             TreeStyleGroup { id: order; controller: controller; onLabelsRequested: host.labelRequests++ }
-            TreeAlignmentGroup { id: alignment; controller: controller; onLinkRequested: target => host.linkTarget = target }
+            TreeAlignmentGroup { id: alignment; controller: controller; captions: captionSource; onLinkRequested: target => host.linkTarget = target }
         }
     }
     TestCase {

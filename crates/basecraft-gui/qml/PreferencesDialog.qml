@@ -5,7 +5,12 @@ import org.kde.kirigami as Kirigami
 
 AppFormDialog {
     id: dialog
-    title: "Preferences"
+    signal contactDetailsRequested
+    // At first launch the same form asks only how the window should look
+    // and whether to hear about new releases.
+    property bool welcome: false
+    title: welcome ? "Welcome to Basecraft" : "Preferences"
+    onClosed: if (welcome) change("welcomed", true)
     standardButtons: Dialog.Close
     required property var settings
     required property var commands
@@ -25,8 +30,10 @@ AppFormDialog {
         }
     }
 
-    Label { text: "Appearance"; font.bold: true }
-    Label { text: "Colours and the monospace font family follow the system theme. Appearance changes apply immediately."; wrapMode: Text.Wrap; Layout.fillWidth: true }
+    Label { objectName: "welcomeText"; visible: dialog.welcome; text: "Choose how Basecraft looks. You can change these later in Preferences."; wrapMode: Text.Wrap; Layout.fillWidth: true }
+    Label { visible: !dialog.welcome; text: "Appearance"; font.bold: true }
+    Label { visible: !dialog.welcome; text: "Colours follow the chosen theme and the font follows the desktop unless you choose one. Appearance changes apply immediately."; wrapMode: Text.Wrap; Layout.fillWidth: true }
+    FontFamilyBox { objectName: "fontFamily"; Kirigami.FormData.label: "Font:"; settings: dialog.settings; family: dialog.values.ui ? dialog.values.ui.font_family : null }
     PreferenceSpinBox {
         objectName: "interfaceFontSize"
         Kirigami.FormData.label: "Interface font size (pt):"
@@ -36,7 +43,7 @@ AppFormDialog {
             ? dialog.values.ui.font_size_points : dialog.defaultFontSizePoints
         onValueModified: dialog.change("fontSizePoints", value)
     }
-    AppButton { objectName: "resetInterfaceFontSize"; text: "Use default size (" + dialog.defaultFontSizePoints + " pt)"; onClicked: dialog.change("fontSizePoints", null) }
+    AppButton { visible: !dialog.welcome; objectName: "resetInterfaceFontSize"; text: "Use default size (" + dialog.defaultFontSizePoints + " pt)"; onClicked: dialog.change("fontSizePoints", null) }
     PreferenceSpinBox {
         objectName: "ribbonSize"
         Kirigami.FormData.label: "Ribbon size (%):"
@@ -46,8 +53,19 @@ AppFormDialog {
             ? dialog.values.ui.ribbon_size_percent : 100
         onValueModified: dialog.change("ribbonSizePercent", value)
     }
-    AppButton { objectName: "resetRibbonSize"; text: "Use default ribbon size (100%)"; onClicked: dialog.change("ribbonSizePercent", 100) }
+    AppButton { visible: !dialog.welcome; objectName: "resetRibbonSize"; text: "Use default ribbon size (100%)"; onClicked: dialog.change("ribbonSizePercent", 100) }
+    AppComboBox {
+        objectName: "theme"
+        Kirigami.FormData.label: "Theme:"
+        Accessible.name: "Theme"
+        readonly property var choices: ["follow-desktop", "light", "dark"]
+        model: ["Follow the desktop", "Light", "Dark"]
+        currentIndex: Math.max(0, choices.indexOf(dialog.values.ui ? dialog.values.ui.theme : "follow-desktop"))
+        onActivated: index => dialog.change("theme", choices[index])
+    }
+    AppCheckBox { objectName: "colourBlind"; visible: dialog.welcome; text: "Colour-blind colours for data"; checked: !!dialog.values.ui && dialog.values.ui.data_color_scheme === "color-blind-friendly"; onToggled: dialog.change("colorBlindFriendly", checked) }
     PreferenceSpinBox {
+        visible: !dialog.welcome
         objectName: "tickBoxSize"
         Kirigami.FormData.label: "Tick box size (px):"
         Accessible.name: "Tick box size in pixels"
@@ -56,6 +74,7 @@ AppFormDialog {
         onValueModified: dialog.change("tickBoxSize", value)
     }
     PreferenceSpinBox {
+        visible: !dialog.welcome
         objectName: "inputBoxHeight"
         Kirigami.FormData.label: "Number box height (px):"
         Accessible.name: "Number box height in pixels"
@@ -63,47 +82,31 @@ AppFormDialog {
         value: dialog.values.ui && dialog.values.ui.input_box_height ? dialog.values.ui.input_box_height : 20
         onValueModified: dialog.change("inputBoxHeight", value)
     }
-    AppButton { objectName: "resetControlSizes"; text: "Use default control sizes (14 and 20 px)"; onClicked: { dialog.change("tickBoxSize", 14); dialog.change("inputBoxHeight", 20) } }
-    AppCheckBox {
-        objectName: "colorBlindFriendly"
-        text: "Colour-blind-friendly data colours"
-        Accessible.description: "Uses the light or dark variant of the active appearance for residues, traces and species groups. Labels still identify the data."
-        checked: dialog.values.ui ? dialog.values.ui.data_color_scheme === "color-blind-friendly" : false
-        onToggled: dialog.change("colorBlindFriendly", checked)
-    }
-    Label {
-        text: "The data palette follows the current light or dark appearance. Suitable theme colours are used where possible, with an Okabe–Ito fallback. Letters and species labels remain the identifiers; custom species colours are retained."
-        wrapMode: Text.Wrap
+    AppButton { visible: !dialog.welcome; objectName: "resetControlSizes"; text: "Use default control sizes (14 and 20 px)"; onClicked: { dialog.change("tickBoxSize", 14); dialog.change("inputBoxHeight", 20) } }
+    AppCheckBox { objectName: "releaseNotices"; text: "Tell me when a new version is out"; Accessible.description: "Asks GitHub for the latest version number at startup."; checked: !!dialog.values.ui && dialog.values.ui.release_notices === true; onToggled: dialog.change("releaseNotices", checked) }
+    AppButton { visible: !dialog.welcome; objectName: "contactDetails"; text: "Submitter details…"; onClicked: dialog.contactDetailsRequested() }
+    Label { visible: !dialog.welcome; text: "Files, provenance and recovery"; font.bold: true }
+    Label { visible: !dialog.welcome; text: "These policy defaults are reserved for recovery and provenance workflows. They do not create history for existing files."; wrapMode: Text.Wrap; Layout.fillWidth: true }
+    AppCheckBox { visible: !dialog.welcome; text: "Enable unsaved-work recovery"; checked: dialog.values.files ? dialog.values.files.recovery : true; onToggled: dialog.change("recovery", checked) }
+    Label { visible: !dialog.welcome; text: "Compute"; font.bold: true }
+    PreferenceSpinBox { visible: !dialog.welcome; objectName: "localCpuThreads"; Kirigami.FormData.label: "CPU threads per task:"; from: 1; to: 65536; editable: true; value: dialog.values.compute ? dialog.values.compute.local_cpu_threads : 4; onValueModified: dialog.change("localCpuThreads", value) }
+    Label { visible: !dialog.welcome; text: "New tasks use this allocation, capped by available CPUs. Running tasks retain their allocation."; wrapMode: Text.Wrap; Layout.fillWidth: true }
+    Label { visible: !dialog.welcome; text: "Ribbon and shortcuts"; font.bold: true }
+    Label { visible: !dialog.welcome; text: "Use Ctrl, Alt, Shift or Meta with one key, or a function key. Canvas keys and F6 are reserved. Empty shortcuts disable the command's shortcut. Reset restores defaults. Unavailable command IDs remain stored for future availability."; wrapMode: Text.Wrap; Layout.fillWidth: true }
+    // Not a Repeater in a layout: a hidden layout keeps pointers to removed
+    // rows until it next lays out, which crashed the window at a resize.
+    ListView {
+        objectName: "shortcutRows"
+        visible: !dialog.welcome
         Layout.fillWidth: true
-    }
-    AppCheckBox { text: "Show GC content"; checked: dialog.values.ui ? dialog.values.ui.show_gc : true; onToggled: dialog.change("showGc", checked) }
-    AppCheckBox { text: "Open files sidebar"; checked: dialog.values.ui ? dialog.values.ui.sidebar_open : true; onToggled: dialog.change("sidebarOpen", checked) }
-    PreferenceSpinBox { objectName: "orfMinCodons"; Kirigami.FormData.label: "Minimum ORF (codons):"; from: 1; to: 1000000; editable: true; value: dialog.values.ui ? dialog.values.ui.orf_min_codons : 100; onValueModified: dialog.change("orfMinCodons", value) }
-    AppCheckBox { text: "Insert alignment bases (rather than overwrite)"; checked: dialog.values.ui ? dialog.values.ui.alignment_insert : true; onToggled: dialog.change("alignmentInsert", checked) }
-    Label { text: "Files, provenance and recovery"; font.bold: true }
-    Label { text: "These policy defaults are reserved for recovery and provenance workflows. They do not create history for existing files."; wrapMode: Text.Wrap; Layout.fillWidth: true }
-    AppComboBox {
-        Kirigami.FormData.label: "Provenance policy:"
-        model: ["Portable companion", "Local only", "None"]
-        property var policies: ["portable", "local-only", "none"]
-        currentIndex: dialog.values.files ? policies.indexOf(dialog.values.files.provenance) : 0
-        onActivated: dialog.change("provenance", policies[currentIndex])
-    }
-    AppCheckBox { text: "Enable unsaved-work recovery"; checked: dialog.values.files ? dialog.values.files.recovery : true; onToggled: dialog.change("recovery", checked) }
-    Label { text: "Compute"; font.bold: true }
-    PreferenceSpinBox { objectName: "localCpuThreads"; Kirigami.FormData.label: "CPU threads per task:"; from: 1; to: 65536; editable: true; value: dialog.values.compute ? dialog.values.compute.local_cpu_threads : 4; onValueModified: dialog.change("localCpuThreads", value) }
-    Label { text: "New tasks use this allocation, capped by available CPUs. Running tasks retain their allocation."; wrapMode: Text.Wrap; Layout.fillWidth: true }
-    Label { text: "Ribbon and shortcuts"; font.bold: true }
-    Label { text: "Use Ctrl, Alt, Shift or Meta with one key, or a function key. Canvas keys and F6 are reserved. Empty shortcuts disable the command's shortcut. Reset restores defaults. Unavailable command IDs remain stored for future availability."; wrapMode: Text.Wrap; Layout.fillWidth: true }
-    ColumnLayout {
-        Layout.fillWidth: true
+        implicitHeight: contentHeight
+        interactive: false
         spacing: 4
-    Repeater {
         model: dialog.opened ? dialog.commands : []
         delegate: RowLayout {
             id: row
             required property var modelData
-            Layout.fillWidth: true
+            width: ListView.view.width
             Label { text: row.modelData.text; Layout.preferredWidth: 180; wrapMode: Text.Wrap }
             TextField {
                 objectName: "shortcut-" + row.modelData.commandId
@@ -155,10 +158,9 @@ AppFormDialog {
             }
         }
     }
-    }
-    Label { visible: dialog.missingIds.length > 0; text: "Unavailable commands (retained): " + dialog.missingIds.join(", "); wrapMode: Text.Wrap; Layout.fillWidth: true }
-    AppButton { text: "Reset ribbon and shortcuts"; onClicked: dialog.change("resetCustomization", null) }
-    Label { text: "Plugins"; font.bold: true }
-    Label { text: "Plugins use the shared compute allocation. Plugin installation and tool locations are managed separately."; wrapMode: Text.Wrap; Layout.fillWidth: true }
-    AppButton { text: "Reload preferences from disk"; onClicked: dialog.settings.reload() }
+    Label { visible: !dialog.welcome && (dialog.missingIds.length > 0); text: "Unavailable commands (retained): " + dialog.missingIds.join(", "); wrapMode: Text.Wrap; Layout.fillWidth: true }
+    AppButton { visible: !dialog.welcome; text: "Reset ribbon and shortcuts"; onClicked: dialog.change("resetCustomization", null) }
+    Label { visible: !dialog.welcome; text: "Plugins"; font.bold: true }
+    Label { visible: !dialog.welcome; text: "Plugins use the shared compute allocation. Plugin installation and tool locations are managed separately."; wrapMode: Text.Wrap; Layout.fillWidth: true }
+    AppButton { visible: !dialog.welcome; text: "Reload preferences from disk"; onClicked: dialog.settings.reload() }
 }

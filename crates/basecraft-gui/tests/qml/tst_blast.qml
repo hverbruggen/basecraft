@@ -28,7 +28,6 @@ Item {
         function submit_blast(source, settings, approval, truncate) {
             submissions++; lastTruncation = truncate; busy = true; return true
         }
-        function poll() {}
         function cancel() { busy = false }
     }
     BlastDialog { id: dialog; backend: backend }

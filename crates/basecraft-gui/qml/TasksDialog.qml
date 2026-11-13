@@ -11,12 +11,16 @@ AppDialog {
     implicitHeight: 570
     standardButtons: Dialog.Close
     property var service: null
+    property var jobs: null
     function resultPath(job) {
         if (job.primary_output !== undefined) return job.primary_output || ""
         return Object.keys(job.outputs || {})[0] || ""
     }
     function activeStatus(status) { return ["queued", "running", "cancelling", "finalizing"].includes(status) }
-    property var jobData: ({jobs: []})
+    // This session's jobs come from the job service; retained runs from
+    // earlier sessions are read from their records only when asked for.
+    readonly property var retained: previousRuns.checked && service ? JSON.parse(service.retained_jobs()) : ({jobs: []})
+    property var jobData: ({jobs: (jobs ? JSON.parse(jobs.jobs) : []).concat(retained.jobs || []), error: retained.error, warnings: retained.warnings})
     readonly property var notices: service && service.notifications.length ? JSON.parse(service.notifications) : []
     signal openDocument(string path)
     signal copyText(string text)
@@ -28,11 +32,8 @@ AppDialog {
         const errors = lines.filter(line => /^[A-Za-z_.]*(Error|Exception)\b/.test(line))
         return errors.length ? errors[errors.length - 1] : lines.length ? lines[0] : ""
     }
-    function refreshJobs() { if (service) jobData = JSON.parse(service.jobs(previousRuns.checked)) }
-    onOpened: refreshJobs()
-    Timer { interval: 1500; repeat: true; running: dialog.visible; onTriggered: dialog.refreshJobs() }
     contentItem: ColumnLayout {
-        AppCheckBox { id: previousRuns; text: "Include retained runs from earlier sessions"; onToggled: dialog.refreshJobs() }
+        AppCheckBox { id: previousRuns; objectName: "previousRuns"; text: "Include retained runs from earlier sessions" }
         Label { text: dialog.jobData.error || (dialog.jobData.warnings || []).join("\n"); Layout.fillWidth: true; wrapMode: Text.Wrap; visible: text.length > 0 }
         EmptyView {
             Layout.fillWidth: true
@@ -63,7 +64,7 @@ AppDialog {
                             Layout.fillWidth: true
                             Layout.preferredHeight: childrenRect.height
                             spacing: 6
-                            AppButton { objectName: "cancelTask"; text: "Cancel"; visible: dialog.activeStatus(modelData.status); enabled: !!modelData.cancellable && ["queued", "running"].includes(modelData.status); onClicked: dialog.service.cancel_run(modelData.id) }
+                            AppButton { objectName: "cancelTask"; text: "Cancel"; visible: dialog.activeStatus(modelData.status); enabled: !!modelData.cancellable && ["queued", "running"].includes(modelData.status); onClicked: dialog.jobs.cancel(modelData.id) }
                             AppButton { text: "Open source"; onClicked: dialog.openDocument(modelData.source.path) }
                             AppButton { objectName: "copyTaskError"; text: "Copy error"; visible: dialog.mainMessage(modelData.diagnostics).length > 0; onClicked: dialog.copyText(dialog.mainMessage(modelData.diagnostics)) }
                             AppButton { text: "Copy diagnostics"; onClicked: dialog.copyText(JSON.stringify(modelData, null, 2)) }

@@ -17,7 +17,7 @@ TestCase {
         QtObject {
             property string notifications: '[{"time":"now","kind":"notify","message":"finished","document":""}]'
             property string retained: JSON.stringify({jobs: [{id: "retained", operation: "tree", status: "completed", source: {path: "/a.afa"}, outputs: {}, primary_output: "/tree.nwk"}]})
-            function jobs(previous) { return retained }
+            function retained_jobs() { return retained }
             function clear_notifications() { notifications = "[]" }
         }
     }
@@ -59,7 +59,7 @@ TestCase {
         verify(clear)
         mouseClick(clear)
         compare(dialog.notices.length, 0)
-        dialog.refreshJobs()
+        findChild(dialog.contentItem, "previousRuns").checked = true
         compare(service.retained, before)
         compare(dialog.jobData.jobs[0].primary_output, "/tree.nwk")
         dialog.close()

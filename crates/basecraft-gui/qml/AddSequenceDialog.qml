@@ -29,7 +29,6 @@ AppContentDialog {
         if (mafft >= 0) additionMode.currentIndex = mafft ? 1 : 0
         open()
     }
-    function showChoices() { additionMode.popup.open() }
     function submit(keep) {
         validationMessage = ""
         if (inputKind !== "fasta" && !sequenceName.text.trim().length) {

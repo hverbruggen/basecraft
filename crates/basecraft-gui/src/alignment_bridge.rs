@@ -7,6 +7,7 @@
 #[cxx_qt::bridge]
 pub mod qobject {
     impl cxx_qt::Threading for AlignmentController {}
+    impl cxx_qt::Initialize for AlignmentController {}
 
     unsafe extern "C++" {
         include!("cxx-qt-lib/qbytearray.h");
@@ -22,6 +23,14 @@ pub mod qobject {
         #[qproperty(QString, overview_matches)]
         #[qproperty(QByteArray, frame)]
         #[qproperty(QString, status)]
+        #[qproperty(QString, find_status)]
+        #[qproperty(i32, find_count)]
+        #[qproperty(i32, find_row)]
+        #[qproperty(f64, find_hit_y)]
+        #[qproperty(bool, find_nucleotide)]
+        #[qproperty(QString, find_rows)]
+        #[qproperty(i32, find_reveals)]
+        #[qproperty(QString, history_revision)]
         #[qproperty(QString, message)]
         /// "ok", "error", or "" for a neutral hint.
         #[qproperty(QString, message_kind)]
@@ -33,6 +42,10 @@ pub mod qobject {
         #[qproperty(QString, mono_font)]
         #[qproperty(QString, file_path)]
         #[qproperty(bool, dirty)]
+        /// The copy offer for an edit a read-only folder refused (D13), or "".
+        #[qproperty(QString, refused_edit)]
+        /// Asks what the document is when basecraft cannot tell (D12), or "".
+        #[qproperty(QString, alphabet_question)]
         #[qproperty(QString, zoom_text)]
         #[qproperty(f64, hscroll_pos)]
         #[qproperty(f64, hscroll_size)]
@@ -56,10 +69,16 @@ pub mod qobject {
         #[cxx_name = "fileCreated"]
         fn file_created(self: Pin<&mut AlignmentController>, path: QString);
 
+        /// End the closed tab's session now (Main.qml `removeDocument`).
+        #[qinvokable]
+        fn close_session(self: Pin<&mut AlignmentController>);
+        /// Where records of work on this document go (its session's folder).
+        #[qinvokable]
+        fn record_folder(self: &AlignmentController) -> QString;
         #[qinvokable]
         fn find_query(self: Pin<&mut AlignmentController>, query: &QString, reverse: bool);
         #[qinvokable]
-        fn find_poll(self: Pin<&mut AlignmentController>, direction: i32) -> QString;
+        fn find_step(self: Pin<&mut AlignmentController>, direction: i32);
 
         #[qinvokable]
         fn document_record(self: &AlignmentController) -> QString;
@@ -224,6 +243,9 @@ pub mod qobject {
         fn vscroll_to(self: Pin<&mut AlignmentController>, fraction: f64);
         #[qinvokable]
         fn undo(self: Pin<&mut AlignmentController>);
+        /// State what the document is: "dna", "rna" or "protein" (D12).
+        #[qinvokable]
+        fn state_alphabet(self: Pin<&mut AlignmentController>, answer: &QString) -> bool;
         #[qinvokable]
         fn redo(self: Pin<&mut AlignmentController>);
         #[qinvokable]
@@ -242,8 +264,6 @@ pub mod qobject {
         #[qinvokable]
         fn save_as(self: Pin<&mut AlignmentController>, path: &QString) -> bool;
         /// Reload the Omarchy theme if it changed.
-        #[qinvokable]
-        fn check_theme(self: Pin<&mut AlignmentController>);
         #[qinvokable]
         fn memory_report(self: &AlignmentController) -> QString;
 
@@ -300,19 +320,13 @@ pub mod qobject {
 
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
 use std::time::Instant;
 
 use basecraft_docs::AlignmentDoc;
 use basecraft_ops::{DocId, Session};
 use basecraft_plugin_host::file_tool::output_beside;
 
-use crate::document_jobs::{
-    BackgroundDocumentJob as DocumentJob, bundled, failure, primary_member,
-};
+use crate::document_jobs::{DocumentJob, Finished, bundled, failure, primary_member};
 use basecraft_protocol::Op;
 use basecraft_protocol::operation::OperationOutcome;
 use basecraft_viewmodel::alignment::Region;
@@ -324,8 +338,7 @@ use serde_json::json;
 use crate::bridge::{
     ALT, CTRL, KEY_0, KEY_BACKSPACE, KEY_DELETE, KEY_DOWN, KEY_END, KEY_EQUAL, KEY_ESCAPE,
     KEY_HOME, KEY_LEFT, KEY_MINUS, KEY_PAGE_DOWN, KEY_PAGE_UP, KEY_PLUS, KEY_RIGHT, KEY_UP, KEY_Y,
-    KEY_Z, SHIFT, WHEEL_ZOOM, ZOOM_STEP, css, file_name, load_theme, memory_text, monospace_font,
-    plugin_dir, theme_stamp, took,
+    KEY_Z, SHIFT, WHEEL_ZOOM, ZOOM_STEP, file_name, memory_text, took,
 };
 
 const KEY_A: i32 = 0x41;
@@ -347,7 +360,14 @@ const KEY_SPACE: i32 = 0x20;
 #[allow(clippy::struct_excessive_bools)]
 pub struct AlignmentRust {
     find: basecraft_viewmodel::find::Session,
-    find_status_revision: u64,
+    find_status: QString,
+    find_count: i32,
+    find_row: i32,
+    find_hit_y: f64,
+    find_nucleotide: bool,
+    find_rows: QString,
+    find_reveals: i32,
+    history_revision: QString,
     overview_content: QString,
     overview_matches: QString,
     overview_match_cache: basecraft_viewmodel::overview::Cache,
@@ -365,6 +385,8 @@ pub struct AlignmentRust {
     mono_font: QString,
     file_path: QString,
     dirty: bool,
+    refused_edit: QString,
+    alphabet_question: QString,
     zoom_text: QString,
     hscroll_pos: f64,
     hscroll_size: f64,
@@ -389,20 +411,19 @@ pub struct AlignmentRust {
     doc: Option<DocId>,
     view: AlignmentView,
     theme: Theme,
-    theme_stamp: crate::bridge::ThemeStamp,
     scratch: Frame,
 }
 
 // The worker and monitor retain this directory until the engine has finished.
 /// A registered operation running on this alignment. Dropping it cancels the
-/// job; the ticker thread stops once `stop` is set.
+/// run.
 struct ActiveTool {
-    job: DocumentJob,
+    work: basecraft_ops::work::Work,
+    started: Instant,
     name: String,
     output: PathBuf,
     kind: ToolKind,
     generation: u64,
-    stop: Arc<AtomicBool>,
 }
 
 enum ToolKind {
@@ -416,15 +437,22 @@ enum ToolKind {
 
 impl Drop for ActiveTool {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Release);
+        self.work.cancel();
     }
 }
 
 impl Default for AlignmentRust {
     fn default() -> Self {
-        let mut c = Self {
+        Self {
             find: basecraft_viewmodel::find::Session::default(),
-            find_status_revision: u64::MAX,
+            find_status: QString::default(),
+            find_count: 0,
+            find_row: -1,
+            find_hit_y: 0.0,
+            find_nucleotide: false,
+            find_rows: QString::from("[]"),
+            find_reveals: 0,
+            history_revision: QString::default(),
             overview_content: QString::from("{\"shapes\":[]}"),
             overview_matches: QString::from("[]"),
             overview_match_cache: basecraft_viewmodel::overview::Cache::default(),
@@ -439,9 +467,11 @@ impl Default for AlignmentRust {
             background: QString::default(),
             foreground: QString::default(),
             accent: QString::default(),
-            mono_font: QString::from(&monospace_font()),
+            mono_font: QString::default(),
             file_path: QString::default(),
             dirty: false,
+            refused_edit: QString::default(),
+            alphabet_question: QString::default(),
             zoom_text: QString::default(),
             hscroll_pos: 0.0,
             hscroll_size: 1.0,
@@ -465,19 +495,8 @@ impl Default for AlignmentRust {
             doc: None,
             view: AlignmentView::new(800.0, 600.0),
             theme: Theme::default(),
-            theme_stamp: crate::bridge::ThemeStamp::default(),
             scratch: Frame::new(),
-        };
-        if let Some((theme, stamp)) = load_theme() {
-            c.theme = theme;
-            c.theme_stamp = stamp;
         }
-        c.background = QString::from(&css(c.theme.background));
-        c.foreground = QString::from(&css(c.theme.foreground));
-        c.accent = QString::from(&css(c.theme.accent));
-        c.ok_color = QString::from(&css(c.theme.nearest_hue(120.0)));
-        c.error_color = QString::from(&css(c.theme.nearest_hue(0.0)));
-        c
     }
 }
 
@@ -486,7 +505,33 @@ fn f(v: f64) -> f32 {
     v as f32
 }
 
+impl crate::document_open::DocumentEditor for qobject::AlignmentController {
+    fn apply_edit(mut self: Pin<&mut Self>, op: Op) -> bool {
+        let a = self.as_mut().edit(op);
+        self.refresh();
+        a
+    }
+    fn set_refused(self: Pin<&mut Self>, refused: QString) {
+        self.set_refused_edit(refused);
+    }
+    fn alphabet_question(&self) -> Option<String> {
+        let (session, doc) = self.rust().session.as_ref().zip(self.rust().doc)?;
+        basecraft_viewmodel::alphabet::alignment_question(session.alignment(doc).ok()?)
+    }
+    fn set_question(self: Pin<&mut Self>, question: QString) {
+        self.set_alphabet_question(question);
+    }
+}
+
 impl qobject::AlignmentController {
+    pub fn record_folder(&self) -> QString {
+        crate::document_open::record_folder(self.rust().session.as_ref())
+    }
+
+    pub fn close_session(mut self: Pin<&mut Self>) {
+        self.as_mut().rust_mut().session = None;
+    }
+
     pub fn document_record(&self) -> QString {
         crate::provenance_bridge::session_report(self.rust().session.as_ref(), self.rust().doc)
     }
@@ -520,6 +565,9 @@ impl qobject::AlignmentController {
 
     /// Rebuild the frame, status line and scroll bars.
     fn refresh(mut self: Pin<&mut Self>) {
+        self.as_mut().find_update(false);
+        let history = self.record_revision();
+        self.as_mut().set_history_revision(history);
         if let Some(warning) =
             crate::document_open::recovery_notice(self.rust().session.as_ref(), self.rust().doc)
         {
@@ -565,7 +613,7 @@ impl qobject::AlignmentController {
             let matches =
                 r.overview_match_cache
                     .get_json(format!("{key}:{}", r.find.revision()), || {
-                        crate::find_bridge::overview_marks(&r.find, |hit| {
+                        basecraft_viewmodel::find::overview_marks(&r.find, |hit| {
                             r.view.overview_match(
                                 hit.row,
                                 hit.start,
@@ -614,22 +662,27 @@ impl qobject::AlignmentController {
             (key, snapshot)
         };
         self.as_mut().set_gap_column_count(-1.0);
-        let qt_thread = self.qt_thread();
-        std::thread::spawn(move || {
-            let runs = work.1.gap_column_runs();
-            let count: u64 = runs.iter().map(|(a, b)| b - a).sum();
-            let _ = qt_thread.queue(move |mut this| {
+        let (key, snapshot) = work;
+        let started = crate::jobs::start(
+            self.qt_thread(),
+            move |_| Ok(snapshot.gap_column_runs()),
+            move |mut this, runs: Result<Vec<(u64, u64)>, String>| {
+                let Ok(runs) = runs else {
+                    this.as_mut().rust_mut().gap_scan_running = false;
+                    return;
+                };
+                let count: u64 = runs.iter().map(|(a, b)| b - a).sum();
                 let current = {
                     let mut r = this.as_mut().rust_mut();
                     r.gap_scan_running = false;
                     let current = r.session.as_ref().zip(r.doc).is_some_and(|(s, d)| {
-                        s.id() == work.0.0
+                        s.id() == key.0
                             && crate::bridge::checked_document!(access_thread, s.alignment(d))
                                 .version()
-                                == work.0.1
+                                == key.1
                     });
                     if current {
-                        r.gap_scan_key = Some(work.0);
+                        r.gap_scan_key = Some(key);
                         r.gap_runs = runs;
                     }
                     current
@@ -640,8 +693,11 @@ impl qobject::AlignmentController {
                 } else {
                     this.update_gap_count();
                 }
-            });
-        });
+            },
+        );
+        if started.is_err() {
+            self.as_mut().rust_mut().gap_scan_running = false;
+        }
     }
 
     /// A neutral hint. Messages stay brief: say what happened.
@@ -673,27 +729,29 @@ impl qobject::AlignmentController {
         if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
             crate::bridge::checked_document!(sync self, session.alignment(doc));
         }
-        let result = {
+        let (result, refused_now) = {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
             let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
                 return false;
             };
-            let result = session.apply(doc, op);
+            let (result, refused) =
+                crate::document_open::applying(session, doc, op, basecraft_ops::renames::apply_op);
             r.view.sync(crate::bridge::checked_document!(
                 access_thread,
                 session.alignment(doc)
             ));
-            result
+            (result, refused)
         };
+        crate::document_open::offer_copy(self.as_mut(), refused_now);
         match result {
-            Ok(_) => {
+            Ok(()) => {
                 self.as_mut().set_dirty(true);
                 self.as_mut().notify("");
                 true
             }
             Err(e) => {
-                self.fail(&crate::document_open::edit_failure(&e));
+                self.fail(&e);
                 false
             }
         }
@@ -765,7 +823,7 @@ impl qobject::AlignmentController {
                 return Ok(());
             };
             let theme = if publication {
-                crate::bridge::publication_theme()
+                crate::appearance::publication_theme()
             } else {
                 r.theme.clone()
             };
@@ -857,30 +915,30 @@ impl qobject::AlignmentController {
         self.as_mut().set_busy(true);
         self.as_mut().notify("Creating species workspace");
         let qt_thread = self.qt_thread();
-        let spawn = crate::document_jobs::background_session(
-            session,
-            move |session| {
-                crate::delimitation_bridge::create_workspace_in_session(session, doc, &method)
+        let mut session = Some(session);
+        let spawn = crate::jobs::with_session(
+            qt_thread.clone(),
+            &mut session,
+            move |session, work| {
+                crate::delimitation_bridge::create_workspace_in_session(session, work, doc, &method)
             },
-            move |session, result| {
-                let _ = qt_thread.queue(move |mut this| {
-                    this.as_mut().rust_mut().session = Some(session);
-                    this.as_mut().set_busy(false);
-                    match result {
-                        Ok(path) => {
-                            this.as_mut().done("Species workspace created");
-                            this.workspace_created(QString::from(path));
-                        }
-                        Err(error) => {
-                            this.as_mut().fail(&error);
-                            this.workspace_created(QString::default());
-                        }
+            move |mut this, session, result| {
+                this.as_mut().rust_mut().session = Some(session);
+                this.as_mut().set_busy(false);
+                match result {
+                    Ok(path) => {
+                        this.as_mut().done("Species workspace created");
+                        this.workspace_created(QString::from(path));
                     }
-                });
+                    Err(error) => {
+                        this.as_mut().fail(&error);
+                        this.workspace_created(QString::default());
+                    }
+                }
             },
         );
-        if let Err((session, error)) = spawn {
-            self.as_mut().rust_mut().session = Some(*session);
+        if let Err(error) = spawn {
+            self.as_mut().rust_mut().session = session;
             self.as_mut().set_busy(false);
             self.fail(&error);
             return false;
@@ -954,6 +1012,7 @@ impl qobject::AlignmentController {
             .set_file_path(QString::from(path.to_string_lossy().as_ref()));
         self.as_mut().set_dirty(false);
         self.as_mut().notify("");
+        crate::document_open::installed(self.as_mut(), &path);
         self.refresh();
         Ok(())
     }
@@ -1171,36 +1230,16 @@ impl qobject::AlignmentController {
         self.refresh();
     }
 
+    pub fn state_alphabet(self: Pin<&mut Self>, answer: &QString) -> bool {
+        crate::document_open::state_alphabet(self, &answer.to_string())
+    }
+
     pub fn undo(self: Pin<&mut Self>) {
         self.history(false);
     }
 
     pub fn redo(self: Pin<&mut Self>) {
         self.history(true);
-    }
-
-    pub fn check_theme(mut self: Pin<&mut Self>) {
-        if let Some(font) = crate::editor_core::prepare_font(&self.rust().mono_font.to_string()) {
-            self.as_mut().set_mono_font(QString::from(&font));
-        }
-
-        if let Some(update) =
-            crate::editor_core::prepare_theme(&self.rust().theme_stamp, theme_stamp, load_theme)
-        {
-            {
-                let mut r = self.as_mut().rust_mut();
-                r.theme = update.theme;
-                r.theme_stamp = update.stamp;
-            }
-            self.as_mut()
-                .set_background(QString::from(&update.background));
-            self.as_mut()
-                .set_foreground(QString::from(&update.foreground));
-            self.as_mut().set_accent(QString::from(&update.accent));
-            self.as_mut().set_ok_color(QString::from(&update.ok));
-            self.as_mut().set_error_color(QString::from(&update.error));
-            self.refresh();
-        }
     }
 
     pub fn memory_report(&self) -> QString {
@@ -1605,14 +1644,11 @@ impl qobject::AlignmentController {
             Ok(context) => context,
             Err(error) => return QString::from(&json!({"error": error.to_string()}).to_string()),
         };
-        let value =
-            basecraft_plugin_host::manifest::Manifest::load(&plugin_dir(&plugin.to_string()))
-                .map_err(|e| e.to_string())
-                .and_then(|m| {
-                    m.form(&form.to_string())
-                        .map(|f| serde_json::to_value(f.for_context(&context)).unwrap_or_default())
-                        .ok_or_else(|| format!("{plugin} has no {form} settings"))
-                });
+        let value = crate::plugins::bundled_manifest(&plugin.to_string()).and_then(|m| {
+            m.form(&form.to_string())
+                .map(|f| serde_json::to_value(f.for_context(&context)).unwrap_or_default())
+                .ok_or_else(|| format!("{plugin} has no {form} settings"))
+        });
         QString::from(
             &value
                 .unwrap_or_else(|error| serde_json::json!({"error": error}))
@@ -1623,8 +1659,7 @@ impl qobject::AlignmentController {
     pub fn run_form(self: Pin<&mut Self>, plugin: &QString, form: &QString, values: &QString) {
         let tool = (|| -> Result<Tool, String> {
             let plugin = plugin.to_string();
-            let manifest = basecraft_plugin_host::manifest::Manifest::load(&plugin_dir(&plugin))
-                .map_err(|e| e.to_string())?;
+            let manifest = crate::plugins::bundled_manifest(&plugin)?;
             let form = manifest
                 .form(&form.to_string())
                 .ok_or_else(|| format!("{} has no {form} settings", manifest.name))?;
@@ -1659,7 +1694,7 @@ impl qobject::AlignmentController {
         let Some(tool) = &self.rust().tool_job else {
             return;
         };
-        tool.job.cancel();
+        tool.work.cancel();
         self.as_mut().set_bootstrap_cancelling(true);
         self.set_bootstrap_status(QString::from("Cancelling after the current replicate…"));
     }
@@ -1701,6 +1736,7 @@ impl qobject::AlignmentController {
                 .get("bootstrap")
                 .and_then(serde_json::Value::as_u64)
                 .is_some_and(|n| n > 0);
+        let thread = self.qt_thread();
         let submitted = (|| -> Result<ActiveTool, String> {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
@@ -1716,20 +1752,26 @@ impl qobject::AlignmentController {
                 (output, exports)
             };
             let generation = session.generation(doc).map_err(|e| e.to_string())?;
-            let job = DocumentJob::submit(
+            let parameters = serde_json::Value::Object(tool.params.clone());
+            let listing = crate::jobs::Listing {
+                operation: name.clone(),
+                source: r.file_path.to_string(),
+            };
+            let work = crate::document_jobs::run_operation(
+                thread,
+                listing,
                 &mut r.session,
-                doc,
-                &operation,
-                serde_json::Value::Object(tool.params.clone()),
-                &exports,
+                move |session| DocumentJob::submit(session, doc, &operation, parameters, &exports),
+                qobject::AlignmentController::show_bootstrap_progress,
+                qobject::AlignmentController::tool_finished,
             )?;
             Ok(ActiveTool {
-                job,
+                work,
+                started: Instant::now(),
                 name: name.clone(),
                 output,
                 kind,
                 generation,
-                stop: Arc::new(AtomicBool::new(false)),
             })
         })();
         let active = match submitted {
@@ -1739,7 +1781,6 @@ impl qobject::AlignmentController {
                 return;
             }
         };
-        let stop = Arc::clone(&active.stop);
         self.as_mut().rust_mut().tool_job = Some(active);
         if bootstrap {
             self.as_mut().set_bootstrap_running(true);
@@ -1750,42 +1791,21 @@ impl qobject::AlignmentController {
         }
         self.as_mut().set_busy(true);
         self.as_mut().notify(&tool.working);
-        let qt_thread = self.qt_thread();
-        std::thread::spawn(move || {
-            while !stop.load(Ordering::Acquire) {
-                std::thread::sleep(std::time::Duration::from_millis(100));
-                if qt_thread
-                    .queue(qobject::AlignmentController::poll_tool)
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        });
     }
 
-    /// Called on the Qt thread while a tool runs: shows bootstrap progress and
-    /// finishes once the session has recorded the run.
-    fn poll_tool(mut self: Pin<&mut Self>) {
-        let polled = {
-            let mut r = self.as_mut().rust_mut();
-            let r = &mut *r;
-            let Some(tool) = &r.tool_job else {
-                return;
-            };
-            tool.job.poll(&mut r.session)
-        };
-        let outcome = match polled {
-            Ok(Some(outcome)) => outcome,
-            Ok(None) => {
-                if self.rust().bootstrap_running && !self.rust().bootstrap_cancelling {
-                    self.show_bootstrap_progress();
-                }
-                return;
-            }
+    /// The run finished and the session has recorded it.
+    fn tool_finished(
+        mut self: Pin<&mut Self>,
+        session: Session,
+        finished: Result<Finished, String>,
+    ) {
+        self.as_mut().rust_mut().session = Some(session);
+        let outcome = match finished {
+            Ok(finished) => finished.outcome,
             Err(e) => {
                 self.as_mut().rust_mut().tool_job = None;
                 self.as_mut().set_busy(false);
+                self.as_mut().set_bootstrap_running(false);
                 self.fail(&e);
                 return;
             }
@@ -1810,12 +1830,12 @@ impl qobject::AlignmentController {
             ToolKind::Addition => self.finish_addition(&outcome, tool.generation),
             ToolKind::Matrix => self.as_mut().done(&format!(
                 "Done with {name}{}; saved {}",
-                took(tool.job.started),
+                took(tool.started),
                 tool.output.display()
             )),
             ToolKind::Open => {
                 self.as_mut()
-                    .done(&format!("Done with {name}{}", took(tool.job.started)));
+                    .done(&format!("Done with {name}{}", took(tool.started)));
                 let components = component_trees(&tool, &outcome);
                 if components.is_empty() {
                     let path = tool.output.to_string_lossy().into_owned();
@@ -1830,23 +1850,10 @@ impl qobject::AlignmentController {
         }
     }
 
-    fn show_bootstrap_progress(mut self: Pin<&mut Self>) {
-        let Some(path) = self
-            .rust()
-            .tool_job
-            .as_ref()
-            .and_then(|tool| tool.job.progress_file())
-        else {
+    fn show_bootstrap_progress(mut self: Pin<&mut Self>, progress: &serde_json::Value) {
+        if !self.rust().bootstrap_running || self.rust().bootstrap_cancelling {
             return;
-        };
-        let Ok(progress) = std::fs::read(&path)
-            .map_err(|e| e.to_string())
-            .and_then(|bytes| {
-                serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|e| e.to_string())
-            })
-        else {
-            return;
-        };
+        }
         let attempted = progress["attempted"].as_f64().unwrap_or(0.);
         let requested = progress["requested"].as_f64().unwrap_or(1.).max(1.);
         let completed = progress["completed"].as_u64().unwrap_or(0);
@@ -2086,3 +2093,5 @@ pub(crate) mod refusal_tests;
 crate::editor_save::ordinary_save!(qobject::AlignmentController);
 
 crate::editor_save::confirmed_save!(qobject::AlignmentController);
+
+crate::appearance::editor_follows_appearance!(qobject::AlignmentController);

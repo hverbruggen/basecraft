@@ -60,7 +60,6 @@ FocusScope {
 
     signal activate
     signal reviewTraces(var paths, string reference)
-    function showAdditionChoices() { if (activeAdditionDialog) activeAdditionDialog.showChoices() }
     property var activeAdditionDialog: null
     function addText() { if (ctl.busy) return; activeAdditionDialog = textSequenceDialog; textSequenceDialog.prepare("") }
     function addFasta() { if (!ctl.busy) fastaDialog.open() }

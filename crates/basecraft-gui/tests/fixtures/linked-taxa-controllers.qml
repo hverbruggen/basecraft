@@ -51,11 +51,11 @@ Main {
             if (!documentAt(0)) return
             if (a === null) {
                 a = documentAt(0).controller
-                appendLegacy({path: folder + "/alignment.afa", kind: "alignment", dirty: false})
-                appendLegacy({path: folder + "/tree.nwk", kind: "tree", dirty: false})
-                appendLegacy({path: folder + "/workspace.spart", kind: "delimitation", dirty: false})
-                appendLegacy({path: folder + "/unrelated.afa", kind: "alignment", dirty: false})
-                appendLegacy({path: folder + "/unlinked.nwk", kind: "tree", dirty: false})
+                documentOpens.add_tab(folder + "/alignment.afa", "alignment")
+                documentOpens.add_tab(folder + "/tree.nwk", "tree")
+                documentOpens.add_tab(folder + "/workspace.spart", "delimitation")
+                documentOpens.add_tab(folder + "/unrelated.afa", "alignment")
+                documentOpens.add_tab(folder + "/unlinked.nwk", "tree")
                 duplicate = documentAt(1).controller
                 tree = documentAt(2).controller
                 workspace = documentAt(3).controller

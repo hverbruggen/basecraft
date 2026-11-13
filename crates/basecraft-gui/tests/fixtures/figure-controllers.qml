@@ -20,22 +20,17 @@ Item {
     MetadataController { id: metadata; onOpened: success => figures.ready(success && available && !busy) }
     SubmissionController { id: submission; onOpened: success => figures.ready(success && available && !busy) }
     MetadataController { id: freshMetadata }
-    Timer {
-        interval: 10; repeat: true; running: figures.opening === 0 && (delimitation.busy || trace.busy)
-        onTriggered: {
-            if (trace.busy) trace.poll_stage()
-            delimitation.poll_job()
-            if (!delimitation.busy && !figures.completed) {
-                if (delimitation.preview_json !== figures.savedPreview) {
-                    console.error("Rejected edits/cancellation lost the cut preview"); Qt.exit(2); return
-                }
-                delimitation.save_cut("Cut after cancellation")
-                if (delimitation.preview_json !== "[]") {
-                    console.error("Session was not restored after cancellation"); Qt.exit(2); return
-                }
-                figures.completed = true
+    Connections { target: delimitation; function onBusyChanged() { figures.settle() } }
+    function settle() {
+            if (figures.opening !== 0 || delimitation.busy || figures.completed) return
+            if (delimitation.preview_json !== figures.savedPreview) {
+                console.error("Rejected edits/cancellation lost the cut preview"); Qt.exit(2); return
             }
-        }
+            delimitation.save_cut("Cut after cancellation")
+            if (delimitation.preview_json !== "[]") {
+                console.error("Session was not restored after cancellation"); Qt.exit(2); return
+            }
+            figures.completed = true
     }
     Component.onCompleted: {
         function check(value, message) { if (!value) { console.error(message); Qt.exit(2) } }

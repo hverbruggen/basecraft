@@ -386,3 +386,10 @@ void InstanceRenderer::render(QRhiCommandBuffer *cb)
     }
     cb->endPass();
 }
+
+// Objects the main window built at startup, counted when the startup trace
+// is on.
+extern "C" int basecraft_startup_object_count(QObject *root)
+{
+    return root ? int(root->findChildren<QObject *>().size()) + 1 : 0;
+}

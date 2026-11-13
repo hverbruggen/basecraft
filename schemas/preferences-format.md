@@ -9,8 +9,15 @@ shown in the example (shortcut overrides default to an empty map).
 
 Optional `ui.font_size_points` sets interface text size in points (6–32), applied
 immediately. When absent, the GUI uses the rounded platform point size minus three,
-with a minimum of six points. Resetting the size removes this override. The font
-family remains the desktop monospace family; scientific canvas zoom is separate.
+with a minimum of six points. Resetting the size removes this override. Optional
+`ui.font_family` names the interface font; when absent the GUI follows the
+desktop's monospace family. Scientific canvas zoom is separate.
+
+`ui.theme` is `follow-desktop` (the default; the desktop's theme colours),
+`light` or `dark` (Basecraft's own palettes). `ui.release_notices` (default
+false) makes the GUI ask GitHub for the latest version number at startup and
+show a notice when it is newer; offscreen and screenshot runs never ask.
+`ui.welcomed` records that the first-launch questions were answered.
 
 `ui.ribbon_size_percent` independently scales ribbon icons, labels, fields, group
 captions and tabs. It defaults to 100 and accepts integers from 100 to 200; the GUI
@@ -23,6 +30,11 @@ street, city, state, postal code and country, each at most 200 characters on
 one line. First and last name, email (with an `@`), institution, city and
 country are required before a package is ready; empty fields are unset. Authors
 and the publication title belong to each submission document, not here.
+
+`contacts.service_emails` maps a service name (lowercase letters and `-`, at
+most 32 characters) to the email that service receives; NCBI BLAST uses
+`blast`. A service without an entry uses `submitter.email`. Clearing an entry
+removes it.
 
 `basecraft_platform::paths::AppPaths` discovers native config, data, state, cache
 and scratch locations without creating them. On Linux these use XDG locations
@@ -42,8 +54,7 @@ OS file locks; cloud synchronization is not a distributed lock protocol. No stal
 whole-file snapshot is accepted for an update. A process crash releases its OS
 lock; the small lock file remains and contains no document information.
 
-A version-0 file (same keys, missing or zero `schema_version`) migrates in memory;
-an explicit update writes version 1. The GUI reads known UI values from the old
+A file without `schema_version` is an error. The GUI reads known UI values from the old
 QSettings `ui` group once and records `migration.qsettings_imported`. It never
 changes the original QSettings store. An explicit profile never imports the global
 legacy store. Existing explicit TOML changes take precedence over legacy values. Invalid imported values produce an error
@@ -65,9 +76,8 @@ currently unavailable. Visibility changes target one ID under the preferences
 lock so concurrent changes to unrelated commands survive. Files are limited to 1 MiB. CPU threads range from
 1 to 65536; ORF minimum codons range from 1 to 1000000.
 
-Recovery and provenance policies are consumed by lazy document sessions and
-saved-result publication. Persistent workspace storage and browsing indexes remain
-reserved policies without an exposed GUI toggle. No recent-document list belongs in this
+Recovery is consumed by lazy document sessions. History and provenance always go
+to the project's `.basecraft`, or beside a loose file; there is no setting for it. No recent-document list belongs in this
 file. Passive preference reads create no file-specific record. The GUI emits
 property change notifications for its preference snapshot; external process
 changes are observed on reload and always before a targeted write.

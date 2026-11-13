@@ -708,6 +708,17 @@ impl TreeView {
         if let Some(s) = self.selected {
             parts.push(describe_node(doc, s));
         }
+        let moved: Vec<String> = doc
+            .displaced_annotations()
+            .iter()
+            .map(|id| format!("{:?}", doc.annotations()[id].label))
+            .collect();
+        if !moved.is_empty() {
+            parts.push(format!(
+                "moved labels, no longer on the group they were made for: {}",
+                moved.join(", ")
+            ));
+        }
         parts.join("   ·   ")
     }
 
@@ -1751,6 +1762,43 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn a_label_a_reroot_moved_is_marked_and_named_in_the_status() {
+        // A rooted tree: an unrooted label follows its split through a reroot.
+        let mut d = tree("[&R] ((a,b),(c,d),e);");
+        for (id, clade, label) in [(1, ["a", "b"], "AB"), (2, ["c", "d"], "CD")] {
+            let annotation = Some(CladeAnnotation::new(clade.map(String::from).into(), label));
+            d.apply_edit(&Op::TreeAnnotate { id, annotation }).unwrap();
+        }
+        let view = TreeView::new(400.0, 300.0);
+        let labels = |d: &TreeDoc| -> Vec<String> {
+            annotation_columns(d, &d.tips_in_order())
+                .iter()
+                .flat_map(|column| {
+                    column
+                        .tips
+                        .values()
+                        .flatten()
+                        .map(|band| band.label.clone())
+                })
+                .collect()
+        };
+        assert!(!view.status(&d).contains("moved"));
+        assert!(labels(&d).iter().all(|label| !label.contains("moved")));
+        d.apply_edit(&Op::TreeReroot {
+            clade: vec!["a".into()],
+        })
+        .unwrap();
+        assert!(
+            view.status(&d)
+                .contains("moved labels, no longer on the group they were made for: \"AB\"")
+        );
+        // The window asks where a displaced label goes (D11); it is drawn as is.
+        assert!(labels(&d).contains(&"AB".to_owned()));
+        assert!(labels(&d).iter().all(|label| !label.contains("moved")));
+        assert!(labels(&d).contains(&"CD".to_owned()));
     }
 
     #[test]

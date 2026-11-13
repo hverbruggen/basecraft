@@ -1,10 +1,12 @@
 //! QML boundary for the Qt-independent preferences service.
 use basecraft_platform::{
     paths::AppPaths,
-    settings::{Change, DataColorScheme, Preferences, SettingsStore},
+    settings::{Change, DataColorScheme, Preferences, SettingsStore, ThemeChoice},
 };
+use basecraft_viewmodel::{projects, release};
 use cxx_qt::CxxQtType;
-use cxx_qt_lib::QString;
+use cxx_qt::Threading;
+use cxx_qt_lib::{QString, QStringList};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
@@ -13,38 +15,74 @@ pub mod qobject {
     unsafe extern "C++" {
         include!("cxx-qt-lib/qstring.h");
         type QString = cxx_qt_lib::QString;
+        include!("cxx-qt-lib/qstringlist.h");
+        type QStringList = cxx_qt_lib::QStringList;
+        include!("releasecheck.h");
+        /// Blocking; runs on a job thread.
+        #[rust_name = "fetch_latest_release"]
+        fn fetchLatestRelease(url: &QString) -> QString;
+        #[rust_name = "cancel_release_check"]
+        fn cancelReleaseCheck();
     }
     unsafe extern "RustQt" {
         #[qobject]
         #[qml_element]
         #[qproperty(QString, snapshot)]
         #[qproperty(QString, error)]
+        /// Recently chosen project folders, newest first.
+        #[qproperty(QStringList, recent_projects)]
+        /// Why the recent projects could not be read, or a project not chosen.
+        #[qproperty(QString, project_error)]
         type AppSettings = super::SettingsRust;
+    }
+    impl cxx_qt::Initialize for AppSettings {}
+    impl cxx_qt::Threading for AppSettings {}
+    unsafe extern "RustQt" {
         #[qinvokable]
         fn reload(self: Pin<&mut AppSettings>) -> bool;
         #[qinvokable]
         fn update(self: Pin<&mut AppSettings>, key: &QString, value: &QString) -> bool;
+        /// Choose `path` as the project: remembered first in the recent
+        /// projects. Returns `path`, or "" with `project_error` set.
         #[qinvokable]
-        fn project_history(self: &AppSettings) -> QString;
+        fn select_project(self: Pin<&mut AppSettings>, path: &QString) -> QString;
         #[qinvokable]
-        fn remember_project(self: Pin<&mut AppSettings>, path: &QString) -> QString;
+        fn project_picker_directory(self: &AppSettings) -> QString;
         #[qinvokable]
-        fn project_picker_directory(self: &AppSettings, home: &QString) -> QString;
+        /// Where a file dialog starts for the document at `document`
+        /// (its tab path) whose file is `file` (may be empty).
+        fn dialog_folder(
+            self: &AppSettings,
+            project: &QString,
+            document: &QString,
+            file: &QString,
+        ) -> QString;
+        /// Ask for the latest release when the user opted in, except in
+        /// offscreen and screenshot runs. `release_available` follows when
+        /// it is newer than this build.
         #[qinvokable]
-        fn project_is_directory(self: &AppSettings, path: &QString) -> bool;
+        fn check_release(self: Pin<&mut AppSettings>);
+        #[qsignal]
+        fn release_available(self: Pin<&mut AppSettings>, notice: QString);
     }
 }
 pub struct SettingsRust {
     snapshot: QString,
     error: QString,
-    project_picker: ProjectPickerLocation,
+    recent_projects: QStringList,
+    project_error: QString,
+    project_picker: projects::PickerLocation,
+    release: Option<crate::release_check::ReleaseCheck>,
 }
 impl Default for SettingsRust {
     fn default() -> Self {
         Self {
             snapshot: snapshot(&Preferences::default()).unwrap_or_default(),
             error: QString::default(),
-            project_picker: ProjectPickerLocation::default(),
+            recent_projects: QStringList::default(),
+            project_error: QString::default(),
+            project_picker: projects::PickerLocation::default(),
+            release: None,
         }
     }
 }
@@ -77,10 +115,32 @@ fn change(key: &str, value: &serde_json::Value) -> Result<Change, String> {
         } else {
             DataColorScheme::DesktopTheme
         }),
+        "serviceEmail" => Change::ServiceEmail {
+            service: value
+                .get("service")
+                .and_then(serde_json::Value::as_str)
+                .ok_or("serviceEmail requires a service")?
+                .into(),
+            email: match value.get("email") {
+                Some(serde_json::Value::String(email)) if !email.trim().is_empty() => {
+                    Some(email.trim().to_owned())
+                }
+                _ => None,
+            },
+        },
+        "theme" => Change::Theme(match value.as_str() {
+            Some("light") => ThemeChoice::Light,
+            Some("dark") => ThemeChoice::Dark,
+            Some("follow-desktop") => ThemeChoice::FollowDesktop,
+            _ => return Err("theme is light, dark or follow-desktop".into()),
+        }),
+        "releaseNotices" => Change::ReleaseNotices(boolean()?),
+        "welcomed" => Change::Welcomed,
         "showGc" => Change::ShowGc(boolean()?),
         "sidebarOpen" => Change::SidebarOpen(boolean()?),
         "orfMinCodons" => Change::OrfMinCodons(integer()?),
         "alignmentInsert" => Change::AlignmentInsert(boolean()?),
+        "fontFamily" => Change::FontFamily(value.as_str().map(str::to_owned)),
         "fontSizePoints" => Change::FontSizePoints(if value.is_null() {
             None
         } else {
@@ -130,9 +190,6 @@ fn change(key: &str, value: &serde_json::Value) -> Result<Change, String> {
             Change::RibbonHidden(serde_json::from_value(value.clone()).map_err(|e| e.to_string())?)
         }
         "resetCustomization" => Change::ResetCustomization,
-        "provenance" => {
-            Change::Provenance(serde_json::from_value(value.clone()).map_err(|e| e.to_string())?)
-        }
         "submitter" => Change::Submitter(Box::new(
             serde_json::from_value(value.clone()).map_err(|e| e.to_string())?,
         )),
@@ -140,27 +197,71 @@ fn change(key: &str, value: &serde_json::Value) -> Result<Change, String> {
     })
 }
 impl qobject::AppSettings {
-    fn project_history(&self) -> QString {
-        history_reply(load_project_history())
+    fn select_project(mut self: Pin<&mut Self>, path: &QString) -> QString {
+        let chosen = path.to_string();
+        let result = history_path().and_then(|file| {
+            projects::choose(
+                &mut self.as_mut().rust_mut().project_picker,
+                Path::new(&chosen),
+                &file,
+            )
+        });
+        let accepted = result.is_ok();
+        self.show_projects(result);
+        QString::from(if accepted { chosen.as_str() } else { "" })
     }
-    fn remember_project(mut self: Pin<&mut Self>, path: &QString) -> QString {
-        let result = self
-            .as_mut()
-            .rust_mut()
+    /// Publish the recent projects, or keep the shown ones and say why not.
+    fn show_projects(mut self: Pin<&mut Self>, result: Result<Vec<PathBuf>, String>) {
+        match result {
+            Ok(projects) => {
+                let mut list = QStringList::default();
+                for project in projects {
+                    list.append(QString::from(project.to_string_lossy().as_ref()));
+                }
+                self.as_mut().set_recent_projects(list);
+                self.set_project_error(QString::default());
+            }
+            Err(error) => self.set_project_error(QString::from(&error)),
+        }
+    }
+    fn project_picker_directory(&self) -> QString {
+        let home = AppPaths::discover()
+            .ok()
+            .and_then(|paths| paths.home)
+            .unwrap_or_default();
+        let folder = self
             .project_picker
-            .opened(Path::new(&path.to_string()))
-            .and_then(|path| remember_project_path(&path));
-        history_reply(result)
-    }
-    fn project_picker_directory(&self, home: &QString) -> QString {
-        let folder = self.project_picker.directory(
-            &load_project_history().unwrap_or_default(),
-            Path::new(&home.to_string()),
-        );
+            .directory(&load_project_history().unwrap_or_default(), &home);
         QString::from(folder.to_string_lossy().as_ref())
     }
-    fn project_is_directory(&self, path: &QString) -> bool {
-        Path::new(&path.to_string()).is_dir()
+    fn check_release(mut self: Pin<&mut Self>) {
+        let opted_in = serde_json::from_str::<Preferences>(&self.snapshot.to_string())
+            .is_ok_and(|prefs| prefs.ui.release_notices);
+        let platform = std::env::var("QT_QPA_PLATFORM").ok();
+        let args: Vec<String> = std::env::args().collect();
+        if !release::wanted(opted_in, platform.as_deref(), &args) {
+            return;
+        }
+        let check = crate::release_check::ReleaseCheck::start(
+            self.qt_thread(),
+            release::url(env!("CARGO_PKG_REPOSITORY")),
+            |this: Pin<&mut Self>, body| {
+                if let Some(notice) = release::notice(env!("CARGO_PKG_VERSION"), &body) {
+                    this.release_available(QString::from(&notice));
+                }
+            },
+        );
+        self.as_mut().rust_mut().release = check;
+    }
+    fn dialog_folder(&self, project: &QString, document: &QString, file: &QString) -> QString {
+        let home = AppPaths::discover().ok().and_then(|paths| paths.home);
+        let folder = projects::dialog_folder(
+            &project.to_string(),
+            &document.to_string(),
+            &file.to_string(),
+            home.as_deref(),
+        );
+        QString::from(folder.to_string_lossy().as_ref())
     }
     fn publish(mut self: Pin<&mut Self>, result: Result<Preferences, String>) -> bool {
         match result.and_then(|prefs| snapshot(&prefs)) {
@@ -180,73 +281,16 @@ impl qobject::AppSettings {
         self.publish(result)
     }
     fn update(self: Pin<&mut Self>, key: &QString, value: &QString) -> bool {
+        let key = key.to_string();
         let result = serde_json::from_str::<serde_json::Value>(&value.to_string())
             .map_err(|e| e.to_string())
-            .and_then(|v| change(&key.to_string(), &v))
+            .and_then(|v| change(&key, &v))
             .and_then(|change| store()?.update(change).map_err(|e| e.to_string()));
+        if result.is_ok() && matches!(key.as_str(), "colorBlindFriendly" | "theme" | "fontFamily") {
+            crate::appearance::preferences_changed();
+        }
         self.publish(result)
     }
-}
-
-const PROJECT_HISTORY_VERSION: u32 = 1;
-const PROJECT_HISTORY_LIMIT: usize = 10;
-
-#[derive(Default)]
-struct ProjectPickerLocation {
-    last_opened: Option<PathBuf>,
-}
-
-impl ProjectPickerLocation {
-    // Session state follows successful folder opens, even when history cannot
-    // be saved. Failed opens and merely browsing/cancelling a picker leave it alone.
-    fn opened(&mut self, path: &Path) -> Result<PathBuf, String> {
-        let path = project_directory(path)?;
-        self.last_opened = Some(path.clone());
-        Ok(path)
-    }
-
-    fn directory(&self, history: &[PathBuf], home: &Path) -> PathBuf {
-        if let Some(path) = &self.last_opened
-            && path.is_dir()
-        {
-            return path.clone();
-        }
-        let mut usable = history
-            .iter()
-            .filter(|path| path.is_absolute())
-            .filter_map(|path| project_directory(path).ok());
-        let Some(mut common) = usable.next() else {
-            return home.into();
-        };
-        for path in usable {
-            while !path.starts_with(&common) {
-                if !common.pop() {
-                    return home.into();
-                }
-            }
-        }
-        // A filesystem root shared by unrelated projects is no useful starting point.
-        if common.parent().is_none() {
-            home.into()
-        } else {
-            common
-        }
-    }
-}
-
-fn project_directory(path: &Path) -> Result<PathBuf, String> {
-    let canonical = std::fs::canonicalize(path)
-        .map_err(|e| format!("cannot open project {}: {e}", path.display()))?;
-    if !canonical.is_dir() {
-        return Err(format!("project {} is not a folder", canonical.display()));
-    }
-    Ok(canonical)
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct ProjectHistory {
-    version: u32,
-    projects: Vec<PathBuf>,
 }
 
 fn history_path() -> Result<PathBuf, String> {
@@ -257,186 +301,13 @@ fn history_path() -> Result<PathBuf, String> {
 
 pub(crate) fn load_project_history() -> Result<Vec<PathBuf>, String> {
     let path = history_path()?;
-    load_project_history_at(&path)
+    projects::load_history(&path)
 }
 
-fn load_project_history_at(path: &Path) -> Result<Vec<PathBuf>, String> {
-    let bytes = match std::fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(format!("cannot read recent projects: {error}")),
-    };
-    if bytes.len() > 64 * 1024 {
-        return Err("recent projects file is too large; original retained".into());
+impl cxx_qt::Initialize for qobject::AppSettings {
+    fn initialize(self: Pin<&mut Self>) {
+        self.show_projects(load_project_history());
     }
-    let history: ProjectHistory = serde_json::from_slice(&bytes)
-        .map_err(|e| format!("invalid recent projects file; original retained: {e}"))?;
-    if history.version != PROJECT_HISTORY_VERSION || history.projects.len() > PROJECT_HISTORY_LIMIT
-    {
-        return Err("unsupported recent projects file; original retained".into());
-    }
-    Ok(history.projects)
-}
-
-fn remember_project_path(path: &Path) -> Result<Vec<PathBuf>, String> {
-    remember_project_path_at(path, &history_path()?)
-}
-
-fn remember_project_path_at(path: &Path, file: &Path) -> Result<Vec<PathBuf>, String> {
-    let canonical = project_directory(path)?;
-    let mut projects = load_project_history_at(file)?;
-    projects.retain(|existing| existing != &canonical);
-    projects.insert(0, canonical);
-    projects.truncate(PROJECT_HISTORY_LIMIT);
-    std::fs::create_dir_all(file.parent().ok_or("recent projects path has no parent")?)
-        .map_err(|e| format!("cannot create application state: {e}"))?;
-    let bytes = serde_json::to_vec_pretty(&ProjectHistory {
-        version: PROJECT_HISTORY_VERSION,
-        projects: projects.clone(),
-    })
-    .map_err(|e| e.to_string())?;
-    basecraft_io::write_atomic(file, |writer| writer.write_all(&bytes))
-        .map_err(|e| format!("cannot save recent projects: {e}"))?;
-    Ok(projects)
-}
-
-#[cfg(test)]
-mod project_history_tests {
-    use super::*;
-
-    #[test]
-    fn picker_uses_available_directories_and_component_ancestors() {
-        let temp = tempfile::tempdir().unwrap();
-        let home = temp.path().join("home");
-        let first = temp.path().join("projects/étude one");
-        let second = temp.path().join("projects/étude two");
-        let lookalike = temp.path().join("projects-other/three");
-        for path in [&home, &first, &second, &lookalike] {
-            std::fs::create_dir_all(path).unwrap();
-        }
-        let file = temp.path().join("not-a-directory");
-        std::fs::write(&file, b"document").unwrap();
-        let picker = ProjectPickerLocation::default();
-        assert_eq!(picker.directory(&[], &home), home);
-        assert_eq!(
-            picker.directory(
-                &[temp.path().join("missing"), file, "relative".into()],
-                &home
-            ),
-            home
-        );
-        assert_eq!(
-            picker.directory(std::slice::from_ref(&first), &home),
-            first.canonicalize().unwrap()
-        );
-        assert_eq!(
-            picker.directory(&[first.clone(), second], &home),
-            temp.path().join("projects").canonicalize().unwrap()
-        );
-        // "projects" and "projects-other" share no directory component.
-        assert_eq!(
-            picker.directory(&[first.clone(), lookalike], &home),
-            temp.path().canonicalize().unwrap()
-        );
-        let root = first.ancestors().last().unwrap().to_path_buf();
-        assert_eq!(picker.directory(&[first, root], &home), home);
-    }
-
-    #[test]
-    fn picker_session_survives_failed_opens_and_history_writes() {
-        let temp = tempfile::tempdir().unwrap();
-        let first = temp.path().join("first");
-        let second = temp.path().join("second");
-        std::fs::create_dir(&first).unwrap();
-        std::fs::create_dir(&second).unwrap();
-        let home = temp.path().join("home");
-        let mut picker = ProjectPickerLocation::default();
-        picker.opened(&first).unwrap();
-        assert!(picker.opened(&temp.path().join("missing")).is_err());
-        assert_eq!(
-            picker.directory(std::slice::from_ref(&second), &home),
-            first.canonicalize().unwrap()
-        );
-        let damaged = temp.path().join("history.json");
-        std::fs::write(&damaged, b"damaged").unwrap();
-        let opened = picker.opened(&second).unwrap();
-        assert!(remember_project_path_at(&opened, &damaged).is_err());
-        assert_eq!(picker.directory(&[], &home), second.canonicalize().unwrap());
-        assert_eq!(std::fs::read(&damaged).unwrap(), b"damaged");
-        std::fs::remove_dir(&second).unwrap();
-        assert_eq!(
-            picker.directory(std::slice::from_ref(&first), &home),
-            first.canonicalize().unwrap()
-        );
-        std::fs::remove_dir(&first).unwrap();
-        assert_eq!(picker.directory(&[], &home), home);
-    }
-
-    #[test]
-    fn unavailable_or_malformed_history_falls_back_without_writing() {
-        let temp = tempfile::tempdir().unwrap();
-        let file = temp.path().join("history.json");
-        let picker = ProjectPickerLocation::default();
-        let home = temp.path().join("home");
-        assert_eq!(
-            picker.directory(&load_project_history_at(&file).unwrap(), &home),
-            home
-        );
-        assert!(!file.exists());
-        for bytes in [b"damaged".as_slice(), br#"{"version":99,"projects":[]}"#] {
-            std::fs::write(&file, bytes).unwrap();
-            assert!(load_project_history_at(&file).is_err());
-            assert_eq!(
-                picker.directory(&load_project_history_at(&file).unwrap_or_default(), &home),
-                home
-            );
-            assert_eq!(std::fs::read(&file).unwrap(), bytes);
-        }
-        std::fs::remove_file(&file).unwrap();
-        std::fs::create_dir(&file).unwrap();
-        assert!(load_project_history_at(&file).is_err());
-        assert_eq!(
-            picker.directory(&load_project_history_at(&file).unwrap_or_default(), &home),
-            home
-        );
-    }
-
-    #[test]
-    fn recent_projects_are_deduplicated_and_damaged_history_is_retained() {
-        let temp = tempfile::tempdir().unwrap();
-        let first = temp.path().join("first");
-        let second = temp.path().join("second");
-        std::fs::create_dir(&first).unwrap();
-        std::fs::create_dir(&second).unwrap();
-        let file = temp.path().join("state/recent-projects.json");
-        remember_project_path_at(&first, &file).unwrap();
-        remember_project_path_at(&second, &file).unwrap();
-        let projects = remember_project_path_at(&first, &file).unwrap();
-        assert_eq!(
-            projects,
-            vec![
-                first.canonicalize().unwrap(),
-                second.canonicalize().unwrap()
-            ]
-        );
-        std::fs::write(&file, b"damaged").unwrap();
-        assert!(remember_project_path_at(&second, &file).is_err());
-        assert_eq!(std::fs::read(&file).unwrap(), b"damaged");
-    }
-}
-
-fn history_reply(result: Result<Vec<PathBuf>, String>) -> QString {
-    let value = match result {
-        Ok(projects) => serde_json::json!({ "projects": projects, "error": "" }),
-        Err(error) => serde_json::json!({ "projects": [], "error": error }),
-    };
-    QString::from(
-        serde_json::to_string(&value)
-            .unwrap_or_else(|_| {
-                "{\"projects\":[],\"error\":\"Cannot display recent projects\"}".into()
-            })
-            .as_str(),
-    )
 }
 
 #[cfg(test)]
@@ -478,8 +349,8 @@ mod tests {
         assert!(change("localCpuThreads", &serde_json::json!(-1)).is_err());
         assert!(change("localCpuThreads", &serde_json::json!(1.5)).is_err());
         assert!(change("localCpuThreads", &serde_json::json!(u64::MAX)).is_err());
-        assert!(change("provenance", &serde_json::json!("portable")).is_ok());
-        assert!(change("provenance", &serde_json::json!("unknown")).is_err());
+        // History placement is not a preference (user decision, 11 November).
+        assert!(change("provenance", &serde_json::json!("portable")).is_err());
         assert!(change("unknown", &serde_json::Value::Null).is_err());
     }
 }

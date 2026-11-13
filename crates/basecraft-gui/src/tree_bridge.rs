@@ -8,6 +8,7 @@ use basecraft_ops::records::AlignmentLinkExt;
 #[cxx_qt::bridge]
 pub mod qobject {
     impl cxx_qt::Threading for TreeController {}
+    impl cxx_qt::Initialize for TreeController {}
     unsafe extern "C++" {
         include!("cxx-qt-lib/qbytearray.h");
         type QByteArray = cxx_qt_lib::QByteArray;
@@ -23,6 +24,17 @@ pub mod qobject {
         #[qproperty(QByteArray, frame)]
         #[qproperty(QString, canvas_geometry)]
         #[qproperty(QString, status)]
+        /// The question about a clade label the last edit displaced (D11),
+        /// as JSON, or "" when there is none to ask.
+        #[qproperty(QString, label_question)]
+        #[qproperty(QString, find_status)]
+        #[qproperty(i32, find_count)]
+        #[qproperty(i32, find_row)]
+        #[qproperty(f64, find_hit_y)]
+        #[qproperty(bool, find_nucleotide)]
+        #[qproperty(QString, find_rows)]
+        #[qproperty(i32, find_reveals)]
+        #[qproperty(QString, history_revision)]
         #[qproperty(QString, message)]
         /// "ok", "error", or "" for a neutral hint.
         #[qproperty(QString, message_kind)]
@@ -35,6 +47,8 @@ pub mod qobject {
         #[qproperty(QString, file_path)]
         #[qproperty(bool, busy)]
         #[qproperty(bool, dirty)]
+        /// The copy offer for an edit a read-only folder refused (D13), or "".
+        #[qproperty(QString, refused_edit)]
         #[qproperty(QString, zoom_text)]
         #[qproperty(f64, hscroll_pos)]
         #[qproperty(f64, hscroll_size)]
@@ -62,12 +76,15 @@ pub mod qobject {
         #[qproperty(bool, display_only)]
         type TreeController = super::TreeRust;
 
+        /// End the closed tab's session now (Main.qml `removeDocument`).
+        #[qinvokable]
+        fn close_session(self: Pin<&mut TreeController>);
         /// Show the tree in `path` with `edits`, a JSON list of drawing
         /// edits, replayed on it. Nothing is written.
         #[qinvokable]
         fn find_query(self: Pin<&mut TreeController>, query: &QString, reverse: bool);
         #[qinvokable]
-        fn find_poll(self: Pin<&mut TreeController>, direction: i32) -> QString;
+        fn find_step(self: Pin<&mut TreeController>, direction: i32);
 
         #[qinvokable]
         fn show_tree(self: Pin<&mut TreeController>, path: &QString, edits: &QString) -> bool;
@@ -147,6 +164,10 @@ pub mod qobject {
         fn vscroll_to(self: Pin<&mut TreeController>, fraction: f64);
         #[qinvokable]
         fn undo(self: Pin<&mut TreeController>);
+        /// Answer the label question: "exact", "smallest", "remove" or
+        /// "undo", for this label or with `all` for every one left.
+        #[qinvokable]
+        fn answer_label(self: Pin<&mut TreeController>, answer: &QString, all: bool) -> bool;
         #[qinvokable]
         fn redo(self: Pin<&mut TreeController>);
         #[qinvokable]
@@ -165,8 +186,6 @@ pub mod qobject {
         #[qinvokable]
         fn save_as(self: Pin<&mut TreeController>, path: &QString) -> bool;
         /// Reload the Omarchy theme if it changed.
-        #[qinvokable]
-        fn check_theme(self: Pin<&mut TreeController>);
         #[qinvokable]
         fn memory_report(self: &TreeController) -> QString;
 
@@ -218,14 +237,15 @@ pub mod qobject {
         /// Replace the style from JSON. Returns an error message, or empty.
         #[qinvokable]
         fn set_style(self: Pin<&mut TreeController>, json: &QString) -> QString;
+        /// Save the style dialog: `json` is the style, `rows` its support
+        /// rows (`tree_style::SupportRow`) and `removed` the sets to forget.
         #[qinvokable]
         fn set_style_with_removals(
             self: Pin<&mut TreeController>,
             json: &QString,
+            rows: &QString,
             removed: &QString,
         ) -> QString;
-        #[qinvokable]
-        fn place_support(self: Pin<&mut TreeController>, placement: &QString);
         /// Set tip and support font sizes and branch width in pixels, as one
         /// edit; a value of 0 or less leaves that size unchanged.
         #[qinvokable]
@@ -241,8 +261,6 @@ pub mod qobject {
         fn support_import_json(self: &TreeController, path: &QString) -> QString;
         #[qinvokable]
         fn add_support_from(self: Pin<&mut TreeController>, path: &QString, name: &QString);
-        #[qinvokable]
-        fn remove_support(self: Pin<&mut TreeController>, name: &QString);
         /// Write the tree as an SVG figure.
         #[qinvokable]
         fn export_svg(self: Pin<&mut TreeController>, path: &QString);
@@ -272,6 +290,7 @@ use basecraft_docs::TreeDoc;
 use basecraft_ops::{DocId, Session};
 use basecraft_protocol::delimitation::TreeDrawingEdit;
 use basecraft_protocol::{CladeAnnotation, Op, SupportPlacement, TreeStyle};
+use basecraft_viewmodel::label_placement::{Answer, Questions, Step};
 use basecraft_viewmodel::tree::TipColumn;
 use basecraft_viewmodel::tree::to_svg_with_style;
 use basecraft_viewmodel::{Frame, Theme, TreeView};
@@ -281,14 +300,23 @@ use serde_json::{Value, json};
 
 use crate::bridge::{
     ALT, CTRL, KEY_0, KEY_DOWN, KEY_EQUAL, KEY_ESCAPE, KEY_LEFT, KEY_MINUS, KEY_PLUS, KEY_RIGHT,
-    KEY_UP, KEY_Y, KEY_Z, SHIFT, WHEEL_ZOOM, ZOOM_STEP, css, file_folder, file_name, load_theme,
-    memory_text, monospace_font, theme_stamp, took,
+    KEY_UP, KEY_Y, KEY_Z, SHIFT, WHEEL_ZOOM, ZOOM_STEP, css, file_folder, file_name, memory_text,
+    took,
 };
 
 #[allow(clippy::struct_excessive_bools)]
 pub struct TreeRust {
+    labels: Option<basecraft_viewmodel::label_placement::Questions>,
+    label_question: QString,
     find: basecraft_viewmodel::find::Session,
-    find_status_revision: u64,
+    find_status: QString,
+    find_count: i32,
+    find_row: i32,
+    find_hit_y: f64,
+    find_nucleotide: bool,
+    find_rows: QString,
+    find_reveals: i32,
+    history_revision: QString,
     overview_content: QString,
     overview_matches: QString,
     overview_match_cache: basecraft_viewmodel::overview::Cache,
@@ -307,6 +335,7 @@ pub struct TreeRust {
     mono_font: QString,
     file_path: QString,
     dirty: bool,
+    refused_edit: QString,
     busy: bool,
     zoom_text: QString,
     hscroll_pos: f64,
@@ -332,15 +361,23 @@ pub struct TreeRust {
     doc: Option<DocId>,
     view: TreeView,
     theme: Theme,
-    theme_stamp: crate::bridge::ThemeStamp,
     scratch: Frame,
 }
 
 impl Default for TreeRust {
     fn default() -> Self {
-        let mut c = Self {
+        Self {
+            labels: None,
+            label_question: QString::default(),
             find: basecraft_viewmodel::find::Session::default(),
-            find_status_revision: u64::MAX,
+            find_status: QString::default(),
+            find_count: 0,
+            find_row: -1,
+            find_hit_y: 0.0,
+            find_nucleotide: false,
+            find_rows: QString::from("[]"),
+            find_reveals: 0,
+            history_revision: QString::default(),
             overview_content: QString::from("{\"shapes\":[]}"),
             overview_matches: QString::from("[]"),
             overview_match_cache: basecraft_viewmodel::overview::Cache::default(),
@@ -356,9 +393,10 @@ impl Default for TreeRust {
             background: QString::default(),
             foreground: QString::default(),
             accent: QString::default(),
-            mono_font: QString::from(&monospace_font()),
+            mono_font: QString::default(),
             file_path: QString::default(),
             dirty: false,
+            refused_edit: QString::default(),
             busy: false,
             zoom_text: QString::default(),
             hscroll_pos: 0.0,
@@ -383,19 +421,8 @@ impl Default for TreeRust {
             doc: None,
             view: TreeView::new(800.0, 600.0),
             theme: Theme::default(),
-            theme_stamp: crate::bridge::ThemeStamp::default(),
             scratch: Frame::new(),
-        };
-        if let Some((theme, stamp)) = load_theme() {
-            c.theme = theme;
-            c.theme_stamp = stamp;
         }
-        c.background = QString::from(&css(c.theme.background));
-        c.foreground = QString::from(&css(c.theme.foreground));
-        c.accent = QString::from(&css(c.theme.accent));
-        c.ok_color = QString::from(&css(c.theme.nearest_hue(120.0)));
-        c.error_color = QString::from(&css(c.theme.nearest_hue(0.0)));
-        c
     }
 }
 
@@ -512,7 +539,20 @@ fn checked_annotation(
     Ok((id, annotation))
 }
 
+impl crate::document_open::DocumentEditor for qobject::TreeController {
+    fn apply_edit(self: Pin<&mut Self>, op: Op) -> bool {
+        self.edit(op).is_ok()
+    }
+    fn set_refused(self: Pin<&mut Self>, refused: QString) {
+        self.set_refused_edit(refused);
+    }
+}
+
 impl qobject::TreeController {
+    pub fn close_session(mut self: Pin<&mut Self>) {
+        self.as_mut().rust_mut().session = None;
+    }
+
     pub fn document_record(&self) -> QString {
         crate::provenance_bridge::session_report(self.rust().session.as_ref(), self.rust().doc)
     }
@@ -546,6 +586,9 @@ impl qobject::TreeController {
 
     /// Rebuild the frame, status line and scroll bars.
     fn refresh(mut self: Pin<&mut Self>) {
+        self.as_mut().find_update(false);
+        let history = self.record_revision();
+        self.as_mut().set_history_revision(history);
         if let Some(warning) =
             crate::document_open::recovery_notice(self.rust().session.as_ref(), self.rust().doc)
         {
@@ -615,7 +658,7 @@ impl qobject::TreeController {
             let matches =
                 r.overview_match_cache
                     .get_json(format!("{key}:{}", r.find.revision()), || {
-                        crate::find_bridge::overview_marks(&r.find, |hit| {
+                        basecraft_viewmodel::find::overview_marks(&r.find, |hit| {
                             r.view.overview_match(hit.row)
                         })
                     });
@@ -688,18 +731,49 @@ impl qobject::TreeController {
         }
         let clears_selection =
             matches!(op, Op::TreeMidpointRoot {} | Op::TreeMinimumVarianceRoot {});
-        let result = {
+        let placing = matches!(op, Op::TreePlaceLabel { .. });
+        // Only rooting moves a clade label off its group (D11).
+        let rooting = placing
+            || matches!(
+                op,
+                Op::TreeReroot { .. }
+                    | Op::TreeMidpointRoot {}
+                    | Op::TreeMinimumVarianceRoot {}
+                    | Op::TreeRootPosition { .. }
+            );
+        let (result, refused_now) = {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
             let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
                 return Err("No tree open".into());
             };
-            let result = session.apply(doc, op);
+            let displaced = |session: &basecraft_ops::Session| {
+                session
+                    .tree(doc)
+                    .map(TreeDoc::displaced_labels)
+                    .map_err(|e| e.to_string())
+            };
+            let before = if rooting {
+                displaced(session)?
+            } else {
+                Vec::new()
+            };
+            let (result, refused) =
+                crate::document_open::applying(session, doc, op, basecraft_ops::renames::apply_op);
+            if rooting && result.is_ok() {
+                let after = displaced(session)?;
+                match (&mut r.labels, placing) {
+                    (Some(questions), true) => questions.refresh(&after),
+                    _ => r.labels = Questions::after_edit(&before, after),
+                }
+            }
             r.view.sync(session.tree(doc).map_err(|e| e.to_string())?);
-            result
+            (result, refused)
         };
+        self.as_mut().ask_labels();
+        crate::document_open::offer_copy(self.as_mut(), refused_now);
         match result {
-            Ok(_) => {
+            Ok(()) => {
                 if clears_selection {
                     let mut state = self.as_mut().rust_mut();
                     state.view.selected = None;
@@ -710,8 +784,7 @@ impl qobject::TreeController {
                 self.refresh();
                 Ok(())
             }
-            Err(e) => {
-                let msg = e.to_string();
+            Err(msg) => {
                 let msg = msg
                     .strip_prefix("invalid operation: ")
                     .unwrap_or(&msg)
@@ -824,11 +897,7 @@ impl qobject::TreeController {
     }
 
     pub fn extract_clade_alignment(mut self: Pin<&mut Self>) {
-        use basecraft_plugin_host::{
-            jobs::JobManager,
-            policy::SessionPolicy,
-            registry::{Registry, RegistryConfig},
-        };
+        use basecraft_plugin_host::{jobs::JobManager, policy::SessionPolicy};
         use basecraft_protocol::operation::{InputReference, OperationRequest, RuntimeState};
         let access_thread = self.qt_thread();
         if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
@@ -864,9 +933,11 @@ impl qobject::TreeController {
         self.as_mut().set_busy(true);
         self.as_mut().notify("Extracting selected clades");
         let qt_thread = self.qt_thread();
-        let spawn = crate::document_jobs::background_session(
-            session,
-            move |session| {
+        let mut session = Some(session);
+        let spawn = crate::jobs::with_session(
+            qt_thread.clone(),
+            &mut session,
+            move |session, _| {
                 let tree = session.tree(doc).map_err(|e| e.to_string())?;
                 let link = basecraft_ops::records::AlignmentLink::read_view(&tree_path)
                     .map_err(|e| format!("Link an alignment first: {e}"))?;
@@ -875,9 +946,7 @@ impl qobject::TreeController {
                     .map_err(|e| e.to_string())?;
                 let output =
                     basecraft_plugin_host::file_tool::output_beside(&tree_path, "clade", "afa");
-                let registry = RegistryConfig::discover()
-                    .and_then(|c| Registry::load(&c))
-                    .map_err(|e| e.to_string())?;
+                let registry = crate::plugins::registry().map_err(|e| e.to_string())?;
                 let policy = SessionPolicy::new(session.root(), true).map_err(|e| e.to_string())?;
                 let destination = output
                     .strip_prefix(&policy.root)
@@ -924,8 +993,7 @@ impl qobject::TreeController {
                 }
                 Ok((output, link.source_changed()))
             },
-            move |session, result| {
-                let _ = qt_thread.queue(move |mut this| {
+            move |mut this, session, result| {
                 this.as_mut().rust_mut().session = Some(session);
                 this.as_mut().set_busy(false);
                 match result {
@@ -935,11 +1003,10 @@ impl qobject::TreeController {
                     }
                     Err(error) => this.fail(&format!("Cannot extract clades: {error}")),
                 }
-            });
             },
         );
-        if let Err((session, error)) = spawn {
-            self.as_mut().rust_mut().session = Some(*session);
+        if let Err(error) = spawn {
+            self.as_mut().rust_mut().session = session;
             self.as_mut().set_busy(false);
             self.fail(&error);
         }
@@ -996,30 +1063,30 @@ impl qobject::TreeController {
         self.as_mut().set_busy(true);
         self.as_mut().notify("Creating species workspace");
         let qt_thread = self.qt_thread();
-        let spawn = crate::document_jobs::background_session(
-            session,
-            move |session| {
-                crate::delimitation_bridge::create_workspace_in_session(session, doc, &method)
+        let mut session = Some(session);
+        let spawn = crate::jobs::with_session(
+            qt_thread.clone(),
+            &mut session,
+            move |session, work| {
+                crate::delimitation_bridge::create_workspace_in_session(session, work, doc, &method)
             },
-            move |session, result| {
-                let _ = qt_thread.queue(move |mut this| {
-                    this.as_mut().rust_mut().session = Some(session);
-                    this.as_mut().set_busy(false);
-                    match result {
-                        Ok(path) => {
-                            this.as_mut().done("Species workspace created");
-                            this.workspace_created(QString::from(path));
-                        }
-                        Err(error) => {
-                            this.as_mut().fail(&error);
-                            this.workspace_created(QString::default());
-                        }
+            move |mut this, session, result| {
+                this.as_mut().rust_mut().session = Some(session);
+                this.as_mut().set_busy(false);
+                match result {
+                    Ok(path) => {
+                        this.as_mut().done("Species workspace created");
+                        this.workspace_created(QString::from(path));
                     }
-                });
+                    Err(error) => {
+                        this.as_mut().fail(&error);
+                        this.workspace_created(QString::default());
+                    }
+                }
             },
         );
-        if let Err((session, error)) = spawn {
-            self.as_mut().rust_mut().session = Some(*session);
+        if let Err(error) = spawn {
+            self.as_mut().rust_mut().session = session;
             self.as_mut().set_busy(false);
             self.fail(&error);
             return false;
@@ -1101,6 +1168,7 @@ impl qobject::TreeController {
         self.as_mut().refresh_link();
         self.as_mut().set_dirty(false);
         self.as_mut().notify(&warning);
+        crate::document_open::installed(self.as_mut(), &path);
         self.refresh();
         Ok(())
     }
@@ -1453,6 +1521,10 @@ impl qobject::TreeController {
         if self.rust().display_only {
             return;
         }
+        if self.rust().labels.is_some() {
+            self.as_mut().rust_mut().labels = None;
+            self.as_mut().ask_labels();
+        }
         let result = {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
@@ -1484,32 +1556,56 @@ impl qobject::TreeController {
         self.history(false);
     }
 
-    pub fn redo(self: Pin<&mut Self>) {
-        self.history(true);
+    /// Publish the label question, or "" when there is nothing to ask.
+    fn ask_labels(mut self: Pin<&mut Self>) {
+        let question = self
+            .rust()
+            .labels
+            .as_ref()
+            .and_then(Questions::question)
+            .map_or_else(String::new, |q| {
+                serde_json::to_string(&q).unwrap_or_default()
+            });
+        self.as_mut().set_label_question(QString::from(&question));
     }
 
-    pub fn check_theme(mut self: Pin<&mut Self>) {
-        if let Some(font) = crate::editor_core::prepare_font(&self.rust().mono_font.to_string()) {
-            self.as_mut().set_mono_font(QString::from(&font));
-        }
-
-        if let Some(update) =
-            crate::editor_core::prepare_theme(&self.rust().theme_stamp, theme_stamp, load_theme)
-        {
-            {
-                let mut r = self.as_mut().rust_mut();
-                r.theme = update.theme;
-                r.theme_stamp = update.stamp;
+    pub fn answer_label(mut self: Pin<&mut Self>, answer: &QString, all: bool) -> bool {
+        let step = Answer::parse(&answer.to_string())
+            .and_then(|answer| self.rust().labels.as_ref()?.answer(answer, all));
+        let done = match step {
+            Some(Step::Place { labels, choice }) => {
+                let placed = self
+                    .as_mut()
+                    .edit(Op::TreePlaceLabel {
+                        labels: labels.clone(),
+                        choice,
+                    })
+                    .is_ok();
+                // Counted only once applied, so Undo reroot stops at the reroot.
+                if let (true, Some(questions)) = (placed, self.as_mut().rust_mut().labels.as_mut())
+                {
+                    questions.placed(&labels);
+                }
+                placed
             }
-            self.as_mut()
-                .set_background(QString::from(&update.background));
-            self.as_mut()
-                .set_foreground(QString::from(&update.foreground));
-            self.as_mut().set_accent(QString::from(&update.accent));
-            self.as_mut().set_ok_color(QString::from(&update.ok));
-            self.as_mut().set_error_color(QString::from(&update.error));
-            self.refresh();
+            Some(Step::Undo(steps)) => {
+                self.as_mut().rust_mut().labels = None;
+                for _ in 0..steps {
+                    self.as_mut().history(false);
+                }
+                true
+            }
+            None => false,
+        };
+        if self.rust().labels.as_ref().is_some_and(Questions::done) {
+            self.as_mut().rust_mut().labels = None;
         }
+        self.ask_labels();
+        done
+    }
+
+    pub fn redo(self: Pin<&mut Self>) {
+        self.history(true);
     }
 
     pub fn memory_report(&self) -> QString {
@@ -1795,6 +1891,13 @@ impl qobject::TreeController {
                         "kind": s.kind,
                     })).collect::<Vec<_>>(),
                     "style": d.style(),
+                    "rows": basecraft_viewmodel::tree_style::rows(&d.supports().iter().map(|s| basecraft_viewmodel::tree_style::SupportSet {
+                        name: &s.name,
+                        source: &s.source,
+                        decimals: s.decimals(d.style()),
+                        automatic_decimals: if s.uses_proportions(d.style()) { 2 } else { 0 },
+                        proportions: s.uses_proportions(d.style()),
+                    }).collect::<Vec<_>>(), d.style()),
                     "tips": d.nodes().iter().filter(|n| n.is_tip()).map(|n| &n.name).collect::<Vec<_>>(),
                 })
             }))
@@ -1803,22 +1906,31 @@ impl qobject::TreeController {
     }
 
     pub fn set_style(self: Pin<&mut Self>, json: &QString) -> QString {
-        self.set_style_with_removals(json, &QString::from("[]"))
+        self.set_style_with_removals(json, &QString::from("null"), &QString::from("[]"))
     }
 
     pub fn set_style_with_removals(
         mut self: Pin<&mut Self>,
         json: &QString,
+        rows: &QString,
         removed: &QString,
     ) -> QString {
         let remove_supports: Vec<String> = match serde_json::from_str(&removed.to_string()) {
             Ok(names) => names,
             Err(e) => return QString::from(&format!("Bad support removals: {e}")),
         };
-        let style: TreeStyle = match serde_json::from_str(&json.to_string()) {
+        let mut style: TreeStyle = match serde_json::from_str(&json.to_string()) {
             Ok(s) => s,
             Err(e) => return QString::from(&format!("Bad style: {e}")),
         };
+        let rows: Option<Vec<basecraft_viewmodel::tree_style::SupportRow>> =
+            match serde_json::from_str(&rows.to_string()) {
+                Ok(rows) => rows,
+                Err(e) => return QString::from(&format!("Bad support rows: {e}")),
+            };
+        if let Some(rows) = rows {
+            basecraft_viewmodel::tree_style::apply(&mut style, &rows, &remove_supports);
+        }
         if remove_supports.is_empty()
             && match self.with_doc(|d| *d.style() == style) {
                 Ok(value) => value,
@@ -1839,28 +1951,6 @@ impl qobject::TreeController {
             Ok(()) => QString::default(),
             Err(msg) => QString::from(&msg),
         }
-    }
-
-    pub fn place_support(mut self: Pin<&mut Self>, placement: &QString) {
-        let p = match placement.to_string().as_str() {
-            "above" => SupportPlacement::Above,
-            "below" => SupportPlacement::Below,
-            _ => SupportPlacement::Natural,
-        };
-        let Some(mut style) = crate::bridge::checked_document!(
-            self.qt_thread(),
-            self.with_doc(|d| d.style().clone())
-        ) else {
-            return;
-        };
-        if style.support_placement == p {
-            return;
-        }
-        style.support_placement = p;
-        let _ = self.as_mut().edit(Op::TreeStyle {
-            style,
-            remove_supports: Vec::new(),
-        });
     }
 
     pub fn set_sizes(
@@ -1952,17 +2042,6 @@ impl qobject::TreeController {
         }
     }
 
-    pub fn remove_support(mut self: Pin<&mut Self>, name: &QString) {
-        let name = name.to_string();
-        if self
-            .as_mut()
-            .edit(Op::TreeRemoveSupport { name: name.clone() })
-            .is_ok()
-        {
-            self.done(&format!("Removed {name}"));
-        }
-    }
-
     pub fn export_svg(self: Pin<&mut Self>, path: &QString) {
         self.export_figure(path, 2, false);
     }
@@ -2007,7 +2086,7 @@ impl qobject::TreeController {
                 return Ok(());
             };
             let theme = if publication {
-                crate::bridge::publication_theme()
+                crate::appearance::publication_theme()
             } else {
                 r.theme.clone()
             };
@@ -2167,3 +2246,5 @@ pub(crate) mod refusal_tests;
 crate::editor_save::ordinary_save!(qobject::TreeController, busy);
 
 crate::editor_save::confirmed_save!(qobject::TreeController);
+
+crate::appearance::editor_follows_appearance!(qobject::TreeController);

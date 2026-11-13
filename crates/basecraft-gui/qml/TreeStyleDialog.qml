@@ -26,14 +26,7 @@ AppContentDialog {
         style = s.style
         sets.clear()
         removedSets = []
-        // Shown sets first, in their order; then the hidden ones.
-        const shown = style.support_shown.length ? style.support_shown : s.sets.map(x => x.name)
-        for (const name of shown) {
-            const x = s.sets.find(x => x.name === name)
-            if (x) sets.append({ name: x.name, source: x.source, shown: true, decimals: x.decimals, autoDefault: x.automatic_decimals, scale: scaleIndex(x), minimum: (style.support_minimums || {})[x.name] === undefined ? style.support_min : style.support_minimums[x.name], autoDecimals: !Object.prototype.hasOwnProperty.call(style.support_decimals || {}, x.name) })
-        }
-        for (const x of s.sets)
-            if (!shown.includes(x.name)) sets.append({ name: x.name, source: x.source, shown: false, decimals: x.decimals, autoDefault: x.automatic_decimals, scale: scaleIndex(x), minimum: (style.support_minimums || {})[x.name] === undefined ? style.support_min : style.support_minimums[x.name], autoDecimals: !Object.prototype.hasOwnProperty.call(style.support_decimals || {}, x.name) })
+        for (const row of s.rows) sets.append(row)
         placement.currentIndex = ["natural", "above", "below"].indexOf(style.support_placement || "natural")
         legend.checked = style.support_legend !== false
         symbols.checked = style.symbols !== null
@@ -48,46 +41,18 @@ AppContentDialog {
         open()
     }
 
-    function scaleIndex(set) {
-        const overrides = style.support_fraction || {}
-        return (Object.prototype.hasOwnProperty.call(overrides, set.name) ? overrides[set.name] : set.proportions) ? 1 : 0
-    }
-
     function save() {
-        const shown = []
-        for (let i = 0; i < sets.count; i++) if (sets.get(i).shown) shown.push(sets.get(i).name)
-        const decimals = Object.assign({}, style.support_decimals || {})
-        const proportions = Object.assign({}, style.support_proportions || {})
-        const fractions = Object.assign({}, style.support_fraction || {})
-        const minimums = Object.assign({}, style.support_minimums || {})
-        for (let i = 0; i < sets.count; i++) {
-            const set = sets.get(i)
-            if (set.autoDecimals) delete decimals[set.name]
-            else decimals[set.name] = set.decimals
-            fractions[set.name] = set.scale === 1
-            minimums[set.name] = set.minimum
-        }
-        for (const name of removedSets) {
-            delete decimals[name]
-            delete proportions[name]
-            delete fractions[name]
-            delete minimums[name]
-        }
+        const rows = []
+        for (let i = 0; i < sets.count; i++) rows.push(sets.get(i))
         const s = Object.assign({}, style, {
-            support_decimals: decimals,
-            support_proportions: proportions,
-            support_fraction: fractions,
-            support_minimums: minimums,
             support_placement: ["natural", "above", "below"][placement.currentIndex],
             support_legend: legend.checked,
-            support_shown: shown,
-            symbols: symbols.checked && symbolSet.currentText.length && !removedSets.includes(symbolSet.currentText)
-                ? { set: symbolSet.currentText, high: high.value, low: low.value } : null,
+            symbols: symbols.checked && symbolSet.currentText.length ? { set: symbolSet.currentText, high: high.value, low: low.value } : null,
             branch_width: branchWidth.value,
             vertical_bar_labels: verticalLabels.checked,
             scale_bar: scaleBar.checked,
         })
-        const err = controller.set_style_with_removals(JSON.stringify(s), JSON.stringify(removedSets))
+        const err = controller.set_style_with_removals(JSON.stringify(s), JSON.stringify(rows), JSON.stringify(removedSets))
         if (err.length > 0) error.text = err
         else close()
     }

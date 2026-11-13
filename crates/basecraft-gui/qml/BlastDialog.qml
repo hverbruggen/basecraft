@@ -28,16 +28,14 @@ AppFormDialog {
     readonly property var programAlphabets: ["nucleotide", "nucleotide", "protein", "protein"]
     readonly property var programDatabases: ["nt", "nr", "nr", "nt"]
     signal copyText(string text)
+    signal saveContact(string email)
+    signal contactDetailsRequested
     required property var backend
-    Timer {
-        interval: 200; repeat: true; running: backend.busy
-        onTriggered: {
-            backend.poll()
-            if (!backend.busy) dialog.completed()
-        }
-    }
-    function show(provider, mode, isAlignment) {
+    // `folder`: where the search's records go, from the document's session.
+    property string recordFolder: ""
+    function show(provider, mode, isAlignment, folder) {
         if (backend.busy) { open(); return }
+        recordFolder = folder || ""
         alignment = isAlignment === true
         sourceProvider = provider
         sourceMode = mode || "whole"
@@ -88,7 +86,7 @@ AppFormDialog {
                 formError = "Source or settings changed. Search again before submitting."
                 return
             }
-            submitted = backend.submit_blast(current, frozenSettings, preview.approval_hash, truncate)
+            submitted = backend.submit_blast(current, frozenSettings, preview.approval_hash, truncate, recordFolder)
             if (!submitted) formError = backend.message
         } catch (error) { formError = String(error) }
     }
@@ -155,6 +153,16 @@ AppFormDialog {
     Label {
         Layout.fillWidth: true; wrapMode: Text.Wrap; visible: contact.visible
         text: "NCBI asks API clients to include a contact email for service problems."
+    }
+    RowLayout {
+        visible: contact.visible
+        AppButton {
+            objectName: "saveBlastContact"
+            text: "Save as BLAST contact"
+            visible: contact.text.trim().indexOf("@") > 0 && contact.text.trim() !== dialog.configuredContact
+            onClicked: { dialog.saveContact(contact.text.trim()); dialog.configuredContact = contact.text.trim() }
+        }
+        AppButton { objectName: "blastContactDetails"; text: "Submitter details…"; onClicked: dialog.contactDetailsRequested() }
     }
     CheckBox { id: options; text: "Search options"; enabled: !backend.busy && !dialog.submitted }
     TextField {

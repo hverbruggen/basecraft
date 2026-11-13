@@ -33,9 +33,31 @@ pub struct Preferences {
     pub customization: Customization,
     /// Contact details written to archive submission templates.
     pub submitter: Submitter,
+    /// Email addresses for other services, such as NCBI BLAST.
+    pub contacts: Contacts,
+}
+
+/// Email addresses for services other than GenBank submission. A service
+/// without its own address uses the submitter's email.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct Contacts {
+    pub service_emails: BTreeMap<String, String>,
+}
+
+impl Preferences {
+    /// The email to give `service`: its own, else the submitter's.
+    pub fn service_email(&self, service: &str) -> &str {
+        self.contacts
+            .service_emails
+            .get(service)
+            .filter(|email| !email.is_empty())
+            .unwrap_or(&self.submitter.email)
+    }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[allow(clippy::struct_excessive_bools)] // independent on/off preferences
 pub struct Ui {
     /// Optional data palette; its light/dark variant follows the active theme.
     pub data_color_scheme: DataColorScheme,
@@ -45,12 +67,28 @@ pub struct Ui {
     pub alignment_insert: bool,
     /// None uses the compact platform-relative default; explicit values are points.
     pub font_size_points: Option<u32>,
+    /// None follows the desktop's monospace font.
+    pub font_family: Option<String>,
     /// Independent ribbon icon, text and layout scale, in percent.
     pub ribbon_size_percent: u32,
     /// Side of a tick box, in pixels.
     pub tick_box_size: u32,
     /// Height of number and text boxes, in pixels.
     pub input_box_height: u32,
+    /// Light, dark, or the desktop's theme.
+    pub theme: ThemeChoice,
+    /// Tell the user when a new release is out; asked at first launch.
+    pub release_notices: bool,
+    /// The first-launch questions have been answered.
+    pub welcomed: bool,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum ThemeChoice {
+    #[default]
+    FollowDesktop,
+    Light,
+    Dark,
 }
 impl Default for Ui {
     fn default() -> Self {
@@ -61,9 +99,13 @@ impl Default for Ui {
             orf_min_codons: 100,
             alignment_insert: true,
             font_size_points: None,
+            font_family: None,
             ribbon_size_percent: 100,
             tick_box_size: 14,
             input_box_height: 20,
+            theme: ThemeChoice::FollowDesktop,
+            release_notices: false,
+            welcomed: false,
         }
     }
 }
@@ -74,36 +116,15 @@ pub enum DataColorScheme {
     DesktopTheme,
     ColorBlindFriendly,
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "kebab-case")]
-pub enum ProvenancePolicy {
-    /// History always goes to the project's `.basecraft`, or beside a loose
-    /// file. The setting stays only until the Preferences control goes.
-    #[default]
-    Portable,
-}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Files {
-    /// Any value an earlier build wrote, such as `local-only`, reads as
-    /// `portable`, so an old preferences file still opens.
-    #[serde(deserialize_with = "any_provenance")]
-    pub provenance: ProvenancePolicy,
     pub recovery: bool,
 }
 
-fn any_provenance<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<ProvenancePolicy, D::Error> {
-    serde::de::IgnoredAny::deserialize(deserializer)?;
-    Ok(ProvenancePolicy::Portable)
-}
 impl Default for Files {
     fn default() -> Self {
-        Self {
-            provenance: ProvenancePolicy::Portable,
-            recovery: true,
-        }
+        Self { recovery: true }
     }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -201,6 +222,7 @@ impl Default for Preferences {
             compute: Compute::default(),
             customization: Customization::default(),
             submitter: Submitter::default(),
+            contacts: Contacts::default(),
         }
     }
 }
@@ -446,21 +468,60 @@ pub enum Change {
     OrfMinCodons(u32),
     AlignmentInsert(bool),
     FontSizePoints(Option<u32>),
+    FontFamily(Option<String>),
     RibbonSizePercent(u32),
     TickBoxSize(u32),
     InputBoxHeight(u32),
     CpuThreads(u32),
-    Provenance(ProvenancePolicy),
     Recovery(bool),
-    Shortcut { id: String, value: Option<String> },
-    KeyHint { id: String, value: Option<String> },
+    Shortcut {
+        id: String,
+        value: Option<String>,
+    },
+    KeyHint {
+        id: String,
+        value: Option<String>,
+    },
     RibbonHidden(Vec<String>),
-    RibbonCommandHidden { id: String, hidden: bool },
+    RibbonCommandHidden {
+        id: String,
+        hidden: bool,
+    },
     ResetCustomization,
     Submitter(Box<Submitter>),
+    /// `None` makes the service use the submitter's email again.
+    ServiceEmail {
+        service: String,
+        email: Option<String>,
+    },
+    Theme(ThemeChoice),
+    ReleaseNotices(bool),
+    Welcomed,
 }
 impl Change {
     fn validate(&self) -> Result<(), Error> {
+        if let Self::FontFamily(Some(family)) = self
+            && (family.trim().is_empty()
+                || family.len() > 200
+                || family.chars().any(char::is_control))
+        {
+            return Err(Error::Invalid("invalid font family".into()));
+        }
+        if let Self::ServiceEmail { service, email } = self {
+            if service.is_empty()
+                || service.len() > 32
+                || !service.chars().all(|c| c.is_ascii_lowercase() || c == '-')
+            {
+                return Err(Error::Invalid("invalid service name".into()));
+            }
+            if let Some(email) = email
+                && (!email.contains('@') || email.len() > 200 || email.trim() != email)
+            {
+                return Err(Error::Invalid(
+                    "a service email needs an @, without surrounding spaces".into(),
+                ));
+            }
+        }
         if let Self::Shortcut { id, .. }
         | Self::KeyHint { id, .. }
         | Self::RibbonCommandHidden { id, .. } = self
@@ -478,11 +539,11 @@ impl Change {
             Self::OrfMinCodons(v) => prefs.ui.orf_min_codons = v,
             Self::AlignmentInsert(v) => prefs.ui.alignment_insert = v,
             Self::FontSizePoints(v) => prefs.ui.font_size_points = v,
+            Self::FontFamily(v) => prefs.ui.font_family = v,
             Self::RibbonSizePercent(v) => prefs.ui.ribbon_size_percent = v,
             Self::TickBoxSize(v) => prefs.ui.tick_box_size = v,
             Self::InputBoxHeight(v) => prefs.ui.input_box_height = v,
             Self::CpuThreads(v) => prefs.compute.local_cpu_threads = v,
-            Self::Provenance(v) => prefs.files.provenance = v,
             Self::Recovery(v) => prefs.files.recovery = v,
             Self::Shortcut { id, value } => {
                 if let Some(v) = value {
@@ -510,6 +571,21 @@ impl Change {
             }
             Self::ResetCustomization => prefs.customization = Customization::default(),
             Self::Submitter(v) => prefs.submitter = *v,
+            Self::ServiceEmail {
+                service,
+                email: Some(email),
+            } => {
+                prefs.contacts.service_emails.insert(service, email);
+            }
+            Self::ServiceEmail {
+                service,
+                email: None,
+            } => {
+                prefs.contacts.service_emails.remove(&service);
+            }
+            Self::Theme(v) => prefs.ui.theme = v,
+            Self::ReleaseNotices(v) => prefs.ui.release_notices = v,
+            Self::Welcomed => prefs.ui.welcomed = true,
         }
     }
 }
@@ -544,19 +620,11 @@ impl SettingsStore {
         if text.len() as u64 > MAX_BYTES {
             return Err(Error::Invalid("file exceeds 1 MiB".into()));
         }
-        let mut raw: toml::Value =
-            toml::from_str(&text).map_err(|e| Error::Invalid(e.to_string()))?;
-        // Version 0 used the same fields without a schema declaration. Migration
-        // occurs in memory; the original is untouched until an explicit update.
-        if raw.get("schema_version").is_none()
-            || raw.get("schema_version").and_then(toml::Value::as_integer) == Some(0)
-        {
-            raw.as_table_mut()
-                .ok_or_else(|| Error::Invalid("expected a TOML table".into()))?
-                .insert(
-                    "schema_version".into(),
-                    toml::Value::Integer(i64::from(SCHEMA_VERSION)),
-                );
+        let raw: toml::Value = toml::from_str(&text).map_err(|e| Error::Invalid(e.to_string()))?;
+        if raw.get("schema_version").is_none() {
+            return Err(Error::Invalid(
+                "no schema_version; original file retained".into(),
+            ));
         }
         let prefs: Preferences = raw
             .clone()
@@ -598,10 +666,20 @@ impl SettingsStore {
             .ok_or_else(|| Error::Invalid("revision overflow".into()))?;
         let typed = toml::Value::try_from(&prefs).map_err(|e| Error::Invalid(e.to_string()))?;
         merge(&mut raw, typed);
-        if prefs.ui.font_size_points.is_none()
-            && let Some(ui) = raw.get_mut("ui").and_then(toml::Value::as_table_mut)
-        {
-            ui.remove("font_size_points");
+        if let Some(ui) = raw.get_mut("ui").and_then(toml::Value::as_table_mut) {
+            if prefs.ui.font_size_points.is_none() {
+                ui.remove("font_size_points");
+            }
+            if prefs.ui.font_family.is_none() {
+                ui.remove("font_family");
+            }
+        }
+        if let Some(contacts) = raw.get_mut("contacts").and_then(toml::Value::as_table_mut) {
+            contacts.insert(
+                "service_emails".into(),
+                toml::Value::try_from(&prefs.contacts.service_emails)
+                    .map_err(|e| Error::Invalid(e.to_string()))?,
+            );
         }
         // Map removals must be reflected, while unknown surrounding fields survive.
         if let Some(customization) = raw
@@ -648,17 +726,6 @@ fn merge(destination: &mut toml::Value, source: toml::Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn a_removed_provenance_setting_still_loads() {
-        for value in ["local-only", "none"] {
-            let prefs: Preferences = toml::from_str(&format!(
-                "[files]\nprovenance = \"{value}\"\nrecovery = false\n"
-            ))
-            .unwrap();
-            assert_eq!(prefs.files.provenance, ProvenancePolicy::Portable);
-            assert!(!prefs.files.recovery);
-        }
-    }
     #[test]
     fn new_sequence_annotation_shortcuts_remap_and_detect_conflicts() {
         let mut prefs = Preferences::default();
@@ -781,6 +848,76 @@ mod tests {
     }
 
     #[test]
+    fn service_emails_default_to_the_submitter_and_can_differ() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = store(&temp);
+        let submitter = Submitter {
+            email: "jane@example.org".into(),
+            ..Submitter::default()
+        };
+        store
+            .update(Change::Submitter(Box::new(submitter)))
+            .unwrap();
+        assert_eq!(
+            store.load().unwrap().service_email("blast"),
+            "jane@example.org"
+        );
+        let lab = Change::ServiceEmail {
+            service: "blast".into(),
+            email: Some("lab@example.org".into()),
+        };
+        assert_eq!(
+            store.update(lab).unwrap().service_email("blast"),
+            "lab@example.org"
+        );
+        assert_eq!(
+            store.load().unwrap().service_email("zenodo"),
+            "jane@example.org"
+        );
+        for bad in [("blast", Some("no-at")), ("Bad Name", Some("a@b.org"))] {
+            let change = Change::ServiceEmail {
+                service: bad.0.into(),
+                email: bad.1.map(Into::into),
+            };
+            assert!(store.update(change).is_err());
+        }
+        let reset = Change::ServiceEmail {
+            service: "blast".into(),
+            email: None,
+        };
+        store.update(reset).unwrap();
+        assert_eq!(
+            store.load().unwrap().service_email("blast"),
+            "jane@example.org"
+        );
+    }
+
+    #[test]
+    fn first_launch_answers_persist() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = store(&temp);
+        let first = store.load().unwrap();
+        assert!(!first.ui.welcomed && !first.ui.release_notices);
+        assert_eq!(first.ui.font_family, None);
+        assert!(store.update(Change::FontFamily(Some(" ".into()))).is_err());
+        store
+            .update(Change::FontFamily(Some("Iosevka".into())))
+            .unwrap();
+        assert_eq!(
+            store.load().unwrap().ui.font_family.as_deref(),
+            Some("Iosevka")
+        );
+        store.update(Change::FontFamily(None)).unwrap();
+        assert_eq!(store.load().unwrap().ui.font_family, None);
+        assert_eq!(first.ui.theme, ThemeChoice::FollowDesktop);
+        store.update(Change::Theme(ThemeChoice::Dark)).unwrap();
+        store.update(Change::ReleaseNotices(true)).unwrap();
+        let answered = store.update(Change::Welcomed).unwrap();
+        assert!(answered.ui.welcomed && answered.ui.release_notices);
+        assert_eq!(answered.ui.theme, ThemeChoice::Dark);
+    }
+
+    #[test]
     fn submitter_round_trips_validates_and_keeps_other_fields() {
         let temp = tempfile::tempdir().unwrap();
         let store = store(&temp);
@@ -861,7 +998,8 @@ mod tests {
         store.update(Change::InputBoxHeight(20)).unwrap();
         for invalid in [
             "schema_version = 999\n[ui]\nribbon_size_percent = 150\n",
-            "[ui]\nribbon_size_percent = 201\n",
+            "[ui]\nribbon_size_percent = 150\n",
+            "schema_version = 1\n[ui]\nribbon_size_percent = 201\n",
             "[ui]\nribbon_size_percent = '150'\n",
             "[ui]\nribbon_size_percent = 150.5\n",
         ] {
@@ -960,6 +1098,10 @@ mod tests {
         let prefs: Preferences =
             toml::from_str(include_str!("../../../schemas/preferences.example.toml")).unwrap();
         prefs.validate().unwrap();
+        assert_eq!(prefs.ui.theme, ThemeChoice::FollowDesktop);
+        assert!(!prefs.ui.release_notices && !prefs.ui.welcomed);
+        assert_eq!(prefs.ui.font_family, None);
+        assert!(prefs.contacts.service_emails.is_empty());
     }
     #[test]
     fn passive_load_creates_nothing() {

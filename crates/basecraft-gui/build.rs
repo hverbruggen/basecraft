@@ -79,6 +79,7 @@ fn main() {
     let shader_dir = out_dir.join("shaders");
     let builder = CxxQtBuilder::new_qml_module(QmlModule::new("Basecraft").qml_files([
         "qml/Main.qml",
+        "tools/ScriptedRun.qml",
         "qml/BlastDialog.qml",
         "qml/ZenodoDialog.qml",
         "qml/FileTreeDelegate.qml",
@@ -125,9 +126,14 @@ fn main() {
         "qml/AppSpinBox.qml",
         "qml/ToolSettingsDialog.qml",
         "qml/OperationPickerDialog.qml",
+        "qml/OnDemand.qml",
+        "qml/FontFamilyBox.qml",
         "qml/OperationParameters.qml",
         "qml/OperationParameterValue.qml",
         "qml/TextPromptDialog.qml",
+        "qml/LabelPlacementDialog.qml",
+        "qml/ReadOnlyCopyDialog.qml",
+        "qml/AlphabetDialog.qml",
         "qml/AppIcon.qml",
         "qml/EmptyWorkspaceBrand.qml",
         "qml/EmptyView.qml",
@@ -165,6 +171,7 @@ fn main() {
     .qrc("icons.qrc")
     .qrc("controls.qrc")
     .qt_module("Quick")
+    .qt_module("Network")
     .files([
         "src/bridge.rs",
         "src/app_bridge.rs",
@@ -179,11 +186,15 @@ fn main() {
         "src/submission_bridge.rs",
         "src/application_test_bridge.rs",
         "src/startup_frame_bridge.rs",
+        "src/jobs.rs",
+        "src/command_bridge.rs",
     ])
     .cpp_file("cpp/instanceview.h")
     .cpp_file("cpp/instanceview.cpp")
     .cpp_file("cpp/filetreemodel.h")
-    .cpp_file("cpp/filetreemodel.cpp");
+    .cpp_file("cpp/filetreemodel.cpp")
+    .cpp_file("cpp/releasecheck.h")
+    .cpp_file("cpp/releasecheck.cpp");
     // SAFETY: not a memory-safety concern; cxx-qt marks this unsafe because
     // its cc::Build may change between minor versions.
     let builder = unsafe {
@@ -200,7 +211,15 @@ fn main() {
     // GNU import libraries must follow the generated static bridge archives.
     // rustc-link-arg preserves that final ordering for the MinGW linker.
     if std::env::var("TARGET").is_ok_and(|target| target.ends_with("windows-gnu")) {
-        for module in ["Quick", "Qml", "QuickControls2", "Widgets", "Gui", "Core"] {
+        for module in [
+            "Quick",
+            "Qml",
+            "QuickControls2",
+            "Widgets",
+            "Network",
+            "Gui",
+            "Core",
+        ] {
             println!("cargo::rustc-link-arg=-lQt6{module}");
         }
     }

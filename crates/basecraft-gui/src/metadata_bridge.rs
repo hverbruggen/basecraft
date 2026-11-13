@@ -119,6 +119,10 @@ pub mod qobject {
         ) -> bool;
         #[qinvokable]
         fn link_status(self: &MetadataController, file: &QString) -> QString;
+        /// `path` when a document of `kind` there is a FASTA file whose
+        /// records can be imported, linked or templated, else "".
+        #[qinvokable]
+        fn fasta_source(self: &MetadataController, kind: &QString, path: &QString) -> QString;
         #[qinvokable]
         fn consumer(self: Pin<&mut MetadataController>, request: &QString, apply: bool) -> QString;
     }
@@ -407,31 +411,29 @@ impl qobject::MetadataController {
         let epoch = self.rust().open_epoch;
         self.as_mut().set_busy(true);
         self.as_mut().refresh();
-        let thread = self.qt_thread();
         let path = metadata::manifest_path(&project)
             .to_string_lossy()
             .into_owned();
+        let thread = self.qt_thread();
         let chosen = basecraft_ops::project::Project::new(&project);
         if let Err(error) = chosen.map_err(Into::into).and_then(|chosen| {
-            crate::document_open::start(path, Some(chosen), move |result| {
-                let _ = thread.queue(move |mut this| {
-                    if this.rust().open_epoch != epoch || this.rust().project() != project {
-                        return;
+            crate::document_open::start(thread, path, Some(chosen), move |mut this, result| {
+                if this.rust().open_epoch != epoch || this.rust().project() != project {
+                    return;
+                }
+                let ok = result.is_ok();
+                match result {
+                    Ok(candidate) => {
+                        let mut state = this.as_mut().rust_mut();
+                        state.session = Some(candidate.session);
+                        state.doc = Some(candidate.doc);
+                        this.as_mut().report("", "");
                     }
-                    let ok = result.is_ok();
-                    match result {
-                        Ok(candidate) => {
-                            let mut state = this.as_mut().rust_mut();
-                            state.session = Some(candidate.session);
-                            state.doc = Some(candidate.doc);
-                            this.as_mut().report("", "");
-                        }
-                        Err(error) => this.as_mut().report("error", &error.to_string()),
-                    }
-                    this.as_mut().refresh();
-                    this.as_mut().set_busy(false);
-                    this.opened(ok);
-                });
+                    Err(error) => this.as_mut().report("error", &error.to_string()),
+                }
+                this.as_mut().refresh();
+                this.as_mut().set_busy(false);
+                this.opened(ok);
             })
         }) {
             self.as_mut().set_busy(false);
@@ -502,7 +504,8 @@ impl qobject::MetadataController {
         };
         let ok = match result {
             Err(error) => {
-                self.as_mut().report("error", &error.to_string());
+                self.as_mut()
+                    .report("error", &crate::document_open::project_edit_failure(&error));
                 false
             }
             Ok(Err(error)) => {
@@ -951,6 +954,17 @@ impl qobject::MetadataController {
                 false
             }
         }
+    }
+
+    pub fn fasta_source(&self, kind: &QString, path: &QString) -> QString {
+        let path = path.to_string();
+        QString::from(
+            if basecraft_viewmodel::workspace::fasta_source(&kind.to_string(), &path) {
+                path.as_str()
+            } else {
+                ""
+            },
+        )
     }
 
     /// `{records, unlinked: [...]}` for a sequence file, or `{}` when it

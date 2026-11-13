@@ -68,7 +68,9 @@ AppDialog {
     onSavedRevisionChanged: { token = ""; if (visible) refreshReport() }
     onControllerChanged: { token = ""; if (visible) refreshReport() }
     onClosed: rememberDraft()
-    Timer { interval: 500; repeat: true; running: dialog.visible; onTriggered: dialog.refreshReport() }
+    // The controller moves this with every edit and recorded run.
+    readonly property string historyRevision: controller ? controller.history_revision : ""
+    onHistoryRevisionChanged: if (visible) refreshReport()
 
     contentItem: ColumnLayout {
         spacing: 8

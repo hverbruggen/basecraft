@@ -12,31 +12,41 @@ use std::{
     },
 };
 
-/// All editor entry points use the same acquisition worker and queued completion.
-pub(crate) fn start(
+/// Acquire `path` as a job; `done` gets the candidate on the window thread of
+/// `owner`. A failed start comes back as the error.
+pub(crate) fn start<T>(
+    owner: impl crate::jobs::Owner<T>,
     path: String,
     project: Option<basecraft_ops::project::Project>,
-    completed: impl FnOnce(Result<Candidate, OpenError>) + Send + 'static,
+    done: impl FnOnce(std::pin::Pin<&mut T>, Result<Candidate, OpenError>) + Send + 'static,
 ) -> Result<(), OpenError> {
-    crate::document_jobs::background_initialized(
-        "document-open",
-        move || Candidate::acquire_in(&path, project, &AtomicBool::new(false)),
-        || OpenError::Interrupted,
-        completed,
+    crate::jobs::start(
+        owner,
+        move |work| Ok(Candidate::acquire_in(&path, project, work.flag())),
+        |owner, result| done(owner, result.unwrap_or(Err(OpenError::Interrupted))),
     )
+    .map(|_| ())
     .map_err(OpenError::Spawn)
 }
 
+/// [`start`] in the window's chosen project, as every open is.
+pub(crate) fn start_in_chosen<T>(
+    owner: impl crate::jobs::Owner<T>,
+    path: String,
+    done: impl FnOnce(std::pin::Pin<&mut T>, Result<Candidate, OpenError>) + Send + 'static,
+) -> Result<(), OpenError> {
+    let project = crate::chosen_project::chosen().map_err(basecraft_ops::Error::Invalid)?;
+    start(owner, path, project, done)
+}
+
+/// A view opening its own file, or reopening after Save As.
 pub(crate) fn open_file<T: cxx_qt::Threading + 'static>(
     mut controller: std::pin::Pin<&mut T>,
     path: &cxx_qt_lib::QString,
     completed: impl Fn(std::pin::Pin<&mut T>, Result<Candidate, OpenError>) + Copy + Send + 'static,
 ) -> bool {
     let thread = controller.qt_thread();
-    let started = start(path.to_string(), None, move |result| {
-        let _ = thread.queue(move |controller| completed(controller, result));
-    });
-    if let Err(error) = started {
+    if let Err(error) = start_in_chosen(thread, path.to_string(), completed) {
         completed(controller.as_mut(), Err(error));
         return false;
     }
@@ -62,7 +72,8 @@ impl From<basecraft_ops::Error> for OpenError {
 impl std::fmt::Display for OpenError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Admission(error) => error.fmt(f),
+            // A folder that cannot hold recovery says so with its code (D13).
+            Self::Admission(error) => f.write_str(&edit_failure(error)),
             Self::Cancelled => f.write_str("Opening cancelled"),
             Self::Queue => f.write_str("Could not deliver the opened document to the interface"),
             Self::Spawn(error) => write!(f, "Could not start document opening: {error}"),
@@ -355,11 +366,25 @@ impl Drop for Opens {
     }
 }
 
-/// An edit refused because the folder cannot hold recovery (D13) starts with
-/// its code, so the window can offer to save a copy and edit that (lane gui2).
+/// What an editor says when an edit fails. A folder that cannot hold
+/// recovery (D13) gets the window's own sentence: the window offers a copy
+/// through `refused_edit`, so the core's command-line advice does not apply.
 pub(crate) fn edit_failure(error: &basecraft_ops::Error) -> String {
     match error {
-        basecraft_ops::Error::ReadOnlyFolder { .. } => format!("{}: {error}", error.code()),
+        basecraft_ops::Error::ReadOnlyFolder { .. } => READ_ONLY_EDIT.into(),
+        _ => error.to_string(),
+    }
+}
+pub(crate) const READ_ONLY_EDIT: &str = "Edit refused: the folder is read-only.";
+
+/// [`edit_failure`] for the project's own tables (specimen metadata,
+/// submissions), which a copy elsewhere would cut off from the project.
+pub(crate) fn project_edit_failure(error: &basecraft_ops::Error) -> String {
+    match error {
+        basecraft_ops::Error::ReadOnlyFolder { .. } => "Edit refused: the project folder is \
+            read-only. Copy the project folder to a place you can write to and choose the copy \
+            as the project."
+            .into(),
         _ => error.to_string(),
     }
 }
@@ -372,6 +397,151 @@ pub(crate) fn recovery_notice(
     session?
         .recovery_warning(doc?)
         .map(cxx_qt_lib::QString::from)
+}
+
+/// The edit a folder that cannot hold `.basecraft` refused (D13), for the
+/// window to offer a copy: `{"file", "folder", "op"}`. None for other errors.
+pub(crate) fn refused_edit(
+    session: &Session,
+    doc: DocId,
+    op: &basecraft_protocol::Op,
+    error: &basecraft_ops::Error,
+) -> Option<cxx_qt_lib::QString> {
+    let basecraft_ops::Error::ReadOnlyFolder { folder, .. } = error else {
+        return None;
+    };
+    let file = session.root().join(session.doc_key(doc).ok()?);
+    let text = serde_json::json!({"file": file, "folder": folder, "op": op}).to_string();
+    Some(cxx_qt_lib::QString::from(&text))
+}
+
+/// Edits waiting for the copy they were moved to, by the copy's path.
+static PENDING: std::sync::Mutex<Vec<(PathBuf, basecraft_protocol::Op)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Copy the file a refused edit was made to, with its companion, to `target`
+/// in a folder the user chose, and keep the edit, if any (a refused trace
+/// review has none), for when the copy opens.
+pub(crate) fn copy_for_editing(refused: &str, target: &Path) -> Result<(), String> {
+    let refused: serde_json::Value = serde_json::from_str(refused).map_err(|e| e.to_string())?;
+    let source = PathBuf::from(refused["file"].as_str().ok_or("No refused edit")?);
+    let op: Option<basecraft_protocol::Op> =
+        serde_json::from_value(refused["op"].clone()).map_err(|e| e.to_string())?;
+    let companion = |file: &Path| {
+        let mut name = file.file_name().unwrap_or_default().to_os_string();
+        name.push(".basecraft.json");
+        file.with_file_name(name)
+    };
+    if let Some(taken) = [target.to_path_buf(), companion(target)]
+        .into_iter()
+        .find(|path| path.exists())
+    {
+        return Err(format!(
+            "{} already exists; choose a new name",
+            taken.display()
+        ));
+    }
+    std::fs::copy(&source, target).map_err(|e| format!("Could not copy the file: {e}"))?;
+    if companion(&source).is_file() {
+        std::fs::copy(companion(&source), companion(target))
+            .map_err(|e| format!("Could not copy the file's companion: {e}"))?;
+    }
+    if let Some(op) = op {
+        let key = target.canonicalize().map_err(|e| e.to_string())?;
+        PENDING
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push((key, op));
+    }
+    Ok(())
+}
+
+/// What every document editor does the same way for D12 and D13. Each editor
+/// supplies only its own edit and properties.
+pub(crate) trait DocumentEditor: cxx_qt::Threading + Sized + 'static {
+    /// Apply `op` as this editor's own edit and redraw; whether it applied.
+    fn apply_edit(self: std::pin::Pin<&mut Self>, op: basecraft_protocol::Op) -> bool;
+    /// Publish the copy offer for an edit a read-only folder refused.
+    fn set_refused(self: std::pin::Pin<&mut Self>, refused: cxx_qt_lib::QString);
+    /// What to ask about the document's alphabet, if anything.
+    fn alphabet_question(&self) -> Option<String> {
+        None
+    }
+    fn set_question(self: std::pin::Pin<&mut Self>, _question: cxx_qt_lib::QString) {}
+}
+
+/// After an editor installed the document at `path`: ask its alphabet
+/// question (D12), and redo the edit a read-only folder refused on the
+/// original (D13) on the next turn, so the install itself changes nothing.
+/// Redoing a stated alphabet answers the question.
+pub(crate) fn installed<T: DocumentEditor>(mut this: std::pin::Pin<&mut T>, path: &Path) {
+    let redo = take_refused(path);
+    let question = this
+        .alphabet_question()
+        .filter(|_| !matches!(redo, Some(basecraft_protocol::Op::SetAlphabet { .. })));
+    this.as_mut()
+        .set_question(cxx_qt_lib::QString::from(&question.unwrap_or_default()));
+    if let Some(op) = redo {
+        let _ = this.qt_thread().queue(move |this| {
+            this.apply_edit(op);
+        });
+    }
+}
+
+/// Where records of work on a document go, such as a BLAST search's: its
+/// session's folder, the project or the file's own folder ("" without one).
+pub(crate) fn record_folder(session: Option<&Session>) -> cxx_qt_lib::QString {
+    let folder = session.map(|s| s.root().to_string_lossy().into_owned());
+    cxx_qt_lib::QString::from(&folder.unwrap_or_default())
+}
+
+/// Offer a copy when [`applying`] reported a refusal for a read-only folder.
+pub(crate) fn offer_copy<T: DocumentEditor>(
+    this: std::pin::Pin<&mut T>,
+    refused: Option<cxx_qt_lib::QString>,
+) {
+    if let Some(refused) = refused {
+        this.set_refused(refused);
+    }
+}
+
+/// State the alphabet the user chose in the question (D12).
+pub(crate) fn state_alphabet<T: DocumentEditor>(
+    mut this: std::pin::Pin<&mut T>,
+    answer: &str,
+) -> bool {
+    this.as_mut().set_question(cxx_qt_lib::QString::default());
+    basecraft_viewmodel::alphabet::stated(answer).is_some_and(|op| this.apply_edit(op))
+}
+
+/// The refused edit to redo on `path` now that its copy is open; also drops
+/// it when that open fails, so no later open of the path gets it.
+pub(crate) fn take_refused(path: &Path) -> Option<basecraft_protocol::Op> {
+    let key = path.canonicalize().ok()?;
+    let mut pending = PENDING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let index = pending.iter().position(|(file, _)| *file == key)?;
+    Some(pending.remove(index).1)
+}
+
+/// Apply `op` with `apply` (`Session::apply`, `renames::apply_op`, ...), as
+/// every editor does: a failure comes back worded by [`edit_failure`], and a
+/// refusal for a folder that cannot hold recovery also as the copy offer.
+pub(crate) fn applying<T>(
+    session: &mut Session,
+    doc: DocId,
+    op: basecraft_protocol::Op,
+    apply: impl FnOnce(&mut Session, DocId, basecraft_protocol::Op) -> basecraft_ops::Result<T>,
+) -> (Result<T, String>, Option<cxx_qt_lib::QString>) {
+    let kept = op.clone();
+    match apply(session, doc, op) {
+        Ok(value) => (Ok(value), None),
+        Err(error) => (
+            Err(edit_failure(&error)),
+            refused_edit(session, doc, &kept, &error),
+        ),
+    }
 }
 
 #[cfg(test)]

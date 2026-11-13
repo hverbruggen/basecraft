@@ -58,6 +58,7 @@ AppDialog {
     signal frameRequested(string record, int codonStart)
     signal confirmDetectedRequested
     signal undoRequested
+    signal contactDetailsRequested
     signal redoRequested
     signal exportRequested
     signal validateRequested
@@ -1032,6 +1033,7 @@ AppDialog {
                         wrapMode: Text.Wrap
                         Layout.fillWidth: true
                     }
+                    AppButton { objectName: "submissionContactDetails"; text: "Submitter details…"; onClicked: dialog.contactDetailsRequested() }
                 }
             }
             ColumnLayout {
