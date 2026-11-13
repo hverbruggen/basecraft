@@ -35,6 +35,7 @@ class PluginContextTests(unittest.TestCase):
                 return {"data": {"ok": True}}
 
             info = plugin._dispatch("initialize", {}, [])
+            self.assertTrue(info.pop("interpreter").startswith("Python "))
             self.assertEqual(info, {"protocol": 2, "id": "org.example.sdk", "version": "1.0.0", "operations": ["run"]})
             raw = context(root, inputs={"source": [str(external)]}, outputs={"artifacts": "pending"},
                           input_evidence={"source": [{"original_path": str(external), "source_hash": "b3:x",
