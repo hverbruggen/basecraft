@@ -21,7 +21,7 @@ enum Change {
         name: String,
         references: Vec<(u32, usize)>,
     },
-    Annotation(u32, Option<CladeAnnotation>),
+    Annotations(Vec<(u32, Option<CladeAnnotation>)>),
     BranchLengths(Option<Fact<BranchLengths>>),
     AddedSupport(String),
     Style {
@@ -130,11 +130,13 @@ impl TreeDoc {
                     self.annotations.get_mut(&id).unwrap().clade[index].clone_from(name);
                 }
             }
-            Change::Annotation(id, annotation) => {
-                if let Some(annotation) = annotation {
-                    self.annotations.insert(*id, annotation.clone());
-                } else {
-                    self.annotations.remove(id);
+            Change::Annotations(before) => {
+                for (id, annotation) in before {
+                    if let Some(annotation) = annotation {
+                        self.annotations.insert(*id, annotation.clone());
+                    } else {
+                        self.annotations.remove(id);
+                    }
                 }
             }
             Change::AddedSupport(name) => {
@@ -164,6 +166,7 @@ impl TreeDoc {
                     *self = *before;
                     return Err(error);
                 }
+                self.repoint_split_labels();
                 Change::Root(before)
             }
             Op::TreeRootPosition { clade, fraction } => {
@@ -228,7 +231,10 @@ impl TreeDoc {
             Op::TreeAnnotate { id, annotation } => {
                 let before = self.annotations.get(id).cloned();
                 self.annotate(*id, annotation.clone())?;
-                Change::Annotation(*id, before)
+                Change::Annotations(vec![(*id, before)])
+            }
+            Op::TreePlaceLabel { labels, choice } => {
+                Change::Annotations(self.place_labels(labels, *choice)?)
             }
             Op::TreeAddSupport {
                 name,

@@ -186,13 +186,25 @@ pub enum Op {
     /// one companion, so in a multi-record FASTA or GenBank file this states
     /// the alphabet of every record in the file, not only the open one.
     #[serde(rename = "doc.set_alphabet")]
-    SetAlphabet { alphabet: crate::facts::Alphabet },
+    SetAlphabet {
+        alphabet: crate::facts::StatedAlphabet,
+    },
     /// Add, change (same `id`) or, with no annotation, remove a clade
     /// annotation.
     #[serde(rename = "tree.annotate")]
     TreeAnnotate {
         id: u32,
         annotation: Option<CladeAnnotation>,
+    },
+    /// Settle labels a reroot left on another group of tips (D11): each goes
+    /// where `choice` says. One undo step; refused as a whole when one label
+    /// can't be placed. Given without `labels`, the session fills in every
+    /// label displaced now, so the log always names them.
+    #[serde(rename = "tree.place_label")]
+    TreePlaceLabel {
+        #[serde(default)]
+        labels: Vec<u32>,
+        choice: crate::tree::LabelPlacement,
     },
     /// A set of support values, such as bootstraps from another analysis:
     /// one per internal node in preorder, as text.
@@ -382,6 +394,7 @@ impl Op {
             Op::TreeSetBranchLengths { .. } => "tree.set_branch_lengths",
             Op::SetAlphabet { .. } => "doc.set_alphabet",
             Op::TreeAnnotate { .. } => "tree.annotate",
+            Op::TreePlaceLabel { .. } => "tree.place_label",
             Op::TreeAddSupport { .. } => "tree.add_support",
             Op::TreeRemoveSupport { .. } => "tree.remove_support",
             Op::TreeStyle { .. } => "tree.style",

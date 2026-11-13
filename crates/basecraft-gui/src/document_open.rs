@@ -148,6 +148,10 @@ impl Candidate {
         );
         let mut session = Session::recoverable(&root)?.in_project(project);
         let (doc, kind) = session.open_classified(&path)?;
+        // Offer recovery a crashed session left beside the file or in the
+        // project. Only a notice depends on it, so a failed look is no error.
+        let _ =
+            session.find_earlier_recovery(doc, &[crate::bridge::file_folder(&path), root.clone()]);
         if cancelled.load(Ordering::Acquire) {
             return Err(OpenError::Cancelled);
         }
@@ -348,6 +352,15 @@ impl Opens {
 impl Drop for Opens {
     fn drop(&mut self) {
         self.stop();
+    }
+}
+
+/// An edit refused because the folder cannot hold recovery (D13) starts with
+/// its code, so the window can offer to save a copy and edit that (lane gui2).
+pub(crate) fn edit_failure(error: &basecraft_ops::Error) -> String {
+    match error {
+        basecraft_ops::Error::ReadOnlyFolder { .. } => format!("{}: {error}", error.code()),
+        _ => error.to_string(),
     }
 }
 

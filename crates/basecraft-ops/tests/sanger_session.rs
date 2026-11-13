@@ -54,7 +54,7 @@ fn new_review_updates_undo_replay_and_recover() {
     edit(&mut session, id, 'A');
     let report = records::replay(&root).unwrap();
     assert!(report.ok(), "{:?}", report.problems);
-    let recovered = records::recover(&root, &root.join("recovered")).unwrap();
+    let recovered = records::recover(&root, &root.join("recovered"), None).unwrap();
     assert_eq!(
         SangerReview::load(&recovered[0]).unwrap().decision(0),
         Some(&ReviewChoice::Edit('A'))
@@ -180,7 +180,8 @@ fn stale_and_failed_saves_keep_decisions_recoverable() {
     std::fs::write(blocked.join("unrelated"), b"keep").unwrap();
     assert!(second.save_new(b, Some(&blocked)).is_err());
     assert_eq!(std::fs::read(blocked.join("unrelated")).unwrap(), b"keep");
-    let recovered = records::recover(second.recovery_root(), &root.join("recovered")).unwrap();
+    let recovered =
+        records::recover(second.recovery_root(), &root.join("recovered"), None).unwrap();
     let review = SangerReview::load(&recovered[0]).unwrap();
     assert_eq!(review.call_sets().len(), 2);
     assert_eq!(review.decision(0), Some(&ReviewChoice::Edit('A')));
@@ -239,6 +240,37 @@ fn structural_redo_keeps_decisions_and_shared_ancestry() {
     assert_eq!(
         SangerReview::load(&path).unwrap().decision(0),
         Some(&ReviewChoice::Edit('A'))
+    );
+}
+
+#[test]
+fn support_survives_recovery_publication() {
+    let Some(root) = isolated_profile::enter("support_survives_recovery_publication") else {
+        return;
+    };
+    let folder = root.join("review");
+    std::fs::create_dir(&folder).unwrap();
+    let mut session = Session::recoverable(&folder).unwrap();
+    let id = session.create_sanger_review(&fixture(&root)).unwrap();
+    let target = folder.join("review.json");
+    edit(&mut session, id, 'N');
+    session.save_new(id, Some(&target)).unwrap();
+    edit(&mut session, id, 'A');
+    session.save_new(id, Some(&target)).unwrap();
+    assert_eq!(
+        SangerReview::load(&target).unwrap().decision(0),
+        Some(&ReviewChoice::Edit('A'))
+    );
+    edit(&mut session, id, 'T');
+    let output =
+        records::recover(session.recovery_root(), &folder.join("recovered"), None).unwrap();
+    let mut recovered = Session::recoverable(output[0].parent().unwrap()).unwrap();
+    let id = recovered.open(&output[0]).unwrap();
+    edit(&mut recovered, id, 'G');
+    recovered.save(id, None).unwrap();
+    assert_eq!(
+        SangerReview::load(&output[0]).unwrap().decision(0),
+        Some(&ReviewChoice::Edit('G'))
     );
 }
 
@@ -419,7 +451,7 @@ fn direct_analysis_update_retains_its_record_and_history_is_readable_once() {
         1
     );
     assert!(records::replay(&root).unwrap().ok());
-    records::recover(&root, &root.join("recovered")).unwrap();
+    records::recover(&root, &root.join("recovered"), None).unwrap();
     session
         .save_new(id, Some(&root.join("saved.json")))
         .unwrap();

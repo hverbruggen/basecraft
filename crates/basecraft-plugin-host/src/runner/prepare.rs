@@ -15,34 +15,35 @@ struct GeneratedInput {
     dependencies: Vec<PathBuf>,
 }
 
-/// Refuse an alignment whose alphabet the input does not accept, and record
-/// the alphabet for the plugin. One binding holds one alphabet.
+/// Refuse a document whose alphabet the input does not accept, or that
+/// basecraft can't tell yet (D12): `refusal` says why. Record the alphabet
+/// for the plugin. One binding holds one alphabet.
 fn check_alphabet(
     operation: &RegisteredOperation,
     name: &str,
-    found: Alphabet,
+    (found, refusal): (Alphabet, Option<String>),
     shown: &str,
     alphabets: &mut BTreeMap<String, Alphabet>,
 ) -> Result<()> {
     let accepted = &operation.descriptor.inputs[name].alphabets;
-    let word = |alphabet: &Alphabet| match alphabet {
-        Alphabet::Dna => "DNA",
-        Alphabet::Rna => "RNA",
-        Alphabet::Protein => "protein",
-        Alphabet::Unknown => "unknown",
-    };
-    if !accepted.is_empty() && !accepted.contains(&found) {
-        let wanted: Vec<_> = accepted.iter().map(word).collect();
+    if !accepted.is_empty()
+        && let Some(refusal) = refusal
+    {
         return Err(Error::Protocol(format!(
-            "unsupported_input: {} needs a {} alignment, and {shown} holds {} sequences",
+            "unsupported_input: {shown}: {refusal}"
+        )));
+    }
+    if !accepted.is_empty() && !accepted.contains(&found) {
+        let wanted: Vec<_> = accepted.iter().map(Alphabet::to_string).collect();
+        return Err(Error::Protocol(format!(
+            "unsupported_input: {} needs {} sequences, and {shown} holds {found} sequences",
             operation.descriptor.title,
             wanted.join(" or "),
-            word(&found),
         )));
     }
     if *alphabets.entry(name.into()).or_insert(found) != found {
         return Err(Error::Protocol(format!(
-            "unsupported_input: {} needs the alignments in {name} to share one alphabet",
+            "unsupported_input: {} needs the documents in {name} to share one alphabet",
             operation.descriptor.title
         )));
     }
@@ -60,8 +61,9 @@ fn document_view(
     let mut bytes = Vec::new();
     let view = operation.descriptor.inputs[name].view;
     if session.is_alignment(doc) {
-        let found = session.alphabet(doc)?.value;
-        check_alphabet(operation, name, found, "the open alignment", alphabets)?;
+        let alignment = session.alignment(doc)?;
+        let alphabet = (alignment.alphabet().value, alignment.alphabet_refusal());
+        check_alphabet(operation, name, alphabet, "the open alignment", alphabets)?;
     }
     match view {
         InputView::AlignedFasta if session.is_alignment(doc) => {
@@ -172,6 +174,8 @@ fn prepare_inputs(
                 }
             };
             let checked = session.checked_sequence(doc)?;
+            let alphabet = (checked.alphabet().value, checked.alphabet_refusal());
+            check_alphabet(operation, name, alphabet, "the open sequence", &mut alphabets)?;
             sequence = Some(SequenceTarget {
                 doc,
                 session: session.id().into(),
@@ -711,8 +715,9 @@ fn freeze_inputs(
                         || source.display().to_string(),
                         |file| file.to_string_lossy().into_owned(),
                     );
-                    let found = alignment.doc.alphabet().value;
-                    check_alphabet(operation, &name, found, &shown, alphabets)?;
+                    let doc = &alignment.doc;
+                    let alphabet = (doc.alphabet().value, doc.alphabet_refusal());
+                    check_alphabet(operation, &name, alphabet, &shown, alphabets)?;
                     if binding.view == InputView::AlignedFasta {
                         alignment
                             .doc
@@ -823,7 +828,7 @@ fn allocate_run(
         .as_ref()
         .map(serde_json::to_vec)
         .transpose()?;
-    let mutation = records::Mutation::begin()?;
+    let mutation = records::Mutation::begin_in(project)?;
     let run = ArtifactRun::create(&anchor, &run_id)?;
     let mut ledger_inputs = Vec::new();
     let mut upstream = Vec::new();

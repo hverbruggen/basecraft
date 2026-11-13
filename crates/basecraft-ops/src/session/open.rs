@@ -1,6 +1,6 @@
 //! Document loading and baseline tracking.
 use super::Session;
-use super::{DocId, Op, OpResult, Path, PathBuf, Result, Slot, files, invalid, objects_dir};
+use super::{DocId, Op, OpResult, Path, PathBuf, Result, Slot, files, invalid};
 
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct SavedMark(pub(super) Option<String>);
@@ -113,6 +113,7 @@ impl Session {
         if !self.tracked {
             return Ok(());
         }
+        self.start_recovery()?;
         let slot = self
             .docs
             .get(id.0)
@@ -134,7 +135,7 @@ impl Session {
                     self.pending_baselines.push(entry);
                 }
                 self.refresh_source_stamps(id);
-                self.docs[id.0].recovery_changed = true;
+                self.note_changed_on_disk(id);
                 self.docs[id.0].baseline = None;
             }
             return Ok(());
@@ -200,20 +201,23 @@ impl Session {
         )?;
         let mut hashes = Vec::new();
         for (path, hash) in written {
-            let name = path.strip_prefix(stage.path()).map_err(|_| {
+            let name = basecraft_platform::files::inside(&path, stage.path()).ok_or_else(|| {
                 crate::Error::Unsupported("Recovery writer escaped its staging folder".into())
             })?;
             let name = if Path::new(key).is_absolute() {
                 original.parent().expect("source parent").join(
-                    path.strip_prefix(target.parent().expect("checkpoint parent"))
-                        .map_err(|_| {
-                            crate::Error::Unsupported(
-                                "Recovery writer escaped its document folder".into(),
-                            )
-                        })?,
+                    basecraft_platform::files::inside(
+                        &path,
+                        target.parent().expect("checkpoint parent"),
+                    )
+                    .ok_or_else(|| {
+                        crate::Error::Unsupported(
+                            "Recovery writer escaped its document folder".into(),
+                        )
+                    })?,
                 )
             } else {
-                name.to_path_buf()
+                name
             };
             hashes.push((name.to_string_lossy().into_owned(), hash.clone()));
             std::fs::rename(&path, directory.join(hash.trim_start_matches("b3:")))?;
@@ -251,11 +255,64 @@ impl Session {
         })
     }
 
+    pub(super) fn note_changed_on_disk(&mut self, id: DocId) {
+        self.docs[id.0].recovery_notice = Some(
+            "The original changed on disk. Your current edits have been preserved in recovery; save them to a new file.".into(),
+        );
+    }
+
     pub fn recovery_warning(&self, id: DocId) -> Option<&str> {
         let slot = self.docs.get(id.0)?;
-        slot.recovery_changed.then_some(
-            "The original changed on disk. Your current edits have been preserved in recovery; save them to a new file.",
-        )
+        slot.recovery_notice.as_deref()
+    }
+
+    /// Note recovery that an earlier session, for example one that crashed,
+    /// left for this document in the recovery folders of `roots`. The notice
+    /// says where it is; recovering it stays the user's choice.
+    pub fn find_earlier_recovery(&mut self, id: DocId, roots: &[PathBuf]) -> Result<()> {
+        let path = self.resolve(&self.slot(id)?.key);
+        let path = path.canonicalize().unwrap_or(path);
+        for folder in crate::records::recovery_sessions(roots)? {
+            let Ok(entries) = crate::log::read_all(&folder) else {
+                continue;
+            };
+            // The session's root holds `.basecraft/recovery/<session>`.
+            let root = folder.ancestors().nth(3).unwrap_or(&folder);
+            let names = |doc: &str| {
+                let named = root.join(doc);
+                named.canonicalize().unwrap_or(named) == path
+            };
+            if folder != self.storage_root && entries.iter().any(|entry| names(&entry.doc)) {
+                self.docs[id.0].recovery_notice = Some(format!(
+                    "Unsaved edits to this file from an earlier session are kept in recovery at {}. Recover them before you edit here.",
+                    folder.display()
+                ));
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// Make the recovery folder before the first edit is recorded. Recovery
+    /// lives only in the folder's `.basecraft` (D13): where that cannot be
+    /// written, the edit is refused with an error that names the folder.
+    pub(super) fn start_recovery(&self) -> Result<()> {
+        if self.log.is_none() || self.storage_root == self.root || self.storage_root.is_dir() {
+            return Ok(());
+        }
+        let foreign = crate::records::input_evidence::foreign_basecraft(&self.root);
+        let reason = if let Some(reason) = foreign {
+            reason.to_owned()
+        } else {
+            match recovery_directory(&self.storage_root) {
+                Ok(()) => return Ok(()),
+                Err(error) => error.to_string(),
+            }
+        };
+        Err(crate::Error::ReadOnlyFolder {
+            folder: self.root.clone(),
+            reason,
+        })
     }
 
     /// Cheap change token for readers; saves and job outcomes also invalidate a report.
@@ -401,6 +458,9 @@ impl Session {
     pub fn snapshot_bytes(&self, bytes: &[u8]) -> Result<String> {
         let hash = basecraft_io::hash_bytes(bytes);
         if self.store_objects {
+            self.start_recovery()?;
+        }
+        if self.store_objects {
             let dest = objects_dir(&self.storage_root).join(hash.trim_start_matches("b3:"));
             if !dest.exists() {
                 std::fs::create_dir_all(objects_dir(&self.storage_root))?;
@@ -409,6 +469,16 @@ impl Session {
         }
         Ok(hash)
     }
+}
+
+/// Checkpoints and other exact bytes a session keeps, by hash.
+pub fn objects_dir(root: &Path) -> PathBuf {
+    root.join(".basecraft").join("objects")
+}
+
+/// Where recovery of unsaved edits lives for sessions rooted at `root`.
+pub fn recovery_folder(root: &Path) -> PathBuf {
+    root.join(".basecraft").join("recovery")
 }
 
 /// Publish newly created directory entries before a synced journal can name them.

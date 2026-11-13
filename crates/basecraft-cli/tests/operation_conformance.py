@@ -655,6 +655,50 @@ def main():
                        cwd=root, env=env, capture_output=True, timeout=45, check=True)
         record("Python support import over MCP; file_record matches CLI history")
 
+        # D11: a reroot reports displaced labels, and CLI and MCP place them
+        # with tree.place_label to the same saved result.
+        def label(clade, text):
+            return {"clade": clade, "label": text, "tips": [], "rooting": "unknown"}
+        setup = [{"op": "tree.annotate", "params": {"id": 1, "annotation": label(["a", "d"], "All")}},
+                 {"op": "tree.annotate", "params": {"id": 2, "annotation": label(["a", "b"], "AB")}},
+                 {"op": "tree.reroot", "params": {"clade": ["b"]}}]
+        placing = [{"op": "tree.place_label", "params": {"labels": [1], "choice": "exact"}},
+                   {"op": "tree.place_label", "params": {"labels": [2], "choice": "remove"}}]
+        expected = [{"id": 1, "label": "All", "exact": True}, {"id": 2, "label": "AB", "exact": False}]
+        for tree_file in ("labels-cli.nwk", "labels-mcp.nwk"):
+            (project / tree_file).write_text("[&R] ((a,b),(c,d));\n")
+
+        def edit(operations):
+            return subprocess.run([str(binary), "edit", str(project / "labels-cli.nwk"),
+                                   json.dumps(operations), "--project", str(project)],
+                                  cwd=root, env=env, capture_output=True, text=True, timeout=45,
+                                  check=True).stdout
+        assert json.loads(edit(setup)) == {"displaced_labels": expected}
+        assert edit(placing) == ""
+        labels_mcp = Mcp(binary, project, env)
+        try:
+            state = labels_mcp.tool("open", {"path": "labels-mcp.nwk"})["structuredContent"]
+            for operation in setup + placing:
+                if operation is placing[0]:
+                    assert state["displaced_labels"] == expected, state
+                state = labels_mcp.tool("apply", {"document": state["document"], "version": state["version"],
+                                                  "operation": operation})["structuredContent"]
+            assert state["displaced_labels"] == [], state
+            assert not labels_mcp.tool("save", {"document": state["document"]})["isError"]
+        finally:
+            labels_mcp.close()
+        reopened = Mcp(binary, project, env)
+        try:
+            for tree_file in ("labels-cli.nwk", "labels-mcp.nwk"):
+                state = reopened.tool("open", {"path": tree_file})["structuredContent"]
+                assert state["displaced_labels"] == [], (tree_file, state)
+        finally:
+            reopened.close()
+        sides = [json.loads((project / f"{tree_file}.basecraft.json").read_text())["tree"]["annotations"]
+                 for tree_file in ("labels-cli.nwk", "labels-mcp.nwk")]
+        assert sides[0] == sides[1] and list(sides[0]) == ["1"], sides
+        record("Displaced labels: CLI and MCP reroot, report, place, save and reopen alike")
+
         readonly = Mcp(binary, project, env, writable=False)
         try:
             assert not any(tool["name"] == name for tool in readonly.tools())

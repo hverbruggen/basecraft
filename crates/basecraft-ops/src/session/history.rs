@@ -281,6 +281,14 @@ impl Session {
             matches!(self.replay_mode, ReplayMode::Live),
         )?;
         content.as_document().name_record(&mut op)?;
+        // The log names every label placed, each once.
+        if let Op::TreePlaceLabel { labels, .. } = &mut op {
+            if labels.is_empty() {
+                *labels = crate::documents::tree::displaced(content);
+            }
+            labels.sort_unstable();
+            labels.dedup();
+        }
         if let Op::SangerUpdate { review } = &mut op {
             *review =
                 self.retain_review_record(&crate::sanger_review::read_journal_record(review)?)?;
@@ -318,12 +326,19 @@ impl Session {
         if checkpoints {
             self.track(doc)?;
         }
-        let displaced = crate::documents::tree::displaced(&self.docs[doc.0].content);
+        let before = crate::documents::tree::displaced(&self.docs[doc.0].content);
+        let mut notes = crate::documents::tree::placement_notes(&self.docs[doc.0].content, &op);
         let (inverse, feature) = self.docs[doc.0]
             .content_mut()
             .as_document_mut()
             .apply(&op)?;
-        let notes = crate::documents::tree::moved_labels(&self.docs[doc.0].content, &displaced);
+        let displaced = crate::documents::tree::newly_displaced(&self.docs[doc.0].content, &before);
+        notes.extend(displaced.iter().map(|label| {
+            format!(
+                "Label {:?} no longer marks the group it was made for",
+                label.label
+            )
+        }));
         if !checkpoints && let Err(error) = self.track(doc) {
             restore_inverse(self.docs[doc.0].content_mut(), &inverse)?;
             return Err(error);
@@ -367,6 +382,7 @@ impl Session {
             entry_id,
             feature,
             notes,
+            displaced,
         })
     }
 
@@ -634,7 +650,9 @@ impl Session {
             }
             self.docs[id.0].baseline = None;
             self.refresh_source_stamps(id);
-            self.docs[id.0].recovery_changed |= changed;
+            if changed {
+                self.note_changed_on_disk(id);
+            }
         } else {
             self.write_entries(entries)?;
         }

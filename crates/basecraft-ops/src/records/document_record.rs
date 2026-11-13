@@ -432,6 +432,7 @@ fn presentation(op: &Op) -> bool {
         Op::TreeRotate { .. }
         | Op::TreeLadderize { .. }
         | Op::TreeAnnotate { .. }
+        | Op::TreePlaceLabel { .. }
         | Op::Export { .. } => true,
         _ => false,
     }

@@ -10,10 +10,11 @@ mod edit;
 mod rooting;
 pub use edit::TreeUndo;
 
-use basecraft_protocol::facts::{BranchLengths, Fact};
+use basecraft_protocol::facts::{BranchLengths, Fact, Rooting};
 use std::collections::{BTreeMap, BTreeSet};
 
 use basecraft_io::newick::{self, ParsedTree};
+use basecraft_protocol::tree::{DisplacedLabel, LabelPlacement};
 use basecraft_protocol::{CladeAnnotation, CladeRef, SupportKind, TreeStyle};
 
 pub use crate::alignment::EditError;
@@ -441,36 +442,187 @@ impl TreeDoc {
 
     /// The names of every tip in the clade a reference names.
     pub fn clade_tips(&self, clade: &[String]) -> Result<BTreeSet<String>, EditError> {
+        Ok(self.tips_under(self.resolve(clade)?))
+    }
+
+    fn tips_under(&self, node: usize) -> BTreeSet<String> {
         let mut tips = BTreeSet::new();
-        let mut stack = vec![self.resolve(clade)?];
+        let mut stack = vec![node];
         while let Some(i) = stack.pop() {
             if self.nodes[i].is_tip() {
                 tips.insert(self.nodes[i].name.clone());
             }
             stack.extend(&self.nodes[i].children);
         }
-        Ok(tips)
+        tips
     }
 
     /// Labels whose tip pair now names a different group of tips than the
     /// one they were made for, as after a reroot.
     pub fn displaced_annotations(&self) -> Vec<u32> {
-        let all: BTreeSet<String> = self
-            .nodes
-            .iter()
-            .filter(|n| n.is_tip())
-            .map(|n| n.name.clone())
-            .collect();
+        let all = self.tip_names();
         self.annotations
             .iter()
             .filter(|(_, a)| {
                 self.clade_tips(&a.clade).map_or(true, |now| {
                     now != a.tips
-                        && (a.rooting == basecraft_protocol::facts::Rooting::Rooted
+                        && (a.rooting != Rooting::Unrooted
                             || all.difference(&now).cloned().collect::<BTreeSet<_>>() != a.tips)
                 })
             })
             .map(|(&id, _)| id)
+            .collect()
+    }
+
+    /// Every displaced label, saying whether a clade now marks exactly its
+    /// group, so the window can offer that choice (D11).
+    pub fn displaced_labels(&self) -> Vec<DisplacedLabel> {
+        self.displaced_annotations()
+            .into_iter()
+            .map(|id| {
+                let a = &self.annotations[&id];
+                let exact = self.exact_clade(a).is_some();
+                let label = a.label.clone();
+                DisplacedLabel { id, label, exact }
+            })
+            .collect()
+    }
+
+    /// The clade holding exactly a label's tips or, for a label made on an
+    /// unrooted tree, exactly the other side of its split.
+    fn exact_clade(&self, a: &CladeAnnotation) -> Option<usize> {
+        let exact = |tips: &BTreeSet<String>| {
+            let node = self.smallest_clade(tips).ok()?;
+            (self.tips_under(node) == *tips).then_some(node)
+        };
+        exact(&a.tips).or_else(|| {
+            let other = self.tip_names().difference(&a.tips).cloned().collect();
+            (a.rooting != Rooting::Rooted).then(|| exact(&other))?
+        })
+    }
+
+    /// The smallest clade holding every tip in `tips`.
+    fn smallest_clade(&self, tips: &BTreeSet<String>) -> Result<usize, EditError> {
+        let mut found = self
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| n.is_tip() && tips.contains(&n.name))
+            .map(|(i, _)| i);
+        let first = found
+            .next()
+            .ok_or_else(|| EditError("the label has no tips".into()))?;
+        let mut common = self.ancestors(first);
+        let mut count = 1;
+        for tip in found {
+            let up: BTreeSet<usize> = self.ancestors(tip).into_iter().collect();
+            common.retain(|n| up.contains(n));
+            count += 1;
+        }
+        if count != tips.len() {
+            return err("some of the label's tips are no longer in the tree");
+        }
+        Ok(common[0])
+    }
+
+    /// After a reroot, point labels made on a tree marked unrooted whose
+    /// split survived at the clade that now marks it. Nothing moved, so their
+    /// tips and rooting stay. Labels of unknown rooting are left displaced
+    /// for the user to place (D11).
+    fn repoint_split_labels(&mut self) {
+        for id in self.displaced_annotations() {
+            let a = &self.annotations[&id];
+            if a.rooting == Rooting::Unrooted
+                && let Some(node) = self.exact_clade(a)
+            {
+                let clade = self.clade_ref(node);
+                self.annotations
+                    .get_mut(&id)
+                    .expect("displaced labels exist")
+                    .clade = clade;
+            }
+        }
+    }
+
+    /// Place `labels` as `choice` says, all or none (D11). Returns the
+    /// labels as they were.
+    pub(crate) fn place_labels(
+        &mut self,
+        labels: &[u32],
+        choice: LabelPlacement,
+    ) -> Result<Vec<(u32, Option<CladeAnnotation>)>, EditError> {
+        let displaced = self.displaced_annotations();
+        let ids: BTreeSet<u32> = labels.iter().copied().collect();
+        if ids.is_empty() {
+            return err("name the labels to place");
+        }
+        let mut placed = Vec::new();
+        for id in ids {
+            let a = self
+                .annotations
+                .get(&id)
+                .filter(|_| displaced.contains(&id))
+                .ok_or_else(|| EditError(format!("label {id} is not displaced")))?;
+            placed.push((id, self.placed(a, choice)?));
+        }
+        let mut before = Vec::new();
+        for (id, a) in placed {
+            let old = match a {
+                Some(a) => self.annotations.insert(id, a),
+                None => self.annotations.remove(&id),
+            };
+            before.push((id, old));
+        }
+        self.edited();
+        Ok(before)
+    }
+
+    /// Label `a` where `choice` puts it, or none when it is removed.
+    fn placed(
+        &self,
+        a: &CladeAnnotation,
+        choice: LabelPlacement,
+    ) -> Result<Option<CladeAnnotation>, EditError> {
+        let mut a = a.clone();
+        match choice {
+            LabelPlacement::Remove => return Ok(None),
+            LabelPlacement::Exact => {
+                let node = self.exact_clade(&a).ok_or_else(|| {
+                    EditError(format!(
+                        "no clade holds exactly the tips of label {:?}",
+                        a.label
+                    ))
+                })?;
+                a.clade = self.clade_ref(node);
+                // Placed on the other side of its split: the user has said
+                // the label marks a split.
+                if self.tips_under(node) != a.tips {
+                    a.rooting = Rooting::Unrooted;
+                }
+            }
+            LabelPlacement::Smallest => {
+                let node = self.smallest_clade(&a.tips)?;
+                a.clade = self.clade_ref(node);
+                a.tips = self.tips_under(node);
+                a.rooting = self.rooting();
+            }
+        }
+        Ok(Some(a))
+    }
+
+    fn rooting(&self) -> Rooting {
+        match self.rooted {
+            Some(true) => Rooting::Rooted,
+            Some(false) => Rooting::Unrooted,
+            None => Rooting::Unknown,
+        }
+    }
+
+    fn tip_names(&self) -> BTreeSet<String> {
+        self.nodes
+            .iter()
+            .filter(|n| n.is_tip())
+            .map(|n| n.name.clone())
             .collect()
     }
 
@@ -605,11 +757,7 @@ impl TreeDoc {
                 // group it marks now. An edited label keeps its group.
                 if a.tips.is_empty() {
                     a.tips = tips;
-                    a.rooting = match self.rooted {
-                        Some(true) => basecraft_protocol::facts::Rooting::Rooted,
-                        Some(false) => basecraft_protocol::facts::Rooting::Unrooted,
-                        None => basecraft_protocol::facts::Rooting::Unknown,
-                    };
+                    a.rooting = self.rooting();
                 }
                 self.annotations.insert(id, a);
             }

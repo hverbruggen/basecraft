@@ -248,16 +248,6 @@
         }
       ]
     },
-    "Alphabet": {
-      "description": "The letters a sequence or alignment is written in.",
-      "type": "string",
-      "enum": [
-        "dna",
-        "rna",
-        "protein",
-        "unknown"
-      ]
-    },
     "Author": {
       "type": "object",
       "properties": {
@@ -2099,6 +2089,26 @@
         "unavailable"
       ]
     },
+    "LabelPlacement": {
+      "description": "Where `tree.place_label` puts a label a reroot left on another group of\ntips (D11).",
+      "oneOf": [
+        {
+          "description": "On the clade that holds exactly the label's tips; refused when none does.",
+          "type": "string",
+          "const": "exact"
+        },
+        {
+          "description": "On the smallest clade that holds all of the label's tips.",
+          "type": "string",
+          "const": "smallest"
+        },
+        {
+          "description": "Remove the label.",
+          "type": "string",
+          "const": "remove"
+        }
+      ]
+    },
     "Location": {
       "description": "A feature location: segments in biological order, 5' to 3' of the\nfeature. A reverse-strand two-exon gene lists its downstream exon first.\nLocations crossing the origin of a circular sequence are split into two\nsegments at the origin.",
       "type": "object",
@@ -3175,7 +3185,7 @@
               "type": "object",
               "properties": {
                 "alphabet": {
-                  "$ref": "#/$defs/Alphabet"
+                  "$ref": "#/$defs/StatedAlphabet"
                 }
               },
               "required": [
@@ -3217,6 +3227,40 @@
               },
               "required": [
                 "id"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Settle labels a reroot left on another group of tips (D11): each goes\nwhere `choice` says. One undo step; refused as a whole when one label\ncan't be placed. Given without `labels`, the session fills in every\nlabel displaced now, so the log always names them.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.place_label"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "choice": {
+                  "$ref": "#/$defs/LabelPlacement"
+                },
+                "labels": {
+                  "type": "array",
+                  "default": [],
+                  "items": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                  }
+                }
+              },
+              "required": [
+                "choice"
               ]
             }
           },
@@ -4747,6 +4791,15 @@
       "required": [
         "name",
         "columns"
+      ]
+    },
+    "StatedAlphabet": {
+      "description": "What a user can state: a kind of sequence.",
+      "type": "string",
+      "enum": [
+        "dna",
+        "rna",
+        "protein"
       ]
     },
     "Strand": {

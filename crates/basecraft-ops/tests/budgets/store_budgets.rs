@@ -18,16 +18,7 @@ fn setup(root: &Path) -> (Session, basecraft_ops::DocId, PathBuf) {
     std::fs::write(&source, ORIGINAL).unwrap();
     let mut session = Session::recoverable(root).unwrap();
     let doc = session.open(&source).unwrap();
-    session
-        .apply(
-            doc,
-            Op::SeqReplace {
-                start: 1,
-                end: 2,
-                residues: "T".into(),
-            },
-        )
-        .unwrap();
+    session.apply(doc, Op::seq_replace(1, 2, "T")).unwrap();
     (session, doc, source)
 }
 
@@ -81,11 +72,7 @@ fn default_and_unrelated_scaling() {
         session
             .apply(
                 doc,
-                Op::SeqReplace {
-                    start: 1,
-                    end: 2,
-                    residues: if index % 2 == 0 { "G" } else { "T" }.into(),
-                },
+                Op::seq_replace(1, 2, if index % 2 == 0 { "G" } else { "T" }),
             )
             .unwrap();
         counters::reset();
@@ -107,13 +94,20 @@ fn incomplete_decision_and_recheck() {
         return;
     };
     let (mut session, doc, source) = setup(&root);
-    // A deleted unrelated store is never visited. A store whose index refresh
-    // fails has unknown relevance and is visited by every save.
+    // A deleted unrelated store is never visited. A damaged store listed
+    // beside the source cannot be read, so its relevance is unknown.
     let missing = store(&root, "missing");
     std::fs::remove_dir_all(&missing).unwrap();
     std::fs::create_dir(root.join("corrupt")).unwrap();
-    let run = ArtifactRun::create(&root.join("corrupt/result.txt"), "reserved").unwrap();
-    records::register(&run).unwrap();
+    let run = records::reference_input_with_dependencies(
+        &root.join("corrupt/result.txt"),
+        &source,
+        &basecraft_io::hash_file(&source).unwrap(),
+        &[],
+        "budget-test",
+        None,
+    )
+    .unwrap();
     let corrupt = run
         .directory()
         .parent()
@@ -122,7 +116,6 @@ fn incomplete_decision_and_recheck() {
         .unwrap()
         .to_path_buf();
     std::fs::write(corrupt.join("store.json"), b"damaged").unwrap();
-    records::register(&run).unwrap();
     let stores = [corrupt];
     counters::reset();
     let check = match session.save(doc, None).unwrap_err() {

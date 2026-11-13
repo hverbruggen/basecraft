@@ -170,7 +170,7 @@ impl qobject::AppOperations {
     pub fn blast_default_alphabet(&self, queries: &QString) -> QString {
         let queries: Vec<basecraft_ops::blast::Query> =
             serde_json::from_str(&queries.to_string()).unwrap_or_default();
-        QString::from(basecraft_ops::blast::suggested_alphabet(&queries))
+        QString::from(basecraft_ops::blast::suggested_alphabet(&queries).unwrap_or(""))
     }
     pub fn open_browser_window(mut self: Pin<&mut Self>, url: &QString) -> QString {
         if self.browser_pending {

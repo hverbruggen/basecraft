@@ -56,6 +56,7 @@ fn record(dir: &Path) -> std::path::PathBuf {
     let rec = basecraft_io::genbank::Record {
         name: "orftest".into(),
         molecule: "DNA".into(),
+        alphabet: None,
         circular: false,
         division: "SYN".into(),
         date: "10-OCT-2026".into(),

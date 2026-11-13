@@ -571,6 +571,7 @@ pub fn describe(op: &Op) -> String {
             id,
             annotation: None,
         } => format!("Removed clade annotation {id}"),
+        Op::TreePlaceLabel { .. } => "Placed displaced labels".into(),
         Op::TreeAddSupport { name, source, .. } if source.is_empty() => {
             format!("Added support values {name:?}")
         }

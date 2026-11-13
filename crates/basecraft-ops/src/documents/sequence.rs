@@ -94,7 +94,7 @@ impl Document for Opened {
     }
     fn apply(&mut self, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {
         if let Op::SetAlphabet { alphabet } = op {
-            let before = super::stated(self.doc.alphabet()).cloned();
+            let before = self.doc.stated_alphabet().cloned();
             self.doc.set_alphabet(Some(super::user_alphabet(*alphabet)));
             return Ok((Inverse::Alphabet(before), None));
         }
@@ -123,7 +123,10 @@ impl Document for Opened {
     fn saved_companions(&self, target: &Path) -> Vec<PathBuf> {
         let gff = files::write_sidecar(self, &mut std::io::sink()).is_some();
         let gff = gff.then(|| files::gff_sidecar(target));
-        let facts = super::stated(self.doc.alphabet()).map(|_| files::tree_sidecar(target));
+        let facts = self
+            .doc
+            .stated_alphabet()
+            .map(|_| files::tree_sidecar(target));
         gff.into_iter().chain(facts).collect()
     }
 
@@ -148,12 +151,7 @@ impl Document for Opened {
                 Ok(())
             })?;
         }
-        super::stage_companion(
-            &mut prepared,
-            target,
-            super::stated(self.doc.alphabet()),
-            &hash,
-        )?;
+        super::stage_companion(&mut prepared, target, self.doc.stated_alphabet(), &hash)?;
         Ok(prepared)
     }
     fn saved_hashes(
@@ -170,10 +168,7 @@ impl Document for Opened {
             r?;
             out.push(hw.hash());
         }
-        out.extend(super::facts_hash(
-            super::stated(self.doc.alphabet()),
-            &main,
-        )?);
+        out.extend(super::facts_hash(self.doc.stated_alphabet(), &main)?);
         Ok(out)
     }
     fn merge(&self, previous: &Op, next: &Op) -> Option<Op> {
@@ -297,6 +292,7 @@ pub(crate) fn execute_sequence(
         | Op::TreeRenameTip { .. }
         | Op::TreeSetBranchLengths { .. }
         | Op::TreeAnnotate { .. }
+        | Op::TreePlaceLabel { .. }
         | Op::TreeAddSupport { .. }
         | Op::TreeRemoveSupport { .. }
         | Op::TreeStyle { .. } => Err(invalid(format!("{} needs a tree", op.name()))),

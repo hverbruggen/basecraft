@@ -41,6 +41,7 @@ mod save_failure_tests;
 #[cfg(test)]
 mod saved_mark_tests;
 mod tool_runs;
+pub use open::{objects_dir, recovery_folder};
 pub use save_decision::{EvidenceAction, SaveCheck, SaveDecision, SaveOutcome, SaveWarning};
 pub use tool_runs::ToolRunRecord;
 pub mod support_import;
@@ -79,7 +80,8 @@ struct Slot {
     saved_at: Option<SavedMark>,
     recovery_boundary: Option<String>,
     source_stamps: Vec<(PathBuf, Option<basecraft_protocol::provenance::FileStamp>)>,
-    recovery_changed: bool,
+    /// What the editor should say about this document's recovery.
+    recovery_notice: Option<String>,
     /// The previous Save As target this session wrote, so a partial Save As can retry it.
     saved_target: Option<(PathBuf, basecraft_protocol::provenance::FileStamp, String)>,
     absent_sidecars: Vec<String>,
@@ -160,6 +162,8 @@ pub struct Outcome {
     pub feature: Option<FeatureId>,
     /// Things the user should hear about, such as a label a reroot moved.
     pub notes: Vec<String>,
+    /// Labels this edit displaced; the window asks where each goes (D11).
+    pub displaced: Vec<basecraft_protocol::tree::DisplacedLabel>,
 }
 
 /// Target-save and evidence locks held while writing an export or extract.
@@ -235,8 +239,9 @@ impl Session {
         }
     }
 
-    /// A viewing session whose first edit starts recovery in application state,
-    /// never next to the source. Discovery creates no directories.
+    /// A viewing session whose first edit starts recovery in
+    /// `<root>/.basecraft/recovery/<session>`: the project's folder, or the
+    /// folder of a loose file. Nothing is created before the first edit.
     pub fn recoverable(root: impl Into<PathBuf>) -> Result<Self> {
         let paths =
             basecraft_platform::paths::AppPaths::discover().map_err(|e| invalid(e.to_string()))?;
@@ -251,7 +256,7 @@ impl Session {
             .load()
             .map_err(|e| invalid(e.to_string()))?;
         let mut session = Self::new(root);
-        session.storage_root = paths.state.join("recovery").join(&session.id);
+        session.storage_root = recovery_folder(&session.root).join(&session.id);
         session.local_provenance_root = paths.state.join("provenance");
         session.log = preferences
             .files
@@ -267,9 +272,7 @@ impl Session {
 
     /// A session that logs nothing, for replay and tests.
     pub fn unlogged(root: impl Into<PathBuf>) -> Self {
-        let mut s = Self::new(root);
-        s.log = None;
-        s.store_objects = false;
+        let mut s = Self::detached(root);
         s.tracked = false;
         s
     }
@@ -437,22 +440,6 @@ impl Session {
             .map(|payload| payload.metadata_warning.as_deref())
     }
 
-    /// The letters an alignment or sequence is written in: what the user
-    /// said, kept in its companion, or else a guess from its residues.
-    pub fn alphabet(
-        &self,
-        id: DocId,
-    ) -> Result<basecraft_protocol::facts::Fact<basecraft_protocol::facts::Alphabet>> {
-        let content = &self.slot(id)?.content;
-        if let Some(opened) = content.alignment() {
-            return Ok(opened.doc.alphabet().clone());
-        }
-        content
-            .sequence()
-            .map(|opened| opened.doc.alphabet().clone())
-            .ok_or_else(|| invalid("only alignments and sequences have an alphabet"))
-    }
-
     pub fn is_alignment(&self, id: DocId) -> bool {
         self.docs
             .get(id.0)
@@ -475,7 +462,7 @@ impl Session {
         self.docs.get(id.0).ok_or(Error::UnknownDocument { id })
     }
 
-    fn content(&self, id: DocId) -> Result<&Loaded> {
+    pub(crate) fn content(&self, id: DocId) -> Result<&Loaded> {
         Ok(&self.slot(id)?.content)
     }
 
@@ -488,7 +475,7 @@ impl Session {
         } else {
             Vec::new()
         };
-        if let Some(molecule) = crate::blast::stated_molecule(opened.doc.alphabet(), None) {
+        if let Some(molecule) = crate::blast::stated_molecule(&opened.doc.alphabet()) {
             for query in &mut queries {
                 query.source["molecule"] = molecule.as_str().into();
             }
@@ -602,19 +589,18 @@ impl Session {
     pub fn state(&self, id: DocId) -> Result<DocState> {
         Ok(self.slot(id)?.content.as_document().fingerprint())
     }
-
-    // Open and save.
-
-    // Operations.
 }
 
 impl Drop for Session {
+    /// Remove recovery once nothing is unsaved, then any emptied recovery and
+    /// `.basecraft` folder.
     fn drop(&mut self) {
-        if self.storage_root != self.root
-            && !self.storage_root.join("pending-save.json").exists()
-            && self.docs.iter().all(Slot::is_clean)
-        {
+        let unsaved = self.storage_root.join("pending-save.json").exists()
+            || !self.docs.iter().all(Slot::is_clean);
+        if self.storage_root != self.root && !unsaved {
             let _ = std::fs::remove_dir_all(&self.storage_root);
+            let _ = std::fs::remove_dir(recovery_folder(&self.root));
+            let _ = std::fs::remove_dir(self.root.join(".basecraft"));
         }
     }
 }
@@ -663,10 +649,6 @@ pub(crate) fn relative(root: &Path, path: &Path) -> String {
         |_| abs.to_string_lossy().into_owned(),
         |p| p.to_string_lossy().into_owned(),
     )
-}
-
-pub fn objects_dir(root: &Path) -> PathBuf {
-    root.join(".basecraft").join("objects")
 }
 
 /// Upper-case residues; reject anything that isn't a letter, `-` or `*`.

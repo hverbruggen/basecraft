@@ -205,7 +205,8 @@ fn annotate(tree: &mut TreeDoc, id: u32, clade: &[&str]) {
 fn a_reroot_that_moves_a_label_to_another_group_is_reported() {
     crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("t.nwk"), "((a,b),(c,d),e);\n").unwrap();
+    // Rooted: on an unrooted tree the split survives and the label follows it.
+    std::fs::write(dir.path().join("t.nwk"), "[&R] ((a,b),(c,d),e);\n").unwrap();
     let mut session = Session::new(dir.path());
     let tree = session.open(&dir.path().join("t.nwk")).unwrap();
     for (id, clade, label) in [(1, ["a", "b"], "AB"), (2, ["c", "d"], "CD")] {

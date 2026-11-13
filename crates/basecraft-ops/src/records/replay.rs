@@ -409,13 +409,46 @@ fn safe_key(key: &str) -> bool {
             .all(|c| matches!(c, std::path::Component::Normal(_)))
 }
 
+/// Recovery sessions with a journal in the recovery folder of each of `roots`
+/// (a project, or the folder of a loose file), oldest first. At most 256.
+pub fn recovery_sessions(roots: &[std::path::PathBuf]) -> Result<Vec<std::path::PathBuf>> {
+    let mut sessions = Vec::new();
+    for root in roots {
+        let entries = match std::fs::read_dir(crate::session::recovery_folder(root)) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        };
+        for entry in entries {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() && crate::log::log_dir(&entry.path()).is_dir() {
+                sessions.push(entry.path());
+            }
+        }
+    }
+    if sessions.len() > 256 {
+        return Err(crate::Error::Limit {
+            what: "recovery sessions".into(),
+            limit: 256,
+        });
+    }
+    // Session folders are named by ULID, which sorts by time.
+    sessions.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+    sessions.dedup();
+    Ok(sessions)
+}
+
 /// Reconstruct unsaved documents into a new directory without modifying sources
 /// or executing any tools. Strict reading rejects torn/corrupt journals; the
 /// error names how many events [`recover_verified_prefix`] would keep.
 /// This conservative wrapper drops its attempt on refusal. A returned check is
 /// advisory only; continuations must use [`prepare_recovery`] on a live attempt.
-pub fn recover(root: &Path, destination: &Path) -> Result<Vec<std::path::PathBuf>> {
-    let mut attempt = prepare_recovery(root, destination, RecoveryMode::Strict)?;
+pub fn recover(
+    root: &Path,
+    destination: &Path,
+    project: Option<&crate::project::Project>,
+) -> Result<Vec<std::path::PathBuf>> {
+    let mut attempt = prepare_recovery(root, destination, RecoveryMode::Strict, project)?;
     for document in 0..attempt.len() {
         attempt.advance(document, None)?;
     }
@@ -429,10 +462,13 @@ pub enum RecoveryMode {
     VerifiedPrefix,
 }
 
+/// `project` is the project the user chose, if any: records of recovered
+/// files inside it are indexed at its root.
 pub fn prepare_recovery(
     root: &Path,
     destination: &Path,
     mode: RecoveryMode,
+    project: Option<&crate::project::Project>,
 ) -> Result<RecoveryAttempt> {
     recover_checked(root, destination)?;
     let (entries, damage) = match mode {
@@ -442,7 +478,7 @@ pub fn prepare_recovery(
             (prefix.entries, prefix.problem)
         }
     };
-    recover_entries(root, destination, entries, damage)
+    recover_entries(root, destination, entries, damage, project)
 }
 
 fn strict_entries(root: &Path) -> Result<Vec<LogEntry>> {
@@ -467,8 +503,9 @@ fn strict_entries(root: &Path) -> Result<Vec<LogEntry>> {
 pub fn recover_verified_prefix(
     root: &Path,
     destination: &Path,
+    project: Option<&crate::project::Project>,
 ) -> Result<(Vec<std::path::PathBuf>, Option<String>)> {
-    let mut attempt = prepare_recovery(root, destination, RecoveryMode::VerifiedPrefix)?;
+    let mut attempt = prepare_recovery(root, destination, RecoveryMode::VerifiedPrefix, project)?;
     for document in 0..attempt.len() {
         attempt.advance(document, None)?;
     }
@@ -498,6 +535,7 @@ fn recover_entries(
     destination: &Path,
     mut entries: Vec<LogEntry>,
     damage: Option<String>,
+    project: Option<&crate::project::Project>,
 ) -> Result<RecoveryAttempt> {
     if entries.is_empty() {
         return Err(crate::error::invalid(
@@ -518,7 +556,7 @@ fn recover_entries(
     let staging = tempfile::Builder::new()
         .prefix(".basecraft-recover-")
         .tempdir_in(&parent)?;
-    let mut session = Session::unlogged(staging.path());
+    let mut session = Session::unlogged(staging.path()).in_project(project.cloned());
     let source_root = recorded_source_root(root, entries.iter());
     let pending_path = root.join("pending-save.json");
     if pending_path.is_file() {
@@ -810,10 +848,8 @@ fn artifacts(root: &Path) -> Result<Vec<ArtifactObservation>> {
             return Err(crate::error::invalid("unsafe recovery artifact"));
         };
         result.push(ArtifactObservation {
-            path: path
-                .strip_prefix(root)
-                .map_err(|_| crate::error::invalid("artifact outside recovery stage"))?
-                .into(),
+            path: basecraft_platform::files::inside(path, root)
+                .ok_or_else(|| crate::error::invalid("artifact outside recovery stage"))?,
             identity,
             revision,
         });
@@ -987,10 +1023,11 @@ impl RecoveryAttempt {
         };
         let finalizing = doc.written;
         let observed = if doc.written {
-            let _evidence = match crate::records::input_evidence::Mutation::begin() {
-                Ok(guard) => guard,
-                Err(error) => return Err(refuse(&mut self.session, error)),
-            };
+            let _evidence =
+                match crate::records::input_evidence::Mutation::begin_in(self.session.project()) {
+                    Ok(guard) => guard,
+                    Err(error) => return Err(refuse(&mut self.session, error)),
+                };
             self.session
                 .recovery_finalize(id, doc.saved.as_ref(), decision)?
         } else {
@@ -1070,7 +1107,7 @@ impl RecoveryAttempt {
     fn publish_inner(&mut self) -> Result<RecoveryCompletion> {
         self.validate()?;
         let _target = crate::records::save_guard::lock(&self.destination)?;
-        let evidence = crate::records::input_evidence::Mutation::begin()?;
+        let evidence = crate::records::input_evidence::Mutation::begin_in(self.session.project())?;
         for doc in &self.documents {
             if !doc.written {
                 return Err(crate::error::invalid(
@@ -1275,6 +1312,7 @@ mod tests {
                 root.path(),
                 &destination,
                 vec![baseline.clone(), attempt, edit.clone()],
+                None,
                 None,
             );
             if escapes {

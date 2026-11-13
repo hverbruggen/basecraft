@@ -66,46 +66,29 @@ fn copied_identity_does_not_retire_the_live_original_store() {
 }
 
 #[test]
-fn corrupt_alias_shard_keeps_other_known_conflicts() {
-    let Some(root) = isolated_profile::enter("corrupt_alias_shard_keeps_other_known_conflicts")
-    else {
+fn damaged_index_cannot_hide_a_reference() {
+    let Some(root) = isolated_profile::enter("damaged_index_cannot_hide_a_reference") else {
         return;
     };
     let source = root.join("source.fasta");
-    let alias = root.join("alias.fasta");
     std::fs::write(&source, b">a\nACGT\n").unwrap();
-    std::fs::hard_link(&source, &alias).unwrap();
-    let known = reference(&root.join("known"), &source);
-    reference(&root.join("other"), &alias);
-    let state = basecraft_platform::paths::AppPaths::discover()
-        .unwrap()
-        .state;
-    let key = basecraft_io::hash_bytes(alias.as_os_str().as_encoded_bytes());
-    std::fs::write(
-        state
-            .join("analysis-inputs/sources")
-            .join(key.trim_start_matches("b3:")),
-        b"damaged",
-    )
-    .unwrap();
-    let check = records::check(&source).unwrap();
-    assert!(!check.is_complete());
-    assert!(
-        check
-            .conflict
-            .analyses
-            .iter()
-            .any(|analysis| analysis.run == known.directory())
-    );
+    reference(&root.join("known"), &source);
+    for bucket in std::fs::read_dir(root.join(".basecraft/analysis-index")).unwrap() {
+        for entry in std::fs::read_dir(bucket.unwrap().path()).unwrap() {
+            std::fs::write(entry.unwrap().path(), b"damaged").unwrap();
+        }
+    }
+    assert!(!records::check(&source).unwrap().is_complete());
     let mut session = basecraft_ops::Session::new(&root);
     let doc = session.open(&source).unwrap();
     session
         .apply(doc, basecraft_protocol::Op::seq_replace(0, 1, "T"))
         .unwrap();
+    assert!(session.save(doc, None).is_err());
     let decision = session
         .check_save(doc, None)
         .unwrap()
-        .decide(records::SavePolicy::Cancel, true);
+        .decide(records::SavePolicy::Cancel, false);
     assert!(session.save_with_decision(doc, None, decision).is_err());
     assert_eq!(std::fs::read(source).unwrap(), b">a\nACGT\n");
 }
@@ -182,32 +165,6 @@ fn failed_dependency_update_cannot_hide_a_later_relinked_source() {
             .iter()
             .any(|analysis| analysis.run == owner.directory())
     );
-}
-
-#[test]
-fn damaged_catalogue_cannot_hide_a_reference() {
-    let Some(root) = isolated_profile::enter("damaged_catalogue_cannot_hide_a_reference") else {
-        return;
-    };
-    let source = root.join("source.fasta");
-    std::fs::write(&source, b">a\nACGT\n").unwrap();
-    let run = reference(&root.join("analysis"), &source);
-    let cache = basecraft_platform::paths::AppPaths::discover()
-        .unwrap()
-        .state
-        .join("analysis-input-index.json");
-    let mut value: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&cache).unwrap()).unwrap();
-    value["value"]["sources"] = serde_json::Value::Array(Vec::new());
-    for damaged in [
-        serde_json::to_vec(&value).unwrap(),
-        b"broken cache".to_vec(),
-    ] {
-        std::fs::write(&cache, damaged).unwrap();
-        let check = records::check(&source).unwrap();
-        assert_eq!(check.conflict.analyses.len(), 1);
-        assert_eq!(check.conflict.analyses[0].run, run.directory());
-    }
 }
 
 #[test]
@@ -298,24 +255,6 @@ fn two_hundred_stores_fifty_runs_open_no_unrelated_ledgers() {
     ] {
         measure_save(&root, label, residue, true);
     }
-    // Minimal metadata-only work, with paths already decoded in memory.
-    let cache = basecraft_platform::paths::AppPaths::discover()
-        .unwrap()
-        .state
-        .join("analysis-input-index.json");
-    let index: basecraft_protocol::records::IndexFile<
-        basecraft_protocol::records::AnalysisInputIndex,
-    > = serde_json::from_slice(&std::fs::read(cache).unwrap()).unwrap();
-    let paths: Vec<_> = index.value.sources.iter().collect();
-    let started = std::time::Instant::now();
-    for path in &paths {
-        let _ = std::fs::symlink_metadata(path);
-    }
-    eprintln!(
-        "{} cached metadata paths, stat only: {:?}",
-        paths.len(),
-        started.elapsed()
-    );
     let cold = std::process::Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
@@ -344,14 +283,7 @@ fn measure_save(root: &Path, label: &str, residue: &str, interactive: bool) {
     };
     let doc = session.open(&root.join("unrelated.fasta")).unwrap();
     session
-        .apply(
-            doc,
-            basecraft_protocol::Op::SeqReplace {
-                start: 0,
-                end: 1,
-                residues: residue.into(),
-            },
-        )
+        .apply(doc, basecraft_protocol::Op::seq_replace(0, 1, residue))
         .unwrap();
     // Recovery sessions retain the original by hard link at the first edit,
     // so the save also covers the multi-link lookup.
@@ -422,21 +354,24 @@ fn completed_registration_needs_no_unrelated_ledger_reads() {
             .keys()
             .all(|p| !p.starts_with(root.join("analysis")))
     );
-    let cache = basecraft_platform::paths::AppPaths::discover()
+    // Registering again changes nothing.
+    let index = std::fs::read_dir(root.join(".basecraft/analysis-index"))
         .unwrap()
-        .state
-        .join("analysis-input-index.json");
-    let bytes = std::fs::read(&cache).unwrap();
-    let record: basecraft_protocol::records::IndexFile<
-        basecraft_protocol::records::AnalysisInputIndex,
-    > = serde_json::from_slice(&bytes).unwrap();
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let shard = std::fs::read_dir(&index)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let bytes = std::fs::read(&shard).unwrap();
     let _lock = records::lock().unwrap();
     records::register(&run).unwrap();
-    let restored: basecraft_protocol::records::IndexFile<
-        basecraft_protocol::records::AnalysisInputIndex,
-    > = serde_json::from_slice(&std::fs::read(cache).unwrap()).unwrap();
-    assert_eq!(restored.value.sources, record.value.sources);
-    assert_eq!(restored.value.stores, record.value.stores);
+    assert_eq!(std::fs::read(shard).unwrap(), bytes);
+    assert_eq!(std::fs::read_dir(index).unwrap().count(), 1);
 }
 
 #[cfg(unix)]
@@ -479,21 +414,111 @@ fn private_and_vanished_stores_do_not_concern_other_saves() {
     let staged = staging.join("tree.fasta");
     std::fs::write(&staged, b">a\nACGT\n").unwrap();
     reference(&staging, &staged);
-    // A store whose index refresh failed, then deleted with its folder.
+    assert!(!staging.join(".basecraft/analysis-index").exists());
+    // A store deleted with its folder.
     let project = root.join("gone");
     std::fs::create_dir(&project).unwrap();
     let source = project.join("source.fasta");
     std::fs::write(&source, b">a\nACGT\n").unwrap();
-    let run = reference(&project, &source);
-    std::fs::write(run.directory().join("input.json"), b"damaged").unwrap();
-    records::register(&run).unwrap();
-    std::fs::remove_dir_all(&project).unwrap();
+    reference(&project.join("results"), &source);
+    std::fs::remove_dir_all(project.join("results")).unwrap();
     std::fs::remove_dir_all(state.join("recovery")).unwrap();
+    for target in [root.join("other.fasta"), source] {
+        std::fs::write(&target, b">b\nAAAA\n").unwrap();
+        let check = records::check(&target).unwrap();
+        assert!(check.is_complete(), "{:?}", check.issues);
+        assert!(check.conflict.analyses.is_empty());
+    }
+}
 
-    let other = root.join("other.fasta");
-    std::fs::write(&other, b">b\nAAAA\n").unwrap();
-    let check = records::check(&other).unwrap();
-    assert!(check.is_complete(), "{:?}", check.issues);
-    let registry = std::fs::read_to_string(state.join("analysis-stores.json")).unwrap();
-    assert!(!registry.contains("recovery"), "{registry}");
+#[cfg(feature = "test-counters")]
+#[test]
+fn a_save_in_one_project_leaves_another_alone() {
+    let Some(root) = isolated_profile::enter("a_save_in_one_project_leaves_another_alone") else {
+        return;
+    };
+    let mut sources = Vec::new();
+    for name in ["first", "second"] {
+        let project = root.join(name);
+        std::fs::create_dir_all(project.join("results")).unwrap();
+        let source = project.join("reads.fasta");
+        std::fs::write(&source, b">a\nACGT\n").unwrap();
+        reference(&project.join("results"), &source);
+        sources.push(source);
+    }
+    let second = root.join("second");
+    let before = tree(&second);
+    // A file in the first project with the same name as the second's input.
+    let target = root.join("first/results/reads.fasta");
+    std::fs::write(&target, b">b\nAAAA\n").unwrap();
+    let mut session = basecraft_ops::Session::new(root.join("first"));
+    let doc = session.open(&target).unwrap();
+    session
+        .apply(doc, basecraft_protocol::Op::seq_replace(0, 1, "T"))
+        .unwrap();
+    basecraft_io::counters::reset();
+    session.save(doc, None).unwrap();
+    let counts = basecraft_io::counters::snapshot();
+    assert!(counts.store_inspections.is_empty());
+    assert!(counts.reads.keys().all(|p| !p.starts_with(&second)));
+    assert_eq!(tree(&second), before);
+    // The first project's own input is still protected.
+    assert_eq!(
+        records::check(&sources[0]).unwrap().conflict.analyses.len(),
+        1
+    );
+}
+
+/// Every file below `folder` with its bytes.
+#[cfg(feature = "test-counters")]
+fn tree(folder: &Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(folder).unwrap().flatten() {
+        if entry.file_type().unwrap().is_dir() {
+            files.extend(tree(&entry.path()));
+        } else {
+            files.push((entry.path(), std::fs::read(entry.path()).unwrap()));
+        }
+    }
+    files.sort();
+    files
+}
+
+#[cfg(feature = "test-counters")]
+#[test]
+fn a_project_save_reads_one_bucket_of_its_index() {
+    let Some(root) = isolated_profile::enter("a_project_save_reads_one_bucket_of_its_index") else {
+        return;
+    };
+    let folder = root.join("project");
+    std::fs::create_dir_all(folder.join("data")).unwrap();
+    let project = basecraft_ops::project::Project::new(&folder).unwrap();
+    for i in 0..300 {
+        let results = folder.join(format!("results-{}", i % 30));
+        std::fs::create_dir_all(&results).unwrap();
+        let source = folder.join(format!("data/input-{i}.fasta"));
+        std::fs::write(&source, b">a\nACGT\n").unwrap();
+        records::reference_input_with_dependencies(
+            &results.join("out.txt"),
+            &source,
+            &basecraft_io::hash_file(&source).unwrap(),
+            &[],
+            "index test",
+            Some(&project),
+        )
+        .unwrap();
+    }
+    let target = folder.join("data/unrelated.fasta");
+    std::fs::write(&target, b">b\nAAAA\n").unwrap();
+    let mut session = basecraft_ops::Session::new(&folder).in_project(Some(project));
+    let doc = session.open(&target).unwrap();
+    session
+        .apply(doc, basecraft_protocol::Op::seq_replace(0, 1, "T"))
+        .unwrap();
+    basecraft_io::counters::reset();
+    session.save(doc, None).unwrap();
+    let counts = basecraft_io::counters::snapshot();
+    assert!(counts.store_inspections.is_empty());
+    let bytes: u64 = counts.reads.values().map(|r| r.bytes).sum();
+    assert!(bytes < 100_000, "{bytes} bytes read");
 }

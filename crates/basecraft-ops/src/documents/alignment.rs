@@ -48,7 +48,8 @@ impl Document for OpenedAlignment {
     }
 
     fn saved_companions(&self, target: &Path) -> Vec<std::path::PathBuf> {
-        super::stated(self.doc.alphabet())
+        self.doc
+            .stated_alphabet()
             .iter()
             .map(|_| files::tree_sidecar(target))
             .collect()
@@ -71,7 +72,7 @@ impl Document for OpenedAlignment {
 
     fn apply(&mut self, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {
         if let Op::SetAlphabet { alphabet } = op {
-            let before = super::stated(self.doc.alphabet()).cloned();
+            let before = self.doc.stated_alphabet().cloned();
             self.doc.set_alphabet(Some(super::user_alphabet(*alphabet)));
             return Ok((Inverse::Alphabet(before), None));
         }
@@ -99,12 +100,7 @@ impl Document for OpenedAlignment {
         }
         let mut prepared = super::PreparedWrite::default();
         let hash = prepared.push(target, |w| files::write_alignment(&self.doc, w))?;
-        super::stage_companion(
-            &mut prepared,
-            target,
-            super::stated(self.doc.alphabet()),
-            &hash,
-        )?;
+        super::stage_companion(&mut prepared, target, self.doc.stated_alphabet(), &hash)?;
         Ok(prepared)
     }
 
@@ -116,7 +112,7 @@ impl Document for OpenedAlignment {
         let mut hw = HashingWriter::new(std::io::sink());
         files::write_alignment(&self.doc, &mut hw)?;
         let main = hw.hash();
-        let facts = super::facts_hash(super::stated(self.doc.alphabet()), &main)?;
+        let facts = super::facts_hash(self.doc.stated_alphabet(), &main)?;
         Ok(std::iter::once(main).chain(facts).collect())
     }
 

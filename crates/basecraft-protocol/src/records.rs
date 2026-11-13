@@ -51,17 +51,6 @@ pub struct StoreMarker {
     pub extra: BTreeMap<String, Value>,
 }
 
-/// Version-one `analysis-stores.json` in application state. These are LOCAL
-/// absolute machine paths, not portable project references. Runtime readers
-/// enforce version 1, the 1 MiB file bound and at most 4096 absolute paths.
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct StoreRegistry {
-    pub schema_version: u32,
-    pub stores: Vec<PathBuf>,
-    #[serde(flatten)]
-    pub extra: BTreeMap<String, Value>,
-}
-
 /// A run folder's `execution.json`: what ran, on what and how. Paths are
 /// relative to the run folder, so the folder can move with its project; an
 /// input outside the folder has a path that starts with `..`. The request
@@ -259,28 +248,31 @@ pub struct AlignmentLink {
     pub extra: BTreeMap<String, serde_json::Value>,
 }
 
-/// Current source catalogue. Per-source shards hold the affected store closure.
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct IndexFile<T> {
-    pub checksum: String,
-    pub value: T,
-}
-
-/// Local source and store locations, without unrelated run records.
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct AnalysisInputIndex {
+/// One file of the analysis index, `.basecraft/analysis-index/<bucket>/<key>.json`:
+/// one analysis store (`.basecraft/analyses-v1`) and the files whose paths fall
+/// in this bucket that its runs depend on. A project's index sits in the
+/// project's `.basecraft` with project-relative paths; a file outside the
+/// writing session's project is indexed in a `.basecraft` beside it by name.
+/// `<bucket>` is the first two hex digits of the BLAKE3 hash of the path;
+/// `<key>` is a hash of `store`. Paths are `/`-separated and relative to the
+/// folder holding `.basecraft`. Readers take the union of every file in a
+/// bucket, copies a sync tool made included.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AnalysisIndex {
     pub schema_version: u32,
-    pub stores: BTreeMap<PathBuf, String>,
-    pub sources: Vec<PathBuf>,
+    pub store: String,
+    pub files: std::collections::BTreeSet<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct IndexedAnalysisStore {
-    pub identity: String,
-    pub sources: Vec<PathBuf>,
-    pub dependencies: Vec<PathBuf>,
-    #[serde(flatten)]
-    pub extra: BTreeMap<String, Value>,
+/// `indexed-folders.json` in an analysis store: the index buckets that list
+/// this store, relative to the folder holding the store's `.basecraft`. Lets a
+/// lost index be noticed and rebuilt.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct IndexedFolders {
+    pub schema_version: u32,
+    pub folders: std::collections::BTreeSet<String>,
 }
 
 /// Checksummed JSONL envelope. Its flattened entry already carries log version `v`.
@@ -315,13 +307,6 @@ pub struct ActivityInputRun {
     pub hash: String,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
-}
-
-/// Sources a pending ledger change can introduce. None means coverage is unknown.
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct IndexChange {
-    pub store: PathBuf,
-    pub sources: Option<std::collections::BTreeSet<PathBuf>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]

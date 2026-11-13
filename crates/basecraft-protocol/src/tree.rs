@@ -47,6 +47,28 @@ pub struct CladeAnnotation {
     pub rooting: crate::facts::Rooting,
 }
 
+/// Where `tree.place_label` puts a label a reroot left on another group of
+/// tips (D11).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LabelPlacement {
+    /// On the clade that holds exactly the label's tips; refused when none does.
+    Exact,
+    /// On the smallest clade that holds all of the label's tips.
+    Smallest,
+    /// Remove the label.
+    Remove,
+}
+
+/// A label that no longer marks the group of tips it was made for.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DisplacedLabel {
+    pub id: u32,
+    pub label: String,
+    /// A clade now holds exactly the label's tips, so `exact` can be offered.
+    pub exact: bool,
+}
+
 fn default_bar_width() -> u32 {
     3
 }

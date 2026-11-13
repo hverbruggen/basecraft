@@ -51,23 +51,38 @@ fn headless_save_conformance() {
     let ledger = damaged.artifact("input.json").unwrap();
     let good = std::fs::read(&ledger).unwrap();
     std::fs::write(&ledger, b"damaged ledger").unwrap();
-    // The index refresh cannot read the damaged ledger, so its store's coverage
-    // stays unknown for every save until the marker is cleared by a repair.
-    records::register(&damaged).unwrap();
-    let store = damaged.directory().parent().unwrap().parent().unwrap();
-    let marker = basecraft_platform::paths::AppPaths::discover()
-        .unwrap()
-        .state
-        .join("analysis-inputs/dirty")
-        .join(
-            basecraft_io::hash_bytes(store.as_os_str().as_encoded_bytes())
-                .trim_start_matches("b3:"),
-        );
-    assert!(marker.is_file());
+    // List the damaged store beside every file the script saves, as a script
+    // may, so each save there has unknown relevance until the ledger is repaired.
+    let names: Vec<_> = "known preservation writefail cli-known cli-preservation fresh new \
+        other unknown cli-complete cli-permission cli-unknown complete complete-explicit \
+        inventory occupied permission replacement saveas scope"
+        .split_whitespace()
+        .map(|name| format!("{name}.fasta"))
+        .chain(["new.gb".into(), "occupied.gb".into()])
+        .collect();
+    // Each name goes in the bucket the index keeps it in: the first two hex
+    // digits of the name's hash (schemas/README.md).
+    for name in names {
+        let key = basecraft_io::hash_bytes(name.as_bytes());
+        let bucket = data
+            .join(".basecraft/analysis-index")
+            .join(&key.trim_start_matches("b3:")[..2]);
+        std::fs::create_dir_all(&bucket).unwrap();
+        std::fs::write(
+            bucket.join(format!("distant-{name}.json")),
+            serde_json::to_vec_pretty(&json!({
+                "schema_version": 1,
+                "store": "../.basecraft/analyses-v1",
+                "files": [name],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
     let config = root.join("fixture.json");
     std::fs::write(
         &config,
-        json!({"known":known,"ledger":ledger,"marker":marker,"good":String::from_utf8(good).unwrap()}).to_string(),
+        json!({"known":known,"ledger":ledger,"good":String::from_utf8(good).unwrap()}).to_string(),
     )
     .unwrap();
     let output = Command::new("python3")
