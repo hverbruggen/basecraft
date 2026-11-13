@@ -167,7 +167,9 @@ def main():
 
     def cli(*arguments):
         completed = subprocess.run([str(binary), *arguments], cwd=root, env=env,
-                                   capture_output=True, text=True, timeout=45, check=True)
+                                   capture_output=True, text=True, timeout=45)
+        if completed.returncode:
+            raise SystemExit(f"basecraft {' '.join(arguments)} failed:\n{completed.stderr}")
         return json.loads(completed.stdout), completed.stderr
 
     if not args.only_linked_alignment and not args.only_delimitation:
@@ -211,6 +213,10 @@ def main():
             "--choice", "a")
         cli("sanger", "export", str(reads / "cli.sanger-review.json"), "-o",
             str(reads / "cli.fasta"), "--label", "HV1")
+        for route in ("cli", "mcp"):
+            (reads / f"{route}-alignment.fasta").write_text(">a\nACGT\n>b\nACGA\n")
+        cli("sanger", "add", str(reads / "cli.sanger-review.json"), "--alignment",
+            str(reads / "cli-alignment.fasta"), "--label", "HV1")
         client = Mcp(binary, project, env)
         try:
             created = client.tool("sanger_review_create", {"read": "reads/forward.ab1",
@@ -227,10 +233,23 @@ def main():
             refused = client.tool("sanger_decide", {"document": document, "columns": "1",
                                   "choice": "maybe"})
             assert refused["isError"], refused
+            alignment = client.tool("open", {"path": "reads/mcp-alignment.fasta"})
+            alignment = alignment["structuredContent"]["document"]
+            added = client.tool("sanger_add", {"document": document, "alignment": alignment,
+                                "label": "HV1"})
+            assert not added["isError"], added
+            again = client.tool("sanger_add", {"document": document, "alignment": alignment,
+                                "label": "HV1"})
+            assert again["isError"] and "already in the alignment" in json.dumps(again), again
+            assert not client.tool("save", {"document": alignment})["isError"]
         finally:
             client.close()
         assert (reads / "cli.fasta").read_bytes() == (reads / "mcp.fasta").read_bytes()
-        record("Sanger review, decisions and consensus export: same result from CLI and MCP")
+        assert ((reads / "cli-alignment.fasta").read_bytes()
+                == (reads / "mcp-alignment.fasta").read_bytes())
+        assert (reads / "cli-alignment.fasta").read_text().count(">") == 3
+        record("Sanger review, decisions, consensus export and addition to an alignment: "
+               "same result from CLI and MCP")
 
         # Tree edits by name (D1): the CLI's reroot and ladderize are the same
         # edits MCP applies, and save the same tree.
@@ -256,6 +275,7 @@ def main():
             client.close()
         assert (project / "cli-tree.nwk").read_text() == (project / "mcp-tree.nwk").read_text()
         record("tree reroot and ladderize by name: same tree from CLI and MCP")
+
         if args.only_sanger:
             receipt["status"] = "passed"
             receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")

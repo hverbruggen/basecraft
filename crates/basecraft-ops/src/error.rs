@@ -71,6 +71,9 @@ pub enum Error {
     /// A Sanger decision or column as a person wrote it, not understood.
     #[error(transparent)]
     ReviewInput(#[from] crate::sanger_commands::InputError),
+    /// Sequences that cannot join an alignment, and why.
+    #[error(transparent)]
+    Addition(#[from] crate::alignment_add::AdditionError),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -106,9 +109,11 @@ impl Error {
                 }
             }
             Self::Format(_) => Code::FormatError,
-            Self::Json(_) | Self::Invalid(_) | Self::NoFileName(_) | Self::ReviewInput(_) => {
-                Code::InvalidArguments
-            }
+            Self::Json(_)
+            | Self::Invalid(_)
+            | Self::NoFileName(_)
+            | Self::ReviewInput(_)
+            | Self::Addition(_) => Code::InvalidArguments,
             Self::UnknownFormat(_) => Code::UnknownFormat,
             Self::Empty(_) => Code::EmptyDocument,
             Self::EvidenceConflict(_) => Code::AnalysisInputConflict,

@@ -7,6 +7,7 @@ use std::path::Path;
 use basecraft_protocol::Op;
 use basecraft_protocol::sanger::{ReviewChoice, ReviewOp};
 
+use crate::alignment_add::AdditionError;
 use crate::{DocId, Error, Result, Session};
 
 /// A new review of `read` from its instrument calls, in `session`.
@@ -87,6 +88,49 @@ pub fn columns(text: &str) -> Result<Vec<usize>> {
     Ok(columns)
 }
 
+/// The rows that add a reviewed consensus (`text`, named `name`) to
+/// `alignment`, checked against it, with the accepted review (`evidence`, from
+/// `SangerReview::addition_evidence`) recorded as the alignment's input. The
+/// caller adds the rows as they are or placed by MAFFT.
+pub fn consensus_rows(
+    session: &mut Session,
+    alignment: DocId,
+    evidence: &str,
+    text: &str,
+    name: &str,
+) -> Result<Vec<(String, String)>> {
+    let rows = crate::alignment_add::addition_rows(session.alignment(alignment)?, text, name)?;
+    if rows.len() != 1 {
+        return Err(AdditionError::NotOneSpecimen.into());
+    }
+    crate::sanger_review::record_addition(session, alignment, evidence, &rows[0].1)?;
+    Ok(rows)
+}
+
+/// Add the decided consensus of `review` to `alignment` as a new last row
+/// named `label`, unplaced (the window can place it with MAFFT instead).
+pub fn add_consensus(
+    session: &mut Session,
+    review: DocId,
+    alignment: DocId,
+    label: &str,
+) -> Result<()> {
+    let reviewed = session.sanger_review(review)?;
+    let evidence = reviewed
+        .addition_evidence(session.project())
+        .map_err(AdditionError::Evidence)?;
+    let sequence = reviewed.resolved_sequence().unwrap_or_default();
+    let rows = consensus_rows(session, alignment, &evidence, &sequence, label)?;
+    crate::renames::apply_op(
+        session,
+        alignment,
+        Op::AlnAddSequences {
+            rows,
+            reference: None,
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,6 +201,54 @@ mod tests {
             std::fs::read_to_string(&consensus)
                 .unwrap()
                 .starts_with(">HV1")
+        );
+    }
+
+    #[test]
+    fn a_decided_consensus_joins_an_alignment_once() {
+        let folder = tempfile::tempdir().unwrap();
+        let read = folder.path().join("forward.ab1");
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../testdata/fixtures/compact/sanger-review/forward.ab1"),
+            &read,
+        )
+        .unwrap();
+        let alignment = folder.path().join("alignment.fasta");
+        std::fs::write(&alignment, ">a\nACGT\n>b\nACGA\n").unwrap();
+        let mut session = Session::recoverable(folder.path()).unwrap();
+        let review = review_read(&mut session, &read).unwrap();
+        session
+            .save_new(
+                review,
+                Some(&folder.path().join("forward.sanger-review.json")),
+            )
+            .unwrap();
+        let aln = session.open(&alignment).unwrap();
+        let undecided = add_consensus(&mut session, review, aln, "HV1").unwrap_err();
+        assert!(
+            undecided
+                .to_string()
+                .contains("Resolve every review column")
+        );
+        let every = (0..session.sanger_review(review).unwrap().draft.columns.len()).collect();
+        decide(
+            &mut session,
+            review,
+            ReviewOp::Set {
+                columns: every,
+                choice: ReviewChoice::Accept,
+            },
+        )
+        .unwrap();
+        add_consensus(&mut session, review, aln, "HV1").unwrap();
+        let rows = session.alignment(aln).unwrap();
+        assert_eq!(rows.row_count(), 3);
+        assert_eq!(rows.row(2).name, "HV1");
+        let again = add_consensus(&mut session, review, aln, "HV1").unwrap_err();
+        assert!(
+            again.to_string().contains("already in the alignment"),
+            "{again}"
         );
     }
 }

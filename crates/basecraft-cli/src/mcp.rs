@@ -72,7 +72,12 @@ impl Server {
     }
 
     fn doc(&self, args: &Value) -> Result<DocId> {
-        let id = args["document"]
+        self.doc_named(args, "document")
+    }
+
+    /// The open document whose ID `args[field]` gives.
+    fn doc_named(&self, args: &Value, field: &str) -> Result<DocId> {
+        let id = args[field]
             .as_u64()
             .and_then(|n| usize::try_from(n).ok())
             .ok_or("Invalid document ID")?;
@@ -146,6 +151,7 @@ impl Server {
                 | "sanger_review_create"
                 | "sanger_decide"
                 | "sanger_export"
+                | "sanger_add"
         ) || creates)
             && !self.writable
         {
@@ -194,6 +200,17 @@ impl Server {
                 self.session
                     .export_sanger_consensus(doc, &output, text(args, "label")?)?;
                 Ok(json!({"consensus": output}))
+            }
+            "sanger_add" => {
+                let review = self.doc(args)?;
+                let alignment = self.doc_named(args, "alignment")?;
+                basecraft_ops::sanger_commands::add_consensus(
+                    &mut self.session,
+                    review,
+                    alignment,
+                    text(args, "label")?,
+                )?;
+                self.state(alignment)
             }
             "sequence_create" => {
                 let doc = self
@@ -685,6 +702,7 @@ fn tools() -> Value {
         tool("replay","Replay the project's operation log in a scratch session and report problems.",json!({}), &[]),
         tool("sanger_review_create","Start a review of a Sanger read (.ab1) from its instrument calls, optionally saved as a new review file at output. Decide columns with sanger_decide, save with save, export with sanger_export. Requires writes.",json!({"read":string,"output":string}), &["read"]),
         tool("sanger_decide","Decide draft columns of an open Sanger review: columns from 1 as \"12\", \"12,15\" or \"12-14\"; choice accept, reject, pending, or the base to put there (IUPAC, - for a gap). Logged and undoable; save with save. Requires writes.",json!({"document":doc,"columns":string,"choice":string}), &["document","columns","choice"]),
+        tool("sanger_add","Add an open Sanger review's decided consensus to an open alignment (alignment: its document ID) as a new last row named label, recording the review as its evidence. The row is not placed; save with save. Requires writes.",json!({"document":doc,"alignment":doc,"label":string}), &["document","alignment","label"]),
         tool("sanger_export","Export an open Sanger review's consensus as FASTA under label (such as the specimen ID). Every column must be decided. Requires writes.",json!({"document":doc,"output":string,"label":string}), &["document","output","label"]),
         tool("sequence_create", "Create an independent unsaved DNA sequence from plain IUPAC text. Save to a new .gb destination with save; edit with apply. Requires writes.", json!({"name":string,"sequence":string}), &["name","sequence"]),
         tool("metadata_open","Open the project's specimen metadata (roster, taxa, identifications, record links, typed collection columns) as a document. With create, write empty tables first if the project has none. Edit it with apply and metadata.edit operations; save it with save.",json!({"create":{"type":"boolean"}}), &[]),

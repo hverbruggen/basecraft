@@ -421,6 +421,11 @@ class Session:
         return self.call("sanger_export", {"document": document, "output": str(output),
                                            "label": str(label)})
 
+    def sanger_add(self, document, alignment, label):
+        """Add the decided consensus to an open alignment as a new row ``label``."""
+        return self.call("sanger_add", {"document": document, "alignment": alignment,
+                                        "label": str(label)})
+
     def document_record(self, document):
         """History and methods for this session's current revision, including unsaved edits."""
         return self.call("document_record", {"document": document})

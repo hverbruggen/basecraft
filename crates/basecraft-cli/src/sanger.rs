@@ -39,6 +39,17 @@ pub enum SangerCommand {
         #[arg(long)]
         label: String,
     },
+    /// Add the reviewed consensus to ALIGNMENT as a new last row and save it.
+    /// Every column must be decided; the review is recorded as the row's
+    /// evidence. The row is not placed: align afterwards (`run mafft/align`).
+    Add {
+        review: PathBuf,
+        #[arg(long)]
+        alignment: PathBuf,
+        /// The row's name, such as the specimen ID.
+        #[arg(long)]
+        label: String,
+    },
 }
 
 fn session_for(
@@ -88,6 +99,18 @@ pub fn run(
             let doc = session.open(&file)?;
             session.export_sanger_consensus(doc, &output, &label)?;
             json!({"consensus": output})
+        }
+        SangerCommand::Add {
+            review,
+            alignment,
+            label,
+        } => {
+            let (mut session, alignment) = session_for(&alignment, project)?;
+            let review = session.open(&review.canonicalize()?)?;
+            let doc = session.open(&alignment)?;
+            sanger_commands::add_consensus(&mut session, review, doc, &label)?;
+            save_options.save(&mut session, doc, None, false)?;
+            json!({"alignment": alignment, "rows": session.alignment(doc)?.row_count()})
         }
     };
     println!("{value}");

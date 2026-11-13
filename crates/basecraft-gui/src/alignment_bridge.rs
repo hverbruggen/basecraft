@@ -1457,64 +1457,38 @@ impl qobject::AlignmentController {
         if self.rust().busy {
             return;
         }
-        let rows = match basecraft_ops::alignment_add::parse_sequences(
-            &text.to_string(),
-            &name.to_string(),
-        ) {
-            Ok(rows) => rows,
-            Err(e) => {
-                self.fail_addition(&e);
-                return;
-            }
-        };
-        match crate::bridge::checked_document!(
-            self.qt_thread(),
-            self.with_doc(|doc| doc.validate_additions(&rows))
-        ) {
-            Some(Ok(())) => {}
-            Some(Err(error)) => {
-                self.fail_addition(&error.to_string());
-                return;
-            }
-            None => {
-                self.fail_addition("No alignment open");
-                return;
-            }
-        }
-        let duplicates = crate::bridge::checked_document!(
-            self.qt_thread(),
-            self.with_doc(|doc| doc.duplicate_sequence_names(&rows))
-        )
-        .unwrap_or_default();
-        if !duplicates.is_empty() {
-            self.fail_addition(&format!(
-                "These sequence IDs are already in the alignment:\n\n{}",
-                duplicates
-                    .iter()
-                    .map(|n| format!("• {n}"))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            ));
+        if crate::bridge::checked_document!(self.qt_thread(), self.with_doc(|_| ())).is_none() {
+            self.fail_addition("No alignment open");
             return;
         }
-        if let Some(evidence) = evidence {
-            let result = (|| -> Result<(), String> {
-                if rows.len() != 1 {
-                    return Err("Select one reviewed specimen at a time".into());
-                }
-                let mut r = self.as_mut().rust_mut();
-                let r = &mut *r;
-                let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
-                    return Err("No alignment is open".into());
-                };
-                basecraft_ops::sanger_review::record_addition(session, doc, &evidence, &rows[0].1)
-                    .map_err(|e| e.to_string())
-            })();
-            if let Err(error) = result {
+        let (text, name) = (text.to_string(), name.to_string());
+        // A reviewed consensus is checked and recorded by the same call as
+        // `basecraft sanger add`; other sequences are only checked.
+        let rows = {
+            let mut r = self.as_mut().rust_mut();
+            let r = &mut *r;
+            let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
+                return;
+            };
+            match evidence {
+                Some(evidence) => basecraft_ops::sanger_commands::consensus_rows(
+                    session, doc, &evidence, &text, &name,
+                ),
+                None => session.alignment(doc).and_then(|alignment| {
+                    Ok(basecraft_ops::alignment_add::addition_rows(
+                        alignment, &text, &name,
+                    )?)
+                }),
+            }
+            .map_err(|e| e.to_string())
+        };
+        let rows = match rows {
+            Ok(rows) => rows,
+            Err(error) => {
                 self.fail_addition(&error);
                 return;
             }
-        }
+        };
         if !mafft {
             if self.as_mut().edit(Op::AlnAddSequences {
                 rows,

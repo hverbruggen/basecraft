@@ -109,6 +109,30 @@ fn a_read_is_reviewed_decided_and_exported_from_the_command_line() {
             .starts_with(">HV1")
     );
 
+    // The consensus joins an alignment once, as a new last row.
+    let alignment = folder.join("alignment.fasta");
+    std::fs::write(&alignment, ">a\nACGT\n>b\nACGA\n").unwrap();
+    let add = |label: &str| {
+        basecraft(
+            &profile,
+            &[
+                "sanger",
+                "add",
+                &path(&review),
+                "--alignment",
+                &path(&alignment),
+                "--label",
+                label,
+            ],
+        )
+    };
+    assert_eq!(json(&add("HV1"))["rows"], 3);
+    let saved = std::fs::read_to_string(&alignment).unwrap();
+    assert!(saved.contains(">HV1"), "{saved}");
+    let twice = add("HV1");
+    assert!(!twice.status.success());
+    assert!(String::from_utf8_lossy(&twice.stderr).contains("already in the alignment"));
+
     // A decision that is not one is refused, saying what to give.
     let refused = basecraft(
         &profile,
