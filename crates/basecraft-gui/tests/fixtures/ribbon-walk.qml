@@ -348,6 +348,51 @@ Main {
             check(loaders.length >= 50, "only " + loaders.length + " dialogs load on demand")
             for (const loader of loaders) check(loader.dialog(), "a dialog failed to build")
         })
+        // D11: a reroot that displaces clade labels asks where each goes.
+        const tree = {}
+        const button = name => find(dialog("labelPlacementDialog").contentItem, i => i.objectName === name)
+        const labelClade = (tips, label) => {
+            tree.ctl.select_clade(JSON.stringify(tips))
+            const annotation = JSON.parse(tree.ctl.annotation_json())
+            annotation.label = label
+            check(tree.ctl.set_annotation(JSON.stringify(annotation)) === "", "could not label " + label)
+        }
+        const reroot = () => { tree.ctl.select_clade(JSON.stringify(["specimen_03"])); tree.ctl.reroot() }
+        list.push(() => {
+            show(2)
+            tree.ctl = documentAt(2).controller
+            labelClade(["specimen_01", "specimen_08"], "All")
+            labelClade(["specimen_03", "specimen_05"], "C3")
+            reroot()
+            const ask = dialog("labelPlacementDialog")
+            const q = JSON.parse(tree.ctl.label_question)
+            check(ask && ask.opened && q.label === "All" && q.number === 1 && q.total === 2, "the reroot did not ask about its first displaced label")
+            check(button("labelExact").visible && button("labelPlacementAll").visible, "the exact clade or apply-to-all was not offered")
+            check(!tree.ctl.status.includes("(moved)"), "labels are still marked as moved")
+            button("labelExact").clicked()
+            const next = JSON.parse(tree.ctl.label_question)
+            check(ask.opened && next.label === "C3" && !button("labelExact").visible, "the second label offers an exact clade it does not have")
+            // Escape leaves the label where the reroot put it; the status line names it.
+            ask.reject()
+            check(tree.ctl.label_question === "" && tree.ctl.status.includes("\"C3\"") && !tree.ctl.status.includes("\"All\""), "Escape did not leave C3 displaced and All placed")
+            // Undo the placement and the reroot, then answer for every label at once.
+            currentView.forceActiveFocus()
+            currentView.pressKey(Qt.Key_Z, Qt.ControlModifier, "")
+            currentView.pressKey(Qt.Key_Z, Qt.ControlModifier, "")
+            check(!tree.ctl.status.includes("moved labels"), "undoing the reroot left labels displaced")
+            reroot()
+            check(ask.opened, "rerooting again did not ask")
+            button("labelPlacementAll").checked = true
+            check(!button("labelExact").visible, "exact offered for every label though C3 has no exact clade")
+            button("labelSmallest").clicked()
+            check(!ask.opened && tree.ctl.label_question === "" && !tree.ctl.status.includes("moved labels"), "one answer did not place every label")
+            // Undo reroot from the question: the placement-free reroot is undone.
+            currentView.pressKey(Qt.Key_Z, Qt.ControlModifier, "")
+            currentView.pressKey(Qt.Key_Z, Qt.ControlModifier, "")
+            reroot()
+            button("labelUndo").clicked()
+            check(!ask.opened && !tree.ctl.status.includes("moved labels"), "Undo reroot left displaced labels")
+        })
         // 6.1: open, edit, save, close and reopen an alignment, with undo, redo,
         // save and close from the keyboard (window shortcuts, through the
         // platform's key entry). The parent process checks the saved file.

@@ -2014,8 +2014,11 @@ impl qobject::GenomeController {
         let result = self
             .with_doc(|session, id| -> basecraft_ops::Result<_> {
                 let source = source.to_string();
+                let root = session.root();
                 if source == "all" {
-                    return session.blast_records(id);
+                    return session
+                        .blast_records(id)
+                        .map(|queries| crate::operations_bridge::queries_in(queries, root));
                 }
                 let doc = session.checked_sequence(id)?;
                 let selected = if source == "annotation" {
@@ -2038,7 +2041,7 @@ impl qobject::GenomeController {
                 let mut query = basecraft_ops::blast::from_doc(doc, range, selected)?;
                 query.source["session"] = serde_json::json!(session.id());
                 query.source["generation"] = serde_json::json!(session.generation(id).unwrap());
-                Ok(vec![query])
+                Ok(crate::operations_bridge::queries_in(vec![query], root))
             })
             .unwrap_or_else(|| Err(basecraft_ops::Error::Invalid("Sequence closed".into())));
         QString::from(&match result {

@@ -8,6 +8,7 @@ pub mod delimitation;
 pub mod find;
 pub mod frame;
 pub mod genome;
+pub mod label_placement;
 pub mod sanger;
 pub mod sanger_alignment;
 pub mod sanger_flow;

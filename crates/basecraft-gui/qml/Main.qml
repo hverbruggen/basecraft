@@ -285,6 +285,7 @@ ApplicationWindow {
         textRepresentation.dialog().source = source
         textRepresentation.dialog().open()
     }
+    OnDemand { id: labelPlacement; objectName: "labelPlacement"; sourceComponent: Component { LabelPlacementDialog {} } }
     OnDemand { id: textRepresentation; objectName: "textRepresentation"; sourceComponent: Component { TextRepresentationDialog { id: textRepresentationItem } } }
 
     function focusRegion(backward) {
@@ -450,6 +451,7 @@ ApplicationWindow {
     Connections {
         target: window.current
         ignoreUnknownSignals: true
+        function onLabel_questionChanged() { labelPlacement.dialog().controller = window.current }
         function onTaxaSelected(names) {
             for (let i = 0; i < docs.count; i++) {
                 const d = window.documentAt(i)

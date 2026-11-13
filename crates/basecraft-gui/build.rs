@@ -131,6 +131,7 @@ fn main() {
         "qml/OperationParameters.qml",
         "qml/OperationParameterValue.qml",
         "qml/TextPromptDialog.qml",
+        "qml/LabelPlacementDialog.qml",
         "qml/AppIcon.qml",
         "qml/EmptyWorkspaceBrand.qml",
         "qml/EmptyView.qml",

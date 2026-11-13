@@ -24,6 +24,9 @@ pub mod qobject {
         #[qproperty(QByteArray, frame)]
         #[qproperty(QString, canvas_geometry)]
         #[qproperty(QString, status)]
+        /// The question about a clade label the last edit displaced (D11),
+        /// as JSON, or "" when there is none to ask.
+        #[qproperty(QString, label_question)]
         #[qproperty(QString, find_status)]
         #[qproperty(i32, find_count)]
         #[qproperty(i32, find_row)]
@@ -156,6 +159,13 @@ pub mod qobject {
         fn vscroll_to(self: Pin<&mut TreeController>, fraction: f64);
         #[qinvokable]
         fn undo(self: Pin<&mut TreeController>);
+        /// Answer the label question: "exact", "smallest", "remove" or
+        /// "undo", for this label or with `all` for every one left.
+        #[qinvokable]
+        fn answer_label(self: Pin<&mut TreeController>, answer: &QString, all: bool) -> bool;
+        /// Stop asking; the labels stay where the edit left them.
+        #[qinvokable]
+        fn dismiss_labels(self: Pin<&mut TreeController>);
         #[qinvokable]
         fn redo(self: Pin<&mut TreeController>);
         #[qinvokable]
@@ -278,6 +288,7 @@ use basecraft_docs::TreeDoc;
 use basecraft_ops::{DocId, Session};
 use basecraft_protocol::delimitation::TreeDrawingEdit;
 use basecraft_protocol::{CladeAnnotation, Op, SupportPlacement, TreeStyle};
+use basecraft_viewmodel::label_placement::{Answer, Questions, Step};
 use basecraft_viewmodel::tree::TipColumn;
 use basecraft_viewmodel::tree::to_svg_with_style;
 use basecraft_viewmodel::{Frame, Theme, TreeView};
@@ -293,6 +304,8 @@ use crate::bridge::{
 
 #[allow(clippy::struct_excessive_bools)]
 pub struct TreeRust {
+    labels: Option<basecraft_viewmodel::label_placement::Questions>,
+    label_question: QString,
     find: basecraft_viewmodel::find::Session,
     find_status: QString,
     find_count: i32,
@@ -351,6 +364,8 @@ pub struct TreeRust {
 impl Default for TreeRust {
     fn default() -> Self {
         Self {
+            labels: None,
+            label_question: QString::default(),
             find: basecraft_viewmodel::find::Session::default(),
             find_status: QString::default(),
             find_count: 0,
@@ -699,16 +714,26 @@ impl qobject::TreeController {
         }
         let clears_selection =
             matches!(op, Op::TreeMidpointRoot {} | Op::TreeMinimumVarianceRoot {});
+        let placing = matches!(op, Op::TreePlaceLabel { .. });
         let result = {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
             let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
                 return Err("No tree open".into());
             };
+            let before = session.displaced_labels(doc).map_err(|e| e.to_string())?;
             let result = basecraft_ops::renames::apply_op(session, doc, op);
+            let after = session.displaced_labels(doc).map_err(|e| e.to_string())?;
+            if result.is_ok() {
+                match (&mut r.labels, placing) {
+                    (Some(questions), true) => questions.refresh(&after),
+                    _ => r.labels = Questions::after_edit(&before, after),
+                }
+            }
             r.view.sync(session.tree(doc).map_err(|e| e.to_string())?);
             result
         };
+        self.as_mut().ask_labels();
         match result {
             Ok(()) => {
                 if clears_selection {
@@ -1458,6 +1483,10 @@ impl qobject::TreeController {
         if self.rust().display_only {
             return;
         }
+        if self.rust().labels.is_some() {
+            self.as_mut().rust_mut().labels = None;
+            self.as_mut().ask_labels();
+        }
         let result = {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
@@ -1487,6 +1516,53 @@ impl qobject::TreeController {
 
     pub fn undo(self: Pin<&mut Self>) {
         self.history(false);
+    }
+
+    /// Publish the label question, or "" when there is nothing to ask.
+    fn ask_labels(mut self: Pin<&mut Self>) {
+        let question = self
+            .rust()
+            .labels
+            .as_ref()
+            .and_then(Questions::question)
+            .map_or_else(String::new, |q| {
+                serde_json::to_string(&q).unwrap_or_default()
+            });
+        self.as_mut().set_label_question(QString::from(&question));
+    }
+
+    pub fn answer_label(mut self: Pin<&mut Self>, answer: &QString, all: bool) -> bool {
+        let step = Answer::parse(&answer.to_string()).and_then(|answer| {
+            self.as_mut()
+                .rust_mut()
+                .labels
+                .as_mut()
+                .and_then(|questions| questions.answer(answer, all))
+        });
+        let done = match step {
+            Some(Step::Place { labels, choice }) => self
+                .as_mut()
+                .edit(Op::TreePlaceLabel { labels, choice })
+                .is_ok(),
+            Some(Step::Undo(steps)) => {
+                self.as_mut().rust_mut().labels = None;
+                for _ in 0..steps {
+                    self.as_mut().history(false);
+                }
+                true
+            }
+            None => false,
+        };
+        if self.rust().labels.as_ref().is_some_and(Questions::done) {
+            self.as_mut().rust_mut().labels = None;
+        }
+        self.ask_labels();
+        done
+    }
+
+    pub fn dismiss_labels(mut self: Pin<&mut Self>) {
+        self.as_mut().rust_mut().labels = None;
+        self.ask_labels();
     }
 
     pub fn redo(self: Pin<&mut Self>) {

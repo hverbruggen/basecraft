@@ -886,20 +886,9 @@ fn layout(doc: &TreeDoc, width: f32, height: f32, row_zoom: f32, width_zoom: f32
     layout_with(doc, &[], width, height, row_zoom, width_zoom)
 }
 
-/// A clade label as drawn: marked when it no longer names the group it was
-/// made for, as after a reroot.
-fn shown_label(displaced: &[u32], id: u32, label: &str) -> String {
-    if label.is_empty() || !displaced.contains(&id) {
-        label.to_owned()
-    } else {
-        format!("{label} (moved)")
-    }
-}
-
 /// One column per nesting level of the clade annotations with bars: a bar
 /// that contains others goes outside them.
 fn annotation_columns(doc: &TreeDoc, tips: &[usize]) -> Vec<TipColumn> {
-    let displaced = doc.displaced_annotations();
     let ranges: Vec<(u32, &CladeAnnotation, usize, usize)> = doc
         .annotations()
         .iter()
@@ -948,7 +937,7 @@ fn annotation_columns(doc: &TreeDoc, tips: &[usize]) -> Vec<TipColumn> {
                     share: 1.0,
                     width: a.bar_width as f32,
                     color: a.colour.clone(),
-                    label: shown_label(&displaced, id, &a.label),
+                    label: a.label.clone(),
                 });
         }
     }
@@ -1406,8 +1395,7 @@ fn shapes(
     }
 
     // Names on stem branches.
-    let displaced = doc.displaced_annotations();
-    for (&id, a) in doc.annotations() {
+    for a in doc.annotations().values() {
         let Ok(node) = doc.resolve(&a.clade) else {
             continue;
         };
@@ -1418,7 +1406,7 @@ fn shapes(
                 x: f32::midpoint(px, l.x[node]),
                 y: l.y[node] - small - bw / 2.0 - 2.0,
                 size: small + 1.0,
-                text: shown_label(&displaced, id, &a.label),
+                text: a.label.clone(),
                 color: if a.bar || a.field {
                     pal.foreground
                 } else {
@@ -1806,7 +1794,9 @@ mod tests {
             view.status(&d)
                 .contains("moved labels, no longer on the group they were made for: \"AB\"")
         );
-        assert!(labels(&d).contains(&"AB (moved)".to_owned()));
+        // The window asks where a displaced label goes (D11); it is drawn as is.
+        assert!(labels(&d).contains(&"AB".to_owned()));
+        assert!(labels(&d).iter().all(|label| !label.contains("moved")));
         assert!(labels(&d).contains(&"CD".to_owned()));
     }
 

@@ -1298,6 +1298,11 @@ impl qobject::AlignmentController {
                 };
                 basecraft_ops::blast::from_alignment(doc, rows, columns)
             })
+            .map(|value| {
+                let root = self.rust().session.as_ref().map(|s| s.root().to_path_buf());
+                let root = root.unwrap_or_default();
+                value.map(|queries| queries.map(|q| crate::operations_bridge::queries_in(q, &root)))
+            })
             .and_then(|value| {
                 value.unwrap_or_else(|| {
                     Err(basecraft_ops::Error::Invalid("Alignment closed".into()))

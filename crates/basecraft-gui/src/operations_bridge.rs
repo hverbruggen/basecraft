@@ -69,6 +69,17 @@ impl Drop for OperationsRust {
         }
     }
 }
+/// Name the folder a BLAST search from `root`'s session records into: the
+/// chosen project, or a loose file's own folder.
+pub(crate) fn queries_in(
+    mut queries: Vec<basecraft_ops::blast::Query>,
+    root: &std::path::Path,
+) -> Vec<basecraft_ops::blast::Query> {
+    for query in &mut queries {
+        query.source["folder"] = json!(root);
+    }
+    queries
+}
 fn blast_parameters(parameters: &str) -> basecraft_plugin_host::Result<Value> {
     let registry = crate::plugins::registry()?;
     let operation = registry.resolve("basecraft.blast/submit@1", None)?;
@@ -165,20 +176,31 @@ impl qobject::AppOperations {
             parameters["truncate"] = json!(truncate);
             let plan = basecraft_ops::blast::prepare(&queries, &parameters)?;
             basecraft_ops::blast::authorize(&plan, &parameters)?;
-            let paths = basecraft_platform::paths::AppPaths::discover()
-                .map_err(|e| basecraft_plugin_host::Error::Protocol(e.to_string()))?;
-            // The existing operation artifact store retains query evidence and
-            // receipt. This application-state root never edits the source file.
-            let root = paths
-                .state
-                .join("operation-jobs")
-                .join(ulid::Ulid::generate().to_string());
-            std::fs::create_dir_all(&root)?;
-            let input = root.join("query-source.json");
-            basecraft_ops::records::write_json(&input, &queries)?;
+            // The search's records, its query snapshot included, go in the
+            // `.basecraft` of the folder the queries came from: the chosen
+            // project, or a loose file's own folder. The record keeps no
+            // absolute path.
+            let mut queries = queries;
+            let root = queries
+                .first()
+                .and_then(|query| query.source["folder"].as_str())
+                .map(PathBuf::from)
+                .ok_or_else(|| {
+                    basecraft_plugin_host::Error::Protocol("BLAST queries name no folder".into())
+                })?;
+            for query in &mut queries {
+                if let Some(source) = query.source.as_object_mut() {
+                    source.remove("folder");
+                }
+            }
+            let input = PathBuf::from(".basecraft/blast")
+                .join(ulid::Ulid::generate().to_string())
+                .join("query-source.json");
+            std::fs::create_dir_all(root.join(&input).parent().unwrap_or(&root))?;
+            basecraft_ops::records::write_json(&root.join(&input), &queries)?;
             Ok((
                 root,
-                json!({"operation":"basecraft.blast/submit@1","inputs":{"queries":[{"kind":"file","path":"query-source.json"}]},"parameters":parameters}),
+                json!({"operation":"basecraft.blast/submit@1","inputs":{"queries":[{"kind":"file","path":input}]},"parameters":parameters}),
             ))
         })
     }
