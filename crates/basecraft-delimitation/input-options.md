@@ -21,7 +21,10 @@ IQ-TREE inference here does not root or date trees.
 
 Ultrametric (D17): each written branch length may be off by half a unit in its
 last decimal, and a tip's allowed difference is that bound summed along its
-root-to-tip path (lengths basecraft computed use the floating-point bound).
+root-to-tip path. A length written without a decimal point is exact, as is one
+basecraft computed from exact lengths: both get only the floating-point bound.
+Pieces of a split written length keep its precision; a merged root branch takes
+the coarser precision of its two parts.
 A tree within it has its tip branches evened out to the common depth that
 changes the largest tip branch least; the run records the depth and change.
 The tree view's threshold cut, time cuts and GMYC use this one check.

@@ -17,7 +17,8 @@ pub struct ParsedNode {
     pub name: String,
     pub length: Option<f64>,
     /// The power of ten of the last digit written in `length`: -6 for
-    /// `0.000123`, 0 for `12`, -4 for `1.5e-3`. It bounds the rounding.
+    /// `0.000123`, -4 for `1.5e-3`. It bounds the rounding. None for a length
+    /// written without a decimal point, such as `12`, which is exact.
     pub length_place: Option<i32>,
     /// `&` comments, without brackets, joined with `,`.
     pub comment: String,
@@ -467,7 +468,8 @@ impl<'a> Parser<'a> {
                         .parse()
                         .map_err(|_| self.error(&format!("bad branch length {s:?}")))?;
                     nodes[current].length = Some(len);
-                    nodes[current].length_place = Some(written_place(s));
+                    // Without a decimal point a length is exact (D17 refined).
+                    nodes[current].length_place = s.contains('.').then(|| written_place(s));
                 }
                 Some(_) => {
                     if !expecting_node {
@@ -558,9 +560,10 @@ mod tests {
         ] {
             assert_eq!(written_place(text), place, "{text}");
         }
-        let tree = parse_newick("(a:0.123456,b:7):0;").unwrap();
+        // Without a decimal point a length is exact: no place.
+        let tree = parse_newick("(a:0.123456,b:7,c:7.0):0;").unwrap();
         let places: Vec<_> = tree.nodes.iter().map(|n| n.length_place).collect();
-        assert_eq!(places, [Some(0), Some(-6), Some(0)]);
+        assert_eq!(places, [None, Some(-6), None, Some(-1)]);
     }
 
     #[test]
@@ -573,7 +576,10 @@ mod tests {
         let places = |t: &ParsedTree| t.nodes.iter().map(|n| n.length_place).collect::<Vec<_>>();
         assert_eq!(places(&saved), places(&tree));
         let saved = String::from_utf8(out).unwrap();
-        assert!(saved.contains("(a:0.100000,b:2.50,c:0.0015,d:7)"), "{saved}");
+        assert!(
+            saved.contains("(a:0.100000,b:2.50,c:0.0015,d:7)"),
+            "{saved}"
+        );
         // A computed length has no written place: the shortest exact form.
         assert_eq!(format_length(1.0, None), "1");
     }

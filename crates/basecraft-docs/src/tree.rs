@@ -31,8 +31,10 @@ pub struct TreeNode {
     pub name: String,
     /// Length of the branch above.
     pub length: Option<f64>,
-    /// The power of ten of the last digit the file wrote for `length`; None
-    /// for a length basecraft computed. It bounds the length's rounding.
+    /// The power of ten of the last digit the file wrote for `length`; it
+    /// bounds the length's rounding. None for an exact length: one written
+    /// without a decimal point, or computed from exact lengths. A piece of a
+    /// split written length keeps its precision (D17 refined).
     pub length_place: Option<i32>,
 }
 
@@ -748,10 +750,13 @@ impl TreeDoc {
         } else {
             return err("that clade isn't beside the root");
         };
+        // The pieces of the written root branch keep the coarser precision of
+        // its two parts (D17 refined); `max` ranks None, exact, finest.
+        let place = self.nodes[a].length_place.max(self.nodes[b].length_place);
         self.nodes[node].length = Some(length * fraction);
         self.nodes[other].length = Some(length * (1.0 - fraction));
-        self.nodes[node].length_place = None;
-        self.nodes[other].length_place = None;
+        self.nodes[node].length_place = place;
+        self.nodes[other].length_place = place;
         self.rooted = Some(true);
         self.rooted_by = FactSource::User;
         self.edited();
@@ -954,7 +959,8 @@ impl TreeDoc {
             let e = edges.len();
             edges.push(Edge {
                 length,
-                length_place: None,
+                // A merged edge takes the coarser precision of its parts.
+                length_place: self.nodes[a].length_place.max(self.nodes[b].length_place),
                 support,
             });
             adj[a].push((b, e));
@@ -1005,8 +1011,11 @@ impl TreeDoc {
         for v in &mut values {
             v.push(None);
         }
-        // The halves are computed, so neither keeps a written precision.
-        let half = (edges[split].length.map(|l| l / 2.0), None);
+        // Both halves keep the precision of the written length they split.
+        let half = (
+            edges[split].length.map(|l| l / 2.0),
+            edges[split].length_place,
+        );
         // (old node, came from, new parent, length and its place, support).
         let mut stack: Vec<(usize, usize, usize, Placed, SupportValues)> = vec![
             (other, target, 0, half, vec![None; sets]),

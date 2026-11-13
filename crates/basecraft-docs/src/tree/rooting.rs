@@ -5,7 +5,8 @@ use super::{EditError, TreeDoc, TreeNode, err};
 struct Branch {
     ends: [usize; 2],
     length: f64,
-    /// The written precision of an original branch; None once computed.
+    /// The written precision of the branch, kept by the pieces it is split
+    /// into; None for an exact length.
     length_place: Option<i32>,
     support: Vec<Option<String>>,
 }
@@ -152,10 +153,12 @@ impl TreeDoc {
             if !length.is_finite() {
                 return err("merged root branch length exceeds the supported numeric range");
             }
+            // A merged edge takes the coarser precision of its two parts.
+            let place = self.nodes[a].length_place.max(self.nodes[b].length_place);
             let edge = graph.add_branch(
                 a,
                 b,
-                (length, None),
+                (length, place),
                 self.supports
                     .iter()
                     .map(|s| s.values[a].clone().or_else(|| s.values[b].clone()))
@@ -235,14 +238,14 @@ impl TreeDoc {
                 b,
                 a,
                 Some(0),
-                (Some(branch.length - position), None),
+                (Some(branch.length - position), branch.length_place),
                 (carrier == b).then_some(edge),
             ));
             stack.push((
                 a,
                 b,
                 Some(0),
-                (Some(position), None),
+                (Some(position), branch.length_place),
                 (carrier == a).then_some(edge),
             ));
         }

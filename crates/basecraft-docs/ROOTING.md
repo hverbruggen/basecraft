@@ -98,8 +98,9 @@ Typed operations `tree.midpoint_root` and `tree.minimum_variance_root` record
 the method against the exact current document, with existing session hashes,
 undo snapshots, save provenance and replay. They have no user parameters.
 Their output is rooted: it is written with `[&R]` and read as rooted by the
-user's action (D18), whatever the input declared. Split root branches are
-computed lengths, so they carry no written precision.
+user's action (D18), whatever the input declared. The two pieces of a split
+written branch keep its written precision, and a merged root branch takes the
+coarser precision of its two parts (D17 refined).
 
 The asymmetric star `(A:1,B:3,C:6);` has midpoint 1.5 units down the C edge
 (depths 2.5, 4.5, 4.5) and MRTTV 2 units down that edge (depths 3, 5, 4).

@@ -444,17 +444,19 @@ mod tests {
             error.contains("tip b") && error.contains("tip a"),
             "{error}"
         );
-        // Whole numbers are written to the unit, so they may be off by a half
-        // each (D17): (a:1,b:2) is within its rounding and evens out to 1.5.
-        let whole = TreeDoc::from_newick("whole", "(a:1,b:2);").unwrap();
-        assert_eq!(validate(&whole, true, true).unwrap().root_height, 1.5);
+        // A length written without a decimal point is exact (D17 refined),
+        // so whole-number trees get no rounding allowance.
+        for whole in ["(a:1,b:2);", "((a:3,b:1):1,(c:2,d:2):2);"] {
+            let tree = TreeDoc::from_newick("whole", whole).unwrap();
+            assert!(validate(&tree, true, true).is_err(), "{whole}");
+        }
     }
 
     #[test]
     fn the_refusal_names_the_tips_in_conflict_and_a_branch_that_would_go_negative() {
-        // a sits deeper than b can reach; whole-number c is loose enough to
-        // fit either, so the refusal names a and b, not c.
-        let tree = TreeDoc::from_newick("mixed", "((a:0.500,b:0.400):0.500,c:1);").unwrap();
+        // a sits deeper than b can reach; c, written to one decimal, is loose
+        // enough to fit either, so the refusal names a and b, not c.
+        let tree = TreeDoc::from_newick("mixed", "((a:0.500,b:0.400):0.500,c:1.0);").unwrap();
         let error = validate(&tree, true, false).unwrap_err().0;
         assert!(
             error.contains("tip b") && error.contains("tip a") && !error.contains("tip c"),
@@ -472,13 +474,26 @@ mod tests {
     }
 
     #[test]
-    fn lengths_basecraft_computed_use_the_floating_point_bound() {
-        let mut tree = TreeDoc::from_newick("moved", "(a:0.5,b:0.5);").unwrap();
+    fn exact_and_split_lengths_keep_their_precision() {
+        // Moving the root of an exact branch: exact pieces, floating-point
+        // bound only.
+        let mut tree = TreeDoc::from_newick("moved", "(a:1,b:1);").unwrap();
         tree.set_root_position(&["a".into()], 0.4).unwrap();
-        // 0.4 and 0.6 have no written decimals: no rounding allowance.
         assert!(validate(&tree, true, true).is_err());
         tree.set_root_position(&["a".into()], 0.5).unwrap();
         assert!(validate(&tree, true, true).unwrap().evened.is_none());
+        // A six-decimal tree still passes after midpoint rooting: the pieces
+        // of the split branch keep its six decimals (D17 refined).
+        let six = "((a:0.123457,b:0.123456):0.876543,(c:0.333333,d:0.333333):0.666667);";
+        let mut tree = TreeDoc::from_newick("beast", six).unwrap();
+        tree.midpoint_root().unwrap();
+        assert!(
+            tree.nodes()
+                .iter()
+                .skip(1)
+                .all(|n| n.length_place == Some(-6))
+        );
+        assert!(validate(&tree, true, true).is_ok());
     }
 
     #[test]
