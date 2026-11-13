@@ -41,10 +41,10 @@ fn inspection_and_naming_are_read_only_and_keep_stable_order() {
     let hash = basecraft_io::hash_file(&paths[0]).unwrap();
     files::delimitation_companion(&work, &hash, &paths[0])
         .unwrap()
-        .write(&mut std::fs::File::create(files::tree_sidecar(&paths[0])).unwrap())
+        .write(&mut create_companion(&paths[0]))
         .unwrap();
     let before = std::fs::read_dir(dir.path()).unwrap().count();
-    let files = workflow::combine_candidates(&paths).unwrap();
+    let files = workflow::combine_candidates(None, &paths).unwrap();
     let ids: Vec<_> = files[0]
         .hypotheses
         .iter()
@@ -168,7 +168,8 @@ fn rejects_bad_selections_wrong_kind_roster_and_existing_destinations() {
     let fasta = dir.path().join("sequence.fa");
     std::fs::write(&fasta, ">a\nACGT\n").unwrap();
     assert!(workflow::combine_to(&mut session, &[fasta, paths[0].clone()], &output, None).is_err());
-    for target in [&output, &files::tree_sidecar(&output)] {
+    for target in [&output, &files::companion_path(None, &output)] {
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
         std::fs::write(target, "keep").unwrap();
         assert!(workflow::combine_to(&mut session, &paths, &output, None).is_err());
         assert_eq!(std::fs::read_to_string(target).unwrap(), "keep");
@@ -362,7 +363,7 @@ fn hint_workspace(
     change(&mut work);
     files::delimitation_companion(&work, &basecraft_io::hash_file(&path).unwrap(), &path)
         .unwrap()
-        .write(&mut std::fs::File::create(files::tree_sidecar(&path)).unwrap())
+        .write(&mut create_companion(&path))
         .unwrap();
     path
 }
@@ -429,7 +430,7 @@ fn linked_alignment_selector_preserves_presence_order_extensions_and_spelling() 
         assert_eq!(hint_files(dir.path()), before_files);
         assert!(!session.can_undo(doc).unwrap());
         assert!(!session.can_redo(doc).unwrap());
-        assert!(!dir.path().join(".basecraft").exists());
+        assert!(only_companions(dir.path()));
     }
     for extension in ["fa", "FASTA", "aFa", "Fas", "fNA"] {
         let key = format!("not-present/Original.{extension}");
@@ -563,4 +564,21 @@ fn linked_alignment_observation_preserves_unsaved_undo_redo_journal_and_replay()
         }
     }
     assert_eq!(std::fs::read(path).unwrap(), original_bytes);
+}
+
+/// A new companion file for the loose document `path`, its folder made.
+fn create_companion(path: &std::path::Path) -> std::fs::File {
+    let companion = files::companion_path(None, path);
+    std::fs::create_dir_all(companion.parent().unwrap()).unwrap();
+    std::fs::File::create(companion).unwrap()
+}
+
+/// Whether `folder`'s `.basecraft`, if any, holds companions and nothing else.
+fn only_companions(folder: &std::path::Path) -> bool {
+    match std::fs::read_dir(folder.join(".basecraft")) {
+        Err(_) => true,
+        Ok(entries) => entries
+            .map(|entry| entry.unwrap().file_name())
+            .all(|name| name == "documents"),
+    }
 }

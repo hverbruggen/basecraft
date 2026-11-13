@@ -306,7 +306,10 @@ impl Server {
                     .collect::<basecraft_ops::Result<Vec<_>>>()?;
                 if name == "delimitation_candidates" {
                     return Ok(serde_json::to_value(
-                        basecraft_ops::delimitation::combine_candidates(&paths)?,
+                        basecraft_ops::delimitation::combine_candidates(
+                            self.session.project(),
+                            &paths,
+                        )?,
                     )?);
                 }
                 if name == "delimitation_name" {

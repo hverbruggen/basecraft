@@ -48,7 +48,8 @@ pub fn run(command: DelimitationCommand) -> Result<()> {
             serde_json::json!({"path": delimitation::linked_alignment(&session, doc)?})
         }
         DelimitationCommand::Candidates { paths } => {
-            serde_json::to_value(delimitation::combine_candidates(&paths)?)?
+            // No --project here: the files are read as loose files.
+            serde_json::to_value(delimitation::combine_candidates(None, &paths)?)?
         }
         DelimitationCommand::Name { paths } => {
             serde_json::json!({"path": delimitation::combined_path(&paths)})

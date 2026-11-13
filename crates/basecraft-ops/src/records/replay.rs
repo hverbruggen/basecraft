@@ -308,16 +308,20 @@ fn materialise(
         if digest.len() != 64 || !digest.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err("invalid input hash".into());
         }
+        // Replay opens its documents as loose files: a recorded companion
+        // goes where a loose document's companion is kept.
         if let Some((main, _)) = inputs.first()
-            && crate::files::Format::from_path(Path::new(main)).ok()
-                == Some(crate::files::Format::Delimitation)
-            && Path::new(rel)
-                .components()
-                .any(|c| c.as_os_str() == "analyses-v1")
-            && Path::new(rel).file_name()
-                == crate::files::tree_sidecar(&work.join(scratch_key(main)?)).file_name()
+            && rel != main
+            && crate::files::is_companion_key(Path::new(rel), Path::new(main))
         {
-            local = crate::files::tree_sidecar(&scratch_key(main)?);
+            let record = crate::project::Project::document_record(
+                None,
+                &stage.path().join(scratch_key(main)?),
+            );
+            local = record
+                .strip_prefix(stage.path())
+                .map_err(|_| "companion outside the replay folder")?
+                .to_path_buf();
         }
         let destination = stage.path().join(&local);
         if let Some(parent) = destination.parent() {
@@ -556,7 +560,9 @@ fn recover_entries(
     let staging = tempfile::Builder::new()
         .prefix(".basecraft-recover-")
         .tempdir_in(&parent)?;
-    let mut session = Session::unlogged(staging.path()).in_project(project.cloned());
+    let mut session = Session::unlogged(staging.path())
+        .in_project(project.cloned())
+        .staged();
     let source_root = recorded_source_root(root, entries.iter());
     let pending_path = root.join("pending-save.json");
     if pending_path.is_file() {
@@ -1153,6 +1159,11 @@ impl RecoveryAttempt {
                     .parent()
                     .ok_or_else(|| crate::error::invalid("recovery parent missing"))?,
             )?;
+            // The stage was a loose folder; each recovered document's
+            // companion now moves to where the project keeps it.
+            for output in &completion.outputs {
+                crate::files::settle_companion(self.session.project(), output)?;
+            }
             for run in stores {
                 let final_run = run.relocated(&stage, &self.destination)?;
                 evidence.register(&final_run)?;

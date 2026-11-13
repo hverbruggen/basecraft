@@ -1986,7 +1986,9 @@ impl qobject::TreeController {
     }
 
     pub fn support_import_json(&self, path: &QString) -> QString {
-        let result = match basecraft_ops::files::load_tree(Path::new(&path.to_string())) {
+        let project = self.rust().session.as_ref().and_then(|s| s.project());
+        let result = match basecraft_ops::files::load_tree_in(project, Path::new(&path.to_string()))
+        {
             Ok(tree) => json!({"sets": tree.doc.supports().iter().map(|set| json!({
                 "name": set.name, "kind": set.kind, "source": set.source
             })).collect::<Vec<_>>()}),

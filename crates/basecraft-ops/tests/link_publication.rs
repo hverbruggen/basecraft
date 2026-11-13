@@ -119,7 +119,7 @@ fn publication_error_after_main_write_disables_extraction_and_keeps_previous_ass
     let old_bytes = std::fs::read(&old_snapshot).unwrap();
     let old_metadata = std::fs::read(records::view_sidecar(&output)).unwrap();
     // Tree replacement succeeds, then presentation-sidecar replacement fails.
-    std::fs::create_dir(files::tree_sidecar(&output)).unwrap();
+    std::fs::create_dir_all(files::companion_path(None, &output)).unwrap();
     let error = session.save(doc, Some(&output)).unwrap_err().to_string();
     assert!(error.contains("Save As incomplete"), "{error}");
     assert!(error.contains("recovery metadata at"), "{error}");

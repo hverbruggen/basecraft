@@ -48,6 +48,32 @@ impl Project {
         }
     }
 
+    /// Where basecraft keeps its record of one document (D23): in the
+    /// project's `.basecraft` when the project holds the file, else in the
+    /// `.basecraft` beside the loose file, at `documents/<path relative to
+    /// that folder>.json`. Nothing is written beside the document itself.
+    pub fn document_record(project: Option<&Self>, file: &Path) -> PathBuf {
+        let held =
+            project.and_then(|project| Some((project.root.clone(), project.relative(file)?)));
+        let (base, key) = held.unwrap_or_else(|| {
+            let absolute = std::path::absolute(file).unwrap_or_else(|_| file.to_path_buf());
+            let base = absolute
+                .parent()
+                .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+            (
+                base,
+                PathBuf::from(absolute.file_name().unwrap_or_default()),
+            )
+        });
+        let mut record = base
+            .join(".basecraft")
+            .join("documents")
+            .join(key)
+            .into_os_string();
+        record.push(".json");
+        PathBuf::from(record)
+    }
+
     /// Whether another clone of this project is alive, such as the project
     /// of an open session.
     pub fn in_use(&self) -> bool {

@@ -92,7 +92,8 @@ fn rereview_legacy_sidecar_break_and_remove_reach_combined_workspace() {
             .unwrap()
             .write(&mut bytes)
             .unwrap();
-        let sidecar = files::tree_sidecar(&source);
+        let sidecar = files::companion_path(None, &source);
+        std::fs::create_dir_all(sidecar.parent().unwrap()).unwrap();
         std::fs::write(&sidecar, &bytes).unwrap();
         let target = root.path().join("combined.spart");
         std::fs::copy(&source, &target).unwrap();
@@ -444,7 +445,9 @@ fn combine_complete_export_includes_legacy_sidecar_evidence() {
         .unwrap()
         .write(&mut bytes)
         .unwrap();
-    std::fs::write(files::tree_sidecar(&source), &bytes).unwrap();
+    let sidecar = files::companion_path(None, &source);
+    std::fs::create_dir_all(sidecar.parent().unwrap()).unwrap();
+    std::fs::write(sidecar, &bytes).unwrap();
     let side_hash = basecraft_io::hash_bytes(&bytes);
     let mut session = Session::recoverable(&root).unwrap();
     let doc = session.open(&target).unwrap();
@@ -505,7 +508,7 @@ fn species_partial_save_retains_recoverable_edits_and_retries() {
             },
         )
         .unwrap();
-    let sidecar = files::tree_sidecar(&canonical);
+    let sidecar = files::companion_path(None, &canonical);
     let directory = sidecar.parent().unwrap();
     let permissions = std::fs::metadata(directory).unwrap().permissions();
     let before = std::fs::read(&canonical).unwrap();

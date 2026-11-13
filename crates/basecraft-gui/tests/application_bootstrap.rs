@@ -395,7 +395,9 @@ fn linked_taxa_journey(mut app: std::pin::Pin<&mut cxx_qt_lib_extras::QApplicati
         &workspace,
     )
     .unwrap()
-    .write(&mut std::fs::File::create(basecraft_ops::files::tree_sidecar(&workspace)).unwrap())
+    .write(
+        &mut std::fs::File::create(basecraft_ops::files::companion_path(None, &workspace)).unwrap(),
+    )
     .unwrap();
     app_bridge::barriers::configure(
         folder

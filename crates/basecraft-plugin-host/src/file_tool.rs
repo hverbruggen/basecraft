@@ -91,6 +91,8 @@ pub(crate) fn write_tree_companion(
     branch_lengths: Option<&basecraft_protocol::facts::BranchLengths>,
 ) -> Result<Option<PathBuf>> {
     use basecraft_protocol::facts::{Fact, FactSource};
+    // A staged run output or an exported tree bound to its run: no project
+    // decides where its companion is.
     let mut doc = basecraft_ops::files::load_tree(path)?.doc;
     let support = support.filter(|_| doc.supports().len() == 1);
     if support.is_none() && branch_lengths.is_none() {
@@ -107,7 +109,9 @@ pub(crate) fn write_tree_companion(
             source: FactSource::Stated,
         }));
     }
-    Ok(Some(basecraft_ops::files::save_tree_companion(path, &doc)?))
+    Ok(Some(basecraft_ops::files::save_tree_companion(
+        None, path, &doc,
+    )?))
 }
 
 pub(crate) fn is_tree(path: &Path) -> bool {

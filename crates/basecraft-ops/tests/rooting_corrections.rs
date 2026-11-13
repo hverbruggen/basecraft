@@ -42,7 +42,7 @@ fn unrepresentable_tip_support_is_refused_before_recovery_tracking() {
             assert!(!session.can_undo(id).unwrap());
             assert!(!session.can_redo(id).unwrap());
             assert!(!session.recovery_root().exists());
-            assert!(!files::tree_sidecar(&path).exists());
+            assert!(!files::companion_path(None, &path).exists());
             assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
         }
     }

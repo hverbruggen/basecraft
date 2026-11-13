@@ -113,7 +113,8 @@ condition holds (`equals`, `one_of`, `positive`). IQ-TREE and FastTree trees
 declare substitution lengths; distance trees declare them only for the
 corrected models `jc69` and `k2p`, so a `p`-distance tree stays unknown. The
 host writes the declared meaning, marked as stated, into the primary tree's
-companion file (`<file>.basecraft.json`), together with the tree's support
+companion (kept in the project's `.basecraft`, or the `.basecraft` beside a
+loose file), together with the tree's support
 semantics. Output alphabets are not declared yet. `tree_support` says what support values on output trees mean, optionally
 only when a parameter has a value. `bootstrap_exports` lets a run export its
 `bootstrap-<run>.nex` trees beside the exported tree when

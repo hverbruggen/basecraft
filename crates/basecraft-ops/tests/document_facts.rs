@@ -25,7 +25,7 @@ fn a_plain_open_and_save_writes_no_companion() {
         )
         .unwrap();
     session.save(doc, None).unwrap();
-    assert!(!files::tree_sidecar(&path).exists());
+    assert!(!files::companion_path(None, &path).exists());
 }
 
 #[test]
@@ -94,7 +94,9 @@ fn a_companion_for_another_tree_is_reported() {
     files::tree_companion(&other, &hash)
         .write(&mut bytes)
         .unwrap();
-    std::fs::write(files::tree_sidecar(&path), bytes).unwrap();
+    let companion = files::companion_path(None, &path);
+    std::fs::create_dir_all(companion.parent().unwrap()).unwrap();
+    std::fs::write(companion, bytes).unwrap();
     let warning = files::load_tree(&path).unwrap().metadata_warning.unwrap();
     assert!(warning.contains("different tree"), "{warning}");
 }
@@ -116,10 +118,10 @@ fn an_undone_alphabet_does_not_come_back_on_reopen() {
         )
         .unwrap();
     session.save(doc, None).unwrap();
-    assert!(files::tree_sidecar(&path).exists());
+    assert!(files::companion_path(None, &path).exists());
     session.undo(doc).unwrap();
     session.save(doc, None).unwrap();
-    assert!(!files::tree_sidecar(&path).exists());
+    assert!(!files::companion_path(None, &path).exists());
     let mut reopened = Session::new(dir.path());
     let doc = reopened.open(&path).unwrap();
     assert_eq!(reopened.alphabet(doc).unwrap().source, FactSource::Guessed);
@@ -297,5 +299,5 @@ fn genbank_files_state_their_molecule_and_every_record_counts() {
     let mut session = session;
     session.apply(doc, Op::seq_replace(0, 1, "G")).unwrap();
     session.save(doc, None).unwrap();
-    assert!(!files::tree_sidecar(&dir.path().join("two.gb")).exists());
+    assert!(!files::companion_path(None, &dir.path().join("two.gb")).exists());
 }

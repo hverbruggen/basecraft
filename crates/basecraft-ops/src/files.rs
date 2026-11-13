@@ -24,7 +24,7 @@ pub enum Format {
     /// FASTA, with annotations in a GFF3 sidecar of the same stem.
     Fasta,
     /// Newick or NEXUS (told apart by content), with annotations and style
-    /// in a JSON sidecar: see [`tree_sidecar`].
+    /// in its companion: see [`companion_path`].
     Tree,
 }
 
@@ -241,8 +241,14 @@ impl Loaded {
     }
 }
 
-/// Open a file as whatever it holds: see [`kind`].
+/// Open a loose file as whatever it holds: see [`kind`].
 pub fn load(path: &Path) -> Result<Loaded> {
+    load_in(None, path)
+}
+
+/// Open a file of `project` (or a loose file) as whatever it holds, with
+/// its companion from where [`companion_path`] keeps it.
+pub fn load_in(project: Option<&crate::project::Project>, path: &Path) -> Result<Loaded> {
     let format = Format::from_path(path)?;
     match format {
         Format::SangerReview => crate::sanger_review::SangerReview::load(path)
@@ -256,8 +262,8 @@ pub fn load(path: &Path) -> Result<Loaded> {
         ))),
         Format::Metadata => crate::metadata::load(path).map(Loaded::Metadata),
         Format::Submission => crate::submission::load(path).map(Loaded::Submission),
-        Format::Delimitation => load_delimitation(path).map(Loaded::Delimitation),
-        Format::Fasta | Format::Tree => load_source(path, format, Source::open(path)?),
+        Format::Delimitation => load_delimitation_in(project, path).map(Loaded::Delimitation),
+        Format::Fasta | Format::Tree => load_source(project, path, format, Source::open(path)?),
     }
 }
 
@@ -266,12 +272,17 @@ pub fn load(path: &Path) -> Result<Loaded> {
 /// must retain the companion validation used by `Session`.
 /// Other formats require their existing loaders and are rejected here.
 pub fn load_from(path: &Path, source: Source) -> Result<Loaded> {
-    load_source(path, Format::from_path(path)?, source)
+    load_source(None, path, Format::from_path(path)?, source)
 }
 
-fn load_source(path: &Path, format: Format, source: Source) -> Result<Loaded> {
+fn load_source(
+    project: Option<&crate::project::Project>,
+    path: &Path,
+    format: Format,
+    source: Source,
+) -> Result<Loaded> {
     match format {
-        Format::Tree => load_tree_from(path, &source).map(Loaded::Tree),
+        Format::Tree => load_tree_from(project, path, &source).map(Loaded::Tree),
         Format::Fasta => {
             let gff = read_optional(&gff_sidecar(path))?;
             load_fasta_from(
@@ -296,7 +307,11 @@ pub(crate) struct CapturedLoad {
     pub stamps: Vec<(PathBuf, Option<basecraft_protocol::provenance::FileStamp>)>,
 }
 
-pub(crate) fn capture_load(path: &Path, format: Format) -> Result<CapturedLoad> {
+pub(crate) fn capture_load(
+    project: Option<&crate::project::Project>,
+    path: &Path,
+    format: Format,
+) -> Result<CapturedLoad> {
     if format == Format::GenBank {
         let stamps = vec![(
             path.to_path_buf(),
@@ -304,6 +319,7 @@ pub(crate) fn capture_load(path: &Path, format: Format) -> Result<CapturedLoad> 
         )];
         let (first, hash) = genbank::open_hashed(path)?;
         return finish_capture(
+            project,
             Loaded::Sequence(opened_genbank(first)),
             vec![(path.to_path_buf(), hash)],
             stamps,
@@ -311,7 +327,7 @@ pub(crate) fn capture_load(path: &Path, format: Format) -> Result<CapturedLoad> 
     }
     let companions = match format {
         Format::Metadata => crate::metadata::files(path).split_off(1),
-        Format::Tree | Format::Delimitation => vec![tree_sidecar(path)],
+        Format::Tree | Format::Delimitation => vec![companion_path(project, path)],
         Format::Fasta => vec![gff_sidecar(path)],
         Format::GenBank => unreachable!("streamed above"),
         Format::Submission => crate::documents::submission_companions(path),
@@ -381,14 +397,14 @@ pub(crate) fn capture_load(path: &Path, format: Format) -> Result<CapturedLoad> 
             path,
             &main,
             &files[0].2,
-            companion,
+            (&companion_path(project, path), companion),
             tree_issue,
         )?),
         Format::Delimitation => Loaded::Delimitation(load_delimitation_bytes(
             path,
             main.bytes(),
             &files[0].2,
-            companion,
+            (&companion_path(project, path), companion),
         )?),
         Format::Submission => Loaded::Submission(crate::submission::load_from(path, main.bytes())?),
         Format::Metadata => Loaded::Metadata(crate::metadata::load_with(path, &mut |file| {
@@ -402,6 +418,7 @@ pub(crate) fn capture_load(path: &Path, format: Format) -> Result<CapturedLoad> 
         })?),
     };
     finish_capture(
+        project,
         content,
         files
             .into_iter()
@@ -412,11 +429,12 @@ pub(crate) fn capture_load(path: &Path, format: Format) -> Result<CapturedLoad> 
 }
 
 fn finish_capture(
+    project: Option<&crate::project::Project>,
     mut content: Loaded,
     files: Vec<(PathBuf, String)>,
     stamps: Vec<(PathBuf, Option<basecraft_protocol::provenance::FileStamp>)>,
 ) -> Result<CapturedLoad> {
-    restore_alphabet(&mut content, &files[0].0, &files[0].1);
+    restore_alphabet(project, &mut content, &files[0].0, &files[0].1);
     for (file, before) in &stamps {
         let after = match std::fs::metadata(file) {
             Ok(metadata) if !metadata.is_file() => None,
@@ -562,15 +580,106 @@ pub fn gff_sidecar(path: &Path) -> PathBuf {
     path.with_extension("gff3")
 }
 
-/// A tree file's sidecar: `NAME.nwk.basecraft.json` beside `NAME.nwk`.
-pub fn tree_sidecar(path: &Path) -> PathBuf {
+/// Where a document's companion lives: the one place that knows (D23). A
+/// result bound to an analysis run keeps it in that run; any other document
+/// in the `.basecraft` of `project` or of its own folder, keyed by its
+/// relative path ([`crate::project::Project::document_record`]).
+pub fn companion_path(project: Option<&crate::project::Project>, path: &Path) -> PathBuf {
     if let Ok(Some(run)) = crate::records::analysis_store::ArtifactRun::for_result(path) {
         let name = path.file_name().unwrap_or_default().to_string_lossy();
         return run.join(format!("{name}.basecraft.json"));
     }
-    let mut name = path.file_name().unwrap_or_default().to_os_string();
-    name.push(".basecraft.json");
-    path.with_file_name(name)
+    crate::project::Project::document_record(project, path)
+}
+
+/// Copy a document to `target` with its companion, which goes where
+/// `target`'s companion is kept. Refuses a target, or a target companion,
+/// that already exists.
+pub fn copy_document(
+    project: Option<&crate::project::Project>,
+    source: &Path,
+    target: &Path,
+) -> Result<()> {
+    let (from, to) = (
+        companion_path(project, source),
+        companion_path(project, target),
+    );
+    if let Some(taken) = [target, to.as_path()]
+        .into_iter()
+        .find(|path| path.exists())
+    {
+        return Err(crate::error::invalid(format!(
+            "{} already exists; choose a new name",
+            taken.display()
+        )));
+    }
+    std::fs::copy(source, target)?;
+    if from.is_file() {
+        companion_folder(&to)?;
+        std::fs::copy(&from, &to)?;
+    }
+    Ok(())
+}
+
+/// Move the companion a document got as a loose file to where `project`
+/// keeps it, when that is somewhere else: for a document published as part
+/// of a folder, such as a recovery, into a project.
+pub(crate) fn settle_companion(
+    project: Option<&crate::project::Project>,
+    document: &Path,
+) -> Result<()> {
+    let loose = crate::project::Project::document_record(None, document);
+    let kept = companion_path(project, document);
+    if loose == kept || !loose.is_file() {
+        return Ok(());
+    }
+    if kept.is_file() {
+        // The save wrote the companion where it is kept (a result bound to
+        // its run); the loose one is the input recovery replayed from.
+        std::fs::remove_file(&loose)?;
+        return Ok(());
+    }
+    companion_folder(&kept)?;
+    basecraft_platform::atomic::rename_noreplace(&loose, &kept)?;
+    Ok(())
+}
+
+/// Whether a recorded file `key` is the companion of document `main`:
+/// either in a `.basecraft/documents` folder, or, for a species workspace,
+/// in the analysis run it is bound to.
+pub(crate) fn is_companion_key(key: &Path, main: &Path) -> bool {
+    let Some(name) = main.file_name() else {
+        return false;
+    };
+    let has = |part: &str| key.components().any(|c| c.as_os_str() == part);
+    let mut record = name.to_os_string();
+    record.push(".json");
+    let mut bound = name.to_os_string();
+    bound.push(".basecraft.json");
+    (has(".basecraft") && has("documents") && key.file_name() == Some(record.as_os_str()))
+        || (Format::from_path(main).ok() == Some(Format::Delimitation)
+            && has("analyses-v1")
+            && key.file_name() == Some(bound.as_os_str()))
+}
+
+/// Make the folder a companion is written into. A `.basecraft` that is a
+/// symbolic link or another program's file is refused, not followed.
+pub(crate) fn companion_folder(companion: &Path) -> Result<()> {
+    let Some(folder) = companion.parent() else {
+        return Ok(());
+    };
+    let base = companion
+        .ancestors()
+        .find(|dir| dir.file_name().is_some_and(|name| name == ".basecraft"))
+        .and_then(Path::parent);
+    if let Some(reason) = base.and_then(crate::records::input_evidence::foreign_basecraft) {
+        return Err(crate::error::invalid(format!(
+            "Basecraft can't keep this document's facts in {}: {reason}",
+            base.unwrap_or(folder).display()
+        )));
+    }
+    std::fs::create_dir_all(folder)?;
+    Ok(())
 }
 
 use basecraft_protocol::companion_records::{
@@ -611,13 +720,24 @@ fn read_companion(
     Ok(companion)
 }
 
-/// Read the first tree of a Newick or NEXUS file, with its sidecar.
+/// Read the first tree of a loose Newick or NEXUS file, with its companion.
 pub fn load_tree(path: &Path) -> Result<OpenedTree> {
-    load_tree_from(path, &open_source(path, Format::Tree)?)
+    load_tree_in(None, path)
 }
 
-pub(crate) fn load_tree_from(path: &Path, source: &Source) -> Result<OpenedTree> {
-    let (side, issue) = match read_optional(&tree_sidecar(path)) {
+/// Read the first tree of a Newick or NEXUS file of `project`, with its
+/// companion.
+pub fn load_tree_in(project: Option<&crate::project::Project>, path: &Path) -> Result<OpenedTree> {
+    load_tree_from(project, path, &open_source(path, Format::Tree)?)
+}
+
+pub(crate) fn load_tree_from(
+    project: Option<&crate::project::Project>,
+    path: &Path,
+    source: &Source,
+) -> Result<OpenedTree> {
+    let companion = companion_path(project, path);
+    let (side, issue) = match read_optional(&companion) {
         Ok(side) => (side, None),
         Err(error) => (None, Some(error.to_string())),
     };
@@ -625,18 +745,18 @@ pub(crate) fn load_tree_from(path: &Path, source: &Source) -> Result<OpenedTree>
         path,
         source,
         &basecraft_io::hash_bytes(source.bytes()),
-        side.as_ref(),
+        (&companion, side.as_ref()),
         issue,
     )
 }
 
-/// `captured_side` is the adjacent companion, read with the main file;
-/// `side_issue` says why an adjacent companion could not be read.
+/// `captured_side` is the companion and its bytes, read with the main
+/// file; `side_issue` says why the companion could not be read.
 fn load_tree_bytes(
     path: &Path,
     source: &Source,
     exchange_hash: &str,
-    captured_side: Option<&Source>,
+    (companion, captured_side): (&Path, Option<&Source>),
     side_issue: Option<String>,
 ) -> Result<OpenedTree> {
     let text = std::str::from_utf8(source.bytes())
@@ -670,7 +790,7 @@ fn load_tree_bytes(
                 let side = read_optional(&sidecar)?;
                 (sidecar, side)
             }
-            None => (tree_sidecar(path), captured_side.cloned()),
+            None => (companion.to_path_buf(), captured_side.cloned()),
         };
         if let Some(bytes) = &side {
             let side = read_companion(&sidecar, bytes.bytes(), exchange_hash, Some(&doc))?
@@ -756,12 +876,17 @@ pub fn facts_companion(
 
 /// Put back the alphabet an alignment's or sequence's companion keeps. A
 /// companion that no longer matches the file is ignored, with a warning.
-fn restore_alphabet(content: &mut Loaded, path: &Path, exchange_hash: &str) {
+fn restore_alphabet(
+    project: Option<&crate::project::Project>,
+    content: &mut Loaded,
+    path: &Path,
+    exchange_hash: &str,
+) {
     // Trees and species files read their side file in their own loader.
     if !matches!(content, Loaded::Sequence(_) | Loaded::Alignment(_)) {
         return;
     }
-    let companion = tree_sidecar(path);
+    let companion = companion_path(project, path);
     let found = read_optional(&companion).and_then(|bytes| {
         bytes
             .map(|bytes| read_companion(&companion, bytes.bytes(), exchange_hash, None))
@@ -810,9 +935,14 @@ pub fn tree_companion(doc: &TreeDoc, exchange_hash: &str) -> Companion {
 }
 
 /// Replace the companion of a tree file already on disk.
-pub fn save_tree_companion(tree: &Path, doc: &TreeDoc) -> Result<PathBuf> {
+pub fn save_tree_companion(
+    project: Option<&crate::project::Project>,
+    tree: &Path,
+    doc: &TreeDoc,
+) -> Result<PathBuf> {
     let companion = tree_companion(doc, &basecraft_io::hash_file(tree)?);
-    let path = tree_sidecar(tree);
+    let path = companion_path(project, tree);
+    companion_folder(&path)?;
     basecraft_io::write_atomic(&path, |w| companion.write(w))?;
     Ok(path)
 }
@@ -1416,19 +1546,29 @@ fn extract_range(doc: &SequenceDoc, start: u64, end: u64) -> genbank::Record {
     extracted(doc, name, &definition, features, doc.read(start, end))
 }
 
+/// Read a loose species workspace with its companion.
 pub fn load_delimitation(
     path: &Path,
 ) -> Result<basecraft_protocol::delimitation::DelimitationWorkspace> {
+    load_delimitation_in(None, path)
+}
+
+/// Read a species workspace of `project` with its companion.
+pub fn load_delimitation_in(
+    project: Option<&crate::project::Project>,
+    path: &Path,
+) -> Result<basecraft_protocol::delimitation::DelimitationWorkspace> {
     let (source, hash) = Source::open_hashed(path)?;
-    let side = read_optional(&tree_sidecar(path))?;
-    load_delimitation_bytes(path, source.bytes(), &hash, side.as_ref())
+    let companion = companion_path(project, path);
+    let side = read_optional(&companion)?;
+    load_delimitation_bytes(path, source.bytes(), &hash, (&companion, side.as_ref()))
 }
 
 fn load_delimitation_bytes(
     path: &Path,
     bytes: &[u8],
     exchange_hash: &str,
-    captured_side: Option<&Source>,
+    (companion, captured_side): (&Path, Option<&Source>),
 ) -> Result<basecraft_protocol::delimitation::DelimitationWorkspace> {
     let text =
         std::str::from_utf8(bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
@@ -1445,11 +1585,10 @@ fn load_delimitation_bytes(
         ));
     }
     if let Some(source) = captured_side {
-        let companion = tree_sidecar(path);
-        let side = read_companion(&companion, source.bytes(), exchange_hash, None)?
+        let side = read_companion(companion, source.bytes(), exchange_hash, None)?
             .delimitation
             .ok_or_else(|| Error::Damaged {
-                path: companion,
+                path: companion.to_path_buf(),
                 detail: "the companion holds no species workspace".into(),
             })?;
         work = side.workspace;

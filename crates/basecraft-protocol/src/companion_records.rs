@@ -1,6 +1,7 @@
-//! The companion file `<file>.basecraft.json` beside a document: what the
-//! document's own format cannot hold. One envelope for every kind, with one
-//! section per kind.
+//! A document's companion: what the document's own format cannot hold. It
+//! lives in the project's `.basecraft` (or the `.basecraft` beside a loose
+//! file) at `documents/<path>.json`, never beside the document (D23). One
+//! envelope for every kind, with one section per kind.
 use crate::facts::{Alphabet, BranchLengths, Fact};
 use crate::{CladeAnnotation, TreeStyle};
 use schemars::JsonSchema;
@@ -27,7 +28,7 @@ pub struct Companion {
 
 impl Companion {
     /// Write the companion as basecraft keeps it: indented JSON and a final
-    /// newline. Every `*.basecraft.json` is written through here.
+    /// newline. Every companion is written through here.
     pub fn write(&self, w: &mut dyn std::io::Write) -> std::io::Result<()> {
         serde_json::to_writer_pretty(&mut *w, self)?;
         writeln!(w)

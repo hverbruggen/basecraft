@@ -180,6 +180,9 @@ pub struct Session {
     root: PathBuf,
     /// The folder the user chose, or none. Set once, when the session is made.
     project: Option<crate::project::Project>,
+    /// The session works in a recovery stage: its documents are loose files
+    /// of the stage, whatever the project.
+    staged: bool,
     storage_root: PathBuf,
     /// Where Sanger review sources go when their own folder is read-only.
     local_provenance_root: PathBuf,
@@ -222,6 +225,7 @@ impl Session {
             events: Retained::new(EVENTS_IN_MEMORY),
             pending_baselines: Vec::new(),
             project: None,
+            staged: false,
             root,
             id: ulid::Ulid::generate().to_string(),
             host,
@@ -304,6 +308,20 @@ impl Session {
 
     pub fn project(&self) -> Option<&crate::project::Project> {
         self.project.as_ref()
+    }
+
+    /// Mark the session as working in a recovery stage: its documents' companions
+    /// are those of loose files in the stage, never the project's.
+    #[must_use]
+    pub(crate) fn staged(mut self) -> Self {
+        self.staged = true;
+        self
+    }
+
+    /// The project whose `.basecraft` holds this session's companions: none
+    /// for a recovery stage, which is published as a folder of its own.
+    pub(crate) fn companion_project(&self) -> Option<&crate::project::Project> {
+        self.project.as_ref().filter(|_| !self.staged)
     }
 
     pub fn id(&self) -> &str {

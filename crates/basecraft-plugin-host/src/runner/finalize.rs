@@ -344,7 +344,7 @@ impl PreparedOperation {
                 .is_some_and(|extension| extension.eq_ignore_ascii_case("nwk"))
             {
                 for companion in [
-                    basecraft_ops::files::tree_sidecar(&path),
+                    basecraft_ops::files::companion_path(None, &path),
                     basecraft_ops::records::sidecar(&path),
                 ] {
                     if companion.is_file() && companion.starts_with(self.run.directory()) {

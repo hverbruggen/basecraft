@@ -532,7 +532,7 @@ impl PreparedOperation {
             })
             .collect();
         for (role, path, lengths, support) in stated {
-            let sidecar = basecraft_ops::files::tree_sidecar(&path);
+            let sidecar = basecraft_ops::files::companion_path(None, &path);
             match std::fs::symlink_metadata(&sidecar) {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Ok(_) => {
@@ -550,12 +550,12 @@ impl PreparedOperation {
                 let hash = basecraft_io::hash_file(&sidecar)?;
                 // Bound tree reads use the run-root companion; the collection
                 // member carries the same facts when exported.
-                let hidden = self.run.artifact(
-                    sidecar
-                        .file_name()
+                let hidden = self.run.artifact(&format!(
+                    "{}.basecraft.json",
+                    path.file_name()
                         .and_then(|file| file.to_str())
-                        .ok_or_else(|| Error::Protocol("companion filename".into()))?,
-                )?;
+                        .ok_or_else(|| Error::Protocol("companion filename".into()))?
+                ))?;
                 basecraft_io::write_atomic(&hidden, |writer| {
                     let mut input = std::fs::File::open(&sidecar)?;
                     std::io::copy(&mut input, writer)?;

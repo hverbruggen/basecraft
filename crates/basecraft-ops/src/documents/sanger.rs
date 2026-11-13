@@ -89,6 +89,7 @@ impl Document for SangerReview {
     }
     fn prepare_write(
         &self,
+        _project: Option<&crate::project::Project>,
         target: &Path,
         format: Format,
         _recovery: &Path,

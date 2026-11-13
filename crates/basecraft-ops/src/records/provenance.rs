@@ -269,9 +269,20 @@ pub fn verify(result: &Path, project: Option<&crate::project::Project>) -> Resul
         return Err(invalid("publication has no output"));
     }
     let hidden = crate::records::analysis_store::ArtifactRun::for_result(result)?.is_some();
+    // The companion is published by its file name; it lives where
+    // `companion_path` keeps it, not beside the result.
+    let companion = crate::files::companion_path(project, result);
+    let is_companion = |name: &str| {
+        !hidden
+            && companion
+                .file_name()
+                .is_some_and(|file| file.to_string_lossy() == name)
+    };
     for (index, output) in publication.outputs.iter().enumerate() {
         let path = if index == 0 && !hidden {
             result.to_path_buf()
+        } else if index > 0 && is_companion(&output.logical_name) {
+            companion.clone()
         } else {
             let base = if output.retained.as_deref() == Some(output.logical_name.as_str()) {
                 bundle.as_path()
@@ -839,6 +850,9 @@ pub fn package(
     let copied = staging.path().join(name);
     copy_atomic(result, &copied)?;
     let publication = inspect(result, project)?;
+    // The companion goes where the copy's companion is kept: the package's
+    // own .basecraft.
+    let companion_of_result = crate::files::companion_path(project, result);
     for artifact in publication.outputs.iter().skip(1) {
         let name = Path::new(&artifact.logical_name);
         if name
@@ -846,6 +860,12 @@ pub fn package(
             .any(|c| !matches!(c, Component::Normal(_)))
         {
             return Err(invalid("unsafe output logical name"));
+        }
+        if companion_of_result.file_name() == Some(name.as_os_str()) {
+            let packaged = crate::project::Project::document_record(None, &copied);
+            crate::files::companion_folder(&packaged)?;
+            copy_atomic(&companion_of_result, &packaged)?;
+            continue;
         }
         copy_atomic(
             &result.parent().unwrap_or(Path::new(".")).join(name),

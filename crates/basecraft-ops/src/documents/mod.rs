@@ -220,13 +220,15 @@ fn sequence(content: &crate::files::Loaded) -> Result<&crate::files::Opened> {
 /// states an alphabet, removed when it no longer does.
 fn stage_companion(
     prepared: &mut PreparedWrite,
+    project: Option<&crate::project::Project>,
     target: &Path,
     alphabet: Option<&Fact<Alphabet>>,
     main: &str,
 ) -> Result<()> {
-    let path = crate::files::tree_sidecar(target);
+    let path = crate::files::companion_path(project, target);
     match crate::files::facts_companion(alphabet, main) {
         Some(companion) => {
+            crate::files::companion_folder(&path)?;
             prepared.push(&path, |w| companion.write(w))?;
         }
         None => prepared.remove_stale(&path),
@@ -311,16 +313,18 @@ pub(crate) trait Document {
     #[allow(dead_code)] // Recovery checkpoints in lane open use this immediate writer.
     fn write(
         &self,
+        project: Option<&crate::project::Project>,
         target: &Path,
         format: Format,
         recovery_root: &Path,
         publication: &WritePublication,
     ) -> Result<Vec<(PathBuf, String)>> {
-        let prepared = self.prepare_write(target, format, recovery_root, publication)?;
+        let prepared = self.prepare_write(project, target, format, recovery_root, publication)?;
         self.publish_write(prepared, target, publication)
     }
     fn prepare_write(
         &self,
+        project: Option<&crate::project::Project>,
         target: &Path,
         format: Format,
         recovery_root: &Path,
@@ -357,7 +361,11 @@ pub(crate) trait Document {
 
     /// Companions accepted only after the main file matches the intended write,
     /// in the order of their hashes after the first in `saved_hashes`.
-    fn saved_companions(&self, _target: &Path) -> Vec<PathBuf> {
+    fn saved_companions(
+        &self,
+        _project: Option<&crate::project::Project>,
+        _target: &Path,
+    ) -> Vec<PathBuf> {
         Vec::new()
     }
 

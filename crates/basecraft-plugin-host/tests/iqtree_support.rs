@@ -51,7 +51,7 @@ fn check_tree(path: &Path, method: &str, multi: bool) {
             !support.proportions,
             "IQ-TREE bootstrap is percentage scale"
         );
-        assert!(basecraft_ops::files::tree_sidecar(path).is_file());
+        assert!(basecraft_ops::files::companion_path(None, path).is_file());
     }
 }
 
@@ -114,13 +114,9 @@ fn run_cases(root: &Path) {
         check_tree(&retained, label, multi);
         let moved = root.join(format!("copied-{suffix}"));
         std::fs::create_dir(&moved).unwrap();
+        // Copied by basecraft, the tree keeps its companion.
         let moved_tree = moved.join("tree.nwk");
-        std::fs::copy(&exported, &moved_tree).unwrap();
-        std::fs::copy(
-            exported.with_file_name("tree.nwk.basecraft.json"),
-            moved.join("tree.nwk.basecraft.json"),
-        )
-        .unwrap();
+        basecraft_ops::files::copy_document(None, &exported, &moved_tree).unwrap();
         check_tree(&moved_tree, label, multi);
         assert_eq!(
             basecraft_ops::records::verify(&retained, None).unwrap(),

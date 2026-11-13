@@ -388,9 +388,15 @@ fn copied_consumers_reject_another_metadata_owner_with_identical_ids() {
     let source = first.path().join("result.spart");
     let copied = other.path().join("copied.spart");
     std::fs::copy(&source, &copied).unwrap();
+    std::fs::create_dir_all(
+        basecraft_ops::files::companion_path(None, &copied)
+            .parent()
+            .unwrap(),
+    )
+    .unwrap();
     std::fs::copy(
-        basecraft_ops::files::tree_sidecar(&source),
-        basecraft_ops::files::tree_sidecar(&copied),
+        basecraft_ops::files::companion_path(None, &source),
+        basecraft_ops::files::companion_path(None, &copied),
     )
     .unwrap();
     let promote = metadata::ConsumerRequest::PromotePartition {
@@ -434,8 +440,8 @@ fn copied_consumers_reject_another_metadata_owner_with_identical_ids() {
     let copied_tree = other.path().join("tree.nwk");
     std::fs::copy(&tree_path, &copied_tree).unwrap();
     std::fs::copy(
-        basecraft_ops::files::tree_sidecar(&tree_path),
-        basecraft_ops::files::tree_sidecar(&copied_tree),
+        basecraft_ops::files::companion_path(None, &tree_path),
+        basecraft_ops::files::companion_path(None, &copied_tree),
     )
     .unwrap();
     let t = b.open(&copied_tree).unwrap();

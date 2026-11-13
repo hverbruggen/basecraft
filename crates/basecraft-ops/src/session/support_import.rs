@@ -44,7 +44,7 @@ impl Session {
         self.tree(id)?;
         let source = source.canonicalize()?;
         let hash = basecraft_io::hash_file(&source)?;
-        let other = crate::files::load_tree(&source)?;
+        let other = crate::files::load_tree_in(self.project(), &source)?;
         if basecraft_io::hash_file(&source)? != hash {
             return Err(invalid("support source changed while it was read"));
         }

@@ -34,7 +34,7 @@ impl Session {
 
     pub(super) fn open_inner(&mut self, path: &Path) -> Result<(DocId, files::Kind)> {
         let format = files::Format::from_path(path)?;
-        let captured = files::capture_load(path, format)?;
+        let captured = files::capture_load(self.companion_project(), path, format)?;
         let content = captured.content;
         let key = self.relative(path);
         let retain_companions = content.as_document().retains_companions();
@@ -193,7 +193,10 @@ impl Session {
         } else {
             files::Format::from_path(&target)?
         };
+        // The checkpoint stage is a loose folder: its companion sits in the
+        // stage's own .basecraft.
         let written = self.docs[id.0].content.as_document().write(
+            None,
             &target,
             format,
             &self.storage_root,

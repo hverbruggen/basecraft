@@ -54,12 +54,17 @@ impl Document for DelimitationWorkspace {
         undo.undo(self);
         Ok(())
     }
-    fn saved_companions(&self, target: &Path) -> Vec<PathBuf> {
-        vec![files::tree_sidecar(target)]
+    fn saved_companions(
+        &self,
+        project: Option<&crate::project::Project>,
+        target: &Path,
+    ) -> Vec<PathBuf> {
+        vec![files::companion_path(project, target)]
     }
 
     fn prepare_write(
         &self,
+        project: Option<&crate::project::Project>,
         target: &Path,
         format: files::Format,
         _recovery_root: &Path,
@@ -91,7 +96,9 @@ impl Document for DelimitationWorkspace {
                     .ok_or_else(|| invalid("SPART filename must be UTF-8"))?
             ))?
         } else {
-            files::tree_sidecar(target)
+            let companion = files::companion_path(project, target);
+            files::companion_folder(&companion)?;
+            companion
         };
         prepared.push(&sidecar, |w| {
             files::delimitation_companion(
@@ -184,6 +191,7 @@ mod tests {
         let target = dir.path().join("wrong.fasta");
         assert!(
             doc.write(
+                None,
                 &target,
                 files::Format::Fasta,
                 dir.path(),
@@ -238,6 +246,7 @@ mod tests {
             );
             let written = doc
                 .write(
+                    None,
                     &target,
                     files::Format::Delimitation,
                     dir.path(),
@@ -279,6 +288,7 @@ mod tests {
             // Saving an already-bound result reuses its run and companion.
             assert_eq!(
                 doc.write(
+                    None,
                     &target,
                     files::Format::Delimitation,
                     dir.path(),
@@ -303,10 +313,11 @@ mod tests {
             crate::records::analysis_store::ArtifactRun::create(&target, "partial-test").unwrap();
         std::fs::write(&target, SPART).unwrap();
         run.bind(&target).unwrap();
-        let side = files::tree_sidecar(&target);
+        let side = files::companion_path(None, &target);
         std::fs::create_dir(&side).unwrap();
         assert!(
             work.write(
+                None,
                 &target,
                 files::Format::Delimitation,
                 dir.path(),

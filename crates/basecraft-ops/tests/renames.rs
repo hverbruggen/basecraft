@@ -406,7 +406,17 @@ fn a_tip_rename_on_a_tree_a_workspace_uses_is_refused() {
         .unwrap()
         .write(&mut companion)
         .unwrap();
-    std::fs::write(basecraft_ops::files::tree_sidecar(&spart), companion).unwrap();
+    std::fs::create_dir_all(
+        basecraft_ops::files::companion_path(None, &spart)
+            .parent()
+            .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        basecraft_ops::files::companion_path(None, &spart),
+        companion,
+    )
+    .unwrap();
     let mut session = Session::new(dir.path());
     let tree = session.open(&dir.path().join("t.nwk")).unwrap();
     assert!(matches!(

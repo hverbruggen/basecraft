@@ -161,6 +161,7 @@ impl Session {
         // 3. Stage every file and the recovery intent; nothing is replaced yet.
         self.track(id)?;
         let mut prepared = self.docs[id.0].content.as_document().prepare_write(
+            self.companion_project(),
             &target.path,
             self.save_format(id, &target.path)?,
             &self.storage_root,
@@ -372,7 +373,7 @@ impl Session {
         let mut paths = document.independently_saved_files(target);
         if paths.is_empty() {
             paths.push(target.to_path_buf());
-            paths.extend(document.saved_companions(target));
+            paths.extend(document.saved_companions(self.companion_project(), target));
         }
         let hashes = paths
             .iter()
@@ -503,7 +504,7 @@ impl Session {
             for (hash, sidecar) in expected
                 .iter()
                 .skip(1)
-                .zip(document.saved_companions(target))
+                .zip(document.saved_companions(self.companion_project(), target))
             {
                 if basecraft_io::hash_file(&sidecar).ok().as_ref() == Some(hash) {
                     accepted.push((self.relative(&sidecar), hash.clone()));

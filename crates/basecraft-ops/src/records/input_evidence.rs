@@ -1766,39 +1766,56 @@ pub fn package(
         }
     }
     publication.inputs.extend(archived);
+    // The packaged copy is a loose file of the package folder: its
+    // companion goes in the package's own .basecraft.
+    let companion = crate::files::companion_path(project, result);
+    let packaged_companion = crate::project::Project::document_record(None, &copied)
+        .strip_prefix(staging.path())
+        .map_err(|_| invalid("package companion lies outside the package"))?
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("/");
     for (index, artifact) in publication.outputs.iter_mut().enumerate() {
-        let source = if index == 0 {
-            result.to_path_buf()
+        // A companion is published by its file name, or, for a result bound
+        // to a run, by its path from the result's folder.
+        let beside = result
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join(&artifact.logical_name);
+        let is_companion = index > 0
+            && (beside == companion
+                || companion
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy() == artifact.logical_name.as_str()));
+        let (source, name) = if index == 0 {
+            (
+                result.to_path_buf(),
+                copied
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+        } else if is_companion {
+            (companion.clone(), packaged_companion.clone())
         } else {
-            result
-                .parent()
-                .unwrap_or(Path::new("."))
-                .join(&artifact.logical_name)
-        };
-        let name = if index == 0 {
-            copied
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned()
-        } else if source == crate::files::tree_sidecar(result) {
-            crate::files::tree_sidecar(&copied)
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned()
-        } else {
-            format!(
+            let name = format!(
                 "support-{}-{}",
                 index,
-                source.file_name().unwrap_or_default().to_string_lossy()
-            )
+                beside.file_name().unwrap_or_default().to_string_lossy()
+            );
+            (beside, name)
         };
-        copy(&source, &staging.path().join(&name))?;
+        let packaged = staging.path().join(&name);
+        if let Some(folder) = packaged.parent() {
+            std::fs::create_dir_all(folder)?;
+        }
+        copy(&source, &packaged)?;
         artifact.logical_name = name;
     }
     if species {
-        let mut work = crate::files::load_delimitation(result)?;
+        let mut work = crate::files::load_delimitation_in(project, result)?;
         let final_folder = parent.canonicalize()?.join(
             destination
                 .file_name()
@@ -1838,16 +1855,17 @@ pub fn package(
                 source.remove("evidence_run");
             }
         }
-        let sidecar = crate::files::tree_sidecar(&copied);
+        let sidecar = staging.path().join(&packaged_companion);
         let target = final_folder.join(copied.file_name().unwrap_or_default());
         let companion =
             crate::files::delimitation_companion(&work, &publication.outputs[0].hash, &target)?;
+        crate::files::companion_folder(&sidecar)?;
         basecraft_io::write_atomic(&sidecar, |w| companion.write(w))?;
         let side_hash = basecraft_io::hash_file(&sidecar)?;
         if let Some(artifact) = publication
             .outputs
             .iter_mut()
-            .find(|a| a.logical_name == sidecar.file_name().unwrap_or_default().to_string_lossy())
+            .find(|a| a.logical_name == packaged_companion)
         {
             artifact.hash = side_hash;
             artifact.size = std::fs::metadata(&sidecar)?.len();
@@ -1855,11 +1873,7 @@ pub fn package(
         } else {
             publication.outputs.push(ArtifactRevision {
                 id: format!("{}:species-context", publication.id),
-                logical_name: sidecar
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into_owned(),
+                logical_name: packaged_companion.clone(),
                 hash: side_hash,
                 size: std::fs::metadata(&sidecar)?.len(),
                 retained: None,
@@ -1901,7 +1915,7 @@ pub fn package(
     }
     // Complete tree exports materialize their exchange association, so
     // extraction still works with the original store absent.
-    if let Ok(tree) = crate::files::load_tree(result)
+    if let Ok(tree) = crate::files::load_tree_in(project, result)
         && crate::records::links::metadata_present(&crate::records::links::sidecar(result))?
     {
         let link = crate::records::links::AlignmentLink::read(result)?;

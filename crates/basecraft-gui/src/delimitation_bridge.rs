@@ -605,7 +605,8 @@ impl qobject::DelimitationController {
         let result = (|| -> Result<Vec<Value>, String> {
             let paths: Vec<PathBuf> =
                 serde_json::from_str(&paths.to_string()).map_err(|e| e.to_string())?;
-            basecraft_ops::delimitation::combine_candidates(&paths)
+            let project = self.rust().session.as_ref().and_then(|s| s.project());
+            basecraft_ops::delimitation::combine_candidates(project, &paths)
                 .map_err(|e| e.to_string())?
                 .into_iter()
                 .map(|file| {
@@ -2536,13 +2537,13 @@ mod naming_tests {
             let mut session = rooting_session(dir.path());
             let first = root_tree_copy(&mut session, &source, method).unwrap();
             let first_bytes = std::fs::read(&first).unwrap();
-            let sidecar = basecraft_ops::files::tree_sidecar(&first);
+            let sidecar = basecraft_ops::files::companion_path(None, &first);
             let sidecar_bytes = std::fs::read(&sidecar).unwrap();
             let mut session = rooting_session(dir.path());
             let second = root_tree_copy(&mut session, &source, method).unwrap();
             assert_ne!(first, second);
             assert_eq!(std::fs::read(&source).unwrap(), original);
-            assert!(!basecraft_ops::files::tree_sidecar(&source).exists());
+            assert!(!basecraft_ops::files::companion_path(None, &source).exists());
             assert_eq!(
                 std::fs::read_to_string(unrelated).unwrap(),
                 "unrelated tree"
@@ -2637,7 +2638,7 @@ mod naming_tests {
         let mut session = rooting_session(dir.path());
         assert!(root_tree_copy(&mut session, &source, "mrttv").is_err());
         assert_eq!(std::fs::read_to_string(&source).unwrap(), original);
-        assert!(!basecraft_ops::files::tree_sidecar(&source).exists());
+        assert!(!basecraft_ops::files::companion_path(None, &source).exists());
     }
 
     #[test]

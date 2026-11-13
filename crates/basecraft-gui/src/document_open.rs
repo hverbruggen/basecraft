@@ -427,25 +427,9 @@ pub(crate) fn copy_for_editing(refused: &str, target: &Path) -> Result<(), Strin
     let source = PathBuf::from(refused["file"].as_str().ok_or("No refused edit")?);
     let op: Option<basecraft_protocol::Op> =
         serde_json::from_value(refused["op"].clone()).map_err(|e| e.to_string())?;
-    let companion = |file: &Path| {
-        let mut name = file.file_name().unwrap_or_default().to_os_string();
-        name.push(".basecraft.json");
-        file.with_file_name(name)
-    };
-    if let Some(taken) = [target.to_path_buf(), companion(target)]
-        .into_iter()
-        .find(|path| path.exists())
-    {
-        return Err(format!(
-            "{} already exists; choose a new name",
-            taken.display()
-        ));
-    }
-    std::fs::copy(&source, target).map_err(|e| format!("Could not copy the file: {e}"))?;
-    if companion(&source).is_file() {
-        std::fs::copy(companion(&source), companion(target))
-            .map_err(|e| format!("Could not copy the file's companion: {e}"))?;
-    }
+    let project = crate::chosen_project::chosen()?;
+    basecraft_ops::files::copy_document(project.as_ref(), &source, target)
+        .map_err(|e| format!("Could not copy the file: {e}"))?;
     if let Some(op) = op {
         let key = target.canonicalize().map_err(|e| e.to_string())?;
         PENDING

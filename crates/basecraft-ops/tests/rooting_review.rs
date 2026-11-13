@@ -112,7 +112,7 @@ fn refusal_in_recoverable_session_creates_no_tracking_or_history() {
             assert!(!session.can_redo(id).unwrap());
             assert!(!session.recovery_root().exists());
             assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
-            assert!(!files::tree_sidecar(&path).exists());
+            assert!(!files::companion_path(None, &path).exists());
         }
     }
 }

@@ -72,6 +72,7 @@ impl Document for Submission {
 
     fn prepare_write(
         &self,
+        _project: Option<&crate::project::Project>,
         target: &Path,
         format: Format,
         _recovery_root: &Path,

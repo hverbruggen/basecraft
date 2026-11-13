@@ -64,7 +64,8 @@ fn unversioned_tree_metadata_is_ignored_without_changing_files() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("tree.nwk");
     std::fs::write(&path, "(a,b);").unwrap();
-    let sidecar = basecraft_ops::files::tree_sidecar(&path);
+    let sidecar = basecraft_ops::files::companion_path(None, &path);
+    std::fs::create_dir_all(sidecar.parent().unwrap()).unwrap();
     let bytes = br#"{"supports":[],"annotations":{},"style":{}}"#;
     std::fs::write(&sidecar, bytes).unwrap();
     assert!(
@@ -89,7 +90,9 @@ fn hidden_binding_errors_never_fall_back_to_adjacent_metadata() {
     files::tree_companion(&tree, &basecraft_io::hash_file(&path).unwrap())
         .write(&mut metadata)
         .unwrap();
-    std::fs::write(files::tree_sidecar(&path), &metadata).unwrap();
+    let companion = files::companion_path(None, &path);
+    std::fs::create_dir_all(companion.parent().unwrap()).unwrap();
+    std::fs::write(companion, &metadata).unwrap();
     let run = ArtifactRun::create(&path, "metadata-test").unwrap();
     std::fs::write(
         run.artifact("forest.nwk.basecraft.json").unwrap(),
@@ -521,7 +524,7 @@ fn interrupted_tree_metadata_save_is_explicit_and_never_reuses_old_semantics() {
         )
         .unwrap();
     let target = dir.path().join("partial.nwk");
-    std::fs::create_dir(files::tree_sidecar(&target)).unwrap();
+    std::fs::create_dir_all(files::companion_path(None, &target)).unwrap();
     let error = session.save(doc, Some(&target)).unwrap_err().to_string();
     // Every file is staged first; the tree replaced, its sidecar could not be.
     assert!(error.contains("sidecar incomplete"), "{error}");

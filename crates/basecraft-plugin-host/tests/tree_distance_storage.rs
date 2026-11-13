@@ -219,7 +219,7 @@ fn ordinary_tree_and_forest_routes_keep_only_scientific_results_visible() {
                     .is_ok()
             );
             session.save(id, None).unwrap();
-            assert!(basecraft_ops::files::tree_sidecar(&tree).starts_with(&run));
+            assert!(basecraft_ops::files::companion_path(None, &tree).starts_with(&run));
         }
         assert_eq!(common::names(root), visible);
         listing(root, &run, &format!("{plugin}-{method}"));

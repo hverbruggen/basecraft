@@ -270,9 +270,15 @@ fn live_annotation_sidecar_is_verified_and_packaged() {
     assert_eq!(published.outputs.len(), 2);
     let package = dir.path().join("package");
     records::package(&file, &package, None).unwrap();
-    assert!(package.join(&published.outputs[1].logical_name).is_file());
-    let sidecar = dir.path().join(&published.outputs[1].logical_name);
-    std::fs::write(sidecar, "{}").unwrap();
+    // The companion is published by name and kept where companions live:
+    // the package's own .basecraft, and the original's.
+    let companion = basecraft_ops::files::companion_path(None, &file);
+    assert_eq!(
+        companion.file_name().unwrap().to_string_lossy(),
+        published.outputs[1].logical_name
+    );
+    assert!(basecraft_ops::files::companion_path(None, &package.join("tree.nwk")).is_file());
+    std::fs::write(companion, "{}").unwrap();
     assert_ne!(records::verify(&file, None).unwrap(), Vec::<String>::new());
 }
 

@@ -56,8 +56,8 @@ fn guarded_partial_save_supports_retry_and_manual_intended_recovery() {
             for path in [&source, &view, &old] {
                 std::fs::remove_file(path).unwrap();
             }
-            let presentation = files::tree_sidecar(&output);
-            std::fs::create_dir(&presentation).unwrap();
+            let presentation = files::companion_path(None, &output);
+            std::fs::create_dir_all(&presentation).unwrap();
             let error = session.save(doc, Some(&output)).unwrap_err().to_string();
             assert!(error.contains("recovery metadata at"), "{error}");
             assert!(AlignmentLink::read(&output).is_err());

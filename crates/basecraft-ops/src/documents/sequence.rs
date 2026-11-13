@@ -120,18 +120,23 @@ impl Document for Opened {
     }
     /// The GFF3 file when the sequence writes one, then the facts companion
     /// when it states an alphabet: the order of `saved_hashes`.
-    fn saved_companions(&self, target: &Path) -> Vec<PathBuf> {
+    fn saved_companions(
+        &self,
+        project: Option<&crate::project::Project>,
+        target: &Path,
+    ) -> Vec<PathBuf> {
         let gff = files::write_sidecar(self, &mut std::io::sink()).is_some();
         let gff = gff.then(|| files::gff_sidecar(target));
         let facts = self
             .doc
             .stated_alphabet()
-            .map(|_| files::tree_sidecar(target));
+            .map(|_| files::companion_path(project, target));
         gff.into_iter().chain(facts).collect()
     }
 
     fn prepare_write(
         &self,
+        project: Option<&crate::project::Project>,
         target: &Path,
         format: Format,
         _recovery_root: &Path,
@@ -151,7 +156,13 @@ impl Document for Opened {
                 Ok(())
             })?;
         }
-        super::stage_companion(&mut prepared, target, self.doc.stated_alphabet(), &hash)?;
+        super::stage_companion(
+            &mut prepared,
+            project,
+            target,
+            self.doc.stated_alphabet(),
+            &hash,
+        )?;
         Ok(prepared)
     }
     fn saved_hashes(
@@ -395,6 +406,7 @@ mod tests {
         assert!(
             document
                 .write(
+                    None,
                     &target,
                     Format::GenBank,
                     root.path(),
@@ -458,6 +470,7 @@ mod tests {
             let target = root.path().join(format!("copy-{name}"));
             let written = document
                 .write(
+                    None,
                     &target,
                     format,
                     root.path(),

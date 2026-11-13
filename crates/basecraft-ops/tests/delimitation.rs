@@ -480,7 +480,8 @@ fn hidden_workspace_moves_with_its_folder_and_passive_open_writes_nothing() {
     assert!(!root.join("species.spart.basecraft.json").exists());
     assert!(!root.join("species.spart.provenance").exists());
     assert!(
-        basecraft_ops::files::tree_sidecar(&path).starts_with(root.join(".basecraft/analyses-v1"))
+        basecraft_ops::files::companion_path(None, &path)
+            .starts_with(root.join(".basecraft/analyses-v1"))
     );
     session.undo(doc).unwrap();
     assert_eq!(session.delimitation(doc).unwrap().view.display_tree, None);
@@ -499,7 +500,8 @@ fn hidden_workspace_moves_with_its_folder_and_passive_open_writes_nothing() {
             .unwrap(),
         moved.join("tree.nwk")
     );
-    let before = std::fs::read(basecraft_ops::files::tree_sidecar(
+    let before = std::fs::read(basecraft_ops::files::companion_path(
+        None,
         &moved.join("species.spart"),
     ))
     .unwrap();
@@ -507,7 +509,8 @@ fn hidden_workspace_moves_with_its_folder_and_passive_open_writes_nothing() {
     reopened.open(&moved.join("species.spart")).unwrap();
     assert_eq!(
         before,
-        std::fs::read(basecraft_ops::files::tree_sidecar(
+        std::fs::read(basecraft_ops::files::companion_path(
+            None,
             &moved.join("species.spart")
         ))
         .unwrap()
@@ -673,12 +676,13 @@ fn visible_workspace_metadata_remains_read_only() {
     std::fs::write(&path, SPART).unwrap();
     let work = basecraft_io::spart::parse_text(SPART).unwrap();
     let hash = basecraft_io::hash_file(&path).unwrap();
-    let sidecar = basecraft_ops::files::tree_sidecar(&path);
+    let sidecar = basecraft_ops::files::companion_path(None, &path);
     let mut bytes = Vec::new();
     basecraft_ops::files::delimitation_companion(&work, &hash, &path)
         .unwrap()
         .write(&mut bytes)
         .unwrap();
+    std::fs::create_dir_all(sidecar.parent().unwrap()).unwrap();
     std::fs::File::create(&sidecar)
         .unwrap()
         .write_all(&bytes)
@@ -688,7 +692,8 @@ fn visible_workspace_metadata_remains_read_only() {
         work
     );
     assert_eq!(std::fs::read(&sidecar).unwrap(), bytes);
-    assert!(!root.path().join(".basecraft").exists());
+    // Reading wrote nothing: only the companion this test put there.
+    assert!(only_companions(root.path()));
 }
 
 #[test]
@@ -741,5 +746,15 @@ fn combined_workspace_move_and_complete_export_keep_declared_source_evidence() {
             .as_str()
             .unwrap();
         assert!(std::path::Path::new(source).is_file(), "{source}");
+    }
+}
+
+/// Whether `folder`'s `.basecraft`, if any, holds companions and nothing else.
+fn only_companions(folder: &std::path::Path) -> bool {
+    match std::fs::read_dir(folder.join(".basecraft")) {
+        Err(_) => true,
+        Ok(entries) => entries
+            .map(|entry| entry.unwrap().file_name())
+            .all(|name| name == "documents"),
     }
 }

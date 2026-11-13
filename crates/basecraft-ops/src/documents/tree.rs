@@ -86,12 +86,17 @@ impl Document for OpenedTree {
         }
     }
 
-    fn saved_companions(&self, target: &Path) -> Vec<PathBuf> {
-        vec![files::tree_sidecar(target)]
+    fn saved_companions(
+        &self,
+        project: Option<&crate::project::Project>,
+        target: &Path,
+    ) -> Vec<PathBuf> {
+        vec![files::companion_path(project, target)]
     }
 
     fn prepare_write(
         &self,
+        project: Option<&crate::project::Project>,
         target: &Path,
         format: Format,
         _recovery_root: &Path,
@@ -103,7 +108,8 @@ impl Document for OpenedTree {
             ));
         }
         let mut prepared = super::PreparedWrite::default();
-        let sidecar = files::tree_sidecar(target);
+        let sidecar = files::companion_path(project, target);
+        files::companion_folder(&sidecar)?;
         let hash = prepared.push(target, |w| files::write_tree(self, w))?;
         prepared.push(&sidecar, |w| {
             files::tree_companion(&self.doc, &hash).write(w)
@@ -216,6 +222,7 @@ mod tests {
         assert!(
             document
                 .write(
+                    None,
                     &target,
                     Format::Fasta,
                     root.path(),
@@ -224,7 +231,7 @@ mod tests {
                 .is_err()
         );
         assert!(!target.exists());
-        assert!(!files::tree_sidecar(&target).exists());
+        assert!(!files::companion_path(None, &target).exists());
         assert_eq!(
             document
                 .saved_hashes(&source, &super::super::WritePublication::Immediate)
@@ -286,6 +293,7 @@ mod tests {
             );
             let written = document
                 .write(
+                    None,
                     &target,
                     Format::Tree,
                     root.path(),
@@ -294,7 +302,7 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 written.iter().map(|(p, _)| p.clone()).collect::<Vec<_>>(),
-                vec![target.clone(), files::tree_sidecar(&target)]
+                vec![target.clone(), files::companion_path(None, &target)]
             );
             assert_eq!(
                 written.iter().map(|(_, h)| h.clone()).collect::<Vec<_>>(),

@@ -279,7 +279,8 @@ fn nested_delimitation_registers_only_final_stores_and_reopens() {
             basecraft_ops::files::write_delimitation(&work, name.ends_with("xml"), w)
         })
         .unwrap();
-        let sidecar = basecraft_ops::files::tree_sidecar(&path);
+        let sidecar = basecraft_ops::files::companion_path(None, &path);
+        std::fs::create_dir_all(sidecar.parent().unwrap()).unwrap();
         basecraft_io::write_atomic(&sidecar, |w| {
             basecraft_ops::files::delimitation_companion(
                 &work,
@@ -353,10 +354,13 @@ fn nested_delimitation_registers_only_final_stores_and_reopens() {
     assert!(!root.join("data/.basecraft").exists());
     assert!(!stage.exists());
     for file in complete.outputs {
-        let work = basecraft_ops::files::load_delimitation(&file).unwrap();
+        // Recovered into the project, the companion is in the project's
+        // .basecraft, keyed by the recovered file's path.
+        let work = basecraft_ops::files::load_delimitation_in(Some(&project), &file).unwrap();
         assert_eq!(work.hypotheses.len(), 2);
         assert_eq!(work.exchange_fields["retained-unknown"], "keep");
-        let side = basecraft_ops::files::tree_sidecar(&file);
+        let side = basecraft_ops::files::companion_path(Some(&project), &file);
+        assert!(!basecraft_ops::project::Project::document_record(None, &file).exists());
         let value: serde_json::Value =
             serde_json::from_slice(&std::fs::read(side).unwrap()).unwrap();
         assert_eq!(

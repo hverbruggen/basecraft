@@ -364,11 +364,11 @@ fn companions_read_and_written_again_keep_their_bytes() {
         (&spart, "copy.spart"),
         (&alignment, "copy.afa"),
     ] {
-        let saved = std::fs::read(files::tree_sidecar(from)).unwrap();
+        let saved = std::fs::read(files::companion_path(None, from)).unwrap();
         let doc = again.open(from).unwrap();
         let copy = dir.path().join(to);
         again.save(doc, Some(&copy)).unwrap();
-        let copied = std::fs::read(files::tree_sidecar(&copy)).unwrap();
+        let copied = std::fs::read(files::companion_path(None, &copy)).unwrap();
         assert_eq!(String::from_utf8(copied), String::from_utf8(saved), "{to}");
     }
 }

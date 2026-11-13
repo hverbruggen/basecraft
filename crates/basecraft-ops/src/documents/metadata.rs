@@ -61,6 +61,7 @@ impl Document for OpenedMetadata {
 
     fn prepare_write(
         &self,
+        _project: Option<&crate::project::Project>,
         target: &Path,
         format: Format,
         _recovery_root: &Path,

@@ -182,7 +182,10 @@ fn companions_are_read_once() {
         } else if path == &fasta {
             vec![path.clone(), path.with_extension("gff3")]
         } else if path == &tree || path == &spart {
-            vec![path.clone(), basecraft_ops::files::tree_sidecar(path)]
+            vec![
+                path.clone(),
+                basecraft_ops::files::companion_path(None, path),
+            ]
         } else {
             vec![path.clone()]
         }

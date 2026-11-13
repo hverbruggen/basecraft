@@ -47,11 +47,15 @@ impl Document for OpenedAlignment {
         self.companion_warning.as_deref()
     }
 
-    fn saved_companions(&self, target: &Path) -> Vec<std::path::PathBuf> {
+    fn saved_companions(
+        &self,
+        project: Option<&crate::project::Project>,
+        target: &Path,
+    ) -> Vec<std::path::PathBuf> {
         self.doc
             .stated_alphabet()
             .iter()
-            .map(|_| files::tree_sidecar(target))
+            .map(|_| files::companion_path(project, target))
             .collect()
     }
 
@@ -90,6 +94,7 @@ impl Document for OpenedAlignment {
 
     fn prepare_write(
         &self,
+        project: Option<&crate::project::Project>,
         target: &Path,
         format: Format,
         _recovery_root: &Path,
@@ -100,7 +105,13 @@ impl Document for OpenedAlignment {
         }
         let mut prepared = super::PreparedWrite::default();
         let hash = prepared.push(target, |w| files::write_alignment(&self.doc, w))?;
-        super::stage_companion(&mut prepared, target, self.doc.stated_alphabet(), &hash)?;
+        super::stage_companion(
+            &mut prepared,
+            project,
+            target,
+            self.doc.stated_alphabet(),
+            &hash,
+        )?;
         Ok(prepared)
     }
 

@@ -83,7 +83,7 @@ fn support_kind_survives_current_sidecar() {
     let mut tree = files::load_tree(&path).unwrap().doc;
     assert_eq!(tree.supports()[0].kind, SupportKind::Unknown);
     tree.set_support_kind("Support", SupportKind::Bootstrap);
-    files::save_tree_companion(&path, &tree).unwrap();
+    files::save_tree_companion(None, &path, &tree).unwrap();
     let reopened = files::load_tree(&path).unwrap().doc;
     assert_eq!(reopened.supports()[0].kind, SupportKind::Bootstrap);
     assert!(!reopened.supports()[0].proportions);
@@ -317,7 +317,7 @@ fn imported_supports_retain_recorded_names_kinds_and_evidence() {
     source.rename_support("Support 2", "Posterior probability");
     source.set_support_kind("Standard bootstrap", SupportKind::Bootstrap);
     source.set_support_kind("Posterior probability", SupportKind::Probability);
-    files::save_tree_companion(&path, &source).unwrap();
+    files::save_tree_companion(None, &path, &source).unwrap();
     let known = files::load_tree(&path).unwrap().doc;
     assert_eq!(known.supports()[0].name, "Standard bootstrap");
     assert_eq!(known.supports()[1].name, "Posterior probability");
@@ -327,7 +327,7 @@ fn imported_supports_retain_recorded_names_kinds_and_evidence() {
     let matched = target.support_from(&known).unwrap();
     assert_eq!(matched[0].0, "Standard bootstrap");
     assert_eq!(matched[1].0, "Posterior probability");
-    std::fs::remove_file(files::tree_sidecar(&path)).unwrap();
+    std::fs::remove_file(files::companion_path(None, &path)).unwrap();
     let unknown = files::load_tree(&path).unwrap().doc;
     assert_eq!(unknown.supports()[0].name, "Support 1");
     assert_eq!(unknown.supports()[0].kind, SupportKind::Unknown);
@@ -347,7 +347,8 @@ fn unreadable_metadata_never_blocks_the_exchange_tree() {
         .write(&mut bytes)
         .unwrap();
     let mut side: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    let sidecar = files::tree_sidecar(&path);
+    let sidecar = files::companion_path(None, &path);
+    std::fs::create_dir_all(sidecar.parent().unwrap()).unwrap();
     for version in [0, 99] {
         side["version"] = version.into();
         std::fs::write(&sidecar, serde_json::to_vec(&side).unwrap()).unwrap();

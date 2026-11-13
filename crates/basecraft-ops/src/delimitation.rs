@@ -469,13 +469,13 @@ fn combined_hypotheses(
     let mut hypotheses = vec![];
     for path in paths {
         let hash = basecraft_io::hash_file(path)?;
-        let sidecar = files::tree_sidecar(path);
+        let sidecar = files::companion_path(session.project(), path);
         let side_hash = if sidecar.exists() {
             Some(basecraft_io::hash_file(&sidecar)?)
         } else {
             None
         };
-        let work = files::load_delimitation(path)?;
+        let work = files::load_delimitation_in(session.project(), path)?;
         if basecraft_io::hash_file(path)? != hash
             || (if sidecar.exists() {
                 Some(basecraft_io::hash_file(&sidecar)?)
@@ -583,12 +583,15 @@ pub struct CombineFile {
 }
 
 /// Inspect saved hypotheses in stable recommendation order without writing.
-pub fn combine_candidates(paths: &[PathBuf]) -> Result<Vec<CombineFile>> {
+pub fn combine_candidates(
+    project: Option<&crate::project::Project>,
+    paths: &[PathBuf],
+) -> Result<Vec<CombineFile>> {
     use basecraft_protocol::delimitation::HypothesisOrigin;
     paths
         .iter()
         .map(|path| {
-            let work = files::load_delimitation(path)?;
+            let work = files::load_delimitation_in(project, path)?;
             let mut hypotheses: Vec<_> = work
                 .hypotheses
                 .into_iter()
@@ -635,7 +638,7 @@ pub fn combine_to(
             "Choose at least two saved species hypothesis files",
         ));
     }
-    if output.try_exists()? || files::tree_sidecar(output).try_exists()? {
+    if output.try_exists()? || files::companion_path(session.project(), output).try_exists()? {
         return Err(std::io::Error::new(
             std::io::ErrorKind::AlreadyExists,
             "Choose a new filename for the combined hypotheses",
