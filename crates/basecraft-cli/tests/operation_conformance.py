@@ -173,7 +173,7 @@ def main():
 
     def cli(*arguments):
         completed = subprocess.run([str(binary), *arguments], cwd=root, env=env,
-                                   capture_output=True, text=True, timeout=45)
+                                   capture_output=True, text=True, timeout=45, check=False)
         if completed.returncode:
             raise SystemExit(f"basecraft {' '.join(arguments)} failed:\n{completed.stderr}")
         return json.loads(completed.stdout), completed.stderr
@@ -217,6 +217,10 @@ def main():
             "--choice", "accept")
         cli("sanger", "decide", str(reads / "cli.sanger-review.json"), "--columns", "1",
             "--choice", "a")
+        # A command's edit undoes like any other in an MCP session; the export
+        # below shows the extra rejection went. (Each CLI call is its own
+        # session, so the CLI has no undo of an earlier command.)
+        middle = str(started["columns"] // 2)
         cli("sanger", "export", str(reads / "cli.sanger-review.json"), "-o",
             str(reads / "cli.fasta"), "--label", "HV1")
         for route in ("cli", "mcp"):
@@ -233,6 +237,10 @@ def main():
                 decided = client.tool("sanger_decide", {"document": document,
                                       "columns": columns, "choice": choice})
                 assert not decided["isError"], decided
+            rejected = client.tool("sanger_decide", {"document": document, "columns": middle,
+                                   "choice": "reject"})
+            assert not rejected["isError"], rejected
+            assert not client.tool("undo", {"document": document})["isError"]
             exported = client.tool("sanger_export", {"document": document,
                                    "output": "reads/mcp.fasta", "label": "HV1"})
             assert not exported["isError"], exported
@@ -244,6 +252,11 @@ def main():
             added = client.tool("sanger_add", {"document": document, "alignment": alignment,
                                 "label": "HV1"})
             assert not added["isError"], added
+            # Undone, the row is gone, so the same consensus adds again.
+            assert not client.tool("undo", {"document": alignment})["isError"]
+            readded = client.tool("sanger_add", {"document": document, "alignment": alignment,
+                                  "label": "HV1"})
+            assert not readded["isError"], readded
             again = client.tool("sanger_add", {"document": document, "alignment": alignment,
                                 "label": "HV1"})
             assert again["isError"] and "already in the alignment" in json.dumps(again), again
@@ -266,12 +279,15 @@ def main():
                        check=True, timeout=45, capture_output=True)
         subprocess.run([str(binary), "tree", "ladderize", cli_tree, "--order", "smallest-first"],
                        env=env, check=True, timeout=45, capture_output=True)
+        subprocess.run([str(binary), "tree", "rotate", cli_tree, "--clade", "a", "--clade", "b"],
+                       env=env, check=True, timeout=45, capture_output=True)
         client = Mcp(binary, project, env)
         try:
             opened = client.tool("open", {"path": "mcp-tree.nwk"})["structuredContent"]
             version = opened["version"]
             for operation in ({"op": "tree.reroot", "params": {"clade": ["c"]}},
-                              {"op": "tree.ladderize", "params": {"small_first": True}}):
+                              {"op": "tree.ladderize", "params": {"small_first": True}},
+                              {"op": "tree.rotate", "params": {"clade": ["a", "b"]}}):
                 applied = client.tool("apply", {"document": opened["document"], "version": version,
                                       "operation": operation})
                 assert not applied["isError"], applied
@@ -280,7 +296,7 @@ def main():
         finally:
             client.close()
         assert (project / "cli-tree.nwk").read_text() == (project / "mcp-tree.nwk").read_text()
-        record("tree reroot and ladderize by name: same tree from CLI and MCP")
+        record("tree reroot, ladderize and rotate by name: same tree from CLI and MCP")
 
         # A display tree attached to a species workspace (D1): the CLI and MCP
         # attach the same tree through the same call and save it.
@@ -302,6 +318,10 @@ def main():
                     done = client.tool("delimitation_display_tree",
                                        {"document": document, "tree": "species/time.nwk"})
                     assert not done["isError"], done
+                    assert not client.tool("undo", {"document": document})["isError"]
+                    undone = client.tool("read", {"document": document})["structuredContent"]
+                    assert undone["view"].get("display_tree") is None, undone["view"]
+                    assert not client.tool("redo", {"document": document})["isError"]
                     assert not client.tool("save", {"document": document})["isError"]
                 read = client.tool("read", {"document": document})["structuredContent"]
                 shown[route] = read["view"]["display_tree"]
@@ -361,6 +381,10 @@ def main():
                                        "fields": ["specimen"]})
                     assert not done["isError"], done
                     assert done["structuredContent"]["kept_own_name"] == labelled["kept_own_name"] == 1
+                    assert not client.tool("undo", {"document": tree["document"]})["isError"]
+                    undone = client.tool("read", {"document": tree["document"]})["structuredContent"]
+                    assert not undone["style"].get("tip_labels"), undone["style"]
+                    assert not client.tool("redo", {"document": tree["document"]})["isError"]
                     assert not client.tool("save", {"document": tree["document"]})["isError"]
                 read = client.tool("read", {"document": tree["document"]})["structuredContent"]
                 styles[route] = read["style"]["tip_labels"]
