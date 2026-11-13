@@ -156,8 +156,7 @@ with Session(root, writes=True) as session:
     path = root / "writefail.fasta"
     doc = open_edit(session, path)
     check = session.save_check(doc)
-    state = Path(os.environ["BASECRAFT_STATE_DIR"])
-    blocker = state / "recovery" / check["session"] / "pending-save.json"
+    blocker = root / ".basecraft" / "recovery" / check["session"] / "pending-save.json"
     blocker.mkdir()
     refuses(lambda: session.save(doc, decision=decision(check, "preserve_copy")), "io_error")
     assert path.read_bytes() == original and session.state(doc)["can_undo"]
@@ -234,9 +233,8 @@ if os.geteuid() != 0:
     finally:
         root.chmod(0o755)
 
-# Repair the deliberately damaged ledger and its pending index update; checks are complete.
+# Repair the deliberately damaged ledger; checks are complete.
 Path(fixture["ledger"]).write_text(fixture["good"])
-Path(fixture["marker"]).unlink()
 with Session(root, writes=True) as session:
     path = source("complete")
     doc = open_edit(session, path)

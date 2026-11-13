@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "store": "../results/.basecraft/analyses-v1",
+  "files": [
+    "reads.fasta",
+    "tree.nwk"
+  ]
+}

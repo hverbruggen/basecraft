@@ -208,6 +208,18 @@ pub fn handle_identity(file: &File) -> io::Result<(u64, u64, u64)> {
         }
     }
 }
+/// `path` relative to `base`. Writers may return another spelling of the same
+/// folder (on Windows a verbatim `\\?\` path, another drive-letter case or a
+/// short name), so a second try compares the canonical forms of both.
+pub fn inside(path: &Path, base: &Path) -> Option<std::path::PathBuf> {
+    if let Ok(rest) = path.strip_prefix(base) {
+        return Some(rest.into());
+    }
+    let path = path.canonicalize().ok()?;
+    let base = base.canonicalize().ok()?;
+    path.strip_prefix(base).ok().map(Into::into)
+}
+
 pub fn link_count(path: &Path) -> io::Result<u64> {
     Ok(handle_identity(&open_regular_read(path)?)?.2)
 }
@@ -546,5 +558,39 @@ mod object_identity_tests {
         );
         assert_eq!(std::fs::read(&target).unwrap(), b"untouched");
         std::fs::remove_dir(dir_link).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod inside_tests {
+    use super::inside;
+
+    #[test]
+    fn another_spelling_of_the_folder_is_inside_it() {
+        let root = tempfile::tempdir().unwrap();
+        let stage = root.path().join("stage");
+        std::fs::create_dir_all(stage.join("nested")).unwrap();
+        let file = stage.join("nested/a.fasta");
+        std::fs::write(&file, b">a\nA\n").unwrap();
+        // The form a writer that canonicalizes returns: verbatim on Windows.
+        let written = file.canonicalize().unwrap();
+        assert_eq!(
+            inside(&written, &stage).unwrap(),
+            std::path::Path::new("nested/a.fasta")
+        );
+        #[cfg(unix)]
+        {
+            let alias = root.path().join("alias");
+            std::os::unix::fs::symlink(&stage, &alias).unwrap();
+            assert!(inside(&alias.join("nested/a.fasta"), &stage).is_some());
+            assert!(inside(&file, &alias).is_some());
+        }
+        #[cfg(windows)]
+        {
+            // A verbatim base against a plain path: strip_prefix alone fails.
+            let verbatim = stage.canonicalize().unwrap();
+            assert!(inside(&file, &verbatim).is_some());
+        }
+        assert!(inside(&root.path().join("outside.fasta"), &stage).is_none());
     }
 }

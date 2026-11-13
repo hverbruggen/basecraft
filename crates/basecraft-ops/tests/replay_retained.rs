@@ -45,7 +45,7 @@ fn qualify(root: &Path, recovered: &Path) {
         assert!(report.ok(), "{report:#?}");
         assert_eq!(objects(root), before);
     }
-    let outputs = records::recover(root, recovered).unwrap();
+    let outputs = records::recover(root, recovered, None).unwrap();
     assert_eq!(outputs, vec![recovered.join("a.spart")]);
     assert_eq!(objects(root), before);
     println!(
@@ -96,7 +96,10 @@ fn repeated_open_with_edits_replays_and_recovers_while_the_original_stays() {
         let source = path.exists().then(|| fingerprint(&path));
         let recovered = parent.path().join("recovered");
         if source_state != "unchanged" {
-            assert!(records::recover(&root, &recovered).map_or(true, |outputs| outputs.is_empty()));
+            assert!(
+                records::recover(&root, &recovered, None)
+                    .map_or(true, |outputs| outputs.is_empty())
+            );
             assert_eq!(path.exists().then(|| fingerprint(&path)), source);
             continue;
         }

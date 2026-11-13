@@ -19,8 +19,8 @@ pub use input_evidence::{
     AffectedAnalysis, BackgroundWait, EvidenceConflict, InspectionCode, InspectionIssue,
     InspectionRelevance, Mutation, SavePolicy, SubmittedInput, check, check_in, conflicts,
     conflicts_in, link_generated_input, lock, preserve_input, read_input,
-    reference_input_with_dependencies, register, relative, relink, resolve, stamp, verified_source,
-    verify_ancestors, wait_in_background, write_json,
+    reference_input_with_dependencies, register, reindex, relative, relink, resolve, stamp,
+    verified_source, verify_ancestors, wait_in_background, write_json,
 };
 pub use links::{AlignmentLink, AlignmentLinkExt, metadata_present, sidecar, view_sidecar};
 pub use provenance::{
@@ -29,5 +29,5 @@ pub use provenance::{
 };
 pub use replay::{
     PublishedWithFailure, RecoveryCompletion, RecoveryMode, RecoveryPhase, ReplayReport,
-    prepare_recovery, recover, recover_verified_prefix, replay,
+    prepare_recovery, recover, recover_verified_prefix, recovery_sessions, replay,
 };

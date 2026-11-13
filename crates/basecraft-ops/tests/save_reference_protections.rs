@@ -60,7 +60,7 @@ fn conflict(error: Error) -> EvidenceConflict {
 fn recoverable(session: &mut Session, doc: DocId, destination: &Path) {
     assert!(session.document_record(doc).unwrap().unsaved);
     assert!(session.can_undo(doc).unwrap());
-    let outputs = records::recover(session.recovery_root(), destination).unwrap();
+    let outputs = records::recover(session.recovery_root(), destination, None).unwrap();
     assert_eq!(outputs.len(), 1);
     assert!(
         std::fs::read_to_string(&outputs[0])

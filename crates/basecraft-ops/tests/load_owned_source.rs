@@ -572,7 +572,7 @@ fn cold_recoverable_edit_reads_no_source_bytes_and_recovery_needs_the_originals(
     let expected = session.doc(id).unwrap().to_genbank();
     drop(session);
     let destination = dir.path().join("recovered");
-    basecraft_ops::records::recover(&recovery, &destination).unwrap();
+    basecraft_ops::records::recover(&recovery, &destination, None).unwrap();
     let restored = files::open(&destination.join("séquences.fasta")).unwrap();
     assert_eq!(restored.doc.to_genbank(), expected);
     assert_eq!(restored.fasta.unwrap().index.records.len(), 1);
@@ -581,7 +581,7 @@ fn cold_recoverable_edit_reads_no_source_bytes_and_recovery_needs_the_originals(
     std::fs::remove_file(&sidecar).unwrap();
     let missing = dir.path().join("missing");
     assert!(
-        basecraft_ops::records::recover(&recovery, &missing)
+        basecraft_ops::records::recover(&recovery, &missing, None)
             .map_or(true, |outputs| outputs.is_empty())
     );
 }

@@ -518,7 +518,7 @@ fn species_partial_save_retains_recoverable_edits_and_retries() {
     assert!(error.contains("Permission denied"), "{error}");
     assert_eq!(std::fs::read(&canonical).unwrap(), before);
     let recovered = root.path().join("recovered");
-    basecraft_ops::records::recover(session.recovery_root(), &recovered).unwrap();
+    basecraft_ops::records::recover(session.recovery_root(), &recovered, None).unwrap();
     let work = files::load_delimitation(&recovered.join("species.spart")).unwrap();
     assert_eq!(work.hypotheses.last().unwrap().name, "Pending edit");
     session.save(doc, None).unwrap();

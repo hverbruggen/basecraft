@@ -298,7 +298,8 @@ fn checked_workspace_input(run: &std::path::Path, hash: &str) -> Result<PathBuf>
     let source = if let Some(reference) = &input.source {
         crate::records::input_evidence::verified_source(run, reference)?
     } else {
-        run.join("submitted.fasta")
+        crate::records::analysis_store::submitted_input(run)
+            .ok_or_else(|| invalid("Retained workspace input is missing"))?
     };
     if basecraft_io::hash_file(&source)? != hash {
         return Err(crate::Error::ChangedOnDisk {
@@ -332,7 +333,8 @@ pub fn checked_display_tree(
     let source = if let Some(reference) = &input.source {
         crate::records::input_evidence::verified_source(run, reference)?
     } else {
-        run.join("submitted.fasta")
+        crate::records::analysis_store::submitted_input(run)
+            .ok_or_else(|| invalid("Retained workspace input is missing"))?
     };
     if work
         .exchange_fields

@@ -1322,7 +1322,7 @@ impl qobject::GenomeController {
                 Some(out)
             }
             Err(e) => {
-                self.fail(&e.to_string());
+                self.fail(&crate::document_open::edit_failure(&e));
                 None
             }
         }

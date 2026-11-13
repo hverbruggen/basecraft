@@ -93,13 +93,14 @@ fn source(
 fn source_capture(
     capture: &crate::sanger_review::CapturedInput,
     anchor: &Path,
+    project: Option<&crate::project::Project>,
 ) -> crate::Result<Source> {
-    let ledger = inputs::Mutation::begin()?.reference_captured(
+    let ledger = inputs::Mutation::begin_in(project)?.reference_captured(
         anchor,
         capture,
         &[],
         "Explicit Sanger input reference",
-        None,
+        project,
     )?;
     let reference = inputs::read_input(ledger.directory())?.source;
     Ok(Source {
@@ -303,7 +304,9 @@ impl SangerRun {
                 ext.eq_ignore_ascii_case("ab1") || ext.eq_ignore_ascii_case("abi")
             }) {
                 let capture = crate::sanger_review::CapturedInput::open(path)?;
-                evidence.sources.push(source_capture(&capture, anchor)?);
+                evidence
+                    .sources
+                    .push(source_capture(&capture, anchor, project)?);
                 captures.push(capture);
             } else {
                 evidence.sources.push(source(
@@ -712,7 +715,8 @@ impl SangerReview {
                     .iter()
                     .find(|c| c.sha256().eq_ignore_ascii_case(&input.sha256))
             {
-                let mut registered = source_capture(capture, anchor)?;
+                // The session's evidence scope carries its project.
+                let mut registered = source_capture(capture, anchor, None)?;
                 registered.original.clone_from(&input.original);
                 *input = registered;
             }
