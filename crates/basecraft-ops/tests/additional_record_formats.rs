@@ -91,18 +91,22 @@ fn provenance_lookup_uses_the_chosen_project_only() {
 #[test]
 fn journal_writer_original_bytes() {
     crate::isolated_profile::isolate!();
-    // The writer adds the checksum and sequence; the entry is the rest.
-    let mut fixture: serde_json::Value = serde_json::from_slice(include_bytes!(
-        "../../../testdata/fixtures/records-v1/journal-entry.jsonl"
-    ))
-    .unwrap();
-    let fields = fixture.as_object_mut().unwrap();
-    fields.remove("_checksum");
-    fields.remove("_sequence");
-    let entry: basecraft_protocol::LogEntry = serde_json::from_value(fixture).unwrap();
+    // The writer adds the checksum and sequence; the entry is the rest. The
+    // example is an open, then a plugin's offer, its edit and the decision.
+    let entries: Vec<basecraft_protocol::LogEntry> =
+        include_str!("../../../testdata/fixtures/records-v1/journal-entry.jsonl")
+            .lines()
+            .map(|line| {
+                let mut fixture: serde_json::Value = serde_json::from_str(line).unwrap();
+                let fields = fixture.as_object_mut().unwrap();
+                fields.remove("_checksum");
+                fields.remove("_sequence");
+                serde_json::from_value(fixture).unwrap()
+            })
+            .collect();
     let root = tempfile::tempdir().unwrap();
     let mut log = basecraft_ops::log::LogWriter::new(root.path(), "fixture");
-    log.append(&entry).unwrap();
+    log.append_batch(&entries).unwrap();
     drop(log);
     let path = std::fs::read_dir(basecraft_ops::log::log_dir(root.path()).join("fixture"))
         .unwrap()
@@ -112,10 +116,13 @@ fn journal_writer_original_bytes() {
         .path();
     let bytes = std::fs::read(path).unwrap();
     golden("journal-entry.jsonl", &bytes);
-    let record: basecraft_protocol::records::JournalEntry = serde_json::from_slice(&bytes).unwrap();
-    let mut roundtrip = serde_json::to_vec(&serde_json::to_value(record).unwrap()).unwrap();
-    roundtrip.push(b'\n');
-    assert_eq!(roundtrip, bytes);
+    for line in bytes.split_inclusive(|&b| b == b'\n') {
+        let record: basecraft_protocol::records::JournalEntry =
+            serde_json::from_slice(line).unwrap();
+        let mut roundtrip = serde_json::to_vec(&serde_json::to_value(record).unwrap()).unwrap();
+        roundtrip.push(b'\n');
+        assert_eq!(roundtrip, line);
+    }
 }
 
 #[test]

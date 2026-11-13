@@ -121,7 +121,17 @@ only when a parameter has a value. `bootstrap_exports` lets a run export its
 analyses never write documents.
 
 Sequence proposals have `family: "sequence_proposal"`, exactly one
-`sequence_snapshot` input and `document_write: true`. They return edits.
+`sequence_snapshot` input and `document_write: true`. They return edits,
+which the host records as one proposal: the offer as received, the edits it
+applied, and the decision (accepted, modified when edits for features the
+document already holds were left out, or rejected with the reason). A batch
+holds at most 4,096 edits. The offer and the applied edits are written to
+the journal together and must fit its 8 MiB batch, so a batch takes about
+twice the space of its edits. 4,096 genes as Pyrodigal reports them take
+about 4 MiB; with long qualifiers such as 500-residue translations they do
+not fit. The host then applies nothing, records the offer as rejected, "too
+large to apply", and the run fails. More than 4,096 edits are refused
+without a record.
 
 Needs list what an operation wants from the host besides its inputs:
 

@@ -42,6 +42,7 @@ mod save_failure_tests;
 mod saved_mark_tests;
 mod tool_runs;
 pub use open::{objects_dir, recovery_folder};
+pub use proposals::{ProposalResult, SequenceOffer};
 pub use save_decision::{EvidenceAction, SaveCheck, SaveDecision, SaveOutcome, SaveWarning};
 pub use tool_runs::ToolRunRecord;
 pub mod support_import;

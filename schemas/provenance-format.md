@@ -33,7 +33,7 @@ only the standard library. Full hash verification additionally uses the open-sou
 `blake3` package. No Basecraft process, network connection or database is required.
 
 Opening is read-only. Recoverable sessions promote on first mutation/explicit
-execution into application state `recovery/SESSION/`. The baseline and retained
+execution into `.basecraft/recovery/SESSION/` of the project, or beside a loose file. The baseline and retained
 objects precede edits. Each UTF-8 JSONL event has `_sequence` and `_checksum`, whose
 value hashes the compact, key-sorted JSON event without framing fields. One writer
 owns each unique stream, rotated at 8 MiB. Entries are synced before acceptance;
@@ -59,7 +59,8 @@ writes; a completed data replacement with a failed ancillary write reports
 Non-cooperating applications can still race the final filesystem replacement;
 network/cloud synchronization is not a distributed transaction protocol.
 
-Jobs persist application-state `jobs/RUN/manifest.json` plus `input.snapshot` before
+Jobs persist `.basecraft/jobs/RUN/manifest.json` (of the run's project, or the
+`.basecraft` that holds the run) plus `input.snapshot` before
 launch and use that retained snapshot as the tool input. Terminal status, submitted
 document generation, effective parameters, plugin version, observed tool identity,
 CPU allocation, output hashes and diagnostics remain inspectable after temporary

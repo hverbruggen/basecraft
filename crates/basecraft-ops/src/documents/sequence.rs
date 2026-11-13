@@ -305,6 +305,9 @@ pub(crate) fn execute_sequence(
         ),
         Op::SubmissionEdit { .. } => Err(invalid("this needs a submission document")),
         Op::JobFinished { .. } => Err(invalid("use log_job_finished")),
+        Op::ProposalOffer { .. } | Op::ProposalDecide { .. } => {
+            Err(invalid("use apply_sequence_proposals"))
+        }
         Op::Open { .. }
         | Op::CreateSangerReview { .. }
         | Op::CreateSequence { .. }

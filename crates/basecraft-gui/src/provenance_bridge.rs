@@ -34,8 +34,10 @@ pub mod qobject {
         );
         #[qinvokable]
         fn clear_notifications(self: Pin<&mut AppProvenance>);
+        /// `folders` (a JSON list) adds the folders of the open files, whose
+        /// `.basecraft` holds the runs on loose files.
         #[qinvokable]
-        fn retained_jobs(self: &AppProvenance) -> QString;
+        fn retained_jobs(self: &AppProvenance, folders: &QString) -> QString;
         #[qinvokable]
         fn start(
             self: Pin<&mut AppProvenance>,
@@ -56,6 +58,13 @@ pub struct ProvenanceRust {
     text: QString,
     notifications: QString,
     notices: Vec<serde_json::Value>,
+}
+/// Folders whose `.basecraft` holds the records the window lists from earlier
+/// sessions (recovery, jobs): the chosen project and the recent ones.
+fn record_roots() -> Result<Vec<std::path::PathBuf>, String> {
+    let mut roots = crate::settings_bridge::load_project_history().unwrap_or_default();
+    roots.extend(crate::chosen_project::chosen()?.map(|p| p.root().to_path_buf()));
+    Ok(roots)
 }
 fn run(
     operation: &str,
@@ -177,23 +186,23 @@ impl qobject::AppProvenance {
         self.set_notifications(QString::from("[]"));
     }
     /// Runs from earlier sessions, from their records. None can be cancelled.
-    fn retained_jobs(&self) -> QString {
-        report_json(
-            basecraft_ops::records::jobs(true)
+    fn retained_jobs(&self, folders: &QString) -> QString {
+        report_json(record_roots().and_then(|mut roots| {
+            roots.extend(
+                serde_json::from_str::<Vec<std::path::PathBuf>>(&folders.to_string())
+                    .unwrap_or_default(),
+            );
+            basecraft_ops::records::jobs(true, &roots)
                 .map(|data| data.to_string())
-                .map_err(|e| e.to_string()),
-        )
+                .map_err(|e| e.to_string())
+        }))
     }
     fn recovery_sessions(mut self: Pin<&mut Self>) -> QString {
         let result = (|| -> Result<String, String> {
-            // Recovery lives in each project's `.basecraft`: look in the
-            // chosen project and the recent ones. A loose file's recovery is
-            // offered when it is opened.
-            let mut roots = crate::settings_bridge::load_project_history().unwrap_or_default();
-            roots.extend(crate::chosen_project::chosen()?.map(|p| p.root().to_path_buf()));
+            // A loose file's recovery is offered when it is opened.
             let mut sessions = Vec::new();
-            for folder in
-                basecraft_ops::records::recovery_sessions(&roots).map_err(|e| e.to_string())?
+            for folder in basecraft_ops::records::recovery_sessions(&record_roots()?)
+                .map_err(|e| e.to_string())?
             {
                 let name = basecraft_ops::log::read_all(&folder)
                     .ok()
