@@ -28,22 +28,6 @@ pub(crate) fn primary_member(operation: &str) -> Result<String, String> {
         .ok_or_else(|| format!("{operation} declares no primary result"))
 }
 
-/// A destination for the policy rooted at `root`: relative when inside it.
-fn destination(root: &Path, path: &Path) -> Result<String, String> {
-    let parent = path
-        .parent()
-        .ok_or("output has no folder")?
-        .canonicalize()
-        .map_err(|error| error.to_string())?;
-    let name = path.file_name().ok_or("output has no file name")?;
-    let path = parent.join(name);
-    Ok(path
-        .strip_prefix(root)
-        .map_or(path.as_path(), |relative| relative)
-        .display()
-        .to_string())
-}
-
 impl DocumentJob {
     /// Submit `operation` with `doc` as its document input. `exports` maps a
     /// result member (`role/member`) to a new file inside the project.
@@ -65,7 +49,11 @@ impl DocumentJob {
         let root = policy.root.clone();
         let destinations = exports
             .iter()
-            .map(|(member, path)| Ok((member.clone(), destination(&root, path)?)))
+            .map(|(member, path)| {
+                let path = basecraft_ops::requests::request_path(&root, path)
+                    .map_err(|error| error.to_string())?;
+                Ok((member.clone(), path))
+            })
             .collect::<Result<BTreeMap<_, _>, String>>()?;
         let request = OperationRequest {
             operation: operation.into(),
@@ -101,44 +89,27 @@ impl DocumentJob {
         session: &mut Session,
         target: DocId,
         operation: &str,
-        inputs: BTreeMap<String, Vec<PathBuf>>,
+        inputs: &BTreeMap<String, Vec<PathBuf>>,
         parameters: serde_json::Value,
         exports: &[(String, PathBuf)],
     ) -> Result<Self, String> {
         let registry = crate::plugins::registry().map_err(|error| error.to_string())?;
         let policy = SessionPolicy::new(session.root(), true).map_err(|error| error.to_string())?;
-        let root = policy.root.clone();
-        let destinations = exports
-            .iter()
-            .map(|(member, path)| Ok((member.clone(), destination(&root, path)?)))
-            .collect::<Result<BTreeMap<_, _>, String>>()?;
-        let inputs = inputs
-            .into_iter()
-            .map(|(role, paths)| {
-                let paths = paths
-                    .iter()
-                    .map(|path| {
-                        Ok(InputReference::File {
-                            path: destination(&root, path)?,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, String>>()?;
-                Ok((role, paths))
-            })
-            .collect::<Result<BTreeMap<_, _>, String>>()?;
-        let request = OperationRequest {
-            operation: operation.into(),
+        // The same request the CLI's `run` makes for files, aimed at `target`.
+        let outputs = exports.iter().cloned().collect();
+        let mut request = basecraft_ops::requests::file_request(
+            &policy.root,
+            operation,
             inputs,
             parameters,
-            destinations,
-            pins: None,
-            request_key: None,
-            target: Some(InputReference::Document {
-                doc: target.0.to_string(),
-                generation: session.generation(target).map_err(|e| e.to_string())?,
-                revision: session.revision(target).map_err(|e| e.to_string())?,
-            }),
-        };
+            &outputs,
+        )
+        .map_err(|error| error.to_string())?;
+        request.target = Some(InputReference::Document {
+            doc: target.0.to_string(),
+            generation: session.generation(target).map_err(|e| e.to_string())?,
+            revision: session.revision(target).map_err(|e| e.to_string())?,
+        });
         let mut manager = JobManager::default().with_task_cancellation();
         let accepted = manager
             .submit_in_session(&registry, request, policy, "GUI", session)

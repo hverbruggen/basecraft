@@ -510,6 +510,15 @@ def main():
                             cli("provenance", "inspect", str(project / "python.json"))[0])
         record("CLI/Python execute installed multi-input package with identical normalized data")
 
+        # One tool on files (D1): `basecraft run` builds the same request from
+        # input files, a result file and settings, and gets the same result.
+        run_outcome, _ = cli("run", op, "--project", str(project),
+                             "--input", f"sources={project / 'a.txt'}",
+                             "--input", f"sources={project / 'b.txt'}",
+                             "-o", f"report={project / 'run.json'}", "--param", "mode=normal")
+        assert check_result(run_outcome, "run.json") == expected
+        record("CLI run on input files matches the request route")
+
         mcp = Mcp(binary, project, env)
         try:
             tools = mcp.tools()

@@ -1962,7 +1962,7 @@ impl qobject::DelimitationController {
                             session,
                             doc,
                             &operation,
-                            [(role, vec![analysis_input])].into(),
+                            &[(role, vec![analysis_input])].into(),
                             params,
                             &exports,
                         )

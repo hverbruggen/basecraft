@@ -56,6 +56,8 @@ enum Command {
         #[command(subcommand)]
         action: operations::PluginsCommand,
     },
+    /// Run one tool on files: input files in, new result files out.
+    Run(operations::RunArgs),
     /// Inspect versioned installed operations without executing plugins.
     Operations {
         #[command(subcommand)]
@@ -293,6 +295,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Command::Delimitation { action } => delimitation::run(action)?,
         Command::Plugins { action } => operations::plugins(action)?,
         Command::Operations { action } => operations::operations(action)?,
+        Command::Run(args) => operations::run_files(args)?,
         Command::Metadata { action } => metadata::run(action, save_options)?,
         Command::Submission { action } => submission::run(action, save_options)?,
         Command::History { file, json } => {
