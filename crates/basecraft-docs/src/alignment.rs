@@ -579,14 +579,12 @@ impl AlignmentDoc {
 
     /// Validate additions against this alignment's molecule alphabet.
     pub fn validate_additions(&self, rows: &[(String, String)]) -> Result<(), EditError> {
-        // Rows that disagree, or can't be told apart, take either set: the
-        // user may be adding rows to settle exactly that.
-        let kind = self.alphabet().value;
-        let alphabet: &[u8] = match kind {
-            Alphabet::Protein | Alphabet::Mixed | Alphabet::Undetermined => {
-                b"ACDEFGHIKLMNPQRSTVWYBXZJUO-*"
-            }
-            _ => b"ACGTUNRYKMSWBDHV-",
+        // Rows that are not of one known kind take either set: the user may
+        // be adding rows to settle exactly that.
+        let (alphabet, kind): (&[u8], &str) = match self.alphabet().value {
+            Alphabet::Dna | Alphabet::Rna => (b"ACGTUNRYKMSWBDHV-", "nucleotide"),
+            Alphabet::Protein => (b"ACDEFGHIKLMNPQRSTVWYBXZJUO-*", "protein"),
+            _ => (b"ACDEFGHIKLMNPQRSTVWYBXZJUO-*", "nucleotide or protein"),
         };
         for (name, sequence) in rows {
             if !sequence
@@ -594,12 +592,7 @@ impl AlignmentDoc {
                 .all(|b| alphabet.contains(&b.to_ascii_uppercase()))
             {
                 return err(format!(
-                    "Sequence {name} contains symbols outside this {} alignment's IUPAC alphabet",
-                    if alphabet.contains(&b'E') {
-                        "protein"
-                    } else {
-                        "nucleotide"
-                    }
+                    "Sequence {name} contains symbols outside this alignment's {kind} IUPAC alphabet"
                 ));
             }
         }

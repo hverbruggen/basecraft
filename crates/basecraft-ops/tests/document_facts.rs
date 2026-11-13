@@ -277,6 +277,22 @@ fn genbank_files_state_their_molecule_and_every_record_counts() {
         records,
         [("d".into(), Alphabet::Dna), ("p".into(), Alphabet::Protein)]
     );
+    // A GenPept record first: "aa" states protein even when its residues
+    // hold no protein-only letters, and the file's own default says nothing.
+    let peptide = record("p", "aa", "", "mkvasghmkvasghmkvas") + &record("d", "bp", "DNA", "acgt");
+    let (genpept, first) = open(dir.path(), "first.gb", &peptide);
+    let records: Vec<_> = genpept
+        .sequence_alphabets(first)
+        .unwrap()
+        .into_iter()
+        .map(|s| s.alphabet)
+        .collect();
+    assert_eq!(records, [Alphabet::Protein, Alphabet::Dna]);
+    let alphabet = genpept.alphabet(first).unwrap();
+    assert_eq!(
+        (alphabet.value, alphabet.source),
+        (Alphabet::Mixed, FactSource::Stated)
+    );
     // A plain open and save writes no side file for what the file says.
     let mut session = session;
     session.apply(doc, Op::seq_replace(0, 1, "G")).unwrap();

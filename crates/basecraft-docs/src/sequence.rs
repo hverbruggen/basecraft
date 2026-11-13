@@ -29,18 +29,6 @@ pub(crate) fn count_letters(seq: &PieceTable) -> AlphabetCounts {
     counts
 }
 
-/// The alphabet a GenBank LOCUS molecule type states, when it names one.
-pub fn molecule_alphabet(molecule: &str) -> Option<Alphabet> {
-    let molecule = molecule.to_ascii_lowercase();
-    if molecule.contains("rna") {
-        Some(Alphabet::Rna)
-    } else if molecule.contains("dna") {
-        Some(Alphabet::Dna)
-    } else {
-        None
-    }
-}
-
 /// Stable for the life of a document: removing a feature leaves a hole, so
 /// ids in the log, in selections and in plugin results stay valid.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -212,7 +200,7 @@ impl SequenceDoc {
 
     pub fn from_genbank(rec: genbank::Record) -> Self {
         let mut doc = Self::new(rec.name, Arc::new(rec.sequence), rec.features, rec.circular);
-        doc.file_alphabet = molecule_alphabet(&rec.molecule);
+        doc.file_alphabet = rec.alphabet;
         doc.genbank = Some(GenbankMeta {
             molecule: rec.molecule,
             division: rec.division,
@@ -474,6 +462,7 @@ impl SequenceDoc {
         genbank::Record {
             name: self.name.clone(),
             molecule: meta.molecule,
+            alphabet: self.file_alphabet,
             circular: self.circular,
             division: meta.division,
             date: meta.date,

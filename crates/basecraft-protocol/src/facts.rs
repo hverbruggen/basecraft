@@ -67,9 +67,12 @@ impl From<StatedAlphabet> for Alphabet {
     }
 }
 
-/// Letters counted per sequence when a document opens. `u64::MAX` counts
-/// every letter; a cap on the guess (a pending user decision) is this one
-/// number. Edits always update the counts exactly.
+/// Letters counted per sequence when a document opens: every letter. Keep it
+/// at `u64::MAX`. A cap on the guess (a pending user decision) needs more
+/// than a smaller number here: counts at open would then cover only a
+/// prefix, and an edit that deletes letters never counted would take the
+/// counts below zero. Capped counts would have to know they are partial and
+/// recount the prefix after an edit instead of subtracting.
 pub const GUESS_LETTERS: u64 = u64::MAX;
 
 /// Letter counts for basecraft's one guess (D12). Edits add what they insert

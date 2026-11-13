@@ -990,15 +990,12 @@ fn genbank_alphabets(rest: &[u8]) -> Vec<(String, Fact<Alphabet>)> {
         if line.starts_with(b"LOCUS") {
             out.extend(record.take().map(finish));
             let text = String::from_utf8_lossy(line);
-            let words: Vec<&str> = text.split_whitespace().collect();
-            let unit = words.iter().position(|w| *w == "bp" || *w == "aa");
-            let stated = unit.and_then(|i| match words[i] {
-                "aa" => Some(Alphabet::Protein),
-                _ => words
-                    .get(i + 1)
-                    .and_then(|m| basecraft_docs::sequence::molecule_alphabet(m)),
-            });
-            let name = words.get(1).copied().unwrap_or_default().to_owned();
+            let stated = genbank::locus_alphabet(&text);
+            let name = text
+                .split_whitespace()
+                .nth(1)
+                .unwrap_or_default()
+                .to_owned();
             record = Some((name, stated, AlphabetCounts::default()));
             origin = false;
         } else if line.starts_with(b"ORIGIN") {
@@ -1338,6 +1335,7 @@ fn extracted(
     genbank::Record {
         name,
         molecule: or(meta.molecule, "DNA"),
+        alphabet: None,
         circular: false,
         division: or(meta.division, "UNK"),
         date: or(meta.date, "01-JAN-1970"),
