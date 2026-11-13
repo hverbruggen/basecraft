@@ -12,7 +12,8 @@ use crate::{DocId, Error, Result, Session};
 
 /// A new review of `read` from its instrument calls, in `session`.
 pub fn review_read(session: &mut Session, read: &Path) -> Result<DocId> {
-    let review = crate::sanger_review::instrument_review(read).map_err(Error::Invalid)?;
+    let review =
+        crate::sanger_review::instrument_review(read).map_err(InputError::UnreadableRead)?;
     session.create_sanger_review(&review)
 }
 
@@ -40,6 +41,9 @@ pub enum InputError {
     NotAColumn(String),
     #[error("{0}: the range runs backwards")]
     Backwards(String),
+    /// The read's instrument calls could not be read; the reason as given.
+    #[error("{0}")]
+    UnreadableRead(String),
 }
 
 /// A decision as a person states it: `accept`, `reject`, `pending`, or the

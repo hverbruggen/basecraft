@@ -151,6 +151,12 @@ def main():
         alias = copy.deepcopy(contract["operations"][0])
         alias["name"] = f"page_fixture_{index}"
         contract["operations"].append(alias)
+    # An operation with a setting that has no default, to refuse its absence.
+    needs = copy.deepcopy(contract["operations"][0])
+    needs["name"] = "needs_label"
+    needs["parameters"]["properties"]["label"] = {"type": "string"}
+    needs["parameters"]["required"] = ["label"]
+    contract["operations"].append(needs)
     contract_path.write_text(json.dumps(contract))
     project = root / "project"
     project.mkdir()
@@ -732,13 +738,14 @@ def main():
             assert not (project / "slow.json").exists()
             record("MCP parity, declared schemas, scoped IDs, responsive ping and cancellation")
             invalid_corpus = []
-            for parameters in ({"mode": "normal", "unknown_setting": True},
-                               {"mode": "not-a-mode"}, {"include_newlines": "yes"}):
+            for parameters, code in (({"mode": "normal", "unknown_setting": True}, "unknown_setting"),
+                                     ({"mode": "not-a-mode"}, "invalid_arguments"),
+                                     ({"include_newlines": "yes"}, "invalid_arguments")):
                 invalid = request("invalid.json")
                 invalid["parameters"] = parameters
                 rejected = run_request(request_path, invalid)
                 assert rejected["state"] == "failed", rejected
-                assert rejected["errors"][0]["code"] == "invalid_arguments", rejected
+                assert rejected["errors"][0]["code"] == code, rejected
                 assert python_error(operation=op, project=project, inputs=invalid["inputs"],
                                     parameters=parameters,
                                     destinations=invalid["destinations"]) == rejected
@@ -750,6 +757,22 @@ def main():
             assert "no setting unknown_setting" in invalid_corpus[0], invalid_corpus
             assert not (project / "invalid.json").exists()
             record("invalid-parameter corpus: identical structured errors from CLI/Python/MCP")
+
+            # A setting the run needs and has no default for is refused by
+            # name and by code on every route (D1).
+            needs_op = "org.example.registry-fixture/needs_label@1"
+            lacking = request("lacking.json", operation=needs_op)
+            refused = run_request(request_path, lacking)
+            assert refused["state"] == "failed", refused
+            assert refused["errors"][0]["code"] == "missing_choice", refused
+            assert "needs the setting label" in refused["errors"][0]["message"], refused
+            assert python_error(operation=needs_op, project=project, inputs=lacking["inputs"],
+                                parameters=lacking["parameters"],
+                                destinations=lacking["destinations"]) == refused
+            via_mcp = mcp.tool(mcp_name(needs_op), lacking)
+            assert via_mcp["isError"] and via_mcp["structuredContent"] == refused, via_mcp
+            assert not (project / "lacking.json").exists()
+            record("missing setting: refused by name and code from CLI/Python/MCP")
 
             missing = "org.example.registry-fixture/missing@1"
             unknown = request("missing.json", operation=missing)

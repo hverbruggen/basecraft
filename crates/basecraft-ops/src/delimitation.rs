@@ -350,6 +350,10 @@ pub fn checked_display_tree(
 /// Why a file cannot be a species workspace's display tree.
 #[derive(Debug, thiserror::Error)]
 pub enum DisplayTreeError {
+    #[error(
+        "Attach a display tree first (delimitation display-tree WORKSPACE --tree FILE, or Attach tree in the window)"
+    )]
+    NoneAttached,
     #[error("{} is not a text tree file", .0.display())]
     NotText(PathBuf),
     #[error("Choose a file containing exactly one display tree; {} holds {count}", path.display())]
@@ -411,6 +415,18 @@ pub fn display_tree(session: &Session, doc: DocId, named: &Path) -> Result<Displ
         hash,
         edit,
     })
+}
+
+/// The display tree attached to species workspace `doc`, read from its kept
+/// copy; refused by name when none is attached.
+pub fn attached_display_tree(session: &Session, doc: DocId) -> Result<DisplayTreeFile> {
+    let named = session
+        .delimitation(doc)?
+        .view
+        .display_tree
+        .clone()
+        .ok_or(DisplayTreeError::NoneAttached)?;
+    display_tree(session, doc, Path::new(&named))
 }
 
 /// Attach the tree in `tree` as the display tree of species workspace `doc`.

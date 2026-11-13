@@ -58,11 +58,7 @@ pub fn figures(
     doc: basecraft_ops::DocId,
     folder: &std::path::Path,
 ) -> Result<Vec<PathBuf>> {
-    let work = session.delimitation(doc)?;
-    let named = work.view.display_tree.clone().ok_or(
-        "Attach a display tree first (basecraft delimitation display-tree WORKSPACE --tree FILE)",
-    )?;
-    let file = delimitation::display_tree(session, doc, std::path::Path::new(&named))?;
+    let file = delimitation::attached_display_tree(session, doc)?;
     let mut tree = basecraft_docs::TreeDoc::from_parsed(&file.tree.name, &file.tree);
     let work = session.delimitation(doc)?.clone();
     basecraft_ops::session::apply_drawing_edits(&mut tree, &work.view.tree_edits);

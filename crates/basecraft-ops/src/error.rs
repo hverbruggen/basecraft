@@ -125,9 +125,15 @@ impl Error {
             | Self::NoFileName(_)
             | Self::ReviewInput(_)
             | Self::Addition(_)
-            | Self::DisplayTree(_)
-            | Self::NotALabelField(_)
-            | Self::NoProject(_) => Code::InvalidArguments,
+            | Self::DisplayTree(
+                crate::delimitation::DisplayTreeError::NotText(_)
+                | crate::delimitation::DisplayTreeError::NotOneTree { .. },
+            )
+            | Self::NotALabelField(_) => Code::InvalidArguments,
+            Self::NoProject(_)
+            | Self::DisplayTree(crate::delimitation::DisplayTreeError::NoneAttached) => {
+                Code::MissingChoice
+            }
             Self::UnknownFormat(_) => Code::UnknownFormat,
             Self::Empty(_) => Code::EmptyDocument,
             Self::EvidenceConflict(_) => Code::AnalysisInputConflict,
