@@ -229,9 +229,6 @@ pub mod qobject {
         fn zoom_to_selection(self: Pin<&mut GenomeController>);
         #[qinvokable]
         fn zoom_to_feature(self: Pin<&mut GenomeController>, id: i32);
-        /// Select the residues a feature covers.
-        #[qinvokable]
-        fn select_feature_range(self: Pin<&mut GenomeController>, id: i32);
         /// A feature as JSON for the editor dialog: kind, GenBank-style
         /// location, qualifiers.
         #[qinvokable]
@@ -1558,17 +1555,6 @@ impl qobject::GenomeController {
         if let Some((a, b)) = self.feature_bounds(id) {
             self.as_mut().rust_mut().view.zoom_to(a, b, len);
             self.as_mut().sync_mode();
-            self.refresh();
-        }
-    }
-
-    pub fn select_feature_range(mut self: Pin<&mut Self>, id: i32) {
-        if let Some((a, b)) = self.feature_bounds(id) {
-            {
-                let mut r = self.as_mut().rust_mut();
-                r.view.selection = Some((a, b));
-                r.view.cursor = Some(b);
-            }
             self.refresh();
         }
     }

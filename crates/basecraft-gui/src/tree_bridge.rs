@@ -234,8 +234,6 @@ pub mod qobject {
             rows: &QString,
             removed: &QString,
         ) -> QString;
-        #[qinvokable]
-        fn place_support(self: Pin<&mut TreeController>, placement: &QString);
         /// Set tip and support font sizes and branch width in pixels, as one
         /// edit; a value of 0 or less leaves that size unchanged.
         #[qinvokable]
@@ -251,8 +249,6 @@ pub mod qobject {
         fn support_import_json(self: &TreeController, path: &QString) -> QString;
         #[qinvokable]
         fn add_support_from(self: Pin<&mut TreeController>, path: &QString, name: &QString);
-        #[qinvokable]
-        fn remove_support(self: Pin<&mut TreeController>, name: &QString);
         /// Write the tree as an SVG figure.
         #[qinvokable]
         fn export_svg(self: Pin<&mut TreeController>, path: &QString);
@@ -1842,28 +1838,6 @@ impl qobject::TreeController {
         }
     }
 
-    pub fn place_support(mut self: Pin<&mut Self>, placement: &QString) {
-        let p = match placement.to_string().as_str() {
-            "above" => SupportPlacement::Above,
-            "below" => SupportPlacement::Below,
-            _ => SupportPlacement::Natural,
-        };
-        let Some(mut style) = crate::bridge::checked_document!(
-            self.qt_thread(),
-            self.with_doc(|d| d.style().clone())
-        ) else {
-            return;
-        };
-        if style.support_placement == p {
-            return;
-        }
-        style.support_placement = p;
-        let _ = self.as_mut().edit(Op::TreeStyle {
-            style,
-            remove_supports: Vec::new(),
-        });
-    }
-
     pub fn set_sizes(
         mut self: Pin<&mut Self>,
         tip_font: i32,
@@ -1950,17 +1924,6 @@ impl qobject::TreeController {
                 "Can't import support from {}: {e}",
                 file_name(&path)
             )),
-        }
-    }
-
-    pub fn remove_support(mut self: Pin<&mut Self>, name: &QString) {
-        let name = name.to_string();
-        if self
-            .as_mut()
-            .edit(Op::TreeRemoveSupport { name: name.clone() })
-            .is_ok()
-        {
-            self.done(&format!("Removed {name}"));
         }
     }
 

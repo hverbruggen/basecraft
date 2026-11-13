@@ -22,12 +22,6 @@ pub mod qobject {
         #[qinvokable]
         fn relink_run(self: Pin<&mut AppProvenance>, run: &QString, original: &QString) -> bool;
         #[qinvokable]
-        fn relink_input(
-            self: Pin<&mut AppProvenance>,
-            result: &QString,
-            original: &QString,
-        ) -> bool;
-        #[qinvokable]
         fn saved_report(self: &AppProvenance, path: &QString) -> QString;
         #[qinvokable]
         fn save_authored(
@@ -133,24 +127,6 @@ impl qobject::AppProvenance {
             Path::new(&run.to_string()),
             Path::new(&original.to_string()),
         );
-        let success = result.is_ok();
-        self.set_message(QString::from(
-            match result {
-                Ok(()) => "done: Verified original relinked".into(),
-                Err(e) => format!("fail: {e}"),
-            }
-            .as_str(),
-        ));
-        success
-    }
-    fn relink_input(self: Pin<&mut Self>, result: &QString, original: &QString) -> bool {
-        let result = (|| -> basecraft_ops::Result<()> {
-            let result = std::path::PathBuf::from(result.to_string());
-            let project = crate::chosen_project::chosen().map_err(basecraft_ops::Error::Invalid)?;
-            basecraft_ops::records::inspect(&result, project.as_ref())?;
-            let run = basecraft_ops::records::bundle_for_result(&result, project.as_ref());
-            basecraft_ops::records::relink(&run, Path::new(&original.to_string()))
-        })();
         let success = result.is_ok();
         self.set_message(QString::from(
             match result {

@@ -185,8 +185,6 @@ pub mod qobject {
         #[qinvokable]
         fn review_redo(self: Pin<&mut SangerController>);
         #[qinvokable]
-        fn review_accept_unflagged(self: Pin<&mut SangerController>);
-        #[qinvokable]
         fn export_consensus(
             self: Pin<&mut SangerController>,
             path: &QString,
@@ -1676,11 +1674,6 @@ impl qobject::SangerController {
                 .map(|_| ())
                 .map_err(|e| e.to_string())
         });
-    }
-
-    pub fn review_accept_unflagged(mut self: std::pin::Pin<&mut Self>) {
-        let settings = self.rust().review_settings.clone();
-        self.as_mut().apply_review_settings(&settings);
     }
 
     pub fn export_consensus(
