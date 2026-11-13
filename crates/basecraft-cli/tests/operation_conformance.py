@@ -231,6 +231,31 @@ def main():
             client.close()
         assert (reads / "cli.fasta").read_bytes() == (reads / "mcp.fasta").read_bytes()
         record("Sanger review, decisions and consensus export: same result from CLI and MCP")
+
+        # Tree edits by name (D1): the CLI's reroot and ladderize are the same
+        # edits MCP applies, and save the same tree.
+        for route in ("cli", "mcp"):
+            (project / f"{route}-tree.nwk").write_text("((a:1,b:1):1,(c:1,(d:1,e:1):1):1);\n")
+        cli_tree = str(project / "cli-tree.nwk")
+        subprocess.run([str(binary), "tree", "reroot", cli_tree, "--outgroup", "c"], env=env,
+                       check=True, timeout=45, capture_output=True)
+        subprocess.run([str(binary), "tree", "ladderize", cli_tree, "--order", "smallest-first"],
+                       env=env, check=True, timeout=45, capture_output=True)
+        client = Mcp(binary, project, env)
+        try:
+            opened = client.tool("open", {"path": "mcp-tree.nwk"})["structuredContent"]
+            version = opened["version"]
+            for operation in ({"op": "tree.reroot", "params": {"clade": ["c"]}},
+                              {"op": "tree.ladderize", "params": {"small_first": True}}):
+                applied = client.tool("apply", {"document": opened["document"], "version": version,
+                                      "operation": operation})
+                assert not applied["isError"], applied
+                version = client.tool("state", {"document": opened["document"]})["structuredContent"]["version"]
+            assert not client.tool("save", {"document": opened["document"]})["isError"]
+        finally:
+            client.close()
+        assert (project / "cli-tree.nwk").read_text() == (project / "mcp-tree.nwk").read_text()
+        record("tree reroot and ladderize by name: same tree from CLI and MCP")
         if args.only_sanger:
             receipt["status"] = "passed"
             receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")

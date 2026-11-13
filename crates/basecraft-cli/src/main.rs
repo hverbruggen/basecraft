@@ -7,6 +7,7 @@ mod operations;
 mod sanger;
 mod save;
 mod submission;
+mod tree;
 
 use basecraft_ops::records::ReportExt;
 use std::path::PathBuf;
@@ -59,6 +60,11 @@ enum Command {
     },
     /// Run one tool on files: input files in, new result files out.
     Run(operations::RunArgs),
+    /// Tree edits by name: reroot on an outgroup, ladderize, rotate a clade.
+    Tree {
+        #[command(subcommand)]
+        action: tree::TreeCommand,
+    },
     /// Sanger reads: start a review from a read's calls, decide columns,
     /// export the consensus.
     Sanger {
@@ -271,6 +277,39 @@ pub(crate) fn script_session(
     Ok(session)
 }
 
+/// Apply typed edits to `file` and save it: `basecraft edit` and the readable
+/// edit commands such as `basecraft tree reroot` go through here.
+pub(crate) fn edit_file(
+    file: &std::path::Path,
+    operations: Vec<basecraft_protocol::Op>,
+    project: Option<&basecraft_ops::project::Project>,
+    save_options: save::Options,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let file = file.canonicalize()?;
+    let root = file.parent().unwrap_or(std::path::Path::new("."));
+    let mut session = script_session(root, project)?;
+    let doc = session.open(&file)?;
+    for operation in operations {
+        if matches!(
+            operation,
+            basecraft_protocol::Op::Undo { .. } | basecraft_protocol::Op::Redo { .. }
+        ) {
+            session.apply_history(doc, &operation)?;
+        } else {
+            basecraft_ops::renames::apply_op(&mut session, doc, operation)?;
+        }
+    }
+    save_options.save(&mut session, doc, None, false)?;
+    // A reroot can leave labels on other groups; place them with tree.place_label.
+    if let Ok(tree) = session.tree(doc)
+        && let displaced = tree.displaced_labels()
+        && !displaced.is_empty()
+    {
+        println!("{}", serde_json::json!({ "displaced_labels": displaced }));
+    }
+    Ok(())
+}
+
 /// A CLI session for a command whose folder argument is the project.
 pub(crate) fn project_session(
     project: &std::path::Path,
@@ -426,32 +465,15 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         Command::Edit { file, operation } => {
-            let file = file.canonicalize()?;
-            let root = file.parent().unwrap_or(std::path::Path::new("."));
-            let mut session = script_session(root, project.as_ref())?;
-            let doc = session.open(&file)?;
             let operations = match serde_json::from_str::<EditOperations>(&operation)? {
                 EditOperations::One(op) => vec![*op],
                 EditOperations::Many(ops) => ops,
             };
-            for operation in operations {
-                if matches!(
-                    operation,
-                    basecraft_protocol::Op::Undo { .. } | basecraft_protocol::Op::Redo { .. }
-                ) {
-                    session.apply_history(doc, &operation)?;
-                } else {
-                    basecraft_ops::renames::apply_op(&mut session, doc, operation)?;
-                }
-            }
-            save_options.save(&mut session, doc, None, false)?;
-            // A reroot can leave labels on other groups; place them with tree.place_label.
-            if let Ok(tree) = session.tree(doc)
-                && let displaced = tree.displaced_labels()
-                && !displaced.is_empty()
-            {
-                println!("{}", serde_json::json!({ "displaced_labels": displaced }));
-            }
+            edit_file(&file, operations, project.as_ref(), save_options)?;
+        }
+        Command::Tree { action } => {
+            let (file, operation) = tree::operation(action);
+            edit_file(&file, vec![operation], project.as_ref(), save_options)?;
         }
         Command::ImportSupport { tree, source, name } => {
             let tree = tree.canonicalize()?;
