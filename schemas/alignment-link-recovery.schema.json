@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "AlignmentLinkRecovery",
-  "description": "Uniquely retained `*.alignment-recovery.json`; schema 1, no rewrite workflow.\nDeserialization describes known writer shapes only. It is not an extension-\npreserving manual repair interface or a substitute for the selective readers.",
+  "description": "Uniquely retained `*.alignment-recovery.json`, kept with the tree's link\nrecords in `.basecraft/documents`; schema 1, no rewrite workflow.\nDeserialization describes known writer shapes only. It is not an extension-\npreserving manual repair interface or a substitute for the selective readers.",
   "type": "object",
   "properties": {
     "intended_origin": {

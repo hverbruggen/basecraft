@@ -17,7 +17,8 @@ pub enum PreviousAlignmentMetadata {
     Symlink(PathBuf),
 }
 
-/// Uniquely retained `*.alignment-recovery.json`; schema 1, no rewrite workflow.
+/// Uniquely retained `*.alignment-recovery.json`, kept with the tree's link
+/// records in `.basecraft/documents`; schema 1, no rewrite workflow.
 /// Deserialization describes known writer shapes only. It is not an extension-
 /// preserving manual repair interface or a substitute for the selective readers.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]

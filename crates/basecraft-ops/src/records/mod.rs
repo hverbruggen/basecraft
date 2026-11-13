@@ -24,7 +24,10 @@ pub use input_evidence::{
     verified_source, verify_ancestors, wait_in_background, write_json,
 };
 pub use jobs::{job_index_path, jobs};
-pub use links::{AlignmentLink, AlignmentLinkExt, metadata_present, sidecar, view_sidecar};
+pub use links::{
+    AlignmentLink, AlignmentLinkExt, metadata_present, sidecar, sidecar_in, view_sidecar,
+    view_sidecar_in,
+};
 pub use provenance::{
     bundle_for_result, companion, export_file, file_run_entry, inspect, package, publish,
     publish_run, read_record, retained_file, verify, verify_export, write_reports,

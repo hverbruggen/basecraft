@@ -54,6 +54,7 @@ fn selected_guard_fields_keep_existing_acceptance_and_view_refusal() {
     std::fs::write(&tree, "(a,b);").unwrap();
     let origin = records::sidecar(&tree);
     let view = records::view_sidecar(&tree);
+    std::fs::create_dir_all(origin.parent().unwrap()).unwrap();
     let valid = include_bytes!("../../../testdata/fixtures/records-v1/link-snapshot-inferred.json");
     std::fs::write(&origin, valid).unwrap();
     for reason in ["", "unavailable test"] {

@@ -35,11 +35,16 @@ fn original_recovery(
     })).unwrap()
 }
 
-fn original_guard(recovery: &Path) -> Vec<u8> {
+/// The guard names its recovery file by its path from the tree's folder:
+/// the file lives with the tree's link records (D23).
+fn original_guard(recovery: &Path, tree: &Path) -> Vec<u8> {
+    let relative = recovery
+        .strip_prefix(tree.parent().unwrap().canonicalize().unwrap())
+        .unwrap();
     serde_json::to_vec_pretty(&serde_json::json!({
         "schema": 1,
         "unavailable": "Save As alignment publication incomplete",
-        "recovery": recovery.file_name(),
+        "recovery": relative.as_os_str(),
     }))
     .unwrap()
 }
@@ -52,6 +57,7 @@ fn repair_original_producer_bytes() {
         let target = dir.path().join("ü target.nwk");
         std::fs::write(&target, b"old tree").unwrap();
         let paths = [sidecar(&target), view_sidecar(&target)];
+        std::fs::create_dir_all(paths[0].parent().unwrap()).unwrap();
         match mode {
             0 => {}
             1 => {
@@ -85,6 +91,7 @@ fn repair_original_producer_bytes() {
             .to_vec(),
         });
         let prepared = PreparedLinks {
+            project: None,
             target: target.clone(),
             origin,
             view,
@@ -109,7 +116,7 @@ fn repair_original_producer_bytes() {
             .unwrap_err();
         assert!(error.to_string().contains("Save As incomplete"));
         assert_eq!(std::fs::read(&target).unwrap(), b"old tree");
-        let recovery = std::fs::read_dir(dir.path())
+        let recovery = std::fs::read_dir(sidecar(&target).parent().unwrap())
             .unwrap()
             .map(|e| e.unwrap().path())
             .find(|p| p.to_string_lossy().ends_with(".alignment-recovery.json"))
@@ -118,7 +125,7 @@ fn repair_original_producer_bytes() {
         assert_eq!(actual, expected);
         assert!(!actual.ends_with(b"\n"));
         let guard = std::fs::read(&paths[0]).unwrap();
-        assert_eq!(guard, original_guard(&recovery));
+        assert_eq!(guard, original_guard(&recovery, &target));
         assert!(!guard.ends_with(b"\n"));
         if let Some(capture) = std::env::var_os("BASECRAFT_RECORD_CAPTURE") {
             let capture = PathBuf::from(capture);
@@ -141,6 +148,7 @@ fn invalid_utf8_prior_symlink_returns_error_before_publication() {
         std::fs::write(&target, b"old tree").unwrap();
         let origin = sidecar(&target);
         let view = view_sidecar(&target);
+        std::fs::create_dir_all(origin.parent().unwrap()).unwrap();
         let (bad, ordinary) = if bad_view {
             (&view, &origin)
         } else {
@@ -152,6 +160,7 @@ fn invalid_utf8_prior_symlink_returns_error_before_publication() {
         let snapshot = dir.path().join("retained.alignment.afa");
         std::fs::write(&snapshot, b"retained snapshot").unwrap();
         let prepared = PreparedLinks {
+            project: None,
             target: target.clone(),
             origin: Some(StagedLink {
                 snapshot: Some(snapshot.clone()),
@@ -191,8 +200,10 @@ fn view_guard_failure_precedes_data_and_origin_mutation() {
     std::fs::write(&target, b"old tree").unwrap();
     let origin = sidecar(&target);
     let view = view_sidecar(&target);
+    std::fs::create_dir_all(origin.parent().unwrap()).unwrap();
     std::fs::write(&origin, b"old origin").unwrap();
     let prepared = PreparedLinks {
+        project: None,
         target: target.clone(),
         origin: None,
         view: None,
@@ -208,10 +219,14 @@ fn view_guard_failure_precedes_data_and_origin_mutation() {
     assert_eq!(std::fs::read(&target).unwrap(), b"old tree");
     assert_eq!(std::fs::read(&origin).unwrap(), b"old origin");
     assert!(view.is_dir());
-    assert!(std::fs::read_dir(dir.path()).unwrap().any(|e| {
-        e.unwrap()
-            .path()
-            .to_string_lossy()
-            .ends_with(".alignment-recovery.json")
-    }));
+    assert!(
+        std::fs::read_dir(origin.parent().unwrap())
+            .unwrap()
+            .any(|e| {
+                e.unwrap()
+                    .path()
+                    .to_string_lossy()
+                    .ends_with(".alignment-recovery.json")
+            })
+    );
 }

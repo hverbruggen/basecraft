@@ -8,10 +8,10 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Component, Path, PathBuf};
 
+/// The saved history of a loose file: in the `.basecraft` beside it,
+/// never beside the file itself (D23).
 pub fn companion(path: &Path) -> PathBuf {
-    let mut name = path.as_os_str().to_os_string();
-    name.push(".provenance");
-    PathBuf::from(name)
+    crate::project::Project::provenance_record(None, path)
 }
 
 /// Select the existing binding or companion path.
@@ -872,7 +872,11 @@ pub fn package(
             &staging.path().join(name),
         )?;
     }
-    copy_tree(&bundle_for_result(result, project), &companion(&copied))?;
+    let packaged_bundle = companion(&copied);
+    if let Some(folder) = packaged_bundle.parent() {
+        std::fs::create_dir_all(folder)?;
+    }
+    copy_tree(&bundle_for_result(result, project), &packaged_bundle)?;
     // The copy carries its history beside it, outside any project.
     let copied_issues = verify(&copied, None)?;
     if !copied_issues.is_empty() {

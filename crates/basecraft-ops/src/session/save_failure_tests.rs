@@ -38,6 +38,7 @@ fn failed_provenance_keeps_recovery_and_retry_accepts_written_data() {
     };
     let (mut session, id, target) = fixture(&root);
     let bundle = crate::records::provenance::companion(&target);
+    fs::create_dir_all(bundle.parent().unwrap()).unwrap();
     fs::write(&bundle, b"blocked").unwrap();
     assert!(session.save(id, None).is_err());
     assert!(fs::read_to_string(&target).unwrap().contains("TCGT"));
@@ -63,6 +64,7 @@ fn crash_before_and_after_replacement_recovers_the_edits() {
         } else {
             recovery.join("pending-save.json")
         };
+        fs::create_dir_all(obstruction.parent().unwrap()).unwrap();
         if after {
             fs::write(&obstruction, b"blocked").unwrap();
         } else {

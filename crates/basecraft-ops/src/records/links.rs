@@ -21,13 +21,19 @@ fn hidden_sidecar(run: &Path, tree: &Path) -> PathBuf {
     ))
 }
 
+/// The alignment link of a loose tree.
 pub fn sidecar(tree: &Path) -> PathBuf {
+    sidecar_in(None, tree)
+}
+
+/// Where a tree's alignment link lives: in the run a bound result belongs
+/// to, else with the tree's other records in the `.basecraft` that holds
+/// them (D23), never beside the tree.
+pub fn sidecar_in(project: Option<&crate::project::Project>, tree: &Path) -> PathBuf {
     if let Ok(Some(run)) = crate::records::analysis_store::ArtifactRun::for_result(tree) {
         return hidden_sidecar(&run, tree);
     }
-    let mut name = tree.as_os_str().to_os_string();
-    name.push(".alignment.json");
-    PathBuf::from(name)
+    crate::project::Project::document_record_with(project, tree, ".alignment.json")
 }
 
 /// A presentation association has its own snapshot and never overwrites inference input.
@@ -38,7 +44,11 @@ fn view_tree(tree: &Path) -> PathBuf {
 }
 
 pub fn view_sidecar(tree: &Path) -> PathBuf {
-    sidecar(&view_tree(tree))
+    view_sidecar_in(None, tree)
+}
+
+pub fn view_sidecar_in(project: Option<&crate::project::Project>, tree: &Path) -> PathBuf {
+    sidecar_in(project, &view_tree(tree))
 }
 
 /// Atomic saves replace the named directory entry, not a symlink's referent.
@@ -65,7 +75,9 @@ pub fn metadata_present(path: &Path) -> Result<bool> {
 
 /// Never replace retained bytes. Metadata is the sole publication point for a
 /// new snapshot. Old snapshots (including legacy fixed-name files) remain intact.
+/// Keep a uniquely named file with the tree's link records, never beside it.
 fn retain_file(
+    project: Option<&crate::project::Project>,
     tree: &Path,
     suffix: &str,
     write: impl FnOnce(&mut std::fs::File) -> io::Result<()>,
@@ -74,18 +86,25 @@ fn retain_file(
         "{}.",
         tree.file_name().unwrap_or_default().to_string_lossy()
     );
+    let link = sidecar_in(project, tree);
+    crate::files::companion_folder(&link)?;
     let mut temporary = tempfile::Builder::new()
         .prefix(&prefix)
         .suffix(suffix)
-        .tempfile_in(tree.parent().unwrap_or(Path::new(".")))?;
+        .tempfile_in(link.parent().unwrap_or(Path::new(".")))?;
     write(temporary.as_file_mut())?;
     temporary.as_file().sync_all()?;
     let (_, path) = temporary.keep().map_err(|error| error.error)?;
     Ok(path)
 }
 
-fn retain_snapshot(tree: &Path, input: &Path, expected: &str) -> Result<PathBuf> {
-    let snapshot = retain_file(tree, ".alignment.afa", |out| {
+fn retain_snapshot(
+    project: Option<&crate::project::Project>,
+    tree: &Path,
+    input: &Path,
+    expected: &str,
+) -> Result<PathBuf> {
+    let snapshot = retain_file(project, tree, ".alignment.afa", |out| {
         io::copy(&mut std::fs::File::open(input)?, out)?;
         Ok(())
     })?;
@@ -119,7 +138,12 @@ struct StagedLink {
 }
 
 impl StagedLink {
-    fn copy(link: &AlignmentLink, from: &Path, to: &Path) -> Result<Self> {
+    fn copy(
+        project: Option<&crate::project::Project>,
+        link: &AlignmentLink,
+        from: &Path,
+        to: &Path,
+    ) -> Result<Self> {
         if link.schema == 2 {
             link.verify_snapshot(from)?;
             let run = link.evidence_run(from)?;
@@ -131,13 +155,11 @@ impl StagedLink {
                 metadata: serde_json::to_vec_pretty(&copied)?,
             });
         }
-        let snapshot = retain_snapshot(to, &link.snapshot_path(from), &link.snapshot_hash)?;
+        let snapshot =
+            retain_snapshot(project, to, &link.snapshot_path(from), &link.snapshot_hash)?;
         let mut copied = link.clone();
         copied.source = relative_to(&link.source, to)?;
-        copied.snapshot = snapshot
-            .file_name()
-            .ok_or_else(|| invalid("snapshot filename"))?
-            .into();
+        copied.snapshot = relative_to(&snapshot, to)?;
         Ok(Self {
             snapshot: Some(snapshot),
             metadata: serde_json::to_vec_pretty(&copied)?,
@@ -149,6 +171,7 @@ impl StagedLink {
 /// explicit unavailable view entry until both metadata states are committed.
 /// A crash/error leaves extraction disabled and a recovery record beside the tree.
 pub(crate) struct PreparedLinks {
+    project: Option<crate::project::Project>,
     target: PathBuf,
     origin: Option<StagedLink>,
     view: Option<StagedLink>,
@@ -157,32 +180,42 @@ pub(crate) struct PreparedLinks {
 }
 
 impl PreparedLinks {
-    pub(crate) fn prepare(from: &Path, to: &Path) -> Result<Self> {
-        let origin = metadata_present(&sidecar(from))?
-            .then(|| AlignmentLink::read(from))
+    pub(crate) fn prepare(
+        project: Option<&crate::project::Project>,
+        from: &Path,
+        to: &Path,
+    ) -> Result<Self> {
+        let origin = metadata_present(&sidecar_in(project, from))?
+            .then(|| AlignmentLink::read_in(project, from))
             .transpose()?;
-        Self::with_origin(origin.as_ref(), from, to)
+        Self::with_origin(project, origin.as_ref(), from, to)
     }
 
-    fn with_origin(origin: Option<&AlignmentLink>, from: &Path, to: &Path) -> Result<Self> {
+    fn with_origin(
+        project: Option<&crate::project::Project>,
+        origin: Option<&AlignmentLink>,
+        from: &Path,
+        to: &Path,
+    ) -> Result<Self> {
         let view_path = view_tree(from);
-        let view = metadata_present(&sidecar(&view_path))?
-            .then(|| AlignmentLink::read(&view_path))
+        let view = metadata_present(&sidecar_in(project, &view_path))?
+            .then(|| AlignmentLink::read_in(project, &view_path))
             .transpose()?;
         // Check every source before creating destination evidence or touching its tree.
         for link in origin.into_iter().chain(view.iter()) {
             link.verify_snapshot(from)?;
         }
-        let previous_origin = previous_metadata(&sidecar(to))?;
-        let previous_view = previous_metadata(&view_sidecar(to))?;
+        let previous_origin = previous_metadata(&sidecar_in(project, to))?;
+        let previous_view = previous_metadata(&view_sidecar_in(project, to))?;
         Ok(Self {
+            project: project.cloned(),
             target: to.to_path_buf(),
             origin: origin
-                .map(|link| StagedLink::copy(link, from, to))
+                .map(|link| StagedLink::copy(project, link, from, to))
                 .transpose()?,
             view: view
                 .as_ref()
-                .map(|link| StagedLink::copy(link, from, &view_tree(to)))
+                .map(|link| StagedLink::copy(project, link, from, &view_tree(to)))
                 .transpose()?,
             previous_origin,
             previous_view,
@@ -203,29 +236,33 @@ impl PreparedLinks {
             intended_origin: self.origin.as_ref().map(|link| link.metadata.clone()),
             intended_view: self.view.as_ref().map(|link| link.metadata.clone()),
         })?)?;
-        let recovery_path = retain_file(&self.target, ".alignment-recovery.json", |out| {
-            out.write_all(&recovery)
-        })?;
+        let project = self.project.as_ref();
+        let recovery_path =
+            retain_file(project, &self.target, ".alignment-recovery.json", |out| {
+                out.write_all(&recovery)
+            })?;
         let unavailable =
             serde_json::to_vec_pretty(&serde_json::to_value(AlignmentLinkUnavailable {
                 schema: 1,
                 unavailable: "Save As alignment publication incomplete".into(),
-                recovery: recovery_path.file_name().map(std::ffi::OsStr::to_os_string),
+                recovery: Some(relative_to(&recovery_path, &self.target)?.into_os_string()),
             })?)?;
         // Install the guard before changing data or origin. If this fails, the old
         // tree and all its associations are untouched. Never remove a failed guard.
-        basecraft_io::write_atomic(&view_sidecar(&self.target), |out| {
-            out.write_all(&unavailable)
-        })?;
+        let view_link = view_sidecar_in(project, &self.target);
+        crate::files::companion_folder(&view_link)?;
+        basecraft_io::write_atomic(&view_link, |out| out.write_all(&unavailable))?;
         let finish = || -> Result<(T, Vec<PathBuf>)> {
             // The scientific origin must also become unavailable before replacing
             // data, so partial files cannot claim the overwritten tree's origin.
-            basecraft_io::write_atomic(&sidecar(&self.target), |out| out.write_all(&unavailable))?;
+            basecraft_io::write_atomic(&sidecar_in(project, &self.target), |out| {
+                out.write_all(&unavailable)
+            })?;
             let result = save_data()?;
             let mut outputs = vec![recovery_path.clone()];
             for (metadata, staged) in [
-                (sidecar(&self.target), &self.origin),
-                (view_sidecar(&self.target), &self.view),
+                (sidecar_in(project, &self.target), &self.origin),
+                (view_sidecar_in(project, &self.target), &self.view),
             ] {
                 if let Some(link) = staged {
                     basecraft_io::write_atomic(&metadata, |out| out.write_all(&link.metadata))?;
@@ -325,7 +362,16 @@ pub fn validate_taxa(tree: &TreeDoc, alignment: &Path, allow_extra: bool) -> Res
 /// Rust callers must import this trait alongside `AlignmentLink` to use its
 /// associated functions and methods. Serialization and public fields are unchanged.
 pub trait AlignmentLinkExt: Sized {
-    fn associate(tree_path: &Path, tree: &TreeDoc, source: &Path) -> Result<Vec<PathBuf>>;
+    /// For a loose tree; see [`AlignmentLinkExt::associate_in`].
+    fn associate(tree_path: &Path, tree: &TreeDoc, source: &Path) -> Result<Vec<PathBuf>> {
+        Self::associate_in(None, tree_path, tree, source)
+    }
+    fn associate_in(
+        project: Option<&crate::project::Project>,
+        tree_path: &Path,
+        tree: &TreeDoc,
+        source: &Path,
+    ) -> Result<Vec<PathBuf>>;
     fn create_referenced(
         tree: &Path,
         source: &Path,
@@ -333,6 +379,7 @@ pub trait AlignmentLinkExt: Sized {
         version: u64,
         run: &crate::records::analysis_store::ArtifactRun,
     ) -> Result<Vec<PathBuf>>;
+    /// For a loose tree; see [`AlignmentLinkExt::create_in`].
     fn create(
         tree: &Path,
         source: &Path,
@@ -340,13 +387,50 @@ pub trait AlignmentLinkExt: Sized {
         version: u64,
         inferred: bool,
         source_hash: Option<&str>,
+    ) -> Result<Vec<PathBuf>> {
+        Self::create_in(None, tree, source, input, version, inferred, source_hash)
+    }
+    fn create_in(
+        project: Option<&crate::project::Project>,
+        tree: &Path,
+        source: &Path,
+        input: &Path,
+        version: u64,
+        inferred: bool,
+        source_hash: Option<&str>,
     ) -> Result<Vec<PathBuf>>;
-    fn read(tree: &Path) -> Result<Self>;
-    fn read_view(tree: &Path) -> Result<Self>;
+    /// For a loose tree; see [`AlignmentLinkExt::read_in`].
+    fn read(tree: &Path) -> Result<Self> {
+        Self::read_in(None, tree)
+    }
+    fn read_in(project: Option<&crate::project::Project>, tree: &Path) -> Result<Self>;
+    /// For a loose tree; see [`AlignmentLinkExt::read_view_in`].
+    fn read_view(tree: &Path) -> Result<Self> {
+        Self::read_view_in(None, tree)
+    }
+    fn read_view_in(project: Option<&crate::project::Project>, tree: &Path) -> Result<Self>;
     fn status(&self, tree_path: &Path, tree: &TreeDoc) -> String;
     fn checked_snapshot(&self, tree_path: &Path, tree: &TreeDoc) -> Result<PathBuf>;
-    fn share_to(&self, from: &Path, to: &Path) -> Result<PathBuf>;
-    fn copy_to(&self, from: &Path, to: &Path) -> Result<Vec<PathBuf>>;
+    /// For loose trees; see [`AlignmentLinkExt::share_to_in`].
+    fn share_to(&self, from: &Path, to: &Path) -> Result<PathBuf> {
+        self.share_to_in(None, from, to)
+    }
+    fn share_to_in(
+        &self,
+        project: Option<&crate::project::Project>,
+        from: &Path,
+        to: &Path,
+    ) -> Result<PathBuf>;
+    /// For loose trees; see [`AlignmentLinkExt::copy_to_in`].
+    fn copy_to(&self, from: &Path, to: &Path) -> Result<Vec<PathBuf>> {
+        self.copy_to_in(None, from, to)
+    }
+    fn copy_to_in(
+        &self,
+        project: Option<&crate::project::Project>,
+        from: &Path,
+        to: &Path,
+    ) -> Result<Vec<PathBuf>>;
     fn source_changed(&self) -> bool;
 }
 
@@ -460,16 +544,21 @@ impl LinkEvidence for AlignmentLink {
 
 impl AlignmentLinkExt for AlignmentLink {
     /// Associate an imported tree, keeping a standard FASTA snapshot beside it.
-    fn associate(tree_path: &Path, tree: &TreeDoc, source: &Path) -> Result<Vec<PathBuf>> {
+    fn associate_in(
+        project: Option<&crate::project::Project>,
+        tree_path: &Path,
+        tree: &TreeDoc,
+        source: &Path,
+    ) -> Result<Vec<PathBuf>> {
         validate_taxa(tree, source, false)?;
-        let origin_inferred =
-            metadata_present(&sidecar(tree_path))? && Self::read(tree_path)?.inferred;
-        let target = if origin_inferred || metadata_present(&view_sidecar(tree_path))? {
+        let origin_inferred = metadata_present(&sidecar_in(project, tree_path))?
+            && Self::read_in(project, tree_path)?.inferred;
+        let target = if origin_inferred || metadata_present(&view_sidecar_in(project, tree_path))? {
             view_tree(tree_path)
         } else {
             tree_path.to_path_buf()
         };
-        Self::create(&target, source, source, 0, false, None)
+        Self::create_in(project, &target, source, source, 0, false, None)
     }
 
     /// Reference-first inferred association. Clean disk input is never copied;
@@ -504,7 +593,8 @@ impl AlignmentLinkExt for AlignmentLink {
     }
 
     /// Called with the exact alignment supplied to a tree tool.
-    fn create(
+    fn create_in(
+        project: Option<&crate::project::Project>,
         tree: &Path,
         source: &Path,
         input: &Path,
@@ -518,22 +608,19 @@ impl AlignmentLinkExt for AlignmentLink {
             .map(str::to_owned)
             .map_or_else(|| basecraft_io::hash_file(&source), Ok)?;
         let snapshot_hash = basecraft_io::hash_file(input)?;
-        let snapshot = retain_snapshot(tree, input, &snapshot_hash)?;
+        let snapshot = retain_snapshot(project, tree, input, &snapshot_hash)?;
         let link = Self {
             schema: 1,
             source_hash,
             source: relative_to(&source, tree)?,
-            snapshot: snapshot
-                .file_name()
-                .ok_or_else(|| invalid("snapshot filename"))?
-                .into(),
+            snapshot: relative_to(&snapshot, tree)?,
             snapshot_hash,
             alignment_version: version,
             inferred,
             analysis_run: None,
             extra: BTreeMap::new(),
         };
-        let metadata = sidecar(tree);
+        let metadata = sidecar_in(project, tree);
         let bytes = serde_json::to_vec_pretty(&link)?;
         basecraft_io::write_atomic(&metadata, |out| out.write_all(&bytes)).map_err(|error| crate::Error::Damaged { path: metadata.clone(), detail: format!(
             "alignment metadata replacement failed; previous snapshots are unchanged; staged snapshot retained at {}: {error}", snapshot.display()
@@ -541,10 +628,10 @@ impl AlignmentLinkExt for AlignmentLink {
         Ok(vec![snapshot, metadata])
     }
 
-    fn read(tree: &Path) -> Result<Self> {
+    fn read_in(project: Option<&crate::project::Project>, tree: &Path) -> Result<Self> {
         crate::records::analysis_store::ArtifactRun::for_result(tree)?;
         let metadata: serde_json::Value =
-            serde_json::from_reader(std::fs::File::open(sidecar(tree))?)?;
+            serde_json::from_reader(std::fs::File::open(sidecar_in(project, tree))?)?;
         if let Some(reason) = metadata
             .get("unavailable")
             .and_then(serde_json::Value::as_str)
@@ -578,12 +665,15 @@ impl AlignmentLinkExt for AlignmentLink {
     }
 
     /// Prefer an explicit view association. A damaged view link is an error, never a fallback.
-    fn read_view(tree: &Path) -> Result<Self> {
-        Self::read(&if metadata_present(&view_sidecar(tree))? {
-            view_tree(tree)
-        } else {
-            tree.to_path_buf()
-        })
+    fn read_view_in(project: Option<&crate::project::Project>, tree: &Path) -> Result<Self> {
+        Self::read_in(
+            project,
+            &if metadata_present(&view_sidecar_in(project, tree))? {
+                view_tree(tree)
+            } else {
+                tree.to_path_buf()
+            },
+        )
     }
 
     /// Status describes retained evidence and never reads changed source data as input.
@@ -654,7 +744,12 @@ impl AlignmentLinkExt for AlignmentLink {
     }
 
     /// Forest members share the same retained alignment instead of copying it per tree.
-    fn share_to(&self, from: &Path, to: &Path) -> Result<PathBuf> {
+    fn share_to_in(
+        &self,
+        project: Option<&crate::project::Project>,
+        from: &Path,
+        to: &Path,
+    ) -> Result<PathBuf> {
         let mut link = self.clone();
         if self.schema == 2 {
             let run = self.evidence_run(from)?;
@@ -681,15 +776,21 @@ impl AlignmentLinkExt for AlignmentLink {
             to,
         )?;
         link.source = relative_to(&self.source, to)?;
-        let metadata = sidecar(to);
+        let metadata = sidecar_in(project, to);
+        crate::files::companion_folder(&metadata)?;
         let bytes = serde_json::to_vec_pretty(&link)?;
         basecraft_io::write_atomic(&metadata, |out| out.write_all(&bytes))?;
         Ok(metadata)
     }
 
     /// Preserve a link when a tree is saved under a new name or directory.
-    fn copy_to(&self, from: &Path, to: &Path) -> Result<Vec<PathBuf>> {
-        PreparedLinks::with_origin(Some(self), from, to)?
+    fn copy_to_in(
+        &self,
+        project: Option<&crate::project::Project>,
+        from: &Path,
+        to: &Path,
+    ) -> Result<Vec<PathBuf>> {
+        PreparedLinks::with_origin(project, Some(self), from, to)?
             .publish(|| Ok(()))
             .map(|((), outputs)| outputs)
     }

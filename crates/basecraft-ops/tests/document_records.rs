@@ -112,17 +112,33 @@ fn round_trip(project: Option<&Project>, folder: &Path, records: &Path, key: &st
             assert_eq!(stated(&reopened, doc, name), fact, "{}", file.display());
         }
     }
-    // No companion sits beside any document. (Provenance bundles, alignment
-    // links and FASTA's GFF3 are other records, outside this check.)
+    // Nothing basecraft keeps sits beside a document: companions, saved
+    // history and alignment links are all in .basecraft. Only FASTA's GFF3
+    // annotations remain beside it, until the user decides.
+    let documents: Vec<String> = kinds()
+        .iter()
+        .flat_map(|(name, _, _)| [name.to_string(), format!("copy-{name}")])
+        .collect();
     let beside: Vec<_> = visible(folder)
         .into_iter()
-        .filter(|name| name.ends_with(".basecraft.json") || name.ends_with(".nwk.json"))
+        .filter(|name| {
+            !(documents.contains(name) || Path::new(name).extension().is_some_and(|e| e == "gff3"))
+        })
         .collect();
     assert_eq!(
         beside,
         Vec::<String>::new(),
-        "a companion sits beside a document"
+        "a record sits beside a document"
     );
+    for name in &documents {
+        assert!(
+            Project::provenance_record(project, &folder.join(name))
+                .join("manifest.json")
+                .is_file()
+                || Path::new(name).extension().is_some_and(|e| e == "spart"),
+            "{name} has no saved history in .basecraft"
+        );
+    }
 }
 
 #[test]
@@ -258,4 +274,54 @@ fn a_species_record_for_other_bytes_is_ignored_with_a_warning() {
         "{:?}",
         record.warnings
     );
+}
+
+/// A tree's alignment link and its retained snapshot live with the tree's
+/// records, and Save As carries them.
+#[test]
+fn a_project_tree_keeps_its_alignment_link_in_the_project() {
+    use basecraft_ops::records::{AlignmentLink, AlignmentLinkExt};
+    crate::isolated_profile::isolate!();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("project");
+    let folder = root.join("trees");
+    std::fs::create_dir_all(&folder).unwrap();
+    let project = Project::new(&root).unwrap();
+    let folder = folder.canonicalize().unwrap();
+    let tree = folder.join("tree.nwk");
+    std::fs::write(&tree, "((a:1,b:1):1,c:2);\n").unwrap();
+    let alignment = folder.join("genes.afa");
+    std::fs::write(&alignment, ">a\nACGT\n>b\nACGA\n>c\nACTT\n").unwrap();
+    let mut session = Session::new(project.root()).in_project(Some(project.clone()));
+    let doc = session.open(&tree).unwrap();
+    let outputs = AlignmentLink::associate_in(
+        Some(&project),
+        &tree,
+        session.tree(doc).unwrap(),
+        &alignment,
+    )
+    .unwrap();
+    let records = project.root().join(".basecraft/documents/trees");
+    for output in &outputs {
+        assert!(output.starts_with(&records), "{}", output.display());
+    }
+    let link = AlignmentLink::read_view_in(Some(&project), &tree).unwrap();
+    assert!(
+        link.checked_snapshot(&tree, session.tree(doc).unwrap())
+            .is_ok()
+    );
+    let copy = folder.join("copy.nwk");
+    session.save(doc, Some(&copy)).unwrap();
+    let copied = AlignmentLink::read_view_in(Some(&project), &copy).unwrap();
+    assert!(
+        copied
+            .checked_snapshot(&copy, session.tree(doc).unwrap())
+            .is_ok()
+    );
+    let beside: Vec<_> = visible(&folder)
+        .into_iter()
+        .filter(|name| !["tree.nwk", "copy.nwk", "genes.afa"].contains(&name.as_str()))
+        .collect();
+    assert_eq!(beside, Vec::<String>::new());
+    assert!(!folder.join(".basecraft").exists());
 }

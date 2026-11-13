@@ -60,8 +60,9 @@ fn a_project_file_packages_with_its_history() {
     crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let chosen = root.path().join("project");
-    std::fs::create_dir(&chosen).unwrap();
-    let file = chosen.join("gene.fasta");
+    // In a subfolder, where its loose and project places differ.
+    std::fs::create_dir_all(chosen.join("data")).unwrap();
+    let file = chosen.join("data/gene.fasta");
     std::fs::write(&file, b">a\nACGT\n").unwrap();
     let project = Project::new(&chosen).unwrap();
     let mut session = Session::new(&chosen).in_project(Some(project.clone()));

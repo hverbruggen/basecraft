@@ -129,7 +129,7 @@ fn publication_error_after_main_write_disables_extraction_and_keeps_previous_ass
         "{link_error}"
     );
     assert_eq!(std::fs::read(&old_snapshot).unwrap(), old_bytes);
-    let record = std::fs::read_dir(root)
+    let record = std::fs::read_dir(records::sidecar(&output).parent().unwrap())
         .unwrap()
         .map(|entry| entry.unwrap().path())
         .find(|path| path.to_string_lossy().ends_with(".alignment-recovery.json"))

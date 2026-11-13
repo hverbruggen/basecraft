@@ -63,7 +63,7 @@ fn guarded_partial_save_supports_retry_and_manual_intended_recovery() {
             assert!(AlignmentLink::read(&output).is_err());
             assert!(AlignmentLink::read_view(&output).is_err());
             assert_eq!(std::fs::read(&old_snapshot).unwrap(), old_bytes);
-            let recovery_path = std::fs::read_dir(root)
+            let recovery_path = std::fs::read_dir(records::sidecar(&output).parent().unwrap())
                 .unwrap()
                 .map(|entry| entry.unwrap().path())
                 .find(|path| path.to_string_lossy().ends_with(".alignment-recovery.json"))

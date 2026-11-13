@@ -1916,9 +1916,11 @@ pub fn package(
     // Complete tree exports materialize their exchange association, so
     // extraction still works with the original store absent.
     if let Ok(tree) = crate::files::load_tree_in(project, result)
-        && crate::records::links::metadata_present(&crate::records::links::sidecar(result))?
+        && crate::records::links::metadata_present(&crate::records::links::sidecar_in(
+            project, result,
+        ))?
     {
-        let link = crate::records::links::AlignmentLink::read(result)?;
+        let link = crate::records::links::AlignmentLink::read_in(project, result)?;
         let input_path = link.checked_snapshot(result, &tree.doc)?;
         let indexed = std::sync::Arc::new(basecraft_io::fasta::IndexedFasta::open(&input_path)?);
         let alignment = basecraft_docs::AlignmentDoc::from_fasta("Exported input", &indexed);
@@ -1954,11 +1956,14 @@ pub fn package(
                         publication.id,
                         publication.outputs.len()
                     ),
+                    // Link records live in the package's .basecraft.
                     logical_name: path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into_owned(),
+                        .strip_prefix(staging.path())
+                        .map_err(|_| invalid("package link lies outside the package"))?
+                        .components()
+                        .map(|part| part.as_os_str().to_string_lossy().into_owned())
+                        .collect::<Vec<_>>()
+                        .join("/"),
                     hash: basecraft_io::hash_file(&path)?,
                     size: std::fs::metadata(&path)?.len(),
                     retained: None,

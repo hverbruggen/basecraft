@@ -595,7 +595,7 @@ impl Session {
         let format = self.save_format(id, &target)?;
         let original = self.resolve(&self.docs[id.0].key);
         let document = self.docs[id.0].content.as_document();
-        let links = document.prepare_links(&original, &target, format)?;
+        let links = document.prepare_links(self.companion_project(), &original, &target, format)?;
         let publication = if create
             && matches!(
                 self.write_publication,

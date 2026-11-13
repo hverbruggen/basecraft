@@ -68,6 +68,7 @@ impl Document for OpenedTree {
 
     fn prepare_links(
         &self,
+        project: Option<&crate::project::Project>,
         original: &Path,
         target: &Path,
         format: Format,
@@ -82,7 +83,7 @@ impl Document for OpenedTree {
         {
             Ok(None)
         } else {
-            crate::records::links::PreparedLinks::prepare(original, target).map(Some)
+            crate::records::links::PreparedLinks::prepare(project, original, target).map(Some)
         }
     }
 

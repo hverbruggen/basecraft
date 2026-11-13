@@ -189,7 +189,7 @@ fn sidecar_failure_reports_partial_save_and_keeps_pending_recovery() {
     session.apply(doc, edit()).unwrap();
     // A directory at the companion location injects a publication write error.
     let bundle = records::companion(&file);
-    std::fs::create_dir(&bundle).unwrap();
+    std::fs::create_dir_all(&bundle).unwrap();
     std::fs::write(bundle.join("artifacts"), "blocked").unwrap();
     assert!(
         session
@@ -817,7 +817,7 @@ fn partial_save_as_can_retry_its_verified_output() {
     let id = session.open(&file).unwrap();
     session.apply(id, edit()).unwrap();
     let bundle = records::companion(&target);
-    std::fs::create_dir(&bundle).unwrap();
+    std::fs::create_dir_all(&bundle).unwrap();
     std::fs::write(bundle.join("artifacts"), b"blocked").unwrap();
     assert!(
         session

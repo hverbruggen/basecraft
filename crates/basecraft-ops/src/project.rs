@@ -48,11 +48,11 @@ impl Project {
         }
     }
 
-    /// Where basecraft keeps its record of one document (D23): in the
-    /// project's `.basecraft` when the project holds the file, else in the
-    /// `.basecraft` beside the loose file, at `documents/<path relative to
-    /// that folder>.json`. Nothing is written beside the document itself.
-    pub fn document_record(project: Option<&Self>, file: &Path) -> PathBuf {
+    /// The `.basecraft` that holds a file's records, and the file's key in
+    /// it (D23): the project's, with the project-relative path, when the
+    /// project holds the file; else the one beside the loose file, with its
+    /// name.
+    fn records_of(project: Option<&Self>, file: &Path) -> (PathBuf, PathBuf) {
         let held =
             project.and_then(|project| Some((project.root.clone(), project.relative(file)?)));
         let (base, key) = held.unwrap_or_else(|| {
@@ -65,13 +65,32 @@ impl Project {
                 PathBuf::from(absolute.file_name().unwrap_or_default()),
             )
         });
-        let mut record = base
-            .join(".basecraft")
-            .join("documents")
-            .join(key)
-            .into_os_string();
-        record.push(".json");
+        (base.join(".basecraft"), key)
+    }
+
+    /// Where basecraft keeps its record of one document (D23): the
+    /// `.basecraft` that holds the file's records, at `documents/<key>.json`.
+    /// Nothing is written beside the document itself.
+    pub fn document_record(project: Option<&Self>, file: &Path) -> PathBuf {
+        Self::document_record_with(project, file, ".json")
+    }
+
+    /// The same place, for another record of the document named by
+    /// `suffix`, such as `.alignment.json` for its alignment link.
+    pub fn document_record_with(project: Option<&Self>, file: &Path, suffix: &str) -> PathBuf {
+        let (records, key) = Self::records_of(project, file);
+        let mut record = records.join("documents").join(key).into_os_string();
+        record.push(suffix);
         PathBuf::from(record)
+    }
+
+    /// Where a file's saved history lives: `provenance/<hash of its key>` in
+    /// the `.basecraft` that holds its records.
+    pub fn provenance_record(project: Option<&Self>, file: &Path) -> PathBuf {
+        let (records, key) = Self::records_of(project, file);
+        records.join("provenance").join(
+            basecraft_io::hash_bytes(key.to_string_lossy().as_bytes()).trim_start_matches("b3:"),
+        )
     }
 
     /// Whether another clone of this project is alive, such as the project
@@ -100,13 +119,8 @@ impl Project {
 
     /// Where a result inside the project keeps its history.
     pub fn provenance_bundle(&self, result: &Path) -> Option<PathBuf> {
-        let relative = self.relative(result)?;
-        Some(
-            self.root.join(".basecraft/provenance").join(
-                basecraft_io::hash_bytes(relative.to_string_lossy().as_bytes())
-                    .trim_start_matches("b3:"),
-            ),
-        )
+        self.contains(result)
+            .then(|| Self::provenance_record(Some(self), result))
     }
 }
 

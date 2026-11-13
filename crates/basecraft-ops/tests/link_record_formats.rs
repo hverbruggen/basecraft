@@ -65,6 +65,7 @@ fn reader_keeps_extensions_and_existing_version_and_missing_field_checks() {
     let tree = root.path().join("tree.nwk");
     std::fs::write(&tree, "(a,b);").unwrap();
     let metadata = records::sidecar(&tree);
+    std::fs::create_dir_all(metadata.parent().unwrap()).unwrap();
     let bytes = include_bytes!("../../../testdata/fixtures/records-v1/link-snapshot-extra.json");
     let mut value: serde_json::Value = serde_json::from_slice(bytes).unwrap();
     // Reader retains extras and tolerates missing source; evidence use checks it later.

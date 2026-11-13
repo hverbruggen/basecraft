@@ -304,6 +304,7 @@ pub(crate) trait Document {
     /// Session publishes it with the guarded document write and records outputs.
     fn prepare_links(
         &self,
+        _project: Option<&crate::project::Project>,
         _original: &Path,
         _target: &Path,
         _format: Format,

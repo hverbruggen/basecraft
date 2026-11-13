@@ -32,7 +32,8 @@ fn history_goes_to_the_chosen_project_or_beside_a_loose_file() {
     let project = basecraft_ops::project::Project::new(&chosen).unwrap();
     let bundle = project.provenance_bundle(&inside).unwrap();
     assert!(bundle.join("manifest.json").is_file());
-    assert!(!basecraft_ops::records::companion(&inside).exists());
+    // Nothing sits beside the file (D23).
+    assert!(!chosen.join("inside.fasta.provenance").exists());
 
     let loose = root.path().join("loose.fasta");
     std::fs::write(&loose, b">a\nACGT\n").unwrap();

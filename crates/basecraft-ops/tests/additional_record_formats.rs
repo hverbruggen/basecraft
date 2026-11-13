@@ -51,7 +51,9 @@ fn metadata_report_and_query_original_writers() {
 fn provenance_lookup_uses_the_chosen_project_only() {
     crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
-    let result = root.path().join("result.fa");
+    // In a subfolder, the loose and project places differ.
+    std::fs::create_dir(root.path().join("data")).unwrap();
+    let result = root.path().join("data/result.fa");
     std::fs::write(&result, ">sample\nACGT\n").unwrap();
     let standalone = basecraft_ops::records::companion(&result);
     assert_eq!(
@@ -68,7 +70,7 @@ fn provenance_lookup_uses_the_chosen_project_only() {
     let expected = project
         .root()
         .join(".basecraft/provenance")
-        .join(basecraft_io::hash_bytes(b"result.fa").trim_start_matches("b3:"));
+        .join(basecraft_io::hash_bytes(b"data/result.fa").trim_start_matches("b3:"));
     // The project's bundle counts once it holds history.
     assert_eq!(
         basecraft_ops::records::bundle_for_result(&result, Some(&project)),
@@ -80,7 +82,7 @@ fn provenance_lookup_uses_the_chosen_project_only() {
         basecraft_ops::records::bundle_for_result(&result, Some(&project)),
         expected
     );
-    std::fs::create_dir(&standalone).unwrap();
+    std::fs::create_dir_all(&standalone).unwrap();
     std::fs::write(standalone.join("manifest.json"), "{}").unwrap();
     assert_eq!(
         basecraft_ops::records::bundle_for_result(&result, Some(&project)),
