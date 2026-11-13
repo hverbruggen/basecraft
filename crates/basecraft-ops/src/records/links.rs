@@ -542,8 +542,9 @@ impl AlignmentLinkExt for AlignmentLink {
 
     fn read(tree: &Path) -> Result<Self> {
         crate::records::analysis_store::ArtifactRun::for_result(tree)?;
-        let metadata: serde_json::Value =
-            basecraft_protocol::records::decode(&std::fs::read(sidecar(tree))?)?;
+        let (metadata, writer) = basecraft_protocol::records::decode_written::<serde_json::Value>(
+            &std::fs::read(sidecar(tree))?,
+        )?;
         if let Some(reason) = metadata
             .get("unavailable")
             .and_then(serde_json::Value::as_str)
@@ -559,10 +560,10 @@ impl AlignmentLinkExt for AlignmentLink {
                 },
             )));
         }
-        let mut link: Self = serde_json::from_value(metadata)?;
+        let mut link: Self = basecraft_protocol::records::convert(metadata, &writer)?;
         if !matches!(link.schema, 1 | 2) {
             return Err(crate::Error::Unsupported(
-                "unsupported tree–alignment link version".into(),
+                basecraft_protocol::records::other_format(&writer, link.schema, "1 or 2"),
             ));
         }
         if link.source.is_relative() {

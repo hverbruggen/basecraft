@@ -32,3 +32,9 @@ pub struct MetadataManifest {
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
 }
+
+impl crate::records::RecordFormat for MetadataManifest {
+    fn is_current(&self) -> bool {
+        self.version == crate::metadata::METADATA_VERSION
+    }
+}

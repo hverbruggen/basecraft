@@ -161,9 +161,9 @@ impl PreparedOperation {
         }
         contract::BoundedSchema::compile(&self.operation.descriptor.result)?
             .validate(result.data.as_deref().unwrap_or(&Value::Null))?;
-        let plan: Value = basecraft_protocol::records::decode(
-            &basecraft_ops::records::read_record(&self.run.artifact("query-preparation.json")?)?,
-        )?;
+        let plan: Value = serde_json::from_slice(&basecraft_ops::records::read_record(
+            &self.run.artifact("query-preparation.json")?,
+        )?)?;
         let receipt = &self.run_path(&self.context.outputs["receipt"]);
         if let Ok(metadata) = receipt.symlink_metadata()
             && (!metadata.is_file()

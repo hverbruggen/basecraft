@@ -96,13 +96,17 @@ fn read<T: serde::de::DeserializeOwned>(path: &Path, version: fn(&T) -> u32) -> 
     let bytes = std::fs::read(path)?;
     #[cfg(feature = "test-counters")]
     basecraft_io::counters::record_read(path, bytes.len() as u64);
-    let record: T =
-        basecraft_protocol::records::decode(&bytes).map_err(|e| crate::Error::Damaged {
-            path: path.into(),
-            detail: e.to_string(),
+    let (record, writer) =
+        basecraft_protocol::records::decode_written::<T>(&bytes).map_err(|e| {
+            crate::Error::Damaged {
+                path: path.into(),
+                detail: e.to_string(),
+            }
         })?;
     if version(&record) != 1 {
-        return Err(crate::Error::Unsupported("analysis index version".into()));
+        return Err(crate::Error::Unsupported(
+            basecraft_protocol::records::other_format(&writer, version(&record), 1),
+        ));
     }
     Ok(record)
 }

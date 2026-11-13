@@ -587,11 +587,16 @@ fn read_companion(
     exchange_hash: &str,
     tree: Option<&TreeDoc>,
 ) -> Result<Companion> {
-    let companion: Companion = basecraft_protocol::records::decode(bytes)?;
+    let (companion, writer) = basecraft_protocol::records::decode_written::<Companion>(bytes)?;
     if companion.version != COMPANION_VERSION {
         return Err(Error::Unsupported(format!(
-            "{} was written by a different basecraft version",
-            path.display()
+            "{}: {}",
+            path.display(),
+            basecraft_protocol::records::other_format(
+                &writer,
+                companion.version,
+                COMPANION_VERSION
+            )
         )));
     }
     if companion.exchange_hash != exchange_hash {

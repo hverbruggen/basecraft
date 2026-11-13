@@ -167,7 +167,7 @@ fn history_is_fingerprints_only_and_path_escape_is_detected() {
     publication.inputs[0].retained = Some("../gene.fasta".into());
     std::fs::write(
         records::companion(&file).join("manifest.json"),
-        serde_json::to_vec(&publication).unwrap(),
+        basecraft_protocol::records::encode(&publication).unwrap(),
     )
     .unwrap();
     assert!(
@@ -467,7 +467,7 @@ fn ancestor_only_artifacts_and_duplicate_parent_references_are_checked() {
     );
     let mut current = records::inspect(&file, None).unwrap();
     current.parents.push(current.parents[0].clone());
-    let bytes = serde_json::to_vec(&current).unwrap();
+    let bytes = basecraft_protocol::records::encode(&current).unwrap();
     std::fs::write(bundle.join("manifest.json"), &bytes).unwrap();
     std::fs::write(
         bundle.join("records").join(format!("{}.json", current.id)),

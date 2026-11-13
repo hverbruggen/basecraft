@@ -253,7 +253,11 @@ fn a_sync_conflict_copy_of_the_index_still_counts() {
     let mut theirs: basecraft_protocol::records::AnalysisIndex =
         serde_json::from_slice(&std::fs::read(&copy).unwrap()).unwrap();
     theirs.files = ["their.fasta".into()].into();
-    std::fs::write(&shard, serde_json::to_vec_pretty(&theirs).unwrap()).unwrap();
+    std::fs::write(
+        &shard,
+        basecraft_protocol::records::encode(&theirs).unwrap(),
+    )
+    .unwrap();
     let check = records::check(&source).unwrap();
     assert!(check.is_complete(), "{:?}", check.issues);
     assert_eq!(check.conflict.analyses[0].run, run.directory());

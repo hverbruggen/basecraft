@@ -100,13 +100,13 @@ pub(crate) fn load_with(
     read: &mut impl FnMut(&Path) -> Result<(basecraft_io::Source, String)>,
 ) -> Result<OpenedMetadata> {
     let dir = manifest_path.parent().unwrap_or(Path::new("."));
-    let value: serde_json::Value =
-        basecraft_protocol::records::decode(read(manifest_path)?.0.bytes()).map_err(|e| {
-            crate::Error::Damaged {
-                path: manifest_path.to_path_buf(),
-                detail: format!("not valid JSON: {e}"),
-            }
-        })?;
+    let (value, writer) = basecraft_protocol::records::decode_written::<serde_json::Value>(
+        read(manifest_path)?.0.bytes(),
+    )
+    .map_err(|e| crate::Error::Damaged {
+        path: manifest_path.to_path_buf(),
+        detail: e.to_string(),
+    })?;
     if value["format"] != FORMAT {
         return Err(crate::Error::Damaged {
             path: manifest_path.to_path_buf(),
@@ -115,13 +115,15 @@ pub(crate) fn load_with(
     }
     let version = value["version"].as_u64().unwrap_or(0);
     if version != u64::from(METADATA_VERSION) {
-        return Err(crate::Error::Unsupported(format!(
-            "metadata format version {version} is not supported"
-        )));
+        return Err(crate::Error::Unsupported(
+            basecraft_protocol::records::other_format(&writer, version, METADATA_VERSION),
+        ));
     }
-    let manifest: Manifest = serde_json::from_value(value).map_err(|e| crate::Error::Damaged {
-        path: manifest_path.to_path_buf(),
-        detail: format!("{MANIFEST} is malformed: {e}"),
+    let manifest: Manifest = basecraft_protocol::records::convert(value, &writer).map_err(|e| {
+        crate::Error::Damaged {
+            path: manifest_path.to_path_buf(),
+            detail: format!("{MANIFEST} is malformed: {e}"),
+        }
     })?;
     let mut notices = Vec::new();
     let mut read = |entry: &TableEntry, expected: &str| -> Result<basecraft_io::table::Sheet> {

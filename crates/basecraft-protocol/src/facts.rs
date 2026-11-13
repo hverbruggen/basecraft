@@ -101,20 +101,25 @@ impl AlphabetCounts {
                 return;
             }
             self.reach += 1;
-            let b = b.to_ascii_uppercase();
-            if matches!(b, b'N' | b'X') || !(b.is_ascii_alphabetic() || b == b'*') {
-                continue;
-            }
-            self.letters += 1;
-            match b {
-                b'E' | b'F' | b'I' | b'L' | b'P' | b'Q' | b'J' | b'O' | b'Z' | b'*' => {
-                    self.protein_only += 1;
-                }
-                b'T' => self.t += 1,
-                b'U' => self.u += 1,
-                _ => {}
-            }
+            self.tally(b, 1);
         }
+    }
+
+    /// Add `step` (1, or `u64::MAX` to take one away) for `b` if it counts.
+    fn tally(&mut self, b: u8, step: u64) {
+        let Some(b) = letter(b) else {
+            return;
+        };
+        self.letters = self.letters.wrapping_add(step);
+        let class = match b {
+            b'E' | b'F' | b'I' | b'L' | b'P' | b'Q' | b'J' | b'O' | b'Z' | b'*' => {
+                &mut self.protein_only
+            }
+            b'T' => &mut self.t,
+            b'U' => &mut self.u,
+            _ => return,
+        };
+        *class = class.wrapping_add(step);
     }
 
     /// Whether all [`GUESS_LETTERS`] letters are counted, so residues
@@ -123,11 +128,33 @@ impl AlphabetCounts {
         self.letters >= GUESS_LETTERS
     }
 
-    /// Whether an edit starting at `position` can change the counts: one
-    /// inside the counted prefix, or any while fewer than
-    /// [`GUESS_LETTERS`] letters are counted.
-    pub fn changed_by_edit_at(&self, position: u64) -> bool {
-        !self.is_full() || position < self.reach
+    /// Follow replacing `removed` at `start` with `inserted`. Returns false
+    /// when the prefix must be counted again. An edit beyond the counted
+    /// prefix changes nothing; one of gaps, N, X and ? only moves where the
+    /// prefix ends. While fewer than [`GUESS_LETTERS`] letters are counted,
+    /// every letter is, so taking the removed ones away is exact.
+    pub fn edited(&mut self, start: u64, removed: &[u8], inserted: &[u8]) -> bool {
+        if self.is_full() && start >= self.reach {
+            return true;
+        }
+        let shift =
+            |reach: u64| (reach + inserted.len() as u64).saturating_sub(removed.len() as u64);
+        let counts = |bytes: &[u8]| bytes.iter().any(|&b| letter(b).is_some());
+        if !counts(removed) && !counts(inserted) {
+            self.reach = shift(self.reach);
+            return true;
+        }
+        if self.is_full() {
+            return false;
+        }
+        for &b in removed {
+            self.tally(b, u64::MAX);
+        }
+        for &b in inserted {
+            self.tally(b, 1);
+        }
+        self.reach = shift(self.reach);
+        !self.is_full()
     }
 
     /// No protein-only letters: DNA, or RNA when U appears without T (IUPAC
@@ -148,6 +175,12 @@ impl AlphabetCounts {
             Alphabet::Undetermined
         }
     }
+}
+
+/// `b` in upper case when it counts toward the guess: not a gap, N, X or ?.
+fn letter(b: u8) -> Option<u8> {
+    let b = b.to_ascii_uppercase();
+    (!matches!(b, b'N' | b'X') && (b.is_ascii_alphabetic() || b == b'*')).then_some(b)
 }
 
 impl Alphabet {
@@ -277,12 +310,39 @@ mod tests {
         let counts = super::AlphabetCounts::of(dna.as_bytes());
         assert_eq!(counts.alphabet(), Alphabet::Dna);
         assert!(counts.is_full());
-        assert!(counts.changed_by_edit_at(1999));
-        assert!(!counts.changed_by_edit_at(2000));
-        let short = super::AlphabetCounts::of(b"ACGT");
+        // Beyond the prefix: nothing changes.
+        let mut beyond = counts;
+        assert!(beyond.edited(2000, b"", b"EEEE"));
+        assert_eq!(beyond, counts);
+        // Inside it, letters need a recount; gaps only move its end.
+        let mut inside = counts;
+        assert!(!inside.edited(1999, b"T", b"E"));
+        let mut gaps = counts;
+        assert!(gaps.edited(0, b"", b"----"));
+        assert!(!gaps.edited(2003, b"", b"E"), "the prefix now ends at 2004");
+    }
+
+    #[test]
+    fn short_and_late_starting_rows_update_without_a_recount() {
+        // A row whose letters start late: gap edits and letter edits while
+        // fewer than 1,000 letters are counted are followed exactly.
+        let row = format!("{}{}", "-".repeat(100_000), "ACGT");
+        let mut counts = super::AlphabetCounts::of(row.as_bytes());
         assert!(
-            short.changed_by_edit_at(4),
-            "appending to a short sequence counts"
+            counts.edited(50, b"", b"-"),
+            "a gap column needs no recount"
+        );
+        assert!(counts.edited(100_001, b"A", b"E"));
+        assert_eq!(counts.alphabet(), Alphabet::Protein);
+        assert!(counts.edited(100_001, b"E", b"A"));
+        assert_eq!(
+            counts,
+            super::AlphabetCounts::of(format!("-{row}").as_bytes())
+        );
+        let mut full = super::AlphabetCounts::of("A".repeat(999).as_bytes());
+        assert!(
+            !full.edited(999, b"", b"CC"),
+            "reaching 1,000 letters recounts"
         );
     }
 

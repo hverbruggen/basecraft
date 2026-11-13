@@ -398,7 +398,7 @@ impl SequenceDoc {
     pub fn replace(&mut self, start: u64, end: u64, residues: &[u8]) -> EditResult {
         let removed = self.seq.delete(start, end);
         self.seq.insert(start, residues);
-        if self.counts.changed_by_edit_at(start) {
+        if !self.counts.edited(start, &removed, residues) {
             self.counts = count_letters(&self.seq);
         }
         let change = Change {

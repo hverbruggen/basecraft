@@ -54,16 +54,17 @@ pub fn load(path: &Path) -> Result<Submission> {
 }
 
 pub(crate) fn load_from(path: &Path, bytes: &[u8]) -> Result<Submission> {
-    let sub: Submission =
-        basecraft_protocol::records::decode(bytes).map_err(|e| crate::Error::Damaged {
-            path: path.to_path_buf(),
-            detail: format!("not a submission: {e}"),
+    let (sub, writer) =
+        basecraft_protocol::records::decode_written::<Submission>(bytes).map_err(|e| {
+            crate::Error::Damaged {
+                path: path.to_path_buf(),
+                detail: format!("not a submission: {e}"),
+            }
         })?;
     if sub.version != SUBMISSION_VERSION {
-        return Err(crate::Error::Unsupported(format!(
-            "submission format version {} is not supported",
-            sub.version
-        )));
+        return Err(crate::Error::Unsupported(
+            basecraft_protocol::records::other_format(&writer, sub.version, SUBMISSION_VERSION),
+        ));
     }
     model::validate(&sub).map_err(|e| invalid(e.0))?;
     Ok(sub)

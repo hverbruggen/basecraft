@@ -511,6 +511,12 @@ pub struct InclusionPlan {
     pub included: usize,
 }
 
+impl crate::records::RecordFormat for Submission {
+    fn is_current(&self) -> bool {
+        self.version == SUBMISSION_VERSION
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

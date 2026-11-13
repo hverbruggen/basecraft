@@ -148,11 +148,12 @@ fn reconcile_task_receipt(
             "runtime receipt pointer must be absolute",
         ));
     }
-    let outcome: OperationOutcome =
-        basecraft_protocol::records::decode(&budget.read(Path::new(path))?)?;
+    let (outcome, writer) = basecraft_protocol::records::decode_written::<OperationOutcome>(
+        &budget.read(Path::new(path))?,
+    )?;
     if outcome.schema != 1 {
         return Err(crate::error::invalid(
-            "unsupported operation receipt schema",
+            basecraft_protocol::records::other_format(&writer, outcome.schema, 1),
         ));
     }
     if run["id"] != outcome.run_id || run["operation"] != outcome.operation {
@@ -210,12 +211,16 @@ fn task_primary_output(
     let root = runtime
         .parent()
         .ok_or_else(|| crate::error::invalid("receipt has no directory"))?;
-    let publication: Publication =
-        basecraft_protocol::records::decode(&budget.read(&root.join("manifest.json"))?)?;
-    if publication.schema_version != 1 || publication.id != outcome.run_id {
+    let (publication, writer) = basecraft_protocol::records::decode_written::<Publication>(
+        &budget.read(&root.join("manifest.json"))?,
+    )?;
+    if publication.schema_version != 1 {
         return Err(crate::error::invalid(
-            "publication schema or run identity mismatch",
+            basecraft_protocol::records::other_format(&writer, publication.schema_version, 1),
         ));
+    }
+    if publication.id != outcome.run_id {
+        return Err(crate::error::invalid("publication run identity mismatch"));
     }
     // Use the accepted descriptor's exact primary role/member, not collection
     // ordering. A result collection can include primary and supporting trees.
@@ -302,11 +307,19 @@ mod tests {
             "requested_parameters":{},"effective_parameters":{"canonical":true},"data":null,
             "artifacts":[],"proposals":null,"warnings":["canonical warning"],
             "errors":[{"code":"tool_failure","message":"canonical error","operation":"test/run@1"}],"evidence":null});
-        std::fs::write(&receipt, outcome.to_string()).unwrap();
+        std::fs::write(
+            &receipt,
+            basecraft_protocol::records::encode(&outcome).unwrap(),
+        )
+        .unwrap();
         let index = serde_json::json!({"schema_version":1,"id":"registered","status":"completed","operation":"test/run@1",
             "owner_instance":"current","source":{"path":"input.afa"},"outputs":{"stale.nwk":"stale"},
             "primary_output":"stale.nwk","diagnostics":"stale error","runtime_record":receipt});
-        std::fs::write(jobs.join("registered/manifest.json"), index.to_string()).unwrap();
+        std::fs::write(
+            jobs.join("registered/manifest.json"),
+            basecraft_protocol::records::encode(&index).unwrap(),
+        )
+        .unwrap();
         (jobs, receipt, outcome)
     }
 
@@ -350,8 +363,8 @@ mod tests {
             }
             assert_eq!(std::fs::read(index).unwrap(), before);
             assert_eq!(
-                std::fs::read_to_string(receipt).unwrap(),
-                outcome.to_string()
+                std::fs::read(receipt).unwrap(),
+                basecraft_protocol::records::encode(&outcome).unwrap()
             );
         }
     }
@@ -378,7 +391,8 @@ mod tests {
                     let mut value: serde_json::Value =
                         serde_json::from_slice(&std::fs::read(&index).unwrap()).unwrap();
                     value["runtime_record"] = serde_json::json!(42);
-                    std::fs::write(index, value.to_string()).unwrap();
+                    std::fs::write(index, basecraft_protocol::records::encode(&value).unwrap())
+                        .unwrap();
                 }
                 field => {
                     match field {
@@ -386,7 +400,11 @@ mod tests {
                         "run" => outcome["run_id"] = serde_json::json!("other"),
                         _ => outcome["operation"] = serde_json::json!("other"),
                     }
-                    std::fs::write(&receipt, outcome.to_string()).unwrap();
+                    std::fs::write(
+                        &receipt,
+                        basecraft_protocol::records::encode(&outcome).unwrap(),
+                    )
+                    .unwrap();
                 }
             }
             let rows = job_records(&jobs, false, "current").unwrap();
@@ -464,9 +482,21 @@ mod tests {
         ));
         let descriptor_path = root.join("descriptor.json");
         let manifest = root.join("manifest.json");
-        std::fs::write(&descriptor_path, serde_json::to_vec(&descriptor).unwrap()).unwrap();
-        std::fs::write(&manifest, serde_json::to_vec(&publication).unwrap()).unwrap();
-        std::fs::write(&receipt, outcome.to_string()).unwrap();
+        std::fs::write(
+            &descriptor_path,
+            basecraft_protocol::records::encode(&descriptor).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            &manifest,
+            basecraft_protocol::records::encode(&publication).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            &receipt,
+            basecraft_protocol::records::encode(&outcome).unwrap(),
+        )
+        .unwrap();
         assert_eq!(
             job_records(&jobs, false, "current").unwrap()["jobs"][0]["primary_output"],
             tree.to_str().unwrap()
@@ -475,14 +505,26 @@ mod tests {
             serde_json::json!(root.join("artifacts/bootstrap-run.nex"));
         publication.outputs[0].logical_name = ".basecraft/run/artifacts/bootstrap-run.nex".into();
         publication.outputs[0].retained = Some("artifacts/bootstrap-run.nex".into());
-        std::fs::write(&manifest, serde_json::to_vec(&publication).unwrap()).unwrap();
-        std::fs::write(&receipt, outcome.to_string()).unwrap();
+        std::fs::write(
+            &manifest,
+            basecraft_protocol::records::encode(&publication).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            &receipt,
+            basecraft_protocol::records::encode(&outcome).unwrap(),
+        )
+        .unwrap();
         assert_eq!(
             job_records(&jobs, false, "current").unwrap()["jobs"][0]["primary_output"],
             tree.to_str().unwrap()
         );
         outcome["state"] = serde_json::json!("finalizing");
-        std::fs::write(&receipt, outcome.to_string()).unwrap();
+        std::fs::write(
+            &receipt,
+            basecraft_protocol::records::encode(&outcome).unwrap(),
+        )
+        .unwrap();
         assert!(
             job_records(&jobs, false, "current").unwrap()["jobs"][0]["primary_output"].is_null()
         );
@@ -504,22 +546,38 @@ mod tests {
             .as_array_mut()
             .unwrap()
             .push(serde_json::json!({"role":"artifacts","path":export,"digest":"canonical"}));
-        std::fs::write(&manifest, serde_json::to_vec(&publication).unwrap()).unwrap();
-        std::fs::write(&receipt, outcome.to_string()).unwrap();
+        std::fs::write(
+            &manifest,
+            basecraft_protocol::records::encode(&publication).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            &receipt,
+            basecraft_protocol::records::encode(&outcome).unwrap(),
+        )
+        .unwrap();
         assert_eq!(
             job_records(&jobs, false, "current").unwrap()["jobs"][0]["primary_output"],
             export.to_str().unwrap()
         );
         // Stale export digest cannot override the valid retained primary.
         outcome["artifacts"][2]["digest"] = serde_json::json!("changed");
-        std::fs::write(&receipt, outcome.to_string()).unwrap();
+        std::fs::write(
+            &receipt,
+            basecraft_protocol::records::encode(&outcome).unwrap(),
+        )
+        .unwrap();
         assert_eq!(
             job_records(&jobs, false, "current").unwrap()["jobs"][0]["primary_output"],
             tree.to_str().unwrap()
         );
         // Missing primary must not substitute the bootstrap collection.
         outcome["artifacts"].as_array_mut().unwrap().remove(1);
-        std::fs::write(&receipt, outcome.to_string()).unwrap();
+        std::fs::write(
+            &receipt,
+            basecraft_protocol::records::encode(&outcome).unwrap(),
+        )
+        .unwrap();
         assert!(
             job_records(&jobs, false, "current").unwrap()["jobs"][0]["primary_output"].is_null()
         );
@@ -531,13 +589,25 @@ mod tests {
         outcome["pins"]["descriptor_digest"] = serde_json::json!(basecraft_io::hash_bytes(
             &serde_json::to_vec(&descriptor).unwrap()
         ));
-        std::fs::write(&descriptor_path, serde_json::to_vec(&descriptor).unwrap()).unwrap();
-        std::fs::write(&receipt, outcome.to_string()).unwrap();
+        std::fs::write(
+            &descriptor_path,
+            basecraft_protocol::records::encode(&descriptor).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            &receipt,
+            basecraft_protocol::records::encode(&outcome).unwrap(),
+        )
+        .unwrap();
         assert!(
             job_records(&jobs, false, "current").unwrap()["jobs"][0]["primary_output"].is_null()
         );
         descriptor.outputs.get_mut("artifacts").unwrap().visibility = ArtifactVisibility::Result;
-        std::fs::write(&descriptor_path, serde_json::to_vec(&descriptor).unwrap()).unwrap();
+        std::fs::write(
+            &descriptor_path,
+            basecraft_protocol::records::encode(&descriptor).unwrap(),
+        )
+        .unwrap();
         let row = &job_records(&jobs, false, "current").unwrap()["jobs"][0];
         assert!(row["primary_output"].is_null());
         assert!(
@@ -576,7 +646,11 @@ mod tests {
                 "runtime" => receipt.clone(),
                 _ => {
                     outcome["artifacts"] = serde_json::json!([{ "role":"artifacts","path":"/tree.nwk","digest":"hash"}]);
-                    std::fs::write(&receipt, outcome.to_string()).unwrap();
+                    std::fs::write(
+                        &receipt,
+                        basecraft_protocol::records::encode(&outcome).unwrap(),
+                    )
+                    .unwrap();
                     receipt.parent().unwrap().join("manifest.json")
                 }
             };
@@ -591,7 +665,7 @@ mod tests {
                     .success()
             );
             std::fs::create_dir_all(jobs.join("regular")).unwrap();
-            std::fs::write(jobs.join("regular/manifest.json"), serde_json::json!({"schema_version":1,"id":"regular","operation":"legacy","status":"completed","source":{"path":"input"},"outputs":{},"owner_instance":"current"}).to_string()).unwrap();
+            std::fs::write(jobs.join("regular/manifest.json"), basecraft_protocol::records::encode(&serde_json::json!({"schema_version":1,"id":"regular","operation":"legacy","status":"completed","source":{"path":"input"},"outputs":{},"owner_instance":"current"})).unwrap()).unwrap();
             let mut child = std::process::Command::new(std::env::current_exe().unwrap())
                 .args(["--exact", "records::document_record::tests::task_nonregular_evidence_is_rejected_in_bounded_subprocess", "--nocapture"])
                 .env(CHILD, temp.path()).spawn().unwrap();
@@ -643,7 +717,11 @@ mod tests {
             std::fs::create_dir_all(&directory).unwrap();
             let value = serde_json::json!({"schema_version":1,"id":id,"status":"completed","operation":id,
                 "source":{"path":"input"},"outputs":{},"primary_output":primary,"owner_instance":"current"});
-            std::fs::write(directory.join("manifest.json"), value.to_string()).unwrap();
+            std::fs::write(
+                directory.join("manifest.json"),
+                basecraft_protocol::records::encode(&value).unwrap(),
+            )
+            .unwrap();
         }
         let first = job_records(&jobs, false, "current").unwrap();
         let second = job_records(&jobs, true, "current").unwrap();
@@ -707,7 +785,10 @@ mod tests {
             ),
         ] {
             std::fs::create_dir_all(jobs.join(id)).unwrap();
-            std::fs::write(jobs.join(id).join("manifest.json"), value.to_string()).unwrap();
+            // A list can't carry the stamp: it is a broken record either way.
+            let bytes = basecraft_protocol::records::encode(&value)
+                .unwrap_or_else(|_| value.to_string().into_bytes());
+            std::fs::write(jobs.join(id).join("manifest.json"), bytes).unwrap();
         }
         let current = job_records(&jobs, false, "current").unwrap();
         assert_eq!(current["jobs"].as_array().unwrap().len(), 1);

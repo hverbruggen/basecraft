@@ -364,14 +364,19 @@ fn outside_edits_future_versions_and_unknown_fields() {
     // A newer format is refused clearly.
     let mut newer = saved.clone();
     newer["version"] = serde_json::json!(2);
-    std::fs::write(&manifest, serde_json::to_vec(&newer).unwrap()).unwrap();
+    std::fs::write(
+        &manifest,
+        basecraft_protocol::records::encode(&newer).unwrap(),
+    )
+    .unwrap();
     let error = Session::unlogged(root)
         .open(&manifest)
         .err()
         .unwrap()
         .to_string();
     assert!(
-        error.contains("metadata format version 2 is not supported"),
+        error.contains("in format version 2; basecraft")
+            && error.contains("reads format version 1"),
         "{error}"
     );
 }

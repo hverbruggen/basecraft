@@ -67,7 +67,7 @@ impl AlnRow {
     fn splice(&mut self, start: u64, end: u64, residues: &[u8]) -> Vec<u8> {
         let removed = self.seq.delete(start, end);
         self.seq.insert(start, residues);
-        if self.counts.changed_by_edit_at(start) {
+        if !self.counts.edited(start, &removed, residues) {
             self.counts = crate::sequence::count_letters(&self.seq);
         }
         removed

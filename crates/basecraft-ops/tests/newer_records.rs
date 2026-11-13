@@ -54,7 +54,7 @@ fn a_save_that_would_drop_newer_fields_is_refused_until_allowed() {
     for part in ["99.0.0", basecraft_protocol::VERSION, "future", "Save as"] {
         assert!(message.contains(part), "{message}");
     }
-    assert!(matches!(&error, Error::NewerFieldsDropped { fields, .. } if fields == &["future"]));
+    assert!(matches!(&error, Error::NewerFieldsDropped(files) if files[0].1.fields == ["future"]));
     // Nothing was replaced.
     assert_eq!(side_file(dir.path())["future"], json!({"kept": 1}));
 
@@ -129,4 +129,83 @@ fn walk(dir: &Path) -> Vec<std::path::PathBuf> {
         }
     }
     out
+}
+
+/// A FASTA file and, beside it, a side file a later basecraft wrote with
+/// `fields`; opened and edited, ready to save.
+fn newer_sequence(root: &Path, fields: &Value) -> (Session, DocId) {
+    let text = ">s\nACGTACGTAC\n";
+    std::fs::write(root.join("s.fasta"), text).unwrap();
+    let mut record = json!({
+        "basecraft": "99.0.0",
+        "version": 1,
+        "exchange_hash": basecraft_io::hash_bytes(text.as_bytes()),
+    });
+    for (key, value) in fields.as_object().unwrap() {
+        record[key] = value.clone();
+    }
+    std::fs::write(root.join("s.fasta.basecraft.json"), record.to_string()).unwrap();
+    let mut session = Session::new(root);
+    let doc = session.open(&root.join("s.fasta")).unwrap();
+    session.apply(doc, Op::seq_replace(0, 1, "T")).unwrap();
+    (session, doc)
+}
+
+fn refused_fields(session: &mut Session, doc: DocId) -> Vec<String> {
+    match session.save(doc, None) {
+        Err(Error::NewerFieldsDropped(files)) => {
+            files.into_iter().flat_map(|(_, u)| u.fields).collect()
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+}
+
+#[test]
+fn removing_a_newer_side_file_asks_first() {
+    crate::isolated_profile::isolate!();
+    let dir = tempfile::tempdir().unwrap();
+    // This build states no alphabet, so its save would remove the file.
+    let (mut session, doc) = newer_sequence(dir.path(), &json!({"reading_frame": 2}));
+    let fields = refused_fields(&mut session, doc);
+    assert!(fields.contains(&"reading_frame".to_owned()), "{fields:?}");
+    assert!(dir.path().join("s.fasta.basecraft.json").exists());
+}
+
+#[test]
+fn a_newer_side_file_this_build_cannot_read_counts_as_a_whole() {
+    crate::isolated_profile::isolate!();
+    for fields in [
+        json!({"alphabet": {"value": "xna", "source": "user"}}),
+        json!({"version": 2, "alphabet": {"value": "dna", "source": "user"}}),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut session, doc) = newer_sequence(dir.path(), &fields);
+        let alphabet = basecraft_protocol::facts::StatedAlphabet::Protein;
+        session.apply(doc, Op::SetAlphabet { alphabet }).unwrap();
+        let refused = refused_fields(&mut session, doc);
+        assert!(
+            refused[0].starts_with("the whole file"),
+            "{fields}: {refused:?}"
+        );
+    }
+}
+
+#[test]
+fn replay_writes_saves_again_as_the_build_that_logged_them() {
+    crate::isolated_profile::isolate!();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.nwk");
+    let original = "[&R] ((a,b),(c,d));\n";
+    std::fs::write(&path, original).unwrap();
+    basecraft_protocol::records::writing_as("0.4.0", || {
+        let mut session = Session::new(dir.path());
+        let tree = session.open(&path).unwrap();
+        reroot(&mut session, tree, "b");
+        session.save(tree, None).unwrap();
+    });
+    assert_eq!(side_file(dir.path())["basecraft"], "0.4.0");
+    // The save replaced the original; replay checks the edits against it.
+    std::fs::write(&path, original).unwrap();
+    let report = basecraft_ops::records::replay(dir.path()).unwrap();
+    assert!(report.ok(), "{:#?}", report.problems);
 }

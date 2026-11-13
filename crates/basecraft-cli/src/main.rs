@@ -917,48 +917,14 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     schemars::schema_for!(basecraft_protocol::Feature),
                 ),
             ];
-            // Files written through `records::encode` name the basecraft
+            // Records written through `records::encode` name the basecraft
             // version that wrote them under `basecraft`.
-            let stamped = [
-                "sanger-saved-review",
-                "sanger-saved-call-sets",
-                "alignment-link",
-                "alignment-link-recovery",
-                "alignment-link-unavailable",
-                "collection-intent",
-                "collection-export-intent",
-                "member-export-receipt",
-                "provenance-report-manifest",
-                "report-export-manifest",
-                "metadata-manifest",
-                "query-preparation",
-                "document-report",
-                "submission-package",
-                "submission-validation",
-                "workflow-failure",
-                "companion",
-                "sanger-request",
-                "sanger-job-record",
-                "submitted-input",
-                "analysis-run",
-                "recovery-integrity-error",
-                "result-binding",
-                "provenance-export-map",
-                "plugin-installation-index",
-                "managed-plugin-runtime",
-                "run-record",
-                "local-job-index",
-                "store-marker",
-                "analysis-index",
-                "indexed-folders",
-                "pending-save",
-                "operation-request",
-                "operation-outcome",
-                "provenance-publication",
-                "submission",
-            ];
             for (name, mut schema) in schemas {
-                if stamped.contains(&name) {
+                let stamped = schema
+                    .get("title")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|t| basecraft_protocol::records::STAMPED.contains(&t));
+                if stamped {
                     let fields = schema.ensure_object();
                     fields
                         .entry("properties")

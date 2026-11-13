@@ -31,7 +31,7 @@ fn source(root: &Path, name: &str, publications: &[Publication]) -> PathBuf {
     for p in publications {
         // Deliberately noncanonical whitespace, retained byte for byte by the writer.
         let mut bytes = b" \n".to_vec();
-        bytes.extend(serde_json::to_vec_pretty(p).unwrap());
+        bytes.extend(basecraft_protocol::records::encode(p).unwrap());
         bytes.extend(b"\n ");
         std::fs::write(bundle.join("records").join(format!("{}.json", p.id)), bytes).unwrap();
     }
@@ -233,16 +233,16 @@ fn original_export_failures() {
             "id" => {
                 let mut q = p.clone();
                 q.id = "Different".into();
-                std::fs::write(&record, serde_json::to_vec(&q).unwrap()).unwrap();
+                std::fs::write(&record, basecraft_protocol::records::encode(&q).unwrap()).unwrap();
             }
             "schema" => {
                 let mut q = p.clone();
                 q.schema_version = 2;
-                std::fs::write(&record, serde_json::to_vec(&q).unwrap()).unwrap();
+                std::fs::write(&record, basecraft_protocol::records::encode(&q).unwrap()).unwrap();
             }
             "cycle" => {
                 p.parents.push(p.id.clone());
-                std::fs::write(&record, serde_json::to_vec(&p).unwrap()).unwrap();
+                std::fs::write(&record, basecraft_protocol::records::encode(&p).unwrap()).unwrap();
             }
             "corrupt" => {
                 std::fs::write(bundle.join("evidence"), b"bad").unwrap();
@@ -254,14 +254,14 @@ fn original_export_failures() {
                     retained: Some("evidence".into()),
                     reference: None,
                 });
-                std::fs::write(&record, serde_json::to_vec(&p).unwrap()).unwrap();
+                std::fs::write(&record, basecraft_protocol::records::encode(&p).unwrap()).unwrap();
             }
             "count" => {
                 p.parents = vec!["Parent".into(); 10_001];
-                std::fs::write(&record, serde_json::to_vec(&p).unwrap()).unwrap();
+                std::fs::write(&record, basecraft_protocol::records::encode(&p).unwrap()).unwrap();
                 std::fs::write(
                     bundle.join("records/Parent.json"),
-                    serde_json::to_vec(&publication("Parent", &[])).unwrap(),
+                    basecraft_protocol::records::encode(&publication("Parent", &[])).unwrap(),
                 )
                 .unwrap();
             }
