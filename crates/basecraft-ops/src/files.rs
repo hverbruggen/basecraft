@@ -121,8 +121,6 @@ pub const LONGEST_ALIGNMENT_ROW: u64 = 1_000_000;
 /// An open alignment plus what's needed to write its file back.
 pub struct OpenedAlignment {
     pub doc: AlignmentDoc,
-    /// The letters the user said the alignment is written in.
-    pub alphabet: Option<Fact<Alphabet>>,
     /// Why the alignment's companion could not be used, if it couldn't.
     pub companion_warning: Option<String>,
     /// Rows the GFF3 companion annotates, with their residue counts at open.
@@ -246,27 +244,21 @@ impl Loaded {
 /// Open a file as whatever it holds: see [`kind`].
 pub fn load(path: &Path) -> Result<Loaded> {
     let format = Format::from_path(path)?;
-    if format == Format::SangerReview {
-        return crate::sanger_review::SangerReview::load(path)
+    match format {
+        Format::SangerReview => crate::sanger_review::SangerReview::load(path)
             .map(|review| Loaded::SangerReview(Box::new(review)))
             .map_err(|detail| crate::Error::Damaged {
                 path: path.into(),
                 detail,
-            });
+            }),
+        Format::GenBank => Ok(Loaded::Sequence(opened_genbank(
+            genbank::open_hashed(path)?.0,
+        ))),
+        Format::Metadata => crate::metadata::load(path).map(Loaded::Metadata),
+        Format::Submission => crate::submission::load(path).map(Loaded::Submission),
+        Format::Delimitation => load_delimitation(path).map(Loaded::Delimitation),
+        Format::Fasta | Format::Tree => load_source(path, format, Source::open(path)?),
     }
-    if format == Format::GenBank {
-        return open(path).map(Loaded::Sequence);
-    }
-    if format == Format::Metadata {
-        return crate::metadata::load(path).map(Loaded::Metadata);
-    }
-    if format == Format::Submission {
-        return crate::submission::load(path).map(Loaded::Submission);
-    }
-    if format == Format::Delimitation {
-        return load_delimitation(path).map(Loaded::Delimitation);
-    }
-    load_from(path, Source::open(path)?)
 }
 
 /// Load FASTA, GenBank or a tree from the supplied main-file snapshot.
@@ -274,7 +266,11 @@ pub fn load(path: &Path) -> Result<Loaded> {
 /// must retain the companion validation used by `Session`.
 /// Other formats require their existing loaders and are rejected here.
 pub fn load_from(path: &Path, source: Source) -> Result<Loaded> {
-    match Format::from_path(path)? {
+    load_source(path, Format::from_path(path)?, source)
+}
+
+fn load_source(path: &Path, format: Format, source: Source) -> Result<Loaded> {
+    match format {
         Format::Tree => load_tree_from(path, &source).map(Loaded::Tree),
         Format::Fasta => {
             let gff = read_optional(&gff_sidecar(path))?;
@@ -284,7 +280,9 @@ pub fn load_from(path: &Path, source: Source) -> Result<Loaded> {
                 gff.as_ref(),
             )
         }
-        Format::GenBank => open_from(path, source).map(Loaded::Sequence),
+        Format::GenBank => Ok(Loaded::Sequence(opened_genbank(genbank::parse_first(
+            source.bytes(),
+        )?))),
         _ => Err(crate::error::invalid(
             "this format does not support loading an owned source",
         )),
@@ -467,7 +465,6 @@ fn load_fasta_from(
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
         let doc = AlignmentDoc::from_fasta(name, &file);
         Ok(Loaded::Alignment(OpenedAlignment {
-            alphabet: None,
             companion_warning: None,
             annotated: annotated_rows(&doc, captured_gff),
             doc,
@@ -760,19 +757,28 @@ pub fn facts_companion(
 /// Put back the alphabet an alignment's or sequence's companion keeps. A
 /// companion that no longer matches the file is ignored, with a warning.
 fn restore_alphabet(content: &mut Loaded, path: &Path, exchange_hash: &str) {
-    let (alphabet, warning) = match content {
-        Loaded::Sequence(opened) => (&mut opened.alphabet, &mut opened.companion_warning),
-        Loaded::Alignment(opened) => (&mut opened.alphabet, &mut opened.companion_warning),
-        _ => return,
-    };
     let companion = tree_sidecar(path);
-    match read_optional(&companion).and_then(|bytes| {
+    let found = read_optional(&companion).and_then(|bytes| {
         bytes
             .map(|bytes| read_companion(&companion, bytes.bytes(), exchange_hash, None))
             .transpose()
-    }) {
-        Ok(found) => *alphabet = found.and_then(|c| c.alphabet),
-        Err(error) => *warning = Some(format!("The companion file was ignored: {error}")),
+    });
+    let (stated, warning) = match found {
+        Ok(found) => (found.and_then(|c| c.alphabet), None),
+        Err(error) => (
+            None,
+            Some(format!("The companion file was ignored: {error}")),
+        ),
+    };
+    match content {
+        Loaded::Sequence(opened) if stated.is_some() => opened.doc.set_alphabet(stated),
+        Loaded::Alignment(opened) if stated.is_some() => opened.doc.set_alphabet(stated),
+        _ => {}
+    }
+    match content {
+        Loaded::Sequence(opened) => opened.companion_warning = warning,
+        Loaded::Alignment(opened) => opened.companion_warning = warning,
+        _ => {}
     }
 }
 
@@ -809,8 +815,6 @@ pub fn save_tree_companion(tree: &Path, doc: &TreeDoc) -> Result<PathBuf> {
 /// An open document plus what's needed to write its file back.
 pub struct Opened {
     pub doc: SequenceDoc,
-    /// The letters the user said the sequence is written in.
-    pub alphabet: Option<Fact<Alphabet>>,
     /// Why the sequence's companion could not be used, if it couldn't.
     pub companion_warning: Option<String>,
     pub format: Format,
@@ -825,6 +829,9 @@ pub struct Opened {
 pub struct OtherRecords {
     /// Records in the file, the open one included.
     pub count: usize,
+    /// Record names that more than one record in the file uses. Edits name
+    /// their record, so they are refused while this is not empty.
+    pub repeated_names: Vec<String>,
     /// GenBank: the exact bytes after the first record, held once.
     pub genbank: Arc<Vec<u8>>,
     /// FASTA: the GFF3 companion without the open record's lines.
@@ -840,21 +847,12 @@ fn open_source(path: &Path, format: Format) -> Result<Source> {
 
 /// Open the first record of a sequence file.
 pub fn open(path: &Path) -> Result<Opened> {
-    let format = Format::from_path(path)?;
-    if format == Format::GenBank {
-        let (first, _) = genbank::open_hashed(path)?;
-        return Ok(opened_genbank(first));
-    }
-    if matches!(format, Format::Fasta | Format::GenBank) {
-        return open_from(path, Source::open(path)?);
-    }
-    open_from(path, Source::from_vec(Vec::new()))
-}
-
-/// Open a sequence from already-read main-file bytes using the shared parsers.
-pub fn open_from(path: &Path, source: Source) -> Result<Opened> {
-    let format = Format::from_path(path)?;
-    match format {
+    match Format::from_path(path)? {
+        Format::GenBank => Ok(opened_genbank(genbank::open_hashed(path)?.0)),
+        Format::Fasta => open_fasta_from(
+            path,
+            Arc::new(fasta::IndexedFasta::from_source(Source::open(path)?)?),
+        ),
         Format::SangerReview => Err(crate::error::invalid("this is a Sanger review")),
         Format::Delimitation => Err(crate::error::invalid("this is a delimitation workspace")),
         Format::Metadata => Err(crate::error::invalid(
@@ -865,20 +863,21 @@ pub fn open_from(path: &Path, source: Source) -> Result<Opened> {
             "{} is a tree, not a sequence",
             path.display()
         ))),
-        Format::GenBank => Ok(opened_genbank(genbank::parse_first(source.bytes())?)),
-        Format::Fasta => open_fasta_from(path, Arc::new(fasta::IndexedFasta::from_source(source)?)),
     }
 }
 
 fn opened_genbank(first: genbank::First) -> Opened {
+    let names: Vec<String> = std::iter::once(first.record.name.clone())
+        .chain(locus_names(&first.rest).map(|(_, name)| String::from_utf8_lossy(name).into_owned()))
+        .collect();
     Opened {
-        alphabet: None,
         companion_warning: None,
         doc: SequenceDoc::from_genbank(first.record),
         format: Format::GenBank,
         fasta: None,
         others: OtherRecords {
             count: first.records,
+            repeated_names: repeated(&names),
             genbank: Arc::new(first.rest),
             gff: None,
         },
@@ -914,17 +913,50 @@ fn open_fasta_with_gff(
     let features = gff.and_then(|g| g.sequences.into_iter().find(|s| s.seqid == name));
     let doc = SequenceDoc::from_fasta(Arc::clone(&file), 0, features);
     Ok(Opened {
-        alphabet: None,
         companion_warning: None,
         doc,
         format: Format::Fasta,
         others: OtherRecords {
             count: file.index.records.len(),
+            repeated_names: repeated(
+                &file
+                    .index
+                    .records
+                    .iter()
+                    .map(|r| r.name.clone())
+                    .collect::<Vec<_>>(),
+            ),
             genbank: Arc::default(),
             gff: gff_bytes.map(|bytes| Arc::new(gff3::keep_others(bytes, &name))),
         },
         fasta: Some(file),
     })
+}
+
+fn repeated(names: &[String]) -> Vec<String> {
+    crate::renames::duplicate_names(names).map_or_else(Vec::new, |d| d.names)
+}
+
+/// Each GenBank record's name, the first word after LOCUS, with the byte
+/// offset where it is written.
+pub(crate) fn locus_names(bytes: &[u8]) -> impl Iterator<Item = (usize, &[u8])> {
+    let mut at = 0;
+    bytes
+        .split_inclusive(|&b| b == b'\n')
+        .filter_map(move |line| {
+            let offset = at;
+            at += line.len();
+            let rest = line.strip_prefix(b"LOCUS")?;
+            if !rest.first().is_some_and(u8::is_ascii_whitespace) {
+                return None;
+            }
+            let start = 5 + rest.iter().take_while(|b| b.is_ascii_whitespace()).count();
+            let len = line[start..]
+                .iter()
+                .take_while(|b| !b.is_ascii_whitespace())
+                .count();
+            Some((offset + start, &line[start..start + len]))
+        })
 }
 
 /// Serialise the main file of a document.
@@ -1095,48 +1127,21 @@ pub fn extract_record(
     segments: &[(u64, u64)],
     reverse: bool,
 ) -> genbank::Record {
-    let mut rec = if segments.len() > 1 {
-        extract_spliced(doc, segments, reverse)
-    } else {
-        let mut r = extract_range(doc, start, end);
-        if reverse {
-            reverse_complement_record(&mut r);
-        }
-        r
-    };
-    rec.name = if reverse && segments.len() <= 1 {
-        format!("{}_rc", rec.name)
-    } else {
-        rec.name
-    };
-    rec
-}
-
-fn complement(b: u8) -> u8 {
-    match b {
-        b'A' => b'T',
-        b'T' | b'U' => b'A',
-        b'C' => b'G',
-        b'G' => b'C',
-        b'a' => b't',
-        b't' | b'u' => b'a',
-        b'c' => b'g',
-        b'g' => b'c',
-        b'R' => b'Y',
-        b'Y' => b'R',
-        b'K' => b'M',
-        b'M' => b'K',
-        b'B' => b'V',
-        b'V' => b'B',
-        b'D' => b'H',
-        b'H' => b'D',
-        other => other,
+    if segments.len() > 1 {
+        return extract_spliced(doc, segments, reverse);
     }
+    let mut rec = extract_range(doc, start, end);
+    if reverse {
+        reverse_complement_record(&mut rec);
+        rec.name.push_str("_rc");
+    }
+    rec
 }
 
 /// Reverse-complement a record's sequence and mirror its annotations onto
 /// the other strand. Segment order (5' to 3') carries over unchanged.
 fn reverse_complement_record(rec: &mut genbank::Record) {
+    use basecraft_docs::sequence::complement;
     let n = rec.sequence.len() as u64;
     rec.sequence.reverse();
     for b in &mut rec.sequence {
@@ -1172,7 +1177,7 @@ fn extract_spliced(doc: &SequenceDoc, segments: &[(u64, u64)], reverse: bool) ->
         if reverse {
             part.reverse();
             for x in &mut part {
-                *x = complement(*x);
+                *x = basecraft_docs::sequence::complement(*x);
             }
         }
         sequence.extend(part);
@@ -1221,34 +1226,43 @@ fn extract_spliced(doc: &SequenceDoc, segments: &[(u64, u64)], reverse: bool) ->
             qualifiers: f.qualifiers.clone(),
         });
     }
-    let meta = doc.genbank.clone().unwrap_or_default();
     let name = match &label {
         Some(l) => format!("{}_{l}", doc.name),
         None => format!("{}_{}-{}_spliced", doc.name, lo + 1, hi),
     };
+    let definition = format!(
+        "{}{} parts of {} spliced together",
+        label.map(|l| format!("{l}: ")).unwrap_or_default(),
+        segments.len(),
+        doc.name
+    );
+    extracted(doc, name, &definition, features, sequence)
+}
+
+/// An extracted record, with the source's molecule, division and date.
+fn extracted(
+    doc: &SequenceDoc,
+    name: String,
+    definition: &str,
+    features: Vec<Feature>,
+    sequence: Vec<u8>,
+) -> genbank::Record {
+    let meta = doc.genbank.clone().unwrap_or_default();
+    let or = |value: String, default: &str| {
+        if value.is_empty() {
+            default.to_owned()
+        } else {
+            value
+        }
+    };
     genbank::Record {
         name,
-        molecule: if meta.molecule.is_empty() {
-            "DNA".into()
-        } else {
-            meta.molecule
-        },
+        molecule: or(meta.molecule, "DNA"),
         circular: false,
-        division: if meta.division.is_empty() {
-            "UNK".into()
-        } else {
-            meta.division
-        },
-        date: if meta.date.is_empty() {
-            "01-JAN-1970".into()
-        } else {
-            meta.date
-        },
+        division: or(meta.division, "UNK"),
+        date: or(meta.date, "01-JAN-1970"),
         header: vec![format!(
-            "DEFINITION  {}{} parts of {} spliced together, extracted with Basecraft.",
-            label.map(|l| format!("{l}: ")).unwrap_or_default(),
-            segments.len(),
-            doc.name
+            "DEFINITION  {definition}, extracted with Basecraft."
         )],
         features,
         sequence,
@@ -1321,34 +1335,8 @@ fn extract_range(doc: &SequenceDoc, start: u64, end: u64) -> genbank::Record {
     features.retain(|f| {
         !(f.kind == "source" && f.qualifier("note").is_none_or(|n| !n.starts_with("bases ")))
     });
-    let meta = doc.genbank.clone().unwrap_or_default();
-    genbank::Record {
-        name,
-        molecule: if meta.molecule.is_empty() {
-            "DNA".into()
-        } else {
-            meta.molecule
-        },
-        circular: false,
-        division: if meta.division.is_empty() {
-            "UNK".into()
-        } else {
-            meta.division
-        },
-        date: if meta.date.is_empty() {
-            "01-JAN-1970".into()
-        } else {
-            meta.date
-        },
-        header: vec![format!(
-            "DEFINITION  Bases {}..{} of {}, extracted with Basecraft.",
-            start + 1,
-            end,
-            doc.name
-        )],
-        features,
-        sequence: doc.read(start, end),
-    }
+    let definition = format!("Bases {}..{} of {}", start + 1, end, doc.name);
+    extracted(doc, name, &definition, features, doc.read(start, end))
 }
 
 pub fn load_delimitation(

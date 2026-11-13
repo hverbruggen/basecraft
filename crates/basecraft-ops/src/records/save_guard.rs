@@ -149,11 +149,7 @@ mod tests {
         std::fs::write(&file, ">gene\nACGT\n").unwrap();
         let mut session = crate::Session::new(dir.path());
         let doc = session.open(&file).unwrap();
-        let edit = Op::SeqReplace {
-            start: 1,
-            end: 2,
-            residues: "T".into(),
-        };
+        let edit = Op::seq_replace(1, 2, "T");
         session.apply(doc, edit).unwrap();
         // Another saver holds the target through its whole save.
         let held = super::hold_elsewhere(&dir.path().join("./gene.fasta"));

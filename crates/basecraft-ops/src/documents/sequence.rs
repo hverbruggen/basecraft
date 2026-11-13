@@ -41,7 +41,6 @@ impl Document for Opened {
     }
     fn proposal_candidate(&self) -> Result<files::Loaded> {
         Ok(files::Loaded::Sequence(Opened {
-            alphabet: self.alphabet.clone(),
             companion_warning: None,
             doc: self.doc.clone(),
             format: self.format,
@@ -72,21 +71,44 @@ impl Document for Opened {
     fn opening_warning(&self) -> Option<&str> {
         self.companion_warning.as_deref()
     }
+    fn name_record(&self, op: &mut Op) -> Result<()> {
+        let Some(record) = op.record() else {
+            return Ok(());
+        };
+        if !self.others.repeated_names.is_empty() {
+            return Err(crate::Error::RecordNamesRepeat(
+                self.others.repeated_names.clone(),
+            ));
+        }
+        let open = &self.doc.name;
+        match record {
+            Some(name) if name != open => Err(invalid(format!(
+                "{name} is not the open record; only {open} can be edited"
+            ))),
+            None if self.others.count > 1 => {
+                *record = Some(open.clone());
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
     fn apply(&mut self, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {
         if let Op::SetAlphabet { alphabet } = op {
-            return Ok((super::set_alphabet(&mut self.alphabet, *alphabet), None));
+            let before = super::stated(self.doc.alphabet()).cloned();
+            self.doc.set_alphabet(Some(super::user_alphabet(*alphabet)));
+            return Ok((Inverse::Alphabet(before), None));
         }
         execute_sequence(&mut self.doc, op)
     }
     fn revert(&mut self, inverse: &Inverse) -> Result<()> {
         if let Inverse::Alphabet(before) = inverse {
-            self.alphabet.clone_from(before);
+            self.doc.set_alphabet(before.clone());
             return Ok(());
         }
         undo_sequence(&mut self.doc, inverse)
     }
     fn reapply(&mut self, op: &Op, inverse: &Inverse) -> Result<Inverse> {
-        if let (Op::FeatureAdd { feature }, Inverse::Feature { id, .. }) = (op, inverse) {
+        if let (Op::FeatureAdd { feature, .. }, Inverse::Feature { id, .. }) = (op, inverse) {
             self.doc.restore_feature(*id, Some(feature.clone()));
             Ok(Inverse::Feature {
                 id: *id,
@@ -101,7 +123,7 @@ impl Document for Opened {
     fn saved_companions(&self, target: &Path) -> Vec<PathBuf> {
         let gff = files::write_sidecar(self, &mut std::io::sink()).is_some();
         let gff = gff.then(|| files::gff_sidecar(target));
-        let facts = self.alphabet.as_ref().map(|_| files::tree_sidecar(target));
+        let facts = super::stated(self.doc.alphabet()).map(|_| files::tree_sidecar(target));
         gff.into_iter().chain(facts).collect()
     }
 
@@ -126,7 +148,12 @@ impl Document for Opened {
                 Ok(())
             })?;
         }
-        super::stage_facts(&mut prepared, target, self.alphabet.as_ref(), &hash)?;
+        super::stage_companion(
+            &mut prepared,
+            target,
+            super::stated(self.doc.alphabet()),
+            &hash,
+        )?;
         Ok(prepared)
     }
     fn saved_hashes(
@@ -143,7 +170,10 @@ impl Document for Opened {
             r?;
             out.push(hw.hash());
         }
-        out.extend(super::facts_hash(self.alphabet.as_ref(), &main)?);
+        out.extend(super::facts_hash(
+            super::stated(self.doc.alphabet()),
+            &main,
+        )?);
         Ok(out)
     }
     fn merge(&self, previous: &Op, next: &Op) -> Option<Op> {
@@ -153,13 +183,16 @@ impl Document for Opened {
                     start,
                     end,
                     residues,
+                    record,
                 },
                 Op::SeqReplace {
                     start: next_start,
                     end: next_end,
                     residues: next_residues,
+                    record: next_record,
                 },
             ) if next_start == next_end
+                && record == next_record
                 && !next_residues.is_empty()
                 && *next_start == start + residues.len() as u64 =>
             {
@@ -167,6 +200,7 @@ impl Document for Opened {
                     start: *start,
                     end: *end,
                     residues: format!("{residues}{}", next_residues.to_ascii_uppercase()),
+                    record: record.clone(),
                 })
             }
             _ => None,
@@ -192,6 +226,7 @@ pub(crate) fn execute_sequence(
             start,
             end,
             residues,
+            ..
         } => {
             if start > end || *end > doc.len() {
                 return Err(invalid(format!(
@@ -209,7 +244,7 @@ pub(crate) fn execute_sequence(
                 None,
             ))
         }
-        Op::FeatureAdd { feature } => {
+        Op::FeatureAdd { feature, .. } => {
             check_location(feature, doc.len())?;
             let fid = doc.add_feature(feature.clone());
             Ok((
@@ -220,7 +255,7 @@ pub(crate) fn execute_sequence(
                 Some(fid),
             ))
         }
-        Op::FeatureRemove { id } => {
+        Op::FeatureRemove { id, .. } => {
             let fid = FeatureId(*id);
             let before = doc
                 .remove_feature(fid)
@@ -233,7 +268,7 @@ pub(crate) fn execute_sequence(
                 None,
             ))
         }
-        Op::FeatureUpdate { id, feature } => {
+        Op::FeatureUpdate { id, feature, .. } => {
             check_location(feature, doc.len())?;
             let fid = FeatureId(*id);
             if doc.feature(fid).is_none() {
@@ -346,17 +381,9 @@ mod tests {
                 col: 0,
                 count: 1,
             },
-            Op::SeqReplace {
-                start: 0,
-                end: 5,
-                residues: "A".into(),
-            },
-            Op::SeqReplace {
-                start: 0,
-                end: 1,
-                residues: "?".into(),
-            },
-            Op::FeatureRemove { id: 900 },
+            Op::seq_replace(0, 5, "A"),
+            Op::seq_replace(0, 1, "?"),
+            Op::feature_remove(900),
         ] {
             assert!(document.apply(&op).is_err());
             assert_eq!(
@@ -418,13 +445,7 @@ mod tests {
                 .saved_hashes(&source, &super::super::WritePublication::Immediate)
                 .unwrap();
             assert_eq!(initial[0], basecraft_io::hash_bytes(&expected_main));
-            let (inverse, _) = document
-                .apply(&Op::SeqReplace {
-                    start: 2,
-                    end: 4,
-                    residues: "n".into(),
-                })
-                .unwrap();
+            let (inverse, _) = document.apply(&Op::seq_replace(2, 4, "n")).unwrap();
             assert_ne!(
                 document
                     .saved_hashes(&source, &super::super::WritePublication::Immediate)
@@ -481,26 +502,8 @@ mod tests {
         let mut session = crate::Session::new(root.path());
         let id = session.open(&source).unwrap();
         let initial = session.save_hashes(id).unwrap();
-        let first = session
-            .apply(
-                id,
-                Op::SeqReplace {
-                    start: 60,
-                    end: 60,
-                    residues: "a".into(),
-                },
-            )
-            .unwrap();
-        let second = session
-            .apply(
-                id,
-                Op::SeqReplace {
-                    start: 61,
-                    end: 61,
-                    residues: "tg".into(),
-                },
-            )
-            .unwrap();
+        let first = session.apply(id, Op::seq_replace(60, 60, "a")).unwrap();
+        let second = session.apply(id, Op::seq_replace(61, 61, "tg")).unwrap();
         assert_ne!(first.entry_id, second.entry_id);
         let edited = session.save_hashes(id).unwrap();
         session.undo(id).unwrap();

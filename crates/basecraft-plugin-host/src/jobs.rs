@@ -386,7 +386,7 @@ impl JobManager {
                     .ops
                     .iter()
                     .filter(|op| match op {
-                        basecraft_protocol::Op::FeatureAdd { feature }
+                        basecraft_protocol::Op::FeatureAdd { feature, .. }
                             if document.features().any(|(_, known)| {
                                 known.kind == feature.kind && known.location == feature.location
                             }) =>

@@ -50,7 +50,6 @@ impl Session {
     ) -> Result<DocId> {
         let (name, residues) = Self::validate_new_sequence(name, text)?;
         let content = Loaded::Sequence(Opened {
-            alphabet: None,
             companion_warning: None,
             doc: SequenceDoc::new(
                 name.clone(),

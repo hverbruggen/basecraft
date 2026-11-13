@@ -89,23 +89,14 @@ fn finds_orfs_and_maps_them_onto_a_newer_version() {
         )
         .unwrap();
     assert_eq!(result.ops.len(), 1, "{:?}", result.message);
-    let Op::FeatureAdd { feature } = &result.ops[0] else {
+    let Op::FeatureAdd { feature, .. } = &result.ops[0] else {
         panic!("not a feature.add")
     };
     let seg = &feature.location.segments[0];
     assert_eq!((seg.start, seg.end), (10, 10 + 3 + 360 + 3));
 
     // The user inserts 5 residues upstream while the plugin was working.
-    session
-        .apply(
-            doc,
-            Op::SeqReplace {
-                start: 2,
-                end: 2,
-                residues: "GGGGG".into(),
-            },
-        )
-        .unwrap();
+    session.apply(doc, Op::seq_replace(2, 2, "GGGGG")).unwrap();
     let actor = Actor::Plugin {
         id: p.info.id.clone(),
         version: p.info.version.clone(),

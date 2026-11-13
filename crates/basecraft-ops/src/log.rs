@@ -457,14 +457,15 @@ pub fn describe(op: &Op) -> String {
             start,
             end,
             residues,
+            ..
         } => match (end.saturating_sub(*start), residues.len()) {
             (0, n) => format!("Inserted {n} bp at {}", start.saturating_add(1)),
             (d, 0) => format!("Deleted {d} bp at {}", range(*start, *end)),
             (_, n) => format!("Replaced {} with {n} bp", range(*start, *end)),
         },
-        Op::FeatureAdd { feature } => format!("Added {}", feature_name(feature)),
+        Op::FeatureAdd { feature, .. } => format!("Added {}", feature_name(feature)),
         Op::FeatureUpdate { feature, .. } => format!("Edited {}", feature_name(feature)),
-        Op::FeatureRemove { id } => format!("Deleted annotation #{id}"),
+        Op::FeatureRemove { id, .. } => format!("Deleted annotation #{id}"),
         Op::AlnReplace {
             row,
             start,
@@ -814,17 +815,9 @@ mod activity_tests {
 
     #[test]
     fn describes_edits() {
-        let op = Op::SeqReplace {
-            start: 9,
-            end: 9,
-            residues: "ACG".into(),
-        };
+        let op = Op::seq_replace(9, 9, "ACG");
         assert_eq!(describe(&op), "Inserted 3 bp at 10");
-        let op = Op::SeqReplace {
-            start: 9,
-            end: 12,
-            residues: String::new(),
-        };
+        let op = Op::seq_replace(9, 12, String::new());
         assert_eq!(describe(&op), "Deleted 3 bp at 10–12");
         let op = Op::AlnShift {
             rows: vec![(2, 5)],

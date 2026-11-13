@@ -2261,6 +2261,13 @@
                   "format": "uint64",
                   "minimum": 0
                 },
+                "record": {
+                  "description": "The record, by name, in a file that holds several. Absent means\nthe open record.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "residues": {
                   "type": "string"
                 },
@@ -2294,6 +2301,13 @@
               "properties": {
                 "feature": {
                   "$ref": "#/$defs/Feature"
+                },
+                "record": {
+                  "description": "The record, by name, in a file that holds several. Absent means\nthe open record.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 }
               },
               "required": [
@@ -2320,6 +2334,13 @@
                   "type": "integer",
                   "format": "uint32",
                   "minimum": 0
+                },
+                "record": {
+                  "description": "The record, by name, in a file that holds several. Absent means\nthe open record.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 }
               },
               "required": [
@@ -2349,6 +2370,13 @@
                   "type": "integer",
                   "format": "uint32",
                   "minimum": 0
+                },
+                "record": {
+                  "description": "The record, by name, in a file that holds several. Absent means\nthe open record.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 }
               },
               "required": [
@@ -2380,6 +2408,13 @@
                 },
                 "path": {
                   "type": "string"
+                },
+                "record": {
+                  "description": "The record, by name, in a file that holds several. Absent means\nthe open record.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 },
                 "reverse": {
                   "description": "Write the reverse complement, so a reverse-strand annotation\nreads 5' to 3' in the new file.",

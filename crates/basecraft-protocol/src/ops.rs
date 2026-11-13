@@ -33,13 +33,36 @@ pub enum Op {
         start: u64,
         end: u64,
         residues: String,
+        /// The record, by name, in a file that holds several. Absent means
+        /// the open record.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        record: Option<String>,
     },
     #[serde(rename = "feature.add")]
-    FeatureAdd { feature: Feature },
+    FeatureAdd {
+        feature: Feature,
+        /// The record, by name, in a file that holds several. Absent means
+        /// the open record.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        record: Option<String>,
+    },
     #[serde(rename = "feature.remove")]
-    FeatureRemove { id: u32 },
+    FeatureRemove {
+        id: u32,
+        /// The record, by name, in a file that holds several. Absent means
+        /// the open record.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        record: Option<String>,
+    },
     #[serde(rename = "feature.update")]
-    FeatureUpdate { id: u32, feature: Feature },
+    FeatureUpdate {
+        id: u32,
+        feature: Feature,
+        /// The record, by name, in a file that holds several. Absent means
+        /// the open record.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        record: Option<String>,
+    },
     /// Write residues `start..end` and the annotations within them to a new
     /// file at `path`. Annotations cut by the range are clipped and marked
     /// incomplete at the cut. Records the new file's hash.
@@ -55,6 +78,10 @@ pub enum Op {
         /// reads 5' to 3' in the new file.
         #[serde(default, skip_serializing_if = "is_false")]
         reverse: bool,
+        /// The record, by name, in a file that holds several. Absent means
+        /// the open record.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        record: Option<String>,
     },
     // Alignment edits. Columns are 0-based, half-open; `rows` are half-open
     // row ranges, `[[first, past_last], ...]`. Every edit keeps the
@@ -260,6 +287,53 @@ pub enum Op {
 }
 
 impl Op {
+    /// Replace residues `start..end` of the open record.
+    pub fn seq_replace(start: u64, end: u64, residues: impl Into<String>) -> Self {
+        Op::SeqReplace {
+            start,
+            end,
+            residues: residues.into(),
+            record: None,
+        }
+    }
+
+    /// Add an annotation to the open record.
+    pub fn feature_add(feature: Feature) -> Self {
+        Op::FeatureAdd {
+            feature,
+            record: None,
+        }
+    }
+
+    /// Remove annotation `id` from the open record.
+    pub fn feature_remove(id: u32) -> Self {
+        Op::FeatureRemove { id, record: None }
+    }
+
+    /// Replace annotation `id` of the open record.
+    pub fn feature_update(id: u32, feature: Feature) -> Self {
+        Op::FeatureUpdate {
+            id,
+            feature,
+            record: None,
+        }
+    }
+
+    /// The record a sequence edit or extraction names. Records in a file
+    /// that holds several are known by name (LOCUS name, or the FASTA
+    /// header up to the first space); absent means the open record.
+    /// `None` for operations that don't name a record.
+    pub fn record(&mut self) -> Option<&mut Option<String>> {
+        match self {
+            Op::SeqReplace { record, .. }
+            | Op::FeatureAdd { record, .. }
+            | Op::FeatureRemove { record, .. }
+            | Op::FeatureUpdate { record, .. }
+            | Op::Extract { record, .. } => Some(record),
+            _ => None,
+        }
+    }
+
     pub fn name(&self) -> &'static str {
         match self {
             Op::Open { .. } => "doc.open",
@@ -546,11 +620,7 @@ mod tests {
             session: "01JB9P".into(),
             actor: Actor::Human { user: "hv".into() },
             doc: "rbcL/rbcL.gb".into(),
-            op: Op::SeqReplace {
-                start: 4,
-                end: 6,
-                residues: "ACG".into(),
-            },
+            op: Op::seq_replace(4, 6, "ACG"),
             result: OpResult::default(),
             state: DocState {
                 counts: None,

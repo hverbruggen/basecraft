@@ -100,14 +100,7 @@ fn corrupt_alias_shard_keeps_other_known_conflicts() {
     let mut session = basecraft_ops::Session::new(&root);
     let doc = session.open(&source).unwrap();
     session
-        .apply(
-            doc,
-            basecraft_protocol::Op::SeqReplace {
-                start: 0,
-                end: 1,
-                residues: "T".into(),
-            },
-        )
+        .apply(doc, basecraft_protocol::Op::seq_replace(0, 1, "T"))
         .unwrap();
     let decision = session
         .check_save(doc, None)

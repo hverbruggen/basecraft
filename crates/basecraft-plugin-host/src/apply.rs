@@ -35,24 +35,19 @@ pub fn apply_proposals(
             .copied()
             .collect();
         let mapped = match op {
-            Op::FeatureAdd { feature } => {
-                map_feature(feature, &changes).map(|feature| Op::FeatureAdd { feature })
-            }
-            Op::FeatureUpdate { id, feature } => {
-                map_feature(feature, &changes).map(|feature| Op::FeatureUpdate { id, feature })
+            Op::FeatureAdd { feature, .. } => map_feature(feature, &changes).map(Op::feature_add),
+            Op::FeatureUpdate { id, feature, .. } => {
+                map_feature(feature, &changes).map(|feature| Op::feature_update(id, feature))
             }
             Op::SeqReplace {
                 start,
                 end,
                 residues,
+                ..
             } => {
                 let s = map_through(&changes, start, Bias::Right);
                 let e = map_through(&changes, end, Bias::Left).max(s);
-                Some(Op::SeqReplace {
-                    start: s,
-                    end: e,
-                    residues,
-                })
+                Some(Op::seq_replace(s, e, residues))
             }
             other => Some(other),
         };
@@ -99,14 +94,7 @@ mod checked_access_tests {
         let sequence = session.create_sequence("sequence", "ACGT").unwrap();
         for (start, residues) in [(0, "T"), (1, "G")] {
             session
-                .apply(
-                    sequence,
-                    Op::SeqReplace {
-                        start,
-                        end: start + 1,
-                        residues: residues.into(),
-                    },
-                )
+                .apply(sequence, Op::seq_replace(start, start + 1, residues))
                 .unwrap();
         }
         session.undo(sequence).unwrap();

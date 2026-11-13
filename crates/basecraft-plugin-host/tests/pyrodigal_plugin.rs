@@ -74,7 +74,7 @@ fn predicts_genes_with_the_mitochondrial_code() {
     );
     // nad1, GenBank complement(12542..13528), with its annotated start.
     let nad1 = result.ops.iter().any(|op| {
-        let Op::FeatureAdd { feature } = op else {
+        let Op::FeatureAdd { feature, .. } = op else {
             return false;
         };
         let s = &feature.location.segments[0];
@@ -95,7 +95,7 @@ fn predicts_genes_with_the_mitochondrial_code() {
         .unwrap();
     assert!(result.ops.len() > 1, "{:?}", result.message);
     for op in &result.ops {
-        let Op::FeatureAdd { feature } = op else {
+        let Op::FeatureAdd { feature, .. } = op else {
             panic!("not a feature.add")
         };
         let s = &feature.location.segments[0];

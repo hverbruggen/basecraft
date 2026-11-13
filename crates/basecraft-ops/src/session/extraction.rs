@@ -21,8 +21,8 @@ use super::{Op, OpResult, invalid};
 use crate::files::HashingWriter;
 
 impl Session {
-    /// Extract residues `start..end` with their annotations to a new
-    /// GenBank file at `path`, and log it.
+    /// Extract residues `start..end` of `record` (absent: the open record)
+    /// with their annotations to a new GenBank file at `path`, and log it.
     pub fn extract(
         &mut self,
         id: DocId,
@@ -30,8 +30,18 @@ impl Session {
         segments: &[(u64, u64)],
         reverse: bool,
         path: &Path,
+        record: Option<&str>,
     ) -> Result<()> {
-        self.doc(id)?;
+        let key = self.relative(path);
+        let mut op = Op::Extract {
+            start,
+            end,
+            path: key.clone(),
+            segments: segments.to_vec(),
+            reverse,
+            record: record.map(str::to_owned),
+        };
+        self.slot(id)?.content.as_document().name_record(&mut op)?;
         let _reserved = self.derived_target(path)?;
         self.track(id)?;
         let doc = &self.sequence_of(id)?.doc;
@@ -56,17 +66,10 @@ impl Session {
             hash = hw.hash();
             Ok(())
         })?;
-        let key = self.relative(path);
         let entry = self.entry(
             id,
             self.actor.clone(),
-            Op::Extract {
-                start,
-                end,
-                path: key.clone(),
-                segments: segments.to_vec(),
-                reverse,
-            },
+            op,
             OpResult {
                 notes: Vec::new(),
                 hashes: vec![(key, hash)],

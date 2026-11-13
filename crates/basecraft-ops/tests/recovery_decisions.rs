@@ -18,16 +18,7 @@ fn source(root: &Path, count: usize) -> Session {
         let file = directory.join(format!("{index}.fasta"));
         std::fs::write(&file, b">gene\nACGT\n").unwrap();
         let doc = session.open(&file).unwrap();
-        session
-            .apply(
-                doc,
-                Op::SeqReplace {
-                    start: 1,
-                    end: 2,
-                    residues: "T".into(),
-                },
-            )
-            .unwrap();
+        session.apply(doc, Op::seq_replace(1, 2, "T")).unwrap();
     }
     session
 }
@@ -743,16 +734,7 @@ fn status_is_read_only_and_tracks_document_progress_without_slot_ids() {
     let mut session = source(&root, 2);
     // Reopen a key so the originating Slot id differs from the attempt index.
     let reopened = session.open(&root.join("source/0.fasta")).unwrap();
-    session
-        .apply(
-            reopened,
-            Op::SeqReplace {
-                start: 1,
-                end: 2,
-                residues: "T".into(),
-            },
-        )
-        .unwrap();
+    session.apply(reopened, Op::seq_replace(1, 2, "T")).unwrap();
     let destination = root.join("out");
     let mut attempt =
         records::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
@@ -894,16 +876,7 @@ fn replaced_stage_directory_is_refused_with_file_identity_unchanged() {
     let file = nested.join("other.fasta");
     std::fs::write(&file, b">other\nACGT\n").unwrap();
     let doc = session.open(&file).unwrap();
-    session
-        .apply(
-            doc,
-            Op::SeqReplace {
-                start: 1,
-                end: 2,
-                residues: "T".into(),
-            },
-        )
-        .unwrap();
+    session.apply(doc, Op::seq_replace(1, 2, "T")).unwrap();
     let destination = root.join("out");
     let mut attempt =
         records::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
