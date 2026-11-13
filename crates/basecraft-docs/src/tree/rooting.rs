@@ -319,6 +319,7 @@ impl TreeDoc {
         }
         // A root placed from branch lengths is a real root (D18).
         result.rooted = Some(true);
+        result.rooted_by = basecraft_protocol::facts::FactSource::User;
         result.edited();
         *self = result;
         Ok(())

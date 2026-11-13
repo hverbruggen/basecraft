@@ -10,7 +10,7 @@ mod edit;
 mod rooting;
 pub use edit::TreeUndo;
 
-use basecraft_protocol::facts::{BranchLengths, Fact, Rooting};
+use basecraft_protocol::facts::{BranchLengths, Fact, FactSource, Rooting};
 use std::collections::{BTreeMap, BTreeSet};
 
 use basecraft_io::newick::{self, ParsedTree};
@@ -163,7 +163,11 @@ pub struct TreeDoc {
     /// Member identity and rooting declared in the exchange, independent of
     /// the file name used for display. Unknown rooting stays unknown.
     pub exchange_name: String,
+    /// The `[&R]` or `[&U]` tag written with the tree; None when there is
+    /// none. See `rooting` for what basecraft takes the tree to be.
     pub rooted: Option<bool>,
+    /// Who set `rooted`: the file, or the user through an edit.
+    rooted_by: FactSource,
     nodes: Vec<TreeNode>,
     root: usize,
     supports: Vec<SupportSet>,
@@ -292,6 +296,7 @@ impl TreeDoc {
             name: name.into(),
             exchange_name: parsed.name.clone(),
             rooted: parsed.rooted,
+            rooted_by: FactSource::Stated,
             nodes,
             root: 0,
             supports,
@@ -608,18 +613,33 @@ impl TreeDoc {
                 let node = self.smallest_clade(&a.tips)?;
                 a.clade = self.clade_ref(node);
                 a.tips = self.tips_under(node);
-                a.rooting = self.rooting();
+                a.rooting = self.rooting().value;
             }
         }
         Ok(Some(a))
     }
 
-    fn rooting(&self) -> Rooting {
-        match self.rooted {
-            Some(true) => Rooting::Rooted,
-            Some(false) => Rooting::Unrooted,
-            None => Rooting::Unknown,
-        }
+    /// Whether the tree is rooted, and who said so (D18). A `[&R]` or `[&U]`
+    /// tag, or the user, says so; without either, two clades at the base
+    /// read as rooted and three or more as unrooted, as a guess.
+    pub fn rooting(&self) -> Fact<Rooting> {
+        let (value, source) = match self.rooted {
+            Some(true) => (Rooting::Rooted, self.rooted_by),
+            Some(false) => (Rooting::Unrooted, self.rooted_by),
+            None => match self.nodes[self.root].children.len() {
+                2 => (Rooting::Rooted, FactSource::Guessed),
+                0 | 1 => (Rooting::Unknown, FactSource::Guessed),
+                _ => (Rooting::Unrooted, FactSource::Guessed),
+            },
+        };
+        Fact { value, source }
+    }
+
+    /// State whether the tree is rooted, as the user does (D18).
+    pub fn set_rooted(&mut self, rooted: bool) {
+        self.rooted = Some(rooted);
+        self.rooted_by = FactSource::User;
+        self.edited();
     }
 
     fn tip_names(&self) -> BTreeSet<String> {
@@ -701,6 +721,7 @@ impl TreeDoc {
         self.nodes[node].length_place = None;
         self.nodes[other].length_place = None;
         self.rooted = Some(true);
+        self.rooted_by = FactSource::User;
         self.edited();
         Ok(())
     }
@@ -763,7 +784,7 @@ impl TreeDoc {
                 // group it marks now. An edited label keeps its group.
                 if a.tips.is_empty() {
                     a.tips = tips;
-                    a.rooting = self.rooting();
+                    a.rooting = self.rooting().value;
                 }
                 self.annotations.insert(id, a);
             }
@@ -955,7 +976,6 @@ impl TreeDoc {
         // The halves are computed, so neither keeps a written precision.
         let half = (edges[split].length.map(|l| l / 2.0), None);
         // (old node, came from, new parent, length and its place, support).
-        type Placed = (Option<f64>, Option<i32>);
         let mut stack: Vec<(usize, usize, usize, Placed, SupportValues)> = vec![
             (other, target, 0, half, vec![None; sets]),
             (target, other, 0, half, edges[split].support.clone()),
@@ -981,6 +1001,7 @@ impl TreeDoc {
         self.nodes = nodes;
         self.root = 0;
         self.rooted = Some(true);
+        self.rooted_by = FactSource::User;
         for (s, v) in values.into_iter().enumerate() {
             self.supports[s].values = v;
         }
@@ -1228,6 +1249,9 @@ impl TreeDoc {
     }
 }
 
+/// A branch length and the place of its last written digit.
+type Placed = (Option<f64>, Option<i32>);
+
 struct Edge {
     length: Option<f64>,
     length_place: Option<i32>,
@@ -1248,6 +1272,49 @@ mod tests {
 
     fn tree(text: &str) -> TreeDoc {
         TreeDoc::from_newick("t", text).unwrap()
+    }
+
+    #[test]
+    fn rooting_is_the_tag_or_a_guess_from_the_base_and_the_user_can_state_it() {
+        use FactSource::{Guessed, Stated, User};
+        let fact = |value, source| Fact { value, source };
+        assert_eq!(
+            tree("((a,b),(c,d));").rooting(),
+            fact(Rooting::Rooted, Guessed)
+        );
+        assert_eq!(
+            tree("(a,b,(c,d));").rooting(),
+            fact(Rooting::Unrooted, Guessed)
+        );
+        assert_eq!(
+            tree("[&U] ((a,b),(c,d));").rooting(),
+            fact(Rooting::Unrooted, Stated)
+        );
+        assert_eq!(
+            tree("[&R] (a,b,(c,d));").rooting(),
+            fact(Rooting::Rooted, Stated)
+        );
+        // A guess leaves the file without a tag; stating it writes one.
+        let mut stated = tree("((a,b),(c,d));");
+        assert!(!stated.to_newick_with_rooting().starts_with('['));
+        let undo = stated
+            .apply_edit(&basecraft_protocol::Op::TreeSetRooting { rooted: false })
+            .unwrap();
+        assert_eq!(stated.rooting(), fact(Rooting::Unrooted, User));
+        assert!(stated.to_newick_with_rooting().starts_with("[&U] "));
+        stated.undo_edit(&undo);
+        assert_eq!(stated.rooting(), fact(Rooting::Rooted, Guessed));
+    }
+
+    #[test]
+    fn midpoint_and_variance_rooting_write_and_record_a_rooted_tree() {
+        for root in [TreeDoc::midpoint_root, TreeDoc::minimum_variance_root] {
+            let mut rooted = tree("[&U] (a:1,b:2,(c:3,d:4):1);");
+            root(&mut rooted).unwrap();
+            assert_eq!(rooted.rooting().value, Rooting::Rooted);
+            assert_eq!(rooted.rooting().source, FactSource::User);
+            assert!(rooted.to_newick_with_rooting().starts_with("[&R] "));
+        }
     }
 
     fn tip_names(t: &TreeDoc) -> Vec<String> {

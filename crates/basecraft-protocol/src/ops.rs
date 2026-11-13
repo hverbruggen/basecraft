@@ -177,6 +177,9 @@ pub enum Op {
     TreeLadderize { small_first: bool },
     #[serde(rename = "tree.rename_tip")]
     TreeRenameTip { from: String, to: String },
+    /// State whether the tree is rooted (D18); saved as `[&R]` or `[&U]`.
+    #[serde(rename = "tree.set_rooting")]
+    TreeSetRooting { rooted: bool },
     /// State what the tree's branch lengths measure.
     #[serde(rename = "tree.set_branch_lengths")]
     TreeSetBranchLengths {
@@ -391,6 +394,7 @@ impl Op {
             Op::TreeRotate { .. } => "tree.rotate",
             Op::TreeLadderize { .. } => "tree.ladderize",
             Op::TreeRenameTip { .. } => "tree.rename_tip",
+            Op::TreeSetRooting { .. } => "tree.set_rooting",
             Op::TreeSetBranchLengths { .. } => "tree.set_branch_lengths",
             Op::SetAlphabet { .. } => "doc.set_alphabet",
             Op::TreeAnnotate { .. } => "tree.annotate",

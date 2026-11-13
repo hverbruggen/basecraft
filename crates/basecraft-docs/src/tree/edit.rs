@@ -14,7 +14,9 @@ enum Change {
     Position {
         lengths: [(usize, Option<f64>, Option<i32>); 2],
         rooted: Option<bool>,
+        rooted_by: FactSource,
     },
+    Rooted(Option<bool>, FactSource),
     Children(Vec<(usize, Vec<usize>)>),
     Name {
         node: usize,
@@ -101,13 +103,18 @@ impl TreeDoc {
         match &undo.change {
             Change::Root(before) => *self = (**before).clone(),
             Change::BranchLengths(before) => self.branch_lengths.clone_from(before),
-            Change::Position { lengths, rooted } => {
+            Change::Position {
+                lengths,
+                rooted,
+                rooted_by,
+            } => {
                 for &(i, length, place) in lengths {
                     self.nodes[i].length = length;
                     self.nodes[i].length_place = place;
                 }
-                self.rooted = *rooted;
+                (self.rooted, self.rooted_by) = (*rooted, *rooted_by);
             }
+            Change::Rooted(rooted, by) => (self.rooted, self.rooted_by) = (*rooted, *by),
             Change::Children(nodes) => {
                 for (i, children) in nodes {
                     self.nodes[*i].children.clone_from(children);
@@ -178,6 +185,7 @@ impl TreeDoc {
                 let change = Change::Position {
                     lengths: [node(a), node(b)],
                     rooted: self.rooted,
+                    rooted_by: self.rooted_by,
                 };
                 self.set_root_position(clade, *fraction)?;
                 change
@@ -253,6 +261,11 @@ impl TreeDoc {
                 style,
                 remove_supports,
             } => self.edit_style(Some(style.clone()), remove_supports)?,
+            Op::TreeSetRooting { rooted } => {
+                let before = Change::Rooted(self.rooted, self.rooted_by);
+                self.set_rooted(*rooted);
+                before
+            }
             Op::TreeSetBranchLengths { meaning } => {
                 let stated = Fact {
                     value: meaning.clone(),

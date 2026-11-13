@@ -543,6 +543,22 @@ fn written_place(number: &str) -> i32 {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_branch_length_keeps_the_place_of_its_last_written_digit() {
+        for (text, place) in [
+            ("0.000123", -6),
+            ("12", 0),
+            ("1.5e-3", -4),
+            ("1.25E3", 1),
+            ("2.100000", -6),
+        ] {
+            assert_eq!(written_place(text), place, "{text}");
+        }
+        let tree = parse_newick("(a:0.123456,b:7):0;").unwrap();
+        let places: Vec<_> = tree.nodes.iter().map(|n| n.length_place).collect();
+        assert_eq!(places, [Some(0), Some(-6), Some(0)]);
+    }
+
     fn tips(t: &ParsedTree) -> Vec<&str> {
         t.nodes
             .iter()

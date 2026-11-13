@@ -311,8 +311,10 @@ fn tree() {
             let a = CladeAnnotation::new(vec!["specimen_01".into()], "Reviewed tip");
             let b = CladeAnnotation::new(vec!["specimen_02".into()], "Second tip");
             // The tree records the tips each label was made for.
+            // Two clades at its base: the tree reads as rooted (D18).
             let made = |label: &CladeAnnotation| CladeAnnotation {
                 tips: label.clade.iter().cloned().collect(),
+                rooting: basecraft_protocol::facts::Rooting::Rooted,
                 ..label.clone()
             };
             let mut first = original.clone();
