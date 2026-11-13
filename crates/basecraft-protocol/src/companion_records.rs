@@ -29,8 +29,7 @@ impl Companion {
     /// Write the companion as basecraft keeps it: indented JSON and a final
     /// newline. Every `*.basecraft.json` is written through here.
     pub fn write(&self, w: &mut dyn std::io::Write) -> std::io::Result<()> {
-        serde_json::to_writer_pretty(&mut *w, self)?;
-        writeln!(w)
+        w.write_all(&crate::records::encode(self)?)
     }
 
     pub fn new(exchange_hash: impl Into<String>) -> Self {

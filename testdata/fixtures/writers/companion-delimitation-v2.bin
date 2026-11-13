@@ -1,0 +1,195 @@
+{
+  "basecraft": "<version>",
+  "delimitation": {
+    "path_base": "/",
+    "workspace": {
+      "exchange_fields": {
+        "date": "2026-10-15T00:00:00"
+      },
+      "hypotheses": [
+        {
+          "attributes": {},
+          "groups": [
+            {
+              "attributes": {},
+              "color": "",
+              "id": "group-1",
+              "individual_scores": {},
+              "label": "1",
+              "members": [
+                "specimen_01",
+                "specimen_02"
+              ],
+              "scores": []
+            },
+            {
+              "attributes": {},
+              "color": "",
+              "id": "group-2",
+              "individual_scores": {},
+              "label": "2",
+              "members": [
+                "specimen_03",
+                "specimen_04",
+                "specimen_05"
+              ],
+              "scores": []
+            },
+            {
+              "attributes": {},
+              "color": "",
+              "id": "group-3",
+              "individual_scores": {},
+              "label": "3",
+              "members": [
+                "specimen_06",
+                "specimen_07",
+                "specimen_08"
+              ],
+              "scores": []
+            }
+          ],
+          "id": "partition-1",
+          "name": "construction",
+          "origin": "imported",
+          "parent": null,
+          "provenance": {
+            "analysis_tree": null,
+            "diagnostics": [],
+            "haplotypes": {},
+            "inputs": {},
+            "method": "SPART import",
+            "parameters": {},
+            "seed": null,
+            "status": null,
+            "version": "",
+            "workers": null
+          },
+          "scores": [],
+          "unassigned": []
+        },
+        {
+          "attributes": {},
+          "groups": [
+            {
+              "attributes": {},
+              "color": "",
+              "id": "group-1",
+              "individual_scores": {},
+              "label": "1",
+              "members": [
+                "specimen_01",
+                "specimen_02"
+              ],
+              "scores": []
+            },
+            {
+              "attributes": {},
+              "color": "",
+              "id": "group-2",
+              "individual_scores": {},
+              "label": "2",
+              "members": [
+                "specimen_03",
+                "specimen_04",
+                "specimen_05"
+              ],
+              "scores": []
+            },
+            {
+              "attributes": {},
+              "color": "",
+              "id": "group-3",
+              "individual_scores": {},
+              "label": "3",
+              "members": [
+                "specimen_06",
+                "specimen_07"
+              ],
+              "scores": []
+            }
+          ],
+          "id": "partition-2",
+          "name": "partial_review",
+          "origin": "imported",
+          "parent": null,
+          "provenance": {
+            "analysis_tree": null,
+            "diagnostics": [],
+            "haplotypes": {},
+            "inputs": {},
+            "method": "SPART import",
+            "parameters": {},
+            "seed": null,
+            "status": null,
+            "version": "",
+            "workers": null
+          },
+          "scores": [],
+          "unassigned": [
+            "specimen_08"
+          ]
+        }
+      ],
+      "name": "synthetic_demo",
+      "specimens": [
+        {
+          "attributes": {},
+          "id": "specimen_01",
+          "label": "specimen_01",
+          "sources": {}
+        },
+        {
+          "attributes": {},
+          "id": "specimen_02",
+          "label": "specimen_02",
+          "sources": {}
+        },
+        {
+          "attributes": {},
+          "id": "specimen_03",
+          "label": "specimen_03",
+          "sources": {}
+        },
+        {
+          "attributes": {},
+          "id": "specimen_04",
+          "label": "specimen_04",
+          "sources": {}
+        },
+        {
+          "attributes": {},
+          "id": "specimen_05",
+          "label": "specimen_05",
+          "sources": {}
+        },
+        {
+          "attributes": {},
+          "id": "specimen_06",
+          "label": "specimen_06",
+          "sources": {}
+        },
+        {
+          "attributes": {},
+          "id": "specimen_07",
+          "label": "specimen_07",
+          "sources": {}
+        },
+        {
+          "attributes": {},
+          "id": "specimen_08",
+          "label": "specimen_08",
+          "sources": {}
+        }
+      ],
+      "version": 1,
+      "view": {
+        "display_tree": null,
+        "selected": [],
+        "visible": []
+      }
+    }
+  },
+  "exchange_hash": "b3:fixture",
+  "version": 1
+}

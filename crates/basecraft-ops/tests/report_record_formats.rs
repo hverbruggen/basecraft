@@ -47,7 +47,7 @@ fn check_export(report: &Report, directory: &Path, capture: Option<&str>) {
     check_file(
         directory,
         "manifest.json",
-        &pretty(&export_manifest(report), false),
+        &basecraft_protocol::records::encode(&export_manifest(report)).unwrap(),
         capture,
     );
     check_file(
@@ -68,7 +68,7 @@ fn check_export(report: &Report, directory: &Path, capture: Option<&str>) {
     );
     assert_eq!(
         std::fs::read(directory.join("report.json")).unwrap(),
-        serde_json::to_vec_pretty(report).unwrap()
+        basecraft_protocol::records::encode(report).unwrap()
     );
 }
 fn check_provenance(publication: &Publication, directory: &Path, capture: Option<&str>) -> Report {
@@ -80,7 +80,7 @@ fn check_provenance(publication: &Publication, directory: &Path, capture: Option
     check_file(
         &reports,
         "manifest.json",
-        &pretty(&provenance_manifest(publication, &report), true),
+        &basecraft_protocol::records::encode(&provenance_manifest(publication, &report)).unwrap(),
         capture,
     );
     check_file(

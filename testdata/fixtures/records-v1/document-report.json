@@ -1,16 +1,17 @@
 {
+  "basecraft": "<version>",
+  "citations": [],
+  "document": "input.fasta",
+  "history": [],
+  "history_text": "History of input.fasta\nRevision: \n\n",
+  "methods": "No contributing scientific transformations are recorded for this revision.\n\nRecord limitations:\nEarlier processing before import is not recorded.",
+  "paragraphs": [],
+  "raw": "{\n  \"schema_version\": 1,\n  \"document\": \"input.fasta\",\n  \"revision\": \"\",\n  \"unsaved\": false,\n  \"warnings\": [\n    \"Earlier processing before import is not recorded.\"\n  ],\n  \"events\": [],\n  \"effective\": []\n}",
+  "revision": "",
   "schema_version": 1,
   "template_version": 2,
-  "document": "input.fasta",
-  "revision": "",
   "unsaved": false,
   "warnings": [
     "Earlier processing before import is not recorded."
-  ],
-  "history": [],
-  "paragraphs": [],
-  "methods": "No contributing scientific transformations are recorded for this revision.\n\nRecord limitations:\nEarlier processing before import is not recorded.",
-  "history_text": "History of input.fasta\nRevision: \n\n",
-  "raw": "{\n  \"schema_version\": 1,\n  \"document\": \"input.fasta\",\n  \"revision\": \"\",\n  \"unsaved\": false,\n  \"warnings\": [\n    \"Earlier processing before import is not recorded.\"\n  ],\n  \"events\": [],\n  \"effective\": []\n}",
-  "citations": []
+  ]
 }

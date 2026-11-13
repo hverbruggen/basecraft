@@ -42,6 +42,18 @@ pub enum Error {
         .0.join(", ")
     )]
     RecordNamesRepeat(Vec<String>),
+    /// D14: a save would drop fields a later basecraft wrote. Save As, or
+    /// save again after `Session::drop_newer_fields`.
+    #[error(
+        "{} was written by basecraft {writer}, and basecraft {} does not know its fields {}. \
+         Saving would drop them. Save as another file instead, or save anyway to drop them.",
+        path.display(), basecraft_protocol::VERSION, fields.join(", ")
+    )]
+    NewerFieldsDropped {
+        path: PathBuf,
+        writer: String,
+        fields: Vec<String>,
+    },
     #[error("invalid operation: {0}")]
     Invalid(String),
     #[error("{0}")]
@@ -83,6 +95,7 @@ impl Error {
             Self::Limit { .. } => Code::Limit,
             Self::Unsupported(_) => Code::Unsupported,
             Self::RecordNamesRepeat(_) => Code::RecordNamesRepeat,
+            Self::NewerFieldsDropped { .. } => Code::NewerFieldsDropped,
             Self::Busy(_) => Code::Busy,
             Self::UnknownDocument { .. } => Code::UnknownDocument,
             Self::WrongKind { .. } => Code::WrongDocumentKind,

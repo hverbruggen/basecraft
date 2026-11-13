@@ -101,7 +101,7 @@ pub(crate) fn load_with(
 ) -> Result<OpenedMetadata> {
     let dir = manifest_path.parent().unwrap_or(Path::new("."));
     let value: serde_json::Value =
-        serde_json::from_slice(read(manifest_path)?.0.bytes()).map_err(|e| {
+        basecraft_protocol::records::decode(read(manifest_path)?.0.bytes()).map_err(|e| {
             crate::Error::Damaged {
                 path: manifest_path.to_path_buf(),
                 detail: format!("not valid JSON: {e}"),
@@ -346,8 +346,7 @@ pub fn encode(meta: &ProjectMetadata) -> Result<Vec<Vec<u8>>> {
         partitions: meta.partitions.clone(),
         extra: meta.extra.clone(),
     };
-    let mut manifest = serde_json::to_vec_pretty(&manifest)?;
-    manifest.push(b'\n');
+    let manifest = basecraft_protocol::records::encode(&manifest)?;
     Ok(vec![manifest, specimens, taxa, identifications, records])
 }
 

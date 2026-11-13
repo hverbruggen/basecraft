@@ -1,0 +1,47 @@
+{
+  "basecraft": "<version>",
+  "exchange_hash": "b3:3f4570097435da892841a5ba8cc668a6513a6458a437d28efb86628f9e79b4bb",
+  "tree": {
+    "annotations": {
+      "1": {
+        "bar": true,
+        "bar_width": 3,
+        "clade": [
+          "a",
+          "b"
+        ],
+        "colour": "#808080",
+        "field": false,
+        "label": "ab",
+        "on_branch": false,
+        "opacity_left": 30,
+        "opacity_right": 30,
+        "rooting": "unknown",
+        "tips": [
+          "a",
+          "b",
+          "c"
+        ]
+      }
+    },
+    "style": {
+      "branch_width": 1,
+      "scale_bar": true,
+      "support_decimals": {},
+      "support_font": 10,
+      "support_fraction": {},
+      "support_legend": true,
+      "support_min": 0,
+      "support_minimums": {},
+      "support_placement": "natural",
+      "support_proportions": {},
+      "support_shown": [],
+      "symbols": null,
+      "tip_font": 13,
+      "vertical_bar_labels": true
+    },
+    "supports": [],
+    "tree_hash": "b3:1eaf68cbb597e7175c19a6a8f88a01e8613c20cba12eb2d67fa5729e5232aff3"
+  },
+  "version": 1
+}

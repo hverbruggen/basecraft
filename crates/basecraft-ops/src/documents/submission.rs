@@ -85,6 +85,7 @@ impl Document for Submission {
         }
         let bytes = crate::submission::encode(self)?;
         let mut prepared = super::PreparedWrite::default();
+        prepared.check_record::<basecraft_protocol::submission::Submission>(target);
         prepared.push(target, |w| w.write_all(&bytes))?;
         Ok(prepared)
     }

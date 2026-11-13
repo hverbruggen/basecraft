@@ -29,7 +29,6 @@
       "type": "string"
     }
   },
-  "additionalProperties": false,
   "required": [
     "original",
     "sha256",

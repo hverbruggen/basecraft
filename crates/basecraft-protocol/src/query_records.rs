@@ -39,7 +39,6 @@ pub struct QueryRecord {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct Query {
     pub name: String,
     pub sequence: String,

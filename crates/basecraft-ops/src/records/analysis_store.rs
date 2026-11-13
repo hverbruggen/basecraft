@@ -122,9 +122,7 @@ impl ArtifactRun {
                     schema_version: 1,
                     extra: BTreeMap::new(),
                 };
-                // Preserve the original compact, sorted JSON and final newline.
-                let mut bytes = serde_json::to_vec(&serde_json::to_value(marker)?)?;
-                bytes.push(b'\n');
+                let bytes = basecraft_protocol::records::encode(&marker)?;
                 basecraft_io::write_atomic(&store.join("store.json"), |w| w.write_all(&bytes))?;
                 basecraft_io::write_atomic(&store.join("identity"), |w| {
                     w.write_all(ulid::Ulid::generate().to_string().as_bytes())
@@ -156,7 +154,8 @@ impl ArtifactRun {
         if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 4096 {
             return Err(invalid("analysis namespace has an unsafe marker"));
         }
-        let value: serde_json::Value = serde_json::from_slice(&std::fs::read(marker)?)?;
+        let value: serde_json::Value =
+            basecraft_protocol::records::decode(&std::fs::read(marker)?)?;
         if value["format"] != "basecraft.analysis-store" || value["schema_version"] != 1 {
             return Err(invalid(
                 "foreign or unsupported analysis namespace; nothing was migrated",
@@ -344,8 +343,9 @@ impl ArtifactRun {
                 if !metadata.is_file() || metadata.file_type().is_symlink() {
                     return Err(invalid("unsafe result binding"));
                 }
-                let value: serde_json::Value =
-                    serde_json::from_slice(&crate::records::provenance::read_record(&binding)?)?;
+                let value: serde_json::Value = basecraft_protocol::records::decode(
+                    &crate::records::provenance::read_record(&binding)?,
+                )?;
                 if value["schema_version"] != 1 || value["result"].as_str() != relative.to_str() {
                     return Err(invalid("unsupported or mismatched result binding"));
                 }
@@ -599,7 +599,7 @@ pub(crate) fn publish_delimitation(
             }
             let bytes = crate::records::provenance::read_record(&dependency.join("manifest.json"))?;
             let publication: basecraft_protocol::provenance::Publication =
-                serde_json::from_slice(&bytes)?;
+                basecraft_protocol::records::decode(&bytes)?;
             let reference = basecraft_protocol::input_records::UpstreamLink {
                 bundle: (crate::records::input_evidence::relative(
                     &placement.logical(&run)?,

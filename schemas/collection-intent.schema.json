@@ -4,6 +4,10 @@
   "description": "Expected members recorded before ordinary collection retention.",
   "type": "object",
   "properties": {
+    "basecraft": {
+      "description": "The basecraft version that wrote this file.",
+      "type": "string"
+    },
     "members": {
       "type": "object",
       "additionalProperties": {
@@ -18,6 +22,7 @@
   },
   "required": [
     "schema",
-    "members"
+    "members",
+    "basecraft"
   ]
 }

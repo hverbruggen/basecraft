@@ -4,6 +4,10 @@
   "description": "`store.json` in an existing `analyses-v1` namespace. Runtime readers also\nenforce version 1, ordinary-file safety and the existing 4096-byte limit.",
   "type": "object",
   "properties": {
+    "basecraft": {
+      "description": "The basecraft version that wrote this file.",
+      "type": "string"
+    },
     "format": {
       "$ref": "#/$defs/StoreFormat"
     },
@@ -16,7 +20,8 @@
   "additionalProperties": true,
   "required": [
     "format",
-    "schema_version"
+    "schema_version",
+    "basecraft"
   ],
   "$defs": {
     "StoreFormat": {

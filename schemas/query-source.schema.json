@@ -19,7 +19,6 @@
           "default": null
         }
       },
-      "additionalProperties": false,
       "required": [
         "name",
         "sequence"

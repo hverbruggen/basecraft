@@ -380,6 +380,9 @@ impl Server {
                         self.session.check_save(doc, path.as_deref())?,
                     )?);
                 }
+                if args.get("drop_newer_fields").and_then(Value::as_bool) == Some(true) {
+                    self.session.drop_newer_fields(doc)?;
+                }
                 // No overwrite confirmation exists here: retain save_new's rule.
                 let warnings = if let Some(value) = args.get("decision") {
                     let choice: crate::save::Decision = serde_json::from_value(value.clone())
@@ -640,7 +643,7 @@ fn tools() -> Value {
             "type":"object","additionalProperties":false,
             "required":["token","known_policy","acknowledge_incomplete"],
             "properties":{"token":{"type":"string"},"known_policy":{"type":"string","enum":["cancel","preserve_copy","break_evidence","remove_analysis"]},"acknowledge_incomplete":{"type":"boolean"}}
-        }}), &["document"]),
+        },"drop_newer_fields":{"type":"boolean","description":"Save even when a file written by a later basecraft holds fields this version does not know; they are dropped."}}), &["document"]),
         tool("save_check","Inspect a save without writing. Returns a single-attempt token owned by this live Session; newer checks supersede it. Known policy and incomplete acknowledgement are separate.",json!({"document":doc,"path":string}), &["document"]),
         tool("file_record","Read history and methods for a saved project file as it is on disk, including saved Sanger reviews. Same output as `basecraft history --json`; writes nothing.",json!({"path":string}), &["path"]),
         tool("extract","Extract the inspected sequence revision to a new GenBank file with source ancestry. Coordinates are zero-based, half-open; optional splice segments are in biological order, followed by optional reverse complement. Existing destinations are refused.",json!({"document":doc,"version":{"type":"integer","minimum":0},"path":string,"start":{"type":"integer","minimum":0},"end":{"type":"integer","minimum":0},"segments":{"type":"array","items":{"type":"array","items":{"type":"integer","minimum":0},"minItems":2,"maxItems":2}},"reverse":{"type":"boolean"},"record":{"type":"string","description":"Optional check: the name of the open (first) record of a file of several. Other records can't be extracted yet."}}), &["document","version","path","start","end"]),
@@ -897,7 +900,7 @@ pub fn serve(root: &Path, writable: bool, kind: ClientKind, model: &str) -> Resu
                         "initialize" => {
                             server.initialized = true;
                             Ok(
-                                json!({"protocolVersion":"2025-11-25","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"basecraft","version":env!("CARGO_PKG_VERSION")},"instructions":"Independent headless project session. Installed operation calls return owned jobs. Use jobs_get/result/cancel; request cancellation does not cancel accepted jobs. Writes require --allow-writes."}),
+                                json!({"protocolVersion":"2025-11-25","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"basecraft","version":basecraft_protocol::VERSION},"instructions":"Independent headless project session. Installed operation calls return owned jobs. Use jobs_get/result/cancel; request cancellation does not cancel accepted jobs. Writes require --allow-writes."}),
                             )
                         }
                         "ping" => Ok(json!({})),

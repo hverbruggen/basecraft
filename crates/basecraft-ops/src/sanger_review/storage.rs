@@ -409,7 +409,7 @@ impl SangerRun {
             inputs: std::collections::BTreeMap::from([("sources".into(), sources)]),
             ..basecraft_protocol::records::RunRecord::new(
                 format!("{SANGER_TOOL}/{}", self.operation),
-                env!("CARGO_PKG_VERSION").into(),
+                basecraft_protocol::VERSION.into(),
                 SANGER_TOOL.into(),
             )
         };
@@ -850,15 +850,14 @@ impl SangerReview {
     }
 
     fn write_embedded(&self, path: &Path) -> crate::Result<()> {
-        let mut bytes = self.encoded_at(path, &self.evidence)?;
-        // Embedded support JSON ends with a newline.
-        bytes.push(b'\n');
+        let bytes = self.encoded_at(path, &self.evidence)?;
         basecraft_io::write_atomic(path, |w| w.write_all(&bytes))?;
         Ok(())
     }
 
     fn encoded_at(&self, path: &Path, evidence: &ReviewEvidence) -> crate::Result<Vec<u8>> {
-        let bytes = serde_json::to_vec_pretty(&self.stored_with_evidence(path, evidence)?)?;
+        let bytes =
+            basecraft_protocol::records::encode(&self.stored_with_evidence(path, evidence)?)?;
         if bytes.len() > 64 * 1024 * 1024 {
             return Err(invalid(
                 "Sanger review exceeds 64 MiB; previous file preserved",
@@ -926,7 +925,7 @@ pub(crate) fn relocate_package(
     paths: &BTreeMap<PathBuf, String>,
 ) -> crate::Result<()> {
     let bytes = crate::records::provenance::read_record(copied)?;
-    let value: serde_json::Value = serde_json::from_slice(&bytes)?;
+    let value: serde_json::Value = basecraft_protocol::records::decode(&bytes)?;
     let mut stored: super::StoredCallSets = serde_json::from_value(value)?;
     if stored.version != 3 {
         return Err(crate::Error::Unsupported(
@@ -1119,7 +1118,7 @@ pub fn record_addition(
         ));
     }
     let bytes = crate::records::provenance::read_record(&evidence.bundle.join("manifest.json"))?;
-    let publication: Publication = serde_json::from_slice(&bytes)?;
+    let publication: Publication = basecraft_protocol::records::decode(&bytes)?;
     if publication.id != evidence.id
         || basecraft_io::hash_bytes(&bytes) != evidence.hash
         || basecraft_io::hash_file(&evidence.review)? != evidence.review_hash
@@ -1292,6 +1291,7 @@ impl SangerReview {
         });
         crate::records::provenance::publish(run.directory(), &support)?;
         let mut prepared = crate::documents::PreparedWrite::default();
+        prepared.check_record::<super::StoredCallSets>(target);
         prepared.push(target, |writer| writer.write_all(&bytes))?;
         prepared.run = Some(run);
         Ok(prepared)
@@ -1723,7 +1723,8 @@ mod tests {
         extended["unknown_field"] = true.into();
         let bytes = serde_json::to_vec(&extended).unwrap();
         std::fs::write(&path, &bytes).unwrap();
-        assert!(ReviewSession::load(&path).is_err());
+        // D14: a field this build does not know does not stop it opening.
+        assert!(ReviewSession::load(&path).is_ok());
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
         let alias = tmp.path().join("trace-alias.json");
         std::fs::hard_link(&trace, &alias).unwrap();

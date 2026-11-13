@@ -4,6 +4,10 @@
   "description": "Existing rollback-durability poison marker. Recovery refuses its presence,\nregardless of its contents; this model does not replace that safety check.",
   "type": "object",
   "properties": {
+    "basecraft": {
+      "description": "The basecraft version that wrote this file.",
+      "type": "string"
+    },
     "error": {
       "description": "Existing human-readable diagnostic, not a new machine error code.",
       "type": "string"
@@ -23,6 +27,7 @@
   "required": [
     "schema_version",
     "verified_length",
-    "error"
+    "error",
+    "basecraft"
   ]
 }

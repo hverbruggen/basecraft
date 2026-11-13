@@ -4,6 +4,10 @@
   "description": "Lightweight application-state `jobs/<id>/manifest.json`. The pointed-to\n`OperationOutcome` in runtime.json stays authoritative; this is not `JobRecord`.\nExisting selected-field readers and owner/receipt checks remain unchanged.",
   "type": "object",
   "properties": {
+    "basecraft": {
+      "description": "The basecraft version that wrote this file.",
+      "type": "string"
+    },
     "diagnostics": {
       "description": "First runtime error message or explicit null.",
       "type": [
@@ -70,7 +74,8 @@
     "initiator",
     "source",
     "outputs",
-    "runtime_record"
+    "runtime_record",
+    "basecraft"
   ],
   "$defs": {
     "JobIndexPlugin": {

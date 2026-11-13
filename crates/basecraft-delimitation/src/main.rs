@@ -860,7 +860,7 @@ fn run_asap(
         ("score_weight", f64::from(settings.score_weight).into()),
         (
             "distance_engine",
-            format!("basecraft-distance {}", env!("CARGO_PKG_VERSION")).into(),
+            format!("basecraft-distance {}", basecraft_protocol::VERSION).into(),
         ),
         ("distance_gap_policy", matrix.gap_policy.clone().into()),
     ] {
@@ -932,7 +932,7 @@ fn run_asap(
                 method: "ASAP".into(),
                 version: format!(
                     "basecraft-asap {} (native port of reference ASAP)",
-                    env!("CARGO_PKG_VERSION")
+                    basecraft_protocol::VERSION
                 ),
                 inputs: [(request.input.clone(), request.input_hash.clone())].into(),
                 parameters: parameters.clone(),
@@ -985,7 +985,7 @@ fn workspace(
         Score, Specimen,
     };
     let id = request.job_id.clone();
-    DelimitationWorkspace { version:1,name:tree.name.clone(),specimens:tree.tips_in_order().iter().map(|&i| Specimen { id:tree.node(i).name.clone(),label:tree.node(i).name.clone(),sources: [(request.input.clone(),tree.node(i).name.clone())].into(),attributes:BTreeMap::new() }).collect(),hypotheses:vec![Hypothesis { id:id.clone(),name,origin:HypothesisOrigin::Inferred,parent:None,groups:groups.into_iter().enumerate().map(|(i,members)| Group { id:format!("group-{}",i+1),label:(i+1).to_string(),color:["#377eb8","#e41a1c","#4daf4a","#984ea3","#ff7f00"][i%5].into(),members,scores:vec![],individual_scores:BTreeMap::new(),attributes:BTreeMap::new() }).collect(),unassigned:std::collections::BTreeSet::new(),scores:vec![Score {value:likelihood,method:request.method.clone(),scale:"logLikelihood".into(),interpretation:"Maximized mixed waiting-time log likelihood; convergence is not evidence of biological support".into()}],provenance:Provenance {method:request.method.clone(),version:env!("CARGO_PKG_VERSION").into(),inputs:[(request.input.clone(),request.input_hash.clone())].into(),analysis_tree:Some(request.input_hash.clone()),parameters:request.parameters.clone(),seed:Some(request.seed),workers:Some(request.workers),status:Some(JobStatus::Completed),..Provenance::default()},attributes:BTreeMap::new() }],view:DelimitationView {display_tree:Some(request.input.clone()),visible:vec![id],..DelimitationView::default()},exchange_fields:BTreeMap::new() }
+    DelimitationWorkspace { version:1,name:tree.name.clone(),specimens:tree.tips_in_order().iter().map(|&i| Specimen { id:tree.node(i).name.clone(),label:tree.node(i).name.clone(),sources: [(request.input.clone(),tree.node(i).name.clone())].into(),attributes:BTreeMap::new() }).collect(),hypotheses:vec![Hypothesis { id:id.clone(),name,origin:HypothesisOrigin::Inferred,parent:None,groups:groups.into_iter().enumerate().map(|(i,members)| Group { id:format!("group-{}",i+1),label:(i+1).to_string(),color:["#377eb8","#e41a1c","#4daf4a","#984ea3","#ff7f00"][i%5].into(),members,scores:vec![],individual_scores:BTreeMap::new(),attributes:BTreeMap::new() }).collect(),unassigned:std::collections::BTreeSet::new(),scores:vec![Score {value:likelihood,method:request.method.clone(),scale:"logLikelihood".into(),interpretation:"Maximized mixed waiting-time log likelihood; convergence is not evidence of biological support".into()}],provenance:Provenance {method:request.method.clone(),version:basecraft_protocol::VERSION.into(),inputs:[(request.input.clone(),request.input_hash.clone())].into(),analysis_tree:Some(request.input_hash.clone()),parameters:request.parameters.clone(),seed:Some(request.seed),workers:Some(request.workers),status:Some(JobStatus::Completed),..Provenance::default()},attributes:BTreeMap::new() }],view:DelimitationView {display_tree:Some(request.input.clone()),visible:vec![id],..DelimitationView::default()},exchange_fields:BTreeMap::new() }
 }
 
 fn progress(

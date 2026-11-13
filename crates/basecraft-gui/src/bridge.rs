@@ -2218,7 +2218,7 @@ impl qobject::GenomeController {
         basecraft_plugin_host::compute::configure(usize::try_from(threads).unwrap_or(1));
     }
     pub fn version(&self) -> QString {
-        QString::from(env!("CARGO_PKG_VERSION"))
+        QString::from(basecraft_protocol::VERSION)
     }
 
     pub fn selected_feature(&self) -> i32 {

@@ -3,6 +3,10 @@
   "title": "MetadataManifest",
   "type": "object",
   "properties": {
+    "basecraft": {
+      "description": "The basecraft version that wrote this file.",
+      "type": "string"
+    },
     "format": {
       "type": "string"
     },
@@ -29,7 +33,8 @@
   "required": [
     "format",
     "version",
-    "tables"
+    "tables",
+    "basecraft"
   ],
   "$defs": {
     "Column": {

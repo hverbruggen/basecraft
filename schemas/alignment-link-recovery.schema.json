@@ -4,6 +4,10 @@
   "description": "Uniquely retained `*.alignment-recovery.json`; schema 1, no rewrite workflow.\nDeserialization describes known writer shapes only. It is not an extension-\npreserving manual repair interface or a substitute for the selective readers.",
   "type": "object",
   "properties": {
+    "basecraft": {
+      "description": "The basecraft version that wrote this file.",
+      "type": "string"
+    },
     "intended_origin": {
       "description": "Always emitted, including null. Never decode/re-encode these bytes.",
       "type": [
@@ -48,7 +52,8 @@
     "schema",
     "note",
     "previous_origin",
-    "previous_view"
+    "previous_view",
+    "basecraft"
   ],
   "$defs": {
     "PreviousAlignmentMetadata": {

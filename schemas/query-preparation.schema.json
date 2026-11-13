@@ -9,6 +9,10 @@
     "approval_hash": {
       "type": "string"
     },
+    "basecraft": {
+      "description": "The basecraft version that wrote this file.",
+      "type": "string"
+    },
     "database": {
       "type": "string"
     },
@@ -67,7 +71,8 @@
     "records",
     "query_hash",
     "approval_hash",
-    "truncation"
+    "truncation",
+    "basecraft"
   ],
   "$defs": {
     "QueryRecord": {

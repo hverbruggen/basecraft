@@ -22,8 +22,7 @@ fn result_binding_writer_bytes_and_selective_reader() {
             .join(key.trim_start_matches("b3:"));
         let bytes = std::fs::read(&binding).unwrap();
         let original = json!({"schema_version":1,"run":run.id(),"result":name,"result_hash":basecraft_io::hash_file(&result).unwrap()});
-        let mut expected = serde_json::to_vec_pretty(&original).unwrap();
-        expected.push(b'\n');
+        let expected = basecraft_protocol::records::encode(&original).unwrap();
         assert_eq!(bytes, expected);
         if let Some(capture) = std::env::var_os("BASECRAFT_RECORD_CAPTURE") {
             std::fs::create_dir_all(&capture).unwrap();

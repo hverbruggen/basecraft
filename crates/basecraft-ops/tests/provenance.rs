@@ -406,6 +406,7 @@ fn recovery_rejects_traversal_and_skips_corrupt_retained_candidates() {
                 let mut value: serde_json::Value = serde_json::from_str(line).unwrap();
                 value.as_object_mut().unwrap().remove("_checksum");
                 value.as_object_mut().unwrap().remove("_sequence");
+                let writer = value.as_object_mut().unwrap().remove("basecraft").unwrap();
                 if index == 0 {
                     value["params"]["path"] = open.into();
                     value["doc"] = key.into();
@@ -413,6 +414,7 @@ fn recovery_rejects_traversal_and_skips_corrupt_retained_candidates() {
                 let checksum = basecraft_io::hash_bytes(&serde_json::to_vec(&value).unwrap());
                 value["_checksum"] = checksum.into();
                 value["_sequence"] = index.into();
+                value["basecraft"] = writer;
                 serde_json::to_string(&value).unwrap() + "\n"
             })
             .collect::<String>();

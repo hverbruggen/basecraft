@@ -4,6 +4,10 @@
   "description": "Visible collection destination and members, recorded before copying.",
   "type": "object",
   "properties": {
+    "basecraft": {
+      "description": "The basecraft version that wrote this file.",
+      "type": "string"
+    },
     "destination": {
       "type": "string"
     },
@@ -22,6 +26,7 @@
   "required": [
     "schema",
     "destination",
-    "members"
+    "members",
+    "basecraft"
   ]
 }

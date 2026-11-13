@@ -15,6 +15,10 @@
     "actor": {
       "$ref": "#/$defs/Actor"
     },
+    "basecraft": {
+      "description": "The basecraft version that wrote this line.",
+      "type": "string"
+    },
     "doc": {
       "description": "Project-relative path of the document the op applies to.",
       "type": "string"
@@ -1614,6 +1618,7 @@
     }
   ],
   "required": [
+    "basecraft",
     "_checksum",
     "_sequence",
     "v",
@@ -4441,7 +4446,6 @@
           "type": "string"
         }
       },
-      "additionalProperties": false,
       "required": [
         "path",
         "hash"
@@ -4609,7 +4613,6 @@
           "type": "string"
         }
       },
-      "additionalProperties": false,
       "required": [
         "id",
         "folder"

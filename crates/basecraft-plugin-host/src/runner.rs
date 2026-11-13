@@ -101,9 +101,9 @@ pub fn verify_completed_result(
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
         return Err(Error::Protocol("unsafe completed run directory".into()));
     }
-    let execution: RunRecord = serde_json::from_slice(&basecraft_ops::records::read_record(
-        &directory.join("execution.json"),
-    )?)?;
+    let execution: RunRecord = basecraft_protocol::records::decode(
+        &basecraft_ops::records::read_record(&directory.join("execution.json"))?,
+    )?;
     if execution.schema != RUN_RECORD_SCHEMA
         || execution.operation != query.operation
         || execution.package_digest.as_ref() != Some(&query.pins.package_digest)
@@ -189,8 +189,9 @@ pub fn lookup_completed_result(
             continue;
         } // Input ledgers and domain runs have no runtime receipt.
         let candidate = (|| -> Result<Option<VerifiedOperationResult>> {
-            let outcome: OperationOutcome =
-                serde_json::from_slice(&basecraft_ops::records::read_record(&receipt)?)?;
+            let outcome: OperationOutcome = basecraft_protocol::records::decode(
+                &basecraft_ops::records::read_record(&receipt)?,
+            )?;
             if outcome.schema != 1 {
                 return Err(Error::Protocol(
                     "unsupported operation receipt version".into(),
@@ -383,7 +384,7 @@ impl PreparedOperation {
             let upstream = &mut input.upstream;
             for dependency in &dependencies {
                 let bytes = basecraft_ops::records::read_record(&dependency.join("manifest.json"))?;
-                let publication: Publication = serde_json::from_slice(&bytes)?;
+                let publication: Publication = basecraft_protocol::records::decode(&bytes)?;
                 if !upstream.iter().any(|entry| entry.id == publication.id) {
                     upstream.push(basecraft_protocol::input_records::UpstreamLink {
                         bundle: (records::relative(&directory, &dependency.canonicalize()?)?)
@@ -455,7 +456,7 @@ impl PreparedOperation {
             self.submission_identity(result)?;
             let receipt = &self.run_path(&self.context.outputs["receipt"]);
             if !receipt.try_exists()? {
-                records::write_json(receipt, result.data.as_deref().unwrap_or(&Value::Null))?;
+                records::write_plain_json(receipt, result.data.as_deref().unwrap_or(&Value::Null))?;
             }
         }
         let mut paths = BTreeSet::new();
@@ -581,9 +582,10 @@ impl PreparedOperation {
             return Err(Error::Protocol("undeclared extra staged outputs".into()));
         }
         if self.lifecycle.external() {
-            let plan: Value = serde_json::from_slice(&basecraft_ops::records::read_record(
-                &self.run.artifact("query-preparation.json")?,
-            )?)?;
+            let plan: Value =
+                basecraft_protocol::records::decode(&basecraft_ops::records::read_record(
+                    &self.run.artifact("query-preparation.json")?,
+                )?)?;
             self.lifecycle.validate_receipt(
                 result,
                 &self.run_path(&self.context.outputs["receipt"]),
@@ -591,7 +593,7 @@ impl PreparedOperation {
             )?;
         }
         records::write_json(&self.run.artifact("validated.json")?, result)?;
-        records::write_json(&self.run.artifact("validated-artifacts.json")?, &validated)?;
+        records::write_plain_json(&self.run.artifact("validated-artifacts.json")?, &validated)?;
         Ok(validated)
     }
 

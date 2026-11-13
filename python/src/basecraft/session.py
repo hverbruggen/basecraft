@@ -378,7 +378,7 @@ class Session:
             arguments["path"] = str(path)
         return self.call("save_check", arguments)
 
-    def save(self, document, path=None, *, decision=None):
+    def save(self, document, path=None, *, decision=None, drop_newer_fields=False):
         """Save conservatively, or submit one explicit decision from save_check.
 
         decision = {"token": check["token"], "known_policy": "cancel",
@@ -387,12 +387,16 @@ class Session:
         Refusals raise OperationError with the fresh check in .outcome["check"].
         Successful results include warnings; callers must present these to users.
         Existing other destinations are always refused. No automatic retry.
+        A save that would drop fields a later basecraft wrote is refused
+        (code newer_fields_dropped) unless drop_newer_fields is True.
         """
         arguments = {"document": document}
         if path is not None:
             arguments["path"] = str(path)
         if decision is not None:
             arguments["decision"] = decision
+        if drop_newer_fields:
+            arguments["drop_newer_fields"] = True
         return self.call("save", arguments)
 
     def create_sequence(self, name, sequence):

@@ -15,7 +15,7 @@ use std::time::Instant;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "basecraft", version, about = "Basecraft command-line tool")]
+#[command(name = "basecraft", version = basecraft_protocol::VERSION, about = "Basecraft command-line tool")]
 struct Cli {
     /// The project folder you chose. Files inside it keep their history in the
     /// project; without it every file is a loose file. Basecraft never guesses.
@@ -917,7 +917,68 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     schemars::schema_for!(basecraft_protocol::Feature),
                 ),
             ];
-            for (name, schema) in schemas {
+            // Files written through `records::encode` name the basecraft
+            // version that wrote them under `basecraft`.
+            let stamped = [
+                "sanger-saved-review",
+                "sanger-saved-call-sets",
+                "alignment-link",
+                "alignment-link-recovery",
+                "alignment-link-unavailable",
+                "collection-intent",
+                "collection-export-intent",
+                "member-export-receipt",
+                "provenance-report-manifest",
+                "report-export-manifest",
+                "metadata-manifest",
+                "query-preparation",
+                "document-report",
+                "submission-package",
+                "submission-validation",
+                "workflow-failure",
+                "companion",
+                "sanger-request",
+                "sanger-job-record",
+                "submitted-input",
+                "analysis-run",
+                "recovery-integrity-error",
+                "result-binding",
+                "provenance-export-map",
+                "plugin-installation-index",
+                "managed-plugin-runtime",
+                "run-record",
+                "local-job-index",
+                "store-marker",
+                "analysis-index",
+                "indexed-folders",
+                "pending-save",
+                "operation-request",
+                "operation-outcome",
+                "provenance-publication",
+                "submission",
+            ];
+            for (name, mut schema) in schemas {
+                if stamped.contains(&name) {
+                    let fields = schema.ensure_object();
+                    fields
+                        .entry("properties")
+                        .or_insert_with(|| serde_json::json!({}))
+                        .as_object_mut()
+                        .expect("schema properties are an object")
+                        .insert(
+                            "basecraft".into(),
+                            serde_json::json!({
+                                "description": "The basecraft version that wrote this file.",
+                                "type": "string"
+                            }),
+                        );
+                    let required = fields
+                        .entry("required")
+                        .or_insert_with(|| serde_json::json!([]));
+                    if let Some(required) = required.as_array_mut() {
+                        required.push("basecraft".into());
+                    }
+                }
                 let mut json = serde_json::to_string_pretty(&schema)?;
                 json.push('\n');
                 std::fs::write(dir.join(format!("{name}.schema.json")), json)?;

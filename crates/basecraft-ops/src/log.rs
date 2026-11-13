@@ -86,6 +86,7 @@ impl LogWriter {
             let value = serde_json::to_value(entry)?;
             let checksum = basecraft_io::hash_bytes(&serde_json::to_vec(&value)?);
             let value = serde_json::to_value(basecraft_protocol::records::JournalEntry {
+                basecraft: basecraft_protocol::VERSION.into(),
                 checksum,
                 sequence: self.sequence + offset as u64,
                 entry: value,
@@ -132,15 +133,15 @@ impl LogWriter {
                     .is_err()
                 {
                     self.poisoned = true;
-                    let bytes = serde_json::to_vec_pretty(&serde_json::to_value(
-                        basecraft_protocol::records::RecoveryIntegrityError {
+                    let bytes = basecraft_protocol::records::encode(
+                        &basecraft_protocol::records::RecoveryIntegrityError {
                             schema_version: 1,
                             verified_length: previous_length,
                             error: "append failed and rollback durability could not be confirmed"
                                 .into(),
                             extra: std::collections::BTreeMap::new(),
                         },
-                    )?)?;
+                    )?;
                     let _ =
                         basecraft_io::write_atomic(&self.poison_marker, |w| w.write_all(&bytes));
                     return Err(crate::Error::Damaged {
@@ -362,14 +363,15 @@ pub fn verified_session_prefix(root: &Path) -> Result<VerifiedPrefix> {
 
 /// Verify the current journal envelope before decoding its operation.
 pub fn parse_entry(line: &str) -> serde_json::Result<LogEntry> {
+    use basecraft_protocol::records::unreadable;
     let record: basecraft_protocol::records::JournalEntry<serde_json::Value> =
-        serde_json::from_str(line)?;
+        serde_json::from_str(line).map_err(|e| unreadable(None, &e))?;
     if record.checksum != basecraft_io::hash_bytes(&serde_json::to_vec(&record.entry)?) {
         return Err(<serde_json::Error as serde::de::Error>::custom(
             "journal checksum mismatch",
         ));
     }
-    serde_json::from_value(record.entry)
+    serde_json::from_value(record.entry).map_err(|e| unreadable(Some(&record.basecraft), &e))
 }
 
 /// A readable account of what happened in the projects under `roots` since
@@ -667,7 +669,7 @@ mod activity_tests {
             writer.faults.rollback_sync = true;
             assert!(writer.append(&entry).is_err());
             let bytes = fs::read(work.join("recovery-integrity-error.json")).unwrap();
-            let expected = serde_json::to_vec_pretty(&serde_json::json!({
+            let expected = basecraft_protocol::records::encode(&serde_json::json!({
                 "schema_version": 1, "verified_length": length,
                 "error": "append failed and rollback durability could not be confirmed"
             }))

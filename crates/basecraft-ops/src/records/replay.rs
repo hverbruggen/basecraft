@@ -561,7 +561,7 @@ fn recover_entries(
     let pending_path = root.join("pending-save.json");
     if pending_path.is_file() {
         let pending: basecraft_protocol::records::PendingSave =
-            serde_json::from_slice(&std::fs::read(&pending_path)?)?;
+            basecraft_protocol::records::decode(&std::fs::read(&pending_path)?)?;
         if !pending.baseline.result.hashes.is_empty()
             && pending.baseline.result.hashes.iter().all(|(path, hash)| {
                 scratch_key(path).is_ok()

@@ -1,4 +1,5 @@
 {
+  "basecraft": "<version>",
   "job": {
     "diagnostics": [
       "GMYC unavailable: fewer than two retained haplotypes; no tree or fit was invented"

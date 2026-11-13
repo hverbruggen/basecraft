@@ -283,7 +283,8 @@ impl SangerReview {
     }
 
     pub(crate) fn decode(bytes: &[u8], path: &Path) -> Result<Self, String> {
-        let value: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+        let value: serde_json::Value =
+            basecraft_protocol::records::decode(bytes).map_err(|e| e.to_string())?;
         Self::decode_value(value, path)
     }
 
@@ -557,7 +558,7 @@ pub(crate) fn read_journal_record(
             detail: "Sanger analysis record changed".into(),
         });
     }
-    Ok(serde_json::from_slice(&bytes)?)
+    Ok(basecraft_protocol::records::decode(&bytes)?)
 }
 
 pub fn instrument_review(path: &Path) -> Result<SangerReview, String> {

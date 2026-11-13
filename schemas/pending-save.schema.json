@@ -4,6 +4,10 @@
   "description": "`pending-save.json`; data and provenance remain separate writes.",
   "type": "object",
   "properties": {
+    "basecraft": {
+      "description": "The basecraft version that wrote this file.",
+      "type": "string"
+    },
     "baseline": {
       "$ref": "#/$defs/LogEntry"
     },
@@ -46,7 +50,8 @@
     "target",
     "expected_hashes",
     "status",
-    "note"
+    "note",
+    "basecraft"
   ],
   "$defs": {
     "AccessionEntry": {
@@ -4487,7 +4492,6 @@
           "type": "string"
         }
       },
-      "additionalProperties": false,
       "required": [
         "path",
         "hash"
@@ -4655,7 +4659,6 @@
           "type": "string"
         }
       },
-      "additionalProperties": false,
       "required": [
         "id",
         "folder"

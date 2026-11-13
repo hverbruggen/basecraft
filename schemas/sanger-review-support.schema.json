@@ -10,7 +10,6 @@
       "type": "string"
     }
   },
-  "additionalProperties": false,
   "required": [
     "path",
     "hash"

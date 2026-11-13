@@ -4,6 +4,10 @@
   "description": "A run folder's `execution.json`: what ran, on what and how. Paths are\nrelative to the run folder, so the folder can move with its project; an\ninput outside the folder has a path that starts with `..`. The request\nitself, normalised the same way, is the folder's `request.json`.",
   "type": "object",
   "properties": {
+    "basecraft": {
+      "description": "The basecraft version that wrote this file.",
+      "type": "string"
+    },
     "cpu_threads": {
       "type": "integer",
       "format": "uint",
@@ -85,7 +89,6 @@
       ]
     }
   },
-  "additionalProperties": false,
   "required": [
     "schema",
     "operation",
@@ -98,7 +101,8 @@
     "effective_parameters",
     "cpu_threads",
     "stdout",
-    "stderr"
+    "stderr",
+    "basecraft"
   ],
   "$defs": {
     "ExecutionInfo": {
@@ -226,8 +230,7 @@
             }
           ]
         }
-      },
-      "additionalProperties": false
+      }
     },
     "RunRuntime": {
       "description": "A managed plugin runtime: the conda specification it was made from and\nwhat was installed, by content.",
@@ -272,7 +275,6 @@
           }
         }
       },
-      "additionalProperties": false,
       "required": [
         "channels",
         "dependencies",

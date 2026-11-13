@@ -1,0 +1,49 @@
+{
+  "accessions": [
+    {
+      "accession": "AB123456.1",
+      "record": "sample"
+    }
+  ],
+  "basecraft": "<version>",
+  "batch": {
+    "ends": "auto",
+    "genetic_code": 1,
+    "marker": {
+      "kind": "rrna",
+      "product": ""
+    },
+    "mol_type": "genomic_dna"
+  },
+  "destination": "genbank",
+  "export": {
+    "trim_terminal_unknown": true
+  },
+  "frames": [
+    {
+      "codon_start": 2,
+      "record": "sample"
+    }
+  ],
+  "publication": {
+    "authors": [
+      {
+        "first": "Ana",
+        "last": "Example",
+        "middle": "M."
+      }
+    ],
+    "title": "Synthetic marker study"
+  },
+  "rows": [
+    {
+      "decision": "new",
+      "record": "sample"
+    }
+  ],
+  "source": {
+    "document": "locus.afa",
+    "hash": "b3:source"
+  },
+  "version": 1
+}

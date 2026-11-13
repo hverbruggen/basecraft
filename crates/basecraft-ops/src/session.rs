@@ -89,6 +89,8 @@ struct Slot {
     origin_issue: Option<String>,
     origin_bundle: PathBuf,
     disk_stamp: basecraft_protocol::provenance::FileStamp,
+    /// The next save may drop fields a later basecraft wrote (D14).
+    drop_newer_fields: bool,
 }
 
 /// Undo reaches back at least this many steps; older edits are settled.

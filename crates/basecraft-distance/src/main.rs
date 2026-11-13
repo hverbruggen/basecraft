@@ -209,7 +209,7 @@ fn run(a: &Args) -> Result<()> {
                 if let Some(published) = error.downcast_ref::<BootstrapPublicationError>() {
                     let mut metadata = RunReport {
                         tool: "basecraft-distance".into(),
-                        version: env!("CARGO_PKG_VERSION").into(),
+                        version: basecraft_protocol::VERSION.into(),
                         bootstrap: Some(published.report.clone()),
                         calculation: None,
                         output_status: OutputStatus::Failed,
@@ -285,7 +285,7 @@ fn run(a: &Args) -> Result<()> {
     }
     let mut result = RunReport {
         tool: "basecraft-distance".into(),
-        version: env!("CARGO_PKG_VERSION").into(),
+        version: basecraft_protocol::VERSION.into(),
         bootstrap: bootstrap_report,
         calculation: Some(DistanceCalculation {
             model: matrix.model,

@@ -4,7 +4,6 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct ArtifactRevision {
     pub id: String,
     pub logical_name: String,
@@ -18,7 +17,6 @@ pub struct ArtifactRevision {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct EditActivity {
     pub id: String,
     /// A journal operation; its shape is defined once, in journal-entry.schema.json.
@@ -27,7 +25,6 @@ pub struct EditActivity {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 #[allow(clippy::struct_excessive_bools)] // Independent completeness dimensions, not lifecycle states.
 pub struct Completeness {
     pub ancestry_known: bool,
@@ -38,7 +35,6 @@ pub struct Completeness {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct Publication {
     pub schema_version: u32,
     pub id: String,

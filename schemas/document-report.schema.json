@@ -3,6 +3,10 @@
   "title": "Report",
   "type": "object",
   "properties": {
+    "basecraft": {
+      "description": "The basecraft version that wrote this file.",
+      "type": "string"
+    },
     "citations": {
       "type": "array",
       "default": [],
@@ -68,7 +72,8 @@
     "paragraphs",
     "methods",
     "history_text",
-    "raw"
+    "raw",
+    "basecraft"
   ],
   "$defs": {
     "HistoryRow": {

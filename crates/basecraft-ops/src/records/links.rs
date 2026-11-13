@@ -128,7 +128,7 @@ impl StagedLink {
             copied.analysis_run = Some(relative_to(&run, to)?);
             return Ok(Self {
                 snapshot: None,
-                metadata: serde_json::to_vec_pretty(&copied)?,
+                metadata: basecraft_protocol::records::encode(&copied)?,
             });
         }
         let snapshot = retain_snapshot(to, &link.snapshot_path(from), &link.snapshot_hash)?;
@@ -140,7 +140,7 @@ impl StagedLink {
             .into();
         Ok(Self {
             snapshot: Some(snapshot),
-            metadata: serde_json::to_vec_pretty(&copied)?,
+            metadata: basecraft_protocol::records::encode(&copied)?,
         })
     }
 }
@@ -195,23 +195,22 @@ impl PreparedLinks {
     ) -> Result<(T, Vec<PathBuf>)> {
         // Convert fallibly before retaining the recovery file or installing guards.
         // A prior symlink may contain a non-UTF-8 path that JSON cannot represent.
-        let recovery = serde_json::to_vec_pretty(&serde_json::to_value(AlignmentLinkRecovery {
+        let recovery = basecraft_protocol::records::encode(&AlignmentLinkRecovery {
             schema: 1,
             note: "Save As association recovery: previous entries and intended metadata; snapshots are retained separately".into(),
             previous_origin: self.previous_origin.clone(),
             previous_view: self.previous_view.clone(),
             intended_origin: self.origin.as_ref().map(|link| link.metadata.clone()),
             intended_view: self.view.as_ref().map(|link| link.metadata.clone()),
-        })?)?;
+        })?;
         let recovery_path = retain_file(&self.target, ".alignment-recovery.json", |out| {
             out.write_all(&recovery)
         })?;
-        let unavailable =
-            serde_json::to_vec_pretty(&serde_json::to_value(AlignmentLinkUnavailable {
-                schema: 1,
-                unavailable: "Save As alignment publication incomplete".into(),
-                recovery: recovery_path.file_name().map(std::ffi::OsStr::to_os_string),
-            })?)?;
+        let unavailable = basecraft_protocol::records::encode(&AlignmentLinkUnavailable {
+            schema: 1,
+            unavailable: "Save As alignment publication incomplete".into(),
+            recovery: recovery_path.file_name().map(std::ffi::OsStr::to_os_string),
+        })?;
         // Install the guard before changing data or origin. If this fails, the old
         // tree and all its associations are untouched. Never remove a failed guard.
         basecraft_io::write_atomic(&view_sidecar(&self.target), |out| {
@@ -534,7 +533,7 @@ impl AlignmentLinkExt for AlignmentLink {
             extra: BTreeMap::new(),
         };
         let metadata = sidecar(tree);
-        let bytes = serde_json::to_vec_pretty(&link)?;
+        let bytes = basecraft_protocol::records::encode(&link)?;
         basecraft_io::write_atomic(&metadata, |out| out.write_all(&bytes)).map_err(|error| crate::Error::Damaged { path: metadata.clone(), detail: format!(
             "alignment metadata replacement failed; previous snapshots are unchanged; staged snapshot retained at {}: {error}", snapshot.display()
         ) })?;
@@ -544,7 +543,7 @@ impl AlignmentLinkExt for AlignmentLink {
     fn read(tree: &Path) -> Result<Self> {
         crate::records::analysis_store::ArtifactRun::for_result(tree)?;
         let metadata: serde_json::Value =
-            serde_json::from_reader(std::fs::File::open(sidecar(tree))?)?;
+            basecraft_protocol::records::decode(&std::fs::read(sidecar(tree))?)?;
         if let Some(reason) = metadata
             .get("unavailable")
             .and_then(serde_json::Value::as_str)
@@ -682,7 +681,7 @@ impl AlignmentLinkExt for AlignmentLink {
         )?;
         link.source = relative_to(&self.source, to)?;
         let metadata = sidecar(to);
-        let bytes = serde_json::to_vec_pretty(&link)?;
+        let bytes = basecraft_protocol::records::encode(&link)?;
         basecraft_io::write_atomic(&metadata, |out| out.write_all(&bytes))?;
         Ok(metadata)
     }

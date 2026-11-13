@@ -105,6 +105,7 @@ impl Document for OpenedTree {
         let mut prepared = super::PreparedWrite::default();
         let sidecar = files::tree_sidecar(target);
         let hash = prepared.push(target, |w| files::write_tree(self, w))?;
+        prepared.check_record::<basecraft_protocol::companion_records::Companion>(&sidecar);
         prepared.push(&sidecar, |w| {
             files::tree_companion(&self.doc, &hash).write(w)
         })?;

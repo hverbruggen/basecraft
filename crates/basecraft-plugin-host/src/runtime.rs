@@ -465,7 +465,7 @@ pub fn provision_with(
     });
     runtime.verify()?;
     basecraft_io::write_atomic(&pending.path().join("runtime.json"), |out| {
-        serde_json::to_writer_pretty(out, &runtime).map_err(std::io::Error::other)
+        out.write_all(&basecraft_protocol::records::encode(&runtime)?)
     })?;
     let _retained = pending.keep();
     Ok(Some(runtime))

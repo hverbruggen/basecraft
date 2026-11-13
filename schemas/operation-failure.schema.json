@@ -107,6 +107,11 @@
           ]
         },
         {
+          "description": "A save would drop fields a later basecraft wrote (D14).",
+          "type": "string",
+          "const": "newer_fields_dropped"
+        },
+        {
           "description": "The folder cannot hold recovery of unsaved edits; copy the file first.",
           "type": "string",
           "const": "read_only_folder"

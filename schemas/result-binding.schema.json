@@ -4,6 +4,10 @@
   "description": "Existing hidden association written by `ArtifactRun::bind`. Runtime readers\nretain their selective version, namespace, path and content-hash checks.",
   "type": "object",
   "properties": {
+    "basecraft": {
+      "description": "The basecraft version that wrote this file.",
+      "type": "string"
+    },
     "result": {
       "description": "UTF-8 relative filename, using the existing writer's path conversion.",
       "type": "string"
@@ -25,6 +29,7 @@
     "schema_version",
     "run",
     "result",
-    "result_hash"
+    "result_hash",
+    "basecraft"
   ]
 }

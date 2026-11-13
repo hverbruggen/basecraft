@@ -4,6 +4,10 @@
   "description": "`indexed-folders.json` in an analysis store: the index buckets that list\nthis store, relative to the folder holding the store's `.basecraft`. Lets a\nlost index be noticed and rebuilt.",
   "type": "object",
   "properties": {
+    "basecraft": {
+      "description": "The basecraft version that wrote this file.",
+      "type": "string"
+    },
     "folders": {
       "type": "array",
       "items": {
@@ -17,9 +21,9 @@
       "minimum": 0
     }
   },
-  "additionalProperties": false,
   "required": [
     "schema_version",
-    "folders"
+    "folders",
+    "basecraft"
   ]
 }

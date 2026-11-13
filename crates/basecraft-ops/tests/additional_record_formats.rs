@@ -6,6 +6,14 @@ use serde_json::json;
 use std::path::Path;
 
 fn golden(name: &str, bytes: &[u8]) {
+    // Goldens hold `<version>` where the writing basecraft version goes.
+    let stamp = format!("\"basecraft\": \"{}\"", basecraft_protocol::VERSION);
+    let bytes = match String::from_utf8(bytes.to_vec()) {
+        Ok(text) => text
+            .replace(&stamp, "\"basecraft\": \"<version>\"")
+            .into_bytes(),
+        Err(_) => bytes.to_vec(),
+    };
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../testdata/fixtures/records-v1")
         .join(name);

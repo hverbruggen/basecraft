@@ -96,10 +96,11 @@ fn read<T: serde::de::DeserializeOwned>(path: &Path, version: fn(&T) -> u32) -> 
     let bytes = std::fs::read(path)?;
     #[cfg(feature = "test-counters")]
     basecraft_io::counters::record_read(path, bytes.len() as u64);
-    let record: T = serde_json::from_slice(&bytes).map_err(|e| crate::Error::Damaged {
-        path: path.into(),
-        detail: e.to_string(),
-    })?;
+    let record: T =
+        basecraft_protocol::records::decode(&bytes).map_err(|e| crate::Error::Damaged {
+            path: path.into(),
+            detail: e.to_string(),
+        })?;
     if version(&record) != 1 {
         return Err(crate::Error::Unsupported("analysis index version".into()));
     }
@@ -127,8 +128,7 @@ fn existing<T: serde::de::DeserializeOwned>(
 }
 
 fn write(path: &Path, value: &impl serde::Serialize) -> Result<()> {
-    let mut bytes = serde_json::to_vec_pretty(value)?;
-    bytes.push(b'\n');
+    let bytes = basecraft_protocol::records::encode(value)?;
     basecraft_io::write_atomic(path, |w| w.write_all(&bytes))?;
     // The entry must be durable before the ledger it covers changes.
     basecraft_platform::files::sync_directory(path.parent().unwrap())?;

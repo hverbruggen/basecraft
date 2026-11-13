@@ -70,6 +70,16 @@ impl Session {
         .map(|_| ())
     }
 
+    /// Let the next save of `id` drop fields a later basecraft wrote into
+    /// the files it replaces, which it otherwise refuses (D14).
+    pub fn drop_newer_fields(&mut self, id: DocId) -> Result<()> {
+        self.docs
+            .get_mut(id.0)
+            .ok_or(Error::UnknownDocument { id })?
+            .drop_newer_fields = true;
+        Ok(())
+    }
+
     /// Any spelling of the document's own file is an ordinary save, so its
     /// accepted-revision checks apply.
     pub(super) fn is_own_file(&self, id: DocId, path: &Path) -> bool {
@@ -166,6 +176,16 @@ impl Session {
             &self.storage_root,
             &self.write_publication,
         )?;
+        let drop_newer_fields = std::mem::take(&mut self.docs[id.0].drop_newer_fields);
+        if let Some((path, unknown)) = prepared.unknown.drain(..).next()
+            && !drop_newer_fields
+        {
+            return Err(Error::NewerFieldsDropped {
+                path,
+                writer: unknown.writer,
+                fields: unknown.fields,
+            });
+        }
         let expected: Vec<_> = prepared
             .hashes()
             .into_iter()
@@ -391,17 +411,18 @@ impl Session {
                 feature: None,
             },
         );
-        let intent = serde_json::to_vec_pretty(&basecraft_protocol::records::PendingSave {
-            baseline,
-            schema_version: 1,
-            session: self.id.clone(),
-            target: target.to_path_buf(),
-            before_hash: before.cloned(),
-            expected_hashes: expected.to_vec(),
-            status: basecraft_protocol::records::RecoveryStatus::Pending,
-            note: "data and provenance are separate writes".into(),
-            extra: std::collections::BTreeMap::new(),
-        })?;
+        let intent =
+            basecraft_protocol::records::encode(&basecraft_protocol::records::PendingSave {
+                baseline,
+                schema_version: 1,
+                session: self.id.clone(),
+                target: target.to_path_buf(),
+                before_hash: before.cloned(),
+                expected_hashes: expected.to_vec(),
+                status: basecraft_protocol::records::RecoveryStatus::Pending,
+                note: "data and provenance are separate writes".into(),
+                extra: std::collections::BTreeMap::new(),
+            })?;
         std::fs::create_dir_all(&self.storage_root)?;
         prepared.pending(&self.storage_root.join("pending-save.json"), &intent)
     }

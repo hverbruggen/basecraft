@@ -246,7 +246,7 @@ impl qobject::AppSettings {
             self.qt_thread(),
             release::url(env!("CARGO_PKG_REPOSITORY")),
             |this: Pin<&mut Self>, body| {
-                if let Some(notice) = release::notice(env!("CARGO_PKG_VERSION"), &body) {
+                if let Some(notice) = release::notice(basecraft_protocol::VERSION, &body) {
                     this.release_available(QString::from(&notice));
                 }
             },

@@ -10,6 +10,10 @@
         "type": "string"
       }
     },
+    "basecraft": {
+      "description": "The basecraft version that wrote this file.",
+      "type": "string"
+    },
     "disabled": {
       "type": "array",
       "items": {
@@ -41,7 +45,8 @@
     "active",
     "runtimes",
     "disabled",
-    "editable"
+    "editable",
+    "basecraft"
   ],
   "$defs": {
     "Runtime": {
@@ -87,7 +92,6 @@
           "minimum": 0
         }
       },
-      "additionalProperties": false,
       "required": [
         "schema",
         "executables",

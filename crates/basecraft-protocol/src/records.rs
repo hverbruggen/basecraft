@@ -1,15 +1,164 @@
-//! Existing recovery, analysis-store and execution records: v1 wire shapes, not new formats.
+//! Recovery, analysis-store and execution records, and the one encoder and
+//! decoder every record basecraft writes goes through.
 //!
-//! Writers serialize through `serde_json::Value`, as the original literal
-//! builders did, sorting keys recursively. Recovery uses pretty JSON without a
-//! newline; the store marker uses compact JSON plus a newline, and the registry
-//! and execution/index records use pretty JSON plus a newline. Direct struct serialization is not that
-//! byte-level contract.
+//! A record on disk is indented JSON with keys sorted and a final newline. It
+//! carries the version of basecraft that wrote it under `basecraft` (brief
+//! rule 6.7); the record types themselves do not hold that field.
 use std::{collections::BTreeMap, path::PathBuf};
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
+
+/// The key under which every record names the basecraft version that wrote it.
+pub const WRITTEN_BY: &str = "basecraft";
+
+/// The bytes of `record` as basecraft writes it: indented JSON, keys sorted,
+/// the writing version under `basecraft`, and a final newline. The record must
+/// serialize to a JSON object.
+pub fn encode(record: &impl Serialize) -> serde_json::Result<Vec<u8>> {
+    let mut value = serde_json::to_value(record)?;
+    let Some(fields) = value.as_object_mut() else {
+        return Err(serde::ser::Error::custom(
+            "a record must be a JSON object to carry the basecraft version",
+        ));
+    };
+    fields.insert(WRITTEN_BY.into(), crate::VERSION.into());
+    let mut bytes = serde_json::to_vec_pretty(&value)?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+/// Reads a record written by [`encode`]. When the bytes do not fit `T`, the
+/// error names the version that wrote them and the version reading them.
+pub fn decode<T: DeserializeOwned>(bytes: &[u8]) -> serde_json::Result<T> {
+    let mut value: Value = serde_json::from_slice(bytes).map_err(|e| unreadable(None, &e))?;
+    let writer = value.as_object_mut().and_then(|o| o.remove(WRITTEN_BY));
+    T::deserialize(value).map_err(|e| unreadable(writer.as_ref().and_then(Value::as_str), &e))
+}
+
+/// Fields of a record written by a later basecraft that this build does not
+/// know, so writing the record again would drop them (decision D14).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct UnknownFields {
+    /// The basecraft version that wrote the record.
+    pub writer: String,
+    /// Each field as a path, `tree.style.colour`; `[]` stands for any element.
+    pub fields: Vec<String>,
+}
+
+/// What `T`, as this build knows it, would drop from `bytes` on writing
+/// them again: only for a record a later basecraft wrote. Fields holding
+/// null, false or an empty list or object are not counted, since this build
+/// leaves those out of what it writes.
+pub fn unknown_fields<T: Serialize + DeserializeOwned>(bytes: &[u8]) -> Option<UnknownFields> {
+    let mut value: Value = serde_json::from_slice(bytes).ok()?;
+    let writer = value.as_object_mut()?.remove(WRITTEN_BY)?;
+    let writer = writer.as_str().filter(|w| is_later(w))?.to_owned();
+    let kept = serde_json::to_value(T::deserialize(&value).ok()?).ok()?;
+    let mut fields = std::collections::BTreeSet::new();
+    dropped(&value, &kept, "", &mut fields);
+    (!fields.is_empty()).then(|| UnknownFields {
+        writer,
+        fields: fields.into_iter().collect(),
+    })
+}
+
+fn dropped(old: &Value, kept: &Value, at: &str, out: &mut std::collections::BTreeSet<String>) {
+    match (old, kept) {
+        (Value::Object(old), Value::Object(kept)) => {
+            for (key, value) in old {
+                let path = if at.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{at}.{key}")
+                };
+                match kept.get(key) {
+                    Some(kept) => dropped(value, kept, &path, out),
+                    None if !is_empty(value) => {
+                        out.insert(path);
+                    }
+                    None => {}
+                }
+            }
+        }
+        (Value::Array(old), Value::Array(kept)) => {
+            for (value, kept) in old.iter().zip(kept) {
+                dropped(value, kept, &format!("{at}[]"), out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn is_empty(value: &Value) -> bool {
+    match value {
+        Value::Null | Value::Bool(false) => true,
+        Value::Array(items) => items.is_empty(),
+        Value::Object(fields) => fields.is_empty(),
+        _ => false,
+    }
+}
+
+/// Whether `writer` is a later basecraft than this build.
+pub fn is_later(writer: &str) -> bool {
+    later(writer, crate::VERSION)
+}
+
+/// Whether `version` comes after `than` by semantic version precedence;
+/// build metadata does not count. A version that does not parse is not later.
+pub fn later(version: &str, than: &str) -> bool {
+    precedence(version)
+        .zip(precedence(than))
+        .is_some_and(|(version, than)| version > than)
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+enum Part {
+    Number(u64),
+    Text(String),
+}
+
+/// Sort key of a semantic version: the release numbers, then whether it is a
+/// release (which follows its pre-releases), then the pre-release parts.
+fn precedence(version: &str) -> Option<([u64; 3], bool, Vec<Part>)> {
+    let version = version.split('+').next()?;
+    let (core, pre) = match version.split_once('-') {
+        Some((core, pre)) => (core, Some(pre)),
+        None => (version, None),
+    };
+    let numbers: Vec<u64> = core
+        .split('.')
+        .map(str::parse)
+        .collect::<Result<_, _>>()
+        .ok()?;
+    let core: [u64; 3] = numbers.try_into().ok()?;
+    let parts = pre.map_or_else(Vec::new, |pre| {
+        pre.split('.')
+            .map(|p| {
+                p.parse()
+                    .map_or_else(|_| Part::Text(p.into()), Part::Number)
+            })
+            .collect()
+    });
+    Some((core, pre.is_none(), parts))
+}
+
+/// The error for a record this build cannot read: which basecraft wrote it
+/// (when the record says) and which is reading.
+pub fn unreadable(writer: Option<&str>, error: &dyn std::fmt::Display) -> serde_json::Error {
+    let reader = crate::VERSION;
+    serde::de::Error::custom(match writer {
+        Some(writer) => {
+            format!(
+                "record written by basecraft {writer}; basecraft {reader} cannot read it: {error}"
+            )
+        }
+        None => format!(
+            "record names no basecraft version that wrote it; basecraft {reader} cannot read it: {error}"
+        ),
+    })
+}
 
 /// Current pending-save lifecycle label.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -56,7 +205,6 @@ pub struct StoreMarker {
 /// input outside the folder has a path that starts with `..`. The request
 /// itself, normalised the same way, is the folder's `request.json`.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct RunRecord {
     pub schema: u32,
     pub operation: String,
@@ -110,7 +258,6 @@ impl RunRecord {
 
 /// What a run needs to be repeated in the same environment. No paths.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct RunEnvironment {
     /// As the plugin reported it, such as "Python 3.12.4". Null for host
     /// workflows and plugins that run no interpreter.
@@ -123,7 +270,6 @@ pub struct RunEnvironment {
 /// A managed plugin runtime: the conda specification it was made from and
 /// what was installed, by content.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct RunRuntime {
     pub channels: Vec<String>,
     /// Conda packages and their version constraints.
@@ -258,7 +404,6 @@ pub struct AlignmentLink {
 /// folder holding `.basecraft`. Readers take the union of every file in a
 /// bucket, copies a sync tool made included.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct AnalysisIndex {
     pub schema_version: u32,
     pub store: String,
@@ -269,7 +414,6 @@ pub struct AnalysisIndex {
 /// this store, relative to the folder holding the store's `.basecraft`. Lets a
 /// lost index be noticed and rebuilt.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct IndexedFolders {
     pub schema_version: u32,
     pub folders: std::collections::BTreeSet<String>,
@@ -278,6 +422,8 @@ pub struct IndexedFolders {
 /// Checksummed JSONL envelope. Its flattened entry already carries log version `v`.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct JournalEntry<T = crate::LogEntry> {
+    /// The basecraft version that wrote this line.
+    pub basecraft: String,
     #[serde(rename = "_checksum")]
     pub checksum: String,
     #[serde(rename = "_sequence")]
@@ -348,4 +494,76 @@ pub enum JobStatus {
     Failed,
     Cancelled,
     Unavailable,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    struct Note {
+        text: String,
+        inner: Inner,
+    }
+
+    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    struct Inner {
+        count: u32,
+    }
+
+    fn note() -> Note {
+        Note {
+            text: "a".into(),
+            inner: Inner { count: 2 },
+        }
+    }
+
+    #[test]
+    fn records_carry_the_writing_version_and_read_back_without_it() {
+        let bytes = encode(&note()).unwrap();
+        let text = std::str::from_utf8(&bytes).unwrap();
+        assert!(text.starts_with(&format!("{{\n  \"basecraft\": \"{}\",", crate::VERSION)));
+        assert!(text.ends_with("}\n"));
+        assert_eq!(decode::<Note>(&bytes).unwrap(), note());
+        assert!(encode(&[1, 2]).is_err());
+    }
+
+    #[test]
+    fn an_unreadable_record_names_both_versions() {
+        let error = decode::<Note>(br#"{"basecraft": "9.1.0", "text": "a"}"#).unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("basecraft 9.1.0"), "{message}");
+        assert!(message.contains(&format!("basecraft {} cannot read it", crate::VERSION)));
+        assert!(message.contains("inner"), "{message}");
+        let error = decode::<Note>(br#"{"text": "a"}"#).unwrap_err().to_string();
+        assert!(error.contains("names no basecraft version"), "{error}");
+    }
+
+    #[test]
+    fn versions_order_by_semantic_precedence() {
+        assert!(later("0.10.0", "0.9.0"));
+        assert!(later("1.0.0-alpha.2", "1.0.0-alpha.1"));
+        assert!(later("1.0.0-alpha.10", "1.0.0-alpha.9"));
+        assert!(later("1.0.0-beta", "1.0.0-alpha.9"));
+        assert!(later("1.0.0", "1.0.0-beta.3"));
+        assert!(!later("0.5.0+20261114.abcdef1", "0.5.0"));
+        assert!(!later("0.5.0", "0.5.0"));
+        assert!(!later("nightly", "0.5.0"));
+    }
+
+    #[test]
+    fn only_fields_a_later_version_wrote_and_this_one_drops_are_unknown() {
+        let newer = br#"{"basecraft": "99.0.0", "text": "a", "inner": {"count": 2, "colour": "red", "empty": []}, "later": 1}"#;
+        assert_eq!(
+            unknown_fields::<Note>(newer),
+            Some(UnknownFields {
+                writer: "99.0.0".into(),
+                fields: vec!["inner.colour".into(), "later".into()],
+            })
+        );
+        let known = br#"{"basecraft": "99.0.0", "text": "a", "inner": {"count": 2}}"#;
+        assert_eq!(unknown_fields::<Note>(known), None);
+        let older = br#"{"basecraft": "0.1.0", "text": "a", "inner": {"count": 2}, "later": 1}"#;
+        assert_eq!(unknown_fields::<Note>(older), None);
+    }
 }

@@ -3,6 +3,10 @@
   "title": "SubmissionPackage",
   "type": "object",
   "properties": {
+    "basecraft": {
+      "description": "The basecraft version that wrote this file.",
+      "type": "string"
+    },
     "batch": {
       "$ref": "#/$defs/BatchSettings"
     },
@@ -90,7 +94,8 @@
     "records",
     "issues",
     "files",
-    "tools"
+    "tools",
+    "basecraft"
   ],
   "$defs": {
     "BatchSettings": {

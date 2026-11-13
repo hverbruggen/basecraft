@@ -45,9 +45,9 @@ fn job_records(directory: &Path, previous: bool, owner: &str) -> crate::Result<s
             continue;
         }
         let path = entry.path().join("manifest.json");
-        let result = budget
-            .read(&path)
-            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).map_err(Into::into));
+        let result = budget.read(&path).and_then(|b| {
+            basecraft_protocol::records::decode::<serde_json::Value>(&b).map_err(Into::into)
+        });
         match result {
             Ok(mut run) => {
                 if !run.is_object()
@@ -148,7 +148,8 @@ fn reconcile_task_receipt(
             "runtime receipt pointer must be absolute",
         ));
     }
-    let outcome: OperationOutcome = serde_json::from_slice(&budget.read(Path::new(path))?)?;
+    let outcome: OperationOutcome =
+        basecraft_protocol::records::decode(&budget.read(Path::new(path))?)?;
     if outcome.schema != 1 {
         return Err(crate::error::invalid(
             "unsupported operation receipt schema",
@@ -210,7 +211,7 @@ fn task_primary_output(
         .parent()
         .ok_or_else(|| crate::error::invalid("receipt has no directory"))?;
     let publication: Publication =
-        serde_json::from_slice(&budget.read(&root.join("manifest.json"))?)?;
+        basecraft_protocol::records::decode(&budget.read(&root.join("manifest.json"))?)?;
     if publication.schema_version != 1 || publication.id != outcome.run_id {
         return Err(crate::error::invalid(
             "publication schema or run identity mismatch",
@@ -219,7 +220,7 @@ fn task_primary_output(
     // Use the accepted descriptor's exact primary role/member, not collection
     // ordering. A result collection can include primary and supporting trees.
     let descriptor: basecraft_protocol::operation::OperationDescriptor =
-        serde_json::from_slice(&budget.read(&root.join("descriptor.json"))?)?;
+        basecraft_protocol::records::decode(&budget.read(&root.join("descriptor.json"))?)?;
     if basecraft_io::hash_bytes(&serde_json::to_vec(&descriptor)?) != outcome.pins.descriptor_digest
     {
         return Err(crate::error::invalid(

@@ -41,7 +41,10 @@ fn store_writer_bytes_and_validation() {
     let original = std::fs::read(&marker).unwrap();
     assert_eq!(
         original,
-        b"{\"format\":\"basecraft.analysis-store\",\"schema_version\":1}\n"
+        basecraft_protocol::records::encode(
+            &json!({"format":"basecraft.analysis-store","schema_version":1})
+        )
+        .unwrap()
     );
     capture("store.json", &original);
     ArtifactRun::validate_store(store).unwrap();
@@ -89,15 +92,13 @@ fn store_writer_bytes_and_validation() {
     let store = root.join("results/.basecraft/analyses-v1");
     // A loose file: the index sits beside it, in the bucket for its name.
     let index = walk(&data.join(".basecraft/analysis-index")).pop().unwrap();
-    let expected = r#"{
-  "schema_version": 1,
-  "store": "../results/.basecraft/analyses-v1",
-  "files": [
-    "reads.fasta"
-  ]
-}
-"#;
-    assert_eq!(std::fs::read_to_string(&index).unwrap(), expected);
+    let expected = basecraft_protocol::records::encode(&json!({
+        "schema_version": 1,
+        "store": "../results/.basecraft/analyses-v1",
+        "files": ["reads.fasta"]
+    }))
+    .unwrap();
+    assert_eq!(std::fs::read(&index).unwrap(), expected);
     // The store lists the bucket, so a lost index can be noticed.
     let bucket = index
         .parent()
@@ -106,11 +107,13 @@ fn store_writer_bytes_and_validation() {
         .unwrap()
         .to_str()
         .unwrap();
-    let folders = format!(
-        "{{\n  \"schema_version\": 1,\n  \"folders\": [\n    \"../data/.basecraft/analysis-index/{bucket}\"\n  ]\n}}\n"
-    );
+    let folders = basecraft_protocol::records::encode(&json!({
+        "schema_version": 1,
+        "folders": [format!("../data/.basecraft/analysis-index/{bucket}")]
+    }))
+    .unwrap();
     assert_eq!(
-        std::fs::read_to_string(store.join("indexed-folders.json")).unwrap(),
+        std::fs::read(store.join("indexed-folders.json")).unwrap(),
         folders
     );
     // Nothing about the analysis is kept in basecraft's own folders.

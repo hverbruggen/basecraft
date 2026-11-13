@@ -9,6 +9,10 @@
         "null"
       ]
     },
+    "basecraft": {
+      "description": "The basecraft version that wrote this file.",
+      "type": "string"
+    },
     "origin_run": {
       "description": "The earlier run, relative to this one, that holds the preserved original.",
       "type": [
@@ -65,7 +69,8 @@
     "submitted_hash",
     "submitted_size",
     "transformation",
-    "state"
+    "state",
+    "basecraft"
   ],
   "$defs": {
     "EvidenceState": {

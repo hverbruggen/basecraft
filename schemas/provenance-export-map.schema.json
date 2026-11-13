@@ -4,6 +4,10 @@
   "description": "Ordered relocations of publications whose original bytes are also retained.",
   "type": "object",
   "properties": {
+    "basecraft": {
+      "description": "The basecraft version that wrote this file.",
+      "type": "string"
+    },
     "records": {
       "type": "array",
       "items": {
@@ -19,7 +23,8 @@
   "additionalProperties": true,
   "required": [
     "schema_version",
-    "records"
+    "records",
+    "basecraft"
   ],
   "$defs": {
     "ProvenanceExportMapping": {

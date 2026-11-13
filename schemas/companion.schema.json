@@ -14,6 +14,10 @@
         }
       ]
     },
+    "basecraft": {
+      "description": "The basecraft version that wrote this file.",
+      "type": "string"
+    },
     "delimitation": {
       "anyOf": [
         {
@@ -46,7 +50,8 @@
   },
   "required": [
     "version",
-    "exchange_hash"
+    "exchange_hash",
+    "basecraft"
   ],
   "$defs": {
     "Alphabet": {

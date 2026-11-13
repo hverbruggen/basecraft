@@ -10,6 +10,10 @@
         "null"
       ]
     },
+    "basecraft": {
+      "description": "The basecraft version that wrote this file.",
+      "type": "string"
+    },
     "diagnostics": {
       "type": [
         "string",
@@ -61,7 +65,8 @@
     "operation",
     "started",
     "source",
-    "outputs"
+    "outputs",
+    "basecraft"
   ],
   "$defs": {
     "SangerJobSource": {

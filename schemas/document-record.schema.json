@@ -51,7 +51,6 @@
           "description": "A journal operation; its shape is defined once, in journal-entry.schema.json."
         }
       },
-      "additionalProperties": false,
       "required": [
         "id",
         "operation"

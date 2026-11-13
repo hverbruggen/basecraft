@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::PathBuf};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct SavedReview {
     pub draft_path: PathBuf,
     pub draft_sha256: String,
@@ -15,7 +14,6 @@ pub struct SavedReview {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct SavedCallSets {
     pub version: u32,
     pub selected: String,
@@ -23,7 +21,6 @@ pub struct SavedCallSets {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct ReviewEvidence {
     pub schema_version: u32,
     pub runs: Vec<PathBuf>,
@@ -43,7 +40,6 @@ impl Default for ReviewEvidence {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct ReviewSource {
     // Identity in the immutable draft/placement, never rebased.
     pub original: PathBuf,
@@ -55,7 +51,6 @@ pub struct ReviewSource {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct ReviewSupport {
     pub path: PathBuf,
     pub hash: String,
@@ -227,7 +222,6 @@ mod tests {
 
 /// Immutable analysis data stored separately from edit-sized journal entries.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct ReviewRecord {
     pub path: PathBuf,
     pub hash: String,

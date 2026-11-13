@@ -406,6 +406,8 @@ pub enum OperationErrorCode {
     PublishedWithFailure,
     NothingToDo,
     RecordNamesRepeat,
+    /// A save would drop fields a later basecraft wrote (D14).
+    NewerFieldsDropped,
     ChangedOnDisk,
     WrongDocumentKind,
     UnknownDocument,
@@ -446,6 +448,7 @@ impl OperationErrorCode {
             Self::PublishedWithFailure => "published_with_failure",
             Self::NothingToDo => "nothing_to_do",
             Self::RecordNamesRepeat => "record_names_repeat",
+            Self::NewerFieldsDropped => "newer_fields_dropped",
             Self::ChangedOnDisk => "changed_on_disk",
             Self::WrongDocumentKind => "wrong_document_kind",
             Self::UnknownDocument => "unknown_document",

@@ -587,7 +587,7 @@ fn read_companion(
     exchange_hash: &str,
     tree: Option<&TreeDoc>,
 ) -> Result<Companion> {
-    let companion: Companion = serde_json::from_slice(bytes)?;
+    let companion: Companion = basecraft_protocol::records::decode(bytes)?;
     if companion.version != COMPANION_VERSION {
         return Err(Error::Unsupported(format!(
             "{} was written by a different basecraft version",

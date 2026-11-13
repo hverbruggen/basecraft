@@ -9,6 +9,19 @@ use std::path::{Path, PathBuf};
 
 type Encoder = fn(&[u8], bool) -> Vec<u8>;
 fn encode<T: DeserializeOwned + Serialize>(original: &[u8], sorted: bool) -> Vec<u8> {
+    // A record written through `records::encode` names its writer; the
+    // record type does not hold that field.
+    let mut value: serde_json::Value = serde_json::from_slice(original).unwrap();
+    if original.starts_with(b"{\n")
+        && let Some(writer) = value.as_object_mut().and_then(|o| o.remove(WRITTEN_BY))
+    {
+        let record: T = serde_json::from_value(value).unwrap();
+        let mut value = serde_json::to_value(record).unwrap();
+        value[WRITTEN_BY] = writer;
+        let mut bytes = serde_json::to_vec_pretty(&value).unwrap();
+        bytes.push(b'\n');
+        return bytes;
+    }
     let record: T = serde_json::from_slice(original).unwrap();
     let pretty =
         original.contains(&b'\n') && original.starts_with(b"{\n") || original.starts_with(b"[\n");

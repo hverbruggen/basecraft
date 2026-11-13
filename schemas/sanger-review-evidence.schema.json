@@ -31,7 +31,6 @@
       }
     }
   },
-  "additionalProperties": false,
   "required": [
     "schema_version",
     "runs",
@@ -130,7 +129,6 @@
           "type": "string"
         }
       },
-      "additionalProperties": false,
       "required": [
         "original",
         "sha256",
@@ -147,7 +145,6 @@
           "type": "string"
         }
       },
-      "additionalProperties": false,
       "required": [
         "path",
         "hash"
