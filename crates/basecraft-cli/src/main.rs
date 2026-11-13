@@ -343,7 +343,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
         Command::Plugins { action } => operations::plugins(action)?,
         Command::Operations { action } => operations::operations(action)?,
-        Command::Run(args) => operations::run_files(args)?,
+        Command::Run(args) => operations::run_files(args, project.as_ref())?,
         Command::Sanger { action } => sanger::run(action, project.as_ref(), save_options)?,
         Command::Metadata { action } => metadata::run(action, save_options)?,
         Command::Submission { action } => submission::run(action, save_options)?,

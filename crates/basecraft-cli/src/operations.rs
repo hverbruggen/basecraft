@@ -229,10 +229,6 @@ pub struct RunArgs {
     /// A setting: `NAME=VALUE`. VALUE is read as JSON when it parses, else as text.
     #[arg(long = "param", value_name = "NAME=VALUE")]
     params: Vec<String>,
-    /// The project folder. Without it the first input file is a loose file,
-    /// and the run's records go beside it.
-    #[arg(long)]
-    project: Option<PathBuf>,
 }
 
 /// The one ID among the registered operations that `name` names.
@@ -287,7 +283,10 @@ fn pair(text: &str, how: &str) -> Result<(String, String)> {
         .ok_or_else(|| format!("{text}: expected {how}").into())
 }
 
-pub fn run_files(args: RunArgs) -> Result<()> {
+/// Run one tool on files. With the global `--project` the run belongs to that
+/// project; without it the first input file is a loose file, and the run's
+/// records go beside it.
+pub fn run_files(args: RunArgs, project: Option<&basecraft_ops::project::Project>) -> Result<()> {
     use std::collections::BTreeMap;
     let registry = Registry::load(&RegistryConfig::discover()?)?;
     let operation = find_operation(&registry, &args.operation)?;
@@ -331,8 +330,8 @@ pub fn run_files(args: RunArgs) -> Result<()> {
         .flatten()
         .next()
         .ok_or("give at least one input file")?;
-    let root = match &args.project {
-        Some(project) => project.clone(),
+    let root = match project {
+        Some(project) => project.root().to_path_buf(),
         None => first
             .canonicalize()?
             .parent()
@@ -347,10 +346,7 @@ pub fn run_files(args: RunArgs) -> Result<()> {
         &outputs,
     )?;
     let policy = basecraft_plugin_host::policy::SessionPolicy::new(&root, true)?;
-    let mut session = match &args.project {
-        Some(project) => crate::project_session(project)?,
-        None => crate::script_session(&root, None)?,
-    };
+    let mut session = crate::script_session(&root, project)?;
     basecraft_platform::interrupt::install()?;
     let (value, _) = run_foreground(&registry, &request, policy, "CLI", &mut session)?;
     println!("{}", serde_json::to_string(&value)?);

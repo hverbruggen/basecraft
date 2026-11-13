@@ -30,10 +30,13 @@ fn a_tool_runs_on_files_like_its_request_and_refuses_with_what_to_give() {
     std::fs::create_dir(&project).unwrap();
     std::fs::write(project.join("input.afa"), ALIGNMENT).unwrap();
 
-    // In a project: the alignment in, the tree out, by the operation's short name.
+    // In a project (the global --project, before the command): the alignment
+    // in, the tree out, by the operation's short name.
     let ran = basecraft(
         &profile,
         &[
+            "--project",
+            text(&project),
             "run",
             "distance/tree",
             text(&project.join("input.afa")),
@@ -41,8 +44,6 @@ fn a_tool_runs_on_files_like_its_request_and_refuses_with_what_to_give() {
             text(&project.join("run.nwk")),
             "--param",
             "model=p",
-            "--project",
-            text(&project),
         ],
     );
     assert!(
