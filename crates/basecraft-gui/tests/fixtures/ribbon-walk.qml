@@ -592,6 +592,26 @@ Main {
             const error = dialog("preferences").project_error
             check(metadataProject === folder + "/second" && error === "", "project did not switch after its documents closed: " + error)
         })
+        // D16: a file in a recent project other than the chosen one asks
+        // first. Open on its own keeps the project; Switch goes through the
+        // switch and then opens the file in its project.
+        const asked = () => dialog("otherProjectDialog")
+        const press = name => find(asked().contentItem, i => i.objectName === name).clicked()
+        list.push(() => {
+            openPath(folder + "/rooted.nwk")
+            check(asked().opened && documentTabs().count === 0, "a file in another recent project opened without asking")
+            check(asked().file.project === folder, "the question names " + asked().file.project + ", not the file's project")
+            press("openOnItsOwn")
+        })
+        list.push(until(() => tabOf(folder + "/rooted.nwk") >= 0, "Open on its own did not open the file"))
+        list.push(() => {
+            check(!asked().opened && metadataProject === folder + "/second", "opening on its own changed the project")
+            openPath(folder + "/locus.gb")
+            check(asked().opened, "the second file did not ask")
+            press("switchToProject")
+        })
+        list.push(until(() => metadataProject === folder && tabOf(folder + "/locus.gb") >= 0, "Switch did not choose the file's project and open the file"))
+        list.push(() => check(tabOf(folder + "/rooted.nwk") < 0 && dialog("preferences").project_error === "", "the switch left the other project's tabs open"))
         list.push(() => { console.log("RIBBON_WALK passed"); Qt.quit() })
         return list
     }

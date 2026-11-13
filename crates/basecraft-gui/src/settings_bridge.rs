@@ -46,6 +46,10 @@ pub mod qobject {
         /// projects. Returns `path`, or "" with `project_error` set.
         #[qinvokable]
         fn select_project(self: Pin<&mut AppSettings>, path: &QString) -> QString;
+        /// The recent project that holds `file` when the chosen one does
+        /// not, else "" (D16).
+        #[qinvokable]
+        fn recent_project_of(self: &AppSettings, file: &QString) -> QString;
         #[qinvokable]
         fn project_picker_directory(self: &AppSettings) -> QString;
         #[qinvokable]
@@ -210,6 +214,20 @@ impl qobject::AppSettings {
         self.show_projects(result);
         QString::from(if accepted { chosen.as_str() } else { "" })
     }
+    fn recent_project_of(&self, file: &QString) -> QString {
+        let file = PathBuf::from(file.to_string());
+        let chosen = crate::chosen_project::chosen().ok().flatten();
+        if chosen.is_some_and(|project| project.contains(&file)) {
+            return QString::default();
+        }
+        basecraft_ops::project::Project::recent_holding(
+            &file,
+            &load_project_history().unwrap_or_default(),
+        )
+        .map_or_else(QString::default, |p| {
+            QString::from(p.root().to_string_lossy().as_ref())
+        })
+    }
     /// Publish the recent projects, or keep the shown ones and say why not.
     fn show_projects(mut self: Pin<&mut Self>, result: Result<Vec<PathBuf>, String>) {
         match result {
@@ -294,9 +312,7 @@ impl qobject::AppSettings {
 }
 
 fn history_path() -> Result<PathBuf, String> {
-    AppPaths::discover()
-        .map(|paths| paths.state.join("recent-projects.json"))
-        .map_err(|e| e.to_string())
+    basecraft_ops::project::recent_projects_file().map_err(|e| e.to_string())
 }
 
 pub(crate) fn load_project_history() -> Result<Vec<PathBuf>, String> {
