@@ -79,7 +79,7 @@ pub fn write_parsed(tree: &ParsedTree, w: &mut dyn std::io::Write) -> std::io::R
                     .ok_or_else(|| std::io::Error::other("invalid parsed tree node"))?;
                 w.write_all(quote_name(&node.name).as_bytes())?;
                 if let Some(length) = node.length {
-                    write!(w, ":{length}")?;
+                    write!(w, ":{}", format_length(length, node.length_place))?;
                 }
                 if !node.comment.is_empty() {
                     write!(w, "[&{}]", node.comment)?;
@@ -524,9 +524,13 @@ pub fn quote_name(name: &str) -> String {
     }
 }
 
-/// A branch length, as short as it reads back exactly.
-pub fn format_length(len: f64) -> String {
-    format!("{len}")
+/// A branch length as text: with the decimals the file wrote (`place`), so
+/// its rounding survives a save (D17), else as short as it reads back exactly.
+pub fn format_length(len: f64, place: Option<i32>) -> String {
+    match place.and_then(|place| usize::try_from(-place).ok()) {
+        Some(decimals) if decimals > 0 => format!("{len:.decimals$}"),
+        _ => format!("{len}"),
+    }
 }
 
 /// The power of ten of the last digit of a written number such as `0.0012`
@@ -557,6 +561,21 @@ mod tests {
         let tree = parse_newick("(a:0.123456,b:7):0;").unwrap();
         let places: Vec<_> = tree.nodes.iter().map(|n| n.length_place).collect();
         assert_eq!(places, [Some(0), Some(-6), Some(0)]);
+    }
+
+    #[test]
+    fn saving_keeps_the_written_decimals() {
+        let text = "(a:0.100000,b:2.50,c:1.5e-3,d:7);";
+        let tree = parse_newick(text).unwrap();
+        let mut out = Vec::new();
+        write_parsed(&tree, &mut out).unwrap();
+        let saved = parse_newick(std::str::from_utf8(&out).unwrap()).unwrap();
+        let places = |t: &ParsedTree| t.nodes.iter().map(|n| n.length_place).collect::<Vec<_>>();
+        assert_eq!(places(&saved), places(&tree));
+        let saved = String::from_utf8(out).unwrap();
+        assert!(saved.contains("(a:0.100000,b:2.50,c:0.0015,d:7)"), "{saved}");
+        // A computed length has no written place: the shortest exact form.
+        assert_eq!(format_length(1.0, None), "1");
     }
 
     fn tips(t: &ParsedTree) -> Vec<&str> {

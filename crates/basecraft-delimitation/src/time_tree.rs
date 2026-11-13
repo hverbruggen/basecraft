@@ -56,30 +56,46 @@ fn ultrametric(tree: &TreeDoc, binary: bool) -> Result<EvenedDepths> {
         }
     }
     let parent_depth = |i: usize| tree.node(i).parent.map_or(0.0, |p| depths[p]);
-    let (mut low, mut high) = (f64::MIN, f64::MAX);
+    // The tips that set each end of the feasible range, and whether the
+    // lower end comes from a tip branch that cannot go below zero.
+    let (mut low, mut high) = ((f64::MIN, 0, false), (f64::MAX, 0));
     let (mut shallow, mut deep) = (f64::MAX, f64::MIN);
     for &i in tips.values() {
-        low = low.max(depths[i] - bounds[i]).max(parent_depth(i));
-        high = high.min(depths[i] + bounds[i]);
+        let rounded = depths[i] - bounds[i];
+        let floor = parent_depth(i);
+        if rounded.max(floor) > low.0 {
+            low = (rounded.max(floor), i, floor > rounded);
+        }
+        if depths[i] + bounds[i] < high.0 {
+            high = (depths[i] + bounds[i], i);
+        }
         shallow = shallow.min(depths[i]);
         deep = deep.max(depths[i]);
     }
-    if low > high {
-        let name = |pick: &dyn Fn(f64, f64) -> bool| {
-            let mut best: Option<usize> = None;
-            for &i in tips.values() {
-                if best.is_none_or(|b| pick(depths[i], depths[b])) {
-                    best = Some(i);
-                }
-            }
-            best.map_or_else(String::new, |i| tree.node(i).name.clone())
+    if low.0 > high.0 {
+        let name = |i: usize| tree.node(i).name.clone();
+        let reason = if low.2 {
+            format!(
+                "tip {} is at most {} from the root, but the branch to tip {} starts deeper, at {}, so evening the tips would make that branch negative",
+                name(high.1),
+                high.0,
+                name(low.1),
+                parent_depth(low.1),
+            )
+        } else {
+            format!(
+                "tip {} is {} from the root and tip {} is {}, further apart than the decimals written in the file allow",
+                name(high.1),
+                depths[high.1],
+                name(low.1),
+                depths[low.1],
+            )
         };
         return Err(Error(format!(
-            "the tree is not ultrametric: tip {} is {shallow} from the root and tip {} is {deep}, further apart than the decimals written in the file allow. Make it ultrametric with penalised likelihood (Sanderson rate smoothing, operation {SMOOTHING_OPERATION}) and use that tree",
-            name(&|a, b| a < b),
-            name(&|a, b| a > b),
+            "the tree is not ultrametric: {reason}. Make it ultrametric with penalised likelihood (Sanderson rate smoothing, operation {SMOOTHING_OPERATION}) and use that tree"
         )));
     }
+    let (low, high) = (low.0, high.0);
     let depth = f64::midpoint(shallow, deep).clamp(low, high);
     let mut evened = Evened {
         depth,
@@ -95,6 +111,13 @@ fn ultrametric(tree: &TreeDoc, binary: bool) -> Result<EvenedDepths> {
         depths[i] = depth;
     }
     Ok((depths, tips, (evened.tips_changed > 0).then_some(evened)))
+}
+
+/// Whether `tree` has usable lengths but is not ultrametric, so smoothing it
+/// with penalised likelihood is the way on (D17). Callers decide on this
+/// check, never on the refusal's text.
+pub fn needs_smoothing(tree: &TreeDoc) -> bool {
+    depths(tree, false).is_ok() && ultrametric(tree, false).is_err()
 }
 
 /// A rooted tree with ultrametric depths, its tips evened out (D17).
@@ -425,6 +448,27 @@ mod tests {
         // each (D17): (a:1,b:2) is within its rounding and evens out to 1.5.
         let whole = TreeDoc::from_newick("whole", "(a:1,b:2);").unwrap();
         assert_eq!(validate(&whole, true, true).unwrap().root_height, 1.5);
+    }
+
+    #[test]
+    fn the_refusal_names_the_tips_in_conflict_and_a_branch_that_would_go_negative() {
+        // a sits deeper than b can reach; whole-number c is loose enough to
+        // fit either, so the refusal names a and b, not c.
+        let tree = TreeDoc::from_newick("mixed", "((a:0.500,b:0.400):0.500,c:1);").unwrap();
+        let error = validate(&tree, true, false).unwrap_err().0;
+        assert!(
+            error.contains("tip b") && error.contains("tip a") && !error.contains("tip c"),
+            "{error}"
+        );
+        // b's branch starts at 0.9, deeper than c can reach, so evening the
+        // tips would make it negative.
+        let tree = TreeDoc::from_newick(
+            "negative",
+            "((a:0.0001,(b:0.0001):0.9000):0.0000,c:0.0001);",
+        )
+        .unwrap();
+        let error = validate(&tree, true, false).unwrap_err().0;
+        assert!(error.contains("negative"), "{error}");
     }
 
     #[test]

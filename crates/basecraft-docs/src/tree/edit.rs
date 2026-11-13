@@ -165,6 +165,7 @@ impl TreeDoc {
         let change = match op {
             Op::TreeReroot { .. } | Op::TreeMidpointRoot {} | Op::TreeMinimumVarianceRoot {} => {
                 let before = Box::new(self.clone());
+                self.settle_label_rooting();
                 let result = match op {
                     Op::TreeReroot { clade } => self.reroot(clade),
                     Op::TreeMidpointRoot {} => self.midpoint_root(),

@@ -382,11 +382,15 @@ fn run(
         .get(request.tree_index)
         .ok_or("selected tree index outside file")?;
     let tree = basecraft_docs::TreeDoc::from_parsed(&parsed.name, parsed);
-    // The request can state the tree rooted; otherwise the tree's own
-    // reading decides: its tag, or two clades at the base (D18).
+    // The request can state whether the tree is rooted; otherwise the
+    // tree's own reading decides: its tag, or two clades at the base (D18).
     let rooting = tree.rooting();
-    let rooted = request.rooted || rooting.value == basecraft_protocol::facts::Rooting::Rooted;
-    if !request.rooted && rooted && rooting.source == basecraft_protocol::facts::FactSource::Guessed
+    let rooted = request
+        .rooted
+        .unwrap_or(rooting.value == basecraft_protocol::facts::Rooting::Rooted);
+    if request.rooted.is_none()
+        && rooted
+        && rooting.source == basecraft_protocol::facts::FactSource::Guessed
     {
         result.job.diagnostics.push(
             "the tree has two clades at its base and no rooting tag, so it was read as rooted (a guess; state it with tree.set_rooting)".into(),
@@ -509,7 +513,11 @@ fn run(
             let mut merged = BTreeMap::new();
             let tree = match basecraft_delimitation::gmyc::collapse_zero_age(full, &time)? {
                 Some((collapsed, groups)) if !clamp => {
+                    // Keep the record of the user's tree; the collapsed one
+                    // is checked again for the fit.
+                    let full_diagnostics = std::mem::take(&mut time.diagnostics);
                     time = basecraft_delimitation::time_tree::validate(&collapsed, rooted, true)?;
+                    time.diagnostics.splice(0..0, full_diagnostics);
                     let tips: usize = groups.values().map(std::collections::BTreeSet::len).sum();
                     time.diagnostics.push(format!(
                         "{tips} tips in {} zero-age tree clades (zero distance within each clade); each clade was fitted as one tip and its members restored; no exact sequence identity is inferred",

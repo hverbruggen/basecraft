@@ -475,7 +475,7 @@ impl TreeDoc {
             .filter(|(_, a)| {
                 self.clade_tips(&a.clade).map_or(true, |now| {
                     now != a.tips
-                        && (a.rooting != Rooting::Unrooted
+                        && (self.reading(a) != Rooting::Unrooted
                             || all.difference(&now).cloned().collect::<BTreeSet<_>>() != a.tips)
                 })
             })
@@ -506,7 +506,7 @@ impl TreeDoc {
         };
         exact(&a.tips).or_else(|| {
             let other = self.tip_names().difference(&a.tips).cloned().collect();
-            (a.rooting != Rooting::Rooted).then(|| exact(&other))?
+            (self.reading(a) != Rooting::Rooted).then(|| exact(&other))?
         })
     }
 
@@ -541,7 +541,7 @@ impl TreeDoc {
     fn repoint_split_labels(&mut self) {
         for id in self.displaced_annotations() {
             let a = &self.annotations[&id];
-            if a.rooting == Rooting::Unrooted
+            if self.reading(a) == Rooting::Unrooted
                 && let Some(node) = self.exact_clade(a)
             {
                 let clade = self.clade_ref(node);
@@ -613,7 +613,7 @@ impl TreeDoc {
                 let node = self.smallest_clade(&a.tips)?;
                 a.clade = self.clade_ref(node);
                 a.tips = self.tips_under(node);
-                a.rooting = self.rooting().value;
+                a.rooting = self.label_rooting();
             }
         }
         Ok(Some(a))
@@ -633,6 +633,38 @@ impl TreeDoc {
             },
         };
         Fact { value, source }
+    }
+
+    /// The rooting a new label records: the tree's reading when the file or
+    /// the user stated it. A guess records Unknown, and the label follows the
+    /// tree's reading until a reroot settles it (D18).
+    fn label_rooting(&self) -> Rooting {
+        let reading = self.rooting();
+        if reading.source == FactSource::Guessed {
+            Rooting::Unknown
+        } else {
+            reading.value
+        }
+    }
+
+    /// Whether a label marks a clade or a split: its own rooting, or for one
+    /// made on a guess, the tree's reading now.
+    fn reading(&self, a: &CladeAnnotation) -> Rooting {
+        if a.rooting == Rooting::Unknown {
+            self.rooting().value
+        } else {
+            a.rooting
+        }
+    }
+
+    /// Before a reroot replaces the reading, labels that follow it take it.
+    pub(crate) fn settle_label_rooting(&mut self) {
+        let value = self.rooting().value;
+        for a in self.annotations.values_mut() {
+            if a.rooting == Rooting::Unknown {
+                a.rooting = value;
+            }
+        }
     }
 
     /// State whether the tree is rooted, as the user does (D18).
@@ -784,7 +816,7 @@ impl TreeDoc {
                 // group it marks now. An edited label keeps its group.
                 if a.tips.is_empty() {
                     a.tips = tips;
-                    a.rooting = self.rooting().value;
+                    a.rooting = self.label_rooting();
                 }
                 self.annotations.insert(id, a);
             }
@@ -1200,7 +1232,7 @@ impl TreeDoc {
                 && let Some(length) = node.length
             {
                 out.write_all(b":")?;
-                out.write_all(newick::format_length(length).as_bytes())?;
+                out.write_all(newick::format_length(length, node.length_place).as_bytes())?;
             }
         }
         out.write_all(b";")?;
@@ -1304,6 +1336,28 @@ mod tests {
         assert!(stated.to_newick_with_rooting().starts_with("[&U] "));
         stated.undo_edit(&undo);
         assert_eq!(stated.rooting(), fact(Rooting::Rooted, Guessed));
+    }
+
+    #[test]
+    fn a_label_on_a_guessed_reading_follows_the_rooting_the_user_states() {
+        use basecraft_protocol::Op;
+        let mut t = tree("((a,b),(c,d));");
+        let annotation = Some(CladeAnnotation::new(vec!["a".into(), "b".into()], "AB"));
+        t.apply_edit(&Op::TreeAnnotate { id: 1, annotation })
+            .unwrap();
+        assert_eq!(t.annotations()[&1].rooting, Rooting::Unknown);
+        // The guess said rooted; the user says unrooted, so the label marks a
+        // split and follows it through the reroot.
+        t.apply_edit(&Op::TreeSetRooting { rooted: false }).unwrap();
+        let undo = t
+            .apply_edit(&Op::TreeReroot {
+                clade: vec!["b".into()],
+            })
+            .unwrap();
+        assert_eq!(t.displaced_annotations(), Vec::<u32>::new());
+        assert_eq!(t.annotations()[&1].rooting, Rooting::Unrooted);
+        t.undo_edit(&undo);
+        assert_eq!(t.annotations()[&1].rooting, Rooting::Unknown);
     }
 
     #[test]

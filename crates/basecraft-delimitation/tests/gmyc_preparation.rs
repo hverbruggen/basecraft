@@ -29,7 +29,7 @@ fn zero_age_preparation_restores_tree_tips_then_exact_haplotype_members() {
         input: input.display().to_string(),
         input_hash: basecraft_io::hash_file(&input).unwrap(),
         output: directory.path().join("result.json").display().to_string(),
-        rooted: true,
+        rooted: Some(true),
         tree_index: 0,
         seed: 1,
         workers: 2,
@@ -182,7 +182,7 @@ fn nested_ties_never_publish_multithreshold_hypotheses_or_exchange_artifacts() {
                     .join(format!("{case}-{method}.json"))
                     .display()
                     .to_string(),
-                rooted: true,
+                rooted: Some(true),
                 tree_index: 0,
                 seed: 1,
                 workers: 1,

@@ -121,7 +121,11 @@
           ]
         },
         "rooted": {
-          "type": "boolean"
+          "description": "Whether the tree is rooted, as the caller states it; None uses the\ntree's own reading: its tag, or two clades at the base (D18).",
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "seed": {
           "type": "integer",
@@ -152,7 +156,6 @@
         "input",
         "input_hash",
         "output",
-        "rooted",
         "tree_index",
         "seed",
         "workers"

@@ -311,10 +311,8 @@ fn tree() {
             let a = CladeAnnotation::new(vec!["specimen_01".into()], "Reviewed tip");
             let b = CladeAnnotation::new(vec!["specimen_02".into()], "Second tip");
             // The tree records the tips each label was made for.
-            // Two clades at its base: the tree reads as rooted (D18).
             let made = |label: &CladeAnnotation| CladeAnnotation {
                 tips: label.clade.iter().cloned().collect(),
-                rooting: basecraft_protocol::facts::Rooting::Rooted,
                 ..label.clone()
             };
             let mut first = original.clone();
@@ -728,6 +726,26 @@ fn alignment_alphabet() {
                 [StatedAlphabet::Rna, StatedAlphabet::Dna]
                     .map(|alphabet| Op::SetAlphabet { alphabet }),
                 [original, stated(Alphabet::Rna), stated(Alphabet::Dna)],
+            )
+        },
+    );
+}
+
+#[test]
+fn tree_rooting() {
+    use basecraft_protocol::facts::Rooting;
+    crate::isolated_profile::isolate!();
+    // Untagged with two clades at the base: a guessed root (D18), which the
+    // user states unrooted and then rooted. The saved tag keeps the reading;
+    // reopened, the file states it.
+    scenario(
+        "tree_rooting",
+        |root| fixture(root, "t.nwk", b"((a:1,b:1):1,(c:1,d:1):1);\n"),
+        |s, d| s.tree(d).unwrap().rooting().value,
+        |_, _| {
+            (
+                [false, true].map(|rooted| Op::TreeSetRooting { rooted }),
+                [Rooting::Rooted, Rooting::Unrooted, Rooting::Rooted],
             )
         },
     );

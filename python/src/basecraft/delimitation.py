@@ -28,7 +28,9 @@ def run(source, method="gmyc_single", workspace=None, output=None, **parameters)
     ``source`` is the tree or alignment to analyse. For an alignment, use
     ``gmyc_alignment_single``, ``gmyc_alignment_multiple`` or
     ``asap_alignment``; these infer a UPGMA equal-rate tree after the chosen
-    sampling policy. Tree methods require an explicit ``rooted=True``.
+    sampling policy. Tree methods need a rooted tree: pass ``rooted=True`` or
+    ``rooted=False`` to state it, or leave it out to use the tree's own
+    reading (its ``[&R]``/``[&U]`` tag, or two clades at the base).
     With ``workspace`` (a ``.spart`` file), the run is recorded in that
     workspace and its hypotheses are added and saved. ``output`` copies the
     result report to a new file. Raises ``OperationError`` unless completed.

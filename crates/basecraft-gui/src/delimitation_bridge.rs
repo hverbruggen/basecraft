@@ -415,12 +415,9 @@ impl qobject::DelimitationController {
 
     fn fail(mut self: Pin<&mut Self>, text: &str) {
         // A tree that is not ultrametric: offer to smooth it (D17).
-        let offer = if text.contains(basecraft_delimitation::time_tree::SMOOTHING_OPERATION) {
-            QString::from(&self.rust().analysis_tree)
-        } else {
-            QString::default()
-        };
-        self.as_mut().set_smoothing_tree(offer);
+        let tree = &self.rust().analysis_tree;
+        let offer = needs_smoothing(Path::new(tree)).then(|| QString::from(tree));
+        self.as_mut().set_smoothing_tree(offer.unwrap_or_default());
         let summary = crate::bridge::error_summary(text);
         let details = if summary == text.trim() {
             ""
@@ -725,10 +722,13 @@ impl qobject::DelimitationController {
                 return Err("Choose a file containing exactly one display tree".into());
             }
             let tree = TreeDoc::from_parsed(&trees[0].name, &trees[0]);
-            // A manual cut works on the tree as drawn, so it needs ultrametric
-            // ages but not a rooting assertion or a bifurcating tree. The
-            // tolerance allows Newick lengths printed to six decimals.
-            let time = basecraft_delimitation::time_tree::validate(&tree, true, false);
+            // A cut needs a rooted ultrametric tree (D17), read as the tree
+            // reads (D18), but not a bifurcating one.
+            let time = basecraft_delimitation::time_tree::validate(
+                &tree,
+                tree.rooting().value == basecraft_protocol::facts::Rooting::Rooted,
+                false,
+            );
             let hash = basecraft_io::hash_bytes(&bytes);
             Ok((p, tree, time, hash, bytes))
         })();
@@ -2523,6 +2523,27 @@ impl cxx_qt::Initialize for qobject::DelimitationController {
             this.update_bar_columns();
         });
     }
+}
+
+/// Whether the tree file an analysis used is one that smoothing would make
+/// usable: a tree, with lengths, that is not ultrametric (D17).
+fn needs_smoothing(path: &Path) -> bool {
+    if !matches!(
+        basecraft_ops::files::Format::from_path(path),
+        Ok(basecraft_ops::files::Format::Tree)
+    ) {
+        return false;
+    }
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| basecraft_io::newick::parse_trees(&text).ok())
+        .and_then(|trees| trees.into_iter().next())
+        .is_some_and(|parsed| {
+            basecraft_delimitation::time_tree::needs_smoothing(&TreeDoc::from_parsed(
+                &parsed.name,
+                &parsed,
+            ))
+        })
 }
 
 #[cfg(test)]

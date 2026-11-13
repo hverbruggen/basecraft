@@ -942,7 +942,15 @@ pub fn collapse_zero_age(tree: &TreeDoc, time: &TimeTree) -> Result<Option<(Tree
     let mut merged = BTreeMap::new();
     for &i in tree.preorder().iter().rev() {
         let node = tree.node(i);
-        let length = node.length.map(|l| format!(":{l}")).unwrap_or_default();
+        let length = node
+            .length
+            .map(|l| {
+                format!(
+                    ":{}",
+                    basecraft_io::newick::format_length(l, node.length_place)
+                )
+            })
+            .unwrap_or_default();
         if node.is_tip() {
             first[i].clone_from(&node.name);
             text[i] = basecraft_io::newick::quote_name(&node.name) + &length;
