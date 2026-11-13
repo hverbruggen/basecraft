@@ -150,7 +150,8 @@ pub struct JobIndexSource {
     pub path: String,
 }
 
-/// Lightweight application-state `jobs/<id>/manifest.json`. The pointed-to
+/// Lightweight `.basecraft/jobs/<id>/manifest.json` of the run's project or
+/// folder. The pointed-to
 /// `OperationOutcome` in runtime.json stays authoritative; this is not `JobRecord`.
 /// Existing selected-field readers and owner/receipt checks remain unchanged.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]

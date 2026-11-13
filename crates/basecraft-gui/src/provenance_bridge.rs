@@ -64,6 +64,15 @@ pub struct ProvenanceRust {
     notifications: QString,
     notices: Vec<serde_json::Value>,
 }
+/// Folders whose `.basecraft` holds the records the window lists from earlier
+/// sessions (recovery, jobs): the chosen project, the recent ones and the
+/// scratch folder of new sequences.
+fn record_roots() -> Result<Vec<std::path::PathBuf>, String> {
+    let mut roots = crate::settings_bridge::load_project_history().unwrap_or_default();
+    roots.extend(crate::chosen_project::chosen()?.map(|p| p.root().to_path_buf()));
+    roots.extend(basecraft_platform::paths::AppPaths::discover().map(|p| p.scratch));
+    Ok(roots)
+}
 fn run(
     operation: &str,
     result: &Path,
@@ -205,23 +214,18 @@ impl qobject::AppProvenance {
     }
     /// Runs from earlier sessions, from their records. None can be cancelled.
     fn retained_jobs(&self) -> QString {
-        report_json(
-            basecraft_ops::records::jobs(true)
+        report_json(record_roots().and_then(|roots| {
+            basecraft_ops::records::jobs(true, &roots)
                 .map(|data| data.to_string())
-                .map_err(|e| e.to_string()),
-        )
+                .map_err(|e| e.to_string())
+        }))
     }
     fn recovery_sessions(mut self: Pin<&mut Self>) -> QString {
         let result = (|| -> Result<String, String> {
-            // Recovery lives in each project's `.basecraft`: look in the
-            // chosen project, the recent ones and the scratch folder of new
-            // sequences. A loose file's recovery is offered when it is opened.
-            let mut roots = crate::settings_bridge::load_project_history().unwrap_or_default();
-            roots.extend(crate::chosen_project::chosen()?.map(|p| p.root().to_path_buf()));
-            roots.extend(basecraft_platform::paths::AppPaths::discover().map(|p| p.scratch));
+            // A loose file's recovery is offered when it is opened.
             let mut sessions = Vec::new();
-            for folder in
-                basecraft_ops::records::recovery_sessions(&roots).map_err(|e| e.to_string())?
+            for folder in basecraft_ops::records::recovery_sessions(&record_roots()?)
+                .map_err(|e| e.to_string())?
             {
                 let name = basecraft_ops::log::read_all(&folder)
                     .ok()

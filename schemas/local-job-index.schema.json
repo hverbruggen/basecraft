@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "LocalJobIndex",
-  "description": "Lightweight application-state `jobs/<id>/manifest.json`. The pointed-to\n`OperationOutcome` in runtime.json stays authoritative; this is not `JobRecord`.\nExisting selected-field readers and owner/receipt checks remain unchanged.",
+  "description": "Lightweight `.basecraft/jobs/<id>/manifest.json` of the run's project or\nfolder. The pointed-to\n`OperationOutcome` in runtime.json stays authoritative; this is not `JobRecord`.\nExisting selected-field readers and owner/receipt checks remain unchanged.",
   "type": "object",
   "properties": {
     "diagnostics": {

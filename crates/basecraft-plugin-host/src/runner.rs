@@ -798,9 +798,10 @@ impl PreparedOperation {
         self.write_task_index(outcome, &runtime)
     }
 
-    /// The Tasks view lists runs from small index records in application
-    /// state. This one only points at the run's own `runtime.json`, which
-    /// stays the authoritative record.
+    /// The Tasks view lists runs from small index records in the `.basecraft`
+    /// of the run's home: the session's project when it holds the run, else
+    /// the folder the run is in. This one only points at the run's own
+    /// `runtime.json`, which stays the authoritative record.
     fn write_task_index(&self, outcome: &OperationOutcome, runtime: &Path) -> Result<()> {
         let source = self.document.as_ref().map_or_else(
             || {
@@ -841,7 +842,11 @@ impl PreparedOperation {
             diagnostics: outcome.errors.first().map(|error| error.message.clone()),
             runtime_record: runtime.into(),
         })?;
-        let path = records::job_index_path(self.run.id())?;
+        let home = basecraft_ops::project::Project::base_of(
+            self.project.as_ref(),
+            &self.run.working_directory().join(".basecraft"),
+        )?;
+        let path = records::job_index_path(&home, self.run.id());
         std::fs::create_dir_all(path.parent().unwrap_or(&path))?;
         records::write_json(&path, &index)?;
         Ok(())

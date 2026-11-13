@@ -376,8 +376,8 @@ impl SangerRun {
         self.run.artifact(name)
     }
 
-    fn job_path(&self) -> crate::Result<PathBuf> {
-        crate::records::job_index_path(self.run.id())
+    fn job_path(&self) -> PathBuf {
+        crate::records::job_index_path(&self.base, self.run.id())
     }
 
     /// The stage's run record, as every tool run has one: its sources with
@@ -438,7 +438,7 @@ impl SangerRun {
             artifact_run: Some(self.run.directory().to_path_buf()),
             extra: std::collections::BTreeMap::new(),
         })?;
-        let path = self.job_path()?;
+        let path = self.job_path();
         std::fs::create_dir_all(path.parent().ok_or_else(|| invalid("job has no parent"))?)?;
         inputs::write_json(&path, &value)
     }
@@ -1567,7 +1567,7 @@ mod tests {
             .unwrap();
         assert!(partial.is_file());
         let job: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(run.job_path().unwrap()).unwrap()).unwrap();
+            serde_json::from_slice(&std::fs::read(run.job_path()).unwrap()).unwrap();
         assert_eq!(job["status"], "failed");
         assert!(job["primary_output"].is_null());
         assert!(trace.is_file());
@@ -1741,7 +1741,7 @@ mod tests {
                 .unwrap();
             let directory = run.directory().to_path_buf();
             std::fs::write(run.artifact("partial").unwrap(), b"recover me").unwrap();
-            let job = run.job_path().unwrap();
+            let job = run.job_path();
             if cancelled {
                 run.cancelled("explicit cancellation").unwrap();
                 assert!(

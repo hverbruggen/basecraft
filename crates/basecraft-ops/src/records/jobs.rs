@@ -1,41 +1,43 @@
-//! The Tasks view's job index: one small record per run in basecraft's
-//! state folder, each pointing at the run's own `runtime.json`, which stays
+//! The Tasks view's job index: one small record per run in the `.basecraft`
+//! of the run's home (its project's root, or the folder it ran in outside a
+//! project), each pointing at the run's own `runtime.json`, which stays
 //! authoritative. Reading creates no folders.
 use basecraft_protocol::provenance::Publication;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-/// Where the Tasks view's index record of job `id` lives.
-pub fn job_index_path(id: &str) -> crate::Result<std::path::PathBuf> {
-    Ok(jobs_folder()?.join(id).join("manifest.json"))
+/// Where the Tasks view's record of job `id` lives, for a run whose records
+/// belong to `home`: a project root, or the folder of a loose file.
+pub fn job_index_path(home: &Path, id: &str) -> PathBuf {
+    home.join(".basecraft/jobs").join(id).join("manifest.json")
 }
 
-fn jobs_folder() -> crate::Result<std::path::PathBuf> {
-    let paths = basecraft_platform::paths::AppPaths::discover()
-        .map_err(|e| crate::error::invalid(e.to_string()))?;
-    Ok(paths.state.join("jobs"))
+/// The job records kept in the `.basecraft` of each of `homes`, whatever tabs
+/// are open. Reading creates no directories.
+pub fn jobs(previous: bool, homes: &[PathBuf]) -> crate::Result<serde_json::Value> {
+    let mut folders: Vec<_> = homes
+        .iter()
+        .filter_map(|home| home.canonicalize().ok())
+        .map(|home| home.join(".basecraft/jobs"))
+        .collect();
+    folders.sort();
+    folders.dedup();
+    let folders: Vec<_> = folders.iter().map(PathBuf::as_path).collect();
+    job_records(&folders, previous, basecraft_platform::process_instance())
 }
 
-/// Retained job evidence is independent of open tabs. Reading creates no directories.
-pub fn jobs(previous: bool) -> crate::Result<serde_json::Value> {
-    job_records(
-        &jobs_folder()?,
-        previous,
-        basecraft_platform::process_instance(),
-    )
-}
-
-fn job_records(directory: &Path, previous: bool, owner: &str) -> crate::Result<serde_json::Value> {
-    let entries = match std::fs::read_dir(directory) {
-        Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(serde_json::json!({"jobs":[]}));
-        }
-        Err(e) => return Err(e.into()),
-    };
+fn job_records(folders: &[&Path], previous: bool, owner: &str) -> crate::Result<serde_json::Value> {
     let mut runs = Vec::new();
     let mut budget = TaskReadBudget(64 << 20);
     let mut warnings = Vec::new();
-    for (index, entry) in entries.enumerate() {
+    let mut listings = Vec::new();
+    for folder in folders {
+        match std::fs::read_dir(folder) {
+            Ok(listing) => listings.push(listing),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+    for (index, entry) in listings.into_iter().flatten().enumerate() {
         if index >= 4096 {
             warnings.push("Showing at most 4096 retained runs".into());
             break;
@@ -326,7 +328,7 @@ mod tests {
             let (jobs, receipt, outcome) = registered_fixture(temp.path(), state);
             let index = jobs.join("registered/manifest.json");
             let before = std::fs::read(&index).unwrap();
-            let rows = job_records(&jobs, false, "current").unwrap();
+            let rows = job_records(&[&jobs], false, "current").unwrap();
             let row = &rows["jobs"][0];
             assert_eq!(row["status"], state);
             assert_eq!(row["outputs"], serde_json::json!({}));
@@ -335,10 +337,10 @@ mod tests {
             assert_eq!(row["effective_parameters"]["canonical"], true);
             assert_eq!(row["receipt_confirmed"], true);
             assert_eq!(
-                job_records(&jobs, false, "new-owner").unwrap()["jobs"],
+                job_records(&[&jobs], false, "new-owner").unwrap()["jobs"],
                 serde_json::json!([])
             );
-            let previous = job_records(&jobs, true, "new-owner").unwrap();
+            let previous = job_records(&[&jobs], true, "new-owner").unwrap();
             if ["queued", "running", "cancelling", "finalizing"].contains(&state) {
                 assert_eq!(
                     previous["jobs"][0]["status"],
@@ -388,7 +390,7 @@ mod tests {
                     std::fs::write(&receipt, outcome.to_string()).unwrap();
                 }
             }
-            let rows = job_records(&jobs, false, "current").unwrap();
+            let rows = job_records(&[&jobs], false, "current").unwrap();
             let row = &rows["jobs"][0];
             assert_eq!(
                 row["status"], "Completion unconfirmed; receipt unavailable",
@@ -467,7 +469,7 @@ mod tests {
         std::fs::write(&manifest, serde_json::to_vec(&publication).unwrap()).unwrap();
         std::fs::write(&receipt, outcome.to_string()).unwrap();
         assert_eq!(
-            job_records(&jobs, false, "current").unwrap()["jobs"][0]["primary_output"],
+            job_records(&[&jobs], false, "current").unwrap()["jobs"][0]["primary_output"],
             tree.to_str().unwrap()
         );
         outcome["artifacts"][0]["path"] =
@@ -477,13 +479,13 @@ mod tests {
         std::fs::write(&manifest, serde_json::to_vec(&publication).unwrap()).unwrap();
         std::fs::write(&receipt, outcome.to_string()).unwrap();
         assert_eq!(
-            job_records(&jobs, false, "current").unwrap()["jobs"][0]["primary_output"],
+            job_records(&[&jobs], false, "current").unwrap()["jobs"][0]["primary_output"],
             tree.to_str().unwrap()
         );
         outcome["state"] = serde_json::json!("finalizing");
         std::fs::write(&receipt, outcome.to_string()).unwrap();
         assert!(
-            job_records(&jobs, false, "current").unwrap()["jobs"][0]["primary_output"].is_null()
+            job_records(&[&jobs], false, "current").unwrap()["jobs"][0]["primary_output"].is_null()
         );
         outcome["state"] = serde_json::json!("completed");
         // A canonical visible export of that exact primary member wins.
@@ -506,21 +508,21 @@ mod tests {
         std::fs::write(&manifest, serde_json::to_vec(&publication).unwrap()).unwrap();
         std::fs::write(&receipt, outcome.to_string()).unwrap();
         assert_eq!(
-            job_records(&jobs, false, "current").unwrap()["jobs"][0]["primary_output"],
+            job_records(&[&jobs], false, "current").unwrap()["jobs"][0]["primary_output"],
             export.to_str().unwrap()
         );
         // Stale export digest cannot override the valid retained primary.
         outcome["artifacts"][2]["digest"] = serde_json::json!("changed");
         std::fs::write(&receipt, outcome.to_string()).unwrap();
         assert_eq!(
-            job_records(&jobs, false, "current").unwrap()["jobs"][0]["primary_output"],
+            job_records(&[&jobs], false, "current").unwrap()["jobs"][0]["primary_output"],
             tree.to_str().unwrap()
         );
         // Missing primary must not substitute the bootstrap collection.
         outcome["artifacts"].as_array_mut().unwrap().remove(1);
         std::fs::write(&receipt, outcome.to_string()).unwrap();
         assert!(
-            job_records(&jobs, false, "current").unwrap()["jobs"][0]["primary_output"].is_null()
+            job_records(&[&jobs], false, "current").unwrap()["jobs"][0]["primary_output"].is_null()
         );
         // A genuinely supporting-only descriptor never offers a primary.
         descriptor.outputs.get_mut("artifacts").unwrap().visibility =
@@ -533,11 +535,11 @@ mod tests {
         std::fs::write(&descriptor_path, serde_json::to_vec(&descriptor).unwrap()).unwrap();
         std::fs::write(&receipt, outcome.to_string()).unwrap();
         assert!(
-            job_records(&jobs, false, "current").unwrap()["jobs"][0]["primary_output"].is_null()
+            job_records(&[&jobs], false, "current").unwrap()["jobs"][0]["primary_output"].is_null()
         );
         descriptor.outputs.get_mut("artifacts").unwrap().visibility = ArtifactVisibility::Result;
         std::fs::write(&descriptor_path, serde_json::to_vec(&descriptor).unwrap()).unwrap();
-        let row = &job_records(&jobs, false, "current").unwrap()["jobs"][0];
+        let row = &job_records(&[&jobs], false, "current").unwrap()["jobs"][0];
         assert!(row["primary_output"].is_null());
         assert!(
             row["diagnostics"]
@@ -554,7 +556,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         const CHILD: &str = "BASECRAFT_TASK_FIFO_CHILD";
         if let Some(root) = std::env::var_os(CHILD) {
-            let rows = job_records(&Path::new(&root).join("jobs"), false, "current").unwrap();
+            let rows = job_records(&[&Path::new(&root).join("jobs")], false, "current").unwrap();
             let text = rows.to_string();
             assert!(text.contains("not a regular file"), "{text}");
             assert!(!text.contains("reading limit"), "{text}");
@@ -644,8 +646,8 @@ mod tests {
                 "source":{"path":"input"},"outputs":{},"primary_output":primary,"owner_instance":"current"});
             std::fs::write(directory.join("manifest.json"), value.to_string()).unwrap();
         }
-        let first = job_records(&jobs, false, "current").unwrap();
-        let second = job_records(&jobs, true, "current").unwrap();
+        let first = job_records(&[&jobs], false, "current").unwrap();
+        let second = job_records(&[&jobs], true, "current").unwrap();
         assert_eq!(first, second);
         let rows = first["jobs"].as_array().unwrap();
         assert_eq!(rows.len(), 3);
@@ -658,7 +660,7 @@ mod tests {
             "called.fa"
         );
         assert_eq!(std::fs::read_dir(&jobs).unwrap().count(), 3);
-        assert_eq!(job_records(&jobs, false, "current").unwrap(), first);
+        assert_eq!(job_records(&[&jobs], false, "current").unwrap(), first);
     }
 
     #[test]
@@ -674,7 +676,7 @@ mod tests {
         let file = std::fs::File::create(&receipt).unwrap();
         file.set_len((64 << 20) + 1).unwrap();
         assert!(crate::records::provenance::read_record(&receipt).is_err());
-        let rows = job_records(&jobs, false, "current").unwrap();
+        let rows = job_records(&[&jobs], false, "current").unwrap();
         assert_eq!(rows["jobs"][0]["receipt_confirmed"], false);
         assert!(
             rows["warnings"]
@@ -690,7 +692,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let jobs = dir.path().join("jobs");
         assert_eq!(
-            job_records(&jobs, false, "current").unwrap()["jobs"],
+            job_records(&[&jobs], false, "current").unwrap()["jobs"],
             serde_json::json!([])
         );
         assert!(!jobs.exists());
@@ -708,11 +710,11 @@ mod tests {
             std::fs::create_dir_all(jobs.join(id)).unwrap();
             std::fs::write(jobs.join(id).join("manifest.json"), value.to_string()).unwrap();
         }
-        let current = job_records(&jobs, false, "current").unwrap();
+        let current = job_records(&[&jobs], false, "current").unwrap();
         assert_eq!(current["jobs"].as_array().unwrap().len(), 1);
         assert_eq!(current["jobs"][0]["status"], "running");
         assert_eq!(current["warnings"].as_array().unwrap().len(), 1);
-        let all = job_records(&jobs, true, "current").unwrap();
+        let all = job_records(&[&jobs], true, "current").unwrap();
         assert_eq!(all["jobs"].as_array().unwrap().len(), 2);
         assert!(
             all["jobs"]

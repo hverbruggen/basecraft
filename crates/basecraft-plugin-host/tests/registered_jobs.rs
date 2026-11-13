@@ -750,7 +750,7 @@ fn document_inputs_read_the_session_revision_and_record_history() {
         ]
     );
     // The Tasks view lists registered runs and points at their own record.
-    let tasks = basecraft_ops::records::jobs(true).unwrap();
+    let tasks = basecraft_ops::records::jobs(true, &[temp.path().to_path_buf()]).unwrap();
     let listed = tasks["jobs"]
         .as_array()
         .unwrap()
@@ -783,6 +783,80 @@ fn document_inputs_read_the_session_revision_and_record_history() {
     );
     assert!(stale.unwrap_err().to_string().contains("stale_revision"));
     assert!(!temp.path().join("stale.json").exists());
+}
+
+#[test]
+fn job_records_stay_with_the_data_when_the_private_folder_is_deleted() {
+    let Some(root) = isolated_profile::enter(
+        "job_records_stay_with_the_data_when_the_private_folder_is_deleted",
+    ) else {
+        return;
+    };
+    // A plugin run in a project subfolder, from a session with that project.
+    let project = root.join("project");
+    let results = project.join("results");
+    std::fs::create_dir_all(&results).unwrap();
+    std::fs::write(results.join("a.txt"), b"abc\n").unwrap();
+    std::fs::write(results.join("b.txt"), b"xy\n").unwrap();
+    let registry = registry(&root);
+    let mut session = basecraft_ops::Session::new(&results).in_project(Some(
+        basecraft_ops::project::Project::new(&project).unwrap(),
+    ));
+    let mut manager = JobManager::default();
+    let plugin = run_in_session(
+        &mut manager,
+        &registry,
+        &mut session,
+        serde_json::to_value(request("normal")).unwrap(),
+    );
+    assert_eq!(plugin.state, RuntimeState::Completed, "{plugin:?}");
+    // A Sanger stage on a loose trace outside any project.
+    let loose = root.join("loose");
+    std::fs::create_dir(&loose).unwrap();
+    let trace = loose.join("trace.ab1");
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../testdata/fixtures/compact/sanger-review/forward.ab1"),
+        &trace,
+    )
+    .unwrap();
+    let stage = basecraft_ops::sanger_review::SangerRun::prepare(
+        &loose.join("consensus"),
+        "consensus",
+        std::slice::from_ref(&trace),
+        None,
+    )
+    .unwrap();
+    let sanger = stage.directory().file_name().unwrap().to_owned();
+    stage.failed("stopped by the test").unwrap();
+    drop(stage);
+
+    let state = basecraft_platform::paths::AppPaths::discover()
+        .unwrap()
+        .state;
+    if state.exists() {
+        std::fs::remove_dir_all(&state).unwrap();
+    }
+    assert!(
+        project
+            .join(".basecraft/jobs")
+            .join(&plugin.run_id)
+            .is_dir()
+    );
+    assert!(loose.join(".basecraft/jobs").join(&sanger).is_dir());
+    let listed = basecraft_ops::records::jobs(true, &[project, loose]).unwrap();
+    let ids: std::collections::BTreeMap<_, _> = listed["jobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|job| (job["id"].as_str().unwrap(), job["status"].as_str().unwrap()))
+        .collect();
+    let sanger = sanger.to_string_lossy();
+    let expected = std::collections::BTreeMap::from([
+        (plugin.run_id.as_str(), "completed"),
+        (sanger.as_ref(), "failed"),
+    ]);
+    assert_eq!(ids, expected, "{listed}");
 }
 
 #[test]
