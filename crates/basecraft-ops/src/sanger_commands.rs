@@ -28,6 +28,19 @@ pub fn decide(session: &mut Session, review: DocId, edit: ReviewOp) -> Result<()
     Ok(())
 }
 
+/// A decision or column as a person wrote it that basecraft cannot read.
+#[derive(Debug, thiserror::Error)]
+pub enum InputError {
+    #[error("{0} is not a base; give one of ACGT, an IUPAC code or -")]
+    NotABase(char),
+    #[error("{0} is not a decision; give accept, reject, pending or a base")]
+    NotADecision(String),
+    #[error("{0} is not a column number (from 1)")]
+    NotAColumn(String),
+    #[error("{0}: the range runs backwards")]
+    Backwards(String),
+}
+
 /// A decision as a person states it: `accept`, `reject`, `pending`, or the
 /// base to put there (IUPAC, or `-` for a gap).
 pub fn choice(text: &str) -> Result<ReviewChoice> {
@@ -40,14 +53,10 @@ pub fn choice(text: &str) -> Result<ReviewChoice> {
             if base == '-' || "ACGTURYSWKMBDHVN".contains(base) {
                 Ok(ReviewChoice::Edit(base))
             } else {
-                Err(Error::Invalid(format!(
-                    "{base} is not a base; give one of ACGT, an IUPAC code or -"
-                )))
+                Err(InputError::NotABase(base).into())
             }
         }
-        other => Err(Error::Invalid(format!(
-            "{other} is not a decision; give accept, reject, pending or a base"
-        ))),
+        other => Err(InputError::NotADecision(other.into()).into()),
     }
 }
 
@@ -58,7 +67,7 @@ pub fn columns(text: &str) -> Result<Vec<usize>> {
             .parse::<usize>()
             .ok()
             .filter(|n| *n > 0)
-            .ok_or_else(|| Error::Invalid(format!("{part} is not a column number (from 1)")))
+            .ok_or_else(|| Error::from(InputError::NotAColumn(part.trim().into())))
     };
     let mut columns = Vec::new();
     for part in text.split(',') {
@@ -66,7 +75,7 @@ pub fn columns(text: &str) -> Result<Vec<usize>> {
             Some((from, to)) => {
                 let (from, to) = (number(from)?, number(to)?);
                 if from > to {
-                    return Err(Error::Invalid(format!("{part}: the range runs backwards")));
+                    return Err(InputError::Backwards(part.into()).into());
                 }
                 columns.extend(from - 1..to);
             }

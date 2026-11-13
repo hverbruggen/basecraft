@@ -19,10 +19,13 @@ pub fn request_path(root: &Path, path: &Path) -> Result<String> {
     };
     let folder = folder
         .canonicalize()
-        .map_err(|error| Error::Invalid(format!("{}: {error}", folder.display())))?;
+        .map_err(|error| Error::FolderUnavailable {
+            folder: folder.to_path_buf(),
+            reason: error.to_string(),
+        })?;
     let name = path
         .file_name()
-        .ok_or_else(|| Error::Invalid(format!("{} names no file", path.display())))?;
+        .ok_or_else(|| Error::NoFileName(path.to_path_buf()))?;
     let path = folder.join(name);
     let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     Ok(path
