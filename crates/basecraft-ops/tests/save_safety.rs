@@ -26,10 +26,12 @@ fn replace(start: u64, residues: &str) -> Op {
     Op::seq_replace(start, start + residues.len() as u64, residues)
 }
 
+/// The folder's entries, without the `.basecraft` folder where recovery lives.
 fn listing(folder: &Path) -> Vec<PathBuf> {
     let mut names: Vec<_> = std::fs::read_dir(folder)
         .unwrap()
         .map(|e| e.unwrap().path())
+        .filter(|path| !path.ends_with(".basecraft"))
         .collect();
     names.sort();
     names

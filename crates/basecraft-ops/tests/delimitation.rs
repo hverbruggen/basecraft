@@ -631,43 +631,30 @@ fn application_state_replay_handles_hidden_baseline_and_moved_original_folder() 
         )
         .unwrap();
     let recovery = edited.recovery_root().to_path_buf();
+    // Recovery moves with the folder; the originals are gone from where the
+    // journal recorded them.
     std::fs::rename(&root, parent.path().join("unavailable")).unwrap();
-    let report = records::replay(&recovery).unwrap();
+    let moved = parent
+        .path()
+        .join("unavailable")
+        .join(recovery.strip_prefix(&root).unwrap());
+    let report = records::replay(&moved).unwrap();
     assert!(report.ok(), "{:?}", report.problems);
     assert_ne!(report.unchecked, 0);
     let recovered = parent.path().join("recovered");
     // Recovery needs the unchanged original.
-    assert!(records::recover(&recovery, &recovered).is_err());
+    assert!(records::recover(&moved, &recovered).is_err());
     assert!(!recovered.exists());
     std::fs::rename(parent.path().join("unavailable"), &root).unwrap();
-    // An unreadable pending index update leaves relevance unknown and needs consent.
-    let dirty = basecraft_platform::paths::AppPaths::discover()
-        .unwrap()
-        .state
-        .join("analysis-inputs/dirty");
-    std::fs::create_dir_all(&dirty).unwrap();
-    std::fs::write(dirty.join("unreadable"), b"damaged").unwrap();
-    assert!(matches!(
-        records::recover(&recovery, &recovered),
-        Err(basecraft_ops::Error::SaveCheckRequired(_))
-    ));
-    assert!(!recovered.exists());
     let journal_before = basecraft_ops::log::read_all(&recovery).unwrap();
     let mut attempt =
         records::prepare_recovery(&recovery, &recovered, records::RecoveryMode::Strict).unwrap();
+    // A recovery stage is a new private folder: no analysis can depend on it.
     let check = attempt.check(0).unwrap();
-    assert_ne!(
-        check.evidence().issues,
-        [] as [basecraft_ops::records::InspectionIssue; 0]
-    );
-    attempt
-        .advance(
-            0,
-            Some(check.decide(basecraft_ops::records::SavePolicy::Cancel, true)),
-        )
-        .unwrap();
+    assert!(check.evidence().is_complete());
+    attempt.advance(0, None).unwrap();
     let completed = attempt.publish().unwrap();
-    assert!(!completed.warnings.is_empty());
+    assert!(completed.warnings.is_empty());
     assert_eq!(
         serde_json::to_vec(&basecraft_ops::log::read_all(&recovery).unwrap()).unwrap(),
         serde_json::to_vec(&journal_before).unwrap()

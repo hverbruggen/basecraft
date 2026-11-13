@@ -429,7 +429,8 @@ impl LinkEvidence for AlignmentLink {
             {
                 let paths = basecraft_platform::paths::AppPaths::discover()
                     .map_err(|e| invalid(e.to_string()))?;
-                let folder = paths.cache.join("analysis-inputs");
+                paths.remove_old_caches();
+                let folder = paths.display_cache();
                 std::fs::create_dir_all(&folder)?;
                 let digest = self
                     .snapshot_hash

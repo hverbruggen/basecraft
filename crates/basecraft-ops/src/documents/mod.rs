@@ -335,8 +335,8 @@ impl WritePublication {
             Self::Recovery {
                 stage, destination, ..
             } => Ok(destination.join(
-                path.strip_prefix(stage)
-                    .map_err(|_| crate::error::invalid("recovery write lies outside stage"))?,
+                basecraft_platform::files::inside(path, stage)
+                    .ok_or_else(|| crate::error::invalid("recovery write lies outside stage"))?,
             )),
         }
     }

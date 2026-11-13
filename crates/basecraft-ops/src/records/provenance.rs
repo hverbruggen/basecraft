@@ -105,13 +105,11 @@ pub(crate) fn read_record_with_budget(path: &Path, remaining: &mut u64) -> Resul
 #[derive(Clone, Copy)]
 pub(crate) enum RecordLimit {
     Provenance,
-    Registry,
 }
 impl RecordLimit {
     fn label(self) -> &'static str {
         match self {
             Self::Provenance => "provenance record reading",
-            Self::Registry => "known-store registry",
         }
     }
 }
@@ -534,7 +532,7 @@ fn link_selected_inputs(bundle: &Path, publication: &Publication) -> Result<()> 
                 return Err(invalid("Inherited selected input identity differs"));
             }
         } else {
-            let directory = crate::records::input_evidence::registered_run(id, expected)?;
+            let directory = crate::records::input_evidence::registered_run(id, expected, bundle)?;
             let reference = basecraft_protocol::input_records::UpstreamLink {
                 bundle: (crate::records::input_evidence::relative(
                     &bundle.canonicalize()?,

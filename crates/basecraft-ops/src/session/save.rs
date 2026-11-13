@@ -141,6 +141,7 @@ impl Session {
             &target.path,
             policy != SavePolicy::Cancel,
             &written,
+            self.project.as_ref().map(crate::project::Project::root),
         )?;
         let evidence = evidence_lock.check(&target.path)?;
         let (stamps, revision) = self.observe_sources(id, &target)?;
@@ -704,7 +705,12 @@ impl Session {
     /// open document's own file would discard its accepted revision.
     /// Known-input conflicts are resolved first, under both locks.
     pub(super) fn derived_target(&self, path: &Path) -> Result<DerivedTarget> {
-        let mut evidence = crate::records::input_evidence::lock_save(path, false, &[])?;
+        let mut evidence = crate::records::input_evidence::lock_save(
+            path,
+            false,
+            &[],
+            self.project.as_ref().map(crate::project::Project::root),
+        )?;
         let check = evidence.check(path)?;
         if !check.is_complete() {
             return Err(Error::EvidenceCheckIncomplete(Box::new(check)));
@@ -759,7 +765,7 @@ impl Session {
             .iter()
             .map(|file| (self.resolve(&file.path), Some(file.stamp.clone())))
             .collect();
-        self.docs[id.0].recovery_changed = false;
+        self.docs[id.0].recovery_notice = None;
         if target == self.resolve(&self.docs[id.0].key) {
             self.docs[id.0]
                 .accepted_hashes

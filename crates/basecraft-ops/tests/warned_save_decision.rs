@@ -48,17 +48,13 @@ fn edited(root: &Path, file: &Path) -> (Session, DocId) {
     (session, doc)
 }
 
+// A damaged ledger in a store that refers to `source` leaves the save's
+// relevance unknown until the ledger is repaired.
 fn damage(root: &Path, source: &Path) -> ArtifactRun {
-    let unrelated = root.join("unrelated.fasta");
-    std::fs::write(&unrelated, ORIGINAL).unwrap();
-    let run = reference(&folder(root, "distant"), &unrelated);
-    assert_ne!(unrelated, source);
+    let run = reference(&folder(root, "distant"), source);
     let original = std::fs::read(run.artifact("input.json").unwrap()).unwrap();
     std::fs::write(run.directory().join("test-original-input"), original).unwrap();
     std::fs::write(run.artifact("input.json").unwrap(), b"damaged a").unwrap();
-    // The index refresh cannot read the damaged ledger, so the store's coverage
-    // becomes unknown for every save until the ledger is repaired.
-    records::register(&run).unwrap();
     run
 }
 
@@ -78,32 +74,9 @@ fn setup(root: &Path) -> (Session, DocId, std::path::PathBuf) {
 }
 
 fn assert_recovery(session: &mut Session, root: &Path) {
-    let before =
-        serde_json::to_value(basecraft_ops::log::read_all(session.recovery_root()).unwrap())
-            .unwrap();
-    // Recovery itself uses conservative Session saving. Do not invent blanket
-    // consent for its private staging destination, or claim recovery succeeded
-    // while the same global inspection remains incomplete.
-    assert!(matches!(
-        records::recover(session.recovery_root(), &root.join("recovered")),
-        Err(Error::SaveCheckRequired(_))
-    ));
-    assert!(!root.join("recovered").exists());
-    assert_eq!(
-        serde_json::to_value(basecraft_ops::log::read_all(session.recovery_root()).unwrap())
-            .unwrap(),
-        before
-    );
-    // Repair only the deliberately damaged test ledger, then prove the retained
-    // journal reconstructs exactly the original accepted edit, not changed disk bytes.
-    let runs = root.join("distant/.basecraft/analyses-v1/runs");
-    for entry in std::fs::read_dir(runs).unwrap() {
-        let run = entry.unwrap().path();
-        let input: records::SubmittedInput =
-            serde_json::from_slice(&std::fs::read(run.join("test-original-input")).unwrap())
-                .unwrap();
-        records::write_json(&run.join("input.json"), &input).unwrap();
-    }
+    // Recovery writes into a new private folder that no analysis can refer to,
+    // so the damaged ledger does not concern it. The retained journal
+    // reconstructs exactly the accepted edit, not changed disk bytes.
     let outputs = records::recover(session.recovery_root(), &root.join("recovered")).unwrap();
     assert_eq!(std::fs::read(&outputs[0]).unwrap(), b">gene\nATGT\n");
 }
@@ -250,8 +223,11 @@ fn stale_document_target_issue_and_inventory_require_new_decisions() {
 fn save_as_rechecks_and_save_new_never_overwrites() {
     isolated("save_as_rechecks_and_save_new_never_overwrites", |root| {
         let (mut session, doc, file) = setup(root);
-        damage(root, &file);
+        // An earlier file at the new path was analysed; its ledger is damaged.
         let new = root.join("new.fasta");
+        std::fs::write(&new, ORIGINAL).unwrap();
+        damage(root, &new);
+        std::fs::remove_file(&new).unwrap();
         let check = session.check_save(doc, Some(&new)).unwrap();
         assert!(!check.evidence().is_complete());
         assert!(!new.exists());
@@ -557,33 +533,18 @@ fn incomplete_inspection_keeps_descendants_ownership_and_backing() {
 }
 
 #[test]
-fn damaged_display_and_registry_entries_do_not_hide_known_conflicts() {
-    isolated(
-        "damaged_display_and_registry_entries_do_not_hide_known_conflicts",
-        |root| {
-            let (mut session, doc, file) = setup(root);
-            let known = reference(&folder(root, "known"), &file);
-            std::fs::write(known.artifact("run.json").unwrap(), b"damaged").unwrap();
-            let registry = AppPaths::discover()
-                .unwrap()
-                .state
-                .join("analysis-stores.json");
-            let mut value: serde_json::Value =
-                serde_json::from_slice(&std::fs::read(&registry).unwrap()).unwrap();
-            value["stores"]
-                .as_array_mut()
-                .unwrap()
-                .push(serde_json::json!("relative invalid entry"));
-            std::fs::write(&registry, serde_json::to_vec(&value).unwrap()).unwrap();
-            let check = required(session.save(doc, None).unwrap_err());
-            assert_eq!(check.evidence().conflict.analyses.len(), 1);
-            // The damaged registry entry is not read by saves; it hides nothing.
-            assert_ne!(check.evidence().issues.len(), 0);
-            assert_eq!(check.evidence().conflict.analyses[0].run, known.directory());
-            assert_eq!(std::fs::read(&file).unwrap(), ORIGINAL);
-            assert!(session.can_undo(doc).unwrap());
-        },
-    );
+fn damaged_run_details_do_not_hide_known_conflicts() {
+    isolated("damaged_run_details_do_not_hide_known_conflicts", |root| {
+        let (mut session, doc, file) = setup(root);
+        let known = reference(&folder(root, "known"), &file);
+        std::fs::write(known.artifact("run.json").unwrap(), b"damaged").unwrap();
+        let check = required(session.save(doc, None).unwrap_err());
+        assert_eq!(check.evidence().conflict.analyses.len(), 1);
+        assert_ne!(check.evidence().issues.len(), 0);
+        assert_eq!(check.evidence().conflict.analyses[0].run, known.directory());
+        assert_eq!(std::fs::read(&file).unwrap(), ORIGINAL);
+        assert!(session.can_undo(doc).unwrap());
+    });
 }
 
 #[test]

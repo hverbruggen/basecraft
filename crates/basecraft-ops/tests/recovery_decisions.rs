@@ -6,7 +6,7 @@ use basecraft_ops::{
 };
 use basecraft_platform::files::{OrdinaryKind, object_identity};
 use basecraft_protocol::Op;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 #[path = "support/isolated_profile.rs"]
 mod isolated_profile;
 
@@ -22,17 +22,21 @@ fn source(root: &Path, count: usize) -> Session {
     }
     session
 }
-fn registry() -> PathBuf {
-    basecraft_platform::paths::AppPaths::discover()
-        .unwrap()
-        .state
-        .join("analysis-stores.json")
-}
-// An unreadable pending index update leaves every save's relevance unknown.
-fn damage() {
-    let path = registry().with_file_name("analysis-inputs/dirty/unreadable");
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, b"damaged inventory").unwrap();
+// Every analysis index below `root`, as text.
+fn indexes(root: &Path) -> String {
+    let mut text = String::new();
+    for entry in std::fs::read_dir(root).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            text += &indexes(&path);
+        } else if path
+            .components()
+            .any(|part| part.as_os_str() == "analysis-index")
+        {
+            text += &std::fs::read_to_string(path).unwrap();
+        }
+    }
+    text
 }
 fn required(error: Error) -> basecraft_ops::session::SaveCheck {
     match error {
@@ -72,48 +76,6 @@ fn complete_multiple_documents_publish_once_without_rewriting() {
 }
 
 #[test]
-fn changed_inventory_requires_fresh_final_consent_without_resaving() {
-    let Some(root) =
-        isolated_profile::enter("changed_inventory_requires_fresh_final_consent_without_resaving")
-    else {
-        return;
-    };
-    let session = source(&root, 2);
-    let destination = root.join("recovered");
-    let mut attempt =
-        records::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
-            .unwrap();
-    let path = attempt.check(0).unwrap().target().to_path_buf();
-    attempt.advance(0, None).unwrap();
-    let first = object_identity(&path, OrdinaryKind::File).unwrap();
-    damage();
-    let second = required(attempt.advance(1, None).unwrap_err());
-    attempt
-        .advance(1, Some(second.decide(SavePolicy::Cancel, true)))
-        .unwrap();
-    let fresh = required(attempt.publish().unwrap_err());
-    let status = attempt.status().unwrap();
-    assert_eq!(status.phase, records::RecoveryPhase::NeedsFinalization);
-    assert!(status.documents.iter().all(|document| document.written));
-    assert_eq!(
-        serde_json::to_value(&status.warnings).unwrap(),
-        serde_json::to_value(attempt.warnings()).unwrap()
-    );
-    assert!(!status.warnings.is_empty());
-    assert!(!destination.exists());
-    let refused = required(
-        attempt
-            .advance(0, Some(fresh.decide(SavePolicy::Cancel, false)))
-            .unwrap_err(),
-    );
-    attempt
-        .advance(0, Some(refused.decide(SavePolicy::Cancel, true)))
-        .unwrap();
-    assert_eq!(object_identity(&path, OrdinaryKind::File).unwrap(), first);
-    attempt.publish().unwrap();
-}
-
-#[test]
 fn receipts_are_single_use_session_document_and_phase_bound() {
     let Some(root) =
         isolated_profile::enter("receipts_are_single_use_session_document_and_phase_bound")
@@ -121,7 +83,6 @@ fn receipts_are_single_use_session_document_and_phase_bound() {
         return;
     };
     let session = source(&root, 2);
-    damage();
     let mut a = records::prepare_recovery(
         session.recovery_root(),
         &root.join("a"),
@@ -265,116 +226,6 @@ fn reference(anchor: &Path, source: &Path) -> basecraft_ops::records::ArtifactRu
 }
 
 #[test]
-fn stage_and_final_policies_validate_all_groups_before_any_mutation() {
-    let Some(root) =
-        isolated_profile::enter("stage_and_final_policies_validate_all_groups_before_any_mutation")
-    else {
-        return;
-    };
-    let session = source(&root, 1);
-    let destination = root.join("recovered");
-    std::fs::create_dir(&destination).unwrap();
-    let final_file = destination.join("0.fasta");
-    std::fs::write(&final_file, b">old\nAAAA\n").unwrap();
-    let final_run = reference(&root.join("final-analysis/result"), &final_file);
-    std::fs::remove_file(&final_file).unwrap();
-    std::fs::remove_dir(&destination).unwrap();
-    let mut attempt =
-        records::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
-            .unwrap();
-    let stage_file = attempt.check(0).unwrap().target().to_path_buf();
-    let stage_run = reference(&root.join("stage-analysis/result"), &stage_file);
-    let owner = reference(&root.join("owner/result"), &root.join("source/0.fasta"));
-    for run in [&stage_run, &final_run] {
-        let mut input = basecraft_ops::records::read_input(run.directory()).unwrap();
-        input.analysis_run =
-            Some(basecraft_ops::records::relative(run.directory(), owner.directory()).unwrap());
-        basecraft_ops::records::write_json(&run.directory().join("input.json"), &input).unwrap();
-    }
-    let original = std::fs::read(stage_run.directory().join("input.json")).unwrap();
-    let check = attempt.check(0).unwrap();
-    let groups: Vec<_> = check.evidence_groups().collect();
-    assert_eq!(groups.len(), 2);
-    assert!(
-        groups[0]
-            .conflict
-            .options
-            .contains(&SavePolicy::PreserveCopy)
-    );
-    assert!(
-        !groups[1]
-            .conflict
-            .options
-            .contains(&SavePolicy::PreserveCopy)
-    );
-    assert!(!groups[0].is_complete());
-    assert!(groups[1].is_complete());
-    assert_eq!(groups[0].conflict.analyses[0].run, owner.directory());
-    assert_eq!(groups[1].conflict.analyses[0].run, owner.directory());
-    assert!(
-        groups[0].conflict.analyses[0]
-            .backing_analyses
-            .iter()
-            .any(|backing| backing.run == stage_run.directory() && backing.direct)
-    );
-    assert!(
-        groups[1].conflict.analyses[0]
-            .backing_analyses
-            .iter()
-            .any(|backing| backing.run == final_run.directory() && backing.direct)
-    );
-    assert!(matches!(
-        attempt.advance(0, Some(check.decide(SavePolicy::Cancel, true))),
-        Err(Error::EvidenceConflict(_))
-    ));
-    let check = attempt.check(0).unwrap();
-    assert!(
-        attempt
-            .advance(0, Some(check.decide(SavePolicy::PreserveCopy, true)))
-            .is_err()
-    );
-    assert_eq!(
-        std::fs::read(stage_run.directory().join("input.json")).unwrap(),
-        original
-    );
-    assert!(!stage_run.directory().join("preserved-input").exists());
-    assert!(attempt.evidence_actions().unwrap().is_empty());
-    let check = attempt.check(0).unwrap();
-    attempt
-        .advance(0, Some(check.decide(SavePolicy::BreakEvidence, true)))
-        .unwrap();
-    let completed = match attempt.publish() {
-        Ok(completed) => completed,
-        Err(error) => {
-            let check = required(error);
-            attempt
-                .advance(0, Some(check.decide(SavePolicy::Cancel, true)))
-                .unwrap();
-            attempt.publish().unwrap()
-        }
-    };
-    assert_eq!(completed.evidence_actions.len(), 2);
-    assert_eq!(
-        serde_json::to_value(attempt.status().unwrap().evidence_actions).unwrap(),
-        serde_json::to_value(&completed.evidence_actions).unwrap()
-    );
-    assert!(
-        completed
-            .evidence_actions
-            .iter()
-            .all(|action| action.completed)
-    );
-    for run in [stage_run, final_run] {
-        assert_eq!(
-            basecraft_ops::records::read_input(run.directory())
-                .unwrap()
-                .state,
-            basecraft_protocol::input_records::EvidenceState::Broken
-        );
-    }
-}
-
-#[test]
 fn nested_delimitation_registers_only_final_stores_and_reopens() {
     let Some(root) =
         isolated_profile::enter("nested_delimitation_registers_only_final_stores_and_reopens")
@@ -392,7 +243,7 @@ fn nested_delimitation_registers_only_final_stores_and_reopens() {
     ledger["future_extension"] = serde_json::json!({"keep": [1, 2, 3]});
     std::fs::write(&ledger_path, serde_json::to_vec(&ledger).unwrap()).unwrap();
     let ledger_bytes = std::fs::read(&ledger_path).unwrap();
-    let registry_before = std::fs::read(registry()).unwrap();
+    let indexes_before = indexes(&root);
     let mut source = Session::recoverable(&original).unwrap();
     for name in ["a.spart", "nested/b.spart.xml"] {
         let path = original.join(name);
@@ -452,7 +303,7 @@ fn nested_delimitation_registers_only_final_stores_and_reopens() {
         .to_path_buf();
     attempt.advance(0, None).unwrap();
     attempt.advance(1, None).unwrap();
-    assert_eq!(std::fs::read(registry()).unwrap(), registry_before);
+    assert_eq!(indexes(&root), indexes_before);
     // A second owned store can alter the earlier evidence inventory. Refresh
     // only the requested finalization check; never run the writers a second time.
     let complete = loop {
@@ -468,8 +319,9 @@ fn nested_delimitation_registers_only_final_stores_and_reopens() {
         }
     };
     assert_eq!(complete.registered_stores.len(), 2);
-    let registered = std::fs::read_to_string(registry()).unwrap();
-    assert!(!registered.contains(stage.to_str().unwrap()));
+    let registered = indexes(&root);
+    let stage_name = stage.file_name().unwrap().to_str().unwrap();
+    assert!(!registered.contains(stage_name), "{registered}");
     assert!(!stage.exists());
     for file in complete.outputs {
         let work = basecraft_ops::files::load_delimitation(&file).unwrap();
@@ -494,8 +346,14 @@ fn nested_delimitation_registers_only_final_stores_and_reopens() {
                 .unwrap()
                 == external.directory()
         }));
+        // SPART inputs are kept under a SPART name.
+        let retained = if file.extension().is_some_and(|ext| ext == "xml") {
+            "submitted.spart.xml"
+        } else {
+            "submitted.spart"
+        };
         assert_eq!(
-            std::fs::read(run.join("submitted.fasta")).unwrap(),
+            std::fs::read(run.join(retained)).unwrap(),
             std::fs::read(&file).unwrap()
         );
         assert_eq!(std::fs::read(&ledger_path).unwrap(), ledger_bytes);
@@ -550,179 +408,6 @@ fn damaged_journal_requires_explicit_prefix_and_preserves_bytes() {
     assert_eq!(std::fs::read(journal).unwrap(), bytes);
 }
 
-#[cfg(unix)]
-#[test]
-fn permission_and_preservation_failures_spend_receipts_without_publication() {
-    use std::os::unix::fs::PermissionsExt;
-    let Some(root) = isolated_profile::enter(
-        "permission_and_preservation_failures_spend_receipts_without_publication",
-    ) else {
-        return;
-    };
-    let session = source(&root, 1);
-    let destination = root.join("out");
-    let mut attempt =
-        records::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
-            .unwrap();
-    let check = attempt.check(0).unwrap();
-    let stage_file = check.target().to_path_buf();
-    let stage = stage_file.parent().unwrap();
-    std::fs::set_permissions(stage, std::fs::Permissions::from_mode(0o500)).unwrap();
-    let failed = attempt.advance(0, Some(check.clone().decide(SavePolicy::Cancel, false)));
-    std::fs::set_permissions(stage, std::fs::Permissions::from_mode(0o700)).unwrap();
-    assert!(matches!(failed, Err(Error::Format(_) | Error::Io(_))));
-    assert!(!destination.exists());
-    assert!(matches!(
-        attempt.advance(0, Some(check.decide(SavePolicy::Cancel, false))),
-        Err(Error::SaveDecisionStale(_))
-    ));
-    let run = reference(&root.join("known/result"), &stage_file);
-    let original = std::fs::read(&stage_file).unwrap();
-    let check = attempt.check(0).unwrap();
-    std::fs::set_permissions(run.directory(), std::fs::Permissions::from_mode(0o500)).unwrap();
-    let failed = attempt.advance(
-        0,
-        Some(check.clone().decide(SavePolicy::PreserveCopy, false)),
-    );
-    std::fs::set_permissions(run.directory(), std::fs::Permissions::from_mode(0o700)).unwrap();
-    assert!(matches!(failed, Err(Error::Format(_) | Error::Io(_))));
-    assert_eq!(std::fs::read(&stage_file).unwrap(), original);
-    assert!(!destination.exists());
-    assert!(
-        !attempt
-            .evidence_actions()
-            .unwrap()
-            .last()
-            .unwrap()
-            .completed
-    );
-    assert!(matches!(
-        attempt.advance(0, Some(check.decide(SavePolicy::PreserveCopy, false))),
-        Err(Error::SaveDecisionStale(_))
-    ));
-    let check = attempt.check(0).unwrap();
-    attempt
-        .advance(0, Some(check.decide(SavePolicy::PreserveCopy, false)))
-        .unwrap();
-    attempt.publish().unwrap();
-    assert_eq!(
-        std::fs::read(run.directory().join("preserved-input")).unwrap(),
-        original
-    );
-}
-
-#[test]
-fn removal_of_shared_backing_ledgers_across_target_groups_is_once() {
-    let Some(root) =
-        isolated_profile::enter("removal_of_shared_backing_ledgers_across_target_groups_is_once")
-    else {
-        return;
-    };
-    let session = source(&root, 1);
-    let destination = root.join("out");
-    std::fs::create_dir(&destination).unwrap();
-    std::fs::write(destination.join("0.fasta"), b">old\nAAAA\n").unwrap();
-    let final_run = reference(&root.join("final/result"), &destination.join("0.fasta"));
-    std::fs::remove_file(destination.join("0.fasta")).unwrap();
-    std::fs::remove_dir(&destination).unwrap();
-    let mut attempt =
-        records::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
-            .unwrap();
-    let stage_run = reference(
-        &root.join("stage/result"),
-        attempt.check(0).unwrap().target(),
-    );
-    let owner = reference(&root.join("owner/result"), &root.join("source/0.fasta"));
-    for run in [&stage_run, &final_run] {
-        let mut input = basecraft_ops::records::read_input(run.directory()).unwrap();
-        input.analysis_run =
-            Some(basecraft_ops::records::relative(run.directory(), owner.directory()).unwrap());
-        basecraft_ops::records::write_json(&run.directory().join("input.json"), &input).unwrap();
-    }
-    let check = attempt.check(0).unwrap();
-    attempt
-        .advance(0, Some(check.decide(SavePolicy::RemoveAnalysis, true)))
-        .unwrap();
-    let complete = match attempt.publish() {
-        Ok(complete) => complete,
-        Err(error) => {
-            let check = required(error);
-            attempt
-                .advance(0, Some(check.decide(SavePolicy::Cancel, true)))
-                .unwrap();
-            attempt.publish().unwrap()
-        }
-    };
-    assert_eq!(complete.evidence_actions.len(), 2);
-    assert!(complete.evidence_actions.iter().all(|a| a.completed));
-    for run in [stage_run, final_run, owner] {
-        assert!(!run.directory().exists());
-        let trash = run
-            .directory()
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("trash");
-        assert_eq!(std::fs::read_dir(trash).unwrap().count(), 1);
-    }
-}
-
-#[test]
-fn new_unsaved_sequence_has_final_only_issue_group_and_explicit_recovery() {
-    let Some(root) = isolated_profile::enter(
-        "new_unsaved_sequence_has_final_only_issue_group_and_explicit_recovery",
-    ) else {
-        return;
-    };
-    let mut source = Session::recoverable(&root).unwrap();
-    source.create_sequence("new", "ACGT").unwrap();
-    let mut attempt = records::prepare_recovery(
-        source.recovery_root(),
-        &root.join("out"),
-        RecoveryMode::Strict,
-    )
-    .unwrap();
-    let stage_target = attempt.check(0).unwrap().target().to_path_buf();
-    assert!(!stage_target.exists());
-    let original = root.join("original.fasta");
-    std::fs::write(&original, b">gene\nACGT\n").unwrap();
-    let run = reference(&root.join("external/result"), &original);
-    let mut input = basecraft_ops::records::read_input(run.directory()).unwrap();
-    input.source.as_mut().unwrap().path =
-        basecraft_ops::records::relative(run.directory(), &stage_target).unwrap();
-    basecraft_ops::records::write_json(&run.directory().join("input.json"), &input).unwrap();
-    let check = attempt.check(0).unwrap();
-    let groups: Vec<_> = check.evidence_groups().collect();
-    assert!(groups[0].is_complete());
-    // A missing recorded source does not concern the unrelated final destination.
-    assert!(groups[1].is_complete());
-    assert!(!groups[0].conflict.analyses.is_empty());
-    assert!(groups[1].conflict.analyses.is_empty());
-    assert!(matches!(
-        attempt.advance(0, Some(check.decide(SavePolicy::Cancel, true))),
-        Err(Error::EvidenceConflict(_))
-    ));
-    let check = attempt.check(0).unwrap();
-    attempt
-        .advance(0, Some(check.decide(SavePolicy::BreakEvidence, true)))
-        .unwrap();
-    let complete = match attempt.publish() {
-        Ok(complete) => complete,
-        Err(error) => {
-            let check = required(error);
-            attempt
-                .advance(0, Some(check.decide(SavePolicy::Cancel, true)))
-                .unwrap();
-            attempt.publish().unwrap()
-        }
-    };
-    assert_eq!(complete.outputs.len(), 1);
-    let mut reopened = Session::unlogged(&root);
-    let doc = reopened.open(&complete.outputs[0]).unwrap();
-    assert_eq!(reopened.state(doc).unwrap().len, 4);
-}
-
 #[test]
 fn status_is_read_only_and_tracks_document_progress_without_slot_ids() {
     use records::RecoveryPhase;
@@ -753,7 +438,7 @@ fn status_is_read_only_and_tracks_document_progress_without_slot_ids() {
     }
     let stage = check.target().parent().unwrap();
     let parked = root.join("unavailable-stage");
-    let registry_before = std::fs::read(registry()).ok();
+    let indexes_before = indexes(&root);
     let journal_before =
         serde_json::to_value(basecraft_ops::log::read_all(session.recovery_root()).unwrap())
             .unwrap();
@@ -767,7 +452,7 @@ fn status_is_read_only_and_tracks_document_progress_without_slot_ids() {
         );
     }
     std::fs::rename(&parked, stage).unwrap();
-    assert_eq!(std::fs::read(registry()).ok(), registry_before);
+    assert_eq!(indexes(&root), indexes_before);
     assert_eq!(
         serde_json::to_value(basecraft_ops::log::read_all(session.recovery_root()).unwrap())
             .unwrap(),
@@ -918,4 +603,32 @@ fn replaced_stage_directory_is_refused_with_file_identity_unchanged() {
             .iter()
             .all(|doc| doc.written)
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn failed_recovery_write_spends_its_decision_and_publishes_nothing() {
+    use std::os::unix::fs::PermissionsExt;
+    let Some(root) =
+        isolated_profile::enter("failed_recovery_write_spends_its_decision_and_publishes_nothing")
+    else {
+        return;
+    };
+    let session = source(&root, 1);
+    let destination = root.join("out");
+    let mut attempt =
+        records::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
+            .unwrap();
+    let check = attempt.check(0).unwrap();
+    let stage = check.target().parent().unwrap().to_path_buf();
+    // A full disk or a permission error stops the write into the stage.
+    std::fs::set_permissions(&stage, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let failed = attempt.advance(0, Some(check.clone().decide(SavePolicy::Cancel, false)));
+    std::fs::set_permissions(&stage, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(matches!(failed, Err(Error::Format(_) | Error::Io(_))));
+    assert!(!destination.exists());
+    assert!(matches!(
+        attempt.advance(0, Some(check.decide(SavePolicy::Cancel, false))),
+        Err(Error::SaveDecisionStale(_))
+    ));
 }

@@ -253,7 +253,10 @@ mod tests {
             let run = crate::records::analysis_store::ArtifactRun::for_result(&target)
                 .unwrap()
                 .unwrap();
-            assert_eq!(std::fs::read(run.join("submitted.fasta")).unwrap(), main);
+            // A SPART input is kept under a SPART name.
+            let retained = crate::records::analysis_store::submitted_input(&run).unwrap();
+            assert!(retained.to_string_lossy().contains("submitted.spart"));
+            assert_eq!(std::fs::read(retained).unwrap(), main);
             let input = crate::records::input_evidence::read_input(&run).unwrap();
             assert_eq!(input.submitted_hash, hash);
             assert_eq!(input.submitted_size, main.len() as u64);

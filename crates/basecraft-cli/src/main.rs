@@ -93,6 +93,11 @@ enum Command {
         #[command(subcommand)]
         action: ProvenanceCommand,
     },
+    /// Maintain the records basecraft keeps in a project's `.basecraft` folders.
+    Records {
+        #[command(subcommand)]
+        action: RecordsCommand,
+    },
     /// Serve a headless project session over MCP stdio (2025-11-25).
     Mcp {
         /// The project folder: the session's root and access boundary.
@@ -193,6 +198,13 @@ enum Command {
         start: u64,
         end: u64,
     },
+}
+
+#[derive(Subcommand)]
+enum RecordsCommand {
+    /// Rebuild the analysis indexes from the project's analysis records, after
+    /// an index was damaged, deleted or left out of a copy.
+    Reindex { project: PathBuf },
 }
 
 #[derive(Subcommand)]
@@ -327,6 +339,12 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             for restored in restored {
                 println!("{}", restored.display());
             }
+        }
+        Command::Records {
+            action: RecordsCommand::Reindex { project },
+        } => {
+            let done = basecraft_ops::records::reindex(&project)?;
+            println!("{}", serde_json::to_string_pretty(&done)?);
         }
         Command::Provenance { action } => match action {
             ProvenanceCommand::Inspect { result } => {
@@ -805,16 +823,12 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     schemars::schema_for!(basecraft_protocol::records::StoreMarker),
                 ),
                 (
-                    "analysis-input-index",
-                    schemars::schema_for!(
-                        basecraft_protocol::records::IndexFile<
-                            basecraft_protocol::records::AnalysisInputIndex,
-                        >
-                    ),
+                    "analysis-index",
+                    schemars::schema_for!(basecraft_protocol::records::AnalysisIndex),
                 ),
                 (
-                    "store-registry",
-                    schemars::schema_for!(basecraft_protocol::records::StoreRegistry),
+                    "indexed-folders",
+                    schemars::schema_for!(basecraft_protocol::records::IndexedFolders),
                 ),
                 (
                     "pending-save",

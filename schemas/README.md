@@ -8,9 +8,47 @@ show those fields as plain JSON values.
 This inventory describes existing writers, including records that do not yet have
 protocol types or schemas. It does not establish a compatibility policy.
 
+## The `.basecraft` folder
+
+Everything basecraft records about a user's data sits in a `.basecraft` folder:
+the project's, or one beside a loose file. Copying the folder that holds it
+copies the records. All records are plain JSON or JSONL; paths in them are
+relative and `/`-separated unless a row says otherwise. Basecraft's own
+application folders are meant to hold settings, plugins, recent projects and
+disposable caches only. Until the open items below close, they still hold:
+
+- job records of plugin runs in `state/jobs` and `state/operation-jobs`
+  (card j3sxh item 3);
+- LocalOnly history, and the history of a Sanger review whose source folder is
+  read-only, in `state/provenance` (j3sxh item 4);
+- recovery of a new sequence made without a project, under the scratch folder
+  until it is saved (`<scratch>/.basecraft/recovery`).
+
+| Path inside `.basecraft` | What it holds | Format |
+|---|---|---|
+| `analysis-index/<bucket>/<key>.json` | The analysis index: one analysis store and the files its runs depend on. A project keeps one index, in its own `.basecraft`, with project-relative paths. A file outside the writing session's project is indexed in a `.basecraft` beside it, by name. `<bucket>` is the first two hex digits of the BLAKE3 hash of the path, so a save reads one small folder; `<key>` is a hash of the store's path. Readers take the union of every file in a bucket, so copies a sync tool makes on a conflict still count. `analysis-index.lock` is a lock with no content. | JSON, [analysis-index.schema.json](analysis-index.schema.json), RP10 |
+| `analyses-v1/indexed-folders.json` | The index buckets that list this store. A save from a project session asks when a store names a bucket that no longer names it: the project's root store always, and every store in the project once when the whole index is missing. `basecraft records reindex <project>` rebuilds the index. | JSON, [indexed-folders.schema.json](indexed-folders.schema.json), RP10 |
+| `analyses-v1/store.json`, `analyses-v1/identity` | Marks the folder as a basecraft analysis store; a random store identity. | JSON (RP08); plain text |
+| `analyses-v1/runs/<run>/` | One analysis run: `input.json` (the input it used, RP06), `run.json` (status and result, RP07), `execution.json` and `request.json` (what ran), `records/` (publications, RP05), and kept bytes: `submitted.fasta`, `submitted.spart` or `submitted.spart.xml` for a generated input, `preserved-input` for an original kept before a save replaced it. | JSON and the input's own format |
+| `analyses-v1/bindings/<hash>` | Which run produced a result file in this folder. | JSON, RP09 |
+| `analyses-v1/trash/` | Runs removed by a save decision, kept for inspection. | As `runs/` |
+| `provenance/<hash>/` | The history of a project file, keyed by the hash of its project-relative path (a loose file uses `<file>.provenance/` beside it instead). | RP05, RP12 to RP14 |
+| `log/<host>/<month>-<stream>-<segment>.jsonl` | Journal of a session that records into the folder itself (CLI and scripts). | JSONL, RP03 |
+| `recovery/<session>/` | Unsaved edits of one open session: `.basecraft/log/<session>/…jsonl` (the edit journal, RP03), `.basecraft/objects/<hash>` (exact bytes the session needs: a checkpoint when an original changed on disk, a new document with no file yet, the input of an analysis started on unsaved edits), `pending-save.json` (a save in progress, RP02) and `recovery-integrity-error.json` (RP04). Removed when the session closes with nothing unsaved. | JSONL and JSON |
+
+Editing needs recovery (decision D13). When the folder of a session cannot
+hold `.basecraft` (read-only, or `.basecraft` is a file of another program),
+the first edit is refused with the error `read_only_folder`, which names the
+folder and says to copy the file to a folder you can write to. The desktop
+app offers to save a copy and continues the edit there. A folder that refuses
+new files gets no index (basecraft cannot save over a file there either). If
+only its `.basecraft` cannot be written, or it is a file of another program,
+an analysis of a file there fails and names the folder, and a save of a file
+there asks.
+
 ## Reading the inventory
 
-Locations: **R** = temporary application-state recovery session; **A** = permanent
+Locations: **R** = a session's recovery folder, `.basecraft/recovery/<session>`; **A** = permanent
 folder-local `.basecraft/analyses-v1/runs/<id>`; **P** = provenance bundle (beside a
 result, in project metadata, or application state according to policy); **J** =
 application-state job index; **E** = user-selected export; **C** = application
@@ -29,7 +67,7 @@ Basecraft builds is promised.
 
 | Record / shape | Location | Writer | Reader | Version on disk | Current type / generated schema | Unknown fields |
 |---|---|---|---|---|---|---|
-| **RP01** `recovery.json`: session, source root, baseline event, retention limit, status | R (legacy sessions: project root) | [session.rs](../crates/basecraft-ops/src/session.rs) `Session::track` | [replay.rs](../crates/basecraft-ops/src/records/replay.rs) `recorded_source_root`; GUI `provenance_bridge::recovery_sessions` | `schema_version: 1` | protocol `records::RecoveryManifest`; [recovery-manifest.schema.json](recovery-manifest.schema.json) | Kept at top level and throughout opaque baseline; readers inspect selected fields |
+| **RP01** `recovery.json`: session, source root, baseline event, retention limit, status | R | [session.rs](../crates/basecraft-ops/src/session.rs) `Session::track` | [replay.rs](../crates/basecraft-ops/src/records/replay.rs) `recorded_source_root`; GUI `provenance_bridge::recovery_sessions` | `schema_version: 1` | protocol `records::RecoveryManifest`; [recovery-manifest.schema.json](recovery-manifest.schema.json) | Kept at top level and throughout opaque baseline; readers inspect selected fields |
 | **RP02** `pending-save.json`: session, target, before hash or null, ordered expected hashes, status, note | R | `Session::save_checked` | save success removes it; `Session` drop/cleanup preserves recovery if present; user/repair tools inspect it | `schema_version: 1` | protocol `records::PendingSave`; [pending-save.schema.json](pending-save.schema.json) | Kept by type; writer creates a fresh intent, does not merge an earlier intent |
 | **RP03** `.basecraft/log/<stream>/<month>-<id>-<segment>.jsonl`: checksummed, sequenced events | R / project | [log.rs](../crates/basecraft-ops/src/log.rs) `LogWriter::append_batch` | `read_all`, `read_readable`, `verified_prefix`, `parse_entry`; replay | `v: 1`; `_checksum`, `_sequence` envelope | protocol `records::JournalEntry` over `LogEntry` / [journal-entry.schema.json](journal-entry.schema.json) | Envelope verified then stripped; unknown event fields dropped by `LogEntry`; future operation variants rejected |
 | **RP04** `recovery-integrity-error.json`: verified length and durability diagnostic | R / project | `LogWriter::append_batch` failed rollback | `replay::recover` refuses poisoned recovery | `schema_version: 1` | protocol `records::RecoveryIntegrityError` / [recovery-integrity-error.schema.json](recovery-integrity-error.schema.json) | Typed round-trip keeps extras; reader checks presence; no rewrite |
@@ -38,7 +76,7 @@ Basecraft builds is promised.
 | **RP07** `run.json`: id, result name, status and sometimes outputs | A | `ArtifactRun::write_run`, called by save, extraction, the `input_evidence` reference/generated helpers and runner `prepare` | `input_evidence::result_name`, `scan_run`; artifact binding | `schema_version: 1` | protocol `records::AnalysisRun` / [analysis-run.schema.json](analysis-run.schema.json) | Selective `Value` reads unchanged; typed round-trip retains unknown status/extras; outputs omitted or array, result null or string; fresh records |
 | **RP08** `store.json`: analysis namespace marker | `.basecraft/analyses-v1` | [analysis_store.rs](../crates/basecraft-ops/src/records/analysis_store.rs) `ArtifactRun::create`, compact JSON plus newline | `ArtifactRun::validate_store` | `format: basecraft.analysis-store`, `schema_version: 1` | protocol `StoreMarker` / [store-marker.schema.json](store-marker.schema.json) | Top-level extras kept by type; validation ignores extras; marker not rewritten |
 | **RP09** Result binding (hash-derived filename): run, result filename/hash | `.basecraft/analyses-v1` binding namespace | `ArtifactRun::bind` | `ArtifactRun::for_result` | `schema_version: 1` | protocol `records::ResultBinding` / [result-binding.schema.json](result-binding.schema.json) | Typed round-trip keeps extras; selective reads; fresh writes |
-| **RP10** `analysis-stores.json`: absolute known store paths | C state | `input_evidence::register` | `store_registry`, `stores`, save conflict scan | `schema_version: 1` | protocol `StoreRegistry` / [store-registry.schema.json](store-registry.schema.json) | Top-level extras kept on registration update; absolute path array/count validated |
+| **RP10** `.basecraft/analysis-index/<bucket>/<key>.json`: one store and the files its runs depend on; `analyses-v1/indexed-folders.json`: the index buckets that list a store | Project root, or beside a file outside the session's project; in each store | [input_evidence/index.rs](../crates/basecraft-ops/src/records/input_evidence/index.rs) `add`, `rebuild` (via `input_evidence::write_json`, `register`, `reindex`) | `index::select` in save checks | `schema_version: 1` | protocol `records::AnalysisIndex`, `records::IndexedFolders` / [analysis-index.schema.json](analysis-index.schema.json), [indexed-folders.schema.json](indexed-folders.schema.json) | Rejected |
 | **RP11** `artifacts/<hash>` with logical name `export-map.json`: old/new publication mapping | E packaged P | `input_evidence::export_history` | retained artifact inspection; no dedicated in-app deserializer | `schema_version: 1` | protocol `export_records::ProvenanceExportMap` / `ProvenanceExportMapping`; [provenance-export-map.schema.json](provenance-export-map.schema.json) | Generated artifact; original records also retained, no rewrite reader |
 | **RP12** `reports/manifest.json`: publication, template, output hashes, redactions, citations | P / A | `provenance::write_reports` | report consumer / inspection (no dedicated typed in-app reader) | `schema_version: 1`, `template_version: 2` | protocol `report_records::ProvenanceReportManifest` / [provenance-report-manifest.schema.json](provenance-report-manifest.schema.json) | Generated afresh |
 | **RP13** `reports/source-map.json`: paragraph/activity array | P / A | `provenance::write_reports` | report consumer / inspection | No version field | protocol `Vec<report_records::ReportSourceMapEntry>` / [report-source-map.schema.json](report-source-map.schema.json) | Generated afresh |

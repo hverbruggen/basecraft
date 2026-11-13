@@ -409,6 +409,35 @@ fn safe_key(key: &str) -> bool {
             .all(|c| matches!(c, std::path::Component::Normal(_)))
 }
 
+/// Recovery sessions with a journal in the recovery folder of each of `roots`
+/// (a project, or the folder of a loose file), oldest first. At most 256.
+pub fn recovery_sessions(roots: &[std::path::PathBuf]) -> Result<Vec<std::path::PathBuf>> {
+    let mut sessions = Vec::new();
+    for root in roots {
+        let entries = match std::fs::read_dir(crate::session::recovery_folder(root)) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        };
+        for entry in entries {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() && crate::log::log_dir(&entry.path()).is_dir() {
+                sessions.push(entry.path());
+            }
+        }
+    }
+    if sessions.len() > 256 {
+        return Err(crate::Error::Limit {
+            what: "recovery sessions".into(),
+            limit: 256,
+        });
+    }
+    // Session folders are named by ULID, which sorts by time.
+    sessions.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+    sessions.dedup();
+    Ok(sessions)
+}
+
 /// Reconstruct unsaved documents into a new directory without modifying sources
 /// or executing any tools. Strict reading rejects torn/corrupt journals; the
 /// error names how many events [`recover_verified_prefix`] would keep.
@@ -810,10 +839,8 @@ fn artifacts(root: &Path) -> Result<Vec<ArtifactObservation>> {
             return Err(crate::error::invalid("unsafe recovery artifact"));
         };
         result.push(ArtifactObservation {
-            path: path
-                .strip_prefix(root)
-                .map_err(|_| crate::error::invalid("artifact outside recovery stage"))?
-                .into(),
+            path: basecraft_platform::files::inside(path, root)
+                .ok_or_else(|| crate::error::invalid("artifact outside recovery stage"))?,
             identity,
             revision,
         });
@@ -987,10 +1014,11 @@ impl RecoveryAttempt {
         };
         let finalizing = doc.written;
         let observed = if doc.written {
-            let _evidence = match crate::records::input_evidence::Mutation::begin() {
-                Ok(guard) => guard,
-                Err(error) => return Err(refuse(&mut self.session, error)),
-            };
+            let _evidence =
+                match crate::records::input_evidence::Mutation::begin_in(self.session.project()) {
+                    Ok(guard) => guard,
+                    Err(error) => return Err(refuse(&mut self.session, error)),
+                };
             self.session
                 .recovery_finalize(id, doc.saved.as_ref(), decision)?
         } else {
@@ -1070,7 +1098,7 @@ impl RecoveryAttempt {
     fn publish_inner(&mut self) -> Result<RecoveryCompletion> {
         self.validate()?;
         let _target = crate::records::save_guard::lock(&self.destination)?;
-        let evidence = crate::records::input_evidence::Mutation::begin()?;
+        let evidence = crate::records::input_evidence::Mutation::begin_in(self.session.project())?;
         for doc in &self.documents {
             if !doc.written {
                 return Err(crate::error::invalid(

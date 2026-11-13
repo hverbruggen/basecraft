@@ -299,7 +299,7 @@ fn history_path() -> Result<PathBuf, String> {
         .map_err(|e| e.to_string())
 }
 
-fn load_project_history() -> Result<Vec<PathBuf>, String> {
+pub(crate) fn load_project_history() -> Result<Vec<PathBuf>, String> {
     let path = history_path()?;
     projects::load_history(&path)
 }

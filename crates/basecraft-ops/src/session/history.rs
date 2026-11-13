@@ -646,7 +646,9 @@ impl Session {
             }
             self.docs[id.0].baseline = None;
             self.refresh_source_stamps(id);
-            self.docs[id.0].recovery_changed |= changed;
+            if changed {
+                self.note_changed_on_disk(id);
+            }
         } else {
             self.write_entries(entries)?;
         }
