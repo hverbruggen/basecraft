@@ -43,7 +43,9 @@ pub struct Request {
 pub enum Step {
     Submit(Stage),
     /// The review is ready; it was made against `reference` (may be empty).
-    Finish { reference: String },
+    Finish {
+        reference: String,
+    },
     Fail,
 }
 
@@ -184,17 +186,38 @@ mod tests {
     fn a_pair_prepares_then_orients_and_places_against_a_reference() {
         let mut flow = Flow::default();
         let start = flow.start(paths(2), "/ref.afa".into(), 20).unwrap();
-        assert_eq!(start, Start { open: None, then: Step::Submit(Stage::Prepare) });
-        assert!(flow.start(paths(2), String::new(), 20).is_none(), "one request at a time");
+        assert_eq!(
+            start,
+            Start {
+                open: None,
+                then: Step::Submit(Stage::Prepare)
+            }
+        );
+        assert!(
+            flow.start(paths(2), String::new(), 20).is_none(),
+            "one request at a time"
+        );
         flow.submitting(Stage::Prepare);
-        assert_eq!(flow.finished("single", true), None, "another stage's completion");
-        assert_eq!(flow.finished("prepare", true), Some(Step::Submit(Stage::Orient)));
+        assert_eq!(
+            flow.finished("single", true),
+            None,
+            "another stage's completion"
+        );
+        assert_eq!(
+            flow.finished("prepare", true),
+            Some(Step::Submit(Stage::Orient))
+        );
         flow.submitting(Stage::Orient);
-        assert_eq!(flow.finished("orient", true), Some(Step::Submit(Stage::Place)));
+        assert_eq!(
+            flow.finished("orient", true),
+            Some(Step::Submit(Stage::Place))
+        );
         flow.submitting(Stage::Place);
         assert_eq!(
             flow.finished("place", true),
-            Some(Step::Finish { reference: "/ref.afa".into() })
+            Some(Step::Finish {
+                reference: "/ref.afa".into()
+            })
         );
         flow.finish();
         assert!(!flow.pending() && !flow.can_retry());
@@ -205,16 +228,29 @@ mod tests {
         let mut flow = Flow::default();
         let plain = flow.start(paths(1), String::new(), 20).unwrap();
         assert_eq!(plain.open.as_deref(), Some("/r0.ab1"));
-        assert_eq!(plain.then, Step::Finish { reference: String::new() });
+        assert_eq!(
+            plain.then,
+            Step::Finish {
+                reference: String::new()
+            }
+        );
         flow.finish();
-        assert_eq!(flow.start(paths(1), String::new(), 35).unwrap().then, Step::Submit(Stage::Single));
+        assert_eq!(
+            flow.start(paths(1), String::new(), 35).unwrap().then,
+            Step::Submit(Stage::Single)
+        );
         flow.submitting(Stage::Single);
         assert_eq!(
             flow.finished("single", true),
-            Some(Step::Finish { reference: String::new() })
+            Some(Step::Finish {
+                reference: String::new()
+            })
         );
         flow.finish();
-        assert_eq!(flow.start(paths(1), "/ref.afa".into(), 20).unwrap().then, Step::Submit(Stage::Orient));
+        assert_eq!(
+            flow.start(paths(1), "/ref.afa".into(), 20).unwrap().then,
+            Step::Submit(Stage::Orient)
+        );
     }
 
     #[test]

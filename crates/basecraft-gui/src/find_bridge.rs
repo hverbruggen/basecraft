@@ -11,7 +11,6 @@ pub fn document_key(session: &basecraft_ops::Session, doc: basecraft_ops::DocId)
     )
 }
 
-
 /// Find for a document controller. A scan runs as a job; when it finishes the
 /// controller reveals the first hit and publishes the find properties.
 /// `find_update(true)` starts the first scan for a query; `find_update(false)`,

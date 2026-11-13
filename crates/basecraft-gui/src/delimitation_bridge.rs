@@ -812,11 +812,19 @@ impl qobject::DelimitationController {
     }
     fn named_species(&self) -> (Option<String>, String) {
         let r = self.rust();
-        let workspace = r.session.as_ref().zip(r.doc).and_then(|(s, doc)| s.delimitation(doc).ok());
+        let workspace = r
+            .session
+            .as_ref()
+            .zip(r.doc)
+            .and_then(|(s, doc)| s.delimitation(doc).ok());
         let active = r.active_hypothesis.to_string();
         let hypothesis = workspace.and_then(|w| w.hypotheses.iter().find(|h| h.id == active));
-        let existing = basecraft_viewmodel::delimitation::group_of(hypothesis, &r.selection.specimens);
-        (existing.map(|g| g.label.clone()), basecraft_viewmodel::delimitation::next_species_label(hypothesis))
+        let existing =
+            basecraft_viewmodel::delimitation::group_of(hypothesis, &r.selection.specimens);
+        (
+            existing.map(|g| g.label.clone()),
+            basecraft_viewmodel::delimitation::next_species_label(hypothesis),
+        )
     }
     pub fn species_name_suggestion(&self) -> QString {
         let (existing, next) = self.named_species();

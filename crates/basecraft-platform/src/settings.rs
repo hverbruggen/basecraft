@@ -486,14 +486,26 @@ pub enum Change {
     CpuThreads(u32),
     Provenance(ProvenancePolicy),
     Recovery(bool),
-    Shortcut { id: String, value: Option<String> },
-    KeyHint { id: String, value: Option<String> },
+    Shortcut {
+        id: String,
+        value: Option<String>,
+    },
+    KeyHint {
+        id: String,
+        value: Option<String>,
+    },
     RibbonHidden(Vec<String>),
-    RibbonCommandHidden { id: String, hidden: bool },
+    RibbonCommandHidden {
+        id: String,
+        hidden: bool,
+    },
     ResetCustomization,
     Submitter(Box<Submitter>),
     /// `None` makes the service use the submitter's email again.
-    ServiceEmail { service: String, email: Option<String> },
+    ServiceEmail {
+        service: String,
+        email: Option<String>,
+    },
     Theme(ThemeChoice),
     ReleaseNotices(bool),
     Welcomed,
@@ -501,18 +513,25 @@ pub enum Change {
 impl Change {
     fn validate(&self) -> Result<(), Error> {
         if let Self::FontFamily(Some(family)) = self
-            && (family.trim().is_empty() || family.len() > 200 || family.chars().any(char::is_control))
+            && (family.trim().is_empty()
+                || family.len() > 200
+                || family.chars().any(char::is_control))
         {
             return Err(Error::Invalid("invalid font family".into()));
         }
         if let Self::ServiceEmail { service, email } = self {
-            if service.is_empty() || service.len() > 32 || !service.chars().all(|c| c.is_ascii_lowercase() || c == '-') {
+            if service.is_empty()
+                || service.len() > 32
+                || !service.chars().all(|c| c.is_ascii_lowercase() || c == '-')
+            {
                 return Err(Error::Invalid("invalid service name".into()));
             }
             if let Some(email) = email
                 && (!email.contains('@') || email.len() > 200 || email.trim() != email)
             {
-                return Err(Error::Invalid("a service email needs an @, without surrounding spaces".into()));
+                return Err(Error::Invalid(
+                    "a service email needs an @, without surrounding spaces".into(),
+                ));
             }
         }
         if let Self::Shortcut { id, .. }
@@ -565,10 +584,16 @@ impl Change {
             }
             Self::ResetCustomization => prefs.customization = Customization::default(),
             Self::Submitter(v) => prefs.submitter = *v,
-            Self::ServiceEmail { service, email: Some(email) } => {
+            Self::ServiceEmail {
+                service,
+                email: Some(email),
+            } => {
                 prefs.contacts.service_emails.insert(service, email);
             }
-            Self::ServiceEmail { service, email: None } => {
+            Self::ServiceEmail {
+                service,
+                email: None,
+            } => {
                 prefs.contacts.service_emails.remove(&service);
             }
             Self::Theme(v) => prefs.ui.theme = v,
@@ -843,14 +868,25 @@ mod tests {
             email: "jane@example.org".into(),
             ..Submitter::default()
         };
-        store.update(Change::Submitter(Box::new(submitter))).unwrap();
-        assert_eq!(store.load().unwrap().service_email("blast"), "jane@example.org");
+        store
+            .update(Change::Submitter(Box::new(submitter)))
+            .unwrap();
+        assert_eq!(
+            store.load().unwrap().service_email("blast"),
+            "jane@example.org"
+        );
         let lab = Change::ServiceEmail {
             service: "blast".into(),
             email: Some("lab@example.org".into()),
         };
-        assert_eq!(store.update(lab).unwrap().service_email("blast"), "lab@example.org");
-        assert_eq!(store.load().unwrap().service_email("zenodo"), "jane@example.org");
+        assert_eq!(
+            store.update(lab).unwrap().service_email("blast"),
+            "lab@example.org"
+        );
+        assert_eq!(
+            store.load().unwrap().service_email("zenodo"),
+            "jane@example.org"
+        );
         for bad in [("blast", Some("no-at")), ("Bad Name", Some("a@b.org"))] {
             let change = Change::ServiceEmail {
                 service: bad.0.into(),
@@ -863,7 +899,10 @@ mod tests {
             email: None,
         };
         store.update(reset).unwrap();
-        assert_eq!(store.load().unwrap().service_email("blast"), "jane@example.org");
+        assert_eq!(
+            store.load().unwrap().service_email("blast"),
+            "jane@example.org"
+        );
     }
 
     #[test]
@@ -874,8 +913,13 @@ mod tests {
         assert!(!first.ui.welcomed && !first.ui.release_notices);
         assert_eq!(first.ui.font_family, None);
         assert!(store.update(Change::FontFamily(Some(" ".into()))).is_err());
-        store.update(Change::FontFamily(Some("Iosevka".into()))).unwrap();
-        assert_eq!(store.load().unwrap().ui.font_family.as_deref(), Some("Iosevka"));
+        store
+            .update(Change::FontFamily(Some("Iosevka".into())))
+            .unwrap();
+        assert_eq!(
+            store.load().unwrap().ui.font_family.as_deref(),
+            Some("Iosevka")
+        );
         store.update(Change::FontFamily(None)).unwrap();
         assert_eq!(store.load().unwrap().ui.font_family, None);
         assert_eq!(first.ui.theme, ThemeChoice::FollowDesktop);

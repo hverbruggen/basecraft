@@ -417,11 +417,7 @@ impl qobject::MetadataController {
         let thread = self.qt_thread();
         let chosen = basecraft_ops::project::Project::new(&project);
         if let Err(error) = chosen.map_err(Into::into).and_then(|chosen| {
-            crate::document_open::start(
-            thread,
-            path,
-            Some(chosen),
-            move |mut this, result| {
+            crate::document_open::start(thread, path, Some(chosen), move |mut this, result| {
                 if this.rust().open_epoch != epoch || this.rust().project() != project {
                     return;
                 }
@@ -438,8 +434,7 @@ impl qobject::MetadataController {
                 this.as_mut().refresh();
                 this.as_mut().set_busy(false);
                 this.opened(ok);
-            },
-        )
+            })
         }) {
             self.as_mut().set_busy(false);
             self.as_mut().report("error", &error.to_string());
@@ -962,7 +957,13 @@ impl qobject::MetadataController {
 
     pub fn fasta_source(&self, kind: &QString, path: &QString) -> QString {
         let path = path.to_string();
-        QString::from(if basecraft_viewmodel::workspace::fasta_source(&kind.to_string(), &path) { path.as_str() } else { "" })
+        QString::from(
+            if basecraft_viewmodel::workspace::fasta_source(&kind.to_string(), &path) {
+                path.as_str()
+            } else {
+                ""
+            },
+        )
     }
 
     /// `{records, unlinked: [...]}` for a sequence file, or `{}` when it
@@ -981,7 +982,6 @@ impl qobject::MetadataController {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     #[test]
     fn field_roles_round_trip_their_qml_names() {

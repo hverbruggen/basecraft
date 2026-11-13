@@ -74,7 +74,12 @@ pub mod qobject {
         /// Prepare a review from `paths` (JSON list), oriented against
         /// `reference` when it is not empty. False when one is already running.
         #[qinvokable]
-        fn start_review(self: Pin<&mut SangerController>, paths: &QString, reference: &QString, cutoff: i32) -> bool;
+        fn start_review(
+            self: Pin<&mut SangerController>,
+            paths: &QString,
+            reference: &QString,
+            cutoff: i32,
+        ) -> bool;
         /// Orient the open review against another reference alignment.
         #[qinvokable]
         fn review_context(self: Pin<&mut SangerController>, reference: &QString);
@@ -545,7 +550,11 @@ impl qobject::SangerController {
         if self.rust().busy {
             return false;
         }
-        let Some(start) = self.as_mut().rust_mut().flow.start(paths, reference.to_string(), cutoff)
+        let Some(start) = self
+            .as_mut()
+            .rust_mut()
+            .flow
+            .start(paths, reference.to_string(), cutoff)
         else {
             return false;
         };
@@ -555,7 +564,9 @@ impl qobject::SangerController {
         // The reference is frozen before any stage runs, so a retry reads
         // the same bytes.
         if !reference.is_empty() {
-            let retained = self.as_mut().retain_reference(&QString::from(&first), reference);
+            let retained = self
+                .as_mut()
+                .retain_reference(&QString::from(&first), reference);
             if retained.is_empty() {
                 self.run_step(Step::Fail);
                 return true;
@@ -581,7 +592,12 @@ impl qobject::SangerController {
         }
         let paths = serde_json::from_str(&self.rust().input_paths.to_string()).unwrap_or_default();
         let cutoff = self.rust().signal_threshold;
-        if let Some(step) = self.as_mut().rust_mut().flow.context(paths, reference.to_string(), cutoff) {
+        if let Some(step) =
+            self.as_mut()
+                .rust_mut()
+                .flow
+                .context(paths, reference.to_string(), cutoff)
+        {
             self.run_step(step);
         }
     }
@@ -618,7 +634,8 @@ impl qobject::SangerController {
                 let accepted = match stage {
                     Stage::Prepare => {
                         let paths = serde_json::to_string(&request.paths).unwrap_or_default();
-                        self.as_mut().prepare_reads(&QString::from(&paths), request.cutoff)
+                        self.as_mut()
+                            .prepare_reads(&QString::from(&paths), request.cutoff)
                     }
                     Stage::Single => self.as_mut().single_review(request.cutoff),
                     Stage::Orient => self.as_mut().orient_review(&reference),

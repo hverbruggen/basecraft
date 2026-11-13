@@ -1787,7 +1787,13 @@ mod tests {
         let labels = |d: &TreeDoc| -> Vec<String> {
             annotation_columns(d, &d.tips_in_order())
                 .iter()
-                .flat_map(|column| column.tips.values().flatten().map(|band| band.label.clone()))
+                .flat_map(|column| {
+                    column
+                        .tips
+                        .values()
+                        .flatten()
+                        .map(|band| band.label.clone())
+                })
                 .collect()
         };
         assert!(!view.status(&d).contains("moved"));
@@ -1796,7 +1802,10 @@ mod tests {
             clade: vec!["a".into()],
         })
         .unwrap();
-        assert!(view.status(&d).contains("moved labels, no longer on the group they were made for: \"AB\""));
+        assert!(
+            view.status(&d)
+                .contains("moved labels, no longer on the group they were made for: \"AB\"")
+        );
         assert!(labels(&d).contains(&"AB (moved)".to_owned()));
         assert!(labels(&d).contains(&"CD".to_owned()));
     }

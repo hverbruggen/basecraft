@@ -318,7 +318,9 @@ impl qobject::AppProvenance {
             }
         };
         let label = format!("Records: {operation}");
-        self.start_work(&label, move || run(&operation, &result, &destination, project.as_ref()));
+        self.start_work(&label, move || {
+            run(&operation, &result, &destination, project.as_ref())
+        });
     }
     fn start_work(
         mut self: Pin<&mut Self>,

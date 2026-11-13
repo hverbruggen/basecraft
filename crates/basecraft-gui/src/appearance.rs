@@ -336,14 +336,22 @@ mod tests {
         assert!(desktop_colours.theme.data_colors.is_none());
         // A chosen theme wins over the desktop's.
         SettingsStore::new(preferences.clone())
-            .update(Change::Theme(basecraft_platform::settings::ThemeChoice::Light))
+            .update(Change::Theme(
+                basecraft_platform::settings::ThemeChoice::Light,
+            ))
             .unwrap();
         let light = Appearance::load(Some(&desktop), Some(&preferences), "mono".into());
         assert_eq!(light.theme, Theme::default());
         SettingsStore::new(preferences.clone())
-            .update(Change::Theme(basecraft_platform::settings::ThemeChoice::Dark))
+            .update(Change::Theme(
+                basecraft_platform::settings::ThemeChoice::Dark,
+            ))
             .unwrap();
-        assert!(Appearance::load(None, Some(&preferences), "mono".into()).theme.dark);
+        assert!(
+            Appearance::load(None, Some(&preferences), "mono".into())
+                .theme
+                .dark
+        );
     }
 
     #[cfg(target_os = "linux")]

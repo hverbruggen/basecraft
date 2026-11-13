@@ -2,7 +2,9 @@
 
 /// GitHub's description of the latest release of `repository`.
 pub fn url(repository: &str) -> String {
-    let project = repository.trim_end_matches('/').trim_start_matches("https://github.com/");
+    let project = repository
+        .trim_end_matches('/')
+        .trim_start_matches("https://github.com/");
     format!("https://api.github.com/repos/{project}/releases/latest")
 }
 
@@ -70,4 +72,3 @@ mod tests {
         assert_eq!(notice("0.5.0", &release("nightly")), None);
     }
 }
-

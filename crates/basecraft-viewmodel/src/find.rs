@@ -621,9 +621,7 @@ pub fn name_rows(find: &Session) -> String {
 /// Keep miniature payloads bounded while always including the current result.
 pub fn overview_marks(
     find: &Session,
-    mut project: impl FnMut(
-        &Hit,
-    ) -> Option<crate::overview::MatchMark>,
+    mut project: impl FnMut(&Hit) -> Option<crate::overview::MatchMark>,
 ) -> String {
     if !find.active() {
         return "[]".into();
@@ -639,7 +637,6 @@ pub fn overview_marks(
         .collect();
     serde_json::to_string(&marks).unwrap_or_else(|_| "[]".into())
 }
-
 
 #[cfg(test)]
 mod tests {

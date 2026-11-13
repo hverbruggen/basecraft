@@ -317,7 +317,10 @@ pub fn next_species_label(hypothesis: Option<&Hypothesis>) -> String {
 }
 
 /// The group of `hypothesis` that is exactly `members`, if any.
-pub fn group_of<'a>(hypothesis: Option<&'a Hypothesis>, members: &BTreeSet<String>) -> Option<&'a Group> {
+pub fn group_of<'a>(
+    hypothesis: Option<&'a Hypothesis>,
+    members: &BTreeSet<String>,
+) -> Option<&'a Group> {
     hypothesis?.groups.iter().find(|g| &g.members == members)
 }
 

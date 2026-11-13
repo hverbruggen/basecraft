@@ -15,9 +15,7 @@ pub fn supported(schema: &Value, depth: usize) -> bool {
         Some("boolean" | "integer" | "number" | "string") => true,
         Some("array") => supported(&schema["items"], depth + 1),
         Some("object") => schema["properties"].as_object().is_some_and(|properties| {
-            properties
-                .values()
-                .all(|field| supported(field, depth + 1))
+            properties.values().all(|field| supported(field, depth + 1))
                 && schema.get("oneOf").is_none_or(|choices| {
                     choices.as_array().is_some_and(|choices| {
                         let mut names = std::collections::BTreeSet::new();
@@ -53,10 +51,7 @@ mod tests {
         let contract: Value =
             serde_json::from_str(include_str!("../../../plugins/sanderson/operations.json"))
                 .unwrap();
-        assert!(supported(
-            &contract["operations"][0]["parameters"],
-            0
-        ));
+        assert!(supported(&contract["operations"][0]["parameters"], 0));
         assert!(!supported(&json!({"type":"null"}), 0));
         assert!(!supported(
             &json!({"type":"object","properties":{"x":{"type":"number"}},"oneOf":[{"required":["x"]},{"required":["x"]}]}),

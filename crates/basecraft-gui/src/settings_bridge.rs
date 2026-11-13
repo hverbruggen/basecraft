@@ -3,9 +3,9 @@ use basecraft_platform::{
     paths::AppPaths,
     settings::{Change, DataColorScheme, Preferences, SettingsStore, ThemeChoice},
 };
+use basecraft_viewmodel::{projects, release};
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::{QString, QStringList};
-use basecraft_viewmodel::{projects, release};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
@@ -43,7 +43,12 @@ pub mod qobject {
         #[qinvokable]
         /// Where a file dialog starts for the document at `document`
         /// (its tab path) whose file is `file` (may be empty).
-        fn dialog_folder(self: &AppSettings, project: &QString, document: &QString, file: &QString) -> QString;
+        fn dialog_folder(
+            self: &AppSettings,
+            project: &QString,
+            document: &QString,
+            file: &QString,
+        ) -> QString;
         /// Where to ask for the latest release, or "" when this start should
         /// not ask (not opted in, or an offscreen or screenshot run).
         #[qinvokable]

@@ -30,7 +30,10 @@ pub fn dialog_folder(project: &str, document: &str, file: &str, home: Option<&Pa
     if path.is_empty() {
         PathBuf::from(project)
     } else {
-        Path::new(path).parent().map(Path::to_owned).unwrap_or_default()
+        Path::new(path)
+            .parent()
+            .map(Path::to_owned)
+            .unwrap_or_default()
     }
 }
 
@@ -181,7 +184,11 @@ mod history_tests {
             [two.canonicalize().unwrap(), one.canonicalize().unwrap()]
         );
         let missing = choose(&mut picker, &temp.path().join("gone"), &history);
-        assert!(missing.unwrap_err().starts_with("Project folder is unavailable: "));
+        assert!(
+            missing
+                .unwrap_err()
+                .starts_with("Project folder is unavailable: ")
+        );
         assert_eq!(load_history(&history).unwrap(), projects);
     }
 
@@ -259,10 +266,7 @@ mod history_tests {
         let file = temp.path().join("history.json");
         let picker = PickerLocation::default();
         let home = temp.path().join("home");
-        assert_eq!(
-            picker.directory(&load_history(&file).unwrap(), &home),
-            home
-        );
+        assert_eq!(picker.directory(&load_history(&file).unwrap(), &home), home);
         assert!(!file.exists());
         for bytes in [b"damaged".as_slice(), br#"{"version":99,"projects":[]}"#] {
             std::fs::write(&file, bytes).unwrap();
@@ -318,4 +322,3 @@ pub fn choose(
     let canonical = picker.opened(path)?;
     remember(&canonical, history)
 }
-
