@@ -2,7 +2,54 @@
 //! and fingerprints; Session retains pins, actors, journal and undo ownership.
 use super::{Applied, Inverse, Session, Slot};
 use crate::{DocId, Result, error::invalid, files::Loaded};
-use basecraft_protocol::{Actor, LogEntry, Op, OpResult};
+use basecraft_protocol::{
+    Actor, LogEntry, Op, OpResult,
+    ops::{ProposalDecision, ProposalSource},
+};
+
+/// Edits a plugin offers for a sequence, as it sent them, pinned to the
+/// document generation and revision it read.
+pub struct SequenceOffer<'a> {
+    pub generation: u64,
+    pub revision: u64,
+    pub operations: &'a [Op],
+    /// Who offered them.
+    pub actor: &'a Actor,
+    pub source: ProposalSource,
+    /// Leave out feature additions the document already holds.
+    pub skip_known: bool,
+}
+
+/// What became of an offer: the log ids of the edits applied, and why any
+/// were left out.
+#[derive(Debug, Default)]
+pub struct ProposalResult {
+    pub applied: Vec<String>,
+    pub skipped: Vec<String>,
+}
+
+/// The offered edits to apply, and a note for each feature addition left out
+/// because the document already holds that feature.
+fn known_left_out(slot: &Slot, operations: &[Op], skip_known: bool) -> (Vec<Op>, Vec<String>) {
+    let known = slot.content.sequence().filter(|_| skip_known);
+    let mut skipped = Vec::new();
+    let kept = operations
+        .iter()
+        .filter(|op| match (op, known) {
+            (Op::FeatureAdd { feature, .. }, Some(opened))
+                if opened.doc.features().any(|(_, present)| {
+                    present.kind == feature.kind && present.location == feature.location
+                }) =>
+            {
+                skipped.push(format!("already annotated: {}", feature.kind));
+                false
+            }
+            _ => true,
+        })
+        .cloned()
+        .collect();
+    (kept, skipped)
+}
 
 struct PreparedEdit {
     op: Op,
@@ -43,37 +90,98 @@ impl Session {
         Ok(slot)
     }
 
-    /// Apply a kind-supported batch as one undo group, recording this session's actor.
-    pub fn apply_proposals(
-        &mut self,
-        id: DocId,
-        generation: u64,
-        revision: u64,
-        ops: &[Op],
-    ) -> Result<Vec<String>> {
-        let slot = self.proposal_target(id, generation, revision, ops.len())?;
-        let candidate = slot.content.as_document().proposal_candidate()?;
-        let batch = self.stage_proposals(id, ops, &self.actor, candidate)?;
-        self.commit_proposals(batch)
-    }
-
-    /// Retains the registered sequence proposal contract, including explicit
-    /// plugin actor, feature identities and the four-edit allowlist.
+    /// Apply the edits a plugin offers for a sequence as one undo group, and
+    /// record the offer and the decision around them: accepted, modified
+    /// when known features were left out, or rejected when the document
+    /// changed since the plugin read it, or the edits don't apply. A refused
+    /// batch returns its error after the rejection is recorded. The plugin's
+    /// actor, feature identities and the four-edit allowlist are kept.
     pub fn apply_sequence_proposals(
         &mut self,
         id: DocId,
-        generation: u64,
-        revision: u64,
-        ops: &[Op],
-        actor: &Actor,
-    ) -> Result<Vec<String>> {
-        let slot = self.proposal_target(id, generation, revision, ops.len())?;
+        offer: SequenceOffer<'_>,
+    ) -> Result<ProposalResult> {
+        let slot = self
+            .docs
+            .get(id.0)
+            .ok_or(crate::Error::UnknownDocument { id })?;
         if slot.content.kind() != crate::files::Kind::Sequence {
             return Err(invalid("proposals require a sequence document"));
         }
-        let candidate = slot.content.as_document().proposal_candidate()?;
-        let batch = self.stage_proposals(id, ops, actor, candidate)?;
-        self.commit_proposals(batch)
+        let SequenceOffer {
+            generation,
+            revision,
+            operations,
+            actor,
+            source,
+            skip_known,
+        } = offer;
+        if operations.is_empty() {
+            self.proposal_target(id, generation, revision, 0)?;
+            return Ok(ProposalResult::default());
+        }
+        self.track(id)?;
+        let proposal = self.next_id();
+        let offered = self.entry(
+            id,
+            actor.clone(),
+            Op::ProposalOffer {
+                proposal: proposal.clone(),
+                source,
+                base_revision: revision,
+                operations: operations.to_vec(),
+            },
+            OpResult::default(),
+        );
+        let decide = |session: &Self, outcome, applied, note| {
+            session.entry(
+                id,
+                session.actor.clone(),
+                Op::ProposalDecide {
+                    proposal: proposal.clone(),
+                    outcome,
+                    automatic: true,
+                    applied,
+                    note,
+                },
+                OpResult::default(),
+            )
+        };
+        let staged = self
+            .proposal_target(id, generation, revision, operations.len())
+            .and_then(|slot| {
+                let (kept, skipped) = known_left_out(slot, operations, skip_known);
+                let candidate = slot.content.as_document().proposal_candidate()?;
+                let batch = self.stage_proposals(id, &kept, actor, candidate)?;
+                Ok((batch, skipped))
+            });
+        let (mut batch, skipped) = match staged {
+            Ok(staged) => staged,
+            Err(error @ crate::Error::Limit { .. }) => return Err(error),
+            Err(error) => {
+                let refused = decide(
+                    self,
+                    ProposalDecision::Rejected,
+                    Vec::new(),
+                    Some(error.to_string()),
+                );
+                self.write_entries(&[offered, refused])?;
+                return Err(error);
+            }
+        };
+        let note = (!skipped.is_empty()).then(|| format!("left out {}", skipped.join("; ")));
+        let applied: Vec<String> = batch.edits.iter().map(|e| e.entry_id.clone()).collect();
+        let outcome = match (applied.is_empty(), skipped.is_empty()) {
+            (true, _) => ProposalDecision::Rejected,
+            (false, true) => ProposalDecision::Accepted,
+            (false, false) => ProposalDecision::Modified,
+        };
+        let mut decided = decide(self, outcome, applied, note);
+        decided.state = batch.candidate.as_document().fingerprint();
+        batch.entries.insert(0, offered);
+        batch.entries.push(decided);
+        let applied = self.commit_proposals(batch)?;
+        Ok(ProposalResult { applied, skipped })
     }
 
     /// Stage an explicit native hypothesis proposal batch with the session's
@@ -145,7 +253,7 @@ impl Session {
             entries,
         } = batch;
         self.proposal_target(doc, generation, revision, edits.len())?;
-        if edits.is_empty() {
+        if entries.is_empty() {
             return Ok(vec![]);
         }
         let next_generation = generation
@@ -155,7 +263,7 @@ impl Session {
         let next_group = group
             .checked_add(1)
             .ok_or_else(|| invalid("proposal group overflow"))?;
-        let ids = entries.iter().map(|entry| entry.id.clone()).collect();
+        let ids = edits.iter().map(|edit| edit.entry_id.clone()).collect();
         let applied: Vec<_> = edits
             .into_iter()
             .map(|edit| Applied {
@@ -200,6 +308,24 @@ mod tests {
         let mut session = Session::new(dir.path());
         let doc = session.open(&path).unwrap();
         (dir, session, doc)
+    }
+
+    fn offer<'a>(
+        generation: u64,
+        revision: u64,
+        operations: &'a [Op],
+        actor: &'a Actor,
+    ) -> SequenceOffer<'a> {
+        SequenceOffer {
+            generation,
+            revision,
+            operations,
+            actor,
+            source: ProposalSource::Run {
+                id: "test-run".into(),
+            },
+            skip_known: false,
+        }
     }
 
     fn remove(id: &str) -> Op {
@@ -392,7 +518,7 @@ mod tests {
         assert!(apply(&mut session, sequence, &[remove("partition-1")]).is_err());
         assert!(
             session
-                .apply_sequence_proposals(doc, 0, 0, &[], &Actor::External)
+                .apply_sequence_proposals(doc, offer(0, 0, &[], &Actor::External))
                 .is_err()
         );
     }
@@ -413,14 +539,14 @@ mod tests {
         session.log.as_mut().unwrap().faults.after_bytes = Some(127);
         assert!(
             session
-                .apply_sequence_proposals(doc, 0, 0, std::slice::from_ref(&op), &actor)
+                .apply_sequence_proposals(doc, offer(0, 0, std::slice::from_ref(&op), &actor))
                 .is_err()
         );
         assert_eq!(journal_bytes(dir.path()), before);
         assert_eq!(session.doc(doc).unwrap().read(0, 4), b"ACGT");
         assert_eq!(session.generation(doc).unwrap(), 0);
         session
-            .apply_sequence_proposals(doc, 0, 0, &[op], &actor)
+            .apply_sequence_proposals(doc, offer(0, 0, &[op], &actor))
             .unwrap();
         assert_eq!(session.doc(doc).unwrap().read(0, 4), b"TCGT");
         let feature = Feature {
@@ -444,13 +570,15 @@ mod tests {
         session
             .apply_sequence_proposals(
                 doc,
-                generation,
-                revision,
-                &[
-                    Op::feature_update(fid.0, changed),
-                    Op::feature_remove(fid.0),
-                ],
-                &actor,
+                offer(
+                    generation,
+                    revision,
+                    &[
+                        Op::feature_update(fid.0, changed),
+                        Op::feature_remove(fid.0),
+                    ],
+                    &actor,
+                ),
             )
             .unwrap();
         assert!(session.doc(doc).unwrap().feature(fid).is_none());

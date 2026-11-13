@@ -26,6 +26,23 @@ fn replace(start: u64, end: u64, residues: &str) -> Op {
     Op::seq_replace(start, end, residues)
 }
 
+/// A plugin's offer of `operations` against the document as it is now.
+fn offer<'a>(
+    session: &Session,
+    doc: basecraft_ops::DocId,
+    operations: &'a [Op],
+    actor: &'a basecraft_protocol::Actor,
+) -> basecraft_ops::session::SequenceOffer<'a> {
+    basecraft_ops::session::SequenceOffer {
+        generation: session.generation(doc).unwrap(),
+        revision: session.doc(doc).unwrap().version(),
+        operations,
+        actor,
+        source: basecraft_protocol::ops::ProposalSource::Run { id: "run-1".into() },
+        skip_known: false,
+    }
+}
+
 fn feature(start: u64, end: u64) -> Feature {
     Feature {
         kind: "misc_feature".into(),
@@ -784,47 +801,36 @@ fn strict_sequence_proposals_stage_invalid_batches_and_replay_one_undo_group() {
     let mut session = Session::new(temp.path());
     let doc = session.open(&path).unwrap();
     let generation = session.generation(doc).unwrap();
-    let revision = session.doc(doc).unwrap().version();
     let actor = basecraft_protocol::Actor::Plugin {
         id: "org.example.annotation".into(),
         version: "1.0.0".into(),
     };
     let before = session.doc(doc).unwrap().read(0, 8);
+    let invalid = [replace(0, 1, "T"), replace(0, 99, "A")];
     assert!(
         session
-            .apply_sequence_proposals(
-                doc,
-                generation,
-                revision,
-                &[replace(0, 1, "T"), replace(0, 99, "A")],
-                &actor
-            )
+            .apply_sequence_proposals(doc, offer(&session, doc, &invalid, &actor))
             .is_err()
     );
     assert_eq!(session.doc(doc).unwrap().read(0, 8), before);
     assert_eq!(session.generation(doc).unwrap(), generation);
     assert!(!session.can_undo(doc).unwrap());
+    let one = [replace(0, 1, "T")];
+    let mut stale = offer(&session, doc, &one, &actor);
+    stale.generation += 1;
+    assert!(session.apply_sequence_proposals(doc, stale).is_err());
+    let unsafe_save = [Op::Save {
+        path: "unsafe.fa".into(),
+    }];
     assert!(
         session
-            .apply_sequence_proposals(doc, generation + 1, revision, &[replace(0, 1, "T")], &actor)
+            .apply_sequence_proposals(doc, offer(&session, doc, &unsafe_save, &actor))
             .is_err()
     );
-    assert!(
-        session
-            .apply_sequence_proposals(
-                doc,
-                generation,
-                revision,
-                &[Op::Save {
-                    path: "unsafe.fa".into(),
-                }],
-                &actor
-            )
-            .is_err()
-    );
+    assert_eq!(session.generation(doc).unwrap(), generation);
     let ops = [replace(0, 1, "T"), Op::feature_add(feature(1, 4))];
     session
-        .apply_sequence_proposals(doc, generation, revision, &ops, &actor)
+        .apply_sequence_proposals(doc, offer(&session, doc, &ops, &actor))
         .unwrap();
     assert_eq!(session.doc(doc).unwrap().read(0, 8), b"TCGTACGT");
     assert_eq!(session.doc(doc).unwrap().features().count(), 1);
@@ -959,4 +965,201 @@ fn submission_edits_undo_save_and_replay() {
     }
     let report = records::replay(root).unwrap();
     assert!(report.ok(), "{:#?}", report.problems);
+}
+
+/// The journal's entries after the documents were opened.
+fn proposal_entries(root: &Path) -> Vec<basecraft_protocol::LogEntry> {
+    basecraft_ops::log::read_all(root)
+        .unwrap()
+        .into_iter()
+        .filter(|e| !matches!(e.op, Op::Open { .. }))
+        .collect()
+}
+
+fn annotation_plugin() -> basecraft_protocol::Actor {
+    basecraft_protocol::Actor::Plugin {
+        id: "org.example.annotation".into(),
+        version: "1.0.0".into(),
+    }
+}
+
+#[test]
+fn accepted_proposal_logs_offer_edits_and_decision_and_shows_one_row() {
+    use basecraft_protocol::ops::{ProposalDecision, ProposalSource};
+    crate::isolated_profile::isolate!();
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("sequence.fa");
+    std::fs::write(&path, ">sequence\nACGTACGTACGT\n").unwrap();
+    let mut session = Session::new(temp.path());
+    let doc = session.open(&path).unwrap();
+    let actor = annotation_plugin();
+    let ops = [
+        Op::feature_add(feature(0, 4)),
+        Op::feature_add(feature(4, 8)),
+    ];
+    let applied = session
+        .apply_sequence_proposals(doc, offer(&session, doc, &ops, &actor))
+        .unwrap()
+        .applied;
+    let entries = proposal_entries(temp.path());
+    let names: Vec<_> = entries.iter().map(|e| e.op.name()).collect();
+    assert_eq!(
+        names,
+        [
+            "proposal.offer",
+            "feature.add",
+            "feature.add",
+            "proposal.decide"
+        ]
+    );
+    let Op::ProposalOffer {
+        proposal,
+        source,
+        base_revision,
+        operations,
+    } = &entries[0].op
+    else {
+        unreachable!()
+    };
+    assert_eq!(source, &ProposalSource::Run { id: "run-1".into() });
+    assert_eq!(*base_revision, 0);
+    assert_eq!(operations[..], ops[..]);
+    assert_eq!(entries[0].actor, actor);
+    assert_eq!(entries[0].state.features, 0);
+    assert_eq!(
+        entries[3].op,
+        Op::ProposalDecide {
+            proposal: proposal.clone(),
+            outcome: ProposalDecision::Accepted,
+            automatic: true,
+            applied: applied.clone(),
+            note: None,
+        }
+    );
+    assert_eq!(entries[3].state.features, 2);
+    assert_eq!(applied, [entries[1].id.clone(), entries[2].id.clone()]);
+    assert!(records::replay(temp.path()).unwrap().ok());
+
+    let report = session.document_record(doc).unwrap().report().unwrap();
+    let rows: Vec<_> = report
+        .history
+        .iter()
+        .filter(|row| !row.summary.starts_with("Opened"))
+        .collect();
+    assert_eq!(rows.len(), 1, "{:#?}", report.history);
+    assert_eq!(
+        rows[0].summary,
+        "org.example.annotation proposed 2 features; all accepted automatically"
+    );
+    assert_eq!(rows[0].status, "Contributing");
+    assert_eq!(rows[0].id, entries[0].id);
+    // Methods describe the edits applied, as before.
+    assert_eq!(report.paragraphs.len(), 2);
+
+    // Undone, the proposal stays as a row and stops contributing.
+    session.undo(doc).unwrap();
+    let report = session.document_record(doc).unwrap().report().unwrap();
+    let row = report
+        .history
+        .iter()
+        .find(|row| row.id == entries[0].id)
+        .unwrap();
+    assert_eq!(row.status, "Undone / not contributing");
+    assert!(report.paragraphs.is_empty());
+    assert!(records::replay(temp.path()).unwrap().ok());
+}
+
+#[test]
+fn proposal_leaving_out_known_features_is_recorded_as_modified() {
+    use basecraft_protocol::ops::ProposalDecision;
+    crate::isolated_profile::isolate!();
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("sequence.fa");
+    std::fs::write(&path, ">sequence\nACGTACGTACGT\n").unwrap();
+    let mut session = Session::new(temp.path());
+    let doc = session.open(&path).unwrap();
+    session.apply(doc, Op::feature_add(feature(0, 4))).unwrap();
+    let actor = annotation_plugin();
+    let ops = [
+        Op::feature_add(feature(0, 4)),
+        Op::feature_add(feature(4, 8)),
+    ];
+    let mut offered = offer(&session, doc, &ops, &actor);
+    offered.skip_known = true;
+    let result = session.apply_sequence_proposals(doc, offered).unwrap();
+    assert_eq!(result.applied.len(), 1);
+    assert_eq!(result.skipped, ["already annotated: misc_feature"]);
+    let entries = proposal_entries(temp.path());
+    let decide = entries.last().unwrap();
+    let Op::ProposalDecide {
+        outcome,
+        applied,
+        note,
+        ..
+    } = &decide.op
+    else {
+        panic!("{:?}", decide.op)
+    };
+    assert_eq!(*outcome, ProposalDecision::Modified);
+    assert_eq!(applied, &result.applied);
+    assert_eq!(
+        note.as_deref(),
+        Some("left out already annotated: misc_feature")
+    );
+    assert!(records::replay(temp.path()).unwrap().ok());
+    let report = session.document_record(doc).unwrap().report().unwrap();
+    assert!(report.history.iter().any(|row| row.summary
+        == "org.example.annotation proposed 2 features; 1 of 2 accepted automatically \
+            (left out already annotated: misc_feature)"));
+}
+
+#[test]
+fn stale_proposal_is_recorded_as_rejected_and_changes_nothing() {
+    use basecraft_protocol::ops::ProposalDecision;
+    crate::isolated_profile::isolate!();
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("sequence.fa");
+    std::fs::write(&path, ">sequence\nACGTACGT\n").unwrap();
+    let mut session = Session::new(temp.path());
+    let doc = session.open(&path).unwrap();
+    let actor = annotation_plugin();
+    let ops = [Op::feature_add(feature(0, 4))];
+    let read = offer(&session, doc, &ops, &actor);
+    // The user edits while the plugin works.
+    session.apply(doc, replace(0, 1, "T")).unwrap();
+    let error = session.apply_sequence_proposals(doc, read).unwrap_err();
+    assert!(matches!(error, basecraft_ops::Error::StaleRevision { .. }));
+    assert_eq!(session.doc(doc).unwrap().features().count(), 0);
+    let entries = proposal_entries(temp.path());
+    let names: Vec<_> = entries.iter().map(|e| e.op.name()).collect();
+    assert_eq!(names, ["seq.replace", "proposal.offer", "proposal.decide"]);
+    let Op::ProposalDecide {
+        outcome,
+        applied,
+        note,
+        ..
+    } = &entries[2].op
+    else {
+        unreachable!()
+    };
+    assert_eq!(*outcome, ProposalDecision::Rejected);
+    assert_eq!(applied, &Vec::<String>::new());
+    assert_eq!(note.as_deref(), Some(error.to_string().as_str()));
+    assert!(records::replay(temp.path()).unwrap().ok());
+    let report = session.document_record(doc).unwrap().report().unwrap();
+    let row = report
+        .history
+        .iter()
+        .find(|row| row.id == entries[1].id)
+        .unwrap();
+    assert_eq!(row.status, "Rejected");
+    assert!(
+        row.summary
+            .starts_with("org.example.annotation proposed 1 feature; rejected automatically ("),
+        "{}",
+        row.summary
+    );
+    // One undo reverts the user's edit; the rejection is not an undo step.
+    session.undo(doc).unwrap();
+    assert!(!session.can_undo(doc).unwrap());
 }

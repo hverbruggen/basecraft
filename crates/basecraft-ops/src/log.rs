@@ -6,7 +6,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
-use basecraft_protocol::{Actor, LogEntry, Op};
+use basecraft_protocol::{Actor, LogEntry, Op, ops::ProposalDecision};
 
 use crate::Result;
 
@@ -596,6 +596,68 @@ pub fn describe(op: &Op) -> String {
         Op::SangerUpdate { .. } => "Updated Sanger call sets and supporting evidence".into(),
         Op::SangerReview { edit, .. } => crate::sanger_review::describe(edit),
         Op::JobFinished { report } => format!("{} {:?}", report.method, report.status),
+        Op::ProposalOffer { operations, .. } => format!("Proposed {}", offered(operations)),
+        Op::ProposalDecide { .. } => format!("Proposal {}", decision(op, None)),
+    }
+}
+
+/// One History line for a proposal: who offered what, and what was decided.
+/// "basecraft.pyrodigal proposed 12 features; all accepted automatically".
+pub(crate) fn describe_proposal(actor: &Actor, offer: &Op, decide: Option<&Op>) -> String {
+    let Op::ProposalOffer { operations, .. } = offer else {
+        return describe(offer);
+    };
+    let who = match actor {
+        Actor::Plugin { id, .. } => id.clone(),
+        Actor::Tool { tool, .. } => tool.clone(),
+        Actor::Agent { model } => format!("Agent {model}"),
+        Actor::Script { client } => format!("Script {client}"),
+        Actor::Human { .. } => "You".into(),
+        Actor::External => "An outside change".into(),
+    };
+    let decided = decide.map_or_else(
+        || "not decided".into(),
+        |op| decision(op, Some(operations.len())),
+    );
+    format!("{who} proposed {}; {decided}", offered(operations))
+}
+
+/// "12 features" when every offered edit adds a feature, else "3 edits".
+fn offered(operations: &[Op]) -> String {
+    let n = operations.len();
+    let noun = if operations
+        .iter()
+        .all(|op| matches!(op, Op::FeatureAdd { .. }))
+    {
+        "feature"
+    } else {
+        "edit"
+    };
+    format!("{n} {noun}{}", if n == 1 { "" } else { "s" })
+}
+
+/// "all accepted automatically", "2 of 3 accepted", "rejected: why".
+fn decision(op: &Op, offered: Option<usize>) -> String {
+    let Op::ProposalDecide {
+        outcome,
+        automatic,
+        applied,
+        note,
+        ..
+    } = op
+    else {
+        return String::new();
+    };
+    let how = if *automatic { " automatically" } else { "" };
+    let text = match (outcome, offered) {
+        (ProposalDecision::Accepted, _) => format!("all accepted{how}"),
+        (ProposalDecision::Modified, Some(n)) => format!("{} of {n} accepted{how}", applied.len()),
+        (ProposalDecision::Modified, None) => format!("partly accepted{how}"),
+        (ProposalDecision::Rejected, _) => format!("rejected{how}"),
+    };
+    match note {
+        Some(note) => format!("{text} ({note})"),
+        None => text,
     }
 }
 

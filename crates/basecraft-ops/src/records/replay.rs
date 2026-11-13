@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use basecraft_platform::files::{ObjectIdentity, OrdinaryKind, object_identity};
-use basecraft_protocol::{LogEntry, Op};
+use basecraft_protocol::{LogEntry, Op, ops::ProposalDecision};
 
 use crate::session::{DocId, Session, objects_dir};
 use crate::{Error, Result, log};
@@ -61,8 +61,14 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut ReplayReport)
     let mut rebased: std::collections::HashSet<&str> = std::collections::HashSet::new();
     // Replay entry id -> logged entry id, to check undo and redo targets.
     let mut ids: HashMap<String, String> = HashMap::new();
-    for e in entries {
+    let mut proposals = Proposals::default();
+    for (index, &e) in entries.iter().enumerate() {
         report.entries += 1;
+        if let Some(msg) = proposals.check(index, e) {
+            report
+                .problems
+                .push(format!("{} {} {}: {msg}", e.id, e.op.name(), e.doc));
+        }
         let mut problem = |msg: String| {
             report
                 .problems
@@ -204,7 +210,12 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut ReplayReport)
             // External tools aren't re-run: their outputs are new files,
             // and opening one later checks it against its stored copy.
             // Exports are figures; drawing isn't part of replay.
-            Op::ToolRun { .. } | Op::Export { .. } | Op::JobFinished { .. } => {}
+            // Proposal entries change nothing; `Proposals` checks them.
+            Op::ToolRun { .. }
+            | Op::Export { .. }
+            | Op::JobFinished { .. }
+            | Op::ProposalOffer { .. }
+            | Op::ProposalDecide { .. } => {}
             Op::Undo { of } | Op::Redo { of } => {
                 let r = if matches!(e.op, Op::Undo { .. }) {
                     session.undo_single(doc)
@@ -251,7 +262,97 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut ReplayReport)
             ));
         }
     }
+    for proposal in proposals.undecided() {
+        report
+            .problems
+            .push(format!("proposal {proposal} was offered and never decided"));
+    }
     Ok(())
+}
+
+/// The offers of one session so far and where each entry stands, to check
+/// that every decision follows its offer and names edits logged after it.
+#[derive(Default)]
+struct Proposals<'a> {
+    /// Proposal id -> position, document and number of offered edits.
+    offers: HashMap<&'a str, (usize, &'a str, usize)>,
+    decided: std::collections::HashSet<&'a str>,
+    /// Entry id -> position and document.
+    seen: HashMap<&'a str, (usize, &'a str)>,
+}
+
+impl<'a> Proposals<'a> {
+    /// Note entry `e` at `index`; why it is inconsistent, if it is.
+    fn check(&mut self, index: usize, e: &'a LogEntry) -> Option<String> {
+        let problem = match &e.op {
+            Op::ProposalOffer {
+                proposal,
+                operations,
+                ..
+            } => self
+                .offers
+                .insert(proposal, (index, &e.doc, operations.len()))
+                .map(|_| format!("proposal {proposal} is offered twice")),
+            Op::ProposalDecide {
+                proposal,
+                outcome,
+                applied,
+                ..
+            } => self.decide(e, proposal, *outcome, applied),
+            _ => None,
+        };
+        self.seen.insert(&e.id, (index, &e.doc));
+        problem
+    }
+
+    fn decide(
+        &mut self,
+        e: &LogEntry,
+        proposal: &'a str,
+        outcome: ProposalDecision,
+        applied: &[String],
+    ) -> Option<String> {
+        let Some(&(offered_at, doc, offered)) = self.offers.get(proposal) else {
+            return Some(format!("proposal {proposal} wasn't offered before"));
+        };
+        if doc != e.doc {
+            return Some(format!("proposal {proposal} was offered for {doc}"));
+        }
+        if !self.decided.insert(proposal) {
+            return Some(format!("proposal {proposal} is decided twice"));
+        }
+        let mut distinct = std::collections::HashSet::new();
+        for id in applied {
+            let follows = self
+                .seen
+                .get(id.as_str())
+                .is_some_and(|&(at, d)| at > offered_at && d == doc);
+            if !follows || !distinct.insert(id) {
+                return Some(format!(
+                    "applied edit {id} isn't one logged after the offer"
+                ));
+            }
+        }
+        match outcome {
+            ProposalDecision::Rejected if !applied.is_empty() => {
+                Some("a rejection lists applied edits".into())
+            }
+            ProposalDecision::Accepted if applied.len() != offered => Some(format!(
+                "accepted, but {} of {offered} offered edits applied",
+                applied.len()
+            )),
+            ProposalDecision::Modified if applied.is_empty() => {
+                Some("modified, but nothing applied".into())
+            }
+            _ => None,
+        }
+    }
+
+    fn undecided(&self) -> impl Iterator<Item = &&'a str> {
+        self.offers
+            .keys()
+            .filter(|proposal| !self.decided.contains(*proposal))
+    }
 }
 
 fn recorded_source_root<'a>(
@@ -693,6 +794,8 @@ fn recover_entries(
             Op::Save { .. }
             | Op::ToolRun { .. }
             | Op::JobFinished { .. }
+            | Op::ProposalOffer { .. }
+            | Op::ProposalDecide { .. }
             | Op::Export { .. }
             | Op::Extract { .. } => {}
             Op::Undo { .. } => {
@@ -1331,6 +1434,138 @@ mod tests {
                     .starts_with(".basecraft-recover-")
             }));
         }
+    }
+
+    fn logged(id: &str, doc: &str, op: Op) -> LogEntry {
+        LogEntry {
+            source: None,
+            v: basecraft_protocol::ops::LOG_VERSION,
+            id: id.into(),
+            t: "2026-11-13T12:00:00Z".into(),
+            host: "host".into(),
+            session: "session".into(),
+            actor: basecraft_protocol::Actor::External,
+            doc: doc.into(),
+            op,
+            result: basecraft_protocol::OpResult::default(),
+            state: basecraft_protocol::DocState {
+                len: 0,
+                features: 0,
+                rows: None,
+                counts: None,
+            },
+        }
+    }
+
+    fn offer(id: &str, doc: &str, offered: usize) -> LogEntry {
+        logged(
+            id,
+            doc,
+            Op::ProposalOffer {
+                proposal: "p".into(),
+                source: basecraft_protocol::ops::ProposalSource::Run { id: "run".into() },
+                base_revision: 0,
+                operations: vec![Op::seq_replace(0, 1, "A"); offered],
+            },
+        )
+    }
+
+    fn decide(id: &str, doc: &str, outcome: ProposalDecision, applied: &[&str]) -> LogEntry {
+        logged(
+            id,
+            doc,
+            Op::ProposalDecide {
+                proposal: "p".into(),
+                outcome,
+                automatic: true,
+                applied: applied.iter().map(|id| (*id).into()).collect(),
+                note: None,
+            },
+        )
+    }
+
+    /// The problems `Proposals` finds in `entries`, undecided offers last.
+    fn proposal_problems(entries: &[LogEntry]) -> Vec<String> {
+        let mut proposals = Proposals::default();
+        let mut problems: Vec<_> = (entries.iter().enumerate())
+            .filter_map(|(index, e)| proposals.check(index, e))
+            .collect();
+        problems.extend(proposals.undecided().map(|p| format!("{p} undecided")));
+        problems
+    }
+
+    #[test]
+    fn proposal_entries_are_checked_for_consistency() {
+        use ProposalDecision::{Accepted, Modified, Rejected};
+        let edit = |id| logged(id, "a.fa", Op::seq_replace(0, 1, "T"));
+        let consistent = [
+            offer("o", "a.fa", 2),
+            edit("e1"),
+            edit("e2"),
+            decide("d", "a.fa", Accepted, &["e1", "e2"]),
+        ];
+        assert_eq!(proposal_problems(&consistent), Vec::<String>::new());
+        let rejected = [offer("o", "a.fa", 1), decide("d", "a.fa", Rejected, &[])];
+        assert_eq!(proposal_problems(&rejected), Vec::<String>::new());
+        let cases: [(&[LogEntry], &str); 8] = [
+            (
+                &[decide("d", "a.fa", Rejected, &[])],
+                "wasn't offered before",
+            ),
+            (&[offer("o", "a.fa", 1)], "undecided"),
+            (
+                &[
+                    edit("e1"),
+                    offer("o", "a.fa", 1),
+                    decide("d", "a.fa", Accepted, &["e1"]),
+                ],
+                "isn't one logged after the offer",
+            ),
+            (
+                &[
+                    offer("o", "a.fa", 1),
+                    decide("d", "a.fa", Accepted, &["missing"]),
+                ],
+                "isn't one logged after the offer",
+            ),
+            (
+                &[
+                    offer("o", "a.fa", 2),
+                    edit("e1"),
+                    decide("d", "a.fa", Accepted, &["e1"]),
+                ],
+                "1 of 2 offered edits applied",
+            ),
+            (
+                &[
+                    offer("o", "a.fa", 1),
+                    edit("e1"),
+                    decide("d", "a.fa", Rejected, &["e1"]),
+                ],
+                "a rejection lists applied edits",
+            ),
+            (
+                &[offer("o", "a.fa", 1), decide("d", "a.fa", Modified, &[])],
+                "nothing applied",
+            ),
+            (
+                &[offer("o", "a.fa", 1), decide("d", "b.fa", Rejected, &[])],
+                "was offered for a.fa",
+            ),
+        ];
+        for (entries, expected) in cases {
+            let problems = proposal_problems(entries);
+            assert!(
+                problems.iter().any(|problem| problem.contains(expected)),
+                "{expected}: {problems:?}"
+            );
+        }
+        let twice = [
+            offer("o", "a.fa", 1),
+            decide("d", "a.fa", Rejected, &[]),
+            decide("d2", "a.fa", Rejected, &[]),
+        ];
+        assert!(proposal_problems(&twice)[0].contains("decided twice"));
     }
 }
 
