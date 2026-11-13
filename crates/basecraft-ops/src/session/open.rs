@@ -1,6 +1,6 @@
 //! Document loading and baseline tracking.
 use super::Session;
-use super::{DocId, Op, OpResult, Path, PathBuf, Result, Slot, files, invalid, objects_dir};
+use super::{DocId, Op, OpResult, Path, PathBuf, Result, Slot, files, invalid};
 
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct SavedMark(pub(super) Option<String>);
@@ -277,14 +277,14 @@ impl Session {
             self.store_objects = false;
             self.recovery_off = Some(format!(
                 "Recovery is off: basecraft cannot write {} ({error}). Save to keep your edits.",
-                crate::session::recovery_folder(&self.root).display()
+                recovery_folder(&self.root).display()
             ));
+            // Removed with the session's recovery when it closes.
             if let Ok(scratch) = tempfile::Builder::new()
                 .prefix("basecraft-session-")
                 .tempdir()
             {
-                self.storage_root = scratch.path().to_path_buf();
-                self.scratch = Some(scratch);
+                self.storage_root = scratch.keep();
             }
         }
     }
@@ -441,10 +441,20 @@ impl Session {
     }
 }
 
+/// Checkpoints and other exact bytes a session keeps, by hash.
+pub fn objects_dir(root: &Path) -> PathBuf {
+    root.join(".basecraft").join("objects")
+}
+
+/// Where recovery of unsaved edits lives for sessions rooted at `root`.
+pub fn recovery_folder(root: &Path) -> PathBuf {
+    root.join(".basecraft").join("recovery")
+}
+
 /// `path` relative to `base`. Writers may return another spelling of the same
 /// folder (on Windows a verbatim `\\?\` path, another drive-letter case or a
 /// short name), so a second try compares the canonical forms of both.
-fn within(path: &Path, base: &Path) -> Option<std::path::PathBuf> {
+fn within(path: &Path, base: &Path) -> Option<PathBuf> {
     if let Ok(rest) = path.strip_prefix(base) {
         return Some(rest.into());
     }

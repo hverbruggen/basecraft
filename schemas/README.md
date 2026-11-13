@@ -8,9 +8,33 @@ show those fields as plain JSON values.
 This inventory describes existing writers, including records that do not yet have
 protocol types or schemas. It does not establish a compatibility policy.
 
+## The `.basecraft` folder
+
+Everything basecraft records about a user's data sits in a `.basecraft` folder:
+the project's, or one beside a loose file. Copying the folder that holds it
+copies the records. All records are plain JSON or JSONL; paths in them are
+relative and `/`-separated unless a row says otherwise. Basecraft's own
+application folders hold settings, plugins, recent projects and disposable
+caches only: deleting them loses no record.
+
+| Path inside `.basecraft` | What it holds | Format |
+|---|---|---|
+| `analysis-index.json` | For each file in this folder that an analysis used, the analysis stores whose runs depend on it. A save reads only this file before deciding which stores to inspect. | JSON, [analysis-index.schema.json](analysis-index.schema.json), RP10 |
+| `analyses-v1/store.json`, `analyses-v1/identity` | Marks the folder as a basecraft analysis store; a random store identity. | JSON (RP08); plain text |
+| `analyses-v1/runs/<run>/` | One analysis run: `input.json` (the input it used, RP06), `run.json` (status and result, RP07), `execution.json` and `request.json` (what ran), `records/` (publications, RP05), and kept bytes: `submitted.fasta`, `submitted.spart` or `submitted.spart.xml` for a generated input, `preserved-input` for an original kept before a save replaced it. | JSON and the input's own format |
+| `analyses-v1/bindings/<hash>` | Which run produced a result file in this folder. | JSON, RP09 |
+| `analyses-v1/trash/` | Runs removed by a save decision, kept for inspection. | As `runs/` |
+| `provenance/<hash>/` | The history of a project file, keyed by the hash of its project-relative path (a loose file uses `<file>.provenance/` beside it instead). | RP05, RP12 to RP14 |
+| `log/<host>/<month>-<stream>-<segment>.jsonl` | Journal of a session that records into the folder itself (CLI and scripts). | JSONL, RP03 |
+| `recovery/<session>/` | Unsaved edits of one open session: `.basecraft/log/<session>/…jsonl` (the edit journal, RP03), `.basecraft/objects/<hash>` (exact bytes the session needs: a checkpoint when an original changed on disk, a new document with no file yet, the input of an analysis started on unsaved edits), `pending-save.json` (a save in progress, RP02) and `recovery-integrity-error.json` (RP04). Removed when the session closes with nothing unsaved. | JSONL and JSON |
+
+A folder that cannot be written (read-only, or with a `.basecraft` file that
+belongs to another program) gets no index and no recovery; basecraft says so
+when you edit there.
+
 ## Reading the inventory
 
-Locations: **R** = temporary application-state recovery session; **A** = permanent
+Locations: **R** = a session's recovery folder, `.basecraft/recovery/<session>`; **A** = permanent
 folder-local `.basecraft/analyses-v1/runs/<id>`; **P** = provenance bundle (beside a
 result, in project metadata, or application state according to policy); **J** =
 application-state job index; **E** = user-selected export; **C** = application
@@ -29,7 +53,7 @@ Basecraft builds is promised.
 
 | Record / shape | Location | Writer | Reader | Version on disk | Current type / generated schema | Unknown fields |
 |---|---|---|---|---|---|---|
-| **RP01** `recovery.json`: session, source root, baseline event, retention limit, status | R (legacy sessions: project root) | [session.rs](../crates/basecraft-ops/src/session.rs) `Session::track` | [replay.rs](../crates/basecraft-ops/src/records/replay.rs) `recorded_source_root`; GUI `provenance_bridge::recovery_sessions` | `schema_version: 1` | protocol `records::RecoveryManifest`; [recovery-manifest.schema.json](recovery-manifest.schema.json) | Kept at top level and throughout opaque baseline; readers inspect selected fields |
+| **RP01** `recovery.json`: session, source root, baseline event, retention limit, status | R | [session.rs](../crates/basecraft-ops/src/session.rs) `Session::track` | [replay.rs](../crates/basecraft-ops/src/records/replay.rs) `recorded_source_root`; GUI `provenance_bridge::recovery_sessions` | `schema_version: 1` | protocol `records::RecoveryManifest`; [recovery-manifest.schema.json](recovery-manifest.schema.json) | Kept at top level and throughout opaque baseline; readers inspect selected fields |
 | **RP02** `pending-save.json`: session, target, before hash or null, ordered expected hashes, status, note | R | `Session::save_checked` | save success removes it; `Session` drop/cleanup preserves recovery if present; user/repair tools inspect it | `schema_version: 1` | protocol `records::PendingSave`; [pending-save.schema.json](pending-save.schema.json) | Kept by type; writer creates a fresh intent, does not merge an earlier intent |
 | **RP03** `.basecraft/log/<stream>/<month>-<id>-<segment>.jsonl`: checksummed, sequenced events | R / project | [log.rs](../crates/basecraft-ops/src/log.rs) `LogWriter::append_batch` | `read_all`, `read_readable`, `verified_prefix`, `parse_entry`; replay | `v: 1`; `_checksum`, `_sequence` envelope | protocol `records::JournalEntry` over `LogEntry` / [journal-entry.schema.json](journal-entry.schema.json) | Envelope verified then stripped; unknown event fields dropped by `LogEntry`; future operation variants rejected |
 | **RP04** `recovery-integrity-error.json`: verified length and durability diagnostic | R / project | `LogWriter::append_batch` failed rollback | `replay::recover` refuses poisoned recovery | `schema_version: 1` | protocol `records::RecoveryIntegrityError` / [recovery-integrity-error.schema.json](recovery-integrity-error.schema.json) | Typed round-trip keeps extras; reader checks presence; no rewrite |

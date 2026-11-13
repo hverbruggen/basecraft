@@ -41,6 +41,7 @@ mod save_failure_tests;
 #[cfg(test)]
 mod saved_mark_tests;
 mod tool_runs;
+pub use open::{objects_dir, recovery_folder};
 pub use save_decision::{EvidenceAction, SaveCheck, SaveDecision, SaveOutcome, SaveWarning};
 pub use tool_runs::ToolRunRecord;
 pub mod support_import;
@@ -184,10 +185,8 @@ pub struct Session {
     docs: Vec<Slot>,
     typing: Option<Typing>,
     store_objects: bool,
-    /// Set when the recovery folder could not be made; edits go unrecorded.
+    /// Why edits go unrecorded, when the recovery folder could not be made.
     recovery_off: Option<String>,
-    /// Then the session's working copies live here until it closes.
-    scratch: Option<tempfile::TempDir>,
     /// The open undo group, if any, and the next group number.
     group: Option<u64>,
     next_group: u64,
@@ -226,7 +225,6 @@ impl Session {
             typing: None,
             store_objects: true,
             recovery_off: None,
-            scratch: None,
             group: None,
             next_group: 1,
             group_docs: std::collections::BTreeMap::new(),
@@ -250,7 +248,6 @@ impl Session {
         let preferences = basecraft_platform::settings::SettingsStore::new(paths.preferences())
             .load()
             .map_err(|e| invalid(e.to_string()))?;
-        paths.remove_old_caches();
         let mut session = Self::new(root);
         session.storage_root = recovery_folder(&session.root).join(&session.id);
         session.local_provenance_root = paths.state.join("provenance");
@@ -269,9 +266,7 @@ impl Session {
 
     /// A session that logs nothing, for replay and tests.
     pub fn unlogged(root: impl Into<PathBuf>) -> Self {
-        let mut s = Self::new(root);
-        s.log = None;
-        s.store_objects = false;
+        let mut s = Self::detached(root);
         s.tracked = false;
         s
     }
@@ -615,31 +610,19 @@ impl Session {
     pub fn state(&self, id: DocId) -> Result<DocState> {
         Ok(self.slot(id)?.content.as_document().fingerprint())
     }
-
-    // Open and save.
-
-    // Operations.
-}
-
-/// Where recovery of unsaved edits lives for sessions rooted at `root`.
-pub fn recovery_folder(root: &Path) -> PathBuf {
-    root.join(".basecraft").join("recovery")
 }
 
 impl Drop for Session {
     /// Nothing unsaved is left: remove this session's recovery, and the
-    /// folders above it when they hold nothing else.
+    /// recovery and `.basecraft` folders if that leaves them empty.
     fn drop(&mut self) {
         if self.storage_root != self.root
             && !self.storage_root.join("pending-save.json").exists()
             && self.docs.iter().all(Slot::is_clean)
         {
             let _ = std::fs::remove_dir_all(&self.storage_root);
-            if self.storage_root.parent() == Some(&recovery_folder(&self.root)) {
-                let recovery = recovery_folder(&self.root);
-                let _ = std::fs::remove_dir(&recovery);
-                let _ = std::fs::remove_dir(recovery.parent().unwrap_or(&recovery));
-            }
+            let _ = std::fs::remove_dir(recovery_folder(&self.root));
+            let _ = std::fs::remove_dir(self.root.join(".basecraft"));
         }
     }
 }
@@ -687,10 +670,6 @@ pub(crate) fn relative(root: &Path, path: &Path) -> String {
         |_| abs.to_string_lossy().into_owned(),
         |p| p.to_string_lossy().into_owned(),
     )
-}
-
-pub fn objects_dir(root: &Path) -> PathBuf {
-    root.join(".basecraft").join("objects")
 }
 
 /// Upper-case residues; reject anything that isn't a letter, `-` or `*`.
