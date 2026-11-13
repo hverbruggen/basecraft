@@ -1563,6 +1563,99 @@
       ]
     },
     {
+      "description": "Edits a plugin or agent offered for this document, as received. The\nentry's actor made the offer. Changes nothing; the edits applied\nfollow it, and [`Op::ProposalDecide`] says what was done with it.",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "proposal.offer"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "base_revision": {
+              "description": "The document revision the edits were made against.",
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "operations": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Op"
+              }
+            },
+            "proposal": {
+              "description": "A new id; the decision names it.",
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/ProposalSource"
+            }
+          },
+          "required": [
+            "proposal",
+            "source",
+            "base_revision",
+            "operations"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
+      "description": "What was done with an offer. Changes nothing; the entry's actor is\nwho decided, or on whose behalf a policy decided.",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "proposal.decide"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "applied": {
+              "description": "Log ids of the edits applied, in order.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "automatic": {
+              "description": "No one reviewed the offer: basecraft's policy decided.",
+              "type": "boolean"
+            },
+            "note": {
+              "description": "Why, when something was left out or refused.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "outcome": {
+              "$ref": "#/$defs/ProposalDecision"
+            },
+            "proposal": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "proposal",
+            "outcome",
+            "automatic",
+            "applied"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
       "description": "Undo the operation with log id `of`.",
       "type": "object",
       "properties": {
@@ -4015,6 +4108,1660 @@
         "genomic_rna"
       ]
     },
+    "Op": {
+      "description": "A change to a document. Coordinates are 0-based, half-open.",
+      "oneOf": [
+        {
+          "description": "Open a file. Records its content hash, so replay can check it starts\nfrom the same input.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "doc.open"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Create an independent unsaved DNA sequence. The initial residues are\nretained so recovery and replay do not need an external source file.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "doc.create_sequence"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "residues": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "residues"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Save a document. Records the hash of each file written.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "doc.save"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Replace residues `start..end` with `residues`. Insertions and\ndeletions are replacements with an empty side.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "seq.replace"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "end": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                },
+                "record": {
+                  "description": "The record, by name, in a file that holds several. Absent means\nthe open record.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "residues": {
+                  "type": "string"
+                },
+                "start": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "start",
+                "end",
+                "residues"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "feature.add"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "feature": {
+                  "$ref": "#/$defs/Feature"
+                },
+                "record": {
+                  "description": "The record, by name, in a file that holds several. Absent means\nthe open record.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "feature"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "feature.remove"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0
+                },
+                "record": {
+                  "description": "The record, by name, in a file that holds several. Absent means\nthe open record.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "id"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "feature.update"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "feature": {
+                  "$ref": "#/$defs/Feature"
+                },
+                "id": {
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0
+                },
+                "record": {
+                  "description": "The record, by name, in a file that holds several. Absent means\nthe open record.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "feature"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Write residues `start..end` and the annotations within them to a new\nfile at `path`. Annotations cut by the range are clipped and marked\nincomplete at the cut. Records the new file's hash.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "doc.extract"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "end": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                },
+                "path": {
+                  "type": "string"
+                },
+                "record": {
+                  "description": "The record, by name, in a file that holds several. Absent means\nthe open record.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "reverse": {
+                  "description": "Write the reverse complement, so a reverse-strand annotation\nreads 5' to 3' in the new file.",
+                  "type": "boolean"
+                },
+                "segments": {
+                  "description": "Parts to splice together, 5' to 3', instead of `start..end`.",
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "type": "integer",
+                        "format": "uint64",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "integer",
+                        "format": "uint64",
+                        "minimum": 0
+                      }
+                    ]
+                  }
+                },
+                "start": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "start",
+                "end",
+                "path"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Replace columns `start..end` of one row with `residues`.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "aln.replace"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "end": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                },
+                "residues": {
+                  "type": "string"
+                },
+                "row": {
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0
+                },
+                "start": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "row",
+                "start",
+                "end",
+                "residues"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Insert `residues` before column `col` in `rows`. Like gaps, they use\nup each row's trailing gaps first, unless every row gets them.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "aln.insert"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "col": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                },
+                "residues": {
+                  "type": "string"
+                },
+                "rows": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "type": "integer",
+                        "format": "uint32",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "integer",
+                        "format": "uint32",
+                        "minimum": 0
+                      }
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "rows",
+                "col",
+                "residues"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Type one residue, or a gap, over the block `rows` × `start..end`.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "aln.fill"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "end": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                },
+                "residue": {
+                  "type": "string"
+                },
+                "rows": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "type": "integer",
+                        "format": "uint32",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "integer",
+                        "format": "uint32",
+                        "minimum": 0
+                      }
+                    ]
+                  }
+                },
+                "start": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "rows",
+                "start",
+                "end",
+                "residue"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Insert `count` gaps before column `col`. Rows use up their own\ntrailing gaps first, unless every row gets gaps: that's a new column.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "aln.insert_gaps"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "col": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                },
+                "count": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                },
+                "rows": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "type": "integer",
+                        "format": "uint32",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "integer",
+                        "format": "uint32",
+                        "minimum": 0
+                      }
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "rows",
+                "col",
+                "count"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Delete columns `start..end` of `rows`; what follows moves left.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "aln.delete"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "end": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                },
+                "rows": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "type": "integer",
+                        "format": "uint32",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "integer",
+                        "format": "uint32",
+                        "minimum": 0
+                      }
+                    ]
+                  }
+                },
+                "start": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "rows",
+                "start",
+                "end"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Slide the block `rows` × `start..end` by `by` columns into the gaps\nbeside it.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "aln.shift"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "by": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "end": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                },
+                "rows": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "type": "integer",
+                        "format": "uint32",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "integer",
+                        "format": "uint32",
+                        "minimum": 0
+                      }
+                    ]
+                  }
+                },
+                "start": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "rows",
+                "start",
+                "end",
+                "by"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Delete every column that is a gap in all rows.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "aln.remove_gap_columns"
+            },
+            "params": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Move `rows`, in order, so the first lands at index `to` among the\nrows that remain.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "aln.move_rows"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "rows": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "type": "integer",
+                        "format": "uint32",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "integer",
+                        "format": "uint32",
+                        "minimum": 0
+                      }
+                    ]
+                  }
+                },
+                "to": {
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "rows",
+                "to"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "aln.rename_row"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "row": {
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "row",
+                "name"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "aln.remove_rows"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "rows": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "type": "integer",
+                        "format": "uint32",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "integer",
+                        "format": "uint32",
+                        "minimum": 0
+                      }
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "rows"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Append sequences, optionally replacing reference rows with their\ngap-expanded forms from an alignment addition tool.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "aln.add_sequences"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "reference": {
+                  "type": [
+                    "array",
+                    "null"
+                  ],
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "rows": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "rows"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Root the tree halfway along the branch above `clade`.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.reroot"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "clade": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "clade"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Root halfway along a longest tip-to-tip branch-length path.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.midpoint_root"
+            },
+            "params": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Globally minimize unweighted root-to-all-tip distance variance.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.minimum_variance_root"
+            },
+            "params": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Move the root along its branch: `clade`, one of the root's two\nchildren, gets `fraction` of the branch's length, the other the\nrest.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.root_position"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "clade": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "fraction": {
+                  "type": "number",
+                  "format": "double"
+                }
+              },
+              "required": [
+                "clade",
+                "fraction"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Reverse the order of the clade's children.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.rotate"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "clade": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "clade"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Order every node's children by size: smallest first (on top), or\nlargest first.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.ladderize"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "small_first": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "small_first"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.rename_tip"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "from": {
+                  "type": "string"
+                },
+                "to": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "from",
+                "to"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "State what the tree's branch lengths measure.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.set_branch_lengths"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "meaning": {
+                  "$ref": "#/$defs/BranchLengths"
+                }
+              },
+              "required": [
+                "meaning"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "State the letters an alignment or sequence is written in. A file has\none companion, so in a multi-record FASTA or GenBank file this states\nthe alphabet of every record in the file, not only the open one.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "doc.set_alphabet"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "alphabet": {
+                  "$ref": "#/$defs/StatedAlphabet"
+                }
+              },
+              "required": [
+                "alphabet"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Add, change (same `id`) or, with no annotation, remove a clade\nannotation.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.annotate"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "annotation": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/CladeAnnotation"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "id": {
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "id"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Settle labels a reroot left on another group of tips (D11): each goes\nwhere `choice` says. One undo step; refused as a whole when one label\ncan't be placed. Given without `labels`, the session fills in every\nlabel displaced now, so the log always names them.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.place_label"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "choice": {
+                  "$ref": "#/$defs/LabelPlacement"
+                },
+                "labels": {
+                  "type": "array",
+                  "default": [],
+                  "items": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                  }
+                }
+              },
+              "required": [
+                "choice"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "A set of support values, such as bootstraps from another analysis:\none per internal node in preorder, as text.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.add_support"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "$ref": "#/$defs/SupportKind",
+                  "default": "unknown"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "source": {
+                  "description": "Where the values came from, for the record.",
+                  "type": "string",
+                  "default": ""
+                },
+                "values": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "name",
+                "values"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.remove_support"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.style"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "remove_supports": {
+                  "description": "Support sets removed on accepting Style; cancellation makes no edits.",
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "style": {
+                  "$ref": "#/$defs/TreeStyle"
+                }
+              },
+              "required": [
+                "style",
+                "remove_supports"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "A figure or other derived file written from a document, such as a\ntree as SVG. The result holds its hash; replay doesn't rewrite it.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "doc.export"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "format": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "format"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "A plugin operation that reads and writes files, such as an aligner.\n`inputs` and `outputs` are project-relative paths; the result holds\ntheir content hashes. The actor names the tool and its version.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tool.run"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "contributions": {
+                  "description": "The document edits this activity made, such as imported values.",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ActivityContributions"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "input_run": {
+                  "description": "The exact input this activity read, retained in its own run.",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ActivityInputRun"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "inputs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "operation": {
+                  "type": "string"
+                },
+                "outputs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "params": {
+                  "description": "The tool's own parameters. Basecraft's bookkeeping is in the typed\nfields below, never in parameter names.",
+                  "default": null
+                },
+                "plugin": {
+                  "type": "string"
+                },
+                "run": {
+                  "description": "The run folder whose `execution.json` says how the tool ran.",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/RunLink"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "plugin",
+                "operation",
+                "inputs",
+                "outputs"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "An atomic species-hypothesis edit against a workspace.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "delimitation.edit"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "edit": {
+                  "$ref": "#/$defs/DelimitationEdit"
+                }
+              },
+              "required": [
+                "edit"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "An atomic edit to the project's specimen and taxon metadata.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "metadata.edit"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "edit": {
+                  "$ref": "#/$defs/MetadataEdit"
+                }
+              },
+              "required": [
+                "edit"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "An atomic edit to a GenBank marker submission document.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "submission.edit"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "edit": {
+                  "$ref": "#/$defs/SubmissionEdit"
+                }
+              },
+              "required": [
+                "edit"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Initial review referencing an immutable record of drafts and biological events.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "doc.create_sanger_review"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "review": {
+                  "$ref": "#/$defs/ReviewRecord"
+                }
+              },
+              "required": [
+                "review"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "An explicit analysis continuation. Selection and decisions have their own operations.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "sanger.update"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "review": {
+                  "$ref": "#/$defs/ReviewRecord"
+                }
+              },
+              "required": [
+                "review"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Select a retained call set without copying its evidence.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "sanger.select"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "call_set": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "call_set"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "A decision addressed to an immutable Sanger call-set digest.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "sanger.review"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "call_set": {
+                  "type": "string"
+                },
+                "edit": {
+                  "$ref": "#/$defs/ReviewOp"
+                }
+              },
+              "required": [
+                "call_set",
+                "edit"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "A terminal job record, including failures and cancellation.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "job.finished"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "report": {
+                  "$ref": "#/$defs/JobRecord"
+                }
+              },
+              "required": [
+                "report"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Edits a plugin or agent offered for this document, as received. The\nentry's actor made the offer. Changes nothing; the edits applied\nfollow it, and [`Op::ProposalDecide`] says what was done with it.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "proposal.offer"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "base_revision": {
+                  "description": "The document revision the edits were made against.",
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                },
+                "operations": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/Op"
+                  }
+                },
+                "proposal": {
+                  "description": "A new id; the decision names it.",
+                  "type": "string"
+                },
+                "source": {
+                  "$ref": "#/$defs/ProposalSource"
+                }
+              },
+              "required": [
+                "proposal",
+                "source",
+                "base_revision",
+                "operations"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "What was done with an offer. Changes nothing; the entry's actor is\nwho decided, or on whose behalf a policy decided.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "proposal.decide"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "applied": {
+                  "description": "Log ids of the edits applied, in order.",
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "automatic": {
+                  "description": "No one reviewed the offer: basecraft's policy decided.",
+                  "type": "boolean"
+                },
+                "note": {
+                  "description": "Why, when something was left out or refused.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "outcome": {
+                  "$ref": "#/$defs/ProposalDecision"
+                },
+                "proposal": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "proposal",
+                "outcome",
+                "automatic",
+                "applied"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Undo the operation with log id `of`.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "history.undo"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "of": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "of"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Redo the operation with log id `of`.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "history.redo"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "of": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "of"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        }
+      ]
+    },
     "OpResult": {
       "type": "object",
       "properties": {
@@ -4070,6 +5817,48 @@
       "description": "A date at year, month or day precision",
       "type": "string",
       "pattern": "^[0-9]{4}(-[0-9]{2}(-[0-9]{2})?)?$"
+    },
+    "ProposalDecision": {
+      "description": "The decision on an offer.",
+      "oneOf": [
+        {
+          "description": "Every offered edit was applied as offered.",
+          "type": "string",
+          "const": "accepted"
+        },
+        {
+          "description": "Nothing was applied.",
+          "type": "string",
+          "const": "rejected"
+        },
+        {
+          "description": "Some offered edits were left out or changed before applying.",
+          "type": "string",
+          "const": "modified"
+        }
+      ]
+    },
+    "ProposalSource": {
+      "description": "Where offered edits came from, beside the entry's actor.",
+      "oneOf": [
+        {
+          "description": "A plugin run, by its run id.",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "run"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ]
+        }
+      ]
     },
     "Provenance": {
       "type": "object",

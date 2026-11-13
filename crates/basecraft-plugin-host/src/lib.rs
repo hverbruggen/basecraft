@@ -3,10 +3,9 @@
 //! Plugins run in owned processes and talk JSON-RPC over a Unix socket or
 //! authenticated Windows loopback connection.
 //! Documents reach them as sealed shared-memory Arrow buffers; they answer
-//! with proposed operations, which [`apply::apply_proposals`] maps onto the
-//! current document version and applies through the ops session.
+//! with proposed operations, which the ops session applies and records as a
+//! proposal (`Session::apply_sequence_proposals`).
 
-pub mod apply;
 pub mod compute;
 pub mod contract;
 mod delimitation_pipeline;

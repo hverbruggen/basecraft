@@ -6,7 +6,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
-use basecraft_protocol::{Actor, LogEntry, Op};
+use basecraft_protocol::{Actor, LogEntry, Op, ops::ProposalDecision};
 
 use crate::Result;
 
@@ -81,24 +81,7 @@ impl LogWriter {
             let file = OpenOptions::new().create(true).append(true).open(path)?;
             self.open = Some((month, file));
         }
-        let mut line = Vec::new();
-        for (offset, entry) in entries.iter().enumerate() {
-            let value = serde_json::to_value(entry)?;
-            let checksum = basecraft_io::hash_bytes(&serde_json::to_vec(&value)?);
-            let value = serde_json::to_value(basecraft_protocol::records::JournalEntry {
-                checksum,
-                sequence: self.sequence + offset as u64,
-                entry: value,
-            })?;
-            serde_json::to_writer(&mut line, &value)?;
-            line.push(b'\n');
-            if line.len() > 8 << 20 {
-                return Err(crate::Error::Limit {
-                    what: "operation journal batch".into(),
-                    limit: 8 << 20,
-                });
-            }
-        }
+        let line = encode(entries, self.sequence)?;
         if let Some((_, f)) = &mut self.open {
             // One write per line: with O_APPEND, a crash can't interleave
             // half lines.
@@ -155,6 +138,43 @@ impl LogWriter {
             self.sequence += entries.len() as u64;
         }
         Ok(())
+    }
+}
+
+/// The most bytes one journal batch may take.
+pub(crate) const BATCH_LIMIT: u64 = 8 << 20;
+
+/// `entries` as journal lines numbered from `sequence`, refused past
+/// [`BATCH_LIMIT`].
+fn encode(entries: &[LogEntry], sequence: u64) -> Result<Vec<u8>> {
+    let mut line = Vec::new();
+    for (offset, entry) in entries.iter().enumerate() {
+        let value = serde_json::to_value(entry)?;
+        let checksum = basecraft_io::hash_bytes(&serde_json::to_vec(&value)?);
+        let value = serde_json::to_value(basecraft_protocol::records::JournalEntry {
+            checksum,
+            sequence: sequence + offset as u64,
+            entry: value,
+        })?;
+        serde_json::to_writer(&mut line, &value)?;
+        line.push(b'\n');
+        if line.len() as u64 > BATCH_LIMIT {
+            return Err(crate::Error::Limit {
+                what: "operation journal batch".into(),
+                limit: BATCH_LIMIT,
+            });
+        }
+    }
+    Ok(line)
+}
+
+/// Whether `entries` fit in one journal batch. Counted with the widest
+/// sequence numbers, so a batch that fits here fits when written.
+pub(crate) fn fits_one_batch(entries: &[LogEntry]) -> Result<bool> {
+    match encode(entries, u64::MAX >> 1) {
+        Ok(_) => Ok(true),
+        Err(crate::Error::Limit { .. }) => Ok(false),
+        Err(error) => Err(error),
     }
 }
 
@@ -596,6 +616,68 @@ pub fn describe(op: &Op) -> String {
         Op::SangerUpdate { .. } => "Updated Sanger call sets and supporting evidence".into(),
         Op::SangerReview { edit, .. } => crate::sanger_review::describe(edit),
         Op::JobFinished { report } => format!("{} {:?}", report.method, report.status),
+        Op::ProposalOffer { operations, .. } => format!("Proposed {}", offered(operations)),
+        Op::ProposalDecide { .. } => format!("Proposal {}", decision(op, None)),
+    }
+}
+
+/// One History line for a proposal: who offered what, and what was decided.
+/// "basecraft.pyrodigal proposed 12 features; all accepted automatically".
+pub(crate) fn describe_proposal(actor: &Actor, offer: &Op, decide: Option<&Op>) -> String {
+    let Op::ProposalOffer { operations, .. } = offer else {
+        return describe(offer);
+    };
+    let who = match actor {
+        Actor::Plugin { id, .. } => id.clone(),
+        Actor::Tool { tool, .. } => tool.clone(),
+        Actor::Agent { model } => format!("Agent {model}"),
+        Actor::Script { client } => format!("Script {client}"),
+        Actor::Human { .. } => "You".into(),
+        Actor::External => "An outside change".into(),
+    };
+    let decided = decide.map_or_else(
+        || "not decided".into(),
+        |op| decision(op, Some(operations.len())),
+    );
+    format!("{who} proposed {}; {decided}", offered(operations))
+}
+
+/// "12 features" when every offered edit adds a feature, else "3 edits".
+fn offered(operations: &[Op]) -> String {
+    let n = operations.len();
+    let noun = if operations
+        .iter()
+        .all(|op| matches!(op, Op::FeatureAdd { .. }))
+    {
+        "feature"
+    } else {
+        "edit"
+    };
+    format!("{n} {noun}{}", if n == 1 { "" } else { "s" })
+}
+
+/// "all accepted automatically", "2 of 3 accepted", "rejected: why".
+fn decision(op: &Op, offered: Option<usize>) -> String {
+    let Op::ProposalDecide {
+        outcome,
+        automatic,
+        applied,
+        note,
+        ..
+    } = op
+    else {
+        return String::new();
+    };
+    let how = if *automatic { " automatically" } else { "" };
+    let text = match (outcome, offered) {
+        (ProposalDecision::Accepted, _) => format!("all accepted{how}"),
+        (ProposalDecision::Modified, Some(n)) => format!("{} of {n} accepted{how}", applied.len()),
+        (ProposalDecision::Modified, None) => format!("partly accepted{how}"),
+        (ProposalDecision::Rejected, _) => format!("rejected{how}"),
+    };
+    match note {
+        Some(note) => format!("{text} ({note})"),
+        None => text,
     }
 }
 
