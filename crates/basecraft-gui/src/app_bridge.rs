@@ -120,7 +120,6 @@ pub mod qobject {
         fn switch_project(
             self: Pin<&mut DocumentOpens>,
             drafts: bool,
-            tasks: bool,
             folder: &QString,
             current: &QString,
         ) -> QString;
@@ -481,16 +480,16 @@ impl qobject::DocumentOpens {
     fn quit(mut self: Pin<&mut Self>, drafts: bool) -> QString {
         quit_json(&self.as_mut().rust_mut().documents.quit(drafts))
     }
+    /// A running listed job, from a tab or not, refuses the switch first.
     fn switch_project(
         mut self: Pin<&mut Self>,
         drafts: bool,
-        tasks: bool,
         folder: &QString,
         current: &QString,
     ) -> QString {
         quit_json(&self.as_mut().rust_mut().documents.switch_project(
             drafts,
-            tasks,
+            crate::jobs::working(),
             folder.to_string(),
             &current.to_string(),
         ))

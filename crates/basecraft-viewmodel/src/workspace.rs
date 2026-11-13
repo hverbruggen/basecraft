@@ -346,9 +346,9 @@ impl Workspace {
     /// chosen. The open documents close first, with the same questions as
     /// quitting. Choosing the current project again closes nothing, and
     /// files opened without a project hold none, so they stay open. `tasks`
-    /// is true while a task outside the tabs (records, submission, a service
-    /// upload) works in the current project: the switch is refused before
-    /// any question, so no tab closes for nothing.
+    /// is true while a task works in the current project, such as a plugin
+    /// run from a tab or a records, submission or service task: the switch is
+    /// refused before any question, so no tab closes for nothing.
     pub fn switch_project(
         &mut self,
         drafts: bool,

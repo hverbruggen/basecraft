@@ -27,6 +27,7 @@ mod metadata_bridge;
 mod operations_bridge;
 mod plugins;
 mod provenance_bridge;
+mod release_check;
 mod sanger_bridge;
 mod settings_bridge;
 mod startup_trace;

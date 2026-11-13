@@ -87,14 +87,6 @@ AppFormDialog {
     AppButton { visible: !dialog.welcome; objectName: "contactDetails"; text: "Submitter details…"; onClicked: dialog.contactDetailsRequested() }
     Label { visible: !dialog.welcome; text: "Files, provenance and recovery"; font.bold: true }
     Label { visible: !dialog.welcome; text: "These policy defaults are reserved for recovery and provenance workflows. They do not create history for existing files."; wrapMode: Text.Wrap; Layout.fillWidth: true }
-    AppComboBox {
-        visible: !dialog.welcome
-        Kirigami.FormData.label: "Provenance policy:"
-        model: ["Portable companion", "Local only", "None"]
-        property var policies: ["portable", "local-only", "none"]
-        currentIndex: dialog.values.files ? policies.indexOf(dialog.values.files.provenance) : 0
-        onActivated: dialog.change("provenance", policies[currentIndex])
-    }
     AppCheckBox { visible: !dialog.welcome; text: "Enable unsaved-work recovery"; checked: dialog.values.files ? dialog.values.files.recovery : true; onToggled: dialog.change("recovery", checked) }
     Label { visible: !dialog.welcome; text: "Compute"; font.bold: true }
     PreferenceSpinBox { visible: !dialog.welcome; objectName: "localCpuThreads"; Kirigami.FormData.label: "CPU threads per task:"; from: 1; to: 65536; editable: true; value: dialog.values.compute ? dialog.values.compute.local_cpu_threads : 4; onValueModified: dialog.change("localCpuThreads", value) }

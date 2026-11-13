@@ -192,11 +192,10 @@ ApplicationWindow {
     }
     readonly property var applicationCommands: [findCommand, newSequenceCommand, addAnnotationCommand, openCommand, saveCommand, saveAsCommand, projectCommand, shortcutsCommand, aboutCommand, preferencesCommand, textRepresentationCommand, contextShortcutsCommand, learnCommand, exportSvgCommand, exportPngCommand, historyCommand, methodsCommand, showProvenanceCommand, verifyProvenanceCommand, packageCommand, recoverCommand, installedOperationsCommand].concat(ribbonCommands)
     // Another project closes the open documents first, asking as quitting does.
-    // A task outside the tabs still working in the old project refuses it first.
+    // A task still running in the old project, from a tab or not, refuses it first.
     function selectProject(path) {
         const chosen = preferences.select_project(path)
-        if (chosen.length) quitStep(JSON.parse(documentOpens.switch_project(!discardAuthoredOnQuit && !!documentRecord.item && documentRecord.item.unsavedDrafts().length > 0,
-            provenance.busy || submissionJobs.busy || zenodoJobs.busy || blastBackend.busy, chosen, shell.project_dir)))
+        if (chosen.length) quitStep(JSON.parse(documentOpens.switch_project(!discardAuthoredOnQuit && !!documentRecord.item && documentRecord.item.unsavedDrafts().length > 0, chosen, shell.project_dir)))
     }
     property bool preferencesReady: false
     AppSettings {

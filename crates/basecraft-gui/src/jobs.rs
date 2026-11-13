@@ -207,6 +207,15 @@ pub(crate) fn listed() -> Vec<Entry> {
     board().entries.clone()
 }
 
+/// Whether a listed job still runs: a plugin run or Sanger stage from a tab,
+/// or a records, submission or service task. Each holds its project.
+pub(crate) fn working() -> bool {
+    board()
+        .entries
+        .iter()
+        .any(|entry| matches!(entry.status, "running" | "cancelling"))
+}
+
 pub(crate) fn cancel(id: u64) {
     update(id, |entry| {
         if entry.status == "running" {
@@ -554,9 +563,11 @@ mod tests {
         let row = || listed().into_iter().find(|e| e.operation == label).unwrap();
         progress.recv_timeout(Duration::from_secs(5)).unwrap();
         assert_eq!((row().status, row().progress.as_str()), ("running", "half"));
+        assert!(working(), "a running listed job holds its project");
         cancel(row().id);
         assert!(work.cancelled(), "cancelling the row cancels the work");
         assert_eq!(row().status, "cancelling");
+        assert!(working(), "a cancelled job still runs until it returns");
         release.send(()).unwrap();
         queue.recv_timeout(Duration::from_secs(5)).unwrap()(&mut Probe::default());
         assert_eq!(row().status, "cancelled");

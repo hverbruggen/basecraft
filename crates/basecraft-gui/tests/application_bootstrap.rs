@@ -62,6 +62,8 @@ mod plugins;
 #[path = "../src/provenance_bridge.rs"]
 #[allow(unused_imports)] // harness=false omits the included module's #[test] bodies.
 mod provenance_bridge;
+#[path = "../src/release_check.rs"]
+mod release_check;
 #[path = "../src/sanger_bridge.rs"]
 mod sanger_bridge;
 #[path = "../src/settings_bridge.rs"]
@@ -457,6 +459,46 @@ fn application_starts_offscreen_and_draws_its_window() {
     assert!(shot.is_file(), "no window was drawn: {stderr}");
 }
 
+/// Quitting while the release check waits on a server that never answers:
+/// the window's teardown drops the check, which must end the request well
+/// before its 10 s timeout and leave the application to exit cleanly.
+fn release_check_cancels_at_quit() -> ! {
+    #[derive(Clone)]
+    struct Gone;
+    impl jobs::Owner<()> for Gone {
+        fn deliver(&self, _: impl FnOnce(std::pin::Pin<&mut ()>) + Send + 'static) -> bool {
+            false
+        }
+    }
+    let app = application::new(&["basecraft-gui".into()], true);
+    let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/latest", server.local_addr().unwrap());
+    let (connected, accepted) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let held = server.accept().unwrap();
+        connected.send(()).unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(30));
+        drop(held);
+    });
+    let check = release_check::ReleaseCheck::start(Gone, url, |_, _| {
+        panic!("a cancelled check delivered a reply")
+    })
+    .expect("release check started");
+    accepted
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the request reached the server");
+    let quit = std::time::Instant::now();
+    drop(check);
+    let waited = quit.elapsed();
+    assert!(
+        waited < std::time::Duration::from_secs(2),
+        "quitting waited {waited:?}"
+    );
+    drop(app);
+    println!("RELEASE_QUIT {}", waited.as_millis());
+    std::process::exit(0);
+}
+
 fn main() {
     if std::env::args().nth(1).as_deref() == Some("--app-starts") {
         application_starts_offscreen_and_draws_its_window();
@@ -471,6 +513,9 @@ fn main() {
             "application_bootstrap requires QT_QPA_PLATFORM=offscreen and QT_QPA_PLATFORMTHEME="
         );
         std::process::exit(1);
+    }
+    if std::env::args().nth(1).as_deref() == Some("--release-quit") {
+        release_check_cancels_at_quit();
     }
     if std::env::args().nth(1).as_deref() == Some("--ribbon-walk") {
         ribbon_walk(&std::env::args().nth(2).expect("document folder"));
@@ -555,6 +600,17 @@ fn main() {
             "isolated identity case {case} failed"
         );
     }
+    let quit = std::process::Command::new(std::env::current_exe().unwrap())
+        .arg("--release-quit")
+        .output()
+        .unwrap();
+    let quit_log = String::from_utf8_lossy(&quit.stdout);
+    assert!(
+        quit.status.success() && quit_log.contains("RELEASE_QUIT"),
+        "{quit_log}{}",
+        String::from_utf8_lossy(&quit.stderr)
+    );
+    println!("Quitting during a slow release check ended the request and exited cleanly");
     ribbon_journey();
     #[cfg(feature = "test-counters")]
     open_argv::spawn();

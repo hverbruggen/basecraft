@@ -21,6 +21,8 @@ pub mod qobject {
         /// Blocking; runs on a job thread.
         #[rust_name = "fetch_latest_release"]
         fn fetchLatestRelease(url: &QString) -> QString;
+        #[rust_name = "cancel_release_check"]
+        fn cancelReleaseCheck();
     }
     unsafe extern "RustQt" {
         #[qobject]
@@ -70,6 +72,7 @@ pub struct SettingsRust {
     recent_projects: QStringList,
     project_error: QString,
     project_picker: projects::PickerLocation,
+    release: Option<crate::release_check::ReleaseCheck>,
 }
 impl Default for SettingsRust {
     fn default() -> Self {
@@ -79,6 +82,7 @@ impl Default for SettingsRust {
             recent_projects: QStringList::default(),
             project_error: QString::default(),
             project_picker: projects::PickerLocation::default(),
+            release: None,
         }
     }
 }
@@ -186,9 +190,6 @@ fn change(key: &str, value: &serde_json::Value) -> Result<Change, String> {
             Change::RibbonHidden(serde_json::from_value(value.clone()).map_err(|e| e.to_string())?)
         }
         "resetCustomization" => Change::ResetCustomization,
-        "provenance" => {
-            Change::Provenance(serde_json::from_value(value.clone()).map_err(|e| e.to_string())?)
-        }
         "submitter" => Change::Submitter(Box::new(
             serde_json::from_value(value.clone()).map_err(|e| e.to_string())?,
         )),
@@ -233,7 +234,7 @@ impl qobject::AppSettings {
             .directory(&load_project_history().unwrap_or_default(), &home);
         QString::from(folder.to_string_lossy().as_ref())
     }
-    fn check_release(self: Pin<&mut Self>) {
+    fn check_release(mut self: Pin<&mut Self>) {
         let opted_in = serde_json::from_str::<Preferences>(&self.snapshot.to_string())
             .is_ok_and(|prefs| prefs.ui.release_notices);
         let platform = std::env::var("QT_QPA_PLATFORM").ok();
@@ -241,20 +242,16 @@ impl qobject::AppSettings {
         if !release::wanted(opted_in, platform.as_deref(), &args) {
             return;
         }
-        let url = QString::from(&release::url(env!("CARGO_PKG_REPOSITORY")));
-        // A failed start or request means no notice, as when offline.
-        let _ = crate::jobs::start(
+        let check = crate::release_check::ReleaseCheck::start(
             self.qt_thread(),
-            move |_| Ok(qobject::fetch_latest_release(&url).to_string()),
-            |this, response: Result<String, String>| {
-                if let Some(notice) = response
-                    .ok()
-                    .and_then(|body| release::notice(env!("CARGO_PKG_VERSION"), &body))
-                {
+            release::url(env!("CARGO_PKG_REPOSITORY")),
+            |this: Pin<&mut Self>, body| {
+                if let Some(notice) = release::notice(env!("CARGO_PKG_VERSION"), &body) {
                     this.release_available(QString::from(&notice));
                 }
             },
         );
+        self.as_mut().rust_mut().release = check;
     }
     fn dialog_folder(&self, project: &QString, document: &QString, file: &QString) -> QString {
         let home = AppPaths::discover().ok().and_then(|paths| paths.home);
@@ -352,8 +349,8 @@ mod tests {
         assert!(change("localCpuThreads", &serde_json::json!(-1)).is_err());
         assert!(change("localCpuThreads", &serde_json::json!(1.5)).is_err());
         assert!(change("localCpuThreads", &serde_json::json!(u64::MAX)).is_err());
-        assert!(change("provenance", &serde_json::json!("portable")).is_ok());
-        assert!(change("provenance", &serde_json::json!("unknown")).is_err());
+        // History placement is not a preference (user decision, 11 November).
+        assert!(change("provenance", &serde_json::json!("portable")).is_err());
         assert!(change("unknown", &serde_json::Value::Null).is_err());
     }
 }
