@@ -29,5 +29,5 @@ pub use provenance::{
 };
 pub use replay::{
     PublishedWithFailure, RecoveryCompletion, RecoveryMode, RecoveryPhase, ReplayReport,
-    prepare_recovery, recover, recover_verified_prefix, replay,
+    prepare_recovery, recover, recover_verified_prefix, recovery_sessions, replay,
 };

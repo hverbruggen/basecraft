@@ -54,7 +54,7 @@ fn edit_undo_redo_save_move_verify_and_report() {
         assert!(!recovery.exists());
         session.apply(doc, edit()).unwrap();
         assert_eq!(log::read_all(&recovery).unwrap().len(), 2);
-        assert!(!dir.path().join(".basecraft").exists());
+        assert!(recovery.starts_with(dir.path().join(".basecraft/recovery")));
         session.undo(doc).unwrap();
         session.redo(doc).unwrap();
         session.save(doc, None).unwrap();

@@ -265,36 +265,20 @@ impl qobject::AppProvenance {
     }
     fn recovery_sessions(mut self: Pin<&mut Self>) -> QString {
         let result = (|| -> Result<String, String> {
-            let root = basecraft_platform::paths::AppPaths::discover()
-                .map_err(|e| e.to_string())?
-                .state
-                .join("recovery");
-            let entries = match std::fs::read_dir(&root) {
-                Ok(entries) => entries,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    return Ok("[]".into());
-                }
-                Err(error) => return Err(error.to_string()),
-            };
+            // Recovery lives in each project's `.basecraft`: look in the
+            // chosen project and the recent ones.
+            let mut roots = crate::settings_bridge::load_project_history().unwrap_or_default();
+            roots.extend(crate::chosen_project::chosen()?.map(|p| p.root().to_path_buf()));
             let mut sessions = Vec::new();
-            for entry in entries {
-                let entry = entry.map_err(|e| e.to_string())?;
-                if !entry.file_type().map_err(|e| e.to_string())?.is_dir() {
-                    continue;
-                }
-                if !basecraft_ops::log::log_dir(&entry.path()).is_dir() {
-                    continue;
-                }
-                if sessions.len() >= 256 {
-                    return Err("More than 256 recovery sessions; inspect the recovery directory with the CLI.".into());
-                }
-                let name = basecraft_ops::log::read_all(&entry.path())
+            for folder in
+                basecraft_ops::records::recovery_sessions(&roots).map_err(|e| e.to_string())?
+            {
+                let name = basecraft_ops::log::read_all(&folder)
                     .ok()
                     .and_then(|entries| entries.first().map(|entry| entry.doc.clone()))
                     .unwrap_or_else(|| "Damaged journal; recovery will validate it".into());
-                let path = entry.path();
-                let path = path.to_str().ok_or("Recovery path cannot be represented in this GUI; use the CLI with the native path")?;
-                sessions.push(serde_json::json!({"path": path, "id": entry.file_name().to_string_lossy(), "name": name}));
+                let path = folder.to_str().ok_or("Recovery path cannot be represented in this GUI; use the CLI with the native path")?;
+                sessions.push(serde_json::json!({"path": path, "id": folder.file_name().unwrap_or_default().to_string_lossy(), "name": name}));
             }
             sessions.sort_by_key(|value| value["id"].as_str().unwrap_or_default().to_owned());
             serde_json::to_string(&sessions).map_err(|e| e.to_string())

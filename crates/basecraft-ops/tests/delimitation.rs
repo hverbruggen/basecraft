@@ -631,13 +631,19 @@ fn application_state_replay_handles_hidden_baseline_and_moved_original_folder() 
         )
         .unwrap();
     let recovery = edited.recovery_root().to_path_buf();
+    // Recovery moves with the folder; the originals are gone from where the
+    // journal recorded them.
     std::fs::rename(&root, parent.path().join("unavailable")).unwrap();
-    let report = records::replay(&recovery).unwrap();
+    let moved = parent
+        .path()
+        .join("unavailable")
+        .join(recovery.strip_prefix(&root).unwrap());
+    let report = records::replay(&moved).unwrap();
     assert!(report.ok(), "{:?}", report.problems);
     assert_ne!(report.unchecked, 0);
     let recovered = parent.path().join("recovered");
     // Recovery needs the unchanged original.
-    assert!(records::recover(&recovery, &recovered).is_err());
+    assert!(records::recover(&moved, &recovered).is_err());
     assert!(!recovered.exists());
     std::fs::rename(parent.path().join("unavailable"), &root).unwrap();
     let journal_before = basecraft_ops::log::read_all(&recovery).unwrap();

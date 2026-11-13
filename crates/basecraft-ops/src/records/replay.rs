@@ -409,6 +409,35 @@ fn safe_key(key: &str) -> bool {
             .all(|c| matches!(c, std::path::Component::Normal(_)))
 }
 
+/// Recovery sessions with a journal in the recovery folder of each of `roots`
+/// (a project, or the folder of a loose file), oldest first. At most 256.
+pub fn recovery_sessions(roots: &[std::path::PathBuf]) -> Result<Vec<std::path::PathBuf>> {
+    let mut sessions = Vec::new();
+    for root in roots {
+        let entries = match std::fs::read_dir(crate::session::recovery_folder(root)) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        };
+        for entry in entries {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() && crate::log::log_dir(&entry.path()).is_dir() {
+                sessions.push(entry.path());
+            }
+        }
+    }
+    if sessions.len() > 256 {
+        return Err(crate::Error::Limit {
+            what: "recovery sessions".into(),
+            limit: 256,
+        });
+    }
+    // Session folders are named by ULID, which sorts by time.
+    sessions.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+    sessions.dedup();
+    Ok(sessions)
+}
+
 /// Reconstruct unsaved documents into a new directory without modifying sources
 /// or executing any tools. Strict reading rejects torn/corrupt journals; the
 /// error names how many events [`recover_verified_prefix`] would keep.

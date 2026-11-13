@@ -184,6 +184,10 @@ pub struct Session {
     docs: Vec<Slot>,
     typing: Option<Typing>,
     store_objects: bool,
+    /// Set when the recovery folder could not be made; edits go unrecorded.
+    recovery_off: Option<String>,
+    /// Then the session's working copies live here until it closes.
+    scratch: Option<tempfile::TempDir>,
     /// The open undo group, if any, and the next group number.
     group: Option<u64>,
     next_group: u64,
@@ -221,6 +225,8 @@ impl Session {
             docs: Vec::new(),
             typing: None,
             store_objects: true,
+            recovery_off: None,
+            scratch: None,
             group: None,
             next_group: 1,
             group_docs: std::collections::BTreeMap::new(),
@@ -228,8 +234,9 @@ impl Session {
         }
     }
 
-    /// A viewing session whose first edit starts recovery in application state,
-    /// never next to the source. Discovery creates no directories.
+    /// A viewing session whose first edit starts recovery in
+    /// `<root>/.basecraft/recovery/<session>`: the project's folder, or the
+    /// folder of a loose file. Nothing is created before the first edit.
     pub fn recoverable(root: impl Into<PathBuf>) -> Result<Self> {
         let paths =
             basecraft_platform::paths::AppPaths::discover().map_err(|e| invalid(e.to_string()))?;
@@ -243,8 +250,9 @@ impl Session {
         let preferences = basecraft_platform::settings::SettingsStore::new(paths.preferences())
             .load()
             .map_err(|e| invalid(e.to_string()))?;
+        paths.remove_old_caches();
         let mut session = Self::new(root);
-        session.storage_root = paths.state.join("recovery").join(&session.id);
+        session.storage_root = recovery_folder(&session.root).join(&session.id);
         session.local_provenance_root = paths.state.join("provenance");
         session.provenance_policy = preferences.files.provenance;
         session.log = preferences
@@ -613,13 +621,25 @@ impl Session {
     // Operations.
 }
 
+/// Where recovery of unsaved edits lives for sessions rooted at `root`.
+pub fn recovery_folder(root: &Path) -> PathBuf {
+    root.join(".basecraft").join("recovery")
+}
+
 impl Drop for Session {
+    /// Nothing unsaved is left: remove this session's recovery, and the
+    /// folders above it when they hold nothing else.
     fn drop(&mut self) {
         if self.storage_root != self.root
             && !self.storage_root.join("pending-save.json").exists()
             && self.docs.iter().all(Slot::is_clean)
         {
             let _ = std::fs::remove_dir_all(&self.storage_root);
+            if self.storage_root.parent() == Some(&recovery_folder(&self.root)) {
+                let recovery = recovery_folder(&self.root);
+                let _ = std::fs::remove_dir(&recovery);
+                let _ = std::fs::remove_dir(recovery.parent().unwrap_or(&recovery));
+            }
         }
     }
 }

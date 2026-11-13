@@ -113,6 +113,7 @@ impl Session {
         if !self.tracked {
             return Ok(());
         }
+        self.start_recovery();
         let slot = self
             .docs
             .get(id.0)
@@ -200,20 +201,21 @@ impl Session {
         )?;
         let mut hashes = Vec::new();
         for (path, hash) in written {
-            let name = path.strip_prefix(stage.path()).map_err(|_| {
+            let name = within(&path, stage.path()).ok_or_else(|| {
                 crate::Error::Unsupported("Recovery writer escaped its staging folder".into())
             })?;
             let name = if Path::new(key).is_absolute() {
                 original.parent().expect("source parent").join(
-                    path.strip_prefix(target.parent().expect("checkpoint parent"))
-                        .map_err(|_| {
+                    within(&path, target.parent().expect("checkpoint parent")).ok_or_else(
+                        || {
                             crate::Error::Unsupported(
                                 "Recovery writer escaped its document folder".into(),
                             )
-                        })?,
+                        },
+                    )?,
                 )
             } else {
-                name.to_path_buf()
+                name
             };
             hashes.push((name.to_string_lossy().into_owned(), hash.clone()));
             std::fs::rename(&path, directory.join(hash.trim_start_matches("b3:")))?;
@@ -253,9 +255,38 @@ impl Session {
 
     pub fn recovery_warning(&self, id: DocId) -> Option<&str> {
         let slot = self.docs.get(id.0)?;
+        if let Some(message) = &self.recovery_off {
+            return Some(message);
+        }
         slot.recovery_changed.then_some(
             "The original changed on disk. Your current edits have been preserved in recovery; save them to a new file.",
         )
+    }
+
+    /// Make the recovery folder before the first edit is recorded. Recovery
+    /// lives only in the folder's `.basecraft`; where that cannot be written
+    /// (a read-only folder, or a `.basecraft` file of another program) the
+    /// session edits without recovery and says so. Working copies it still
+    /// needs go to a temporary folder that is removed when it closes.
+    pub(super) fn start_recovery(&mut self) {
+        if self.log.is_none() || self.storage_root == self.root || self.storage_root.is_dir() {
+            return;
+        }
+        if let Err(error) = recovery_directory(&self.storage_root) {
+            self.log = None;
+            self.store_objects = false;
+            self.recovery_off = Some(format!(
+                "Recovery is off: basecraft cannot write {} ({error}). Save to keep your edits.",
+                crate::session::recovery_folder(&self.root).display()
+            ));
+            if let Ok(scratch) = tempfile::Builder::new()
+                .prefix("basecraft-session-")
+                .tempdir()
+            {
+                self.storage_root = scratch.path().to_path_buf();
+                self.scratch = Some(scratch);
+            }
+        }
     }
 
     /// Cheap change token for readers; saves and job outcomes also invalidate a report.
@@ -410,6 +441,18 @@ impl Session {
     }
 }
 
+/// `path` relative to `base`. Writers may return another spelling of the same
+/// folder (on Windows a verbatim `\\?\` path, another drive-letter case or a
+/// short name), so a second try compares the canonical forms of both.
+fn within(path: &Path, base: &Path) -> Option<std::path::PathBuf> {
+    if let Ok(rest) = path.strip_prefix(base) {
+        return Some(rest.into());
+    }
+    let path = path.canonicalize().ok()?;
+    let base = base.canonicalize().ok()?;
+    path.strip_prefix(base).ok().map(Into::into)
+}
+
 /// Publish newly created directory entries before a synced journal can name them.
 fn recovery_directory(path: &Path) -> std::io::Result<()> {
     let missing: Vec<_> = path.ancestors().take_while(|dir| !dir.exists()).collect();
@@ -420,4 +463,38 @@ fn recovery_directory(path: &Path) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod within_tests {
+    use super::within;
+
+    #[test]
+    fn another_spelling_of_the_stage_is_inside_it() {
+        let root = tempfile::tempdir().unwrap();
+        let stage = root.path().join("stage");
+        std::fs::create_dir_all(stage.join("nested")).unwrap();
+        let file = stage.join("nested/a.fasta");
+        std::fs::write(&file, b">a\nA\n").unwrap();
+        // The form a writer that canonicalizes returns: verbatim on Windows.
+        let written = file.canonicalize().unwrap();
+        assert_eq!(
+            within(&written, &stage).unwrap(),
+            std::path::Path::new("nested/a.fasta")
+        );
+        #[cfg(unix)]
+        {
+            let alias = root.path().join("alias");
+            std::os::unix::fs::symlink(&stage, &alias).unwrap();
+            assert!(within(&alias.join("nested/a.fasta"), &stage).is_some());
+            assert!(within(&file, &alias).is_some());
+        }
+        #[cfg(windows)]
+        {
+            let text = stage.to_str().unwrap();
+            let other_case = format!("{}{}", &text[..1].to_lowercase(), &text[1..]);
+            assert!(within(&file, std::path::Path::new(&other_case)).is_some());
+        }
+        assert!(within(&root.path().join("outside.fasta"), &stage).is_none());
+    }
 }

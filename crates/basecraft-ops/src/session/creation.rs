@@ -105,6 +105,7 @@ impl Session {
         &mut self,
         review: &crate::sanger_review::SangerReview,
     ) -> Result<DocId> {
+        self.start_recovery();
         let key = format!("new-review-{}.json", self.next_id());
         let mut review = review.clone();
         let anchor = review.storage_anchor().to_path_buf();
