@@ -165,8 +165,6 @@ pub mod qobject {
             names: &QString,
         );
         #[qinvokable]
-        fn request(self: Pin<&mut DocumentOpens>, path: &QString) -> QString;
-        #[qinvokable]
         fn start(self: Pin<&mut DocumentOpens>, token: &QString);
         #[qinvokable]
         unsafe fn install(
