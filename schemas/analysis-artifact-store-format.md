@@ -192,16 +192,7 @@ Bindings select the hidden run for a primary/component basename. The run retains
 artifacts. A run's `runtime.json` is its job record (D28); clean inputs are
 referenced, not copied. Optional provenance None/LocalOnly remains
 separate from the minimum analysis/evidence record needed for these protections.
-Complete export is explicit: it materializes the dependency closure in a new
-package and provides a standard tree/alignment association when applicable.
-Saved companions select this path by their evidence content as well as hidden
-bindings. The entire immutable parent graph and declared upstream records are
-included: export assigns new relocation identities and recomputes parent checksums,
-materializes input references, and retains the original immutable JSON byte-for-byte
-as checked artifacts. A checked `export-map.json` artifact maps original IDs/hashes
-to export IDs. Source records remain untouched, and export verifies independently
-of the original source, hidden store and saved companion. Run/binding filenames
-are explicit UTF-8 JSON strings; unsupported native filenames are refused.
+Run/binding filenames are explicit UTF-8 JSON strings; unsupported native filenames are refused.
 
 Host input-I/O counters cover post-open source-identity hashing, execution-scratch
 reads and persistent generated-input copies. They exclude initial document loading,

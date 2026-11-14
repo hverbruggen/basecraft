@@ -197,9 +197,12 @@ These commands read saved files. They do not run tools or write records.
 | `basecraft methods FILE [--json] [--output DIR]` | Methods text; `--output` exports the report the History window exports |
 | `basecraft provenance inspect RESULT` | Recorded inputs, settings and steps of a saved result |
 | `basecraft provenance verify RESULT` | Check recorded hashes and ancestry |
-| `basecraft provenance package RESULT --output DIR` | Copy a verified result with its exact inputs |
 | `basecraft replay --project PROJECT` | Replay the project's operation log and check every step |
 | `basecraft recover SESSION --output DIR` | Rebuild an unsaved session into a new folder |
+
+To share work, copy or zip the project folder. Every file and record a result
+depends on is inside it, in its `.basecraft` folder, so the copy verifies and
+replays on its own.
 
 From Python, `basecraft.records.document_record(path)` and
 `basecraft.records.methods(path)` wrap `history --json` for saved files.
@@ -228,8 +231,7 @@ with Session("/path/to/project", writes=True) as session:
 Existing headless destinations and stale inspected revisions are refused.
 The output keeps the source hash, revision and selection mapping. Clean sources
 are referenced; unsaved source revisions retain their generated input bytes.
-`provenance verify` diagnoses changed or unavailable references, and
-`provenance package` materializes the exact available source for sharing.
+`provenance verify` diagnoses changed or unavailable references.
 
 Registered `basecraft.clade-alignment/extract@1` keeps selected `taxa` and leaves
 alignment columns unchanged. Its optional `selection_tree` input retains the

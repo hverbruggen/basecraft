@@ -693,7 +693,7 @@ fn visible_workspace_metadata_remains_read_only() {
 }
 
 #[test]
-fn combined_workspace_move_and_complete_export_keep_declared_source_evidence() {
+fn combined_workspace_keeps_declared_source_evidence() {
     crate::isolated_profile::isolate!();
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().join("working");
@@ -720,16 +720,12 @@ fn combined_workspace_move_and_complete_export_keep_declared_source_evidence() {
             .analyses
             .is_empty()
     );
-    let package = parent.path().join("package");
-    basecraft_ops::records::package(&canonical, &package, None).unwrap();
     drop(session);
-    std::fs::rename(&root, parent.path().join("moved")).unwrap();
-    let exported = package.join("combined.spart");
     assert_eq!(
-        basecraft_ops::records::verify(&exported, None).unwrap(),
+        basecraft_ops::records::verify(&canonical, None).unwrap(),
         Vec::<String>::new()
     );
-    let work = basecraft_ops::files::load_delimitation(&exported).unwrap();
+    let work = basecraft_ops::files::load_delimitation(&canonical).unwrap();
     assert_eq!(
         work.hypotheses
             .iter()

@@ -1,8 +1,8 @@
 //! One registry of current record examples, using the production wire types.
 use basecraft_protocol::{
-    export_records::*, input_records::*, installation_records::*, link_records::*,
-    metadata_records::*, publication_records::*, query_records::*, records::*, report_records::*,
-    sanger_records::*, submission_records::*,
+    input_records::*, installation_records::*, link_records::*, metadata_records::*,
+    publication_records::*, query_records::*, records::*, report_records::*, sanger_records::*,
+    submission_records::*,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use std::path::Path;
@@ -91,7 +91,6 @@ fn current_records_round_trip() {
         ("link-repair", encode::<AlignmentLinkRecovery>, true),
         ("link-guard", encode::<AlignmentLinkUnavailable>, true),
         ("link-", encode::<AlignmentLink>, false),
-        ("provenance-export-map", encode::<ProvenanceExportMap>, true),
         ("installation-index", encode::<InstallationIndex>, false),
         ("managed-plugin-runtime", encode::<Runtime>, false),
     ];

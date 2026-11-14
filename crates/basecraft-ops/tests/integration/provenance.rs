@@ -66,18 +66,11 @@ fn edit_undo_redo_save_move_verify_and_report() {
         );
     }
     assert!(!recovery.exists(), "clean close removes published recovery");
-    let exported = dir.path().join("package");
-    records::package(&file, &exported, None).unwrap();
-    let moved = exported.join("gene.fasta");
-    std::fs::remove_file(&file).unwrap();
-    std::fs::remove_dir_all(records::companion(&file)).unwrap();
-    assert_eq!(records::verify(&moved, None).unwrap(), Vec::<String>::new());
+    assert_eq!(records::verify(&file, None).unwrap(), Vec::<String>::new());
     // Reports are written only on request, never into the history folder.
-    let bundle = records::companion(&moved);
-    assert!(!bundle.join("reports").exists());
-    assert!(bundle.join("README.md").is_file());
+    assert!(!records::companion(&file).join("reports").exists());
     let reports = dir.path().join("reports-out");
-    let report = records::DocumentRecord::saved_report(&moved, None).unwrap();
+    let report = records::DocumentRecord::saved_report(&file, None).unwrap();
     records::ReportExt::export(&report, &reports).unwrap();
     assert!(
         std::fs::read_to_string(reports.join("methods.generated.md"))
@@ -238,7 +231,7 @@ fn save_as_does_not_disable_original_conflict_detection() {
 }
 
 #[test]
-fn live_annotation_sidecar_is_verified_and_packaged() {
+fn live_annotation_sidecar_is_verified() {
     crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("tree.nwk");
@@ -256,16 +249,12 @@ fn live_annotation_sidecar_is_verified_and_packaged() {
     session.save(doc, None).unwrap();
     let published = records::inspect(&file, None).unwrap();
     assert_eq!(published.outputs.len(), 2);
-    let package = dir.path().join("package");
-    records::package(&file, &package, None).unwrap();
-    // The companion is published by name and kept where companions live:
-    // the package's own .basecraft, and the original's.
+    // The companion is published by name.
     let companion = basecraft_ops::files::companion_path(None, &file);
     assert_eq!(
         companion.file_name().unwrap().to_string_lossy(),
         published.outputs[1].logical_name
     );
-    assert!(basecraft_ops::files::companion_path(None, &package.join("tree.nwk")).is_file());
     std::fs::write(companion, "{}").unwrap();
     assert_ne!(records::verify(&file, None).unwrap(), Vec::<String>::new());
 }

@@ -63,25 +63,9 @@ fn relinking_saved_copy_repairs_the_effective_reference() {
 }
 
 #[test]
-fn complete_export_of_saved_copy_is_independent() {
+fn in_place_edit_of_an_analysed_file_keeps_its_history() {
     crate::isolated_profile::isolate!();
-    let (dir, mut session, _, source, first) = setup();
-    let copied = dir.path().join("copy.afa");
-    save_as(&mut session, &first, &copied);
-    let package = dir.path().join("portable");
-    records::package(&copied, &package, None).expect("Save As result must support complete export");
-    std::fs::remove_file(&source).unwrap();
-    let issues = records::verify(&package.join("copy.afa"), None).unwrap();
-    assert!(
-        issues.is_empty(),
-        "complete export still depends on original files: {issues:?}"
-    );
-}
-
-#[test]
-fn complete_export_after_in_place_edit_keeps_history() {
-    crate::isolated_profile::isolate!();
-    let (dir, mut session, _, source, first) = setup();
+    let (_dir, mut session, _, _, first) = setup();
     let doc = session.open(&first).unwrap();
     session
         .apply(
@@ -96,15 +80,6 @@ fn complete_export_after_in_place_edit_keeps_history() {
         .unwrap();
     session.save(doc, None).unwrap();
     assert!(records::verify(&first, None).unwrap().is_empty());
-    let package = dir.path().join("portable");
-    records::package(&first, &package, None)
-        .expect("edited analysis result must support complete export");
-    std::fs::remove_file(&source).unwrap();
-    let issues = records::verify(&package.join("first.afa"), None).unwrap();
-    assert!(
-        issues.is_empty(),
-        "complete export lost evidence: {issues:?}"
-    );
 }
 
 #[test]

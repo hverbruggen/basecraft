@@ -54,7 +54,7 @@ fn files_inside_and_outside_the_chosen_project() {
 }
 
 #[test]
-fn a_project_file_packages_with_its_history() {
+fn a_project_file_keeps_its_history_in_the_project() {
     crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let chosen = root.path().join("project");
@@ -65,11 +65,8 @@ fn a_project_file_packages_with_its_history() {
     let project = Project::new(&chosen).unwrap();
     let mut session = Session::new(&chosen).in_project(Some(project.clone()));
     edit_and_save(&mut session, &file);
-    let package = root.path().join("package");
-    records::package(&file, &package, Some(&project)).unwrap();
-    let copied = package.join("gene.fasta");
     assert_eq!(
-        records::verify(&copied, None).unwrap(),
+        records::verify(&file, Some(&project)).unwrap(),
         Vec::<String>::new()
     );
     // Without the project, the reader says where else to look.

@@ -219,30 +219,6 @@ managed-plugin-runtime-serializer-empty-maps.json
 managed-plugin-runtime-serializer-populated.json
   438 bytes; SHA256 88163aca4682216b5bde247b111e2eae39a8c9acd1e7a11d5f3cc249e896b4b3
 
-RP11 provenance-export-map-{empty,single,shared-ancestry}.json were captured
-from the unchanged original input_evidence::export_history writer by its private
-export_record_format_tests child module, before any export-map type substitution.
-These are raw retained content-addressed artifact bytes, without normalization,
-including generated nonpersonal ULIDs, original byte hashes, recursively sorted
-Value keys, ordered rows, pretty whitespace and no terminal newline.
-
-Empty is a helper-level control; normal package workflows have a root. Single
-archives one synthetic publication. Shared ancestry covers two roots sharing a
-parent in one owner and a distinct same-id publication in another canonical
-owner; traversal order is the original LIFO postorder. Accepted source records
-contain Unicode/escaping and noncanonical raw whitespace, archived unchanged.
-Publication currently rejects unknown fields; its rejection is tested rather
-than claiming unknown publication extensions were archived successfully.
-
-Fresh writer runs compare full bytes and retained hash/size/path to the original
-sorted-Value recipe, with old identities/topology and original byte hashes from
-synthetic inputs and generated identities from separately returned relocated
-publications/parents. The map under test never supplies oracle identities.
-The frozen examples retain one original run's random identities; fresh runs are
-not normalized to match those identities and ordinary tests never update them.
-Private capture source/input manifests and fault observations accompany the
-task handoff. No new production decoder or compatibility policy is implied.
-
 SubmittedInput original core-owner captures (WF-0131, Phase A1)
 --------------------------------------------------------------
 submitted-input-{referenced,referenced-upstream,generated,generated-upstream,

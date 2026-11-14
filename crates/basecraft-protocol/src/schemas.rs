@@ -7,10 +7,10 @@ use schemars::Schema;
 use serde_json::json;
 
 use crate::{
-    companion_records, delimitation, distance_records, export_records, input_records,
-    installation_records, link_records, metadata, metadata_records, operation, plugin,
-    producer_records, provenance, publication_records, query_records, records, report_records,
-    sanderson_records, sanger, sanger_records, submission, submission_records,
+    companion_records, delimitation, distance_records, input_records, installation_records,
+    link_records, metadata, metadata_records, operation, plugin, producer_records, provenance,
+    publication_records, query_records, records, report_records, sanderson_records, sanger,
+    sanger_records, submission, submission_records,
 };
 
 macro_rules! schemas {
@@ -96,7 +96,6 @@ schemas! {
     "pending-save" => records::PendingSave,
     "recovery-integrity-error" => records::RecoveryIntegrityError,
     "result-binding" => records::ResultBinding,
-    "provenance-export-map" => export_records::ProvenanceExportMap,
     "provenance-publication" => provenance::Publication,
     "provenance-latest" => provenance::LatestRecord,
     "operation-contract" => operation::OperationContract,

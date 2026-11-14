@@ -226,33 +226,9 @@ fn assert_reopened_completion(workspace: &std::path::Path, run_id: &str, hypothe
             .count(),
         1
     );
-    let portable = workspace.parent().unwrap().join("portable-completion");
-    records::package(workspace, &portable, None).unwrap();
-    let portable_result = portable.join(workspace.file_name().unwrap());
     assert_eq!(
-        records::verify(&portable_result, None).unwrap(),
+        records::verify(workspace, None).unwrap(),
         Vec::<String>::new()
-    );
-    let publication = records::inspect(&portable_result, None).unwrap();
-    assert_eq!(
-        publication
-            .events
-            .iter()
-            .filter(|event| matches!(&event.op,
-        basecraft_protocol::Op::JobFinished { report } if report.id == run_id
-            && report.status == basecraft_protocol::records::JobStatus::Completed))
-            .count(),
-        1
-    );
-    let portable_record =
-        basecraft_ops::records::DocumentRecord::from_file(&portable_result, None, None).unwrap();
-    assert!(
-        portable_record
-            .report()
-            .unwrap()
-            .history
-            .iter()
-            .any(|row| row.id == finished[0].id)
     );
 }
 

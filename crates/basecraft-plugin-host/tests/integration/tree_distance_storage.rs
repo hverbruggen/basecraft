@@ -24,7 +24,7 @@ fn matrix(session: &Session, doc: basecraft_ops::DocId, model: &str, output: &st
 }
 
 #[test]
-fn matrix_reference_generated_failure_move_and_export_use_the_common_store() {
+fn matrix_reference_generated_failure_and_move_use_the_common_store() {
     crate::isolated_profile::isolate!();
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().join("working");
@@ -141,14 +141,6 @@ fn matrix_reference_generated_failure_move_and_export_use_the_common_store() {
         records::verify(&output, None).unwrap(),
         Vec::<String>::new()
     );
-    let package = parent.path().join("export");
-    records::package(&output, &package, None).unwrap();
-    std::fs::rename(&moved, parent.path().join("unavailable")).unwrap();
-    assert_eq!(
-        records::verify(&package.join("matrix.tsv"), None).unwrap(),
-        Vec::<String>::new()
-    );
-    println!("matrix-export: {:?}", common::names(&package));
 }
 
 #[test]
