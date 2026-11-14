@@ -283,9 +283,7 @@ mod tests {
 
     #[test]
     fn actual_json_scope_digest_retains_all_identity_bits_and_variant() {
-        let Some(root) = isolated_identity_profile::enter(
-            "session::save_decision::tests::actual_json_scope_digest_retains_all_identity_bits_and_variant",
-        ) else {
+        let Some(root) = isolated_identity_profile::enter() else {
             return;
         };
         let (session, doc, _, parent) = recovery_session(&root);
@@ -351,9 +349,7 @@ mod tests {
 
     #[test]
     fn changed_full_parent_identity_spends_receipt_and_returns_stale_scope() {
-        let Some(root) = isolated_identity_profile::enter(
-            "session::save_decision::tests::changed_full_parent_identity_spends_receipt_and_returns_stale_scope",
-        ) else {
+        let Some(root) = isolated_identity_profile::enter() else {
             return;
         };
         let (mut session, doc, target, parent) = recovery_session(&root);

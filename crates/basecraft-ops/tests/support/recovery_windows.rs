@@ -5,16 +5,17 @@ use std::{
     process::Command,
 };
 
-pub fn enter(name: &str) -> Option<PathBuf> {
-    if std::env::var("BASECRAFT_ISOLATED_CASE").as_deref() == Ok(name) {
+pub fn enter() -> Option<PathBuf> {
+    let name = crate::isolated_profile::test_name();
+    if std::env::var("BASECRAFT_ISOLATED_CASE").as_deref() == Ok(name.as_str()) {
         return Some(PathBuf::from(
             std::env::var_os("BASECRAFT_ISOLATED_ROOT").unwrap(),
         ));
     }
     let root = tempfile::tempdir().unwrap();
     let output = Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", name, "--ignored", "--nocapture"])
-        .env("BASECRAFT_ISOLATED_CASE", name)
+        .args(["--exact", &name, "--ignored", "--nocapture"])
+        .env("BASECRAFT_ISOLATED_CASE", &name)
         .env("BASECRAFT_ISOLATED_ROOT", root.path())
         .env("BASECRAFT_PROFILE_DIR", root.path().join("profile"))
         .env("BASECRAFT_STATE_DIR", root.path().join("profile/state"))

@@ -103,7 +103,7 @@ qml-test:
 
 # Replay tests for every operation type.
 replay:
-    python3 tools/isolated_tests.py -p basecraft-ops --test replay
+    python3 tools/isolated_tests.py -p basecraft-ops --test integration -- replay::
 
 # Warm-cache headless timings. Run on the build host under its shared lock.
 bench *args:

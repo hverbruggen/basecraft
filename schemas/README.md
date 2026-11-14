@@ -18,7 +18,7 @@ the field; `records::decode` reads it, refuses a record that names no version (r
 D15), and when a record does not fit this build the error names the version that wrote
 it and the version reading it. Replay writes a journal's saves again as the version
 that logged them. The records' own format versions are unchanged: the stamp marks this
-change, and the generations in `tests/writer_record_formats.rs` count goldens only. Lists inside a run
+change, and the generations in `tests/integration/writer_record_formats.rs` count goldens only. Lists inside a run
 or report folder (`validated-artifacts.json`, `stages.json`, `source-map.json`,
 `citations.json`), plugin data and plain values are written unchanged; the run's or
 report's own record names the writer. A record written by a later basecraft opens
@@ -276,7 +276,7 @@ are not each an independently stored record.
 
 ## Record and writer checks
 
-`basecraft-protocol/tests/record_formats.rs` maps current `records-v1` fixture
+`basecraft-protocol/tests/integration/record_formats.rs` maps current `records-v1` fixture
 prefixes to their production wire types and checks exact serialization, including
 field order, sorting, omitted fields, nulls and trailing newlines. Fingerprint
 JSONL examples are checked by the protocol fingerprint test. Current SubmittedInput goldens cover

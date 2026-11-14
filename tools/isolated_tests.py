@@ -4,7 +4,8 @@
 Tests register analysis stores in the profile. A shared profile lets one test's
 deleted temporary store change another test's save checks, so each test gets
 its own profile, state and cache folders. Arguments select cargo test targets
-(default: the whole workspace).
+(default: the whole workspace); names after `--` keep only the tests whose
+names contain one of them, for example `-p basecraft-ops --test integration -- replay::`.
 """
 from concurrent.futures import ThreadPoolExecutor
 import json
@@ -26,10 +27,12 @@ def executables(extra):
             yield Path(row["executable"]), Path(row["manifest_path"]).parent
 
 
-def cases(executable, crate):
-    listed = subprocess.run([executable, "--list", "--format", "terse"], cwd=crate, text=True,
-                            capture_output=True)
+def cases(executable, crate, filters):
+    listed = subprocess.run([executable, "--list", "--format", "terse", *filters], cwd=crate,
+                            text=True, capture_output=True)
     names = [line.removesuffix(": test") for line in listed.stdout.splitlines() if line.endswith(": test")]
+    if filters:
+        return [(executable, crate, name) for name in names]
     # Custom harnesses do not list cases; run the whole binary once.
     return [(executable, crate, name) for name in names] if listed.returncode == 0 and names \
         else [(executable, crate, None)]
@@ -47,7 +50,13 @@ def run(case):
 
 
 def main():
-    all_cases = [case for binary in executables(sys.argv[1:]) for case in cases(*binary)]
+    args = sys.argv[1:]
+    selection, filters = (args[:args.index("--")], args[args.index("--") + 1:]) if "--" in args \
+        else (args, [])
+    all_cases = [case for binary in executables(selection) for case in cases(*binary, filters)]
+    if filters and not all_cases:
+        print("no test matches", *filters)
+        return 1
     failed = []
     # Timing-sensitive lock tests need the CPU share the container really has.
     workers = int(os.environ.get("CARGO_BUILD_JOBS") or os.cpu_count() or 4)

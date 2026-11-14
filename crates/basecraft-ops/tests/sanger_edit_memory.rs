@@ -8,8 +8,7 @@ mod sanger_fixture;
 
 #[test]
 fn two_hundred_selections_retain_less_than_one_mib() {
-    let Some(root) = isolated_profile::enter("two_hundred_selections_retain_less_than_one_mib")
-    else {
+    let Some(root) = isolated_profile::enter() else {
         return;
     };
     let path = sanger_fixture::copy_to(&root.join("fixture"), "multi.json");
