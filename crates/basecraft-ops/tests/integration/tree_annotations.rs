@@ -25,7 +25,7 @@ fn display_names_preserve_support_tip_identity_links_and_replay() {
         let link = std::fs::read(basecraft_ops::records::sidecar(&path)).unwrap();
         let snapshot = AlignmentLink::read(&path)
             .unwrap()
-            .checked_snapshot(&path, session.tree(doc).unwrap())
+            .checked_alignment(&path, session.tree(doc).unwrap())
             .unwrap();
         let snapshot_bytes = std::fs::read(&snapshot).unwrap();
         let scientific = session.tree(doc).unwrap().to_newick();

@@ -1931,33 +1931,23 @@ pub fn package(
             project, result,
         ))?
     {
-        let link = crate::records::links::AlignmentLink::read_in(project, result)?;
-        let input_path = link.checked_snapshot(result, &tree.doc)?;
+        let (link, input_path) =
+            crate::records::links::AlignmentLink::checked_in(project, result, &tree.doc)?;
         let indexed = std::sync::Arc::new(basecraft_io::fasta::IndexedFasta::open(&input_path)?);
         let alignment = basecraft_docs::AlignmentDoc::from_fasta("Exported input", &indexed);
-        let mut canonical = tempfile::Builder::new()
-            .suffix(".afa")
-            .tempfile_in(staging.path())?;
-        crate::files::write_alignment(&alignment, canonical.as_file_mut())?;
-        canonical.as_file().sync_all()?;
-        let source_artifact = publication
-            .inputs
-            .first()
-            .ok_or_else(|| invalid("tree export has no source"))?;
-        let source_path = target_bundle.join(
-            source_artifact
-                .retained
-                .as_ref()
-                .ok_or_else(|| invalid("exported source is not retained"))?,
-        );
-        let paths = crate::records::links::AlignmentLink::create(
+        // The package carries the alignment the tree is linked to, with the
+        // copy's other records.
+        let canonical =
+            crate::project::Project::document_record_with(None, &copied, ".alignment.afa");
+        crate::files::companion_folder(&canonical)?;
+        basecraft_io::write_atomic(&canonical, |w| crate::files::write_alignment(&alignment, w))?;
+        let mut paths = crate::records::links::AlignmentLink::create(
             &copied,
-            &source_path,
-            canonical.path(),
+            &canonical,
             link.alignment_version,
             link.inferred,
-            None,
         )?;
+        paths.push(canonical);
         for path in paths {
             publication
                 .outputs

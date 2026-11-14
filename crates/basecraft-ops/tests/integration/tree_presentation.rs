@@ -100,13 +100,9 @@ fn changing_view_link_preserves_origin_and_save_as_rebases_both_links() {
     std::fs::write(&tree_path, "(a,b);").unwrap();
     let mut session = Session::new(root);
     let doc = session.open(&tree_path).unwrap();
-    AlignmentLink::create(&tree_path, &source, &source, 7, true, None).unwrap();
+    AlignmentLink::create(&tree_path, &source, 7, true).unwrap();
     let origin_bytes = std::fs::read(basecraft_ops::records::sidecar(&tree_path)).unwrap();
     let origin = AlignmentLink::read(&tree_path).unwrap();
-    let snapshot = origin
-        .checked_snapshot(&tree_path, session.tree(doc).unwrap())
-        .unwrap();
-    let snapshot_bytes = std::fs::read(&snapshot).unwrap();
     AlignmentLink::associate(&tree_path, session.tree(doc).unwrap(), &other).unwrap();
     let view = AlignmentLink::read_view(&tree_path).unwrap();
     assert_eq!(view.source, other);
@@ -115,7 +111,6 @@ fn changing_view_link_preserves_origin_and_save_as_rebases_both_links() {
         origin_bytes,
         std::fs::read(basecraft_ops::records::sidecar(&tree_path)).unwrap()
     );
-    assert_eq!(snapshot_bytes, std::fs::read(&snapshot).unwrap());
     let invalid = root.join("invalid.afa");
     std::fs::write(&invalid, ">a\nAC\n>x\nAT\n").unwrap();
     assert!(AlignmentLink::associate(&tree_path, session.tree(doc).unwrap(), &invalid).is_err());
@@ -126,19 +121,20 @@ fn changing_view_link_preserves_origin_and_save_as_rebases_both_links() {
     let copied_origin = AlignmentLink::read(&output).unwrap();
     let copied_view = AlignmentLink::read_view(&output).unwrap();
     assert_eq!(copied_origin.source, source);
-    assert_eq!(copied_origin.snapshot_hash, origin.snapshot_hash);
+    assert_eq!(copied_origin.source_hash, origin.source_hash);
     assert_eq!(copied_origin.alignment_version, 7);
     assert_eq!(copied_view.source, other);
     assert!(
         copied_origin
-            .checked_snapshot(&output, session.tree(doc).unwrap())
+            .checked_alignment(&output, session.tree(doc).unwrap())
             .is_ok()
     );
     assert!(
         copied_view
-            .checked_snapshot(&output, session.tree(doc).unwrap())
+            .checked_alignment(&output, session.tree(doc).unwrap())
             .is_ok()
     );
+    // No copy is kept: a removed file is missing, a rewritten one changed.
     std::fs::remove_file(&other).unwrap();
     assert!(
         copied_view
@@ -147,16 +143,15 @@ fn changing_view_link_preserves_origin_and_save_as_rebases_both_links() {
     );
     assert!(
         copied_view
-            .checked_snapshot(&output, session.tree(doc).unwrap())
-            .is_ok()
+            .checked_alignment(&output, session.tree(doc).unwrap())
+            .is_err()
     );
     std::fs::write(&source, ">a\nGG\n>b\nGT\n").unwrap();
     assert!(
         copied_origin
             .status(&output, session.tree(doc).unwrap())
-            .contains("source changed")
+            .contains("changed since it was linked")
     );
-    assert_eq!(std::fs::read(&snapshot).unwrap(), snapshot_bytes);
     assert!(basecraft_ops::records::replay(root).unwrap().ok());
 }
 
@@ -171,7 +166,7 @@ fn portable_links_and_corrupt_view_never_fall_back_to_scientific_input() {
     std::fs::write(&source, ">a\nAC\n>b\nAT\n").unwrap();
     std::fs::write(&tree_path, "(a,b);").unwrap();
     let tree = files::load_tree(&tree_path).unwrap().doc;
-    AlignmentLink::create(&tree_path, &source, &source, 0, true, None).unwrap();
+    AlignmentLink::create(&tree_path, &source, 0, true).unwrap();
     let value: serde_json::Value = serde_json::from_slice(
         &std::fs::read(basecraft_ops::records::sidecar(&tree_path)).unwrap(),
     )
@@ -183,7 +178,7 @@ fn portable_links_and_corrupt_view_never_fall_back_to_scientific_input() {
     let link = AlignmentLink::read(&tree_path).unwrap();
     assert_eq!(link.source, moved.join("source.afa"));
     assert!(!link.source_changed());
-    assert!(link.checked_snapshot(&tree_path, &tree).is_ok());
+    assert!(link.checked_alignment(&tree_path, &tree).is_ok());
     std::fs::write(basecraft_ops::records::view_sidecar(&tree_path), "damaged").unwrap();
     assert!(AlignmentLink::read_view(&tree_path).is_err());
     assert!(AlignmentLink::read(&tree_path).is_ok());

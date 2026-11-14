@@ -875,7 +875,7 @@
     125,
     10
   ],
-  "note": "Save As association recovery: previous entries and intended metadata; snapshots are retained separately",
+  "note": "Save As association recovery: previous entries and intended metadata",
   "previous_origin": {
     "entry": "symlink",
     "value": "missing ü.json"

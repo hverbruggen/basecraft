@@ -213,7 +213,7 @@ fn ordinary_tree_and_forest_routes_keep_only_scientific_results_visible() {
             let link = basecraft_ops::records::AlignmentLink::read(&tree).unwrap();
             assert_eq!(link.source, source);
             assert!(
-                link.checked_snapshot(&tree, session.tree(id).unwrap())
+                link.checked_alignment(&tree, session.tree(id).unwrap())
                     .is_ok()
             );
             session.save(id, None).unwrap();

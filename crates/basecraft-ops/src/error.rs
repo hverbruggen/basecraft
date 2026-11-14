@@ -25,6 +25,12 @@ pub enum Error {
     StaleRevision { id: crate::DocId, revision: u64 },
     #[error("{path} changed on disk")]
     ChangedOnDisk { path: PathBuf },
+    /// D25: the alignment linked to a tree is not the file that was linked.
+    #[error(
+        "{} changed since it was linked to this tree. Link alignment again to use the current file, or choose another alignment",
+        path.display()
+    )]
+    AlignmentChanged { path: PathBuf },
     #[error("{path} was not found")]
     NotFound { path: PathBuf },
     #[error("{path}: {detail}")]
@@ -122,7 +128,7 @@ impl Error {
         use basecraft_protocol::operation::OperationErrorCode as Code;
         match self {
             Self::StaleRevision { .. } => Code::StaleRevision,
-            Self::ChangedOnDisk { .. } => Code::ChangedOnDisk,
+            Self::ChangedOnDisk { .. } | Self::AlignmentChanged { .. } => Code::ChangedOnDisk,
             Self::NotFound { .. } | Self::FolderUnavailable { .. } | Self::NoMetadata => {
                 Code::NotFound
             }

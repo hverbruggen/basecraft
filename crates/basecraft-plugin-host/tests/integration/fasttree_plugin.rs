@@ -95,7 +95,7 @@ fn builds_a_tree_with_fasttree_and_logs_the_run() {
     let link = basecraft_ops::records::AlignmentLink::read(&output).unwrap();
     assert!(link.inferred);
     assert_eq!(link.source, file);
-    assert!(link.checked_snapshot(&output, t).is_ok());
+    assert!(link.checked_alignment(&output, t).is_ok());
 
     let runs = common::tool_run_events(&session, doc);
     assert_eq!(runs.len(), 1);

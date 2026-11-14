@@ -19,7 +19,7 @@ fn save_as_replaces_destination_view_association() {
     write_alignment(&other, "CC");
     for tree in [&input, &output] {
         std::fs::write(tree, "(a,b);").unwrap();
-        AlignmentLink::create(tree, &source, &source, 3, true, None).unwrap();
+        AlignmentLink::create(tree, &source, 3, true).unwrap();
     }
     let mut session = Session::new(root);
     let doc = session.open(&input).unwrap();
@@ -27,7 +27,7 @@ fn save_as_replaces_destination_view_association() {
     session.save(doc, Some(&output)).unwrap();
     let view = AlignmentLink::read_view(&output).unwrap();
     assert!(
-        view.checked_snapshot(&output, session.tree(doc).unwrap())
+        view.checked_alignment(&output, session.tree(doc).unwrap())
             .is_ok()
     );
     assert_eq!(
@@ -48,28 +48,25 @@ fn failed_save_as_does_not_expose_origin_as_explicit_view() {
     write_alignment(&source, "AA");
     write_alignment(&other, "CC");
     std::fs::write(&input, "(a,b);").unwrap();
-    AlignmentLink::create(&input, &source, &source, 3, true, None).unwrap();
+    AlignmentLink::create(&input, &source, 3, true).unwrap();
     let mut session = Session::new(root);
     let doc = session.open(&input).unwrap();
     AlignmentLink::associate(&input, session.tree(doc).unwrap(), &other).unwrap();
-    let view = AlignmentLink::read_view(&input).unwrap();
-    let snapshot = view
-        .checked_snapshot(&input, session.tree(doc).unwrap())
-        .unwrap();
-    std::fs::write(snapshot, "damaged").unwrap();
+    // The output's companion cannot be written, so Save As stops part way.
+    std::fs::create_dir_all(files::companion_path(None, &output)).unwrap();
     let error = session.save(doc, Some(&output)).unwrap_err();
     eprintln!("save error: {error}");
     assert!(
         AlignmentLink::read_view(&input)
             .unwrap()
-            .checked_snapshot(&input, session.tree(doc).unwrap())
-            .is_err()
+            .checked_alignment(&input, session.tree(doc).unwrap())
+            .is_ok()
     );
     if output.exists() {
         let reopened = files::load_tree(&output).unwrap().doc;
         assert!(
             AlignmentLink::read_view(&output)
-                .and_then(|link| link.checked_snapshot(&output, &reopened))
+                .and_then(|link| link.checked_alignment(&output, &reopened))
                 .is_err(),
             "partial Save As must not silently substitute scientific origin for the damaged explicit view"
         );
@@ -86,7 +83,7 @@ fn dangling_explicit_view_link_refuses_fallback() {
     let input = root.join("input.nwk");
     write_alignment(&source, "AA");
     std::fs::write(&input, "(a,b);").unwrap();
-    AlignmentLink::create(&input, &source, &source, 3, true, None).unwrap();
+    AlignmentLink::create(&input, &source, 3, true).unwrap();
     std::os::unix::fs::symlink("missing-view.json", records::view_sidecar(&input)).unwrap();
     assert!(
         AlignmentLink::read_view(&input).is_err(),
@@ -107,11 +104,11 @@ fn failed_view_replacement_preserves_retained_snapshot() {
     write_alignment(&other, "CC");
     write_alignment(&replacement, "GG");
     std::fs::write(&input, "(a,b);").unwrap();
-    AlignmentLink::create(&input, &source, &source, 3, true, None).unwrap();
+    AlignmentLink::create(&input, &source, 3, true).unwrap();
     let tree = files::load_tree(&input).unwrap().doc;
     AlignmentLink::associate(&input, &tree, &other).unwrap();
     let old = AlignmentLink::read_view(&input).unwrap();
-    let snapshot = old.checked_snapshot(&input, &tree).unwrap();
+    let snapshot = old.checked_alignment(&input, &tree).unwrap();
     let bytes = std::fs::read(&snapshot).unwrap();
     // Force metadata replacement to fail after the snapshot write.
     let metadata = records::view_sidecar(&input);
@@ -122,5 +119,5 @@ fn failed_view_replacement_preserves_retained_snapshot() {
     std::fs::remove_dir(&metadata).unwrap();
     std::fs::rename(&backup, &metadata).unwrap();
     assert_eq!(std::fs::read(snapshot).unwrap(), bytes);
-    assert!(old.checked_snapshot(&input, &tree).is_ok());
+    assert!(old.checked_alignment(&input, &tree).is_ok());
 }

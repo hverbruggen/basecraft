@@ -53,8 +53,7 @@ fn selected_guard_fields_keep_existing_acceptance_and_view_refusal() {
     let origin = records::sidecar(&tree);
     let view = records::view_sidecar(&tree);
     std::fs::create_dir_all(origin.parent().unwrap()).unwrap();
-    let valid =
-        include_bytes!("../../../../testdata/fixtures/records-v1/link-snapshot-inferred.json");
+    let valid = include_bytes!("../../../../testdata/fixtures/records-v1/link-file-inferred.json");
     let link: Value = serde_json::from_slice(valid).unwrap();
     std::fs::write(&origin, basecraft_protocol::records::encode(&link).unwrap()).unwrap();
     for reason in ["", "unavailable test"] {

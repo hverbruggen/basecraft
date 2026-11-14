@@ -5,17 +5,18 @@ use basecraft_ops::{
 };
 
 #[test]
-fn snapshot_and_view_associations_remain_distinct() {
+fn inferred_and_view_links_remain_distinct() {
     crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source.afa");
     let tree = root.path().join("tree.nwk");
     std::fs::write(&source, b">a\nAC\n>b\nAT\n").unwrap();
     std::fs::write(&tree, "(a,b);").unwrap();
-    let outputs = AlignmentLink::create(&tree, &source, &source, 7, true, None).unwrap();
+    let outputs = AlignmentLink::create(&tree, &source, 7, true).unwrap();
     assert_eq!(
-        std::fs::read(&outputs[0]).unwrap(),
-        std::fs::read(&source).unwrap()
+        outputs,
+        [records::sidecar(&tree)],
+        "no copy of the alignment"
     );
     let doc = files::load_tree(&tree).unwrap().doc;
     AlignmentLink::associate(&tree, &doc, &source).unwrap();
@@ -51,7 +52,7 @@ fn shared_reference_verifies_the_same_input() {
     assert!(
         AlignmentLink::read(&shared)
             .unwrap()
-            .checked_snapshot(&shared, &files::load_tree(&shared).unwrap().doc)
+            .checked_alignment(&shared, &files::load_tree(&shared).unwrap().doc)
             .is_ok()
     );
 }
@@ -64,7 +65,7 @@ fn reader_keeps_extensions_and_existing_version_and_missing_field_checks() {
     std::fs::write(&tree, "(a,b);").unwrap();
     let metadata = records::sidecar(&tree);
     std::fs::create_dir_all(metadata.parent().unwrap()).unwrap();
-    let bytes = include_bytes!("../../../../testdata/fixtures/records-v1/link-snapshot-extra.json");
+    let bytes = include_bytes!("../../../../testdata/fixtures/records-v1/link-file-extra.json");
     let mut value: serde_json::Value = serde_json::from_slice(bytes).unwrap();
     // Reader retains extras and tolerates missing source; evidence use checks it later.
     std::fs::write(

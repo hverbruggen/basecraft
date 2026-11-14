@@ -2,8 +2,11 @@
   "schema": 1,
   "source": "../ünicode source.afa",
   "source_hash": "b3:f1d993752f7b946232a7c95734b60256035fda36a66ef08326bba1bffd1f8dee",
-  "snapshot": "origin.nwk.6Oukbo.alignment.afa",
-  "snapshot_hash": "b3:f1d993752f7b946232a7c95734b60256035fda36a66ef08326bba1bffd1f8dee",
+  "source_stamp": {
+    "size": 12,
+    "modified_seconds": 1700000000,
+    "modified_nanos": 5
+  },
   "alignment_version": 7,
   "inferred": true
 }

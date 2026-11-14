@@ -99,14 +99,14 @@ fn forest_members_share_one_alignment_snapshot() {
     common::assert_completed(&outcome);
     let output = dir.path().join("forest.nwk");
     let main = basecraft_ops::records::AlignmentLink::read(&output).unwrap();
-    // Component trees travel with the exported tree and share its snapshot.
+    // Component trees travel with the exported tree and share its alignment.
     for index in 1..=2 {
         let path = dir.path().join(format!("forest.component-{index}.nwk"));
         let tree = session.open(&path).unwrap();
         let link = basecraft_ops::records::AlignmentLink::read(&path).unwrap();
-        assert_eq!(link.snapshot, main.snapshot);
+        assert_eq!(link.source, main.source);
         assert!(
-            link.checked_snapshot(&path, session.tree(tree).unwrap())
+            link.checked_alignment(&path, session.tree(tree).unwrap())
                 .is_ok()
         );
     }
@@ -166,7 +166,7 @@ fn bootstrap_provenance_success_and_withheld_support_replay() {
                 let link = basecraft_ops::records::AlignmentLink::read(&output).unwrap();
                 assert!(link.inferred);
                 assert_eq!(link.source, input);
-                assert!(link.checked_snapshot(&output, generated).is_ok());
+                assert!(link.checked_alignment(&output, generated).is_ok());
                 session.save(tree, None).unwrap();
                 let reopened = basecraft_ops::files::load_tree(&output).unwrap().doc;
                 assert_eq!(reopened.supports()[0].name, "Bootstrap");
@@ -219,7 +219,7 @@ fn reference_tree_save_as_and_complete_export_retain_alignment_and_support() {
     let link = basecraft_ops::records::AlignmentLink::read(&copied).unwrap();
     assert_eq!(link.schema, 2);
     assert!(
-        link.checked_snapshot(&copied, session.tree(tree).unwrap())
+        link.checked_alignment(&copied, session.tree(tree).unwrap())
             .is_ok()
     );
     assert!(
@@ -241,7 +241,7 @@ fn reference_tree_save_as_and_complete_export_retain_alignment_and_support() {
         basecraft_protocol::SupportKind::Bootstrap
     );
     let link = basecraft_ops::records::AlignmentLink::read(&exported).unwrap();
-    assert!(link.checked_snapshot(&exported, &tree).is_ok());
+    assert!(link.checked_alignment(&exported, &tree).is_ok());
     assert!(Path::new(&common::evidence(&outcome)).is_dir());
 }
 

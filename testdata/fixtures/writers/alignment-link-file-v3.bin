@@ -1,0 +1,13 @@
+{
+  "alignment_version": 7,
+  "basecraft": "<version>",
+  "inferred": true,
+  "schema": 1,
+  "source": "source.afa",
+  "source_hash": "b3:f1d993752f7b946232a7c95734b60256035fda36a66ef08326bba1bffd1f8dee",
+  "source_stamp": {
+    "modified_nanos": 5,
+    "modified_seconds": 1700000000,
+    "size": 12
+  }
+}

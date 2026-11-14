@@ -288,11 +288,12 @@ mod typed_error_tests {
         let tree = root.path().join("tree.nwk");
         std::fs::write(&source, b">a\nAC\n>b\nAT\n").unwrap();
         std::fs::write(&tree, "(a,b);").unwrap();
-        let outputs = AlignmentLink::create(&tree, &source, &source, 0, true, None).unwrap();
+        let outputs = AlignmentLink::create(&tree, &source, 0, true).unwrap();
         let link = AlignmentLink::read(&tree).unwrap();
-        std::fs::write(&outputs[0], b">a\nTC\n>b\nTT\n").unwrap();
+        assert_eq!(outputs, [basecraft_ops::records::sidecar(&tree)]);
+        std::fs::write(&source, b">a\nTC\n>b\nTT\n").unwrap();
         let changed = link
-            .checked_snapshot(&tree, &basecraft_ops::files::load_tree(&tree).unwrap().doc)
+            .checked_alignment(&tree, &basecraft_ops::files::load_tree(&tree).unwrap().doc)
             .unwrap_err();
         let oversized = root.path().join("oversized.json");
         std::fs::File::create(&oversized)

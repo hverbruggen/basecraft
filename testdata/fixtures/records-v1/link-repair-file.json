@@ -446,7 +446,7 @@
     125
   ],
   "intended_view": null,
-  "note": "Save As association recovery: previous entries and intended metadata; snapshots are retained separately",
+  "note": "Save As association recovery: previous entries and intended metadata",
   "previous_origin": {
     "entry": "file",
     "value": [

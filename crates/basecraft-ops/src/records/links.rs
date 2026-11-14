@@ -1,4 +1,6 @@
-//! Explicit tree–alignment provenance. Snapshots retain unsaved input exactly.
+//! Tree–alignment links: the linked file by path, size, modification time
+//! and hash, with no copy (D25), or the exact input of the run that inferred
+//! the tree.
 use crate::{Result, error::invalid};
 use basecraft_docs::TreeDoc;
 use std::{
@@ -36,7 +38,7 @@ pub fn sidecar_in(project: Option<&crate::project::Project>, tree: &Path) -> Pat
     crate::project::Project::document_record_with(project, tree, ".alignment.json")
 }
 
-/// A presentation association has its own snapshot and never overwrites inference input.
+/// A presentation association has its own link and never overwrites inference input.
 fn view_tree(tree: &Path) -> PathBuf {
     let mut name = tree.as_os_str().to_os_string();
     name.push(".view");
@@ -73,8 +75,6 @@ pub fn metadata_present(path: &Path) -> Result<bool> {
     }
 }
 
-/// Never replace retained bytes. Metadata is the sole publication point for a
-/// new snapshot. Old snapshots (including legacy fixed-name files) remain intact.
 /// Keep a uniquely named file with the tree's link records, never beside it.
 fn retain_file(
     project: Option<&crate::project::Project>,
@@ -98,24 +98,6 @@ fn retain_file(
     Ok(path)
 }
 
-fn retain_snapshot(
-    project: Option<&crate::project::Project>,
-    tree: &Path,
-    input: &Path,
-    expected: &str,
-) -> Result<PathBuf> {
-    let snapshot = retain_file(project, tree, ".alignment.afa", |out| {
-        io::copy(&mut std::fs::File::open(input)?, out)?;
-        Ok(())
-    })?;
-    if basecraft_io::hash_file(&snapshot)? != expected {
-        return Err(crate::Error::ChangedOnDisk {
-            path: input.to_path_buf(),
-        });
-    }
-    Ok(snapshot)
-}
-
 /// Keep filesystem inspection in ops; protocol owns only the wire declaration.
 fn previous_metadata(path: &Path) -> Result<PreviousMetadata> {
     match std::fs::symlink_metadata(path) {
@@ -133,35 +115,18 @@ fn previous_metadata(path: &Path) -> Result<PreviousMetadata> {
 }
 
 struct StagedLink {
-    snapshot: Option<PathBuf>,
     metadata: Vec<u8>,
 }
 
 impl StagedLink {
-    fn copy(
-        project: Option<&crate::project::Project>,
-        link: &AlignmentLink,
-        from: &Path,
-        to: &Path,
-    ) -> Result<Self> {
-        if link.schema == 2 {
-            link.verify_snapshot(from)?;
-            let run = link.evidence_run(from)?;
-            let mut copied = link.clone();
-            copied.source = relative_to(&link.source, to)?;
-            copied.analysis_run = Some(relative_to(&run, to)?);
-            return Ok(Self {
-                snapshot: None,
-                metadata: basecraft_protocol::records::encode(&copied)?,
-            });
-        }
-        let snapshot =
-            retain_snapshot(project, to, &link.snapshot_path(from), &link.snapshot_hash)?;
+    /// The link as the tree at `to` records it: paths relative to `to`.
+    fn copy(link: &AlignmentLink, from: &Path, to: &Path) -> Result<Self> {
         let mut copied = link.clone();
         copied.source = relative_to(&link.source, to)?;
-        copied.snapshot = relative_to(&snapshot, to)?;
+        if link.schema == 2 {
+            copied.analysis_run = Some(relative_to(&link.evidence_run(from)?, to)?);
+        }
         Ok(Self {
-            snapshot: Some(snapshot),
             metadata: basecraft_protocol::records::encode(&copied)?,
         })
     }
@@ -201,9 +166,12 @@ impl PreparedLinks {
         let view = metadata_present(&sidecar_in(project, &view_path))?
             .then(|| AlignmentLink::read_in(project, &view_path))
             .transpose()?;
-        // Check every source before creating destination evidence or touching its tree.
+        // Check every run input before creating destination evidence or
+        // touching its tree. A linked file is checked when it is used.
         for link in origin.into_iter().chain(view.iter()) {
-            link.verify_snapshot(from)?;
+            if link.schema == 2 {
+                link.verified_run_input(from)?;
+            }
         }
         let previous_origin = previous_metadata(&sidecar_in(project, to))?;
         let previous_view = previous_metadata(&view_sidecar_in(project, to))?;
@@ -211,11 +179,11 @@ impl PreparedLinks {
             project: project.cloned(),
             target: to.to_path_buf(),
             origin: origin
-                .map(|link| StagedLink::copy(project, link, from, to))
+                .map(|link| StagedLink::copy(link, from, to))
                 .transpose()?,
             view: view
                 .as_ref()
-                .map(|link| StagedLink::copy(project, link, from, &view_tree(to)))
+                .map(|link| StagedLink::copy(link, from, &view_tree(to)))
                 .transpose()?,
             previous_origin,
             previous_view,
@@ -230,7 +198,7 @@ impl PreparedLinks {
         // A prior symlink may contain a non-UTF-8 path that JSON cannot represent.
         let recovery = basecraft_protocol::records::encode(&AlignmentLinkRecovery {
             schema: 1,
-            note: "Save As association recovery: previous entries and intended metadata; snapshots are retained separately".into(),
+            note: "Save As association recovery: previous entries and intended metadata".into(),
             previous_origin: self.previous_origin.clone(),
             previous_view: self.previous_view.clone(),
             intended_origin: self.origin.as_ref().map(|link| link.metadata.clone()),
@@ -265,13 +233,10 @@ impl PreparedLinks {
             ] {
                 if let Some(link) = staged {
                     basecraft_io::write_atomic(&metadata, |out| out.write_all(&link.metadata))?;
-                    if let Some(snapshot) = &link.snapshot {
-                        outputs.push(snapshot.clone());
-                    }
                     outputs.push(metadata);
                 } else if metadata_present(&metadata)? {
                     // Intentional absence is part of Save As state. Prior entries
-                    // are preserved in recovery, and their snapshots are untouched.
+                    // are preserved in recovery.
                     std::fs::remove_file(&metadata)?;
                 }
             }
@@ -379,24 +344,15 @@ pub trait AlignmentLinkExt: Sized {
         run: &crate::records::analysis_store::ArtifactRun,
     ) -> Result<Vec<PathBuf>>;
     /// For a loose tree; see [`AlignmentLinkExt::create_in`].
-    fn create(
-        tree: &Path,
-        source: &Path,
-        input: &Path,
-        version: u64,
-        inferred: bool,
-        source_hash: Option<&str>,
-    ) -> Result<Vec<PathBuf>> {
-        Self::create_in(None, tree, source, input, version, inferred, source_hash)
+    fn create(tree: &Path, source: &Path, version: u64, inferred: bool) -> Result<Vec<PathBuf>> {
+        Self::create_in(None, tree, source, version, inferred)
     }
     fn create_in(
         project: Option<&crate::project::Project>,
         tree: &Path,
         source: &Path,
-        input: &Path,
         version: u64,
         inferred: bool,
-        source_hash: Option<&str>,
     ) -> Result<Vec<PathBuf>>;
     /// For a loose tree; see [`AlignmentLinkExt::read_in`].
     fn read(tree: &Path) -> Result<Self> {
@@ -408,8 +364,25 @@ pub trait AlignmentLinkExt: Sized {
         Self::read_view_in(None, tree)
     }
     fn read_view_in(project: Option<&crate::project::Project>, tree: &Path) -> Result<Self>;
+    /// The tree's alignment, checked as D25 says, with the link it came from:
+    /// the explicit view link if there is one, else the tree's own. A linked
+    /// file whose size or time changed but whose hash did not has its stored
+    /// time updated; a changed file is [`crate::Error::AlignmentChanged`].
+    fn checked_view_in(
+        project: Option<&crate::project::Project>,
+        tree_path: &Path,
+        tree: &TreeDoc,
+    ) -> Result<(Self, PathBuf)>;
+    /// [`AlignmentLinkExt::checked_view_in`] for the tree's own link.
+    fn checked_in(
+        project: Option<&crate::project::Project>,
+        tree_path: &Path,
+        tree: &TreeDoc,
+    ) -> Result<(Self, PathBuf)>;
     fn status(&self, tree_path: &Path, tree: &TreeDoc) -> String;
-    fn checked_snapshot(&self, tree_path: &Path, tree: &TreeDoc) -> Result<PathBuf>;
+    /// The alignment to use; writes nothing. See
+    /// [`AlignmentLinkExt::checked_view_in`].
+    fn checked_alignment(&self, tree_path: &Path, tree: &TreeDoc) -> Result<PathBuf>;
     /// For loose trees; see [`AlignmentLinkExt::share_to_in`].
     fn share_to(&self, from: &Path, to: &Path) -> Result<PathBuf> {
         self.share_to_in(None, from, to)
@@ -435,17 +408,40 @@ pub trait AlignmentLinkExt: Sized {
 
 // Evidence helpers remain private to ops; protocol contains only wire data.
 trait LinkEvidence {
-    fn snapshot_path(&self, tree_path: &Path) -> PathBuf;
     fn evidence_run(&self, tree_path: &Path) -> Result<PathBuf>;
-    fn verify_snapshot(&self, tree_path: &Path) -> Result<PathBuf>;
+    fn verified_run_input(&self, tree_path: &Path) -> Result<PathBuf>;
+    fn linked_file(&self) -> Result<LinkedFile>;
+}
+
+/// A linked file's size and modification time. Saves replace files, so the
+/// device and inode are not kept.
+fn file_stamp(path: &Path) -> Result<basecraft_protocol::provenance::FileStamp> {
+    Ok(basecraft_protocol::provenance::FileStamp {
+        device: None,
+        inode: None,
+        ..crate::records::input_evidence::stamp(path)?
+    })
+}
+
+/// What a schema 1 link finds on disk.
+enum LinkedFile {
+    /// Same size and time as recorded.
+    Unchanged,
+    /// Size or time differ, the bytes do not: the new stamp.
+    Touched(basecraft_protocol::provenance::FileStamp),
+    Changed,
 }
 
 impl LinkEvidence for AlignmentLink {
-    fn snapshot_path(&self, tree_path: &Path) -> PathBuf {
-        tree_path
-            .parent()
-            .unwrap_or(Path::new("."))
-            .join(&self.snapshot)
+    fn linked_file(&self) -> Result<LinkedFile> {
+        let stamp = file_stamp(&self.source)?;
+        if self.source_stamp.as_ref() == Some(&stamp) {
+            Ok(LinkedFile::Unchanged)
+        } else if basecraft_io::hash_file(&self.source)? == self.source_hash {
+            Ok(LinkedFile::Touched(stamp))
+        } else {
+            Ok(LinkedFile::Changed)
+        }
     }
 
     fn evidence_run(&self, tree_path: &Path) -> Result<PathBuf> {
@@ -474,75 +470,67 @@ impl LinkEvidence for AlignmentLink {
         Ok(run)
     }
 
-    fn verify_snapshot(&self, tree_path: &Path) -> Result<PathBuf> {
-        if self.schema == 2 {
-            let run = self.evidence_run(tree_path)?;
-            let input = crate::records::input_evidence::read_input(&run)?;
-            if input.state == basecraft_protocol::input_records::EvidenceState::Broken {
-                return Err(invalid("alignment evidence explicitly broken"));
-            }
-            let source = if let Some(reference) = &input.source {
-                crate::records::input_evidence::verified_source(&run, reference)?
-            } else {
-                run.join("submitted.fasta")
-            };
-            let alignment = load_alignment(&source)?;
-            let mut hashing = crate::files::HashingWriter::new(std::io::sink());
-            crate::files::write_alignment(&alignment, &mut hashing)?;
-            let raw = input.transformation == "identity-v1";
-            let actual = if raw {
-                basecraft_io::hash_file(&source)?
-            } else {
-                hashing.hash()
-            };
-            if actual != self.snapshot_hash {
-                return Err(invalid(
-                    "linked input differs from actual submitted alignment",
-                ));
-            }
-            // The snapshot API needs a typed FASTA path. Materialize a disposable
-            // canonical cache only on explicit use, after verifying the original;
-            // never treat this cache as repair for a missing/changed reference.
-            if crate::files::Format::from_path(&source).ok() != Some(crate::files::Format::Fasta)
-                || !raw
-                    && input
-                        .source
-                        .as_ref()
-                        .is_some_and(|r| r.hash != self.snapshot_hash)
-            {
-                let paths = basecraft_platform::paths::AppPaths::discover()
-                    .map_err(|e| invalid(e.to_string()))?;
-                paths.remove_old_caches();
-                let folder = paths.display_cache();
-                std::fs::create_dir_all(&folder)?;
-                let digest = self
-                    .snapshot_hash
-                    .strip_prefix("b3:")
-                    .filter(|h| h.len() == 64 && h.bytes().all(|b| b.is_ascii_hexdigit()))
-                    .ok_or_else(|| invalid("invalid submitted input digest"))?;
-                let target = folder.join(format!("{digest}.afa"));
-                basecraft_io::write_atomic(&target, |w| {
-                    if raw {
-                        std::io::copy(&mut std::fs::File::open(&source)?, w)?;
-                        Ok(())
-                    } else {
-                        crate::files::write_alignment(&alignment, w)
-                    }
-                })?;
-                return Ok(target);
-            }
-            return Ok(source);
+    fn verified_run_input(&self, tree_path: &Path) -> Result<PathBuf> {
+        let submitted = self
+            .submitted_hash
+            .as_deref()
+            .ok_or_else(|| invalid("reference association has no submitted input"))?;
+        let run = self.evidence_run(tree_path)?;
+        let input = crate::records::input_evidence::read_input(&run)?;
+        if input.state == basecraft_protocol::input_records::EvidenceState::Broken {
+            return Err(invalid("alignment evidence explicitly broken"));
         }
-        let snapshot = self.snapshot_path(tree_path);
-        if basecraft_io::hash_file(&snapshot)? != self.snapshot_hash {
-            return Err(crate::Error::ChangedOnDisk { path: snapshot });
+        let source = if let Some(reference) = &input.source {
+            crate::records::input_evidence::verified_source(&run, reference)?
+        } else {
+            run.join("submitted.fasta")
+        };
+        let alignment = load_alignment(&source)?;
+        let mut hashing = crate::files::HashingWriter::new(std::io::sink());
+        crate::files::write_alignment(&alignment, &mut hashing)?;
+        let raw = input.transformation == "identity-v1";
+        let actual = if raw {
+            basecraft_io::hash_file(&source)?
+        } else {
+            hashing.hash()
+        };
+        if actual != submitted {
+            return Err(invalid(
+                "linked input differs from actual submitted alignment",
+            ));
         }
-        Ok(snapshot)
+        // Callers need a typed FASTA path. Materialize a disposable
+        // canonical cache only on explicit use, after verifying the original;
+        // never treat this cache as repair for a missing/changed reference.
+        if crate::files::Format::from_path(&source).ok() != Some(crate::files::Format::Fasta)
+            || !raw && input.source.as_ref().is_some_and(|r| r.hash != submitted)
+        {
+            let paths = basecraft_platform::paths::AppPaths::discover()
+                .map_err(|e| invalid(e.to_string()))?;
+            paths.remove_old_caches();
+            let folder = paths.display_cache();
+            std::fs::create_dir_all(&folder)?;
+            let digest = submitted
+                .strip_prefix("b3:")
+                .filter(|h| h.len() == 64 && h.bytes().all(|b| b.is_ascii_hexdigit()))
+                .ok_or_else(|| invalid("invalid submitted input digest"))?;
+            let target = folder.join(format!("{digest}.afa"));
+            basecraft_io::write_atomic(&target, |w| {
+                if raw {
+                    std::io::copy(&mut std::fs::File::open(&source)?, w)?;
+                    Ok(())
+                } else {
+                    crate::files::write_alignment(&alignment, w)
+                }
+            })?;
+            return Ok(target);
+        }
+        Ok(source)
     }
 }
 
 impl AlignmentLinkExt for AlignmentLink {
-    /// Associate an imported tree, keeping a standard FASTA snapshot beside it.
+    /// Link an imported tree to an alignment file.
     fn associate_in(
         project: Option<&crate::project::Project>,
         tree_path: &Path,
@@ -557,7 +545,7 @@ impl AlignmentLinkExt for AlignmentLink {
         } else {
             tree_path.to_path_buf()
         };
-        Self::create_in(project, &target, source, source, 0, false, None)
+        Self::create_in(project, &target, source, 0, false)
     }
 
     /// Reference-first inferred association. Clean disk input is never copied;
@@ -578,8 +566,8 @@ impl AlignmentLinkExt for AlignmentLink {
                 .source
                 .as_ref()
                 .map_or_else(String::new, |r| r.hash.clone()),
-            snapshot: PathBuf::new(),
-            snapshot_hash: record.submitted_hash,
+            source_stamp: None,
+            submitted_hash: Some(record.submitted_hash),
             alignment_version: version,
             inferred: true,
             analysis_run: Some(relative_to(run.directory(), tree)?),
@@ -591,40 +579,32 @@ impl AlignmentLinkExt for AlignmentLink {
         Ok(vec![metadata])
     }
 
-    /// Called with the exact alignment supplied to a tree tool.
+    /// Link `tree` to the alignment file `source` as it is now.
     fn create_in(
         project: Option<&crate::project::Project>,
         tree: &Path,
         source: &Path,
-        input: &Path,
         version: u64,
         inferred: bool,
-        source_hash: Option<&str>,
     ) -> Result<Vec<PathBuf>> {
-        names(input)?;
+        names(source)?;
         let source = source.canonicalize()?;
-        let source_hash = source_hash
-            .map(str::to_owned)
-            .map_or_else(|| basecraft_io::hash_file(&source), Ok)?;
-        let snapshot_hash = basecraft_io::hash_file(input)?;
-        let snapshot = retain_snapshot(project, tree, input, &snapshot_hash)?;
         let link = Self {
             schema: 1,
-            source_hash,
+            source_hash: basecraft_io::hash_file(&source)?,
+            source_stamp: Some(file_stamp(&source)?),
             source: relative_to(&source, tree)?,
-            snapshot: relative_to(&snapshot, tree)?,
-            snapshot_hash,
+            submitted_hash: None,
             alignment_version: version,
             inferred,
             analysis_run: None,
             extra: BTreeMap::new(),
         };
         let metadata = sidecar_in(project, tree);
+        crate::files::companion_folder(&metadata)?;
         let bytes = basecraft_protocol::records::encode(&link)?;
-        basecraft_io::write_atomic(&metadata, |out| out.write_all(&bytes)).map_err(|error| crate::Error::Damaged { path: metadata.clone(), detail: format!(
-            "alignment metadata replacement failed; previous snapshots are unchanged; staged snapshot retained at {}: {error}", snapshot.display()
-        ) })?;
-        Ok(vec![snapshot, metadata])
+        basecraft_io::write_atomic(&metadata, |out| out.write_all(&bytes))?;
+        Ok(vec![metadata])
     }
 
     fn read_in(project: Option<&crate::project::Project>, tree: &Path) -> Result<Self> {
@@ -723,24 +703,54 @@ impl AlignmentLinkExt for AlignmentLink {
                 Err(e) => format!("{status}; evidence unavailable: {e}"),
             };
         }
-        if !self.source.exists() {
-            status.push_str(" (source missing or moved)");
-        } else if self.source_changed() {
-            status.push_str(" (source changed)");
-        }
-        match self.checked_snapshot(tree_path, tree) {
-            Ok(_) => status.push_str("; retained snapshot available"),
-            Err(e) => {
-                let _ = write!(status, "; retained snapshot unavailable: {e}");
-            }
+        match self.linked_file() {
+            Err(_) => status.push_str("; file missing or moved"),
+            Ok(LinkedFile::Changed) => status.push_str(
+                "; changed since it was linked: link alignment again to use the current file, or choose another",
+            ),
+            Ok(_) => match validate_taxa(tree, &self.source, self.inferred) {
+                Ok(()) => status.push_str("; unchanged since it was linked"),
+                Err(e) => {
+                    let _ = write!(status, "; cannot be used with this tree: {e}");
+                }
+            },
         }
         status
     }
 
-    fn checked_snapshot(&self, tree_path: &Path, tree: &TreeDoc) -> Result<PathBuf> {
-        let snapshot = self.verify_snapshot(tree_path)?;
-        validate_taxa(tree, &snapshot, self.inferred)?;
-        Ok(snapshot)
+    fn checked_alignment(&self, tree_path: &Path, tree: &TreeDoc) -> Result<PathBuf> {
+        let alignment = if self.schema == 2 {
+            self.verified_run_input(tree_path)?
+        } else if matches!(self.linked_file()?, LinkedFile::Changed) {
+            return Err(crate::Error::AlignmentChanged {
+                path: self.source.clone(),
+            });
+        } else {
+            self.source.clone()
+        };
+        validate_taxa(tree, &alignment, self.inferred)?;
+        Ok(alignment)
+    }
+
+    fn checked_view_in(
+        project: Option<&crate::project::Project>,
+        tree_path: &Path,
+        tree: &TreeDoc,
+    ) -> Result<(Self, PathBuf)> {
+        let linked = if metadata_present(&view_sidecar_in(project, tree_path))? {
+            view_tree(tree_path)
+        } else {
+            tree_path.to_path_buf()
+        };
+        checked(project, &linked, tree_path, tree)
+    }
+
+    fn checked_in(
+        project: Option<&crate::project::Project>,
+        tree_path: &Path,
+        tree: &TreeDoc,
+    ) -> Result<(Self, PathBuf)> {
+        checked(project, tree_path, tree_path, tree)
     }
 
     /// Forest members share the same retained alignment instead of copying it per tree.
@@ -767,14 +777,6 @@ impl AlignmentLinkExt for AlignmentLink {
             crate::records::analysis_store::bind_existing(&run, &id, to)?;
             return Ok(metadata);
         }
-        link.snapshot = relative_to(
-            &from
-                .parent()
-                .unwrap_or(Path::new("."))
-                .join(&self.snapshot)
-                .canonicalize()?,
-            to,
-        )?;
         link.source = relative_to(&self.source, to)?;
         let metadata = sidecar_in(project, to);
         crate::files::companion_folder(&metadata)?;
@@ -796,18 +798,38 @@ impl AlignmentLinkExt for AlignmentLink {
     }
 
     fn source_changed(&self) -> bool {
-        if self.schema == 2 {
-            return !self.source.exists();
-        }
-        basecraft_io::hash_file(&self.source).map_or(true, |h| h != self.source_hash)
+        self.schema == 2 && !self.source.exists()
     }
+}
+
+/// Read the link recorded for `linked` and check it. A touched but
+/// unchanged file has its new size and time written back to the link.
+fn checked(
+    project: Option<&crate::project::Project>,
+    linked: &Path,
+    tree_path: &Path,
+    tree: &TreeDoc,
+) -> Result<(AlignmentLink, PathBuf)> {
+    let mut link = AlignmentLink::read_in(project, linked)?;
+    if link.schema == 1
+        && let LinkedFile::Touched(stamp) = link.linked_file()?
+    {
+        let mut stored = link.clone();
+        stored.source = relative_to(&link.source, linked)?;
+        stored.source_stamp = Some(stamp.clone());
+        let bytes = basecraft_protocol::records::encode(&stored)?;
+        basecraft_io::write_atomic(&sidecar_in(project, linked), |out| out.write_all(&bytes))?;
+        link.source_stamp = Some(stamp);
+    }
+    let alignment = link.checked_alignment(tree_path, tree)?;
+    Ok((link, alignment))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn tree_save_as_carries_snapshot_and_replays() {
+    fn tree_save_as_carries_the_link_and_replays() {
         crate::isolated_profile::isolate!();
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("a.afa");
@@ -820,15 +842,18 @@ mod tests {
         AlignmentLink::associate(&tree_path, session.tree(doc).unwrap(), &source).unwrap();
         session.save(doc, Some(&output)).unwrap();
         let link = AlignmentLink::read(&output).unwrap();
-        assert!(
-            link.checked_snapshot(&output, session.tree(doc).unwrap())
-                .is_ok()
+        assert_eq!(
+            link.checked_alignment(&output, session.tree(doc).unwrap())
+                .unwrap(),
+            source.canonicalize().unwrap()
         );
         assert!(crate::records::replay::replay(dir.path()).unwrap().ok());
     }
 
+    /// D25: same size and time, unchanged; either differs, hash it; same
+    /// hash, store the new time; another hash, the alignment changed.
     #[test]
-    fn linkage_checks_labels_snapshot_and_changed_source() {
+    fn a_linked_file_is_checked_by_time_size_then_hash() {
         crate::isolated_profile::isolate!();
         let d = tempfile::tempdir().unwrap();
         let source = d.path().join("a.afa");
@@ -838,16 +863,33 @@ mod tests {
             "tree",
             &basecraft_io::newick::parse_newick("(a,b);").unwrap(),
         );
-        AlignmentLink::associate(&tree_path, &tree, &source).unwrap();
+        let outputs = AlignmentLink::associate(&tree_path, &tree, &source).unwrap();
+        assert_eq!(outputs, [sidecar(&tree_path)], "no copy of the alignment");
         let link = AlignmentLink::read(&tree_path).unwrap();
         assert!(!link.inferred);
-        assert!(!link.source_changed());
-        let snapshot = link.checked_snapshot(&tree_path, &tree).unwrap();
+        assert!(link.status(&tree_path, &tree).contains("unchanged"));
+        // Rewritten with the same bytes: the new time is stored silently.
+        let before = link.source_stamp.clone().unwrap();
+        let file = std::fs::File::options().write(true).open(&source).unwrap();
+        file.set_modified(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap();
+        drop(file);
+        let (checked, path) = AlignmentLink::checked_in(None, &tree_path, &tree).unwrap();
+        assert_eq!(path, source.canonicalize().unwrap());
+        assert_ne!(checked.source_stamp.as_ref(), Some(&before));
+        let stored = AlignmentLink::read(&tree_path).unwrap();
+        assert_eq!(stored.source_stamp, checked.source_stamp);
+        // Other bytes: the alignment changed since it was linked.
         std::fs::write(&source, ">a\nAAC\n>b\nATC\n").unwrap();
-        assert!(link.source_changed());
-        assert!(link.checked_snapshot(&tree_path, &tree).is_ok());
-        std::fs::write(snapshot, ">a\nAAC\n>b\nATC\n").unwrap();
-        assert!(link.checked_snapshot(&tree_path, &tree).is_err());
+        assert!(matches!(
+            AlignmentLink::checked_in(None, &tree_path, &tree),
+            Err(crate::Error::AlignmentChanged { .. })
+        ));
+        assert!(
+            stored
+                .status(&tree_path, &tree)
+                .contains("changed since it was linked")
+        );
         std::fs::write(&source, ">a\nAAC\n>a\nATC\n").unwrap();
         assert!(validate_taxa(&tree, &source, false).is_err());
         std::fs::write(&source, ">a\nAAC\n>c\nATC\n").unwrap();
