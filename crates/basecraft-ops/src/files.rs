@@ -33,13 +33,15 @@ impl Format {
         if crate::metadata::is_manifest(path) {
             return Ok(Format::Metadata);
         }
-        if crate::submission::is_submission(path) {
-            return Ok(Format::Submission);
-        }
+        // A saved Sanger review is one by its content, whatever its name,
+        // as the window decides too; `<name>.submission.json` may hold one.
         if crate::sanger_review::evidence_kind(path)
             == Some(crate::sanger_review::EvidenceKind::Review)
         {
             return Ok(Format::SangerReview);
+        }
+        if crate::submission::is_submission(path) {
+            return Ok(Format::Submission);
         }
         let ext = path
             .extension()
