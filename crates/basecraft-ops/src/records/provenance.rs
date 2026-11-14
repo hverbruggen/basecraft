@@ -62,19 +62,7 @@ pub fn read_record(path: &Path) -> Result<Vec<u8>> {
 pub(crate) fn read_record_with_budget(path: &Path, remaining: &mut u64) -> Result<Vec<u8>> {
     let file = basecraft_platform::files::open_regular_read(path)?;
     let length = file.metadata()?.len();
-    read_record_from_open(file, length, remaining, 64 << 20, RecordLimit::Provenance)
-}
-
-#[derive(Clone, Copy)]
-pub(crate) enum RecordLimit {
-    Provenance,
-}
-impl RecordLimit {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Provenance => "provenance record reading",
-        }
-    }
+    read_record_from_open(file, length, remaining, 64 << 20)
 }
 
 pub(crate) fn read_record_from_open(
@@ -82,25 +70,22 @@ pub(crate) fn read_record_from_open(
     length: u64,
     remaining: &mut u64,
     cap: u64,
-    label: RecordLimit,
 ) -> Result<Vec<u8>> {
     use std::io::Read as _;
     let limit = (*remaining).min(64 << 20).min(cap);
+    let too_long = || crate::Error::Limit {
+        what: "provenance record reading".into(),
+        limit,
+    };
     if length > limit {
-        return Err(crate::Error::Limit {
-            what: label.label().into(),
-            limit,
-        });
+        return Err(too_long());
     }
     let mut bytes = Vec::new();
     let result = file.take(limit + 1).read_to_end(&mut bytes);
     *remaining = remaining.saturating_sub(bytes.len() as u64);
     result?;
     if bytes.len() as u64 > limit {
-        return Err(crate::Error::Limit {
-            what: label.label().into(),
-            limit,
-        });
+        return Err(too_long());
     }
     Ok(bytes)
 }

@@ -86,9 +86,9 @@ link-file-inferred.json: create, schema 1, inferred input, parent-relative
   Unicode source.
 link-explicit-view.json: associate after inferred origin, schema 1, explicit
   presentation association, equal labels do not imply scientific inference.
-link-file-extra.json: share_to, schema 1, nested extra.
+link-file-extra.json: schema 1 with a nested extra field.
 link-referenced.json: create_referenced, schema 2, artifact-run reference.
-link-referenced-extra.json: share_to, schema 2, same run and nested extra.
+link-referenced-extra.json: schema 2, same run, nested extra field.
 Rust callers using the ops re-export now also import links::AlignmentLinkExt
 for associated functions and methods; public fields/struct literals remain.
 

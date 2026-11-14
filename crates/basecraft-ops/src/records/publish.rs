@@ -167,11 +167,9 @@ impl History<'_> {
             }
             if bundle.join("input.json").is_file() {
                 let current = crate::records::input_evidence::read_input(&bundle)?;
-                if let Some(dependencies) = Some(&current.upstream) {
-                    for dependency in dependencies {
-                        if !upstream.contains(dependency) {
-                            upstream.push(dependency.clone());
-                        }
+                for dependency in &current.upstream {
+                    if !upstream.contains(dependency) {
+                        upstream.push(dependency.clone());
                     }
                 }
             }

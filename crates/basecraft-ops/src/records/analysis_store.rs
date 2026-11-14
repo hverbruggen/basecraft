@@ -412,15 +412,6 @@ impl ArtifactRun {
     }
 }
 
-pub(crate) fn bind_existing(run: &Path, id: &str, result: &Path) -> Result<()> {
-    let artifact_run = ArtifactRun {
-        directory: run.into(),
-        working_directory: result.parent().unwrap_or(Path::new(".")).canonicalize()?,
-        id: id.into(),
-    };
-    artifact_run.bind(result)
-}
-
 impl ArtifactRun {
     /// Promote a staged primary/component output without replacing existing data.
     /// Its basename is preserved; allocation remains anchored to the final folder.

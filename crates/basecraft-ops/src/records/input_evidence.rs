@@ -1157,17 +1157,15 @@ fn inspect(target: &Path, stores: &[PathBuf], mut inspection: Inspection) -> Res
                 continue;
             }
             let mut dependent = false;
-            if let Some(parents) = Some(&input.upstream) {
-                for parent in parents {
-                    let path = &parent.bundle;
-                    match depends_on_inspected(&run.join(path), &analyses, &mut inspection) {
-                        Ok(found) => dependent |= found,
-                        Err(error) => inspection.issue(
-                            InspectionCode::DependencyUnavailable,
-                            &run.join(path),
-                            error,
-                        ),
-                    }
+            for parent in &input.upstream {
+                let path = &parent.bundle;
+                match depends_on_inspected(&run.join(path), &analyses, &mut inspection) {
+                    Ok(found) => dependent |= found,
+                    Err(error) => inspection.issue(
+                        InspectionCode::DependencyUnavailable,
+                        &run.join(path),
+                        error,
+                    ),
                 }
             }
             if dependent {
@@ -1746,7 +1744,7 @@ pub fn package(
                     artifact.retained.as_ref().map(|name| directory.join(name))
                 };
                 if let Some(original) = original {
-                    species_paths.insert(normalized_path(&original), artifact.hash.clone());
+                    species_paths.insert(lexical(&original), artifact.hash.clone());
                 }
             }
         }
@@ -1836,18 +1834,16 @@ pub fn package(
         // Immutable scientific reports stay byte-for-byte; only the derived
         // workspace metadata is relocated for use without its originals.
         crate::files::map_delimitation_paths(&mut work, |path| {
-            species_paths
-                .get(&normalized_path(Path::new(path)))
-                .map_or_else(
-                    || path.to_owned(),
-                    |hash| {
-                        final_bundle
-                            .join("artifacts")
-                            .join(hash.trim_start_matches("b3:"))
-                            .display()
-                            .to_string()
-                    },
-                )
+            species_paths.get(&lexical(Path::new(path))).map_or_else(
+                || path.to_owned(),
+                |hash| {
+                    final_bundle
+                        .join("artifacts")
+                        .join(hash.trim_start_matches("b3:"))
+                        .display()
+                        .to_string()
+                },
+            )
         });
         work.exchange_fields
             .remove("basecraft_display_evidence_run");
@@ -1990,20 +1986,6 @@ pub fn package(
     // Publish a new directory without replacing a destination created concurrently.
     basecraft_platform::atomic::rename_noreplace(staging.path(), destination)?;
     Ok(())
-}
-
-fn normalized_path(path: &Path) -> PathBuf {
-    let mut result = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::ParentDir => {
-                result.pop();
-            }
-            Component::CurDir => {}
-            other => result.push(other.as_os_str()),
-        }
-    }
-    result
 }
 
 /// Copy checked bytes into the package's content-addressed artifact directory.
@@ -2225,37 +2207,35 @@ pub(crate) fn ancestors(
         if let Some(origin) = &input.origin_run {
             stack.push((location.join(origin), false));
         }
-        if let Some(upstream) = Some(&input.upstream) {
-            for reference in upstream {
-                if records.len() + stack.len() >= 10_000 {
-                    return Err(invalid("evidence ancestry exceeds 10,000 references"));
-                }
-                let directory = location.join(&reference.bundle).canonicalize()?;
-                let id = &reference.id;
-                if id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
-                    return Err(invalid("unsafe ancestor identity"));
-                }
-                stack.push((directory.clone(), false));
-                if !seen_records.insert((directory.clone(), id.to_owned())) {
-                    continue;
-                }
-                let bytes = crate::records::provenance::read_record(
-                    &directory.join("records").join(format!("{id}.json")),
-                )?;
-                bytes_read = bytes_read.saturating_add(bytes.len());
-                if bytes_read > 128 << 20 {
-                    return Err(invalid("evidence ancestry exceeds 128 MiB"));
-                }
-                if reference.hash != basecraft_io::hash_bytes(&bytes) {
-                    return Err(invalid("ancestor record hash differs"));
-                }
-                let publication: basecraft_protocol::provenance::Publication =
-                    basecraft_protocol::records::decode(&bytes)?;
-                if &publication.id != id || publication.schema_version != 1 {
-                    return Err(invalid("unsupported or inconsistent ancestor record"));
-                }
-                records.push((directory, publication));
+        for reference in &input.upstream {
+            if records.len() + stack.len() >= 10_000 {
+                return Err(invalid("evidence ancestry exceeds 10,000 references"));
             }
+            let directory = location.join(&reference.bundle).canonicalize()?;
+            let id = &reference.id;
+            if id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+                return Err(invalid("unsafe ancestor identity"));
+            }
+            stack.push((directory.clone(), false));
+            if !seen_records.insert((directory.clone(), id.to_owned())) {
+                continue;
+            }
+            let bytes = crate::records::provenance::read_record(
+                &directory.join("records").join(format!("{id}.json")),
+            )?;
+            bytes_read = bytes_read.saturating_add(bytes.len());
+            if bytes_read > 128 << 20 {
+                return Err(invalid("evidence ancestry exceeds 128 MiB"));
+            }
+            if reference.hash != basecraft_io::hash_bytes(&bytes) {
+                return Err(invalid("ancestor record hash differs"));
+            }
+            let publication: basecraft_protocol::provenance::Publication =
+                basecraft_protocol::records::decode(&bytes)?;
+            if &publication.id != id || publication.schema_version != 1 {
+                return Err(invalid("unsupported or inconsistent ancestor record"));
+            }
+            records.push((directory, publication));
         }
     }
     Ok(records)

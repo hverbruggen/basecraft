@@ -383,26 +383,6 @@ pub trait AlignmentLinkExt: Sized {
     /// The alignment to use; writes nothing. See
     /// [`AlignmentLinkExt::checked_view_in`].
     fn checked_alignment(&self, tree_path: &Path, tree: &TreeDoc) -> Result<PathBuf>;
-    /// For loose trees; see [`AlignmentLinkExt::share_to_in`].
-    fn share_to(&self, from: &Path, to: &Path) -> Result<PathBuf> {
-        self.share_to_in(None, from, to)
-    }
-    fn share_to_in(
-        &self,
-        project: Option<&crate::project::Project>,
-        from: &Path,
-        to: &Path,
-    ) -> Result<PathBuf>;
-    /// For loose trees; see [`AlignmentLinkExt::copy_to_in`].
-    fn copy_to(&self, from: &Path, to: &Path) -> Result<Vec<PathBuf>> {
-        self.copy_to_in(None, from, to)
-    }
-    fn copy_to_in(
-        &self,
-        project: Option<&crate::project::Project>,
-        from: &Path,
-        to: &Path,
-    ) -> Result<Vec<PathBuf>>;
     fn source_changed(&self) -> bool;
 }
 
@@ -751,50 +731,6 @@ impl AlignmentLinkExt for AlignmentLink {
         tree: &TreeDoc,
     ) -> Result<(Self, PathBuf)> {
         checked(project, tree_path, tree_path, tree)
-    }
-
-    /// Forest members share the same retained alignment instead of copying it per tree.
-    fn share_to_in(
-        &self,
-        project: Option<&crate::project::Project>,
-        from: &Path,
-        to: &Path,
-    ) -> Result<PathBuf> {
-        let mut link = self.clone();
-        if self.schema == 2 {
-            let run = self.evidence_run(from)?;
-            link.analysis_run = Some(relative_to(&run, to)?);
-            link.source = relative_to(&self.source, to)?;
-            // Same-folder forest components share one run; no input copy.
-            let metadata = hidden_sidecar(&run, to);
-            crate::records::input_evidence::write_json(&metadata, &link)?;
-            let original_binding = crate::records::analysis_store::ArtifactRun::for_result(from)?
-                .ok_or_else(|| invalid("missing run binding"))?;
-            let id = original_binding
-                .file_name()
-                .ok_or_else(|| invalid("run identity missing"))?
-                .to_string_lossy();
-            crate::records::analysis_store::bind_existing(&run, &id, to)?;
-            return Ok(metadata);
-        }
-        link.source = relative_to(&self.source, to)?;
-        let metadata = sidecar_in(project, to);
-        crate::files::companion_folder(&metadata)?;
-        let bytes = basecraft_protocol::records::encode(&link)?;
-        basecraft_io::write_atomic(&metadata, |out| out.write_all(&bytes))?;
-        Ok(metadata)
-    }
-
-    /// Preserve a link when a tree is saved under a new name or directory.
-    fn copy_to_in(
-        &self,
-        project: Option<&crate::project::Project>,
-        from: &Path,
-        to: &Path,
-    ) -> Result<Vec<PathBuf>> {
-        PreparedLinks::with_origin(project, Some(self), from, to)?
-            .publish(|| Ok(()))
-            .map(|((), outputs)| outputs)
     }
 
     fn source_changed(&self) -> bool {
