@@ -28,6 +28,11 @@ pub enum Error {
     },
 }
 
+/// A plugin or host step that broke the protocol; the text says how.
+pub(crate) fn protocol(message: impl Into<String>) -> Error {
+    Error::Protocol(message.into())
+}
+
 impl Error {
     pub fn refused(
         code: basecraft_protocol::operation::OperationErrorCode,

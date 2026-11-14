@@ -1,6 +1,7 @@
 //! Caller-owned path/effect restrictions, shared by all operation adapters.
 //! This constrains host actions; trusted plugin code is not OS-sandboxed.
 
+use crate::error::protocol;
 use basecraft_ops::access::{Access, AccessError, Denial, ResourceAction};
 use basecraft_platform::files::{identity, link_count};
 use basecraft_protocol::operation::OperationErrorCode as Code;
@@ -353,7 +354,7 @@ impl SessionPolicy {
     ) -> Result<ResolvedBindings> {
         self.check(operation)?;
         if request.operation != operation.id {
-            return Err(Error::Protocol("operation identity mismatch".into()));
+            return Err(protocol("operation identity mismatch"));
         }
         if request
             .inputs

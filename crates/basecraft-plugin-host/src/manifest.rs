@@ -1,5 +1,6 @@
 //! `plugin.toml`.
 
+use crate::error::protocol;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -292,8 +293,8 @@ impl Manifest {
                 .components()
                 .any(|c| !matches!(c, std::path::Component::Normal(_)))
         {
-            return Err(Error::Protocol(
-                "package file must be a relative path without traversal".into(),
+            return Err(protocol(
+                "package file must be a relative path without traversal",
             ));
         }
         let root = self.dir.canonicalize()?;
@@ -304,15 +305,11 @@ impl Manifest {
                 .file_type()
                 .is_symlink()
             {
-                return Err(Error::Protocol(
-                    "package files cannot use symbolic links".into(),
-                ));
+                return Err(protocol("package files cannot use symbolic links"));
             }
         }
         if !current.is_file() {
-            return Err(Error::Protocol(
-                "package entry is not a regular file".into(),
-            ));
+            return Err(protocol("package entry is not a regular file"));
         }
         Ok(current)
     }
@@ -321,16 +318,14 @@ impl Manifest {
         let relative = self
             .contract
             .as_deref()
-            .ok_or_else(|| Error::Protocol("a plugin needs an operation contract".into()))?;
+            .ok_or_else(|| protocol("a plugin needs an operation contract"))?;
         let path = self.package_file(relative)?;
         let file = std::fs::File::open(path)?;
         let mut bytes = Vec::new();
         file.take((basecraft_protocol::operation::MAX_DESCRIPTOR_BYTES + 1) as u64)
             .read_to_end(&mut bytes)?;
         if bytes.len() > basecraft_protocol::operation::MAX_DESCRIPTOR_BYTES {
-            return Err(Error::Protocol(
-                "operation contract exceeds byte limit".into(),
-            ));
+            return Err(protocol("operation contract exceeds byte limit"));
         }
         let contract = serde_json::from_slice(&bytes)?;
         crate::contract::validate_contract(&self.id, &contract)?;

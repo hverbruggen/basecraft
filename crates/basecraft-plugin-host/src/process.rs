@@ -1,5 +1,6 @@
 //! A running plugin process.
 
+use crate::error::protocol;
 #[cfg(windows)]
 use crate::windows_transport::{BorrowedFd, OwnedFd, Receiver};
 use basecraft_platform::process::OwnedProcess;
@@ -91,9 +92,7 @@ impl PluginProcess {
     ) -> Result<Self> {
         let python = if manifest.runtime.is_some() {
             let runtime = manifest.managed_runtime.as_ref().ok_or_else(|| {
-                Error::Protocol(
-                    "declared plugin runtime unavailable; install the plugin first".into(),
-                )
+                protocol("declared plugin runtime unavailable; install the plugin first")
             })?;
             runtime.verify()?;
             runtime.interpreter.as_path()
@@ -105,13 +104,11 @@ impl PluginProcess {
             .ok()
             .map(|value| {
                 let seconds: u64 = value.parse().map_err(|_| {
-                    Error::Protocol(
-                        "BASECRAFT_PLUGIN_TIMEOUT_SECONDS must be positive seconds".into(),
-                    )
+                    protocol("BASECRAFT_PLUGIN_TIMEOUT_SECONDS must be positive seconds")
                 })?;
                 if seconds == 0 {
-                    return Err(Error::Protocol(
-                        "BASECRAFT_PLUGIN_TIMEOUT_SECONDS must be positive".into(),
+                    return Err(protocol(
+                        "BASECRAFT_PLUGIN_TIMEOUT_SECONDS must be positive",
                     ));
                 }
                 Ok(Duration::from_secs(seconds))
@@ -177,7 +174,7 @@ impl PluginProcess {
             .env("BASECRAFT_TOKEN", &token)
             .env_remove("BASECRAFT_SOCKET");
         let mut child = OwnedProcess::spawn(&mut command).map_err(|e| {
-            Error::Protocol(format!(
+            protocol(format!(
                 "cannot start plugin {} with interpreter {}: {e}",
                 manifest.id,
                 python.display()
@@ -232,7 +229,7 @@ impl PluginProcess {
                         let output = capture
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        return Err(Error::Protocol(format!(
+                        return Err(protocol(format!(
                             "plugin {} exited before connecting ({status}): {}",
                             manifest.id,
                             String::from_utf8_lossy(
@@ -280,7 +277,7 @@ impl PluginProcess {
         let (result, _) = p.call("initialize", json!({ "protocol": PROTOCOL_VERSION }), &[])?;
         p.info = serde_json::from_value(result)?;
         if p.info.protocol != PROTOCOL_VERSION {
-            return Err(Error::Protocol(format!(
+            return Err(protocol(format!(
                 "plugin speaks protocol {}",
                 p.info.protocol
             )));
@@ -312,9 +309,7 @@ impl PluginProcess {
         if line.len() > basecraft_protocol::operation::MAX_FRAME_BYTES
             || fds.len() > basecraft_protocol::operation::MAX_FDS
         {
-            return Err(Error::Protocol(
-                "outgoing frame/descriptor limit exceeded".into(),
-            ));
+            return Err(protocol("outgoing frame/descriptor limit exceeded"));
         }
         line.push(b'\n');
         #[cfg(unix)]
@@ -344,9 +339,7 @@ impl PluginProcess {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .exceeded
             {
-                return Err(Error::Protocol(
-                    "plugin stdout/stderr quota exceeded".into(),
-                ));
+                return Err(protocol("plugin stdout/stderr quota exceeded"));
             }
             let cancelled = self.cancelled.clone();
             let deadline = self.deadline;
@@ -371,7 +364,7 @@ impl PluginProcess {
                 Ok(())
             }) {
                 Ok(Some(reply)) => break reply,
-                Ok(None) => return Err(Error::Protocol("plugin closed the connection".into())),
+                Ok(None) => return Err(protocol("plugin closed the connection")),
                 Err(error)
                     if matches!(
                         error.kind(),
@@ -391,14 +384,11 @@ impl PluginProcess {
             || (raw.get("error").is_some() && msg.error.is_none())
             || (raw.get("result").is_some() == raw.get("error").is_some())
         {
-            return Err(Error::Protocol("invalid JSON-RPC response shape".into()));
+            return Err(protocol("invalid JSON-RPC response shape"));
         }
         let received = self.rx.take_fds(msg.fds)?;
         if msg.id != Some(id) {
-            return Err(Error::Protocol(format!(
-                "reply to {:?}, expected {id}",
-                msg.id
-            )));
+            return Err(protocol(format!("reply to {:?}, expected {id}", msg.id)));
         }
         if let Some(e) = msg.error {
             return Err(Error::Remote {
@@ -428,9 +418,7 @@ impl PluginProcess {
             .iter()
             .any(|name| name == implementation)
         {
-            return Err(Error::Protocol(
-                "runtime lacks declared implementation".into(),
-            ));
+            return Err(protocol("runtime lacks declared implementation"));
         }
         let request = Invoke {
             operation: implementation.into(),
@@ -443,7 +431,7 @@ impl PluginProcess {
             .unwrap_or_default();
         let (result, received) = self.call("invoke", serde_json::to_value(request)?, &fds)?;
         if !received.is_empty() {
-            return Err(Error::Protocol("unexpected result descriptors".into()));
+            return Err(protocol("unexpected result descriptors"));
         }
         Ok(serde_json::from_value(result)?)
     }
@@ -457,7 +445,7 @@ impl PluginProcess {
             .iter()
             .find(|query| query.name == name)
             .map(|query| query.result.clone())
-            .ok_or_else(|| Error::Protocol(format!("the plugin declares no query {name}")))?;
+            .ok_or_else(|| protocol(format!("the plugin declares no query {name}")))?;
         let query = basecraft_protocol::plugin::Query { name: name.into() };
         let answer = self.call("query", serde_json::to_value(query)?, &[])?.0;
         crate::contract::BoundedSchema::compile(&schema)?.validate(&answer)?;
@@ -542,8 +530,8 @@ impl PluginProcess {
             }
         }
         if unfinished {
-            return Err(Error::Protocol(
-                "plugin retained open output streams after teardown".into(),
+            return Err(protocol(
+                "plugin retained open output streams after teardown",
             ));
         }
         if self
@@ -552,9 +540,7 @@ impl PluginProcess {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .exceeded
         {
-            return Err(Error::Protocol(
-                "plugin stdout/stderr quota exceeded".into(),
-            ));
+            return Err(protocol("plugin stdout/stderr quota exceeded"));
         }
         Ok(())
     }
@@ -584,17 +570,15 @@ pub fn verify_handshake(manifest: &Manifest, info: &PluginInfo) -> Result<()> {
         || info.id != manifest.id
         || info.version != manifest.version
     {
-        return Err(Error::Protocol(
-            "runtime identity/version does not match manifest".into(),
-        ));
+        return Err(protocol("runtime identity/version does not match manifest"));
     }
     let unique: std::collections::BTreeSet<_> = info.operations.iter().collect();
     if unique.len() != info.operations.len() {
-        return Err(Error::Protocol("duplicate runtime implementations".into()));
+        return Err(protocol("duplicate runtime implementations"));
     }
     for descriptor in manifest.operation_contract()?.operations {
         if !info.operations.contains(&descriptor.implementation) {
-            return Err(Error::Protocol(format!(
+            return Err(protocol(format!(
                 "runtime missing implementation {}",
                 descriptor.implementation
             )));

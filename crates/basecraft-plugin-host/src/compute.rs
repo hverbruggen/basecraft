@@ -1,4 +1,5 @@
 //! Local per-task CPU budget. Jobs freeze the allocation when they are created.
+use crate::error::protocol;
 use serde_json::{Map, Value, json};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -107,9 +108,7 @@ fn reserve_cpu_with_capacity(
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     loop {
         if cancel.is_some_and(std::path::Path::exists) {
-            return Err(crate::Error::Protocol(
-                "job cancelled while waiting for CPU allocation".into(),
-            ));
+            return Err(protocol("job cancelled while waiting for CPU allocation"));
         }
         if used.saturating_add(requested) <= capacity {
             *used += requested;

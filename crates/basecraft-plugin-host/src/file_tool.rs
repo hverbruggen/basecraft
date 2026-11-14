@@ -1,8 +1,9 @@
 //! Shared input freezing, support semantics and publication.
 
+use crate::error::protocol;
 use std::path::{Path, PathBuf};
 
-use crate::{Error, Result};
+use crate::Result;
 
 /// Producer-declared support semantics win over numeric-range guesses.
 pub(crate) fn producer_support<'a>(
@@ -99,7 +100,7 @@ pub(crate) fn freeze_file(source: &Path, destination: &Path) -> Result<String> {
     let hash = basecraft_io::hash_file(destination)?;
     if before != basecraft_ops::records::stamp(source)? || basecraft_io::hash_file(source)? != hash
     {
-        return Err(Error::Protocol("input changed during submission".into()));
+        return Err(protocol("input changed during submission"));
     }
     Ok(hash)
 }
