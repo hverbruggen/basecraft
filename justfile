@@ -99,7 +99,7 @@ qml-test *scales="1 1.25 1.5 2":
     # must fail here, not only when someone opens the app.
     cargo test -p basecraft-gui --test application_bootstrap -- --app-starts
     logs=$(mktemp -d)
-    trap 'rm -rf "$logs"' EXIT
+    trap 'kill $(jobs -p) 2>/dev/null || true; wait; rm -rf "$logs"' EXIT
     runner="$(qmake6 -query QT_HOST_BINS)/qmltestrunner"
     declare -A scale_of
     for scale in {{scales}}; do
@@ -112,7 +112,7 @@ qml-test *scales="1 1.25 1.5 2":
         wait "$pid" || failed+=" ${scale_of[$pid]}"
     done
     for scale in {{scales}}; do
-        echo "Scale $scale: $(grep -h '^Totals:' "$logs/$scale.log" || echo 'no totals')"
+        echo "Scale $scale: $(grep -h '^Totals:' "$logs/$scale.log" || echo 'no totals'); $(grep -c '^QWARN' "$logs/$scale.log" || true) QWARN"
     done
     for scale in $failed; do
         echo "== QML tests at scale $scale failed:"
