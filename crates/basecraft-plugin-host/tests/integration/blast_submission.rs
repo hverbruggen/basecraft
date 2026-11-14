@@ -26,7 +26,8 @@ def submit(params,context):
     Path(context.progress_file).write_text('accepted')
     if mode=='cancel':
         until=time.monotonic()+5
-        while not Path(context.cancel_file).exists() and time.monotonic()<until: time.sleep(.01)
+        release=Path(context.cancel_file).with_name('release')
+        while not Path(context.cancel_file).exists() and not release.exists() and time.monotonic()<until: time.sleep(.01)
     if mode=='crash': os._exit(17)
     if mode=='malformed': output.write_text('{bad receipt'); os._exit(18)
     if mode=='bad_identity': receipt['query_hash']='changed'; output.write_text(json.dumps(receipt))
@@ -125,7 +126,8 @@ fn blast_local_publication_failure_retains_rid_and_repairs_without_execution() {
     wait_marker(&evidence.join("progress"));
     // A competing destination appears after the host accepted the request.
     std::fs::write(temp.path().join("export.json"), "unrelated").unwrap();
-    // This mock waits up to five seconds before returning an accepted response.
+    // The mock returns its accepted response once released, or after five seconds.
+    std::fs::write(evidence.join("release"), "").unwrap();
     let result = wait(&jobs, &id);
     assert_eq!(result.state, RuntimeState::Partial, "{result:?}");
     assert_eq!(result.data.as_ref().unwrap()["rid"], "ABCD1234567");
@@ -133,27 +135,39 @@ fn blast_local_publication_failure_retains_rid_and_repairs_without_execution() {
     assert_eq!(jobs.repair(&id).unwrap().state, RuntimeState::Completed);
 }
 #[test]
-fn blast_crash_after_receipt_recovers_while_malformed_identity_does_not() {
+fn blast_crash_after_receipt_recovers() {
     crate::isolated_profile::isolate!();
-    for mode in ["crash", "malformed", "bad_identity"] {
-        let temp = tempfile::tempdir().unwrap();
-        let (jobs, id, evidence) = start(temp.path(), mode, false);
-        let outcome = wait(&jobs, &id);
-        if mode == "crash" {
-            assert!(
-                matches!(
-                    outcome.state,
-                    RuntimeState::Completed | RuntimeState::Partial
-                ),
-                "{outcome:?}"
-            );
-            assert_eq!(outcome.data.as_ref().unwrap()["rid"], "ABCD1234567");
-        } else {
-            assert_eq!(outcome.state, RuntimeState::Failed, "{outcome:?}");
-            assert!(outcome.data.is_none());
-            assert!(evidence.join("query-preparation.json").exists());
-        }
-    }
+    let temp = tempfile::tempdir().unwrap();
+    let (jobs, id, _) = start(temp.path(), "crash", false);
+    let outcome = wait(&jobs, &id);
+    assert!(
+        matches!(
+            outcome.state,
+            RuntimeState::Completed | RuntimeState::Partial
+        ),
+        "{outcome:?}"
+    );
+    assert_eq!(outcome.data.as_ref().unwrap()["rid"], "ABCD1234567");
+}
+// One submission per test: submissions from one profile are at least ten
+// seconds apart, so each mode gets its own profile.
+fn receipt_is_refused(mode: &str) {
+    let temp = tempfile::tempdir().unwrap();
+    let (jobs, id, evidence) = start(temp.path(), mode, false);
+    let outcome = wait(&jobs, &id);
+    assert_eq!(outcome.state, RuntimeState::Failed, "{outcome:?}");
+    assert!(outcome.data.is_none());
+    assert!(evidence.join("query-preparation.json").exists());
+}
+#[test]
+fn blast_malformed_receipt_after_crash_does_not_recover() {
+    crate::isolated_profile::isolate!();
+    receipt_is_refused("malformed");
+}
+#[test]
+fn blast_receipt_with_changed_identity_does_not_recover() {
+    crate::isolated_profile::isolate!();
+    receipt_is_refused("bad_identity");
 }
 #[test]
 fn blast_oversize_rejected_before_spawn_and_changed_approval_rejected() {
