@@ -1,6 +1,6 @@
 //! Combining saved hypotheses preserves identities, lineage and exact source evidence.
-use crate::error::changed_on_disk;
-use crate::{DocId, Result, Session, error::invalid, files};
+use crate::error::{changed_on_disk, damaged, invalid};
+use crate::{DocId, Error, Result, Session, files};
 use basecraft_protocol::{Op, delimitation::DelimitationEdit};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -293,13 +293,16 @@ pub fn checked_alignment(
 fn checked_workspace_input(run: &std::path::Path, hash: &str) -> Result<PathBuf> {
     let input = crate::records::input_evidence::read_input(run)?;
     if input.state == basecraft_protocol::input_records::EvidenceState::Broken {
-        return Err(invalid("Workspace input evidence was explicitly broken"));
+        return Err(damaged(
+            run,
+            "Workspace input evidence was explicitly broken",
+        ));
     }
     let source = if let Some(reference) = &input.source {
         crate::records::input_evidence::verified_source(run, reference)?
     } else {
         crate::records::analysis_store::submitted_input(run)
-            .ok_or_else(|| invalid("Retained workspace input is missing"))?
+            .ok_or_else(|| damaged(run, "Retained workspace input is missing"))?
     };
     if basecraft_io::hash_file(&source)? != hash {
         return Err(changed_on_disk(source.clone()));
@@ -324,13 +327,13 @@ pub fn checked_display_tree(
     let run = std::path::Path::new(run);
     let input = crate::records::input_evidence::read_input(run)?;
     if input.state == basecraft_protocol::input_records::EvidenceState::Broken {
-        return Err(invalid("Display tree evidence was explicitly broken"));
+        return Err(damaged(run, "Display tree evidence was explicitly broken"));
     }
     let source = if let Some(reference) = &input.source {
         crate::records::input_evidence::verified_source(run, reference)?
     } else {
         crate::records::analysis_store::submitted_input(run)
-            .ok_or_else(|| invalid("Retained workspace input is missing"))?
+            .ok_or_else(|| damaged(run, "Retained workspace input is missing"))?
     };
     if work
         .exchange_fields
@@ -468,8 +471,8 @@ pub fn analysis_result_edits(
         .collect::<BTreeSet<_>>()
         != work.specimens.iter().map(|s| &s.id).collect()
     {
-        return Err(invalid(
-            "Analysis specimen mapping differs; result saved separately",
+        return Err(Error::Outdated(
+            "Analysis specimen mapping differs; result saved separately".into(),
         ));
     }
     let report_hash = basecraft_io::hash_file(output)?;
@@ -561,7 +564,7 @@ fn combined_hypotheses(
         if let Some(wanted) = keep.and_then(|keep| keep.get(path)) {
             let available = work.hypotheses.iter().map(|h| h.id.clone()).collect();
             if !wanted.is_subset(&available) {
-                return Err(invalid(format!(
+                return Err(Error::Outdated(format!(
                     "Selected hypothesis no longer exists in {}",
                     path.display()
                 )));
@@ -707,8 +710,8 @@ pub fn combine_to(
     keep: Option<&CombineSelection>,
 ) -> Result<DocId> {
     if paths.len() < 2 {
-        return Err(invalid(
-            "Choose at least two saved species hypothesis files",
+        return Err(Error::MissingChoice(
+            "Choose at least two saved species hypothesis files".into(),
         ));
     }
     if output.try_exists()? || session.companion_path(output).try_exists()? {
@@ -747,12 +750,16 @@ pub fn combine_to(
             ));
         }
         if keep.values().all(BTreeSet::is_empty) {
-            return Err(invalid("Choose at least one hypothesis to combine"));
+            return Err(Error::MissingChoice(
+                "Choose at least one hypothesis to combine".into(),
+            ));
         }
     }
     let doc = session.open(&paths[0])?;
     if !session.is_delimitation(doc) {
-        return Err(invalid("Choose saved species hypothesis files"));
+        return Err(Error::MissingChoice(
+            "Choose saved species hypothesis files".into(),
+        ));
     }
     let generation = session.generation(doc)?;
     let revision = session.revision(doc)?;
@@ -762,8 +769,8 @@ pub fn combine_to(
         let wanted = keep.get(&paths[0]).cloned().unwrap_or_default();
         let available: BTreeSet<_> = current.hypotheses.iter().map(|h| h.id.clone()).collect();
         if !wanted.is_subset(&available) {
-            return Err(invalid(
-                "Selected hypothesis no longer exists in the first input",
+            return Err(Error::Outdated(
+                "Selected hypothesis no longer exists in the first input".into(),
             ));
         }
         let dropped = available

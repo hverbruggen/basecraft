@@ -311,7 +311,7 @@ fn alignment_interface_rejections_normalization_and_hashes() {
     let wrong = dir.path().join("wrong.gb");
     assert!(matches!(
         session.save(doc, Some(&wrong)),
-        Err(basecraft_ops::Error::Invalid(_))
+        Err(basecraft_ops::Error::Unsupported(_))
     ));
     assert!(!wrong.exists());
     assert_eq!(session.revision(doc).unwrap(), revision);

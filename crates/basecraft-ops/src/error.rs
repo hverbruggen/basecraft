@@ -155,6 +155,10 @@ pub(crate) fn damaged(path: impl Into<PathBuf>, detail: impl Into<String>) -> Er
     }
 }
 
+pub(crate) fn unsupported(msg: impl Into<String>) -> Error {
+    Error::Unsupported(msg.into())
+}
+
 pub(crate) fn limit(what: impl Into<String>, limit: u64) -> Error {
     Error::Limit {
         what: what.into(),

@@ -201,8 +201,8 @@ pub fn prepare(queries: &[Query], settings: &Value) -> Result<Plan> {
         "nucleotide" => (NUCLEOTIDE_RESIDUES, NUCLEOTIDE_LIMIT),
         "protein" => (b"ABCDEFGHIKLMNPQRSTVWXYZUOJ".as_slice(), PROTEIN_LIMIT),
         _ => {
-            return Err(invalid(
-                "Choose nucleotide or protein explicitly; alphabet is not inferred from ambiguous letters",
+            return Err(crate::Error::MissingChoice(
+                "Choose nucleotide or protein explicitly; alphabet is not inferred from ambiguous letters".into(),
             ));
         }
     };
@@ -376,12 +376,12 @@ pub fn authorize(plan: &Plan, settings: &Value) -> Result<()> {
     if let Some(hash) = settings["approval_hash"].as_str()
         && hash != plan.approval_hash
     {
-        return Err(invalid(
-            "BLAST source or settings changed; review a new preview",
+        return Err(crate::Error::Outdated(
+            "BLAST source or settings changed; review a new preview".into(),
         ));
     }
     if plan.oversized && !plan.truncation {
-        return Err(invalid(format!(
+        return Err(crate::Error::MissingChoice(format!(
             "BLAST query has {} residues; {} permits {}. Explicit truncate=true is required after reviewing the prefix/omission proposal",
             plan.original_residues, plan.alphabet, plan.limit
         )));
