@@ -1,4 +1,5 @@
-//! Real argv project prelude and existing project-owner preservation.
+//! Files given on the command line open in the window's chosen project and
+//! leave that project's metadata and submission owners as they were.
 use crate::{application, application_test_bridge, bridge, metadata_bridge, submission_bridge};
 use cxx_qt::{QObject, Threading, casting::Downcast};
 use cxx_qt_lib::{QByteArray, QQmlApplicationEngine, QString, QUrl};
@@ -194,7 +195,7 @@ pub fn run(folder: &Path) {
         "legacy metadata/submission created a canvas candidate"
     );
     println!(
-        "Mixed-project argv retained exact metadata/submission Session, DocId, generation, revision and undo availability"
+        "Argv files kept the chosen project's metadata and submission Session, DocId, generation, revision and undo"
     );
 }
 
@@ -226,7 +227,7 @@ pub fn spawn() {
             .arg(folder.path())
             .arg(sequence)
             .arg(basecraft_ops::metadata::manifest_path(
-                &folder.path().join("A")
+                &folder.path().join("B")
             ))
             .arg(alignment)
             .arg(submission)

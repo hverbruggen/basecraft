@@ -391,15 +391,15 @@ fn linked_taxa_journey(mut app: std::pin::Pin<&mut cxx_qt_lib_extras::QApplicati
             "LINKED_MEMBERS",
             &serde_json::to_string(&group.members).unwrap(),
         );
+    let record = basecraft_ops::files::companion_path(None, &workspace);
+    std::fs::create_dir_all(record.parent().unwrap()).unwrap();
     basecraft_ops::files::delimitation_companion(
         &work,
         &basecraft_io::hash_file(&workspace).unwrap(),
         &workspace,
     )
     .unwrap()
-    .write(
-        &mut std::fs::File::create(basecraft_ops::files::companion_path(None, &workspace)).unwrap(),
-    )
+    .write(&mut std::fs::File::create(record).unwrap())
     .unwrap();
     open_hooks::hold(
         folder
@@ -426,6 +426,10 @@ fn linked_taxa_journey(mut app: std::pin::Pin<&mut cxx_qt_lib_extras::QApplicati
         .pin_mut()
         .load_data(&QByteArray::from(&source), &QUrl::default());
     let mut baseline = BTreeMap::new();
+    // Closing the tree's tab before checkpoint 6 ends its session, which
+    // deletes that session's recovery log. Nothing else may change.
+    let recovery = folder.path().join(".basecraft/recovery");
+    let mut closed = None;
     for checkpoint in 0..9 {
         let status = app.as_mut().exec();
         // SAFETY: the engine owns Main; this synchronous read emits no signals.
@@ -448,10 +452,17 @@ fn linked_taxa_journey(mut app: std::pin::Pin<&mut cxx_qt_lib_extras::QApplicati
         if checkpoint == 0 {
             baseline = files(folder.path());
         } else {
-            assert_eq!(
-                files(folder.path()),
-                baseline,
-                "routing wrote document/sidecar/journal files at {checkpoint}"
+            let now = files(folder.path());
+            let ended = |path: &Path| closed.as_ref().is_some_and(|log| path.starts_with(log));
+            let changed: Vec<_> = baseline
+                .keys()
+                .chain(now.keys())
+                .filter(|path| baseline.get(*path) != now.get(*path))
+                .filter(|path| now.contains_key(*path) || !ended(path))
+                .collect();
+            assert!(
+                changed.is_empty(),
+                "routing wrote document/sidecar/journal files at {checkpoint}: {changed:#?}"
             );
         }
         // SAFETY: Main and its fixture-owned references remain live throughout
@@ -486,6 +497,11 @@ fn linked_taxa_journey(mut app: std::pin::Pin<&mut cxx_qt_lib_extras::QApplicati
             // SAFETY: the fixture clears its reference before removing a tab.
             // Reacquire each current receiver after every event-loop checkpoint.
             let object = unsafe { pointer.as_ref().unwrap() };
+            if checkpoint == 5 && property == c"tree" {
+                let tree = object.downcast::<tree_bridge::qobject::TreeController>();
+                let revision = tree.unwrap().record_revision().to_string();
+                closed = Some(recovery.join(revision.split(':').next().unwrap()));
+            }
             let name = object.object_name().to_string();
             if let Some(expected) = name.strip_prefix("linked-check:") {
                 let expected: Vec<String> = serde_json::from_str(expected).unwrap();
@@ -821,7 +837,7 @@ fn main() {
                 (0, 0, 0)
             );
             println!(
-                "GUI route {}: worker 1/{expected}, GUI 0, identical installed Session/DocId/generation/revision",
+                "GUI route {}: the worker read it once ({expected} bytes), the window not at all",
                 path.file_name().unwrap().to_string_lossy()
             );
         }
@@ -885,22 +901,13 @@ fn main() {
         }
         // The last ready sibling acknowledges on the GUI callback that opens consent.
         // Releasing A here cannot deliver its queued failure until that callback returns.
-        open_hooks::hold(
-            folder
-                .path()
-                .join("missing.gb")
-                .to_string_lossy()
-                .into_owned(),
-            folder
-                .path()
-                .join(if scenario == "quit-batch" {
-                    "D.gb"
-                } else {
-                    "C.gb"
-                })
-                .to_string_lossy()
-                .into_owned(),
-        );
+        let path = |name: &str| folder.path().join(name).to_string_lossy().into_owned();
+        let last = if scenario == "quit-batch" {
+            "D.gb"
+        } else {
+            "C.gb"
+        };
+        open_hooks::hold(path("missing.gb"), path(last));
         let source = include_str!("fixtures/open-consent.qml")
             .replace(
                 "OPEN_TEST_FOLDER",
@@ -923,15 +930,7 @@ fn main() {
             open_hooks::take_admissions().len(),
             if scenario == "quit-batch" { 3 } else { 2 }
         );
-        assert_eq!(
-            std::fs::read(folder.path().join(if scenario == "quit-batch" {
-                "D.gb"
-            } else {
-                "C.gb"
-            }))
-            .unwrap(),
-            original
-        );
+        assert_eq!(std::fs::read(folder.path().join(last)).unwrap(), original);
         if scenario.starts_with("stale-")
             || scenario == "close-discard"
             || scenario == "quit-discard"
@@ -1057,34 +1056,20 @@ fn main() {
                 .unwrap();
             std::fs::write(folder.path().join("unknown.data"), "unsupported").unwrap();
         }
+        let path = |name: &str| folder.path().join(name).to_string_lossy().into_owned();
         if let Some(fault) = match scenario {
             "fail-spawn" => Some(open_hooks::Fault::Spawn),
             "fail-worker" => Some(open_hooks::Fault::Worker),
             "fail-queue" => Some(open_hooks::Fault::Queue),
             _ => None,
         } {
-            open_hooks::fail(
-                folder
-                    .path()
-                    .join("sequence.gb")
-                    .to_string_lossy()
-                    .into_owned(),
-                fault,
-            );
+            open_hooks::fail(path("sequence.gb"), fault);
         }
         if matches!(scenario, "reorder" | "cancel-reopen" | "fail-construction") {
-            open_hooks::hold(
-                folder
-                    .path()
-                    .join("sequence.gb")
-                    .to_string_lossy()
-                    .into_owned(),
-                folder
-                    .path()
-                    .join("tree.nwk")
-                    .to_string_lossy()
-                    .into_owned(),
-            );
+            // A failed construction must end the request before the tree's
+            // readiness can release the worker and install its document.
+            let release = (scenario != "fail-construction").then(|| path("tree.nwk"));
+            open_hooks::hold(path("sequence.gb"), release.unwrap_or_default());
         }
         let source = include_str!("fixtures/open-lifecycle.qml")
             .replace(
