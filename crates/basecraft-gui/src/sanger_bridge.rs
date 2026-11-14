@@ -543,7 +543,8 @@ impl qobject::SangerController {
                 } else {
                     "fail"
                 }));
-                self.as_mut().set_message(QString::from(&error.to_string()));
+                let shown = crate::jobs::JobError::shown(&error);
+                self.as_mut().set_message(QString::from(&shown));
                 (false, String::new())
             }
         };

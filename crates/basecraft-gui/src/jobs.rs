@@ -288,17 +288,30 @@ fn finish(id: u64, cancelled: bool, ended: Ended) {
 const INTERRUPTED: &str = "Interrupted by an internal failure";
 
 /// A job's error: text for the job list, and the value a panicked job returns.
-pub(crate) trait JobError: std::fmt::Display + Send + 'static {
+pub(crate) trait JobError: Send + 'static {
     fn interrupted() -> Self;
+    /// The text the window and the job list show.
+    fn shown(&self) -> String;
 }
 impl JobError for String {
     fn interrupted() -> Self {
         INTERRUPTED.into()
     }
+    fn shown(&self) -> String {
+        self.clone()
+    }
 }
 impl JobError for basecraft_plugin_host::Error {
     fn interrupted() -> Self {
         Self::Io(std::io::Error::other(INTERRUPTED))
+    }
+    /// A folder that cannot hold recovery reads as the window's sentence,
+    /// not the command-line advice in the core's message.
+    fn shown(&self) -> String {
+        match self {
+            Self::Ops(error) => crate::document_open::edit_failure(error),
+            error => error.to_string(),
+        }
     }
 }
 
@@ -349,16 +362,16 @@ fn run<T, R: Send + 'static, E: JobError>(
     started.map(|()| handle)
 }
 
-fn summarize<R: Outcome, E: std::fmt::Display>(result: &Result<R, E>) -> Ended {
+fn summarize<R: Outcome, E: JobError>(result: &Result<R, E>) -> Ended {
     match result {
         Ok(value) => value.ended(),
         Err(error) => failed(error),
     }
 }
 
-fn failed(error: &impl std::fmt::Display) -> Ended {
+fn failed(error: &impl JobError) -> Ended {
     Ended {
-        error: Some(error.to_string()),
+        error: Some(error.shown()),
         result: String::new(),
     }
 }

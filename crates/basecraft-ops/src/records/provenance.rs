@@ -224,7 +224,7 @@ pub fn verify_export(destination: &Path, hash: &str, receipt: &Path) -> Result<(
     {
         return Err(damaged(
             destination,
-            "output_conflict: member ownership or bytes changed; repair refused",
+            "member ownership or bytes changed; repair refused",
         ));
     }
     Ok(())

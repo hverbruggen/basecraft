@@ -90,7 +90,9 @@ failed run. Error codes are `invalid_arguments`, `incompatible_contract`,
 `plugin_disabled`, `plugin_unavailable`, `plugin_changed`, `permission_denied`,
 `stale_revision`, `output_conflict`, `unsupported_input`,
 `plugin_protocol_violation`, `tool_failure`, `cancelled`, `timeout`,
-`publication_incomplete` and `evidence_incomplete`.
+`publication_incomplete` and `evidence_incomplete`. Core commands can also
+return `missing_choice`, `not_ready` and `unknown_setting`;
+`schemas/operation-failure.schema.json` lists every code.
 
 ## Python: one-off operations
 

@@ -251,9 +251,9 @@ fn execute(
             let first = paths
                 .first()
                 .ok_or_else(|| OpsError::MissingChoice("Choose two or three AB1 reads".into()))?;
-            let root = first
-                .parent()
-                .ok_or_else(|| OpsError::NoFileName(first.clone()))?;
+            let root = first.parent().ok_or_else(|| {
+                Error::refused(Code::InvalidArguments, "AB1 has no parent directory")
+            })?;
             let inputs: Vec<_> = paths
                 .iter()
                 .map(|path| serde_json::json!({"kind":"file","path":path}))
@@ -278,9 +278,9 @@ fn execute(
         request => {
             let mut session = previous.ok_or_else(|| not_ready("Open a Sanger review first"))?;
             let path = session.storage_anchor().to_path_buf();
-            let root = path
-                .parent()
-                .ok_or_else(|| OpsError::NoFileName(path.clone()))?;
+            let root = path.parent().ok_or_else(|| {
+                Error::refused(Code::InvalidArguments, "Review has no parent directory")
+            })?;
             match request {
                 Request::Single(threshold) => {
                     let draft = session.working_draft()?;
@@ -521,7 +521,10 @@ pub(super) fn session_view(session: &SangerReview) -> basecraft_ops::Result<Sang
         .iter()
         .map(|capture| abif::parse(capture.bytes()))
         .collect::<basecraft_io::Result<Vec<_>>>()?;
-    let mut view = SangerReviewView::new(draft, traces).map_err(OpsError::Invalid)?;
+    let mut view = SangerReviewView::new(draft, traces).map_err(|detail| OpsError::Damaged {
+        path: session.storage_anchor().into(),
+        detail,
+    })?;
     if let Some(placement) = session.placement()? {
         let source = placement.source_path.clone();
         let indexed = Arc::new(basecraft_io::fasta::IndexedFasta::open(&source)?);
@@ -552,6 +555,40 @@ mod tests {
             &flag,
         );
         assert_eq!(result.err().unwrap().to_string(), CANCELLED);
+    }
+
+    /// The prepare stage opens the fresh draft as a review document. A folder
+    /// that cannot hold recovery fails it with the window's sentence and keeps
+    /// the kind, so the window can offer a copy.
+    #[test]
+    #[cfg(unix)]
+    fn a_read_only_folder_fails_the_prepare_stage_with_the_window_sentence() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let read = temp.path().join("forward.ab1");
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../testdata/fixtures/compact/sanger-review/forward.ab1"),
+            &read,
+        )
+        .unwrap();
+        let mut session = basecraft_ops::sanger_review::instrument_review(&read).unwrap();
+        let mut view = session_view(&session).unwrap();
+        let mode =
+            |mode| std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(mode));
+        mode(0o555).unwrap();
+        let result = evaluate(&mut session, &mut view).map_err(Error::from);
+        mode(0o755).unwrap();
+        let error = result.unwrap_err();
+        assert!(
+            matches!(error, Error::Ops(OpsError::ReadOnlyFolder { .. })),
+            "{error}"
+        );
+        assert_eq!(
+            crate::jobs::JobError::shown(&error),
+            crate::document_open::READ_ONLY_EDIT
+        );
+        assert!(!temp.path().join(".basecraft").exists());
     }
 
     #[test]
