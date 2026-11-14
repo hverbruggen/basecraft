@@ -50,6 +50,7 @@ or persistent preference grants authority.
 
 Refusals have `state: failed` and `errors: [{code, message}]`. Codes include
 `evidence_check_incomplete`, `save_decision_stale`, `analysis_input_conflict`,
+`changed_on_disk`, `stale_revision`, `damaged`, `unsupported`,
 `permission_denied`, `io_error`, `format_error` and `invalid_arguments`.
 Incomplete/stale Session refusals include `check`; known conflicts include
 `conflict`. Python preserves all fields in `OperationError.outcome`. Successful

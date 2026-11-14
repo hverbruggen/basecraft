@@ -51,8 +51,8 @@ jobs = {}
 
 def call(name, args):
     if name in ("apply", "save") and not WRITABLE:
-        return structured(failure(name, "permission_denied", "permission_denied: This server is "
-                                  "read-only; start it with --allow-writes to enable edits"), True)
+        return structured(failure(name, "permission_denied", "This server is read-only; start "
+                                  "it with --allow-writes to enable edits"), True)
     if name == "open":
         return structured(document, False)
     if name == "read":
@@ -101,7 +101,7 @@ def unknown_tool(name):
     if MODE != "bare-unknown" and plugin and major.isdigit():
         operation = f"{plugin}/{local}@{major}"
         error["data"] = failure(operation, "plugin_unavailable",
-                                f"plugin_unavailable: unknown operation {operation}")
+                                f"unknown operation {operation}")
     return error
 
 

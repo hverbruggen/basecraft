@@ -126,7 +126,7 @@ impl SaveCheck {
                 )));
             }
             if !group.conflict.options.contains(&policy) {
-                return Err(invalid(
+                return Err(crate::error::unsupported(
                     "old analysed bytes are unavailable; preserve-copy cannot repair this input",
                 ));
             }

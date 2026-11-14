@@ -6,6 +6,7 @@ deleted temporary store change another test's save checks, so each test gets
 its own profile, state and cache folders. Arguments select cargo test targets
 (default: the whole workspace); names after `--` keep only the tests whose
 names contain one of them, for example `-p basecraft-ops --test integration -- replay::`.
+The run fails if a test left a new file under plugins/.
 """
 from concurrent.futures import ThreadPoolExecutor
 import json
@@ -49,6 +50,10 @@ def run(case):
     return case, result.returncode, result.stdout
 
 
+def plugin_files():
+    return {path for path in (ROOT / "plugins").rglob("*") if path.is_file()}
+
+
 def main():
     args = sys.argv[1:]
     selection, filters = (args[:args.index("--")], args[args.index("--") + 1:]) if "--" in args \
@@ -58,6 +63,9 @@ def main():
         print("no test matches", *filters)
         return 1
     failed = []
+    # Tests run the bundled plugins from plugins/ and check their digest, so a
+    # file one test writes there makes the others refuse the plugin as changed.
+    before = plugin_files()
     # Timing-sensitive lock tests need the CPU share the container really has.
     workers = int(os.environ.get("CARGO_BUILD_JOBS") or os.cpu_count() or 4)
     with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -65,10 +73,13 @@ def main():
             if code:
                 failed.append(f"{executable.name} {name or '(whole binary)'}")
                 print(output, flush=True)
+    written = sorted(plugin_files() - before)
     print(f"{len(all_cases) - len(failed)} passed, {len(failed)} failed")
     for line in failed:
         print("FAILED", line)
-    return int(bool(failed))
+    for path in written:
+        print("WROTE", path.relative_to(ROOT), "(tests must not write into plugins/)")
+    return int(bool(failed or written))
 
 
 if __name__ == "__main__":

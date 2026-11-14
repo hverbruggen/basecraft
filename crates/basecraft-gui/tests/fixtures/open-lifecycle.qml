@@ -105,5 +105,5 @@ Main {
     }
     Component.onCompleted: { if (scenario === "fail-construction") begin(); else Qt.callLater(begin) }
     Timer { interval: 1; repeat: true; running: test.began; onTriggered: test.advance() }
-    Timer { interval: 15000; running: true; onTriggered: { console.error("OPEN_LIFECYCLE timeout " + scenario + ": " + stage); Qt.exit(3) } }
+    Timer { interval: 15000; running: true; onTriggered: { console.error("OPEN_LIFECYCLE timeout " + scenario + ": stage " + stage + ", " + currentKind + " " + currentPath + (current ? " review " + current.review_mode + " " + current.message : "")); Qt.exit(3) } }
 }

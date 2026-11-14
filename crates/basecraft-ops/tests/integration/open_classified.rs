@@ -81,6 +81,37 @@ fn all_six_payloads_agree_across_open_apis() {
     agree(&path, Kind::Submission);
 }
 
+/// A Sanger review saved as `<name>.submission.json`: the name decides the
+/// format, and the bytes read to open it show a review.
+#[test]
+fn a_review_saved_under_a_submission_name_opens_as_a_review() {
+    crate::isolated_profile::isolate!();
+    let dir = tempfile::tempdir().unwrap();
+    let trace = dir.path().join("trace.ab1");
+    std::fs::write(
+        &trace,
+        include_bytes!("../../../../testdata/fixtures/compact/sanger-review/forward.ab1"),
+    )
+    .unwrap();
+    let review = basecraft_ops::sanger_review::instrument_review(&trace).unwrap();
+    let mut writer = Session::unlogged(dir.path());
+    let id = writer.create_sanger_review(&review).unwrap();
+    let path = dir.path().join("trace.submission.json");
+    writer.save(id, Some(&path)).unwrap();
+    assert_eq!(
+        files::Format::from_path(&path).unwrap(),
+        files::Format::Submission
+    );
+    assert_eq!(
+        payload_kind(&files::load(&path).unwrap()),
+        files::Kind::SangerReview
+    );
+    let mut session = Session::unlogged(dir.path());
+    let (id, kind) = session.open_classified(&path).unwrap();
+    assert_eq!(kind, files::Kind::SangerReview);
+    assert!(session.sanger_review(id).is_ok());
+}
+
 #[test]
 fn all_fasta_fixtures_return_the_loaded_kind() {
     fn visit(dir: &Path, count: &mut usize) {

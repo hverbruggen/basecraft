@@ -272,25 +272,18 @@ fn original_export_failures() {
         let dest = target(temp.path(), "target");
         let error = export_history(&[(bundle, p)], &dest).unwrap_err();
         let (code, message) = match case {
-            "unsafe" | "empty" => ("invalid_arguments", "unsafe publication identity"),
-            "id" | "schema" => ("invalid_arguments", "inconsistent export history record"),
-            "cycle" => ("invalid_arguments", "export history contains a cycle"),
-            "corrupt" => ("invalid_arguments", "evidence changed during export"),
-            "count" => (
-                "invalid_arguments",
-                "export history exceeds bounded record limit",
-            ),
+            "unsafe" | "empty" => ("damaged", "unsafe publication identity"),
+            "id" => ("damaged", "inconsistent export history record"),
+            "schema" => ("unsupported", "unsupported export history record"),
+            "cycle" => ("damaged", "export history contains a cycle"),
+            "corrupt" => ("damaged", "evidence changed during export"),
+            "count" => ("limit", "export history records exceeds the limit of 10000"),
             "missing" => ("io_error", "No such file or directory (os error 2)"),
-            "malformed" => (
-                "invalid_arguments",
-                "EOF while parsing an object at line 1 column 1",
-            ),
+            "malformed" => ("damaged", "EOF while parsing an object at line 1 column 1"),
             _ => unreachable!(),
         };
         assert_eq!(error.code(), code, "{case}: {error}");
-        if matches!(error, crate::Error::Invalid(_)) {
-            assert_eq!(error.to_string(), format!("invalid operation: {message}"));
-        } else if case == "malformed" {
+        if case == "malformed" {
             assert!(error.to_string().ends_with(message), "{error}");
             assert!(error.to_string().contains("cannot read it"), "{error}");
         } else if case == "missing" {
@@ -301,7 +294,7 @@ fn original_export_failures() {
             #[cfg(target_os = "linux")]
             assert_eq!(error.to_string(), message);
         } else {
-            assert_eq!(error.to_string(), message);
+            assert!(error.to_string().ends_with(message), "{case}: {error}");
         }
         assert_eq!(std::fs::read(&record).ok(), before);
         let artifacts: Vec<_> = std::fs::read_dir(dest.join("artifacts")).unwrap().collect();
