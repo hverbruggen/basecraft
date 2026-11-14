@@ -461,37 +461,62 @@ pub(crate) fn duplicates(
 ) -> basecraft_ops::Result<Option<basecraft_ops::renames::DuplicateNames>> {
     if session.is_tree(doc) || session.is_alignment(doc) {
         basecraft_ops::renames::duplicates(session, doc)
+    } else if session.repeated_record_names(doc)?.is_empty() {
+        // Known since the file opened: no second read of the file.
+        Ok(None)
     } else {
         let path = session.root().join(session.doc_key(doc)?);
         basecraft_ops::renames::duplicate_records(session, &path)
     }
 }
 
-/// The offer to number duplicate names, in plain words, or "" when every
-/// name is unique.
+/// The offer to number duplicate names as JSON, `text` in plain words and
+/// `action` for its button, or "" when every name is unique or a species
+/// workspace refuses the numbering.
 fn duplicate_offer(session: &Session, doc: basecraft_ops::DocId) -> String {
     let Ok(Some(found)) = duplicates(session, doc) else {
         return String::new();
     };
-    let things = if session.is_tree(doc) {
-        "tips"
-    } else if session.is_alignment(doc) {
-        "rows"
-    } else {
-        "records"
-    };
-    let example = found
+    if !found.workspaces.is_empty() {
+        return String::new();
+    }
+    let shown = found
         .names
-        .first()
-        .map_or_else(String::new, |name| format!(" ({name}.1, {name}.2)"));
+        .iter()
+        .take(5)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    let names = match found.names.len() {
+        n if n > 5 => format!("{shown} and {} more", n - 5),
+        _ => shown,
+    };
+    let first = &found.names[0];
     let relink = match found.links.len() + found.submissions.len() {
         0 => String::new(),
         n => format!(" {n} specimen links or submissions use these names and will need relinking."),
     };
-    format!(
-        "Some {things} share a name: {}. Number them{example} so each can be edited?{relink}",
-        found.names.join(", ")
-    )
+    let (text, action) = if session.is_tree(doc) || session.is_alignment(doc) {
+        let things = if session.is_tree(doc) { "tips" } else { "rows" };
+        (
+            format!(
+                "Some {things} share a name: {names}. Number them ({first}.1, {first}.2) so each can be edited?{relink}"
+            ),
+            "&Number them",
+        )
+    } else {
+        let file = session
+            .doc_key(doc)
+            .map(|key| crate::bridge::file_name(Path::new(key)))
+            .unwrap_or_default();
+        (
+            format!(
+                "Some records in {file} share a name: {names}. Number them in the file ({first}.1, {first}.2) so each can be edited? This changes the record names in the file itself; Undo cannot reverse it, and the file's history records it.{relink}"
+            ),
+            "&Number in file",
+        )
+    };
+    serde_json::json!({"text": text, "action": action}).to_string()
 }
 
 /// After an editor installed the document at `path`: ask its alphabet

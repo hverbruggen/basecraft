@@ -1,12 +1,14 @@
 //! Undo, redo and numbering in real QML-created editors. A document is
 //! unsaved exactly when its session says so: undoing back to the saved file
 //! leaves it clean. An alignment whose rows share a name offers to number
-//! them (D29), as one undo step.
+//! them (D29), as one undo step; a sequence file's records are numbered in
+//! the file, recorded in its history, and the file opens again.
 use cxx_qt::casting::Downcast;
 use cxx_qt_lib::{QByteArray, QQmlApplicationEngine, QUrl};
 use std::sync::{Arc, Mutex};
 
 use crate::alignment_bridge::qobject::AlignmentController;
+use crate::bridge::qobject::GenomeController;
 use crate::tree_bridge::qobject::TreeController;
 
 fn candidate(path: &std::path::Path) -> crate::document_open::Candidate {
@@ -17,7 +19,7 @@ fn candidate(path: &std::path::Path) -> crate::document_open::Candidate {
     .unwrap()
 }
 
-pub(crate) fn run() {
+pub(crate) fn run(app: &cxx_qt_lib_extras::QApplication) {
     let profile = std::env::var_os("BASECRAFT_PROFILE_DIR").expect("isolated bootstrap profile");
     let folder = tempfile::tempdir_in(&profile).unwrap();
     let path = folder.path().join("history.nwk");
@@ -31,7 +33,7 @@ pub(crate) fn run() {
         .pin_mut()
         .on_object_created(move |_, object, _| sink.lock().unwrap().push(object as usize))
         .release();
-    for name in ["TreeController", "AlignmentController"] {
+    for name in ["TreeController", "AlignmentController", "GenomeController"] {
         engine.pin_mut().load_data(
             &QByteArray::from(format!("import Basecraft; {name} {{}}").as_str()),
             &QUrl::default(),
@@ -87,8 +89,48 @@ pub(crate) fn run() {
         "undoing the numbering leaves the alignment clean"
     );
     alignment.as_mut().close_session();
+
+    // Short FASTA records open as alignment rows; GenBank records stay records.
+    let path = folder.path().join("two.gb");
+    let record = "LOCUS       ABC          4 bp    DNA\nORIGIN\n        1 acgt\n//\n";
+    std::fs::write(&path, record.repeat(2)).unwrap();
+    let mut genome = object(objects[2])
+        .downcast_pin::<GenomeController>()
+        .unwrap();
+    genome.as_mut().install_fresh(candidate(&path)).unwrap();
+    let offer: serde_json::Value =
+        serde_json::from_str(&genome.duplicate_names().to_string()).unwrap();
+    assert_eq!(offer["action"], "&Number in file");
+    let text = offer["text"].as_str().unwrap();
+    assert!(
+        text.contains("records in two.gb share a name: ABC.")
+            && text.contains("in the file itself"),
+        "{text}"
+    );
+    assert!(genome.as_mut().number_duplicates());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while *genome.busy() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the numbered file never opened again"
+        );
+        app.process_events();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        record.replace("ABC   ", "ABC.1 ") + &record.replace("ABC   ", "ABC.2 ")
+    );
+    assert!(
+        genome.duplicate_names().is_empty(),
+        "the reopened file has unique names"
+    );
+    assert!(!*genome.dirty());
+    let history = genome.document_record().to_string();
+    assert!(history.contains("number_records"), "{history}");
+    genome.as_mut().close_session();
     drop(engine);
     println!(
-        "Undo back to the saved state leaves a tree clean; duplicate rows are numbered in one step"
+        "Undo back to the saved state leaves a tree clean; duplicate rows are numbered in one step; duplicate records are numbered in the file and its history"
     );
 }

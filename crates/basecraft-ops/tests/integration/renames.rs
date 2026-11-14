@@ -371,6 +371,39 @@ fn duplicate_records_in_a_file_get_numbered_names_and_nothing_else_changes() {
 }
 
 #[test]
+fn numbering_an_open_file_is_in_its_history() {
+    crate::isolated_profile::isolate!();
+    let dir = tempfile::tempdir().unwrap();
+    // Short FASTA records open as alignment rows; GenBank records stay records.
+    let fasta = dir.path().join("two.gb");
+    let record = "LOCUS       ABC          4 bp    DNA\nORIGIN\n        1 acgt\n//\n";
+    let original = record.repeat(2);
+    std::fs::write(&fasta, &original).unwrap();
+    // A window's session: edits stay in recovery until something publishes them.
+    let mut session = Session::recoverable(dir.path()).unwrap();
+    let doc = session.open(&fasta).unwrap();
+    assert_eq!(session.repeated_record_names(doc).unwrap(), ["ABC"]);
+    let found = renames::number_open_records(&mut session, doc).unwrap();
+    assert_eq!(found.names, ["ABC"]);
+    assert_eq!(
+        std::fs::read_to_string(&fasta).unwrap(),
+        record.replace("ABC   ", "ABC.1 ") + &record.replace("ABC   ", "ABC.2 ")
+    );
+    drop(session);
+    let mut reopened = Session::recoverable(dir.path()).unwrap();
+    let doc = reopened.open(&fasta).unwrap();
+    assert!(
+        reopened.recovery_warning(doc).is_none(),
+        "nothing is left in recovery"
+    );
+    let record = serde_json::to_string(&reopened.document_record(doc).unwrap()).unwrap();
+    assert!(
+        record.contains("number_records"),
+        "the numbering run is in the history: {record}"
+    );
+}
+
+#[test]
 fn a_tip_rename_on_a_tree_a_workspace_uses_is_refused() {
     crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
@@ -417,6 +450,18 @@ fn a_tip_rename_on_a_tree_a_workspace_uses_is_refused() {
     assert!(matches!(
         renames::plan(&session, tree, "a", "a2").unwrap(),
         Err(RenameRefusal::UsedByWorkspace { .. })
+    ));
+    // Numbering is the same rename, so it is refused the same way.
+    let numbering = renames::DuplicateNames {
+        names: vec!["a".into()],
+        renames: vec![("a".into(), "a.1".into())],
+        ..Default::default()
+    };
+    assert!(matches!(
+        renames::make_unique(&mut session, tree, &numbering),
+        Err(basecraft_ops::Error::Rename(
+            RenameRefusal::UsedByWorkspace { .. }
+        ))
     ));
 }
 

@@ -94,7 +94,7 @@ pub(crate) use editor_state;
 ///
 /// The bridge supplies `install_opened`, `refresh`, and two undo steps:
 /// `before_history`, which may refuse undo and redo, and `after_history`,
-/// which brings the view up to date with the document.
+/// which brings the view up to date after the document changed.
 macro_rules! document_editor {
     ($controller:ty, $getter:ident [fresh $($flag:ident)*]) => {
         impl $controller {
@@ -216,10 +216,10 @@ macro_rules! document_editor {
                         self.as_mut().set_dirty(dirty);
                         // Undoing or redoing makes the last message stale.
                         self.as_mut().notify("");
+                        self.as_mut().after_history();
                     }
                     Err(e) => self.as_mut().fail(&e.to_string()),
                 }
-                self.as_mut().after_history();
                 self.refresh();
             }
         }

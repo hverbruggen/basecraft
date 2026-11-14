@@ -1150,7 +1150,7 @@ fn main() {
 
     controller_appearance::run(&app);
     controller_appearance::closed_editor(&app);
-    editor_history::run();
+    editor_history::run(&app);
 
     // Real QML-created controllers; inject invalid owned IDs without exposing
     // production invokables or constructing placeholder document payloads.

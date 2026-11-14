@@ -1225,30 +1225,29 @@ impl qobject::GenomeController {
         self.clamp_cursor();
     }
 
-    /// Number the records that share a name in the file itself (D29), then
-    /// open it again. Only names change, so the saved document must have no
-    /// unsaved edits; the numbering check runs in a session of its own,
-    /// because this editor reopens the file straight after.
+    /// Number the records that share a name in the file itself (D29),
+    /// recorded in this document's history, then open the file again: the
+    /// open copy still has the old names.
     pub fn number_duplicates(mut self: Pin<&mut Self>) -> bool {
         self.as_mut().set_duplicate_names(QString::default());
-        if crate::document_open::unsaved(self.rust().session.as_ref(), self.rust().doc) {
-            self.fail("Save or undo the changes before numbering the records");
+        // Refused before the file changes: the reopen would be refused too.
+        if self.rust().busy {
+            self.fail("Wait for the running operation before replacing this document");
             return false;
         }
-        let path = self.rust().file_path.clone();
-        let file = PathBuf::from(path.to_string());
-        let result = match &self.rust().session {
-            Some(session) => {
-                basecraft_ops::renames::duplicate_records(session, &file).and_then(|found| {
-                    let Some(found) = found else { return Ok(()) };
-                    let numbering = Session::unlogged(session.root());
-                    basecraft_ops::renames::number_records(&numbering, &file, &found)
-                })
-            }
-            None => return false,
+        let result = {
+            let mut r = self.as_mut().rust_mut();
+            let r = &mut *r;
+            let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
+                return false;
+            };
+            basecraft_ops::renames::number_open_records(session, doc)
         };
         match result {
-            Ok(()) => self.open_file(&path),
+            Ok(_) => {
+                let path = self.rust().file_path.clone();
+                self.open_file(&path)
+            }
             Err(e) => {
                 self.fail(&e.to_string());
                 false
