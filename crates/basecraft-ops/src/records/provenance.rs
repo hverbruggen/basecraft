@@ -293,52 +293,79 @@ impl HistoryGap {
 /// parent that is missing or whose bytes differ from the hash its child
 /// recorded is a gap, not an error.
 fn ancestry(bundle: &Path, latest: Publication) -> Result<(Vec<Publication>, Vec<HistoryGap>)> {
+    /// A record still to read (its id, the hash its child expects and when
+    /// the child was saved), one to expand, or one whose parents are done.
+    enum Step {
+        Read(String, Option<String>, String),
+        Expand(Publication),
+        Done(Publication),
+    }
     let mut budget = 128u64 << 20;
-    let mut seen = std::collections::HashSet::from([latest.id.clone()]);
+    // A record is visited when it is expanded (or found unreadable), so one
+    // reached through two children still comes after all its own parents.
+    let mut visited = std::collections::HashSet::new();
     let mut gaps = Vec::new();
     let mut order = Vec::new();
-    let mut stack = vec![(latest, false)];
-    while let Some((record, expanded)) = stack.pop() {
-        if expanded {
-            order.push(record);
-            continue;
-        }
-        let mut parents = Vec::new();
-        for id in record.parents.iter().rev() {
-            if parents.iter().any(|(known, _)| known == id) {
-                return Err(invalid("duplicate parent identity"));
-            }
-            parents.push((id.clone(), record.parent_hashes.get(id).cloned()));
-        }
-        let before = record.created.clone();
-        stack.push((record, true));
-        for (id, expected) in parents {
-            if !seen.insert(id.clone()) {
+    let mut stack = vec![Step::Expand(latest)];
+    while let Some(step) = stack.pop() {
+        let record = match step {
+            Step::Done(record) => {
+                order.push(record);
                 continue;
             }
-            if seen.len() > 10_000 {
-                return Err(crate::Error::Limit {
-                    what: "history records".into(),
-                    limit: 10_000,
+            Step::Expand(record) => record,
+            Step::Read(id, expected, before) => {
+                if visited.contains(&id) {
+                    continue;
+                }
+                let read = read_publication(bundle, &id, &mut budget);
+                let reason = match read {
+                    Ok((parent, hash)) if expected.as_deref() == Some(hash.as_str()) => {
+                        stack.push(Step::Expand(parent));
+                        continue;
+                    }
+                    Ok(_) => "has changed since it was saved",
+                    Err(crate::Error::Io(error))
+                        if error.kind() == std::io::ErrorKind::NotFound =>
+                    {
+                        "is missing"
+                    }
+                    Err(error @ crate::Error::Limit { .. }) => return Err(error),
+                    Err(_) => "cannot be read",
+                };
+                visited.insert(id.clone());
+                gaps.push(HistoryGap {
+                    record: id,
+                    before,
+                    reason,
                 });
+                continue;
             }
-            let gap = |reason| HistoryGap {
-                record: id.clone(),
-                before: before.clone(),
-                reason,
-            };
-            match read_publication(bundle, &id, &mut budget) {
-                Ok((parent, hash)) if expected.as_deref() == Some(hash.as_str()) => {
-                    stack.push((parent, false));
-                }
-                Ok(_) => gaps.push(gap("has changed since it was saved")),
-                Err(crate::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-                    gaps.push(gap("is missing"));
-                }
-                Err(error @ crate::Error::Limit { .. }) => return Err(error),
-                Err(_) => gaps.push(gap("cannot be read")),
-            }
+        };
+        if !visited.insert(record.id.clone()) {
+            continue;
         }
+        if visited.len() > 10_000 {
+            return Err(crate::Error::Limit {
+                what: "history records".into(),
+                limit: 10_000,
+            });
+        }
+        let mut parents = std::collections::HashSet::new();
+        let reads: Vec<_> = record
+            .parents
+            .iter()
+            .map(|id| {
+                if !parents.insert(id) {
+                    return Err(invalid("duplicate parent identity"));
+                }
+                let expected = record.parent_hashes.get(id).cloned();
+                Ok(Step::Read(id.clone(), expected, record.created.clone()))
+            })
+            .collect::<Result<_>>()?;
+        stack.push(Step::Done(record));
+        // The first parent is read first.
+        stack.extend(reads.into_iter().rev());
     }
     Ok((order, gaps))
 }

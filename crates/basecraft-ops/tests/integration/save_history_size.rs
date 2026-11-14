@@ -238,3 +238,153 @@ fn a_run_links_to_its_input_history_instead_of_copying_it() {
         Vec::<String>::new()
     );
 }
+
+/// A record whose parents are [B, A], where B descends from A and undoes A's
+/// edit: A is read before B, so the edit is not in effect. Both readers.
+#[test]
+fn a_parent_is_read_before_the_records_that_descend_from_it() {
+    use basecraft_protocol::provenance::{
+        ArtifactRevision, Completeness, EditActivity, Publication,
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let bundle = dir.path().join("history");
+    std::fs::create_dir_all(bundle.join("records")).unwrap();
+    let fixture = include_str!("../../../../testdata/fixtures/records-v1/journal-entry.jsonl");
+    let event = |id: &str| basecraft_protocol::LogEntry {
+        id: id.into(),
+        ..basecraft_ops::log::parse_entry(fixture.lines().next().unwrap()).unwrap()
+    };
+    let result = dir.path().join("result.txt");
+    std::fs::write(&result, b"result").unwrap();
+    let record =
+        |id: &str, parents: &[(&str, &String)], events, effective, withdrawn| Publication {
+            schema_version: 1,
+            id: id.into(),
+            session: "test".into(),
+            parents: parents.iter().map(|(id, _)| (*id).to_owned()).collect(),
+            parent_hashes: parents
+                .iter()
+                .map(|(id, hash)| ((*id).to_owned(), (*hash).clone()))
+                .collect(),
+            created: "2026-11-14T00:00:00Z".into(),
+            origin: "test".into(),
+            inputs: vec![],
+            outputs: vec![ArtifactRevision {
+                id: format!("{id}:output"),
+                logical_name: "result.txt".into(),
+                hash: basecraft_io::hash_bytes(b"result"),
+                size: 6,
+                retained: None,
+                reference: None,
+            }],
+            events,
+            effective_edits: effective,
+            withdrawn,
+            completeness: Completeness {
+                ancestry_known: false,
+                input_bytes_available: true,
+                execution_specification_available: false,
+                replay_verified: false,
+            },
+            report_template_version: 2,
+        };
+    let write = |publication: &Publication| {
+        let bytes = basecraft_protocol::records::encode(publication).unwrap();
+        std::fs::write(
+            bundle.join(format!("records/{}.json", publication.id)),
+            &bytes,
+        )
+        .unwrap();
+        basecraft_io::hash_bytes(&bytes)
+    };
+    let edit = event("01E1");
+    let effective = vec![EditActivity {
+        id: edit.id.clone(),
+        operation: edit.op.clone(),
+    }];
+    let a = write(&record("01A", &[], vec![edit], effective, vec![]));
+    let b = write(&record(
+        "01B",
+        &[("01A", &a)],
+        vec![event("01E2")],
+        vec![],
+        vec!["01E1".into()],
+    ));
+    let latest = record("01L", &[("01B", &b), ("01A", &a)], vec![], vec![], vec![]);
+    let hash = write(&latest);
+    let pointer = basecraft_protocol::provenance::LatestRecord {
+        schema_version: 1,
+        id: "01L".into(),
+        hash,
+    };
+    std::fs::write(
+        bundle.join("manifest.json"),
+        basecraft_protocol::records::encode(&pointer).unwrap(),
+    )
+    .unwrap();
+    let history = basecraft_ops::records::SavedHistory::read(&bundle, latest).unwrap();
+    assert!(history.effective.is_empty(), "{:?}", history.effective);
+    let reader = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schemas/verify_provenance.py");
+    let output = std::process::Command::new("python3")
+        .arg(reader)
+        .arg(&result)
+        .arg("--bundle")
+        .arg(&bundle)
+        .arg("--metadata-only")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report["effective_operations"],
+        serde_json::json!([]),
+        "{report}"
+    );
+}
+
+/// D27: a GFF3 that happens to sit beside a Save As target was not read with
+/// the document, so a featureless FASTA leaves it alone.
+#[test]
+fn save_as_leaves_an_unrelated_gff3_beside_the_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("gene.fasta");
+    std::fs::write(&file, ">gene\nACGTACGT\n").unwrap();
+    let unrelated = dir.path().join("copy.gff3");
+    std::fs::write(
+        &unrelated,
+        b"##gff-version 3\nother\tsrc\tgene\t1\t4\t.\t+\t.\tID=x\n",
+    )
+    .unwrap();
+    let before = std::fs::read(&unrelated).unwrap();
+    let mut session = Session::recoverable(dir.path()).unwrap();
+    let doc = session.open(&file).unwrap();
+    session.apply(doc, Op::seq_replace(0, 1, "T")).unwrap();
+    session
+        .save(doc, Some(&dir.path().join("copy.fasta")))
+        .unwrap();
+    assert_eq!(std::fs::read(&unrelated).unwrap(), before);
+}
+
+/// With one file open twice, a save of one keeps the other's unsaved edits
+/// in the recovery journal.
+#[test]
+fn a_save_keeps_the_journal_of_the_same_file_open_twice() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("gene.fasta");
+    std::fs::write(&file, ">gene\nACGTACGT\n").unwrap();
+    let mut session = Session::recoverable(dir.path()).unwrap();
+    let first = session.open(&file).unwrap();
+    let second = session.open(&file).unwrap();
+    let kept = session
+        .apply(second, Op::seq_replace(4, 5, "C"))
+        .unwrap()
+        .entry_id;
+    session.apply(first, Op::seq_replace(0, 1, "T")).unwrap();
+    session.save(first, None).unwrap();
+    let journal = basecraft_ops::log::read_all(session.recovery_root()).unwrap();
+    assert!(journal.iter().any(|entry| entry.id == kept));
+}

@@ -1297,22 +1297,20 @@ fn write_fasta_record(
     Ok(())
 }
 
-/// Serialise the GFF3 sidecar, if the format has one.
-/// Whether saving to `target` writes the GFF3 file beside a FASTA (D27):
-/// when there are features, the sequence is circular, or a GFF3 was read
-/// with it or is there already. Such a GFF3 is written again, empty if every
-/// feature went; basecraft never deletes it.
-pub fn writes_gff(opened: &Opened, target: &Path) -> bool {
+/// Whether a save writes the GFF3 file beside a FASTA (D27): when there
+/// are features, the sequence is circular, or a GFF3 was read with it (or
+/// this session wrote one for it). Such a GFF3 is written again, empty if
+/// every feature went; basecraft never deletes it.
+pub fn writes_gff(opened: &Opened) -> bool {
     opened.format == Format::Fasta
         && (opened.others.gff.is_some()
             || opened.doc.circular
-            || opened.doc.features().next().is_some()
-            || gff_sidecar(target).exists())
+            || opened.doc.features().next().is_some())
 }
 
-/// The GFF3 file beside a FASTA saved to `target`, when [`writes_gff`].
-pub fn write_sidecar(opened: &Opened, target: &Path, w: &mut dyn Write) -> Option<io::Result<()>> {
-    writes_gff(opened, target).then(|| {
+/// The GFF3 file beside a FASTA, when [`writes_gff`].
+pub fn write_sidecar(opened: &Opened, w: &mut dyn Write) -> Option<io::Result<()>> {
+    writes_gff(opened).then(|| {
         let feats = opened.doc.to_gff();
         match &opened.others.gff {
             Some(kept) => gff3::write_kept(w, kept, &feats, opened.doc.len()),

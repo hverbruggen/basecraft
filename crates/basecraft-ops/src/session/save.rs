@@ -491,6 +491,7 @@ impl Session {
             let stamp = crate::records::input_evidence::stamp(target)?;
             if own {
                 self.docs[id.0].disk_stamp = stamp.clone();
+                self.wrote_gff(id, target)?;
             }
             self.docs[id.0].saved_target = Some((target.to_path_buf(), stamp, expected[0].clone()));
             if self.log.is_some() {
@@ -552,6 +553,22 @@ impl Session {
             });
         }
         Err(error)
+    }
+
+    /// A GFF3 this save wrote for the document's own file is from now on
+    /// one that was read with it (D27): later saves write it again.
+    fn wrote_gff(&mut self, id: DocId, target: &Path) -> Result<()> {
+        if let files::Loaded::Sequence(opened) = self.docs[id.0].content_mut()
+            && opened.others.gff.is_none()
+            && files::writes_gff(opened)
+        {
+            let bytes = std::fs::read(files::gff_sidecar(target))?;
+            let name = opened.doc.name.clone();
+            opened.others.gff = Some(std::sync::Arc::new(basecraft_io::gff3::keep_others(
+                &bytes, &name,
+            )));
+        }
+        Ok(())
     }
 
     /// A recovery write ends with a fresh check of its final destination.
@@ -792,7 +809,11 @@ impl Session {
         slot.recorded.extend(saved);
         let key = slot.key.clone();
         let save = entry.id.clone();
+        // The same file open twice shares a key: the other slot's unsaved
+        // edits stay in the journal.
+        let shared = self.docs.iter().filter(|slot| slot.key == key).count() > 1;
         if self.storage_root != self.root
+            && !shared
             && let Some(log) = &mut self.log
         {
             // The Save entry is the document's recovery baseline from now on.

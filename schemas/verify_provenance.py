@@ -190,6 +190,8 @@ def main():
     # parents first.
     effective = []
     order = []
+    # A record is visited when it is expanded, so one reached through two
+    # children still comes after all its own parents.
     walk = [(publication, False)]
     walked = set()
     while walk:
@@ -197,10 +199,12 @@ def main():
         if done:
             order.append(current)
             continue
+        if current["id"] in walked:
+            continue
+        walked.add(current["id"])
         walk.append((current, True))
         for parent in reversed(current["parents"]):
             if parent not in walked:
-                walked.add(parent)
                 walk.append((record(relative(bundle, f"records/{parent}.json")), False))
     for current in order:
         withdrawn = set(current["withdrawn"])

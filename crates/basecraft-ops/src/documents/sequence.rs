@@ -125,7 +125,7 @@ impl Document for Opened {
         project: Option<&crate::project::Project>,
         target: &Path,
     ) -> Vec<PathBuf> {
-        let gff = files::writes_gff(self, target).then(|| files::gff_sidecar(target));
+        let gff = files::writes_gff(self).then(|| files::gff_sidecar(target));
         let facts = self
             .doc
             .stated_alphabet()
@@ -146,9 +146,9 @@ impl Document for Opened {
         }
         let mut prepared = super::PreparedWrite::default();
         let hash = prepared.push(target, |w| files::write_main(self, w))?;
-        if files::writes_gff(self, target) {
+        if files::writes_gff(self) {
             prepared.push(&files::gff_sidecar(target), |w| {
-                files::write_sidecar(self, target, w).unwrap_or(Ok(()))
+                files::write_sidecar(self, w).unwrap_or(Ok(()))
             })?;
         }
         super::stage_companion(
@@ -162,7 +162,7 @@ impl Document for Opened {
     }
     fn saved_hashes(
         &self,
-        target: &Path,
+        _target: &Path,
         _publication: &super::WritePublication,
     ) -> Result<Vec<String>> {
         let mut hw = HashingWriter::new(std::io::sink());
@@ -170,7 +170,7 @@ impl Document for Opened {
         let main = hw.hash();
         let mut out = vec![main.clone()];
         let mut hw = HashingWriter::new(std::io::sink());
-        if let Some(r) = files::write_sidecar(self, target, &mut hw) {
+        if let Some(r) = files::write_sidecar(self, &mut hw) {
             r?;
             out.push(hw.hash());
         }
@@ -445,8 +445,7 @@ mod tests {
             let mut expected_main = Vec::new();
             files::write_main(&opened, &mut expected_main).unwrap();
             let mut expected_side = Vec::new();
-            let side =
-                files::write_sidecar(&opened, &source, &mut expected_side).map(|r| r.unwrap());
+            let side = files::write_sidecar(&opened, &mut expected_side).map(|r| r.unwrap());
             let mut loaded = files::Loaded::Sequence(opened);
             let document = loaded.as_document_mut();
             let initial = document

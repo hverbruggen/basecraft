@@ -741,18 +741,23 @@ impl Locks {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
     }
-    /// One key per file: its inode while it exists, so every name of it
-    /// shares the key, else its path.
+    /// A file's keys: its path, which stays the same when a save replaces
+    /// the file or creates it, and while it exists its inode, which every
+    /// other name of it shares. Both go in one reservation, in lock order.
     pub(crate) fn source(&self, path: &Path) -> Result<()> {
-        let key = match stamp(path) {
-            Ok(FileStamp {
-                device: Some(device),
-                inode: Some(inode),
-                ..
-            }) => PathBuf::from(format!("inode:{device}:{inode}")),
-            _ => lexical(&std::path::absolute(path)?),
-        };
-        self.reserve([key])
+        let mut keys = vec![
+            crate::records::save_guard::target_path(path)
+                .or_else(|_| std::path::absolute(path).map(|path| lexical(&path)))?,
+        ];
+        if let Ok(FileStamp {
+            device: Some(device),
+            inode: Some(inode),
+            ..
+        }) = stamp(path)
+        {
+            keys.push(PathBuf::from(format!("inode:{device}:{inode}")));
+        }
+        self.reserve(keys)
     }
 }
 
