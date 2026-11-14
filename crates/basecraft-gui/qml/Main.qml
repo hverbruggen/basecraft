@@ -465,8 +465,6 @@ ApplicationWindow {
         ignoreUnknownSignals: true
         function onLabel_questionChanged() { labelPlacement.dialog().controller = window.current }
         function onRefused_editChanged() { readOnlyCopy.dialog().owner = window.current }
-        function onAlphabet_questionChanged() { alphabetQuestion.dialog().controller = window.current }
-        function onDuplicate_namesChanged() { duplicateNames.dialog().controller = window.current }
         function onTaxaSelected(names) {
             for (let i = 0; i < docs.count; i++) {
                 const d = window.documentAt(i)
