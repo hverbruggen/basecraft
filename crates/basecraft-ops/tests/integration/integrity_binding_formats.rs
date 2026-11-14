@@ -6,7 +6,7 @@ use serde_json::json;
 pub(crate) fn checked_run(
     result: &std::path::Path,
 ) -> basecraft_ops::Result<Option<std::path::PathBuf>> {
-    ArtifactRun::for_result_with_hash(result, &basecraft_io::hash_file(result)?)
+    ArtifactRun::for_result_with_hash(None, result, &basecraft_io::hash_file(result)?)
 }
 
 #[test]
@@ -14,12 +14,12 @@ fn result_binding_writer_bytes_and_selective_reader() {
     crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let output = root.path().join("result.txt");
-    let run = ArtifactRun::create(&output, "binding-probe").unwrap();
-    for name in ["result.txt", "nested/ünicode result.txt"] {
+    let run = ArtifactRun::create(None, &output, "binding-probe").unwrap();
+    for name in ["result.txt", "ünicode result.txt"] {
         let result = root.path().join(name);
         std::fs::create_dir_all(result.parent().unwrap()).unwrap();
         std::fs::write(&result, b"bound result bytes").unwrap();
-        run.bind(&result, &basecraft_io::hash_file(&result).unwrap())
+        run.bind(None, &result, &basecraft_io::hash_file(&result).unwrap())
             .unwrap();
         let key = basecraft_io::hash_bytes(name.as_bytes());
         let binding = root
@@ -63,7 +63,8 @@ fn result_binding_writer_bytes_and_selective_reader() {
             basecraft_protocol::records::encode(&no_hash).unwrap(),
         )
         .unwrap();
-        assert!(ArtifactRun::for_result(&result).unwrap().is_some());
+        // A binding is read as its type: one without a hash is refused.
+        assert!(ArtifactRun::for_result(None, &result).is_err());
         assert!(checked_run(&result).is_err());
         let mut missing_run = original.clone();
         missing_run["run"] = json!("absent");
@@ -72,7 +73,7 @@ fn result_binding_writer_bytes_and_selective_reader() {
             basecraft_protocol::records::encode(&missing_run).unwrap(),
         )
         .unwrap();
-        assert!(ArtifactRun::for_result(&result).unwrap().is_none());
+        assert!(ArtifactRun::for_result(None, &result).unwrap().is_none());
         assert!(checked_run(&result).is_err());
         std::fs::write(
             &binding,
@@ -80,7 +81,7 @@ fn result_binding_writer_bytes_and_selective_reader() {
         )
         .unwrap();
         std::fs::write(&result, b"changed").unwrap();
-        assert!(ArtifactRun::for_result(&result).unwrap().is_some());
+        assert!(ArtifactRun::for_result(None, &result).unwrap().is_some());
         assert!(checked_run(&result).is_err());
         for bad in [
             json!({}),
@@ -88,12 +89,12 @@ fn result_binding_writer_bytes_and_selective_reader() {
             json!({"schema_version":1,"result":name,"run":"../escape"}),
         ] {
             std::fs::write(&binding, basecraft_protocol::records::encode(&bad).unwrap()).unwrap();
-            assert!(ArtifactRun::for_result(&result).is_err());
+            assert!(ArtifactRun::for_result(None, &result).is_err());
         }
         std::fs::write(&binding, b"{broken").unwrap();
-        assert!(ArtifactRun::for_result(&result).is_err());
+        assert!(ArtifactRun::for_result(None, &result).is_err());
         std::fs::remove_file(&binding).unwrap();
-        assert!(ArtifactRun::for_result(&result).unwrap().is_none());
+        assert!(ArtifactRun::for_result(None, &result).unwrap().is_none());
     }
 }
 

@@ -25,6 +25,9 @@ pub(crate) struct History<'a> {
     /// Records the session knows, with the ids of the edits in effect in each.
     pub(crate) known: [Option<(String, Vec<String>)>; 2],
     pub(crate) origin_bundle: &'a Path,
+    /// The document's own file, and the run it is bound to.
+    pub(crate) file: PathBuf,
+    pub(crate) run: Option<&'a Path>,
     pub(crate) delimitation: bool,
 }
 
@@ -36,6 +39,16 @@ pub(crate) struct StagedRecord {
 }
 
 impl History<'_> {
+    /// The run `target` is bound to: the kept one for the document's own
+    /// file, else looked up.
+    fn bound(&self, target: &Path) -> Result<Option<PathBuf>> {
+        if std::path::absolute(target)? == std::path::absolute(&self.file)? {
+            Ok(self.run.map(Path::to_path_buf))
+        } else {
+            crate::records::analysis_store::ArtifactRun::for_result(self.project, target)
+        }
+    }
+
     /// Every event of the document this session knows, oldest first.
     fn events(&self) -> impl Iterator<Item = &LogEntry> {
         self.recorded
@@ -52,9 +65,8 @@ impl History<'_> {
     pub(crate) fn save(&self, target: &Path, save: &LogEntry) -> Result<StagedRecord> {
         use basecraft_protocol::provenance::{ArtifactRevision, Completeness};
         let _scope = crate::records::input_evidence::lock_in(self.project)?;
-        let bundle = if let Some(hidden) =
-            crate::records::analysis_store::ArtifactRun::for_result(target)?
-        {
+        let bound = self.bound(target)?;
+        let bundle = if let Some(hidden) = bound.clone() {
             hidden
         } else if let Some(bundle) = self
             .project
@@ -256,15 +268,14 @@ impl History<'_> {
         }
         let mut outputs = Vec::new();
         for (key, hash) in &save.result.hashes {
-            let logical_name =
-                if crate::records::analysis_store::ArtifactRun::for_result(target)?.is_some() {
-                    crate::records::input_evidence::relative(
-                        &target.parent().unwrap_or(Path::new(".")).canonicalize()?,
-                        &self.root.join(key).canonicalize()?,
-                    )?
-                } else {
-                    name(key)
-                };
+            let logical_name = if bound.is_some() {
+                crate::records::input_evidence::relative(
+                    &target.parent().unwrap_or(Path::new(".")).canonicalize()?,
+                    &self.root.join(key).canonicalize()?,
+                )?
+            } else {
+                name(key)
+            };
             outputs.push(ArtifactRevision {
                 id: format!("{}:output:{}", save.id, outputs.len()),
                 logical_name,
@@ -403,7 +414,7 @@ impl History<'_> {
         if !self.tracked {
             return Ok(());
         }
-        let run = crate::records::ArtifactRun::create(path, &activity.id)?;
+        let run = crate::records::ArtifactRun::create(self.project, path, &activity.id)?;
         let bundle = run.directory().to_path_buf();
         std::fs::create_dir_all(&bundle)?;
         let (reference, hash, size, logical_name) = if let Some((source, stamp, hash)) = source {
@@ -517,7 +528,7 @@ impl History<'_> {
             report_template_version: 2,
         };
         crate::records::publish(&bundle, &publication)?;
-        run.bind(path, &output_hash)?;
+        run.bind(self.project, path, &output_hash)?;
         Ok(())
     }
 }

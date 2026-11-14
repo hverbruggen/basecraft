@@ -91,6 +91,9 @@ struct Slot {
     origin_history: crate::records::SavedHistory,
     origin_issue: Option<String>,
     origin_bundle: PathBuf,
+    /// The analysis run the document's file is bound to: found once when it
+    /// was opened (rule 2.5), and set by a save that binds it.
+    run: Option<PathBuf>,
     /// Events this session moved into the document's records, oldest first.
     recorded: Vec<LogEntry>,
     /// The document's journal entries since its file was last saved.
@@ -593,6 +596,8 @@ impl Session {
                 slot.last_record.clone(),
             ],
             origin_bundle: &slot.origin_bundle,
+            file: self.resolve(&slot.key),
+            run: slot.run.as_deref(),
             delimitation: slot.content.kind() == files::Kind::Delimitation,
         })
     }

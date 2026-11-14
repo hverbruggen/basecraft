@@ -152,7 +152,7 @@ impl Session {
         );
 
         // 1. Find and reserve the analyses that may use the target.
-        let written = Self::written_stores(&target.path)?;
+        let written = self.written_stores(&target.path)?;
         let mut evidence_lock = crate::records::input_evidence::lock_save(
             &target.path,
             &written,
@@ -641,12 +641,21 @@ impl Session {
         };
         #[cfg(test)]
         super::save_failure_tests::fail_write(super::save_failure_tests::WriteStep::Replace)?;
-        let write = || document.publish_write(prepared, target, publication);
+        let project = self.companion_project();
+        let new_run = prepared
+            .run
+            .as_ref()
+            .map(|run| run.directory().to_path_buf());
+        let write = || document.publish_write(project, prepared, target, publication);
         let (hashes, outputs) = if let Some(links) = links {
             links.publish(write)?
         } else {
             (write()?, Vec::new())
         };
+        if new_run.is_some() && original == target {
+            // The save bound the document's own file to a new run.
+            self.docs[id.0].run = new_run;
+        }
         let hashes = hashes
             .into_iter()
             .map(|(path, hash)| (self.relative(&path), hash))
@@ -862,21 +871,18 @@ impl Session {
         }
     }
 
-    /// Stores this save may write after the data: the store of a bound result
-    /// (binding, history) and the target folder's store (new hidden runs).
-    /// They are reserved exclusively up front, never upgraded later.
-    fn written_stores(target: &Path) -> Result<Vec<std::path::PathBuf>> {
-        let mut stores: Vec<_> = crate::records::analysis_store::ArtifactRun::for_result(target)?
-            .and_then(|run| run.parent().and_then(Path::parent).map(Path::to_path_buf))
-            .into_iter()
-            .collect();
-        if let Some(folder) = target.parent() {
-            let store = folder.join(".basecraft/analyses-v1");
-            if store.is_dir() {
-                stores.push(store);
-            }
-        }
-        Ok(stores)
+    /// The store this save may write after the data: the one that holds
+    /// the target's binding and any run the save makes, in the project or
+    /// beside a loose file (rule 2.5). Reserved exclusively up front, never
+    /// upgraded later.
+    fn written_stores(&self, target: &Path) -> Result<Vec<std::path::PathBuf>> {
+        let base = crate::project::Project::base_of(self.companion_project(), target)?;
+        let store = base.join(".basecraft/analyses-v1");
+        Ok(if store.is_dir() {
+            vec![store]
+        } else {
+            Vec::new()
+        })
     }
 
     fn save_format(&self, id: DocId, target: &Path) -> Result<files::Format> {

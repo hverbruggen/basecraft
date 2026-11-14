@@ -89,6 +89,7 @@ impl PreparedOperation {
                         .iter()
                         .any(|artifact| artifact.path == member)
                 });
+                let moved_now = !path.exists();
                 if path.exists() && !(repair && published && intent.is_file()) {
                     // Not yet in the outcome: adopt only the folder this run
                     // moved, by the identity its intent recorded.
@@ -135,7 +136,8 @@ impl PreparedOperation {
                             })
                         },
                     )?;
-                } else {
+                }
+                if !moved_now {
                     // A repair adopts what an earlier attempt moved there.
                     verify_collection(&path, &expected)?;
                 }
@@ -483,7 +485,9 @@ impl PreparedOperation {
                 .publish_operation_activity(&self.run, &activity)?;
         }
         for artifact in &outcome.artifacts {
-            self.run.bind(Path::new(&artifact.path), &artifact.digest)?;
+            let path = Path::new(&artifact.path);
+            self.run
+                .bind(self.project.as_ref(), path, &artifact.digest)?;
         }
         Ok(())
     }

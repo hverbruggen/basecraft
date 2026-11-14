@@ -17,7 +17,7 @@ fn submitted_input_ancestry_and_source_identity() {
         None,
     )
     .unwrap();
-    let generated = ArtifactRun::create(&root.path().join("derived"), "generated").unwrap();
+    let generated = ArtifactRun::create(None, &root.path().join("derived"), "generated").unwrap();
     records::link_generated_input(
         &generated,
         &[original.directory().into()],

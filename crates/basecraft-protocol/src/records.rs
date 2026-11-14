@@ -492,13 +492,19 @@ pub struct RecoveryIntegrityError {
     pub extra: BTreeMap<String, Value>,
 }
 
-/// Existing hidden association written by `ArtifactRun::bind`. Runtime readers
-/// retain their selective version, namespace, path and content-hash checks.
+/// A result's link to the run that made it, written by `ArtifactRun::bind`
+/// in the `.basecraft` where the result's records are kept: its project's,
+/// or the one beside a loose result.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct ResultBinding {
     pub schema_version: u32,
     pub run: String,
-    /// UTF-8 relative filename, using the existing writer's path conversion.
+    /// The folder whose `.basecraft` holds the run, relative to the folder
+    /// whose `.basecraft` holds this binding; absent when they are the same.
+    /// A loose result in a subfolder of the folder a run was made in has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home: Option<String>,
+    /// The result's path, relative to the folder that holds this binding.
     pub result: String,
     pub result_hash: String,
     #[serde(flatten)]

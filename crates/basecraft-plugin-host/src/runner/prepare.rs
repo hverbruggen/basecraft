@@ -850,7 +850,7 @@ fn allocate_run(
         .map(serde_json::to_vec)
         .transpose()?;
     let mutation = records::Mutation::begin_in(project)?;
-    let run = ArtifactRun::create(&anchor, &run_id)?;
+    let run = ArtifactRun::create(project, &anchor, &run_id)?;
     let mut ledger_inputs = Vec::new();
     let mut upstream = Vec::new();
     let mut first_input = None;

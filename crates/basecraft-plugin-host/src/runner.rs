@@ -678,7 +678,12 @@ impl PreparedOperation {
         let roster =
             basecraft_ops::delimitation::link_roster(&self.policy.root, &self.run, &mut work)?;
         let target = self.policy.path(destination, true)?;
-        basecraft_ops::delimitation::publish_workspace_to(&target, &work, &self.run)?;
+        basecraft_ops::delimitation::publish_workspace_to(
+            self.project.as_ref(),
+            &target,
+            &work,
+            &self.run,
+        )?;
         Ok((target, roster.summary()))
     }
 
@@ -700,7 +705,7 @@ impl PreparedOperation {
     /// An exported tree gets what the retained member has: its run binding,
     /// producer support semantics and the link to the alignment it came from.
     fn finalise_exported_tree(&self, role: &str, tree: &Path, hash: &str) -> Result<()> {
-        self.run.bind(tree, hash)?;
+        self.run.bind(self.project.as_ref(), tree, hash)?;
         file_tool::write_tree_companion(
             tree,
             file_tool::producer_support(&self.operation.descriptor, &self.parameters),
@@ -737,6 +742,7 @@ impl PreparedOperation {
             ),
         };
         basecraft_ops::records::AlignmentLink::create_referenced(
+            self.project.as_ref(),
             tree,
             &source,
             Path::new(frozen),
@@ -925,6 +931,19 @@ fn check_members(root: &Path, expected: &BTreeMap<PathBuf, String>) -> Result<()
     }
     let mut actual = BTreeSet::new();
     scan_files(root, &mut actual, 0)?;
+    // Validation refused any analysis store a plugin wrote, so one here
+    // holds the bindings of loose members, kept beside them (rule 2.5).
+    actual.retain(|path| {
+        !path.strip_prefix(root).is_ok_and(|member| {
+            let parts: Vec<_> = member
+                .components()
+                .map(std::path::Component::as_os_str)
+                .collect();
+            parts
+                .windows(2)
+                .any(|pair| pair == [".basecraft", "analyses-v1"])
+        })
+    });
     if actual != expected.keys().map(|path| root.join(path)).collect() {
         return Err(Error::Protocol(
             "collection members differ from validated output".into(),

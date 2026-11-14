@@ -6,7 +6,7 @@ use std::path::Path;
 pub fn retain(root: &Path, request: &Value, outcome: &mut Value) {
     let reports = root.join(request["destinations"]["reports"].as_str().unwrap());
     let anchor = reports.parent().unwrap().join("anchor");
-    let run = ArtifactRun::create(&anchor, &ulid::Ulid::generate().to_string()).unwrap();
+    let run = ArtifactRun::create(None, &anchor, &ulid::Ulid::generate().to_string()).unwrap();
     let mut evidence = serde_json::Map::new();
     let mut inputs = vec![];
     let mut first = None;
@@ -54,7 +54,7 @@ pub fn retain(root: &Path, request: &Value, outcome: &mut Value) {
     records::publish(run.directory(), &publication).unwrap();
     for artifact in artifacts {
         let path = Path::new(artifact["path"].as_str().unwrap());
-        run.bind(path, &basecraft_io::hash_file(path).unwrap())
+        run.bind(None, path, &basecraft_io::hash_file(path).unwrap())
             .unwrap();
     }
 }

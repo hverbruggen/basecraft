@@ -58,7 +58,7 @@ fn a_tool_run_names_its_run_folder_and_replays() {
         "gene.fasta".to_string(),
         session.snapshot_file(&file).unwrap(),
     )];
-    let run = records::ArtifactRun::create(&output, "01M79REPLAYRUNFOLDER00000").unwrap();
+    let run = records::ArtifactRun::create(None, &output, "01M79REPLAYRUNFOLDER00000").unwrap();
     session
         .record_tool_run(
             doc,

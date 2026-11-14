@@ -358,7 +358,7 @@ fn nested_delimitation_registers_only_final_stores_and_reopens() {
             value["delimitation"]["path_base"],
             file.parent().unwrap().to_str().unwrap()
         );
-        let run = basecraft_ops::records::ArtifactRun::for_result(&file)
+        let run = basecraft_ops::records::ArtifactRun::for_result(Some(&project), &file)
             .unwrap()
             .unwrap();
         let input = basecraft_ops::records::read_input(&run).unwrap();

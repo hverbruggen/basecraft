@@ -89,7 +89,7 @@ impl Document for SangerReview {
     }
     fn prepare_write(
         &self,
-        _project: Option<&crate::project::Project>,
+        project: Option<&crate::project::Project>,
         target: &Path,
         format: Format,
         _recovery: &Path,
@@ -100,16 +100,19 @@ impl Document for SangerReview {
                 "a Sanger review is saved as JSON".into(),
             ));
         }
-        self.prepare_session_review(target, &publication.logical(target)?, publication)
+        self.prepare_session_review(project, target, &publication.logical(target)?, publication)
     }
     fn finish_write(
         &self,
+        project: Option<&crate::project::Project>,
         target: &Path,
         _hashes: &[(PathBuf, String)],
         run: Option<&crate::records::analysis_store::ArtifactRun>,
         _publication: &WritePublication,
     ) -> Result<()> {
-        run.map_or(Ok(()), |run| SangerReview::bind_session_review(target, run))
+        run.map_or(Ok(()), |run| {
+            SangerReview::bind_session_review(project, target, run)
+        })
     }
     fn saved_hashes(&self, target: &Path, publication: &WritePublication) -> Result<Vec<String>> {
         Ok(vec![basecraft_io::hash_bytes(

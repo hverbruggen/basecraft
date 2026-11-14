@@ -122,6 +122,7 @@ impl Document for OpenedTree {
 
     fn finish_write(
         &self,
+        project: Option<&crate::project::Project>,
         target: &Path,
         written: &[(PathBuf, String)],
         _: Option<&crate::records::analysis_store::ArtifactRun>,
@@ -131,7 +132,7 @@ impl Document for OpenedTree {
             Some((_, hash)) => hash.clone(),
             None => basecraft_io::hash_file(target)?,
         };
-        crate::records::analysis_store::ArtifactRun::refresh_binding(target, &hash)
+        crate::records::analysis_store::ArtifactRun::refresh_binding(project, target, &hash)
     }
 
     fn saved_hashes(

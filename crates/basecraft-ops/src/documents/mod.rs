@@ -342,7 +342,7 @@ pub(crate) trait Document {
         publication: &WritePublication,
     ) -> Result<Vec<(PathBuf, String)>> {
         let prepared = self.prepare_write(project, target, format, recovery_root, publication)?;
-        self.publish_write(prepared, target, publication)
+        self.publish_write(project, prepared, target, publication)
     }
     fn prepare_write(
         &self,
@@ -354,6 +354,7 @@ pub(crate) trait Document {
     ) -> Result<PreparedWrite>;
     fn publish_write(
         &self,
+        project: Option<&crate::project::Project>,
         prepared: PreparedWrite,
         target: &Path,
         publication: &WritePublication,
@@ -362,11 +363,12 @@ pub(crate) trait Document {
         let mut prepared = prepared;
         prepared.create = matches!(publication, WritePublication::Create);
         let hashes = prepared.publish()?;
-        self.finish_write(target, &hashes, run.as_ref(), publication)?;
+        self.finish_write(project, target, &hashes, run.as_ref(), publication)?;
         Ok(hashes)
     }
     fn finish_write(
         &self,
+        _project: Option<&crate::project::Project>,
         _target: &Path,
         _hashes: &[(PathBuf, String)],
         _run: Option<&crate::records::analysis_store::ArtifactRun>,

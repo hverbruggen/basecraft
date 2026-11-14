@@ -297,7 +297,7 @@ impl SangerRun {
                 evidence.sources.push(source(path, None, anchor, project)?);
             }
         }
-        let run = ArtifactRun::create(anchor, &ulid::Ulid::generate().to_string())?;
+        let run = ArtifactRun::create(project, anchor, &ulid::Ulid::generate().to_string())?;
         let mut dependencies: Vec<_> = evidence
             .sources
             .iter()
@@ -845,9 +845,13 @@ impl SangerReview {
         Ok(bytes)
     }
 
-    pub(crate) fn publish_consensus(&mut self, path: &Path) -> crate::Result<()> {
+    pub(crate) fn publish_consensus(
+        &mut self,
+        project: Option<&crate::project::Project>,
+        path: &Path,
+    ) -> crate::Result<()> {
         self.ensure_sources(path)?;
-        let run = ArtifactRun::create(path, &ulid::Ulid::generate().to_string())?;
+        let run = ArtifactRun::create(project, path, &ulid::Ulid::generate().to_string())?;
         let mut dependencies = self.evidence.runs.clone();
         for set in &self.retained {
             dependencies.extend(set.evidence.runs.clone());
@@ -889,7 +893,7 @@ impl SangerReview {
             reference: None,
         });
         crate::records::provenance::publish(run.directory(), &record)?;
-        run.bind(path, &hash)?;
+        run.bind(project, path, &hash)?;
         self.evidence.runs = vec![run.directory().into()];
         Ok(())
     }
@@ -1205,6 +1209,7 @@ impl SangerReview {
     /// owner replaces the target, then `bind_session_review` links the run.
     pub(crate) fn prepare_session_review(
         &self,
+        project: Option<&crate::project::Project>,
         target: &Path,
         logical: &Path,
         publication_context: &crate::documents::WritePublication,
@@ -1238,8 +1243,10 @@ impl SangerReview {
                 }
             }
         }
-        let run = ArtifactRun::create(target, &ulid::Ulid::generate().to_string())?;
-        let mut dependencies: Vec<_> = ArtifactRun::for_result(target)?.into_iter().collect();
+        let run = ArtifactRun::create(project, target, &ulid::Ulid::generate().to_string())?;
+        let mut dependencies: Vec<_> = ArtifactRun::for_result(project, target)?
+            .into_iter()
+            .collect();
         for set in std::iter::once(self).chain(self.retained.iter()) {
             dependencies.extend(set.evidence.runs.clone());
             dependencies.extend(
@@ -1284,9 +1291,13 @@ impl SangerReview {
         Ok(prepared)
     }
 
-    pub(crate) fn bind_session_review(target: &Path, run: &ArtifactRun) -> crate::Result<()> {
+    pub(crate) fn bind_session_review(
+        project: Option<&crate::project::Project>,
+        target: &Path,
+        run: &ArtifactRun,
+    ) -> crate::Result<()> {
         let hash = basecraft_io::hash_file(target)?;
-        run.bind(target, &hash)
+        run.bind(project, target, &hash)
             .map_err(|error| crate::Error::Damaged {
                 path: target.into(),
                 detail: format!(

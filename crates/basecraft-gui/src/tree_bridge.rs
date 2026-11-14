@@ -814,8 +814,10 @@ impl qobject::TreeController {
                     self.with_doc(|tree| {
                         use basecraft_ops::records::AlignmentLink;
                         let _ = AlignmentLink::checked_view_in(project, &path, tree);
-                        AlignmentLink::read_view_in(project, &path)
-                            .map_or_else(|e| e.to_string(), |link| link.status(&path, tree))
+                        AlignmentLink::read_view_in(project, &path).map_or_else(
+                            |e| e.to_string(),
+                            |link| link.status(project, &path, tree),
+                        )
                     })
                 )
                 .unwrap_or_default();

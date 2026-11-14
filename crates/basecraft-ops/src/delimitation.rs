@@ -38,18 +38,6 @@ pub fn linked_alignment(session: &Session, doc: DocId) -> Result<Option<&str>> {
     }))
 }
 
-/// Publish a new canonical exchange file without replacing a user file. The
-/// authoritative workspace is hidden; native per-fit SPARTs stay in their runs.
-pub fn publish_workspace(
-    target: &std::path::Path,
-    work: &basecraft_protocol::delimitation::DelimitationWorkspace,
-    run: &crate::records::analysis_store::ArtifactRun,
-) -> Result<()> {
-    let name = stage_workspace(target, work, run)?;
-    run.publish_primary(&name)?;
-    run.bind(target, &basecraft_io::hash_file(target)?)
-}
-
 /// Which specimens of a new workspace were linked to the project roster.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RosterLinks {
@@ -147,6 +135,7 @@ pub const WORKSPACE_RECEIPT: &str = "workspace-export.json";
 /// may lie anywhere in the project; never replaces an existing file. The
 /// staged file moves there with a receipt; the run keeps no copy (D26).
 pub fn publish_workspace_to(
+    project: Option<&crate::project::Project>,
     target: &std::path::Path,
     work: &basecraft_protocol::delimitation::DelimitationWorkspace,
     run: &crate::records::analysis_store::ArtifactRun,
@@ -154,7 +143,7 @@ pub fn publish_workspace_to(
     let staged = run.staging(&stage_workspace(target, work, run)?)?;
     let hash = basecraft_io::hash_file(&staged)?;
     crate::records::move_file(&staged, target, &hash, &run.artifact(WORKSPACE_RECEIPT)?)?;
-    run.bind(target, &hash)
+    run.bind(project, target, &hash)
 }
 
 /// Stage the SPART and its sidecar in the run; returns the staged name.
@@ -208,6 +197,7 @@ fn reference_input_with_dependencies(
 
 /// Retain declared contributing ledgers, not copies of clean original inputs.
 pub(crate) fn dependencies(
+    project: Option<&crate::project::Project>,
     work: &basecraft_protocol::delimitation::DelimitationWorkspace,
 ) -> Result<Vec<PathBuf>> {
     let mut runs = BTreeSet::new();
@@ -231,7 +221,9 @@ pub(crate) fn dependencies(
                     path: path.to_path_buf(),
                 });
             }
-            if let Some(run) = crate::records::analysis_store::ArtifactRun::for_result(path)? {
+            if let Some(run) =
+                crate::records::analysis_store::ArtifactRun::for_result(project, path)?
+            {
                 runs.insert(run);
             }
         }

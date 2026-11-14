@@ -679,7 +679,7 @@ fn concurrent_species_publication_never_replaces_another_run() {
         ["source.nwk", "species.spart"]
     );
     assert_eq!(
-        basecraft_ops::records::ArtifactRun::for_result(&canonical)
+        basecraft_ops::records::ArtifactRun::for_result(None, &canonical)
             .unwrap()
             .unwrap(),
         common::evidence(winner)
@@ -744,7 +744,7 @@ fn optional_display_tree_uses_hidden_reference_first_companions() {
     // The link resolves to exactly the alignment the run read: the referenced
     // source in the canonical FASTA the descriptor's view submits.
     assert_eq!(link.source, source);
-    let snapshot = link.checked_alignment(&display, &tree.doc).unwrap();
+    let snapshot = link.checked_alignment(None, &display, &tree.doc).unwrap();
     let basecraft_ops::files::Loaded::Alignment(alignment) =
         basecraft_ops::files::load(&source).unwrap()
     else {

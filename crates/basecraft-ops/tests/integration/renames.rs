@@ -271,7 +271,7 @@ fn a_new_workspace_links_specimens_through_record_links() {
         exchange_fields: BTreeMap::new(),
     };
     let target = dir.path().join("w.spart");
-    let run = basecraft_ops::records::ArtifactRun::create(&target, "roster").unwrap();
+    let run = basecraft_ops::records::ArtifactRun::create(None, &target, "roster").unwrap();
     let links = basecraft_ops::delimitation::link_roster(dir.path(), &run, &mut work).unwrap();
     assert_eq!(links.linked, 1, "{links:?}");
     assert_eq!(links.unlinked, ["b"]);

@@ -120,6 +120,7 @@ pub(crate) fn reference_input_locked(
         ArtifactRevision, Completeness, InputReference, Publication,
     };
     let run = crate::records::analysis_store::ArtifactRun::create(
+        project,
         anchor,
         &ulid::Ulid::generate().to_string(),
     )?;
@@ -2340,7 +2341,7 @@ mod store_scan_tests {
     use super::*;
 
     fn fixture(root: &Path, source: &Path) -> ArtifactRun {
-        let run = ArtifactRun::create(&root.join("species.spart"), "scan-test").unwrap();
+        let run = ArtifactRun::create(None, &root.join("species.spart"), "scan-test").unwrap();
         write_input(
             run.directory(),
             &SubmittedInput {

@@ -27,7 +27,7 @@ fn save_as_replaces_destination_view_association() {
     session.save(doc, Some(&output)).unwrap();
     let view = AlignmentLink::read_view(&output).unwrap();
     assert!(
-        view.checked_alignment(&output, session.tree(doc).unwrap())
+        view.checked_alignment(None, &output, session.tree(doc).unwrap())
             .is_ok()
     );
     assert_eq!(
@@ -59,14 +59,14 @@ fn failed_save_as_does_not_expose_origin_as_explicit_view() {
     assert!(
         AlignmentLink::read_view(&input)
             .unwrap()
-            .checked_alignment(&input, session.tree(doc).unwrap())
+            .checked_alignment(None, &input, session.tree(doc).unwrap())
             .is_ok()
     );
     if output.exists() {
         let reopened = files::load_tree(&output).unwrap().doc;
         assert!(
             AlignmentLink::read_view(&output)
-                .and_then(|link| link.checked_alignment(&output, &reopened))
+                .and_then(|link| link.checked_alignment(None, &output, &reopened))
                 .is_err(),
             "partial Save As must not silently substitute scientific origin for the damaged explicit view"
         );
@@ -108,7 +108,7 @@ fn failed_view_replacement_preserves_retained_snapshot() {
     let tree = files::load_tree(&input).unwrap().doc;
     AlignmentLink::associate(&input, &tree, &other).unwrap();
     let old = AlignmentLink::read_view(&input).unwrap();
-    let snapshot = old.checked_alignment(&input, &tree).unwrap();
+    let snapshot = old.checked_alignment(None, &input, &tree).unwrap();
     let bytes = std::fs::read(&snapshot).unwrap();
     // Force metadata replacement to fail after the snapshot write.
     let metadata = records::view_sidecar(&input);
@@ -119,5 +119,5 @@ fn failed_view_replacement_preserves_retained_snapshot() {
     std::fs::remove_dir(&metadata).unwrap();
     std::fs::rename(&backup, &metadata).unwrap();
     assert_eq!(std::fs::read(snapshot).unwrap(), bytes);
-    assert!(old.checked_alignment(&input, &tree).is_ok());
+    assert!(old.checked_alignment(None, &input, &tree).is_ok());
 }

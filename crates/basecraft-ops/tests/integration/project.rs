@@ -36,7 +36,7 @@ fn files_inside_and_outside_the_chosen_project() {
     );
 
     // An analysis folder in a subfolder makes no new project.
-    records::ArtifactRun::create(&chosen.join("data/result.txt"), "analysis").unwrap();
+    records::ArtifactRun::create(None, &chosen.join("data/result.txt"), "analysis").unwrap();
     assert!(chosen.join("data/.basecraft").is_dir());
     assert_eq!(session.project(), Some(&project));
     edit_and_save(&mut session, &inside);

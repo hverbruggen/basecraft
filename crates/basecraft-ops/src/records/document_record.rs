@@ -34,23 +34,15 @@ impl std::ops::DerefMut for DocumentRecord {
     }
 }
 
-/// The latest saved record of `path` and its whole history, when the record
-/// describes the file's current contents; otherwise why not.
+/// The latest saved record in `bundle` and its whole history, when the
+/// record describes the file's current contents (`hashes`); otherwise why not.
 pub fn read_origin(
-    path: &Path,
+    bundle: &Path,
     hashes: &[(String, String)],
-    project: Option<&crate::project::Project>,
 ) -> (Option<(Publication, SavedHistory)>, Option<String>) {
-    if let Err(e) = crate::records::analysis_store::ArtifactRun::for_result(path) {
-        return (
-            None,
-            Some(format!("Hidden analysis binding could not be read: {e}")),
-        );
-    }
-    let bundle = crate::records::provenance::bundle_for_result(path, project);
-    match crate::records::provenance::latest(&bundle) {
+    match crate::records::provenance::latest(bundle) {
         Ok(None) => (None, None),
-        Ok(Some((p, _))) if !hashes.is_empty() && hashes.iter().all(|(_, hash)| p.outputs.iter().any(|a| &a.hash == hash)) => match SavedHistory::read(&bundle, p.clone()) {
+        Ok(Some((p, _))) if !hashes.is_empty() && hashes.iter().all(|(_, hash)| p.outputs.iter().any(|a| &a.hash == hash)) => match SavedHistory::read(bundle, p.clone()) {
             Ok(history) => (Some((p, history)), None),
             Err(e) => (None, Some(format!("The saved history could not be read: {e}"))),
         },

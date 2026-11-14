@@ -309,7 +309,7 @@ fn a_project_tree_keeps_its_alignment_link_in_the_project() {
     }
     let link = AlignmentLink::read_view_in(Some(&project), &tree).unwrap();
     assert!(
-        link.checked_alignment(&tree, session.tree(doc).unwrap())
+        link.checked_alignment(Some(&project), &tree, session.tree(doc).unwrap())
             .is_ok()
     );
     let copy = folder.join("copy.nwk");
@@ -317,7 +317,7 @@ fn a_project_tree_keeps_its_alignment_link_in_the_project() {
     let copied = AlignmentLink::read_view_in(Some(&project), &copy).unwrap();
     assert!(
         copied
-            .checked_alignment(&copy, session.tree(doc).unwrap())
+            .checked_alignment(Some(&project), &copy, session.tree(doc).unwrap())
             .is_ok()
     );
     let beside: Vec<_> = visible(&folder)
@@ -346,7 +346,7 @@ fn copying_a_linked_tree_carries_its_link() {
     let copy = folder.join("edit/tree.nwk");
     files::copy_document(None, &tree, &copy).unwrap();
     let link = AlignmentLink::read_view(&copy).unwrap();
-    assert!(link.checked_alignment(&copy, &doc).is_ok());
+    assert!(link.checked_alignment(None, &copy, &doc).is_ok());
     assert!(
         !basecraft_ops::records::companion(&copy)
             .join("manifest.json")

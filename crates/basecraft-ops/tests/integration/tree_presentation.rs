@@ -126,30 +126,30 @@ fn changing_view_link_preserves_origin_and_save_as_rebases_both_links() {
     assert_eq!(copied_view.source, other);
     assert!(
         copied_origin
-            .checked_alignment(&output, session.tree(doc).unwrap())
+            .checked_alignment(None, &output, session.tree(doc).unwrap())
             .is_ok()
     );
     assert!(
         copied_view
-            .checked_alignment(&output, session.tree(doc).unwrap())
+            .checked_alignment(None, &output, session.tree(doc).unwrap())
             .is_ok()
     );
     // No copy is kept: a removed file is missing, a rewritten one changed.
     std::fs::remove_file(&other).unwrap();
     assert!(
         copied_view
-            .status(&output, session.tree(doc).unwrap())
+            .status(None, &output, session.tree(doc).unwrap())
             .contains("missing or moved")
     );
     assert!(
         copied_view
-            .checked_alignment(&output, session.tree(doc).unwrap())
+            .checked_alignment(None, &output, session.tree(doc).unwrap())
             .is_err()
     );
     std::fs::write(&source, ">a\nGG\n>b\nGT\n").unwrap();
     assert!(
         copied_origin
-            .status(&output, session.tree(doc).unwrap())
+            .status(None, &output, session.tree(doc).unwrap())
             .contains("changed since it was linked")
     );
     assert!(basecraft_ops::records::replay(root).unwrap().ok());
@@ -178,7 +178,7 @@ fn portable_links_and_corrupt_view_never_fall_back_to_scientific_input() {
     let link = AlignmentLink::read(&tree_path).unwrap();
     assert_eq!(link.source, moved.join("source.afa"));
     assert!(!link.source_changed());
-    assert!(link.checked_alignment(&tree_path, &tree).is_ok());
+    assert!(link.checked_alignment(None, &tree_path, &tree).is_ok());
     std::fs::write(basecraft_ops::records::view_sidecar(&tree_path), "damaged").unwrap();
     assert!(AlignmentLink::read_view(&tree_path).is_err());
     assert!(AlignmentLink::read(&tree_path).is_ok());

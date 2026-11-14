@@ -38,7 +38,7 @@ fn a_failed_relink_keeps_the_earlier_link() {
     std::fs::rename(backup, &metadata).unwrap();
     let restored = AlignmentLink::read_view(&path).unwrap();
     assert_eq!(
-        restored.checked_alignment(&path, &tree).unwrap(),
+        restored.checked_alignment(None, &path, &tree).unwrap(),
         other.canonicalize().unwrap()
     );
     assert_eq!(std::fs::read(&metadata).unwrap(), original_metadata);
@@ -86,7 +86,7 @@ fn publication_error_after_main_write_disables_extraction_and_keeps_previous_ass
     AlignmentLink::associate(&output, session.tree(doc).unwrap(), &other).unwrap();
     let old = AlignmentLink::read_view(&output).unwrap();
     let old_snapshot = old
-        .checked_alignment(&output, session.tree(doc).unwrap())
+        .checked_alignment(None, &output, session.tree(doc).unwrap())
         .unwrap();
     let old_bytes = std::fs::read(&old_snapshot).unwrap();
     let old_metadata = std::fs::read(records::view_sidecar(&output)).unwrap();
@@ -200,8 +200,8 @@ fn save_as_with_explicit_view_remains_portable_and_preserves_source_hashes() {
     assert_eq!(view.source, moved.join("other.afa"));
     assert_eq!(origin.source_hash, original.source_hash);
     assert_eq!(origin.alignment_version, original.alignment_version);
-    assert!(origin.checked_alignment(&path, &tree).is_ok());
-    assert!(view.checked_alignment(&path, &tree).is_ok());
+    assert!(origin.checked_alignment(None, &path, &tree).is_ok());
+    assert!(view.checked_alignment(None, &path, &tree).is_ok());
 }
 
 #[cfg(unix)]
@@ -232,7 +232,7 @@ fn save_as_over_symlink_to_original_replaces_alias_associations() {
     let link = AlignmentLink::read_view(&output).unwrap();
     assert_eq!(link.source, source);
     assert!(
-        link.checked_alignment(&output, session.tree(doc).unwrap())
+        link.checked_alignment(None, &output, session.tree(doc).unwrap())
             .is_ok()
     );
     assert_eq!(

@@ -124,7 +124,7 @@ fn failed_dependency_update_cannot_hide_a_later_relinked_source() {
     std::fs::write(&b, b">b\nTTTT\n").unwrap();
     let owner = reference(&root.join("owner"), &a);
     let dependent = reference(&root.join("dependent"), &a);
-    let sibling = ArtifactRun::create(&root.join("dependent/result.txt"), "broken").unwrap();
+    let sibling = ArtifactRun::create(None, &root.join("dependent/result.txt"), "broken").unwrap();
     std::fs::write(sibling.directory().join("input.json"), b"damaged").unwrap();
     let mut input = records::read_input(dependent.directory()).unwrap();
     input.extra.insert(
@@ -197,8 +197,8 @@ fn two_hundred_stores_fifty_runs_open_no_unrelated_ledgers() {
         let input = records::read_input(first.directory()).unwrap();
         let _lock = records::lock().unwrap();
         for run in 0..49 {
-            let run =
-                ArtifactRun::create(&folder.join("result.txt"), &format!("run-{run}")).unwrap();
+            let run = ArtifactRun::create(None, &folder.join("result.txt"), &format!("run-{run}"))
+                .unwrap();
             // Build a complete current-format fixture, then publish its index once.
             std::fs::write(
                 run.artifact("input.json").unwrap(),

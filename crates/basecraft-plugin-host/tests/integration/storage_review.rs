@@ -37,7 +37,7 @@ fn dependencies_follow_save_as_delegation() {
     save_as(&mut session, &first, &copied);
     let downstream = dir.path().join("downstream.afa");
     analyse(&mut session, &registry, &copied, &downstream);
-    let downstream_run = ArtifactRun::for_result(&downstream).unwrap().unwrap();
+    let downstream_run = ArtifactRun::for_result(None, &downstream).unwrap().unwrap();
     let conflict = records::conflicts(&source).unwrap();
     assert!(
         conflict.analyses.iter().any(|a| a.run == downstream_run),
@@ -114,7 +114,7 @@ fn repeated_preserve_decision_never_replaces_verified_old_bytes() {
     let old = std::fs::read(&source).unwrap();
     let conflict = records::conflicts(&source).unwrap();
     records::resolve(&conflict, records::SavePolicy::PreserveCopy).unwrap();
-    let run = ArtifactRun::for_result(&first).unwrap().unwrap();
+    let run = ArtifactRun::for_result(None, &first).unwrap().unwrap();
     assert_eq!(std::fs::read(common::verified_input(&run)).unwrap(), old);
     std::fs::write(&source, ">a\nTTTT\n>b\nTTTA\n").unwrap();
     // A retry of the same public decision must not overwrite the protected copy,

@@ -25,7 +25,7 @@ fn setup(root: &Path) -> (Session, basecraft_ops::DocId, PathBuf) {
 fn store(root: &Path, name: &str) -> PathBuf {
     let directory = root.join(name);
     std::fs::create_dir(&directory).unwrap();
-    let run = ArtifactRun::create(&directory.join("result.txt"), "reserved").unwrap();
+    let run = ArtifactRun::create(None, &directory.join("result.txt"), "reserved").unwrap();
     records::register(&run).unwrap();
     run.directory()
         .parent()
