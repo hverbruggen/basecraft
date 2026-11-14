@@ -31,15 +31,15 @@ Main {
             if (previousAction.length) console.log("PROJECT_PICKER_AUDIT", JSON.stringify({
                 action: previousAction, folder: run.projectDialog ? run.projectDialog.currentFolder.toString() : run.projectPickerFolder().toString(),
                 policyFolder: run.projectPickerFolder().toString(),
-                visible: run.projectDialog !== null && run.projectDialog.visible, project: run.part("shell").project_dir,
-                historyError: run.part("preferences").project_error, preferencesError: run.part("preferences").error,
+                visible: run.projectDialog !== null && run.projectDialog.visible, project: run.shell.project_dir,
+                historyError: run.preferences.project_error, preferencesError: run.preferences.error,
                 preferencesReady: run.preferencesReady
             }))
             if (!steps.length) { stop(); Qt.quit(); return }
             const step = steps.shift()
             previousAction = step.action
             if (step.action === "open") run.applicationCommands.find(c => c.commandId === "project.open").trigger()
-            else if (step.action === "browse" || step.action === "choose") run.projectDialog.selectedFolder = run.part("shell").local_file_url(step.path)
+            else if (step.action === "browse" || step.action === "choose") run.projectDialog.selectedFolder = run.shell.local_file_url(step.path)
             else if (step.action === "accept") run.projectDialog.accept()
             else if (step.action === "reject") run.projectDialog.reject()
             else if (step.action === "select") run.selectProject(step.path)
@@ -49,7 +49,7 @@ Main {
         interval: 900; running: true
         onTriggered: {
             const error = run.part("preferencesError")
-            console.debug("PREFERENCES_AUDIT", JSON.stringify({error: run.part("preferences").error, modal: !!error.item && error.item.visible, ready: run.preferencesReady, font: run.font.family, fontPoints: run.font.pointSize, defaultFontPoints: run.defaultFontSizePoints}))
+            console.debug("PREFERENCES_AUDIT", JSON.stringify({error: run.preferences.error, modal: !!error.item && error.item.visible, ready: run.preferencesReady, font: run.font.family, fontPoints: run.font.pointSize, defaultFontPoints: run.defaultFontSizePoints}))
             if (run.option["--project-picker"]) {
                 projectPickerCheck.steps = JSON.parse(run.option["--project-picker"])
                 projectPickerCheck.start()
@@ -57,7 +57,7 @@ Main {
             }
             const c = run.current
             if (!c) { console.log("no document open"); shot.start(); return }
-            const apply = {"--cpu-threads": v => run.localCpuThreads = Number(v), "--font-points": v => run.part("preferences").update("fontSizePoints", v),
+            const apply = {"--cpu-threads": v => run.localCpuThreads = Number(v), "--font-points": v => run.preferences.update("fontSizePoints", v),
                 "--fit": () => c.fit(), "--ribbon": v => run.ribbonTabName = run.ribbonTabs[Number(v)],
                 "--species-dialog": v => run.beginDelimitation(v), "--distance-dialog": v => run.part("toolSettings").dialog().show(c, "distance", v)}
             for (const name in apply) if (run.option[name]) apply[name](run.option[name])

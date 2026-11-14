@@ -13,11 +13,7 @@ Main {
     function check(ok, message) {
         if (!ok) { console.error("OPEN_BOUNDARY " + scenario + ": " + message); Qt.exit(2); throw new Error(message) }
     }
-    // Main's DocumentOpens, which a derived window reaches only by walking its objects.
-    function opens() {
-        for (const item of test.contentData) if (item && typeof item.index_of === "function") return item
-        return null
-    }
+    function opens() { return test.documentOpens }
     function slotAt(item, path) {
         if (item.adoptedSlot === true && item.path === path) return item
         for (const child of item.children || []) { const found = slotAt(child, path); if (found) return found }

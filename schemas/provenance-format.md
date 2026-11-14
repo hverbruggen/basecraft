@@ -29,10 +29,7 @@ methods/citation templates and
 validated RO-Crate export remain separate future interfaces.
 
 CLI: `basecraft provenance inspect|verify RESULT`, `basecraft methods FILE --output
-DIRECTORY`, `basecraft provenance package RESULT --output DIRECTORY`.
-The package operation requires all recorded input/output bytes to verify and copies
-live sidecars as well as the bundle into a new destination. It executes nothing and
-makes no claim that unavailable external software can reproduce the result.
+DIRECTORY`. To share a result, copy or zip the project folder (D31).
 `verify_provenance.py` is an independent Python reader; metadata inspection uses
 only the standard library. Full hash verification additionally uses the open-source
 `blake3` package. No Basecraft process, network connection or database is required.

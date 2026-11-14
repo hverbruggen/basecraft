@@ -319,11 +319,12 @@ FocusScope {
     FileDialog {
         onVisibleChanged: if (visible) currentFolder = doc.activeFolder()
         id: saveReviewDialog
+        objectName: "saveReviewDialog"
         title: "Save Sanger review"
         fileMode: FileDialog.SaveFile
         defaultSuffix: "json"
         nameFilters: ["Sanger review (*.sanger-review.json)"]
-        onAccepted: { reviewEvidence.owner = null; reviewEvidence.target = fileUrls.local_file_path(selectedFile); reviewEvidence.inspect(true) }
+        onAccepted: { reviewEvidence.owner = null; reviewEvidence.target = fileUrls.local_file_path(selectedFile); reviewEvidence.save() }
     }
     FileDialog {
         onVisibleChanged: if (visible) currentFolder = doc.activeFolder()

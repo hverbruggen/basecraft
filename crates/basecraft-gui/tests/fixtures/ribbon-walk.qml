@@ -355,9 +355,9 @@ Main {
             record.close()
             // A missing project folder changes nothing; an existing one is chosen.
             selectProject(folder + "/missing")
-            check(dialog("preferences").project_error.includes("/missing") && metadataProject !== folder + "/missing", "missing project accepted")
+            check(walk.preferences.project_error.includes("/missing") && metadataProject !== folder + "/missing", "missing project accepted")
             selectProject(folder)
-            check(metadataProject === folder && dialog("preferences").recent_projects.includes(folder) && dialog("preferences").project_error === "", "project not chosen")
+            check(metadataProject === folder && walk.preferences.recent_projects.includes(folder) && walk.preferences.project_error === "", "project not chosen")
             check(command("file.new-sequence").enabled, "new sequence still disabled with a project")
         })
         // Figure export options: PNG width, selection for alignments only.
@@ -464,6 +464,51 @@ Main {
             ctl.select_group(hypothesis.id, hypothesis.groups[0].id, false)
             check(caption() === "Rename species…", "species menu did not follow the selection")
         })
+        // Saves through the window for the two kinds without a check of their
+        // own: a Sanger review (Save review as, then the close question's
+        // Save) and a species workspace (the Save command, then the close
+        // question's Save). Both used to stop at a missing check_save.
+        const review = folder + "/forward.sanger-review.json"
+        let reviewTabs = 0
+        list.push(() => {
+            const trace = documentAt(4)
+            check(trace.controller.review_mode, "the trace is not a review")
+            trace.accept()
+            check(trace.controller.dirty, "accepting a base did not change the review")
+            const saveAs = trace.data.find(o => o && o.objectName === "saveReviewDialog")
+            saveAs.selectedFile = walk.shell.local_file_url(review)
+            saveAs.accepted()
+        })
+        list.push(until(() => !documentAt(4).controller.dirty, "Save review as did not save"))
+        list.push(() => {
+            const trace = documentAt(4)
+            trace.issue(true)
+            trace.accept()
+            check(trace.controller.dirty, "the second accept did not change the review")
+            reviewTabs = documentTabs().count
+            closeTab(4)
+            dialog("closeDocumentDialog").accept()
+        })
+        list.push(until(() => documentTabs().count === reviewTabs - 1, "the close question's Save did not close the review"))
+        const workspace = folder + "/hypotheses.spart"
+        const renamed = name => {
+            const view = documentAt(tabOf(workspace))
+            const hypothesis = view.hypotheses[0]
+            view.controller.action("rename", JSON.stringify({hypothesis: hypothesis.id, name: name}))
+            check(view.controller.dirty, "renaming a hypothesis did not change the workspace: " + view.controller.message)
+        }
+        list.push(() => {
+            show(tabOf(workspace))
+            renamed("renamed_by_the_walk")
+            command("file.save").trigger()
+        })
+        list.push(until(() => !documentAt(tabOf(workspace)).controller.dirty, "the Save command did not save the workspace"))
+        list.push(() => {
+            renamed("renamed_again_by_the_walk")
+            closeTab(tabOf(workspace))
+            dialog("closeDocumentDialog").accept()
+        })
+        list.push(until(() => tabOf(workspace) < 0, "the close question's Save did not close the workspace"))
         // Every dialog built on demand builds without a QML warning.
         list.push(() => {
             const loaders = walk.contentData.filter(item => item && item.sourceComponent !== undefined && typeof item.dialog === "function")
@@ -570,7 +615,7 @@ Main {
             currentView.forceActiveFocus()
             edited.focus = activeFocusItem
             selectProject(folder + "/second")
-            check(dialog("preferences").project_error.startsWith("A task is still running") && metadataProject === folder && documentTabs().count === edited.tabs, "a busy tab did not refuse the switch first")
+            check(walk.preferences.project_error.startsWith("A task is still running") && metadataProject === folder && documentTabs().count === edited.tabs, "a busy tab did not refuse the switch first")
         })
         list.push(until(() => !edited.controller.busy, "the ORF finder did not finish"))
         list.push(() => {
@@ -586,7 +631,7 @@ Main {
         list.push(until(() => JSON.parse(jobWatch.jobs).some(j => j.operation.includes("registry-fixture") && j.status === "running"), "the hanging run is not in the job list"))
         list.push(() => {
             selectProject(folder + "/second")
-            check(dialog("preferences").project_error.startsWith("A task is still running"), "a running job did not refuse the switch")
+            check(walk.preferences.project_error.startsWith("A task is still running"), "a running job did not refuse the switch")
             const row = JSON.parse(jobWatch.jobs).find(j => j.operation.includes("registry-fixture") && j.status === "running")
             check(row.cancellable, "the running plugin cannot be cancelled")
             jobWatch.cancel(row.id)
@@ -603,9 +648,9 @@ Main {
             ask.discarded()
             check(documentTabs().count === 0, "switching project left documents open")
         })
-        list.push(until(() => metadataProject === folder + "/second" || dialog("preferences").project_error.length > 0, "the project choice never finished"))
+        list.push(until(() => metadataProject === folder + "/second" || walk.preferences.project_error.length > 0, "the project choice never finished"))
         list.push(() => {
-            const error = dialog("preferences").project_error
+            const error = walk.preferences.project_error
             check(metadataProject === folder + "/second" && error === "", "project did not switch after its documents closed: " + error)
         })
         // D16: a file in a recent project other than the chosen one asks
@@ -627,7 +672,7 @@ Main {
             press("switchToProject")
         })
         list.push(until(() => metadataProject === folder && tabOf(folder + "/locus.gb") >= 0, "Switch did not choose the file's project and open the file"))
-        list.push(() => check(tabOf(folder + "/rooted.nwk") < 0 && dialog("preferences").project_error === "", "the switch left the other project's tabs open"))
+        list.push(() => check(tabOf(folder + "/rooted.nwk") < 0 && walk.preferences.project_error === "", "the switch left the other project's tabs open"))
         list.push(() => { console.log("RIBBON_WALK passed"); Qt.quit() })
         return list
     }

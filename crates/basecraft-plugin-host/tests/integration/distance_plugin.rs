@@ -197,7 +197,7 @@ fn bootstrap_provenance_success_and_withheld_support_replay() {
 }
 
 #[test]
-fn reference_tree_save_as_and_complete_export_retain_alignment_and_support() {
+fn reference_tree_save_as_retains_alignment_and_support() {
     crate::isolated_profile::isolate!();
     if !engine() {
         return;
@@ -231,21 +231,6 @@ fn reference_tree_save_as_and_complete_export_retain_alignment_and_support() {
             .iter()
             .any(|name| name.ends_with(".alignment.afa"))
     );
-    let package = root.path().join("portable");
-    basecraft_ops::records::package(&output, &package, None).unwrap();
-    std::fs::remove_file(&source).unwrap();
-    let exported = package.join("tree.nwk");
-    assert_eq!(
-        basecraft_ops::records::verify(&exported, None).unwrap(),
-        Vec::<String>::new()
-    );
-    let tree = basecraft_ops::files::load_tree(&exported).unwrap().doc;
-    assert_eq!(
-        tree.supports()[0].kind,
-        basecraft_protocol::SupportKind::Bootstrap
-    );
-    let link = basecraft_ops::records::AlignmentLink::read(&exported).unwrap();
-    assert!(link.checked_alignment(None, &exported, &tree).is_ok());
     assert!(Path::new(&common::evidence(&outcome)).is_dir());
 }
 

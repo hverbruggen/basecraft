@@ -99,11 +99,4 @@ fn unsaved_clade_tree_with_referenced_alignment_retains_both_inputs_and_selectio
         records::verify(&result, None).unwrap(),
         Vec::<String>::new()
     );
-    let package = root.join("package");
-    records::package(&result, &package, None).unwrap();
-    std::fs::remove_file(&alignment).unwrap();
-    assert_eq!(
-        records::verify(&package.join("selected.afa"), None).unwrap(),
-        Vec::<String>::new()
-    );
 }

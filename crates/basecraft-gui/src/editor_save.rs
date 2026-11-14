@@ -20,6 +20,21 @@ pub(crate) fn check_json(
     )
 }
 
+/// `{"saved": bool}`: the answer to a save request that needed no question.
+pub(crate) fn saved_json(saved: bool) -> cxx_qt_lib::QString {
+    cxx_qt_lib::QString::from(&serde_json::json!({ "saved": saved }).to_string())
+}
+
+/// The check a refused save carries when the refusal is a question for the
+/// user: unchecked analyses, or a check that went stale before the answer.
+pub(crate) fn question(error: &basecraft_ops::Error) -> Option<basecraft_ops::session::SaveCheck> {
+    match error {
+        basecraft_ops::Error::SaveCheckRequired(check)
+        | basecraft_ops::Error::SaveDecisionStale(check) => Some((**check).clone()),
+        _ => None,
+    }
+}
+
 pub(crate) fn save(
     session: &mut basecraft_ops::Session,
     doc: basecraft_ops::DocId,
@@ -44,19 +59,50 @@ macro_rules! confirmed_save {
     ($controller:ty) => {
         impl $controller {
             pub fn check_save(&self, path: &cxx_qt_lib::QString) -> cxx_qt_lib::QString {
+                crate::editor_save::check_json(self.save_check(path))
+            }
+            fn save_check(&self, path: &cxx_qt_lib::QString) -> basecraft_ops::Result<basecraft_ops::session::SaveCheck> {
                 let path = path.to_string();
-                let result = self
-                    .rust()
-                    .session
-                    .as_ref()
-                    .zip(self.rust().doc)
-                    .ok_or(basecraft_ops::Error::UnknownDocument {
-                        id: basecraft_ops::DocId(usize::MAX),
-                    })
-                    .and_then(|(s, d)| {
-                        s.check_save(d, (!path.is_empty()).then(|| std::path::Path::new(&path)))
-                    });
-                crate::editor_save::check_json(result)
+                let (session, doc) = self.rust().session.as_ref().zip(self.rust().doc).ok_or(
+                    basecraft_ops::Error::UnknownDocument { id: basecraft_ops::DocId(usize::MAX) },
+                )?;
+                session.check_save(doc, (!path.is_empty()).then(|| std::path::Path::new(&path)))
+            }
+            /// Save to the document's own file, or to `path`, unless the user
+            /// must answer first. `{"saved": bool}`, `{"check": ...}` with the
+            /// question to show, or `{"error": ...}`.
+            pub fn request_save(
+                mut self: std::pin::Pin<&mut Self>,
+                path: &cxx_qt_lib::QString,
+            ) -> cxx_qt_lib::QString {
+                if !path.is_empty() {
+                    // Save As checks the destination first: a new file's
+                    // unchecked analyses would only warn while saving, and the
+                    // window asks about them instead.
+                    return match self.save_check(path) {
+                        Ok(check) if !check.needs_answer() => {
+                            let token = cxx_qt_lib::QString::from(check.token());
+                            let saved = self.as_mut().save_confirmed(path, &token, &cxx_qt_lib::QString::from("cancel"), false);
+                            crate::editor_save::saved_json(saved)
+                        }
+                        other => crate::editor_save::check_json(other),
+                    };
+                }
+                // The save's own check decides. A refusal that is a question
+                // carries its check, except a conflict found by a complete
+                // check, which is checked once more to give the question.
+                match self.as_mut().write_own() {
+                    Ok(saved) => crate::editor_save::saved_json(saved),
+                    Err(error) => match crate::editor_save::question(&error) {
+                        Some(check) => crate::editor_save::check_json(Ok(check)),
+                        None if matches!(error, basecraft_ops::Error::InputConflict(_)) => crate::editor_save::check_json(self.save_check(path)),
+                        None => {
+                            let message = format!("Save failed: {error}");
+                            self.fail(&message);
+                            cxx_qt_lib::QString::from(&serde_json::json!({ "error": message }).to_string())
+                        }
+                    },
+                }
             }
             pub fn save_confirmed(
                 mut self: std::pin::Pin<&mut Self>,
@@ -114,16 +160,21 @@ macro_rules! ordinary_save {
     ($controller:ty $(, $busy:ident)?) => {
         impl $controller {
             pub fn save(mut self: std::pin::Pin<&mut Self>) {
+                if let Err(e) = self.as_mut().write_own() { self.fail(&format!("Save failed: {e}")); }
+            }
+            /// Save to the document's own file; the error is the caller's to
+            /// report. `Ok(false)` when no document is open.
+            fn write_own(mut self: std::pin::Pin<&mut Self>) -> basecraft_ops::Result<bool> {
                 let started = std::time::Instant::now();
-                let result = {
+                {
                     let mut r = self.as_mut().rust_mut(); let r = &mut *r;
-                    let (Some(session), Some(doc)) = (&mut r.session, r.doc) else { return; };
-                    crate::editor_save::save(session, doc, None, r.save_state.decision.take(), &mut r.save_state.unchecked)
-                };
-                match result {
-                    Ok(()) => { self.as_mut().rust_mut().save_state.succeeded = true; self.as_mut().set_dirty(false); self.done(&format!("Saved{}", took(started))); }
-                    Err(e) => self.fail(&format!("Save failed: {e}")),
+                    let (Some(session), Some(doc)) = (&mut r.session, r.doc) else { return Ok(false); };
+                    crate::editor_save::save(session, doc, None, r.save_state.decision.take(), &mut r.save_state.unchecked)?;
                 }
+                self.as_mut().rust_mut().save_state.succeeded = true;
+                self.as_mut().set_dirty(false);
+                self.done(&format!("Saved{}", took(started)));
+                Ok(true)
             }
             pub fn save_as(mut self: std::pin::Pin<&mut Self>, path: &cxx_qt_lib::QString) -> bool {
                 $(if self.rust().$busy {
@@ -152,9 +203,13 @@ macro_rules! auto_save {
         impl $controller {
             fn save_error(mut self: std::pin::Pin<&mut Self>, error: &basecraft_ops::Error) {
                 self.as_mut().report("error", &format!("Changed but not saved: {error}"));
-                if matches!(error, basecraft_ops::Error::SaveCheckRequired(_) | basecraft_ops::Error::SaveDecisionStale(_) | basecraft_ops::Error::InputConflict(_)) {
-                    self.save_question();
-                }
+                // The question carries its check, so the window shows it without checking again.
+                let check = crate::editor_save::question(error).or_else(|| {
+                    let conflict = matches!(error, basecraft_ops::Error::InputConflict(_));
+                    let (session, doc) = self.rust().session.as_ref().zip(self.rust().doc).filter(|_| conflict)?;
+                    session.check_save(doc, None).ok()
+                });
+                if let Some(check) = check { self.save_question(crate::editor_save::check_json(Ok(check))); }
             }
             pub fn check_save(&self, path: &cxx_qt_lib::QString) -> cxx_qt_lib::QString {
                 let target = path.to_string();

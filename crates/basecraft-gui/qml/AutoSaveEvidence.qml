@@ -14,6 +14,23 @@ Item {
     property string dialogName: "autoSaveEvidenceDialog"
     signal finished(bool success)
     signal failed(string message)
+    // Save now, or show the question the save needs answered first. Rust
+    // checks once and decides; the window only shows the answer.
+    function save() {
+        if (!valid()) { dialog.close(); finished(false); return }
+        const step = JSON.parse(controller.request_save(target))
+        if (step.check) ask(step.check)
+        else {
+            if (step.error) { dialog.errorText = step.error; failed(step.error) }
+            finished(!!step.saved)
+        }
+    }
+    function ask(check) {
+        owner = check
+        dialog.check = check
+        dialog.open()
+    }
+    // Check again: the dialog's Retry, and after an answer the save refused.
     function inspect(saveIfClear) {
         if (!valid()) { dialog.close(); finished(false); return }
         const result = JSON.parse(controller.check_save(target))
@@ -36,10 +53,9 @@ Item {
         target: root.controller
         enabled: root.automatic
         ignoreUnknownSignals: true
-        function onSaveQuestion() {
+        function onSaveQuestion(check) {
             root.target = ""
-            root.owner = JSON.parse(root.controller.check_save("")).check || null
-            Qt.callLater(() => root.inspect(true))
+            Qt.callLater(() => root.ask(JSON.parse(check).check))
         }
     }
     FileDialog {

@@ -177,6 +177,9 @@ pub mod qobject {
         fn redo(self: Pin<&mut TreeController>);
         #[qinvokable]
         fn save(self: Pin<&mut TreeController>);
+        /// Save, or the question to answer first (editor_save.rs).
+        #[qinvokable]
+        fn request_save(self: Pin<&mut TreeController>, path: &QString) -> QString;
         #[qinvokable]
         fn check_save(self: &TreeController, path: &QString) -> QString;
         #[qinvokable]
@@ -263,9 +266,6 @@ pub mod qobject {
         fn support_import_json(self: &TreeController, path: &QString) -> QString;
         #[qinvokable]
         fn add_support_from(self: Pin<&mut TreeController>, path: &QString, name: &QString);
-        /// Write the tree as an SVG figure.
-        #[qinvokable]
-        fn export_svg(self: Pin<&mut TreeController>, path: &QString);
         #[qinvokable]
         fn export_figure(
             self: Pin<&mut TreeController>,
@@ -1749,10 +1749,6 @@ impl qobject::TreeController {
                 file_name(&path)
             )),
         }
-    }
-
-    pub fn export_svg(self: Pin<&mut Self>, path: &QString) {
-        self.export_figure(path, 2, false);
     }
 }
 

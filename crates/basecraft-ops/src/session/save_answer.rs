@@ -100,6 +100,15 @@ impl SaveCheck {
         self.evidence_groups().all(InputCheck::is_complete)
     }
 
+    /// Whether the user answers before this save: a record could not be
+    /// checked, or analyses used the file.
+    pub fn needs_answer(&self) -> bool {
+        !self.complete()
+            || self
+                .evidence_groups()
+                .any(|group| !group.conflict.analyses.is_empty())
+    }
+
     pub(crate) fn issues(&self) -> Vec<UncheckedRecord> {
         self.evidence_groups()
             .flat_map(|group| group.issues.clone())
@@ -291,11 +300,7 @@ impl PendingSaveCheck {
         if let Some((decision, consumed)) = decision {
             self.validate_decision(fresh, &decision, consumed)?;
             drop(decision);
-        } else if !fresh.complete()
-            || fresh
-                .evidence_groups()
-                .any(|g| !g.conflict.analyses.is_empty())
-        {
+        } else if fresh.needs_answer() {
             return Err(crate::Error::SaveCheckRequired(Box::new(
                 self.publish(fresh.clone())?,
             )));

@@ -225,31 +225,19 @@ fn saved_reviews_report_through_cli_and_mcp_as_in_the_gui() {
     let single = gui_report(&v1);
     assert!(!single["methods"].as_str().unwrap().contains("call set"));
 
-    // Verification and packaging use the shared provenance readers and keep
+    // Verification uses the shared provenance readers, and the history keeps
     // every retained call set.
     ok(&cli(
         &profile,
         &["provenance", "verify", v2.to_str().unwrap()],
     ));
-    let package = temp.path().join("package");
-    ok(&cli(
-        &profile,
-        &[
-            "provenance",
-            "package",
-            v2.to_str().unwrap(),
-            "--output",
-            package.to_str().unwrap(),
-        ],
-    ));
-    let packaged = package.join("multi.json");
-    assert_eq!(SangerReview::load(&packaged).unwrap().call_sets().len(), 2);
+    assert_eq!(SangerReview::load(&v2).unwrap().call_sets().len(), 2);
     let history: Value = serde_json::from_str(&ok(&cli(
         &profile,
-        &["history", packaged.to_str().unwrap(), "--json"],
+        &["history", v2.to_str().unwrap(), "--json"],
     )))
     .unwrap();
-    assert_eq!(history, gui_report(&packaged));
+    assert_eq!(history, gui_report(&v2));
 
     // Read-only MCP can inspect a review through the common document interface.
     let mut mcp = Mcp::start(&project, &profile, false);

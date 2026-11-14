@@ -995,9 +995,6 @@ pub fn saved_history(
     Ok((latest, history))
 }
 
-/// The README of an exported history folder.
-const BUNDLE_README: &[u8] = b"# Basecraft provenance v1\n\nmanifest.json names the latest record. records/ holds one immutable record per save; each names its parents, and together they are the file's history. artifacts/ holds BLAKE3-addressed original and saved bytes. Imported history before Basecraft is unknown. Checksums detect changes; they are not signatures. No file in this folder should be executed to inspect or verify it.\n";
-
 fn copy_tree(source: &Path, target: &Path) -> Result<()> {
     if std::fs::symlink_metadata(source)?.file_type().is_symlink() {
         return Err(invalid("package bundle contains a symlink"));
@@ -1018,85 +1015,5 @@ fn copy_tree(source: &Path, target: &Path) -> Result<()> {
             return Err(invalid("package contains a special file"));
         }
     }
-    Ok(())
-}
-
-/// Result and complete retained bundle copied into a new directory. This is a
-/// data package, not a promise that external software can reproduce the result.
-pub fn package(
-    result: &Path,
-    destination: &Path,
-    project: Option<&crate::project::Project>,
-) -> Result<()> {
-    if crate::records::analysis_store::ArtifactRun::for_result(project, result)?.is_some()
-        || bundle_for_result(result, project)
-            .join("input.json")
-            .is_file()
-    {
-        return crate::records::run_inputs::package(result, destination, project);
-    }
-    let issues = verify(result, project)?;
-    if !issues.is_empty() {
-        return Err(crate::error::damaged(result, issues.join("; ")));
-    }
-    if destination.exists() {
-        return Err(crate::Error::OutputConflict(
-            "package destination already exists".into(),
-        ));
-    }
-    let parent = destination
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-    std::fs::create_dir_all(parent)?;
-    let staging = tempfile::Builder::new()
-        .prefix(".basecraft-package-")
-        .tempdir_in(parent)?;
-    let name = result
-        .file_name()
-        .ok_or_else(|| invalid("result has no filename"))?;
-    let copied = staging.path().join(name);
-    copy_atomic(result, &copied)?;
-    let publication = inspect(result, project)?;
-    // The companion goes where the copy's companion is kept: the package's
-    // own .basecraft.
-    let companion_of_result = crate::files::companion_path(project, result);
-    for artifact in publication.outputs.iter().skip(1) {
-        let name = Path::new(&artifact.logical_name);
-        if name
-            .components()
-            .any(|c| !matches!(c, Component::Normal(_)))
-        {
-            return Err(invalid("unsafe output logical name"));
-        }
-        if companion_of_result.file_name() == Some(name.as_os_str()) {
-            let packaged = crate::project::Project::document_record(None, &copied);
-            crate::files::companion_folder(&packaged)?;
-            copy_atomic(&companion_of_result, &packaged)?;
-            continue;
-        }
-        copy_atomic(
-            &result.parent().unwrap_or(Path::new(".")).join(name),
-            &staging.path().join(name),
-        )?;
-    }
-    let packaged_bundle = companion(&copied);
-    if let Some(folder) = packaged_bundle.parent() {
-        std::fs::create_dir_all(folder)?;
-    }
-    copy_tree(&bundle_for_result(result, project), &packaged_bundle)?;
-    basecraft_io::write_atomic(&packaged_bundle.join("README.md"), |w| {
-        w.write_all(BUNDLE_README)
-    })?;
-    // The copy carries its history beside it, outside any project.
-    let copied_issues = verify(&copied, None)?;
-    if !copied_issues.is_empty() {
-        return Err(invalid(copied_issues.join("; ")));
-    }
-    // The destination is deliberately new: never merge unrelated package bytes.
-    if destination.exists() {
-        return Err(invalid("package destination appeared during export"));
-    }
-    basecraft_platform::atomic::rename_noreplace(staging.path(), destination)?;
     Ok(())
 }

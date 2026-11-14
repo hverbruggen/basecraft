@@ -107,13 +107,6 @@ fn run(
                 records::ReportExt::export(&report, destination)?;
                 Ok(format!("Generated reports: {}", destination.display()))
             }
-            "package" => {
-                records::package(result, destination, project)?;
-                Ok(format!(
-                    "Package saved: {}\nThis contains retained data and recorded history; external-tool replay has not been verified.",
-                    destination.display()
-                ))
-            }
             _ => Err(basecraft_ops::Error::Invalid(
                 "unsupported provenance action".into(),
             )),
@@ -392,10 +385,6 @@ mod tests {
         );
         assert!(export.join("methods.generated.md").is_file());
         assert!(export.join("manifest.json").is_file());
-        let package = root.join("package");
-        run("package", &file, &package, None).unwrap();
-        assert!(package.join("sequence.fasta").is_file());
-        assert!(run("package", &file, &package, None).is_err());
         std::fs::write(&file, ">example\nAAAA\n").unwrap();
         assert!(run("verify", &file, root, None).is_err());
     }

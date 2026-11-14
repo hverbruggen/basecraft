@@ -144,7 +144,7 @@ pub const GROUPS: &[(&str, &str)] = &[
     ("tree", "Tree edits by name: reroot on an outgroup, ladderize, rotate a clade, label tips."),
     ("sanger", "Sanger reads: start a review from a read's calls, decide columns, export or add \
         the consensus."),
-    ("provenance", "Inspect, verify or package the readable provenance of saved results."),
+    ("provenance", "Inspect or verify the readable provenance of saved results."),
     ("records", "Maintain the records basecraft keeps in a project's `.basecraft` folder."),
     ("metadata", "The project's specimen metadata: roster, identifications, record links and \
         collection columns; imports and the .ods template."),

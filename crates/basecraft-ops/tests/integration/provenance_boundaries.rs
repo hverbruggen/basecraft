@@ -375,7 +375,7 @@ fn generic_no_output_activity_does_not_own_unrelated_manual_edits() {
 }
 
 #[test]
-fn extraction_is_reference_first_and_packages_exact_source_and_mapping() {
+fn extraction_is_reference_first_and_keeps_its_mapping() {
     use basecraft_ops::records;
     crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
@@ -409,15 +409,9 @@ fn extraction_is_reference_first_and_packages_exact_source_and_mapping() {
         input.extra["extraction"]["selection"]["params"]["segments"],
         serde_json::json!([[1, 3], [5, 7]])
     );
-    let package = dir.path().join("package");
-    records::package(&result, &package, None).unwrap();
     std::fs::write(&source, ">gene\nTTTTTTTT\n").unwrap();
     assert_ne!(
         records::verify(&result, None).unwrap(),
-        Vec::<String>::new()
-    );
-    assert_eq!(
-        records::verify(&package.join("extract.gb"), None).unwrap(),
         Vec::<String>::new()
     );
 }

@@ -72,7 +72,6 @@ fn alignment_move_and_explicit_evidence_decisions() {
         assert!(checked().is_err(), "explicit {policy:?} must prevent reuse");
         assert_eq!(std::fs::read_to_string(&source).unwrap(), original);
         assert!(canonical.is_file());
-        assert!(records::package(&canonical, &parent.path().join("rejected"), None).is_err());
     }
 }
 
@@ -122,7 +121,6 @@ fn legacy_sidecar_break_and_remove_reach_combined_workspace() {
             !matches!(records::verify(&target, None), Ok(issues) if issues.is_empty()),
             "explicit {policy:?} must never verify complete"
         );
-        assert!(records::package(&target, &root.path().join("rejected"), None).is_err());
         assert_eq!(std::fs::read(&sidecar).unwrap(), bytes);
         assert_eq!(std::fs::read_to_string(&source).unwrap(), original);
         assert!(
@@ -191,7 +189,7 @@ fn nexus_source_workspace_can_reuse_its_display_tree() {
 }
 
 #[test]
-fn alignment_gmyc_export_preserves_display_and_declared_inputs() {
+fn alignment_gmyc_keeps_display_and_declared_inputs() {
     isolated_profile::isolate!();
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().join("working");
@@ -222,35 +220,26 @@ fn alignment_gmyc_export_preserves_display_and_declared_inputs() {
     });
     common::assert_completed(&outcome);
     let canonical = root.join("species.spart");
-    let package = parent.path().join("package");
-    records::package(&canonical, &package, None).unwrap();
     drop(session);
-    std::fs::rename(&root, parent.path().join("unavailable")).unwrap();
-    let moved = parent.path().join("moved-package");
-    std::fs::rename(&package, &moved).unwrap();
-    let exported = moved.join("species.spart");
-    assert!(records::verify(&exported, None).unwrap().is_empty());
-    let work = files::load_delimitation(&exported).unwrap();
+    assert!(records::verify(&canonical, None).unwrap().is_empty());
+    let work = files::load_delimitation(&canonical).unwrap();
     let display = basecraft_ops::delimitation::checked_display_tree(&work)
         .unwrap()
         .unwrap();
-    assert!(
-        display.is_file(),
-        "exported display is unavailable: {display:?}"
-    );
+    assert!(display.is_file(), "display is unavailable: {display:?}");
     for hypothesis in &work.hypotheses {
         for (path, hash) in &hypothesis.provenance.inputs {
             assert_eq!(
                 &basecraft_io::hash_file(Path::new(path)).unwrap(),
                 hash,
-                "exported input {path}"
+                "input {path}"
             );
         }
     }
 }
 
 #[test]
-fn preserved_tree_export_relocates_original_display_reference() {
+fn preserved_tree_keeps_its_display_reference() {
     use basecraft_ops::records::{SavePolicy, conflicts, resolve};
     isolated_profile::isolate!();
     let parent = tempfile::tempdir().unwrap();
@@ -270,23 +259,11 @@ fn preserved_tree_export_relocates_original_display_reference() {
             .unwrap()
             .is_file()
     );
-    let package = parent.path().join("package");
-    records::package(&canonical, &package, None).unwrap();
     drop(session);
-    std::fs::rename(&root, parent.path().join("unavailable")).unwrap();
-    let exported = package.join("species.spart");
-    assert!(records::verify(&exported, None).unwrap().is_empty());
-    let work = files::load_delimitation(&exported).unwrap();
-    let display = basecraft_ops::delimitation::checked_display_tree(&work);
-    assert!(
-        display.is_ok(),
-        "complete export lost preserved display: {display:?}"
-    );
-    assert!(display.unwrap().unwrap().is_file());
 }
 
 #[test]
-fn fitted_workspace_survives_folder_move_then_save_and_export() {
+fn fitted_workspace_survives_folder_move_then_save() {
     isolated_profile::isolate!();
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().join("working");
@@ -307,7 +284,6 @@ fn fitted_workspace_survives_folder_move_then_save_and_export() {
     let doc = session.open(&canonical).unwrap();
     session.save(doc, None).unwrap();
     assert!(records::verify(&canonical, None).unwrap().is_empty());
-    records::package(&canonical, &parent.path().join("package"), None).unwrap();
 }
 
 #[test]
@@ -401,71 +377,8 @@ fn preserved_alignment_remains_usable_by_workspace_default_input() {
             .unwrap(),
         linked
     );
-    let package = root.path().join("package");
-    records::package(&copied, &package, None).unwrap();
-    let exported = package.join("copied.spart");
-    let exported_work = files::load_delimitation(&exported).unwrap();
-    assert!(records::verify(&exported, None).unwrap().is_empty());
-    assert_eq!(
-        basecraft_io::hash_file(
-            &basecraft_ops::delimitation::checked_alignment(&exported_work, &exported)
-                .unwrap()
-                .unwrap()
-        )
-        .unwrap(),
-        saved.exchange_fields["basecraft_alignment_hash"]
-    );
     std::fs::write(&linked, "damaged preserved alignment").unwrap();
     assert!(basecraft_ops::delimitation::checked_alignment(&saved, &copied).is_err());
-}
-
-#[test]
-fn combine_complete_export_includes_legacy_sidecar_evidence() {
-    isolated_profile::isolate!();
-    let parent = tempfile::tempdir().unwrap();
-    let root = parent.path().join("working");
-    std::fs::create_dir(&root).unwrap();
-    let text = include_str!("../../../../testdata/fixtures/delimitation/manual.spart");
-    let source = root.join("legacy.spart");
-    let target = root.join("target.spart");
-    std::fs::write(&source, text).unwrap();
-    std::fs::write(&target, text).unwrap();
-    let mut legacy = basecraft_io::spart::parse_text(text).unwrap();
-    legacy.exchange_fields.insert(
-        "authored_metadata".into(),
-        "Distinct original sidecar context".into(),
-    );
-    legacy.hypotheses[0].provenance.parameters.insert(
-        "reviewed_method_context".into(),
-        json!("Sidecar-only scientific context"),
-    );
-    let mut bytes = Vec::new();
-    files::delimitation_companion(&legacy, &basecraft_io::hash_file(&source).unwrap(), &source)
-        .unwrap()
-        .write(&mut bytes)
-        .unwrap();
-    let sidecar = files::companion_path(None, &source);
-    std::fs::create_dir_all(sidecar.parent().unwrap()).unwrap();
-    std::fs::write(sidecar, &bytes).unwrap();
-    let side_hash = basecraft_io::hash_bytes(&bytes);
-    let mut session = Session::recoverable(&root).unwrap();
-    let doc = session.open(&target).unwrap();
-    basecraft_ops::delimitation::combine(&mut session, doc, &[source]).unwrap();
-    let combined = root.join("combined.spart");
-    session.save(doc, Some(&combined)).unwrap();
-    let package = parent.path().join("package");
-    records::package(&combined, &package, None).unwrap();
-    drop(session);
-    std::fs::rename(&root, parent.path().join("unavailable")).unwrap();
-    let exported = package.join("combined.spart");
-    assert!(records::verify(&exported, None).unwrap().is_empty());
-    let artifacts = records::companion(&exported).join("artifacts");
-    assert!(
-        std::fs::read_dir(&artifacts)
-            .unwrap()
-            .any(|entry| basecraft_io::hash_file(&entry.unwrap().path()).unwrap() == side_hash),
-        "complete export omitted the legacy sidecar whose hash Combine declares: {side_hash}"
-    );
 }
 
 #[test]

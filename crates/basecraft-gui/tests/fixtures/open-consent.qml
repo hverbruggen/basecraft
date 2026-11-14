@@ -50,7 +50,7 @@ Main {
         }
         return null
     }
-    function opens() { return child(item => typeof item.target_index === "function") }
+    function opens() { return test.documentOpens }
     function evidence() { return child(item => item.dialogName === "evidenceSaveDialog") }
     function dialog(name) {
         const found = child(item => item.objectName === name)
