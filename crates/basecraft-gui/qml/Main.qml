@@ -195,7 +195,7 @@ ApplicationWindow {
             Qt.callLater(publishRibbonCommands)
         }
     }
-    readonly property var applicationCommands: [findCommand, newSequenceCommand, addAnnotationCommand, openCommand, saveCommand, saveAsCommand, projectCommand, shortcutsCommand, aboutCommand, preferencesCommand, textRepresentationCommand, contextShortcutsCommand, learnCommand, exportSvgCommand, exportPngCommand, historyCommand, methodsCommand, showProvenanceCommand, verifyProvenanceCommand, packageCommand, recoverCommand, installedOperationsCommand].concat(ribbonCommands)
+    readonly property var applicationCommands: [findCommand, newSequenceCommand, addAnnotationCommand, openCommand, saveCommand, saveAsCommand, projectCommand, shortcutsCommand, aboutCommand, preferencesCommand, textRepresentationCommand, contextShortcutsCommand, learnCommand, exportSvgCommand, exportPngCommand, historyCommand, methodsCommand, showProvenanceCommand, verifyProvenanceCommand, recoverCommand, installedOperationsCommand].concat(ribbonCommands)
     // Another project closes the open documents first, asking as quitting does.
     // A task still running in the old project, from a tab or not, refuses it first.
     function selectProject(path, then = "") {
@@ -615,7 +615,6 @@ ApplicationWindow {
         onCopyText: text => clipboard.put(text)
         onExportReport: snapshot => { window.frozenReport = snapshot; reportFolder.dialog().open() }
         onVerify: verifyProvenanceCommand.trigger()
-        onPackageRecord: packageCommand.trigger()
         onOpenRecordFolder: showProvenanceCommand.trigger()
     } } }
 
@@ -645,11 +644,6 @@ ApplicationWindow {
         provenanceExport = ""
         provenanceDialog.dialog().open()
         provenance.start(operation, window.savedRecordPath, "")
-    }
-    function exportProvenance(operation) {
-        provenanceSource = window.savedRecordPath
-        provenanceExport = operation
-        provenanceFolder.dialog().open()
     }
     Command {
         id: historyCommand
@@ -685,12 +679,6 @@ ApplicationWindow {
         onTriggered: window.inspectProvenance("verify")
     }
     Command {
-        id: packageCommand
-        commandId: "provenance.package"
-        enabled: window.current !== null && !provenance.busy
-        onTriggered: window.exportProvenance("package")
-    }
-    Command {
         id: recoverCommand
         commandId: "file.recover-work"
         iconName: "open"
@@ -704,11 +692,9 @@ ApplicationWindow {
 
     OnDemand { id: provenanceFolder; sourceComponent: Component { FolderDialog {
         id: provenanceFolderItem
-        title: window.provenanceExport === "methods" ? "Choose the folder for generated reports" : window.provenanceExport === "recover" ? "Choose the parent folder for recovered copies" : "Choose the parent folder for a new reproduction package"
+        title: "Choose the parent folder for recovered copies"
         onAccepted: {
-            let destination = shell.local_file_path(selectedFolder)
-            if (window.provenanceExport === "package") destination += "/" + window.fileName(window.provenanceSource) + ".reproduction"
-            if (window.provenanceExport === "recover") destination += "/" + window.fileName(window.provenanceSource) + ".recovered"
+            const destination = shell.local_file_path(selectedFolder) + "/" + window.fileName(window.provenanceSource) + ".recovered"
             provenanceDialog.dialog().open()
             provenance.start(window.provenanceExport, window.provenanceSource, destination)
         }

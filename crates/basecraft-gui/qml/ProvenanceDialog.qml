@@ -12,7 +12,7 @@ AppDialog {
     standardButtons: Dialog.Close
     initialFocusItem: provenanceText
     contentItem: ColumnLayout {
-        Label { visible: app.provenanceExport !== "recover"; text: "File verification and reproduction packages describe saved files. Report exports retain the selected document revision."; wrapMode: Text.Wrap; Layout.fillWidth: true }
+        Label { visible: app.provenanceExport !== "recover"; text: "File verification describes saved files. Report exports retain the selected document revision."; wrapMode: Text.Wrap; Layout.fillWidth: true }
         AppMessageBar {
             Layout.fillWidth: true
             busy: app.provenance.busy

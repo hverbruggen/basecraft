@@ -25,7 +25,6 @@ AppDialog {
     signal copyText(string text)
     signal exportReport(string snapshot)
     signal verify()
-    signal packageRecord()
     signal openRecordFolder()
     initialFocusItem: pages
 

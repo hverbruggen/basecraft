@@ -243,14 +243,6 @@ pub static COMMANDS: &[Command] = &[
         icon: "",
     },
     Command {
-        id: "provenance.package",
-        caption: "Package for reproduction…",
-        tip: "Copy the result and retained history to a new package directory",
-        key: "",
-        scope: "",
-        icon: "",
-    },
-    Command {
         id: "provenance.show-files",
         caption: "Record folder",
         tip: "Open the saved result's readable provenance folder",
