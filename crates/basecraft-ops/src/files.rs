@@ -34,15 +34,13 @@ impl Format {
         if crate::metadata::is_manifest(path) {
             return Ok(Format::Metadata);
         }
-        // A saved Sanger review is one by its content, whatever its name,
-        // as the window decides too; `<name>.submission.json` may hold one.
+        if crate::submission::is_submission(path) {
+            return Ok(Format::Submission);
+        }
         if crate::sanger_review::evidence_kind(path)
             == Some(crate::sanger_review::EvidenceKind::Review)
         {
             return Ok(Format::SangerReview);
-        }
-        if crate::submission::is_submission(path) {
-            return Ok(Format::Submission);
         }
         let ext = path
             .extension()
@@ -225,7 +223,7 @@ pub fn load_in(project: Option<&crate::project::Project>, path: &Path) -> Result
             genbank::open_hashed(path)?.0,
         ))),
         Format::Metadata => crate::metadata::load(path).map(Loaded::Metadata),
-        Format::Submission => crate::submission::load(path).map(Loaded::Submission),
+        Format::Submission => submission_or_review(path, Source::open(path)?.bytes()),
         Format::Delimitation => load_delimitation_in(project, path).map(Loaded::Delimitation),
         Format::Fasta | Format::Tree => load_source(project, path, format, Source::open(path)?),
     }
@@ -371,7 +369,7 @@ pub(crate) fn capture_load(
             warning = ignored;
             Loaded::Delimitation(work)
         }
-        Format::Submission => Loaded::Submission(crate::submission::load_from(path, main.bytes())?),
+        Format::Submission => submission_or_review(path, main.bytes())?,
         Format::Metadata => Loaded::Metadata(crate::metadata::load_with(path, &mut |file| {
             files
                 .iter()
@@ -393,6 +391,19 @@ pub(crate) fn capture_load(
     )?;
     captured.warning = warning;
     Ok(captured)
+}
+
+/// A `<name>.submission.json` holds a submission, or a Sanger review saved
+/// under that name, which opens as a review as the window shows it. The
+/// bytes already read decide; a submission is decoded once.
+fn submission_or_review(path: &Path, bytes: &[u8]) -> Result<Loaded> {
+    crate::submission::load_from(path, bytes)
+        .map(Loaded::Submission)
+        .or_else(|error| {
+            crate::sanger_review::SangerReview::decode(bytes, path)
+                .map(|review| Loaded::SangerReview(Box::new(review)))
+                .map_err(|_| error)
+        })
 }
 
 fn finish_capture(

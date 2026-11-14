@@ -46,6 +46,7 @@ fn every_kind_reads_each_input_once() {
             "delimitation",
             "metadata",
             "submission",
+            "submission-named-review",
         ] {
             let root = tempfile::tempdir().unwrap();
             let result = std::process::Command::new(std::env::current_exe().unwrap())
@@ -107,6 +108,16 @@ fn every_kind_reads_each_input_once() {
             basecraft_ops::submission::create(&mut Session::unlogged(&root), &file, &alignment)
                 .unwrap();
             (file, Kind::Submission, 1)
+        }
+        // A Sanger review saved under a submission's name: one read decides.
+        "submission-named-review" => {
+            let trace = copy(&root, "sanger-review/forward.ab1");
+            let review = basecraft_ops::sanger_review::instrument_review(&trace).unwrap();
+            let mut writer = Session::unlogged(&root);
+            let id = writer.create_sanger_review(&review).unwrap();
+            let file = root.join("trace.submission.json");
+            writer.save(id, Some(&file)).unwrap();
+            (file, Kind::SangerReview, 1)
         }
         _ => panic!("unknown case"),
     };
