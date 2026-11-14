@@ -42,6 +42,8 @@ mod document_open;
 mod editor;
 #[path = "editor_history/mod.rs"]
 mod editor_history;
+#[path = "save_request/mod.rs"]
+mod save_request;
 #[path = "../src/editor_save.rs"]
 mod editor_save;
 #[path = "../src/figure_png.rs"]
@@ -1156,6 +1158,7 @@ fn main() {
     controller_appearance::run(&app);
     controller_appearance::closed_editor(&app);
     editor_history::run(&app);
+    save_request::run();
 
     // Real QML-created controllers; inject invalid owned IDs without exposing
     // production invokables or constructing placeholder document payloads.

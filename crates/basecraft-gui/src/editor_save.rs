@@ -35,30 +35,6 @@ pub(crate) fn question(error: &basecraft_ops::Error) -> Option<basecraft_ops::se
     }
 }
 
-/// Whether a check (as sent to the window) names analyses that used the
-/// file, or parts it could not check: then the user answers before saving.
-fn needs_answer(check: &serde_json::Value) -> bool {
-    let listed =
-        |value: &serde_json::Value| value.as_array().is_some_and(|items| !items.is_empty());
-    listed(&check["evidence"]["issues"]) || listed(&check["evidence"]["conflict"]["analyses"])
-}
-
-/// Save As: check the destination first, then save unless the user must
-/// answer. A new file's unchecked analyses would only warn while saving, and
-/// the window asks about them instead.
-pub(crate) fn request_save_as(
-    check: cxx_qt_lib::QString,
-    save: impl FnOnce(&cxx_qt_lib::QString) -> bool,
-) -> cxx_qt_lib::QString {
-    let answer: serde_json::Value = serde_json::from_str(&check.to_string()).unwrap_or_default();
-    match answer.get("check") {
-        Some(check) if !needs_answer(check) => saved_json(save(&cxx_qt_lib::QString::from(
-            check["token"].as_str().unwrap_or_default(),
-        ))),
-        _ => check,
-    }
-}
-
 pub(crate) fn save(
     session: &mut basecraft_ops::Session,
     doc: basecraft_ops::DocId,
@@ -83,19 +59,14 @@ macro_rules! confirmed_save {
     ($controller:ty) => {
         impl $controller {
             pub fn check_save(&self, path: &cxx_qt_lib::QString) -> cxx_qt_lib::QString {
+                crate::editor_save::check_json(self.save_check(path))
+            }
+            fn save_check(&self, path: &cxx_qt_lib::QString) -> basecraft_ops::Result<basecraft_ops::session::SaveCheck> {
                 let path = path.to_string();
-                let result = self
-                    .rust()
-                    .session
-                    .as_ref()
-                    .zip(self.rust().doc)
-                    .ok_or(basecraft_ops::Error::UnknownDocument {
-                        id: basecraft_ops::DocId(usize::MAX),
-                    })
-                    .and_then(|(s, d)| {
-                        s.check_save(d, (!path.is_empty()).then(|| std::path::Path::new(&path)))
-                    });
-                crate::editor_save::check_json(result)
+                let (session, doc) = self.rust().session.as_ref().zip(self.rust().doc).ok_or(
+                    basecraft_ops::Error::UnknownDocument { id: basecraft_ops::DocId(usize::MAX) },
+                )?;
+                session.check_save(doc, (!path.is_empty()).then(|| std::path::Path::new(&path)))
             }
             /// Save to the document's own file, or to `path`, unless the user
             /// must answer first. `{"saved": bool}`, `{"check": ...}` with the
@@ -105,10 +76,17 @@ macro_rules! confirmed_save {
                 path: &cxx_qt_lib::QString,
             ) -> cxx_qt_lib::QString {
                 if !path.is_empty() {
-                    let check = self.check_save(path);
-                    return crate::editor_save::request_save_as(check, |token| {
-                        self.as_mut().save_confirmed(path, token, &cxx_qt_lib::QString::from("cancel"), false)
-                    });
+                    // Save As checks the destination first: a new file's
+                    // unchecked analyses would only warn while saving, and the
+                    // window asks about them instead.
+                    return match self.save_check(path) {
+                        Ok(check) if !check.needs_answer() => {
+                            let token = cxx_qt_lib::QString::from(check.token());
+                            let saved = self.as_mut().save_confirmed(path, &token, &cxx_qt_lib::QString::from("cancel"), false);
+                            crate::editor_save::saved_json(saved)
+                        }
+                        other => crate::editor_save::check_json(other),
+                    };
                 }
                 // The save's own check decides. A refusal that is a question
                 // carries its check, except a conflict found by a complete
@@ -117,7 +95,7 @@ macro_rules! confirmed_save {
                     Ok(saved) => crate::editor_save::saved_json(saved),
                     Err(error) => match crate::editor_save::question(&error) {
                         Some(check) => crate::editor_save::check_json(Ok(check)),
-                        None if matches!(error, basecraft_ops::Error::InputConflict(_)) => self.check_save(path),
+                        None if matches!(error, basecraft_ops::Error::InputConflict(_)) => crate::editor_save::check_json(self.save_check(path)),
                         None => {
                             let message = format!("Save failed: {error}");
                             self.fail(&message);
