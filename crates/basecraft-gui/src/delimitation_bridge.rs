@@ -197,6 +197,7 @@ pub mod qobject {
     }
 }
 use basecraft_docs::TreeDoc;
+use basecraft_ops::species_analysis as analysis;
 use basecraft_ops::{DocId, Session};
 use basecraft_protocol::{
     Op,
@@ -1573,196 +1574,39 @@ impl qobject::DelimitationController {
             return;
         }
         self.as_mut().rust_mut().analysis_tree = input.to_string();
-        let display_job = method.to_string().starts_with("display_");
-        let display_rooted = method.to_string() == "display_upgma";
+        let method = analysis::Method::parse(&method.to_string());
+        let display_job = method.as_ref().is_ok_and(|m| m.is_display());
+        let display_rooted = matches!(method, Ok(analysis::Method::DisplayUpgma));
         let result = (|| -> Result<_, String> {
             let r = self.rust();
             let (session, doc) = r.session.as_ref().zip(r.doc).ok_or("No workspace open")?;
-            let workspace = session.delimitation(doc).map_err(|e| e.to_string())?;
-            let expected_alignment = if workspace
-                .exchange_fields
-                .get("basecraft_alignment_snapshot")
-                .is_some_and(|p| p == &input.to_string())
-            {
-                Some(
-                    workspace
-                        .exchange_fields
-                        .get("basecraft_alignment_hash")
-                        .ok_or("Retained alignment hash is missing")?,
-                )
-            } else {
-                None
+            let method = method.map_err(|e| e.to_string())?;
+            let declared = declared_parameters(&method.operation())?;
+            let (input, shown) = (input.to_string(), r.display_path.to_string());
+            let hypothesis = r.active_hypothesis.to_string();
+            let request = analysis::Request {
+                method,
+                input: Path::new(&input),
+                rooted,
+                settings: serde_json::from_str(&settings.to_string()).map_err(|e| e.to_string())?,
+                hypothesis: &hypothesis,
+                shown_tree: Path::new(&shown),
             };
-            let method = method.to_string();
-            if ![
-                "display_upgma",
-                "display_nj",
-                "display_iqtree",
-                "gmyc_single",
-                "gmyc_multiple",
-                "gmyc_alignment_single",
-                "gmyc_alignment_multiple",
-                "ptp",
-                "mptp",
-                "asap",
-                "relative_time",
-                "haplotypes",
-                "group_statistics",
-            ]
-            .contains(&method.as_str())
-            {
-                return Err("Unknown analysis".into());
-            }
-            let display_job = method.starts_with("display_");
-            let workspace_path = session
-                .root()
-                .join(session.doc_key(doc).map_err(|e| e.to_string())?);
-            let output = workspace_path
-                .parent()
-                .unwrap_or(session.root())
-                .join(format!(
-                    "analysis-{}.{}",
-                    ulid::Ulid::generate(),
-                    if display_job { "nwk" } else { "json" }
-                ));
-            let alignment_pipeline = method.starts_with("gmyc_alignment_") || method == "asap";
-            let requested_input = PathBuf::from(input.to_string());
-            let analysis_input = if expected_alignment.is_some() {
-                basecraft_ops::delimitation::checked_alignment(workspace, &workspace_path)
-                    .map_err(|e| e.to_string())?
-                    .ok_or("No linked alignment available")?
-            } else if !display_job
-                && (workspace.view.display_tree.as_deref() == Some(input.to_string().as_str())
-                    || r.display_path == *input)
-            {
-                basecraft_ops::delimitation::checked_display_tree(workspace)
-                    .map_err(|e| e.to_string())?
-                    .ok_or("No analysis tree available")?
-            } else {
-                requested_input
-            };
-            if let Some(expected) = expected_alignment {
-                let actual = basecraft_io::hash_file(&analysis_input).map_err(|e| e.to_string())?;
-                if &actual != expected {
-                    return Err(
-                        "The retained alignment changed; select an intact input explicitly".into(),
-                    );
-                }
-            }
-            let operation = if method == "display_iqtree" {
-                bundled("iqtree", "tree")
-            } else if display_job {
-                bundled("distance", "tree")
-            } else if alignment_pipeline {
-                format!(
-                    "basecraft.host/{}@1",
-                    if method == "asap" {
-                        "asap_alignment"
-                    } else {
-                        &method
-                    }
-                )
-            } else {
-                bundled("delimitation", &method)
-            };
-            let declared = declared_parameters(&operation)?;
-            let mut params = serde_json::Map::new();
-            params.insert("rooted".into(), json!(rooted));
-            params.insert("workers".into(), json!(1));
-            params.insert("seed".into(), json!(1));
-            let settings: serde_json::Map<String, Value> =
-                serde_json::from_str(&settings.to_string()).map_err(|e| e.to_string())?;
-            for (key, value) in settings {
-                if [
-                    "mapping",
-                    "workers",
-                    "seed",
-                    "replicates",
-                    "model",
-                    "reference_version",
-                    "reference_age_clamp",
-                    "unique_haplotypes",
-                    "deduplicate",
-                    "iqtree_model",
-                    "tree_index",
-                    "min_overlap",
-                    "candidate_budget",
-                ]
-                .contains(&key.as_str())
-                    && !value.as_str().is_some_and(str::is_empty)
-                {
-                    params.insert(key, value);
-                }
-            }
-            if !alignment_pipeline
-                && !display_job
-                && params.get("deduplicate").and_then(Value::as_bool) == Some(true)
-            {
-                return Err("Exact sequence deduplication requires a verified alignment and representative tree. Tree-only preprocessing is unavailable; use alignment GMYC/ASAP, or prepare and root a representative tree with its mapping before fitting. No tips were removed.".into());
-            }
-            if alignment_pipeline {
-                let unique = params
-                    .get("deduplicate")
-                    .or_else(|| params.get("unique_haplotypes"))
-                    .and_then(Value::as_bool)
-                    .unwrap_or(method.starts_with("gmyc_alignment_"));
-                params.insert("unique_haplotypes".into(), json!(unique));
-            }
-            if display_job {
-                params.insert(
-                    "tree_role".into(),
-                    json!("display only; does not change species assignments"),
-                );
-                params.insert(
-                    "method".into(),
-                    json!(if method == "display_upgma" {
-                        "upgma"
-                    } else {
-                        "njstar"
-                    }),
-                );
-            }
-            if method == "display_iqtree" {
-                let model = params.remove("iqtree_model").unwrap_or(json!("MFP"));
-                params.insert("model".into(), model);
-                params.insert("keep_identical".into(), json!(true));
-            }
-            if method == "group_statistics" {
-                let h = session
-                    .delimitation(doc)
-                    .map_err(|e| e.to_string())?
-                    .hypotheses
-                    .iter()
-                    .find(|h| h.id == r.active_hypothesis.to_string())
-                    .ok_or("Choose a hypothesis")?;
-                params.insert(
-                    "groups_data".into(),
-                    json!(
-                        h.groups
-                            .iter()
-                            .flat_map(|g| g
-                                .members
-                                .iter()
-                                .map(move |id| (id.clone(), g.id.clone())))
-                            .collect::<BTreeMap<_, _>>()
-                    ),
-                );
-            }
-            // Only declared settings reach the plugin; the descriptor decides.
-            params.retain(|key, _| declared.contains(key));
-            let role = input_role(&operation, &analysis_input)?;
+            let run = analysis::run(session, doc, &request, &declared)
+                .map_err(|e| e.to_string())?;
+            let role = input_role(&run.operation, &run.input)?;
             let exports = if display_job {
-                vec![(primary_member(&operation)?, output.clone())]
+                vec![(primary_member(&run.operation)?, run.output.clone())]
             } else {
                 Vec::new()
             };
             Ok((
-                operation,
+                run.operation,
                 role,
-                analysis_input,
-                Value::Object(params),
+                run.input,
+                run.parameters,
                 exports,
-                output,
+                run.output,
                 session.generation(doc).map_err(|e| e.to_string())?,
                 (
                     session.id().to_owned(),
