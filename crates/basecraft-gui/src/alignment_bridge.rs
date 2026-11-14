@@ -44,6 +44,8 @@ pub mod qobject {
         #[qproperty(bool, dirty)]
         /// The copy offer for an edit a read-only folder refused (D13), or "".
         #[qproperty(QString, refused_edit)]
+        /// The offer to number names several entries share (D29), or "".
+        #[qproperty(QString, duplicate_names)]
         /// Asks what the document is when basecraft cannot tell (D12), or "".
         #[qproperty(QString, alphabet_question)]
         #[qproperty(QString, zoom_text)]
@@ -72,6 +74,9 @@ pub mod qobject {
         /// End the closed tab's session now (Main.qml `removeDocument`).
         #[qinvokable]
         fn close_session(self: Pin<&mut AlignmentController>);
+        /// Number the names the duplicate-name offer named; whether it worked.
+        #[qinvokable]
+        fn number_duplicates(self: Pin<&mut AlignmentController>) -> bool;
         /// Where records of work on this document go (its session's folder).
         #[qinvokable]
         fn record_folder(self: &AlignmentController) -> QString;
@@ -323,14 +328,14 @@ use std::pin::Pin;
 use std::time::Instant;
 
 use basecraft_docs::AlignmentDoc;
-use basecraft_ops::{DocId, Session};
+use basecraft_ops::Session;
 use basecraft_plugin_host::file_tool::output_beside;
 
 use crate::document_jobs::{DocumentJob, Finished, bundled, failure, primary_member};
 use basecraft_protocol::Op;
 use basecraft_protocol::operation::OperationOutcome;
 use basecraft_viewmodel::alignment::Region;
-use basecraft_viewmodel::{AlignmentView, Frame, Theme};
+use basecraft_viewmodel::{AlignmentView, Frame};
 use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::{QByteArray, QString};
 use serde_json::json;
@@ -338,7 +343,7 @@ use serde_json::json;
 use crate::bridge::{
     ALT, CTRL, KEY_0, KEY_BACKSPACE, KEY_DELETE, KEY_DOWN, KEY_END, KEY_EQUAL, KEY_ESCAPE,
     KEY_HOME, KEY_LEFT, KEY_MINUS, KEY_PAGE_DOWN, KEY_PAGE_UP, KEY_PLUS, KEY_RIGHT, KEY_UP, KEY_Y,
-    KEY_Z, SHIFT, WHEEL_ZOOM, ZOOM_STEP, file_name, memory_text, took,
+    KEY_Z, SHIFT, WHEEL_ZOOM, ZOOM_STEP, file_name, took,
 };
 
 const KEY_A: i32 = 0x41;
@@ -357,62 +362,29 @@ struct Tool {
 const KEY_SPACE: i32 = 0x20;
 
 // Independent Qt properties plus the background scan state.
-#[allow(clippy::struct_excessive_bools)]
-pub struct AlignmentRust {
-    find: basecraft_viewmodel::find::Session,
-    find_status: QString,
-    find_count: i32,
-    find_row: i32,
-    find_hit_y: f64,
-    find_nucleotide: bool,
-    find_rows: QString,
-    find_reveals: i32,
-    history_revision: QString,
-    overview_content: QString,
-    overview_matches: QString,
-    overview_match_cache: basecraft_viewmodel::overview::Cache,
-    overview_cache: basecraft_viewmodel::overview::Cache,
-    frame: QByteArray,
-    last_taxa: String,
-    status: QString,
-    message: QString,
-    message_kind: QString,
-    ok_color: QString,
-    error_color: QString,
-    background: QString,
-    foreground: QString,
-    accent: QString,
-    mono_font: QString,
-    file_path: QString,
-    dirty: bool,
-    refused_edit: QString,
-    alphabet_question: QString,
-    zoom_text: QString,
-    hscroll_pos: f64,
-    hscroll_size: f64,
-    vscroll_pos: f64,
-    vscroll_size: f64,
-    names_width: f64,
-    insert_mode: bool,
-    busy: bool,
-    bootstrap_running: bool,
-    bootstrap_cancelling: bool,
-    bootstrap_progress: f64,
-    bootstrap_status: QString,
-    tool_job: Option<ActiveTool>,
-    gap_column_count: f64,
-    gap_scan_running: bool,
-    gap_runs: Vec<(u64, u64)>,
-    gap_scan_key: Option<(String, u64)>,
-
-    review_snapshot_dir: Option<tempfile::TempDir>,
-    session: Option<Session>,
-    save_state: crate::editor_save::SaveState,
-    doc: Option<DocId>,
-    view: AlignmentView,
-    theme: Theme,
-    scratch: Frame,
-}
+crate::editor::editor_state!(AlignmentRust [drawn documents] {
+    last_taxa: String = String::new(),
+    alphabet_question: QString = QString::default(),
+    hscroll_pos: f64 = 0.0,
+    hscroll_size: f64 = 1.0,
+    vscroll_pos: f64 = 0.0,
+    vscroll_size: f64 = 1.0,
+    names_width: f64 = 0.0,
+    insert_mode: bool = false,
+    bootstrap_running: bool = false,
+    bootstrap_cancelling: bool = false,
+    bootstrap_progress: f64 = 0.,
+    bootstrap_status: QString = QString::default(),
+    tool_job: Option<ActiveTool> = None,
+    gap_column_count: f64 = -1.0,
+    gap_scan_running: bool = false,
+    gap_runs: Vec<(u64, u64)> = Vec::new(),
+    gap_scan_key: Option<(String, u64)> = None,
+    review_snapshot_dir: Option<tempfile::TempDir> = None,
+    duplicate_names: QString = QString::default(),
+    save_state: crate::editor_save::SaveState = crate::editor_save::SaveState::default(),
+    view: AlignmentView = AlignmentView::new(800.0, 600.0),
+});
 
 // The worker and monitor retain this directory until the engine has finished.
 /// A registered operation running on this alignment. Dropping it cancels the
@@ -449,68 +421,75 @@ impl Drop for ActiveTool {
     }
 }
 
-impl Default for AlignmentRust {
-    fn default() -> Self {
-        Self {
-            find: basecraft_viewmodel::find::Session::default(),
-            find_status: QString::default(),
-            find_count: 0,
-            find_row: -1,
-            find_hit_y: 0.0,
-            find_nucleotide: false,
-            find_rows: QString::from("[]"),
-            find_reveals: 0,
-            history_revision: QString::default(),
-            overview_content: QString::from("{\"shapes\":[]}"),
-            overview_matches: QString::from("[]"),
-            overview_match_cache: basecraft_viewmodel::overview::Cache::default(),
-            overview_cache: basecraft_viewmodel::overview::Cache::default(),
-            frame: QByteArray::default(),
-            last_taxa: String::new(),
-            status: QString::default(),
-            message: QString::default(),
-            message_kind: QString::default(),
-            ok_color: QString::default(),
-            error_color: QString::default(),
-            background: QString::default(),
-            foreground: QString::default(),
-            accent: QString::default(),
-            mono_font: QString::default(),
-            file_path: QString::default(),
-            dirty: false,
-            refused_edit: QString::default(),
-            alphabet_question: QString::default(),
-            zoom_text: QString::default(),
-            hscroll_pos: 0.0,
-            hscroll_size: 1.0,
-            vscroll_pos: 0.0,
-            vscroll_size: 1.0,
-            names_width: 0.0,
-            insert_mode: false,
-            busy: false,
-            bootstrap_running: false,
-            bootstrap_cancelling: false,
-            bootstrap_progress: 0.,
-            bootstrap_status: QString::default(),
-            tool_job: None,
-            gap_column_count: -1.0,
-            gap_scan_running: false,
-            gap_runs: Vec::new(),
-            gap_scan_key: None,
-            review_snapshot_dir: None,
-            session: None,
-            save_state: crate::editor_save::SaveState::default(),
-            doc: None,
-            view: AlignmentView::new(800.0, 600.0),
-            theme: Theme::default(),
-            scratch: Frame::new(),
-        }
-    }
+/// The names of the rows the selection covers.
+fn selected_names(view: &AlignmentView, alignment: &basecraft_docs::AlignmentDoc) -> Vec<String> {
+    view.selection.map_or_else(Vec::new, |block| {
+        (block.rows.0..block.rows.1)
+            .map(|i| alignment.row(i).name.clone())
+            .collect()
+    })
 }
 
 #[allow(clippy::cast_possible_truncation)]
 fn f(v: f64) -> f32 {
     v as f32
+}
+
+crate::editor::document_editor!(qobject::AlignmentController, alignment [fresh fail]);
+crate::editor::number_names!(qobject::AlignmentController);
+crate::editor::taxa_editor!(
+    qobject::AlignmentController,
+    alignment,
+    basecraft_docs::AlignmentDoc
+);
+crate::editor::figure_export!(qobject::AlignmentController, alignment);
+
+fn has_figure_selection(view: &AlignmentView) -> bool {
+    view.selection.is_some()
+}
+
+// Every editor's figure goes through the shared export, which takes a Result.
+#[allow(clippy::unnecessary_wraps)]
+fn figure_svg(
+    view: &mut AlignmentView,
+    alignment: &basecraft_docs::AlignmentDoc,
+    scope: i32,
+    theme: &basecraft_viewmodel::Theme,
+    font: &str,
+    include_selection: bool,
+) -> basecraft_ops::Result<String> {
+    let mut view = if scope == 0 {
+        view.visible_figure_view(alignment, include_selection)
+    } else {
+        view.figure_view_with_selection(alignment, scope == 1, include_selection)
+    };
+    let mut frame = Frame::new();
+    view.build(alignment, theme, &mut frame);
+    Ok(basecraft_viewmodel::svg::frame_svg(
+        &frame,
+        view.width,
+        view.height,
+        font,
+        theme.background,
+    ))
+}
+
+impl qobject::AlignmentController {
+    fn before_history(self: Pin<&mut Self>) -> bool {
+        true
+    }
+
+    fn after_history(mut self: Pin<&mut Self>) {
+        let access_thread = self.qt_thread();
+        let mut r = self.as_mut().rust_mut();
+        let r = &mut *r;
+        if let (Some(session), Some(doc)) = (&r.session, r.doc) {
+            r.view.sync(crate::bridge::checked_document!(
+                access_thread,
+                session.alignment(doc)
+            ));
+        }
+    }
 }
 
 impl crate::document_open::DocumentEditor for qobject::AlignmentController {
@@ -521,6 +500,12 @@ impl crate::document_open::DocumentEditor for qobject::AlignmentController {
     }
     fn set_refused(self: Pin<&mut Self>, refused: QString) {
         self.set_refused_edit(refused);
+    }
+    fn open_document(&self) -> Option<(&Session, basecraft_ops::DocId)> {
+        self.rust().session.as_ref().zip(self.rust().doc)
+    }
+    fn offer_numbering(self: Pin<&mut Self>, offer: QString) {
+        self.set_duplicate_names(offer);
     }
     fn alphabet_question(&self) -> Option<String> {
         let (session, doc) = self.rust().session.as_ref().zip(self.rust().doc)?;
@@ -536,56 +521,12 @@ impl qobject::AlignmentController {
         crate::document_open::record_folder(self.rust().session.as_ref())
     }
 
-    pub fn close_session(mut self: Pin<&mut Self>) {
-        self.as_mut().rust_mut().session = None;
-    }
-
-    pub fn document_record(&self) -> QString {
-        crate::provenance_bridge::session_report(self.rust().session.as_ref(), self.rust().doc)
-    }
-    pub fn record_revision(&self) -> QString {
-        crate::provenance_bridge::session_revision(self.rust().session.as_ref(), self.rust().doc)
-    }
-
-    pub fn accessible_page(&self, page: i32) -> QString {
-        let result = crate::bridge::checked_document!(
-            self.qt_thread(),
-            self.with_doc(|d| basecraft_viewmodel::accessible::alignment(d, page))
-        );
-        let value = result.map_or_else(
-            || serde_json::json!({"page": 0, "pages": 1, "text": "No document loaded"}),
-            |p| serde_json::json!({"page": p.page, "pages": p.pages, "text": p.text}),
-        );
-        QString::from(&value.to_string())
-    }
-
-    fn with_doc<T>(&self, f: impl FnOnce(&AlignmentDoc) -> T) -> basecraft_ops::Result<Option<T>> {
-        let r = self.rust();
-        match (&r.session, r.doc) {
-            (Some(s), Some(d)) => Ok(Some(f(s.alignment(d)?))),
-            _ => Ok(None),
-        }
-    }
-
-    fn check_document(&self) -> basecraft_ops::Result<()> {
-        self.with_doc(|_| ()).map(|_| ())
-    }
-
     /// Rebuild the frame, status line and scroll bars.
     fn refresh(mut self: Pin<&mut Self>) {
-        self.as_mut().find_update(false);
-        let history = self.record_revision();
-        self.as_mut().set_history_revision(history);
-        if let Some(warning) =
-            crate::document_open::recovery_notice(self.rust().session.as_ref(), self.rust().doc)
-        {
-            self.as_mut().set_message_kind(QString::from("error"));
-            self.as_mut().set_message(warning);
+        if !self.as_mut().refresh_start() {
+            return;
         }
         let access_thread = self.qt_thread();
-        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
-            crate::bridge::checked_document!(sync self, session.alignment(doc));
-        }
         let (bytes, status, zoom, h, v, names) = {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
@@ -708,24 +649,6 @@ impl qobject::AlignmentController {
         }
     }
 
-    /// A neutral hint. Messages stay brief: say what happened.
-    fn notify(mut self: Pin<&mut Self>, msg: &str) {
-        self.as_mut().set_message_kind(QString::default());
-        self.as_mut().set_message(QString::from(msg));
-    }
-
-    /// Something completed.
-    fn done(mut self: Pin<&mut Self>, msg: &str) {
-        self.as_mut().set_message_kind(QString::from("ok"));
-        self.as_mut().set_message(QString::from(msg));
-    }
-
-    /// Something failed.
-    fn fail(mut self: Pin<&mut Self>, msg: &str) {
-        self.as_mut().set_message_kind(QString::from("error"));
-        self.as_mut().set_message(QString::from(msg));
-    }
-
     fn fail_addition(mut self: Pin<&mut Self>, msg: &str) {
         self.as_mut().fail("Cannot add sequences");
         self.as_mut().addition_failed(QString::from(msg));
@@ -771,20 +694,6 @@ impl qobject::AlignmentController {
         self.export_figure(path, 0, false);
     }
 
-    pub fn export_figure(self: Pin<&mut Self>, path: &QString, scope: i32, publication: bool) {
-        self.export_figure_selection(path, scope, publication, false);
-    }
-
-    pub fn export_figure_png(
-        self: Pin<&mut Self>,
-        path: &QString,
-        scope: i32,
-        publication: bool,
-        width: f64,
-    ) {
-        self.export_figure_png_selection(path, scope, publication, width, false);
-    }
-
     pub fn export_figure_selection(
         self: Pin<&mut Self>,
         path: &QString,
@@ -804,182 +713,6 @@ impl qobject::AlignmentController {
         include_selection: bool,
     ) {
         self.export_figure_with(path, scope, publication, Some(width), include_selection);
-    }
-
-    fn export_figure_with(
-        mut self: Pin<&mut Self>,
-        path: &QString,
-        scope: i32,
-        publication: bool,
-        png_width: Option<f64>,
-        include_selection: bool,
-    ) {
-        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
-            crate::bridge::checked_document!(sync self, session.alignment(doc));
-        }
-        if !(0..=2).contains(&scope) {
-            self.fail("Unknown figure scope");
-            return;
-        }
-        if scope == 1 && self.rust().view.selection.is_none() {
-            self.fail("Select a region or clade first");
-            return;
-        }
-        let target = PathBuf::from(path.to_string());
-        let result = (|| -> basecraft_ops::Result<()> {
-            let mut r = self.as_mut().rust_mut();
-            let r = &mut *r;
-            let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
-                return Ok(());
-            };
-            let theme = if publication {
-                crate::appearance::publication_theme()
-            } else {
-                r.theme.clone()
-            };
-            let mut view = if scope == 0 {
-                r.view
-                    .visible_figure_view(session.alignment(doc)?, include_selection)
-            } else {
-                r.view.figure_view_with_selection(
-                    session.alignment(doc)?,
-                    scope == 1,
-                    include_selection,
-                )
-            };
-            let mut frame = Frame::new();
-            view.build(session.alignment(doc)?, &theme, &mut frame);
-            let svg = basecraft_viewmodel::svg::frame_svg(
-                &frame,
-                view.width,
-                view.height,
-                &r.mono_font.to_string(),
-                theme.background,
-            );
-            if let Some(width) = png_width {
-                let bytes = crate::figure_png::render(&svg, width)
-                    .map_err(basecraft_ops::Error::Invalid)?;
-                session.export(doc, &target, "png", |w| w.write_all(&bytes))
-            } else {
-                session.export(doc, &target, "svg", |w| w.write_all(svg.as_bytes()))
-            }
-        })();
-        match result {
-            Ok(()) => self.done(&format!("Exported {}", file_name(&target))),
-            Err(e) => self.fail(&format!("Export failed: {e}")),
-        }
-    }
-
-    #[cfg(test)]
-    #[allow(dead_code)] // Read by the real-controller bootstrap journey.
-    pub(crate) fn linked_taxa_snapshot(&self) -> Vec<String> {
-        let mut taxa: Vec<_> = self.rust().view.linked_taxa.iter().cloned().collect();
-        taxa.sort();
-        taxa
-    }
-
-    pub fn highlight_taxa(mut self: Pin<&mut Self>, names: &QString) {
-        if let Ok(taxa) =
-            serde_json::from_str::<std::collections::HashSet<String>>(&names.to_string())
-        {
-            self.as_mut().rust_mut().view.linked_taxa = taxa;
-            self.refresh();
-        }
-    }
-
-    fn emit_taxa(mut self: Pin<&mut Self>) {
-        let access_thread = self.qt_thread();
-        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
-            crate::bridge::checked_document!(sync self, session.alignment(doc));
-        }
-        let taxa = {
-            let r = self.rust();
-            let (Some(session), Some(doc)) = (&r.session, r.doc) else {
-                return;
-            };
-            let alignment = crate::bridge::checked_document!(access_thread, session.alignment(doc));
-            let names: Vec<_> = r.view.selection.map_or_else(Vec::new, |block| {
-                (block.rows.0..block.rows.1)
-                    .map(|i| alignment.row(i).name.clone())
-                    .collect()
-            });
-            serde_json::to_string(&names).unwrap_or_default()
-        };
-        if taxa != self.rust().last_taxa {
-            self.as_mut().rust_mut().last_taxa.clone_from(&taxa);
-            self.taxa_selected(QString::from(&taxa));
-        }
-    }
-
-    pub fn create_delimitation(mut self: Pin<&mut Self>, method: &QString) -> bool {
-        if self.rust().busy {
-            return false;
-        }
-        let Some(doc) = self.rust().doc else {
-            return false;
-        };
-        let Some(session) = self.as_mut().rust_mut().session.take() else {
-            return false;
-        };
-        let method = method.to_string();
-        self.as_mut().set_busy(true);
-        self.as_mut().notify("Creating species workspace");
-        let qt_thread = self.qt_thread();
-        let mut session = Some(session);
-        let spawn = crate::jobs::with_session(
-            qt_thread.clone(),
-            &mut session,
-            move |session, work| {
-                crate::delimitation_bridge::create_workspace_in_session(session, work, doc, &method)
-            },
-            move |mut this, session, result| {
-                this.as_mut().rust_mut().session = Some(session);
-                this.as_mut().set_busy(false);
-                match result {
-                    Ok(path) => {
-                        this.as_mut().done("Species workspace created");
-                        this.workspace_created(QString::from(path));
-                    }
-                    Err(error) => {
-                        this.as_mut().fail(&error);
-                        this.workspace_created(QString::default());
-                    }
-                }
-            },
-        );
-        if let Err(error) = spawn {
-            self.as_mut().rust_mut().session = session;
-            self.as_mut().set_busy(false);
-            self.fail(&error);
-            return false;
-        }
-        true
-    }
-    pub fn open_file(mut self: Pin<&mut Self>, path: &QString) -> bool {
-        if self.rust().busy {
-            self.fail("Wait for the running operation before replacing this document");
-            return false;
-        }
-        self.as_mut().set_busy(true);
-        crate::document_open::open_file(self, path, |mut this, result| {
-            let result = result.and_then(|candidate| this.as_mut().install_opened(candidate));
-            this.as_mut().set_busy(false);
-            let ok = result.is_ok();
-            if let Err(error) = result {
-                this.as_mut().fail(&error.to_string());
-            }
-            this.opened(ok);
-        })
-    }
-
-    pub(crate) fn install_fresh(
-        self: Pin<&mut Self>,
-        candidate: crate::document_open::Candidate,
-    ) -> Result<(), crate::document_open::OpenError> {
-        if self.rust().session.is_some() || self.rust().doc.is_some() || self.rust().busy {
-            return Err(crate::document_open::OpenError::StaleIdentity);
-        }
-        self.install_opened(candidate)
     }
 
     pub(crate) fn install_opened(
@@ -1010,11 +743,6 @@ impl qobject::AlignmentController {
         crate::document_open::installed(self.as_mut(), &path);
         self.refresh();
         Ok(())
-    }
-
-    pub fn resize(mut self: Pin<&mut Self>, width: f64, height: f64) {
-        self.as_mut().rust_mut().view.resize(f(width), f(height));
-        self.refresh();
     }
 
     pub fn wheel(mut self: Pin<&mut Self>, x: f64, y: f64, dy: f64, dx: f64, modifiers: i32) {
@@ -1192,55 +920,8 @@ impl qobject::AlignmentController {
         handled
     }
 
-    fn history(mut self: Pin<&mut Self>, redo: bool) {
-        let access_thread = self.qt_thread();
-        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
-            crate::bridge::checked_document!(sync self, session.alignment(doc));
-        }
-        let result = {
-            let mut r = self.as_mut().rust_mut();
-            let r = &mut *r;
-            let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
-                return;
-            };
-            let result = if redo {
-                session.redo(doc)
-            } else {
-                session.undo(doc)
-            };
-            r.view.sync(crate::bridge::checked_document!(
-                access_thread,
-                session.alignment(doc)
-            ));
-            result
-        };
-        match result {
-            Ok(_) => {
-                let dirty =
-                    crate::document_open::unsaved(self.rust().session.as_ref(), self.rust().doc);
-                self.as_mut().set_dirty(dirty);
-                // Undoing or redoing makes the last message stale.
-                self.as_mut().notify("");
-            }
-            Err(e) => self.as_mut().fail(&e.to_string()),
-        }
-        self.refresh();
-    }
-
     pub fn state_alphabet(self: Pin<&mut Self>, answer: &QString) -> bool {
         crate::document_open::state_alphabet(self, &answer.to_string())
-    }
-
-    pub fn undo(self: Pin<&mut Self>) {
-        self.history(false);
-    }
-
-    pub fn redo(self: Pin<&mut Self>) {
-        self.history(true);
-    }
-
-    pub fn memory_report(&self) -> QString {
-        QString::from(&memory_text())
     }
 
     pub fn double_click(mut self: Pin<&mut Self>, x: f64, y: f64) {
@@ -1271,11 +952,6 @@ impl qobject::AlignmentController {
 
     pub fn zoom_out(mut self: Pin<&mut Self>) {
         self.as_mut().rust_mut().view.zoom_step(1.0 / ZOOM_STEP);
-        self.refresh();
-    }
-
-    pub fn fit(mut self: Pin<&mut Self>) {
-        self.as_mut().rust_mut().view.fit();
         self.refresh();
     }
 
@@ -2097,9 +1773,6 @@ impl qobject::AlignmentController {
         if hit.kind == basecraft_viewmodel::find::Kind::Name {
             r.view.start = start;
         }
-    }
-    fn find_y(&self) -> f32 {
-        0.0
     }
 }
 

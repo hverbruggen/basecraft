@@ -109,6 +109,56 @@ impl Session {
         crate::project::Project::base_of(self.project.as_ref(), &path)
     }
 
+    /// Replace a saved document's file with `bytes` a tool made from it, such
+    /// as numbered record names (D29): record the run, write the file and
+    /// publish the history, which then describes the new file. The open
+    /// document keeps the old content, so the caller opens the file again.
+    pub fn publish_rewrite(
+        &mut self,
+        id: DocId,
+        activity: (&str, &str),
+        params: serde_json::Value,
+        bytes: &[u8],
+    ) -> Result<()> {
+        let slot = self
+            .docs
+            .get(id.0)
+            .ok_or(crate::Error::UnknownDocument { id })?;
+        if !slot.is_clean() {
+            return Err(crate::Error::NotReady(
+                "Save or undo the changes first".into(),
+            ));
+        }
+        let key = slot.key.clone();
+        let target = self.resolve(&key);
+        self.check_save_source(id, None)?;
+        let before = basecraft_io::hash_file(&target)?;
+        let after = basecraft_io::hash_bytes(bytes);
+        let actor = self.actor.clone();
+        // Recorded before the file changes: the run logs the file as opened.
+        self.record_tool_run(
+            id,
+            actor,
+            ToolRunRecord::new(
+                activity,
+                params,
+                &[(key.clone(), before)],
+                &[(target.clone(), after.clone())],
+            ),
+        )?;
+        {
+            let _target = crate::records::save_guard::lock(&target)?;
+            basecraft_io::write_atomic(&target, |w| std::io::Write::write_all(w, bytes))?;
+        }
+        for (accepted, hash) in &mut self.docs[id.0].accepted_hashes {
+            if *accepted == key {
+                hash.clone_from(&after);
+            }
+        }
+        self.refresh_source_stamps(id);
+        self.save_history(id)
+    }
+
     /// The one way a tool run reaches the log: one typed `tool.run` entry.
     pub fn record_tool_run(
         &mut self,

@@ -167,6 +167,12 @@ impl Session {
             .any(|(path, before)| *before != crate::records::input_evidence::stamp(path).ok())
     }
 
+    /// The record names more than one record in a sequence document's file
+    /// uses, found once when the file opened.
+    pub fn repeated_record_names(&self, id: DocId) -> Result<&[String]> {
+        Ok(&self.sequence_of(id)?.others.repeated_names)
+    }
+
     pub(super) fn refresh_source_stamps(&mut self, id: DocId) {
         for (path, stamp) in &mut self.docs[id.0].source_stamps {
             *stamp = crate::records::input_evidence::stamp(path).ok();

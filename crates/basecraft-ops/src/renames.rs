@@ -255,13 +255,20 @@ pub struct DuplicateNames {
     pub links: Vec<RecordLink>,
     /// Submissions with rows named by a duplicated name, left the same way.
     pub submissions: Vec<PathBuf>,
+    /// Species workspaces that match specimens to this tree's tips by name.
+    /// Numbering is refused while any does, as a single tip rename is.
+    pub workspaces: Vec<PathBuf>,
 }
 
 /// Duplicate row or tip names in `doc`, for a warning that offers numbered
 /// names or editing by hand. None when every name is unique.
 pub fn duplicates(session: &Session, doc: DocId) -> Result<Option<DuplicateNames>> {
     let file = session.root().join(session.doc_key(doc)?);
-    with_references(session, &file, duplicate_names(&names(session, doc)?))
+    let mut found = with_references(session, &file, duplicate_names(&names(session, doc)?))?;
+    if let Some(found) = found.as_mut().filter(|_| session.is_tree(doc)) {
+        found.workspaces = workspaces_using(session, &file, &mut None)?;
+    }
+    Ok(found)
 }
 
 pub fn duplicate_names(names: &[String]) -> Option<DuplicateNames> {
@@ -333,6 +340,15 @@ fn with_references(
 pub fn make_unique(session: &mut Session, doc: DocId, duplicates: &DuplicateNames) -> Result<()> {
     let mut queue = numbering(duplicates);
     let edits = if session.is_tree(doc) {
+        let file = session.root().join(session.doc_key(doc)?);
+        let mut unreadable = None;
+        let users = workspaces_using(session, &file, &mut unreadable)?;
+        if let Some(path) = unreadable {
+            return Err(RenameRefusal::Unreadable { path }.into());
+        }
+        if let Some(path) = users.into_iter().next() {
+            return Err(RenameRefusal::UsedByWorkspace { path }.into());
+        }
         duplicates
             .renames
             .iter()
@@ -590,11 +606,42 @@ pub fn number_records(session: &Session, path: &Path, duplicates: &DuplicateName
             path.display()
         )));
     }
-    let bytes = std::fs::read(path)?;
+    let numbered = numbered_records(path, &std::fs::read(path)?, duplicates)?;
+    basecraft_io::write_atomic(path, |w| w.write_all(&numbered))?;
+    Ok(())
+}
+
+/// Number the duplicate records of the open sequence document `doc` in its
+/// file (D29). The document's history records the run, with the file's hash
+/// before and after. Only the names change. Refused while the document has
+/// unsaved edits, which a save would write back with the old names. The open
+/// copy keeps the old names: the caller opens the file again.
+pub fn number_open_records(session: &mut Session, doc: DocId) -> Result<DuplicateNames> {
+    if session.is_unsaved(doc) {
+        return Err(crate::Error::NotReady(
+            "Save or undo the changes before numbering the records".into(),
+        ));
+    }
+    let path = session.root().join(session.doc_key(doc)?);
+    let found = duplicate_records(session, &path)?.ok_or(crate::Error::NothingTo("number"))?;
+    let numbered = numbered_records(&path, &std::fs::read(&path)?, &found)?;
+    let mut params = serde_json::Map::new();
+    params.insert("renames".into(), serde_json::to_value(&found.renames)?);
+    session.publish_rewrite(
+        doc,
+        ("basecraft.renames", "number_records"),
+        serde_json::Value::Object(params),
+        &numbered,
+    )?;
+    Ok(found)
+}
+
+/// The file's bytes with each duplicated record name numbered.
+fn numbered_records(path: &Path, bytes: &[u8], duplicates: &DuplicateNames) -> Result<Vec<u8>> {
     let mut queue = numbering(duplicates);
     let mut out = Vec::with_capacity(bytes.len());
     let mut copied = 0;
-    for (start, name) in record_names(path, bytes.clone())? {
+    for (start, name) in record_names(path, bytes.to_vec())? {
         let Some(to) = queue.get_mut(name.as_str()).and_then(VecDeque::pop_front) else {
             continue;
         };
@@ -608,8 +655,7 @@ pub fn number_records(session: &Session, path: &Path, duplicates: &DuplicateName
         copied = end + if spaces > 1 { grow.min(spaces - 1) } else { 0 };
     }
     out.extend_from_slice(&bytes[copied..]);
-    basecraft_io::write_atomic(path, |w| w.write_all(&out))?;
-    Ok(())
+    Ok(out)
 }
 
 /// Each record's name and the byte offset where it is written. FASTA names

@@ -57,6 +57,7 @@ mod save_index;
 mod save_reference_protections;
 mod save_safety;
 mod shared_delimitation_workflow;
+mod species_analysis;
 mod store_registry_formats;
 mod submission;
 #[path = "../support/submission_run.rs"]

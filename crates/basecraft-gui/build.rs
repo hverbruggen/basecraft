@@ -132,6 +132,7 @@ fn main() {
         "qml/LabelPlacementDialog.qml",
         "qml/ReadOnlyCopyDialog.qml",
         "qml/AlphabetDialog.qml",
+        "qml/DuplicateNamesDialog.qml",
         "qml/AppIcon.qml",
         "qml/EmptyWorkspaceBrand.qml",
         "qml/EmptyView.qml",

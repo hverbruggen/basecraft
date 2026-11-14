@@ -197,6 +197,7 @@ pub mod qobject {
     }
 }
 use basecraft_docs::TreeDoc;
+use basecraft_ops::species_analysis as analysis;
 use basecraft_ops::{DocId, Session};
 use basecraft_protocol::{
     Op,
@@ -235,108 +236,37 @@ use std::{
     pin::Pin,
 };
 
-// Independent generated QML properties describe document state and caller activity.
-#[allow(clippy::struct_excessive_bools)]
-pub struct DelimitationRust {
-    find: basecraft_viewmodel::find::Session,
-    find_status: QString,
-    find_count: i32,
-    find_row: i32,
-    find_hit_y: f64,
-    find_nucleotide: bool,
-    find_rows: QString,
-    find_reveals: i32,
-    history_revision: QString,
-    workspace_json: QString,
-    selection_json: QString,
-    preview_json: QString,
-    statistics_json: QString,
-    sampling_summary: QString,
-    display_path: QString,
-    active_hypothesis: QString,
-    linked_alignment: QString,
-    file_path: QString,
-    status: QString,
-    message: QString,
-    message_kind: QString,
-    message_details: QString,
-    smoothing_tree: QString,
+crate::editor::editor_state!(DelimitationRust [documents] {
+    workspace_json: QString = QString::from("{}"),
+    selection_json: QString = QString::from("[]"),
+    preview_json: QString = QString::from("[]"),
+    statistics_json: QString = QString::from("{}"),
+    sampling_summary: QString = QString::default(),
+    display_path: QString = QString::default(),
+    active_hypothesis: QString = QString::default(),
+    linked_alignment: QString = QString::default(),
+    message_details: QString = QString::default(),
+    smoothing_tree: QString = QString::default(),
     /// The tree the latest analysis or attach used.
-    analysis_tree: String,
-    dirty: bool,
-    refused_edit: QString,
-    busy: bool,
-    can_cut: bool,
-    root_height: f64,
-    threshold: f64,
-    theme_revision: i32,
-    tree_edits: QString,
-    display_revision: i32,
-    bar_columns: QString,
-    palette: Vec<String>,
-    // Modification time of the theme file last applied; empty before the first read.
-    session: Option<Session>,
-    doc: Option<DocId>,
-    selection: Selection,
-    display_tree: Option<TreeDoc>,
-    time_tree: Option<(TreeDoc, basecraft_delimitation::time_tree::TimeTree, String)>,
-    preview: Vec<BTreeSet<String>>,
-    analysis: Option<RunningAnalysis>,
+    analysis_tree: String = String::new(),
+    can_cut: bool = false,
+    root_height: f64 = 0.0,
+    threshold: f64 = 0.0,
+    theme_revision: i32 = 0,
+    tree_edits: QString = QString::from("[]"),
+    display_revision: i32 = 0,
+    bar_columns: QString = QString::from("[]"),
+    palette: Vec<String> = delimitation::palette(&basecraft_viewmodel::Theme::default()),
+    selection: Selection = Selection::default(),
+    display_tree: Option<TreeDoc> = None,
+    time_tree: Option<(TreeDoc, basecraft_delimitation::time_tree::TimeTree, String)> = None,
+    preview: Vec<BTreeSet<String>> = vec![],
+    analysis: Option<RunningAnalysis> = None,
     /// A fit waiting for the display tree being inferred.
-    pending_fit: Option<species_analysis::Fit>,
+    pending_fit: Option<species_analysis::Fit> = None,
     /// A display tree to build once the analysis succeeds.
-    pending_display: Option<species_analysis::Run>,
-}
-impl Default for DelimitationRust {
-    fn default() -> Self {
-        Self {
-            find: basecraft_viewmodel::find::Session::default(),
-            find_status: QString::default(),
-            find_count: 0,
-            find_row: -1,
-            find_hit_y: 0.0,
-            find_nucleotide: false,
-            find_rows: QString::from("[]"),
-            find_reveals: 0,
-            history_revision: QString::default(),
-            workspace_json: QString::from("{}"),
-            selection_json: QString::from("[]"),
-            preview_json: QString::from("[]"),
-            statistics_json: QString::from("{}"),
-            sampling_summary: QString::default(),
-            display_path: QString::default(),
-            active_hypothesis: QString::default(),
-            linked_alignment: QString::default(),
-            file_path: QString::default(),
-            status: QString::default(),
-            message: QString::default(),
-            message_kind: QString::default(),
-            message_details: QString::default(),
-            smoothing_tree: QString::default(),
-            analysis_tree: String::new(),
-            dirty: false,
-            refused_edit: QString::default(),
-            busy: false,
-            can_cut: false,
-            root_height: 0.0,
-            threshold: 0.0,
-            theme_revision: 0,
-            tree_edits: QString::from("[]"),
-            display_revision: 0,
-            bar_columns: QString::from("[]"),
-            palette: delimitation::palette(&basecraft_viewmodel::Theme::default()),
-            session: None,
-            doc: None,
-            selection: Selection::default(),
-            display_tree: None,
-            time_tree: None,
-            preview: vec![],
-            analysis: None,
-            pending_fit: None,
-            pending_display: None,
-        }
-    }
-}
+    pending_display: Option<species_analysis::Run> = None,
+});
 fn rows(geometry: &str) -> Vec<(String, f32, f32)> {
     serde_json::from_str::<Value>(geometry)
         .ok()
@@ -367,6 +297,19 @@ fn group(members: BTreeSet<String>, label: String) -> Group {
         attributes: BTreeMap::new(),
     }
 }
+crate::editor::document_editor!(qobject::DelimitationController, delimitation []);
+
+impl qobject::DelimitationController {
+    fn before_history(self: Pin<&mut Self>) -> bool {
+        self.workspace_available()
+    }
+
+    fn after_history(mut self: Pin<&mut Self>) {
+        self.as_mut().set_statistics_json(QString::from("{}"));
+        self.cancel_cut();
+    }
+}
+
 impl crate::document_open::DocumentEditor for qobject::DelimitationController {
     fn apply_edit(self: Pin<&mut Self>, op: Op) -> bool {
         match op {
@@ -380,10 +323,6 @@ impl crate::document_open::DocumentEditor for qobject::DelimitationController {
 }
 
 impl qobject::DelimitationController {
-    pub fn close_session(mut self: Pin<&mut Self>) {
-        self.as_mut().rust_mut().session = None;
-    }
-
     pub fn accessible_page(&self, page: i32) -> QString {
         let access_thread = self.qt_thread();
         let state = self.rust();
@@ -406,13 +345,6 @@ impl qobject::DelimitationController {
         )
     }
 
-    pub fn document_record(&self) -> QString {
-        crate::provenance_bridge::session_report(self.rust().session.as_ref(), self.rust().doc)
-    }
-    pub fn record_revision(&self) -> QString {
-        crate::provenance_bridge::session_revision(self.rust().session.as_ref(), self.rust().doc)
-    }
-
     fn fail(mut self: Pin<&mut Self>, text: &str) {
         // A tree that is not ultrametric: offer to smooth it (D17).
         let tree = &self.rust().analysis_tree;
@@ -429,19 +361,10 @@ impl qobject::DelimitationController {
         self.set_message(QString::from(&summary));
     }
     fn refresh(mut self: Pin<&mut Self>) {
-        self.as_mut().find_update(false);
-        let history = self.record_revision();
-        self.as_mut().set_history_revision(history);
-        if let Some(warning) =
-            crate::document_open::recovery_notice(self.rust().session.as_ref(), self.rust().doc)
-        {
-            self.as_mut().set_message_kind(QString::from("error"));
-            self.as_mut().set_message(warning);
+        if !self.as_mut().refresh_start() {
+            return;
         }
         let access_thread = self.qt_thread();
-        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
-            crate::bridge::checked_document!(sync self, session.delimitation(doc));
-        }
         let Some((data, status)) = ({
             let r = self.rust();
             r.session.as_ref().zip(r.doc).map(|(s, d)| {
@@ -523,22 +446,6 @@ impl qobject::DelimitationController {
             Err(e) => self.fail(e),
         }
         result
-    }
-    pub fn open_file(mut self: Pin<&mut Self>, path: &QString) -> bool {
-        if self.rust().busy {
-            self.fail("Wait for the running operation before replacing this document");
-            return false;
-        }
-        self.as_mut().set_busy(true);
-        crate::document_open::open_file(self, path, |mut this, result| {
-            let result = result.and_then(|candidate| this.as_mut().install_opened(candidate));
-            this.as_mut().set_busy(false);
-            let ok = result.is_ok();
-            if let Err(error) = result {
-                this.as_mut().fail(&error.to_string());
-            }
-            this.opened(ok);
-        })
     }
 
     fn install_opened(
@@ -1465,34 +1372,6 @@ impl qobject::DelimitationController {
             }
         }
     }
-    fn history(mut self: Pin<&mut Self>, redo: bool) {
-        if !self.as_mut().workspace_available() {
-            return;
-        }
-        let result = {
-            let mut r = self.as_mut().rust_mut();
-            let r = &mut *r;
-            r.session
-                .as_mut()
-                .zip(r.doc)
-                .map(|(s, d)| if redo { s.redo(d) } else { s.undo(d) })
-        };
-        if let Some(Err(e)) = result {
-            self.fail(&e.to_string());
-        } else {
-            self.as_mut().set_statistics_json(QString::from("{}"));
-            self.as_mut().set_message(QString::default());
-            self.as_mut().set_dirty(true);
-            self.as_mut().cancel_cut();
-            self.refresh();
-        }
-    }
-    pub fn undo(self: Pin<&mut Self>) {
-        self.history(false);
-    }
-    pub fn redo(self: Pin<&mut Self>) {
-        self.history(true);
-    }
     pub fn save(mut self: Pin<&mut Self>) {
         let path = self.rust().file_path.clone();
         self.as_mut().save_as(&path);
@@ -1538,8 +1417,7 @@ impl qobject::DelimitationController {
                 }
                 self.as_mut().set_file_path(path.clone());
                 self.as_mut().set_dirty(false);
-                self.as_mut().set_message_kind(QString::from("ok"));
-                self.set_message(QString::from("Saved"));
+                self.as_mut().done("Saved");
                 true
             }
             Some(Err(e)) => {
@@ -1589,8 +1467,7 @@ impl qobject::DelimitationController {
         })();
         match result {
             Ok(()) => {
-                self.as_mut().set_message_kind(QString::from("ok"));
-                self.set_message(QString::from("Exported comparison"));
+                self.as_mut().done("Exported comparison");
             }
             Err(e) => self.fail(&e.to_string()),
         }
@@ -1677,8 +1554,7 @@ impl qobject::DelimitationController {
         })();
         match result {
             Ok(()) => {
-                self.as_mut().set_message_kind(QString::from("ok"));
-                self.set_message(QString::from("Exported distance summaries"));
+                self.as_mut().done("Exported distance summaries");
             }
             Err(error) => self.fail(&error.to_string()),
         }
@@ -1697,196 +1573,39 @@ impl qobject::DelimitationController {
             return;
         }
         self.as_mut().rust_mut().analysis_tree = input.to_string();
-        let display_job = method.to_string().starts_with("display_");
-        let display_rooted = method.to_string() == "display_upgma";
+        let method = analysis::Method::parse(&method.to_string());
+        let display_job = method.as_ref().is_ok_and(|m| m.is_display());
+        let display_rooted = matches!(method, Ok(analysis::Method::DisplayUpgma));
         let result = (|| -> Result<_, String> {
             let r = self.rust();
             let (session, doc) = r.session.as_ref().zip(r.doc).ok_or("No workspace open")?;
-            let workspace = session.delimitation(doc).map_err(|e| e.to_string())?;
-            let expected_alignment = if workspace
-                .exchange_fields
-                .get("basecraft_alignment_snapshot")
-                .is_some_and(|p| p == &input.to_string())
-            {
-                Some(
-                    workspace
-                        .exchange_fields
-                        .get("basecraft_alignment_hash")
-                        .ok_or("Retained alignment hash is missing")?,
-                )
-            } else {
-                None
+            let method = method.map_err(|e| e.to_string())?;
+            let declared = declared_parameters(&method.operation())?;
+            let (input, shown) = (input.to_string(), r.display_path.to_string());
+            let hypothesis = r.active_hypothesis.to_string();
+            let request = analysis::Request {
+                method,
+                input: Path::new(&input),
+                rooted,
+                settings: serde_json::from_str(&settings.to_string()).map_err(|e| e.to_string())?,
+                hypothesis: &hypothesis,
+                shown_tree: Path::new(&shown),
             };
-            let method = method.to_string();
-            if ![
-                "display_upgma",
-                "display_nj",
-                "display_iqtree",
-                "gmyc_single",
-                "gmyc_multiple",
-                "gmyc_alignment_single",
-                "gmyc_alignment_multiple",
-                "ptp",
-                "mptp",
-                "asap",
-                "relative_time",
-                "haplotypes",
-                "group_statistics",
-            ]
-            .contains(&method.as_str())
-            {
-                return Err("Unknown analysis".into());
-            }
-            let display_job = method.starts_with("display_");
-            let workspace_path = session
-                .root()
-                .join(session.doc_key(doc).map_err(|e| e.to_string())?);
-            let output = workspace_path
-                .parent()
-                .unwrap_or(session.root())
-                .join(format!(
-                    "analysis-{}.{}",
-                    ulid::Ulid::generate(),
-                    if display_job { "nwk" } else { "json" }
-                ));
-            let alignment_pipeline = method.starts_with("gmyc_alignment_") || method == "asap";
-            let requested_input = PathBuf::from(input.to_string());
-            let analysis_input = if expected_alignment.is_some() {
-                basecraft_ops::delimitation::checked_alignment(workspace, &workspace_path)
-                    .map_err(|e| e.to_string())?
-                    .ok_or("No linked alignment available")?
-            } else if !display_job
-                && (workspace.view.display_tree.as_deref() == Some(input.to_string().as_str())
-                    || r.display_path == *input)
-            {
-                basecraft_ops::delimitation::checked_display_tree(workspace)
-                    .map_err(|e| e.to_string())?
-                    .ok_or("No analysis tree available")?
-            } else {
-                requested_input
-            };
-            if let Some(expected) = expected_alignment {
-                let actual = basecraft_io::hash_file(&analysis_input).map_err(|e| e.to_string())?;
-                if &actual != expected {
-                    return Err(
-                        "The retained alignment changed; select an intact input explicitly".into(),
-                    );
-                }
-            }
-            let operation = if method == "display_iqtree" {
-                bundled("iqtree", "tree")
-            } else if display_job {
-                bundled("distance", "tree")
-            } else if alignment_pipeline {
-                format!(
-                    "basecraft.host/{}@1",
-                    if method == "asap" {
-                        "asap_alignment"
-                    } else {
-                        &method
-                    }
-                )
-            } else {
-                bundled("delimitation", &method)
-            };
-            let declared = declared_parameters(&operation)?;
-            let mut params = serde_json::Map::new();
-            params.insert("rooted".into(), json!(rooted));
-            params.insert("workers".into(), json!(1));
-            params.insert("seed".into(), json!(1));
-            let settings: serde_json::Map<String, Value> =
-                serde_json::from_str(&settings.to_string()).map_err(|e| e.to_string())?;
-            for (key, value) in settings {
-                if [
-                    "mapping",
-                    "workers",
-                    "seed",
-                    "replicates",
-                    "model",
-                    "reference_version",
-                    "reference_age_clamp",
-                    "unique_haplotypes",
-                    "deduplicate",
-                    "iqtree_model",
-                    "tree_index",
-                    "min_overlap",
-                    "candidate_budget",
-                ]
-                .contains(&key.as_str())
-                    && !value.as_str().is_some_and(str::is_empty)
-                {
-                    params.insert(key, value);
-                }
-            }
-            if !alignment_pipeline
-                && !display_job
-                && params.get("deduplicate").and_then(Value::as_bool) == Some(true)
-            {
-                return Err("Exact sequence deduplication requires a verified alignment and representative tree. Tree-only preprocessing is unavailable; use alignment GMYC/ASAP, or prepare and root a representative tree with its mapping before fitting. No tips were removed.".into());
-            }
-            if alignment_pipeline {
-                let unique = params
-                    .get("deduplicate")
-                    .or_else(|| params.get("unique_haplotypes"))
-                    .and_then(Value::as_bool)
-                    .unwrap_or(method.starts_with("gmyc_alignment_"));
-                params.insert("unique_haplotypes".into(), json!(unique));
-            }
-            if display_job {
-                params.insert(
-                    "tree_role".into(),
-                    json!("display only; does not change species assignments"),
-                );
-                params.insert(
-                    "method".into(),
-                    json!(if method == "display_upgma" {
-                        "upgma"
-                    } else {
-                        "njstar"
-                    }),
-                );
-            }
-            if method == "display_iqtree" {
-                let model = params.remove("iqtree_model").unwrap_or(json!("MFP"));
-                params.insert("model".into(), model);
-                params.insert("keep_identical".into(), json!(true));
-            }
-            if method == "group_statistics" {
-                let h = session
-                    .delimitation(doc)
-                    .map_err(|e| e.to_string())?
-                    .hypotheses
-                    .iter()
-                    .find(|h| h.id == r.active_hypothesis.to_string())
-                    .ok_or("Choose a hypothesis")?;
-                params.insert(
-                    "groups_data".into(),
-                    json!(
-                        h.groups
-                            .iter()
-                            .flat_map(|g| g
-                                .members
-                                .iter()
-                                .map(move |id| (id.clone(), g.id.clone())))
-                            .collect::<BTreeMap<_, _>>()
-                    ),
-                );
-            }
-            // Only declared settings reach the plugin; the descriptor decides.
-            params.retain(|key, _| declared.contains(key));
-            let role = input_role(&operation, &analysis_input)?;
+            let run =
+                analysis::run(session, doc, &request, &declared).map_err(|e| e.to_string())?;
+            let role = input_role(&run.operation, &run.input)?;
             let exports = if display_job {
-                vec![(primary_member(&operation)?, output.clone())]
+                vec![(primary_member(&run.operation)?, run.output.clone())]
             } else {
                 Vec::new()
             };
             Ok((
-                operation,
+                run.operation,
                 role,
-                analysis_input,
-                Value::Object(params),
+                run.input,
+                run.parameters,
                 exports,
-                output,
+                run.output,
                 session.generation(doc).map_err(|e| e.to_string())?,
                 (
                     session.id().to_owned(),
@@ -2096,9 +1815,7 @@ impl qobject::DelimitationController {
                         )));
                     }
                 }
-                self.as_mut().set_message_kind(QString::from("ok"));
-                self.as_mut()
-                    .set_message(QString::from("Analysis completed"));
+                self.as_mut().done("Analysis completed");
                 self.as_mut().refresh();
                 self.analysis_done(true);
             }
@@ -2264,9 +1981,6 @@ impl qobject::DelimitationController {
             progress["completed"],
             progress["total"]
         )));
-    }
-    pub fn memory_report(&self) -> QString {
-        QString::from(&crate::bridge::memory_text())
     }
 }
 
@@ -2450,9 +2164,6 @@ impl qobject::DelimitationController {
         };
         let d = crate::bridge::checked_document!(access_thread, session.delimitation(doc));
         let _ = (d, hit);
-    }
-    fn find_y(&self) -> f32 {
-        0.0
     }
 }
 

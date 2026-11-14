@@ -446,10 +446,81 @@ pub(crate) trait DocumentEditor: cxx_qt::Threading + Sized + 'static {
         None
     }
     fn set_question(self: std::pin::Pin<&mut Self>, _question: cxx_qt_lib::QString) {}
+    /// The open session and document, for the duplicate-name offer (D29).
+    fn open_document(&self) -> Option<(&Session, basecraft_ops::DocId)> {
+        None
+    }
+    fn offer_numbering(self: std::pin::Pin<&mut Self>, _offer: cxx_qt_lib::QString) {}
+}
+
+/// The rows, tips or records of `doc` that share a name, and what numbering
+/// them would do (D29). `ops::renames` finds them.
+pub(crate) fn duplicates(
+    session: &Session,
+    doc: basecraft_ops::DocId,
+) -> basecraft_ops::Result<Option<basecraft_ops::renames::DuplicateNames>> {
+    if session.is_tree(doc) || session.is_alignment(doc) {
+        basecraft_ops::renames::duplicates(session, doc)
+    } else if session.repeated_record_names(doc)?.is_empty() {
+        // Known since the file opened: no second read of the file.
+        Ok(None)
+    } else {
+        let path = session.root().join(session.doc_key(doc)?);
+        basecraft_ops::renames::duplicate_records(session, &path)
+    }
+}
+
+/// The offer to number duplicate names as JSON, `text` in plain words and
+/// `action` for its button, or "" when every name is unique or a species
+/// workspace refuses the numbering.
+fn duplicate_offer(session: &Session, doc: basecraft_ops::DocId) -> String {
+    let Ok(Some(found)) = duplicates(session, doc) else {
+        return String::new();
+    };
+    if !found.workspaces.is_empty() {
+        return String::new();
+    }
+    let shown = found
+        .names
+        .iter()
+        .take(5)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    let names = match found.names.len() {
+        n if n > 5 => format!("{shown} and {} more", n - 5),
+        _ => shown,
+    };
+    let first = &found.names[0];
+    let relink = match found.links.len() + found.submissions.len() {
+        0 => String::new(),
+        n => format!(" {n} specimen links or submissions use these names and will need relinking."),
+    };
+    let (text, action) = if session.is_tree(doc) || session.is_alignment(doc) {
+        let things = if session.is_tree(doc) { "tips" } else { "rows" };
+        (
+            format!(
+                "Some {things} share a name: {names}. Number them ({first}.1, {first}.2) so each can be edited?{relink}"
+            ),
+            "&Number them",
+        )
+    } else {
+        let file = session
+            .doc_key(doc)
+            .map(|key| crate::bridge::file_name(Path::new(key)))
+            .unwrap_or_default();
+        (
+            format!(
+                "Some records in {file} share a name: {names}. Number them in the file ({first}.1, {first}.2) so each can be edited? This changes the record names in the file itself; Undo cannot reverse it, and the file's history records it.{relink}"
+            ),
+            "&Number in file",
+        )
+    };
+    serde_json::json!({"text": text, "action": action}).to_string()
 }
 
 /// After an editor installed the document at `path`: ask its alphabet
-/// question (D12), and redo the edit a read-only folder refused on the
+/// question (D12), offer to number duplicate names (D29), and redo the edit a read-only folder refused on the
 /// original (D13) on the next turn, so the install itself changes nothing.
 /// Redoing a stated alphabet answers the question.
 pub(crate) fn installed<T: DocumentEditor>(mut this: std::pin::Pin<&mut T>, path: &Path) {
@@ -459,6 +530,12 @@ pub(crate) fn installed<T: DocumentEditor>(mut this: std::pin::Pin<&mut T>, path
         .filter(|_| !matches!(redo, Some(basecraft_protocol::Op::SetAlphabet { .. })));
     this.as_mut()
         .set_question(cxx_qt_lib::QString::from(&question.unwrap_or_default()));
+    let offer = this
+        .open_document()
+        .map(|(session, doc)| duplicate_offer(session, doc))
+        .unwrap_or_default();
+    this.as_mut()
+        .offer_numbering(cxx_qt_lib::QString::from(&offer));
     if let Some(op) = redo {
         let _ = this.qt_thread().queue(move |this| {
             this.apply_edit(op);

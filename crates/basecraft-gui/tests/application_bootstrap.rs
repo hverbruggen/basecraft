@@ -38,6 +38,10 @@ mod delimitation_bridge;
 mod document_jobs;
 #[path = "../src/document_open.rs"]
 mod document_open;
+#[path = "../src/editor.rs"]
+mod editor;
+#[path = "editor_history/mod.rs"]
+mod editor_history;
 #[path = "../src/editor_save.rs"]
 mod editor_save;
 #[path = "../src/figure_png.rs"]
@@ -1146,6 +1150,7 @@ fn main() {
 
     controller_appearance::run(&app);
     controller_appearance::closed_editor(&app);
+    editor_history::run(&app);
 
     // Real QML-created controllers; inject invalid owned IDs without exposing
     // production invokables or constructing placeholder document payloads.

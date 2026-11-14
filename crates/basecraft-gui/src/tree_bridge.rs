@@ -49,6 +49,8 @@ pub mod qobject {
         #[qproperty(bool, dirty)]
         /// The copy offer for an edit a read-only folder refused (D13), or "".
         #[qproperty(QString, refused_edit)]
+        /// The offer to number names several entries share (D29), or "".
+        #[qproperty(QString, duplicate_names)]
         #[qproperty(QString, zoom_text)]
         #[qproperty(f64, hscroll_pos)]
         #[qproperty(f64, hscroll_size)]
@@ -79,6 +81,9 @@ pub mod qobject {
         /// End the closed tab's session now (Main.qml `removeDocument`).
         #[qinvokable]
         fn close_session(self: Pin<&mut TreeController>);
+        /// Number the names the duplicate-name offer named; whether it worked.
+        #[qinvokable]
+        fn number_duplicates(self: Pin<&mut TreeController>) -> bool;
         /// Show the tree in `path` with `edits`, a JSON list of drawing
         /// edits, replayed on it. Nothing is written.
         #[qinvokable]
@@ -284,143 +289,51 @@ use std::pin::Pin;
 use std::time::Instant;
 
 use basecraft_docs::TreeDoc;
-use basecraft_ops::{DocId, Session};
+use basecraft_ops::Session;
 use basecraft_protocol::delimitation::TreeDrawingEdit;
 use basecraft_protocol::{CladeAnnotation, Op, SupportPlacement, TreeStyle};
 use basecraft_viewmodel::label_placement::{Answer, Questions, Step};
 use basecraft_viewmodel::tree::TipColumn;
 use basecraft_viewmodel::tree::to_svg_with_style;
-use basecraft_viewmodel::{Frame, Theme, TreeView};
+use basecraft_viewmodel::{Frame, TreeView};
 use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::{QByteArray, QString};
 use serde_json::{Value, json};
 
 use crate::bridge::{
     ALT, CTRL, KEY_0, KEY_DOWN, KEY_EQUAL, KEY_ESCAPE, KEY_LEFT, KEY_MINUS, KEY_PLUS, KEY_RIGHT,
-    KEY_UP, KEY_Y, KEY_Z, SHIFT, WHEEL_ZOOM, ZOOM_STEP, css, file_folder, file_name, memory_text,
-    took,
+    KEY_UP, KEY_Y, KEY_Z, SHIFT, WHEEL_ZOOM, ZOOM_STEP, css, file_folder, file_name, took,
 };
 
-#[allow(clippy::struct_excessive_bools)]
-pub struct TreeRust {
-    labels: Option<basecraft_viewmodel::label_placement::Questions>,
-    label_question: QString,
-    find: basecraft_viewmodel::find::Session,
-    find_status: QString,
-    find_count: i32,
-    find_row: i32,
-    find_hit_y: f64,
-    find_nucleotide: bool,
-    find_rows: QString,
-    find_reveals: i32,
-    history_revision: QString,
-    overview_content: QString,
-    overview_matches: QString,
-    overview_match_cache: basecraft_viewmodel::overview::Cache,
-    overview_cache: basecraft_viewmodel::overview::Cache,
-    frame: QByteArray,
-    canvas_geometry: QString,
-    last_taxa: String,
-    status: QString,
-    message: QString,
-    message_kind: QString,
-    ok_color: QString,
-    error_color: QString,
-    background: QString,
-    foreground: QString,
-    accent: QString,
-    mono_font: QString,
-    file_path: QString,
-    dirty: bool,
-    refused_edit: QString,
-    busy: bool,
-    zoom_text: QString,
-    hscroll_pos: f64,
-    hscroll_size: f64,
-    vscroll_pos: f64,
-    vscroll_size: f64,
-    has_selection: bool,
-    can_auto_root: bool,
-    tip_selected: bool,
-    linked_alignment: QString,
-    source_alignment: QString,
-    alignment_link_status: QString,
-    alignment_link_inferred: bool,
-    support_placement: QString,
-    tip_font: i32,
-    support_font: i32,
-    branch_width: i32,
-    has_support: bool,
-    display_only: bool,
+crate::editor::editor_state!(TreeRust [drawn documents] {
+    labels: Option<basecraft_viewmodel::label_placement::Questions> = None,
+    label_question: QString = QString::default(),
+    canvas_geometry: QString = QString::from("{}"),
+    last_taxa: String = String::new(),
+    hscroll_pos: f64 = 0.0,
+    hscroll_size: f64 = 1.0,
+    vscroll_pos: f64 = 0.0,
+    vscroll_size: f64 = 1.0,
+    has_selection: bool = false,
+    can_auto_root: bool = false,
+    tip_selected: bool = false,
+    linked_alignment: QString = QString::default(),
+    source_alignment: QString = QString::default(),
+    alignment_link_status: QString = QString::default(),
+    alignment_link_inferred: bool = false,
+    support_placement: QString = QString::from("natural"),
+    tip_font: i32 = 0,
+    support_font: i32 = 0,
+    branch_width: i32 = 0,
+    has_support: bool = false,
+    display_only: bool = false,
+    duplicate_names: QString = QString::default(),
+    save_state: crate::editor_save::SaveState = crate::editor_save::SaveState::default(),
+    view: TreeView = TreeView::new(800.0, 600.0),
+});
 
-    session: Option<Session>,
-    save_state: crate::editor_save::SaveState,
-    doc: Option<DocId>,
-    view: TreeView,
-    theme: Theme,
-    scratch: Frame,
-}
-
-impl Default for TreeRust {
-    fn default() -> Self {
-        Self {
-            labels: None,
-            label_question: QString::default(),
-            find: basecraft_viewmodel::find::Session::default(),
-            find_status: QString::default(),
-            find_count: 0,
-            find_row: -1,
-            find_hit_y: 0.0,
-            find_nucleotide: false,
-            find_rows: QString::from("[]"),
-            find_reveals: 0,
-            history_revision: QString::default(),
-            overview_content: QString::from("{\"shapes\":[]}"),
-            overview_matches: QString::from("[]"),
-            overview_match_cache: basecraft_viewmodel::overview::Cache::default(),
-            overview_cache: basecraft_viewmodel::overview::Cache::default(),
-            frame: QByteArray::default(),
-            canvas_geometry: QString::from("{}"),
-            last_taxa: String::new(),
-            status: QString::default(),
-            message: QString::default(),
-            message_kind: QString::default(),
-            ok_color: QString::default(),
-            error_color: QString::default(),
-            background: QString::default(),
-            foreground: QString::default(),
-            accent: QString::default(),
-            mono_font: QString::default(),
-            file_path: QString::default(),
-            dirty: false,
-            refused_edit: QString::default(),
-            busy: false,
-            zoom_text: QString::default(),
-            hscroll_pos: 0.0,
-            hscroll_size: 1.0,
-            vscroll_pos: 0.0,
-            vscroll_size: 1.0,
-            has_selection: false,
-            can_auto_root: false,
-            tip_selected: false,
-            linked_alignment: QString::default(),
-            source_alignment: QString::default(),
-            alignment_link_status: QString::default(),
-            alignment_link_inferred: false,
-            support_placement: QString::from("natural"),
-            tip_font: 0,
-            support_font: 0,
-            branch_width: 0,
-            has_support: false,
-            display_only: false,
-            session: None,
-            save_state: crate::editor_save::SaveState::default(),
-            doc: None,
-            view: TreeView::new(800.0, 600.0),
-            theme: Theme::default(),
-            scratch: Frame::new(),
-        }
-    }
+fn selected_names(view: &TreeView, tree: &TreeDoc) -> Vec<String> {
+    view.selected_names(tree)
 }
 
 #[allow(clippy::cast_possible_truncation)]
@@ -536,6 +449,69 @@ fn checked_annotation(
     Ok((id, annotation))
 }
 
+crate::editor::document_editor!(qobject::TreeController, tree [fresh fail]);
+crate::editor::number_names!(qobject::TreeController);
+crate::editor::taxa_editor!(qobject::TreeController, tree, TreeDoc);
+crate::editor::figure_export!(qobject::TreeController, tree);
+
+fn has_figure_selection(view: &TreeView) -> bool {
+    view.selected.is_some()
+}
+
+fn figure_svg(
+    view: &mut TreeView,
+    tree: &TreeDoc,
+    scope: i32,
+    theme: &basecraft_viewmodel::Theme,
+    font: &str,
+    _include_selection: bool,
+) -> basecraft_ops::Result<String> {
+    Ok(match scope {
+        0 => {
+            let mut frame = Frame::new();
+            view.build(tree, theme, &mut frame);
+            let (width, height) = view.size();
+            basecraft_viewmodel::svg::frame_svg(&frame, width, height, font, theme.background)
+        }
+        1 => {
+            let trees = view
+                .selected_roots(tree)
+                .into_iter()
+                .map(|node| tree.subtree(node))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| basecraft_ops::Error::Invalid(e.to_string()))?;
+            basecraft_viewmodel::tree::forest_svg(&trees, 900.0, 20.0, theme, font)
+        }
+        _ => to_svg_with_style(tree, 900.0, 20.0, theme, font),
+    })
+}
+
+impl qobject::TreeController {
+    /// A display tree's history belongs to the document it is drawn for.
+    fn before_history(mut self: Pin<&mut Self>) -> bool {
+        if self.rust().display_only {
+            return false;
+        }
+        if self.rust().labels.is_some() {
+            self.as_mut().rust_mut().labels = None;
+            self.as_mut().ask_labels();
+        }
+        true
+    }
+
+    fn after_history(mut self: Pin<&mut Self>) {
+        let access_thread = self.qt_thread();
+        let mut r = self.as_mut().rust_mut();
+        let r = &mut *r;
+        if let (Some(session), Some(doc)) = (&r.session, r.doc) {
+            r.view.sync(crate::bridge::checked_document!(
+                access_thread,
+                session.tree(doc)
+            ));
+        }
+    }
+}
+
 impl crate::document_open::DocumentEditor for qobject::TreeController {
     fn apply_edit(self: Pin<&mut Self>, op: Op) -> bool {
         self.edit(op).is_ok()
@@ -543,59 +519,21 @@ impl crate::document_open::DocumentEditor for qobject::TreeController {
     fn set_refused(self: Pin<&mut Self>, refused: QString) {
         self.set_refused_edit(refused);
     }
+    fn open_document(&self) -> Option<(&Session, basecraft_ops::DocId)> {
+        self.rust().session.as_ref().zip(self.rust().doc)
+    }
+    fn offer_numbering(self: Pin<&mut Self>, offer: QString) {
+        self.set_duplicate_names(offer);
+    }
 }
 
 impl qobject::TreeController {
-    pub fn close_session(mut self: Pin<&mut Self>) {
-        self.as_mut().rust_mut().session = None;
-    }
-
-    pub fn document_record(&self) -> QString {
-        crate::provenance_bridge::session_report(self.rust().session.as_ref(), self.rust().doc)
-    }
-    pub fn record_revision(&self) -> QString {
-        crate::provenance_bridge::session_revision(self.rust().session.as_ref(), self.rust().doc)
-    }
-
-    pub fn accessible_page(&self, page: i32) -> QString {
-        let result = crate::bridge::checked_document!(
-            self.qt_thread(),
-            self.with_doc(|d| basecraft_viewmodel::accessible::tree(d, page))
-        );
-        let value = result.map_or_else(
-            || serde_json::json!({"page": 0, "pages": 1, "text": "No document loaded"}),
-            |p| serde_json::json!({"page": p.page, "pages": p.pages, "text": p.text}),
-        );
-        QString::from(&value.to_string())
-    }
-
-    fn with_doc<T>(&self, f: impl FnOnce(&TreeDoc) -> T) -> basecraft_ops::Result<Option<T>> {
-        let r = self.rust();
-        match (&r.session, r.doc) {
-            (Some(s), Some(d)) => Ok(Some(f(s.tree(d)?))),
-            _ => Ok(None),
-        }
-    }
-
-    fn check_document(&self) -> basecraft_ops::Result<()> {
-        self.with_doc(|_| ()).map(|_| ())
-    }
-
     /// Rebuild the frame, status line and scroll bars.
     fn refresh(mut self: Pin<&mut Self>) {
-        self.as_mut().find_update(false);
-        let history = self.record_revision();
-        self.as_mut().set_history_revision(history);
-        if let Some(warning) =
-            crate::document_open::recovery_notice(self.rust().session.as_ref(), self.rust().doc)
-        {
-            self.as_mut().set_message_kind(QString::from("error"));
-            self.as_mut().set_message(warning);
+        if !self.as_mut().refresh_start() {
+            return;
         }
         let access_thread = self.qt_thread();
-        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
-            crate::bridge::checked_document!(sync self, session.tree(doc));
-        }
         let (bytes, status, zoom, h, v, sel, tip, placement, sizes) = {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
@@ -685,22 +623,6 @@ impl qobject::TreeController {
         self.as_mut().set_branch_width(sizes.2);
         self.as_mut().set_has_support(sizes.3);
         self.emit_taxa();
-    }
-
-    /// A neutral hint. Messages stay brief: say what happened.
-    fn notify(mut self: Pin<&mut Self>, msg: &str) {
-        self.as_mut().set_message_kind(QString::default());
-        self.as_mut().set_message(QString::from(msg));
-    }
-
-    fn done(mut self: Pin<&mut Self>, msg: &str) {
-        self.as_mut().set_message_kind(QString::from("ok"));
-        self.as_mut().set_message(QString::from(msg));
-    }
-
-    fn fail(mut self: Pin<&mut Self>, msg: &str) {
-        self.as_mut().set_message_kind(QString::from("error"));
-        self.as_mut().set_message(QString::from(msg));
     }
 
     /// Apply an edit through the session; on failure, say why and return
@@ -1023,114 +945,6 @@ impl qobject::TreeController {
         }
     }
 
-    #[cfg(test)]
-    #[allow(dead_code)] // Read by the real-controller bootstrap journey.
-    pub(crate) fn linked_taxa_snapshot(&self) -> Vec<String> {
-        let mut taxa: Vec<_> = self.rust().view.linked_taxa.iter().cloned().collect();
-        taxa.sort();
-        taxa
-    }
-
-    pub fn highlight_taxa(mut self: Pin<&mut Self>, names: &QString) {
-        if let Ok(taxa) =
-            serde_json::from_str::<std::collections::HashSet<String>>(&names.to_string())
-        {
-            self.as_mut().rust_mut().view.linked_taxa = taxa;
-            self.refresh();
-        }
-    }
-
-    fn emit_taxa(mut self: Pin<&mut Self>) {
-        let access_thread = self.qt_thread();
-        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
-            crate::bridge::checked_document!(sync self, session.tree(doc));
-        }
-        let taxa = {
-            let r = self.rust();
-            let (Some(session), Some(doc)) = (&r.session, r.doc) else {
-                return;
-            };
-            let tree = crate::bridge::checked_document!(access_thread, session.tree(doc));
-            let names = r.view.selected_names(tree);
-            serde_json::to_string(&names).unwrap_or_default()
-        };
-        if taxa != self.rust().last_taxa {
-            self.as_mut().rust_mut().last_taxa.clone_from(&taxa);
-            self.taxa_selected(QString::from(&taxa));
-        }
-    }
-
-    pub fn create_delimitation(mut self: Pin<&mut Self>, method: &QString) -> bool {
-        if self.rust().busy {
-            return false;
-        }
-        let Some(doc) = self.rust().doc else {
-            return false;
-        };
-        let Some(session) = self.as_mut().rust_mut().session.take() else {
-            return false;
-        };
-        let method = method.to_string();
-        self.as_mut().set_busy(true);
-        self.as_mut().notify("Creating species workspace");
-        let qt_thread = self.qt_thread();
-        let mut session = Some(session);
-        let spawn = crate::jobs::with_session(
-            qt_thread.clone(),
-            &mut session,
-            move |session, work| {
-                crate::delimitation_bridge::create_workspace_in_session(session, work, doc, &method)
-            },
-            move |mut this, session, result| {
-                this.as_mut().rust_mut().session = Some(session);
-                this.as_mut().set_busy(false);
-                match result {
-                    Ok(path) => {
-                        this.as_mut().done("Species workspace created");
-                        this.workspace_created(QString::from(path));
-                    }
-                    Err(error) => {
-                        this.as_mut().fail(&error);
-                        this.workspace_created(QString::default());
-                    }
-                }
-            },
-        );
-        if let Err(error) = spawn {
-            self.as_mut().rust_mut().session = session;
-            self.as_mut().set_busy(false);
-            self.fail(&error);
-            return false;
-        }
-        true
-    }
-    pub fn open_file(mut self: Pin<&mut Self>, path: &QString) -> bool {
-        if self.rust().busy {
-            self.fail("Wait for the running operation before replacing this document");
-            return false;
-        }
-        self.as_mut().set_busy(true);
-        crate::document_open::open_file(self, path, |mut this, result| {
-            let result = result.and_then(|candidate| this.as_mut().install_opened(candidate));
-            this.as_mut().set_busy(false);
-            let ok = result.is_ok();
-            if let Err(error) = result {
-                this.as_mut().fail(&error.to_string());
-            }
-            this.opened(ok);
-        })
-    }
-
-    pub(crate) fn install_fresh(
-        self: Pin<&mut Self>,
-        candidate: crate::document_open::Candidate,
-    ) -> Result<(), crate::document_open::OpenError> {
-        if self.rust().session.is_some() || self.rust().doc.is_some() || self.rust().busy {
-            return Err(crate::document_open::OpenError::StaleIdentity);
-        }
-        self.install_opened(candidate)
-    }
-
     pub(crate) fn install_opened(
         mut self: Pin<&mut Self>,
         candidate: crate::document_open::Candidate,
@@ -1167,11 +981,6 @@ impl qobject::TreeController {
         crate::document_open::installed(self.as_mut(), &path);
         self.refresh();
         Ok(())
-    }
-
-    pub fn resize(mut self: Pin<&mut Self>, width: f64, height: f64) {
-        self.as_mut().rust_mut().view.resize(f(width), f(height));
-        self.refresh();
     }
 
     pub fn set_pixel_ratio(mut self: Pin<&mut Self>, ratio: f64) {
@@ -1493,11 +1302,6 @@ impl qobject::TreeController {
         self.refresh();
     }
 
-    pub fn fit(mut self: Pin<&mut Self>) {
-        self.as_mut().rust_mut().view.fit();
-        self.refresh();
-    }
-
     pub fn hscroll_to(mut self: Pin<&mut Self>, fraction: f64) {
         self.as_mut().rust_mut().view.hscroll_to(f(fraction));
         self.refresh();
@@ -1506,50 +1310,6 @@ impl qobject::TreeController {
     pub fn vscroll_to(mut self: Pin<&mut Self>, fraction: f64) {
         self.as_mut().rust_mut().view.vscroll_to(f(fraction));
         self.refresh();
-    }
-
-    fn history(mut self: Pin<&mut Self>, redo: bool) {
-        let access_thread = self.qt_thread();
-        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
-            crate::bridge::checked_document!(sync self, session.tree(doc));
-        }
-        // A display tree's history belongs to the document it is drawn for.
-        if self.rust().display_only {
-            return;
-        }
-        if self.rust().labels.is_some() {
-            self.as_mut().rust_mut().labels = None;
-            self.as_mut().ask_labels();
-        }
-        let result = {
-            let mut r = self.as_mut().rust_mut();
-            let r = &mut *r;
-            let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
-                return;
-            };
-            let result = if redo {
-                session.redo(doc)
-            } else {
-                session.undo(doc)
-            };
-            r.view.sync(crate::bridge::checked_document!(
-                access_thread,
-                session.tree(doc)
-            ));
-            result
-        };
-        match result {
-            Ok(_) => {
-                self.as_mut().set_dirty(true);
-                self.as_mut().notify("");
-            }
-            Err(e) => self.as_mut().fail(&e.to_string()),
-        }
-        self.refresh();
-    }
-
-    pub fn undo(self: Pin<&mut Self>) {
-        self.history(false);
     }
 
     /// Publish the label question, or "" when there is nothing to ask.
@@ -1598,14 +1358,6 @@ impl qobject::TreeController {
         }
         self.ask_labels();
         done
-    }
-
-    pub fn redo(self: Pin<&mut Self>) {
-        self.history(true);
-    }
-
-    pub fn memory_report(&self) -> QString {
-        QString::from(&memory_text())
     }
 
     // Edits.
@@ -2002,94 +1754,6 @@ impl qobject::TreeController {
     pub fn export_svg(self: Pin<&mut Self>, path: &QString) {
         self.export_figure(path, 2, false);
     }
-
-    pub fn export_figure(self: Pin<&mut Self>, path: &QString, scope: i32, publication: bool) {
-        self.export_figure_with(path, scope, publication, None);
-    }
-
-    pub fn export_figure_png(
-        self: Pin<&mut Self>,
-        path: &QString,
-        scope: i32,
-        publication: bool,
-        width: f64,
-    ) {
-        self.export_figure_with(path, scope, publication, Some(width));
-    }
-
-    fn export_figure_with(
-        mut self: Pin<&mut Self>,
-        path: &QString,
-        scope: i32,
-        publication: bool,
-        png_width: Option<f64>,
-    ) {
-        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
-            crate::bridge::checked_document!(sync self, session.tree(doc));
-        }
-        if !(0..=2).contains(&scope) {
-            self.fail("Unknown figure scope");
-            return;
-        }
-        if scope == 1 && self.rust().view.selected.is_none() {
-            self.fail("Select a region or clade first");
-            return;
-        }
-        let target = PathBuf::from(path.to_string());
-        let result = (|| -> basecraft_ops::Result<()> {
-            let mut r = self.as_mut().rust_mut();
-            let r = &mut *r;
-            let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
-                return Ok(());
-            };
-            let theme = if publication {
-                crate::appearance::publication_theme()
-            } else {
-                r.theme.clone()
-            };
-            let tree = session.tree(doc)?;
-            let svg = if scope == 0 {
-                let mut frame = Frame::new();
-                r.view.build(tree, &theme, &mut frame);
-                let (width, height) = r.view.size();
-                basecraft_viewmodel::svg::frame_svg(
-                    &frame,
-                    width,
-                    height,
-                    &r.mono_font.to_string(),
-                    theme.background,
-                )
-            } else if scope == 1 {
-                let trees = r
-                    .view
-                    .selected_roots(tree)
-                    .into_iter()
-                    .map(|node| tree.subtree(node))
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(|e| basecraft_ops::Error::Invalid(e.to_string()))?;
-                basecraft_viewmodel::tree::forest_svg(
-                    &trees,
-                    900.0,
-                    20.0,
-                    &theme,
-                    &r.mono_font.to_string(),
-                )
-            } else {
-                to_svg_with_style(tree, 900.0, 20.0, &theme, &r.mono_font.to_string())
-            };
-            if let Some(width) = png_width {
-                let bytes = crate::figure_png::render(&svg, width)
-                    .map_err(basecraft_ops::Error::Invalid)?;
-                session.export(doc, &target, "png", |w| w.write_all(&bytes))
-            } else {
-                session.export(doc, &target, "svg", |w| w.write_all(svg.as_bytes()))
-            }
-        })();
-        match result {
-            Ok(()) => self.done(&format!("Exported {}", file_name(&target))),
-            Err(e) => self.fail(&format!("Export failed: {e}")),
-        }
-    }
 }
 
 impl TreeRust {
@@ -2121,9 +1785,6 @@ impl qobject::TreeController {
         let d = crate::bridge::checked_document!(access_thread, session.tree(doc));
         r.view.sync(d);
         r.view.reveal_find(hit.row);
-    }
-    fn find_y(&self) -> f32 {
-        0.0
     }
 }
 
