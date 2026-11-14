@@ -986,7 +986,7 @@ impl qobject::TreeController {
                     request_key: None,
                     target: None,
                 };
-                let mut jobs = JobManager::default().with_task_cancellation();
+                let mut jobs = JobManager::default();
                 let accepted = jobs
                     .submit_in_session(&registry, request, policy, "GUI", session)
                     .map_err(|e| e.to_string())?;

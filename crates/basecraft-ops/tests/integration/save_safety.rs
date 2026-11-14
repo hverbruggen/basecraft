@@ -376,7 +376,13 @@ fn analysis_result_hypotheses_and_columns_undo_as_one_step() {
         serde_json::to_vec(&serde_json::json!({"workspace": result})).unwrap(),
     )
     .unwrap();
-    delimitation::add_analysis_result(&mut session, doc, &report).unwrap();
+    let (_, edits) = delimitation::analysis_result_edits(&session, doc, &report).unwrap();
+    session.begin_group();
+    for edit in edits {
+        let edit = Box::new(edit);
+        session.apply(doc, Op::DelimitationEdit { edit }).unwrap();
+    }
+    session.end_group();
     let added = session.delimitation(doc).unwrap().clone();
     assert_eq!(added.hypotheses.len(), initial.hypotheses.len() + 2);
     assert!(added.view.visible.contains(&"fitted-2".to_string()));

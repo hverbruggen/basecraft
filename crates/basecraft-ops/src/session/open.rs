@@ -433,24 +433,6 @@ impl Session {
         Ok(Some((path, current, hash)))
     }
 
-    /// Use an accepted disk revision only for a clean, unchanged document.
-    pub fn referenced_source(
-        &self,
-        id: DocId,
-        bundle: &Path,
-    ) -> Result<Option<basecraft_protocol::provenance::InputReference>> {
-        self.saved_source(id)?
-            .map(|(path, stamp, hash)| {
-                Ok(basecraft_protocol::provenance::InputReference {
-                    path: crate::records::input_evidence::relative(bundle, &path)?,
-                    stamp,
-                    hash,
-                    extra: std::collections::BTreeMap::new(),
-                })
-            })
-            .transpose()
-    }
-
     pub fn snapshot_file(&self, path: &Path) -> Result<String> {
         #[cfg(feature = "test-counters")]
         {

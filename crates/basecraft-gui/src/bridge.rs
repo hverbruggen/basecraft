@@ -1881,9 +1881,7 @@ impl qobject::GenomeController {
                 request_key: None,
             };
             let policy = SessionPolicy::new(session.root(), true).map_err(|e| e.to_string())?;
-            let mut jobs = JobManager::default()
-                .with_task_cancellation()
-                .skipping_known_features();
+            let mut jobs = JobManager::default().skipping_known_features();
             let accepted = jobs
                 .submit_in_session(&registry, request, policy, "GUI", session)
                 .map_err(|e| e.to_string())?;

@@ -78,18 +78,3 @@ pub trait Access {
     /// path permission alone never authorizes deleting a project subtree.
     fn resource(&self, path: &Path, action: ResourceAction) -> Result<PathBuf>;
 }
-
-/// Explicit compatibility mode for trusted legacy entry points only. No Default
-/// implementation: MCP must bind its `SessionPolicy`, never choose this implicitly.
-/// This does not bypass domain safety, source checks or no-replace publication.
-pub struct TrustedLegacy;
-
-impl Access for TrustedLegacy {
-    fn boundary(&self) -> Option<&Path> {
-        None
-    }
-
-    fn resource(&self, path: &Path, _action: ResourceAction) -> Result<PathBuf> {
-        Ok(path.to_path_buf())
-    }
-}

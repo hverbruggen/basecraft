@@ -448,7 +448,7 @@ fn saving_a_forest_preserves_other_members_and_refreshes_bound_identity() {
         )
         .unwrap();
     session.save(doc, None).unwrap();
-    assert!(ArtifactRun::for_result_checked(&file).unwrap().is_some());
+    assert!(crate::integrity_binding_formats::checked_run(&file).unwrap().is_some());
     let opened = files::load_tree(&file).unwrap();
     assert_eq!(opened.remaining.len(), 1);
     assert_eq!(

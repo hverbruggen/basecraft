@@ -357,7 +357,7 @@ fn run_request(
         }
         policy = policy.with_runtime_credential(recipient, "zenodo_access", token)?;
     }
-    let mut jobs = JobManager::default().with_task_cancellation();
+    let mut jobs = JobManager::default();
     let accepted = jobs.submit(&registry, serde_json::from_value(request)?, policy, "GUI")?;
     let text = json!(accepted).to_string();
     let _ = owner.queue(move |mut state| {

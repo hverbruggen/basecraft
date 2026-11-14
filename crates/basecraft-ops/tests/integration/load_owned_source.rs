@@ -299,7 +299,7 @@ fn bound_tree_verifies_owned_snapshot_after_main_mutation_or_removal() {
             }
             // The disk verifier must still reject changed/missing disk contents.
             if mutation != "unchanged" {
-                assert!(ArtifactRun::for_result_checked(&path).is_err());
+                assert!(crate::integrity_binding_formats::checked_run(&path).is_err());
             }
         }
     }
