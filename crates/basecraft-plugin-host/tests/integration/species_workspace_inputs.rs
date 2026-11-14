@@ -1,5 +1,5 @@
-//! Independent storage review probes and regression coverage for their corrections.
-// Preserve the independently reviewed assertions verbatim.
+//! A species workspace keeps the inputs of its analyses through moves,
+//! saves and the user's answers to them.
 #![allow(clippy::assert_is_empty)]
 use crate::common;
 use crate::isolated_profile;
@@ -34,7 +34,7 @@ fn referenced_hash(outcome: &basecraft_protocol::operation::OperationOutcome) ->
 }
 
 #[test]
-fn rereview_alignment_move_and_explicit_evidence_decisions() {
+fn alignment_move_and_explicit_evidence_decisions() {
     use basecraft_ops::records::{SavePolicy, conflicts, resolve};
     isolated_profile::isolate!();
     for policy in [SavePolicy::BreakEvidence, SavePolicy::RemoveAnalysis] {
@@ -77,7 +77,7 @@ fn rereview_alignment_move_and_explicit_evidence_decisions() {
 }
 
 #[test]
-fn rereview_legacy_sidecar_break_and_remove_reach_combined_workspace() {
+fn legacy_sidecar_break_and_remove_reach_combined_workspace() {
     use basecraft_ops::records::{SavePolicy, conflicts, read_input, resolve};
     isolated_profile::isolate!();
     for policy in [SavePolicy::BreakEvidence, SavePolicy::RemoveAnalysis] {

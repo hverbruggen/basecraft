@@ -1,4 +1,4 @@
-//! Independent correction review: recovery evidence must be usable, not merely present.
+//! A save that fails partway leaves link records a retry or a person can use.
 #![cfg(unix)]
 use basecraft_ops::records::AlignmentLinkExt;
 

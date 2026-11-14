@@ -1,4 +1,4 @@
-"""Independent late-failure recovery probes against the native distance engine."""
+"""Late failures of the native distance engine leave a usable result."""
 import os
 import tempfile
 import unittest
