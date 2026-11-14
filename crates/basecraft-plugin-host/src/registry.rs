@@ -354,6 +354,8 @@ pub fn package_digest(root: &Path) -> Result<String> {
     Ok(basecraft_io::hash_bytes(&serde_json::to_vec(&hashes)?))
 }
 
+/// The files that make up a package. Python's bytecode caches are not part of
+/// it: running the plugin's Python must not change the package's digest.
 fn package_files(root: &Path) -> Result<Vec<PathBuf>> {
     fn visit(dir: &Path, files: &mut Vec<PathBuf>, bytes: &mut u64, depth: usize) -> Result<()> {
         if depth > 32 {
@@ -361,7 +363,13 @@ fn package_files(root: &Path) -> Result<Vec<PathBuf>> {
         }
         for entry in std::fs::read_dir(dir)? {
             let entry = entry?;
-            let metadata = entry.path().symlink_metadata()?;
+            let path = entry.path();
+            if path.file_name() == Some("__pycache__".as_ref())
+                || path.extension() == Some("pyc".as_ref())
+            {
+                continue;
+            }
+            let metadata = path.symlink_metadata()?;
             if metadata.is_dir() {
                 visit(&entry.path(), files, bytes, depth + 1)?;
             } else if metadata.is_file() {
