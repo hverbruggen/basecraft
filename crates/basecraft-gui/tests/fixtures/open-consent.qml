@@ -110,7 +110,7 @@ Main {
             } else if (scenario.includes("evidence")) {
                 // A retired owner ends its save unsuccessfully; the others must succeed.
                 saveTarget(documentTarget(1), folder + "/chosen.gb", success => {
-                    check(success || scenario.includes("stale"), "evidence save failed"); completedSave = success })
+                    check(success || scenario.includes("stale"), "evidence save failed"); saveEnded = true; completedSave = success })
                 consent = dialog("evidenceSaveDialog")
                 check(consent.visible && evidence().request.owner.controller === b, "real evidence consent missing")
             }
@@ -137,6 +137,7 @@ Main {
         }
     }
     property bool completedSave: false
+    property bool saveEnded: false
     function verify() {
         if (b && b.busy) {
             const ready = function(ok) { b.opened.disconnect(ready); check(ok, "Save As reopen failed"); verify() }
@@ -148,7 +149,8 @@ Main {
         check(c.accessible_page(0) === pageC && c.document_record() === recordC && c.record_revision() === revisionC, "consent changed C contents/records/revision")
         check(!closeConfirmed, "old quit consent covered newly dirty C")
         if (scenario.includes("stale")) {
-            if (scenario.includes("evidence")) check(!completedSave, "retired evidence owner executed")
+            // The retired owner's save ends, unsuccessfully, and its dialog closes.
+            if (scenario.includes("evidence")) check(saveEnded && !completedSave && !consent.visible, "retired evidence owner executed or kept its dialog")
         } else if (scenario.includes("close")) {
             check(opens().target_index(ownerB.token, ownerB.path) === -1 && ci === 0, "close did not remove only B")
             if (scenario.includes("save")) {

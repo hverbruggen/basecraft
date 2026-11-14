@@ -426,6 +426,10 @@ fn linked_taxa_journey(mut app: std::pin::Pin<&mut cxx_qt_lib_extras::QApplicati
         .pin_mut()
         .load_data(&QByteArray::from(&source), &QUrl::default());
     let mut baseline = BTreeMap::new();
+    // Closing the tree's tab before checkpoint 6 ends its session, which
+    // deletes that session's recovery log. Nothing else may change.
+    let recovery = folder.path().join(".basecraft/recovery");
+    let mut closed = None;
     for checkpoint in 0..9 {
         let status = app.as_mut().exec();
         // SAFETY: the engine owns Main; this synchronous read emits no signals.
@@ -448,15 +452,13 @@ fn linked_taxa_journey(mut app: std::pin::Pin<&mut cxx_qt_lib_extras::QApplicati
         if checkpoint == 0 {
             baseline = files(folder.path());
         } else {
-            // Closing the tree's tab ends its session, which deletes that
-            // session's recovery log. Nothing else may change.
-            let recovery = folder.path().join(".basecraft/recovery");
             let now = files(folder.path());
+            let ended = |path: &Path| closed.as_ref().is_some_and(|log| path.starts_with(log));
             let changed: Vec<_> = baseline
                 .keys()
                 .chain(now.keys())
                 .filter(|path| baseline.get(*path) != now.get(*path))
-                .filter(|path| now.contains_key(*path) || !path.starts_with(&recovery))
+                .filter(|path| now.contains_key(*path) || !ended(path))
                 .collect();
             assert!(
                 changed.is_empty(),
@@ -495,6 +497,11 @@ fn linked_taxa_journey(mut app: std::pin::Pin<&mut cxx_qt_lib_extras::QApplicati
             // SAFETY: the fixture clears its reference before removing a tab.
             // Reacquire each current receiver after every event-loop checkpoint.
             let object = unsafe { pointer.as_ref().unwrap() };
+            if checkpoint == 5 && property == c"tree" {
+                let tree = object.downcast::<tree_bridge::qobject::TreeController>();
+                let revision = tree.unwrap().record_revision().to_string();
+                closed = Some(recovery.join(revision.split(':').next().unwrap()));
+            }
             let name = object.object_name().to_string();
             if let Some(expected) = name.strip_prefix("linked-check:") {
                 let expected: Vec<String> = serde_json::from_str(expected).unwrap();
