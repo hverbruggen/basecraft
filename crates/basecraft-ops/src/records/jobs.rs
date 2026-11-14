@@ -306,7 +306,7 @@ mod tests {
                     original_path: Some("../../../../input.afa".into()),
                     source_hash: None,
                     submitted_hash: "b3:x".into(),
-                    transformation: "identity-v1".into(),
+                    transformation: basecraft_protocol::input_records::Transformation::Identity,
                     run_directory: ".".into(),
                 }],
             )]),

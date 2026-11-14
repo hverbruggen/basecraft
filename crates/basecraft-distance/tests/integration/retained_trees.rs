@@ -1,4 +1,4 @@
-//! Independent retention regression probes: no production implementation changes.
+//! Trees the distance engine keeps reopen with their taxa and roots intact.
 use std::process::Command;
 
 fn retained(input: &str, method: &str) -> (tempfile::TempDir, std::process::Output) {

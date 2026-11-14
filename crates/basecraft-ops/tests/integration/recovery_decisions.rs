@@ -234,10 +234,11 @@ fn nested_delimitation_registers_only_final_stores_and_reopens() {
     std::fs::write(&external_input, b">external\nAAAA\n").unwrap();
     let anchor = root.join("external-store/result");
     std::fs::create_dir_all(anchor.parent().unwrap()).unwrap();
-    let external = basecraft_ops::records::reference_input_with_dependencies(
+    let external = basecraft_ops::records::reference_input(
         &anchor,
         &external_input,
         &basecraft_io::hash_file(&external_input).unwrap(),
+        None,
         &[],
         "recovery test",
         Some(&project),

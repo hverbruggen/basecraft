@@ -152,7 +152,7 @@ macro_rules! auto_save {
         impl $controller {
             fn save_error(mut self: std::pin::Pin<&mut Self>, error: &basecraft_ops::Error) {
                 self.as_mut().report("error", &format!("Changed but not saved: {error}"));
-                if matches!(error, basecraft_ops::Error::SaveCheckRequired(_) | basecraft_ops::Error::SaveDecisionStale(_) | basecraft_ops::Error::EvidenceConflict(_)) {
+                if matches!(error, basecraft_ops::Error::SaveCheckRequired(_) | basecraft_ops::Error::SaveDecisionStale(_) | basecraft_ops::Error::InputConflict(_)) {
                     self.save_question();
                 }
             }

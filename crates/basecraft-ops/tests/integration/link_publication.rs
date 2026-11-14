@@ -1,4 +1,4 @@
-//! Failure and overwrite coverage supplementing the unchanged REV-0004 probes.
+//! Failed and overwriting saves of linked trees: what the links say afterwards.
 use basecraft_ops::records::AlignmentLinkExt;
 use basecraft_ops::{Session, files, records, records::AlignmentLink};
 use std::path::{Path, PathBuf};

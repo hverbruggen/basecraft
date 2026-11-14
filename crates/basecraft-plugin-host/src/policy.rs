@@ -549,5 +549,5 @@ impl Access for SessionPolicy {
 }
 
 #[cfg(test)]
-#[path = "policy_access_tests.rs"]
+#[path = "file_access_tests.rs"]
 mod access_tests;

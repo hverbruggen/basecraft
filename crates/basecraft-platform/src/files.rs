@@ -220,6 +220,22 @@ pub fn inside(path: &Path, base: &Path) -> Option<std::path::PathBuf> {
     path.strip_prefix(base).ok().map(Into::into)
 }
 
+/// `path` with `.` dropped and each `..` removing the part before it, without
+/// reading the filesystem, so a symbolic link is not resolved.
+pub fn lexical(path: &Path) -> std::path::PathBuf {
+    let mut result = std::path::PathBuf::new();
+    for part in path.components() {
+        match part {
+            std::path::Component::ParentDir => {
+                result.pop();
+            }
+            std::path::Component::CurDir => {}
+            _ => result.push(part),
+        }
+    }
+    result
+}
+
 pub fn link_count(path: &Path) -> io::Result<u64> {
     Ok(handle_identity(&open_regular_read(path)?)?.2)
 }

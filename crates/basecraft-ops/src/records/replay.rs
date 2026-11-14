@@ -6,7 +6,7 @@
 //! recorded hashes. Nothing in the project is written.
 
 use crate::error::{damaged, limit};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use basecraft_platform::files::{ObjectIdentity, OrdinaryKind, object_identity};
@@ -62,157 +62,245 @@ fn replay_session(
     report: &mut ReplayReport,
 ) -> Result<()> {
     let work = tempfile::tempdir()?;
-    let mut session = Session::replay_session(work.path());
-    let source_root = recorded_source_root(root, entries.iter().copied());
-    let mut docs: HashMap<&str, DocId> = HashMap::new();
-    // Documents whose original was replaced: their entries are not checkable
-    // until a later Save or checkpoint whose inputs are still available.
-    let mut replaced: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    // Documents restarted at such a baseline: undo cannot reach before it.
-    let mut rebased: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    // Replay entry id -> logged entry id, to check undo and redo targets.
-    let mut ids: HashMap<String, String> = HashMap::new();
+    let mut replay = Replay {
+        session: Session::replay_session(work.path()),
+        source_root: recorded_source_root(root, entries.iter().copied()),
+        work,
+        root,
+        writers,
+        report,
+        docs: HashMap::new(),
+        replaced: HashSet::new(),
+        rebased: HashSet::new(),
+        ids: HashMap::new(),
+    };
     let mut proposals = Proposals::default();
     for &e in entries {
-        report.entries += 1;
+        replay.report.entries += 1;
         if let Some(msg) = proposals.check(e) {
-            report
-                .problems
-                .push(format!("{} {} {}: {msg}", e.id, e.op.name(), e.doc));
+            replay.problem(e, msg);
         }
-        let mut problem = |msg: String| {
-            report
-                .problems
-                .push(format!("{} {} {}: {msg}", e.id, e.op.name(), e.doc));
-        };
+        replay.entry(e)?;
+    }
+    for proposal in proposals.undecided() {
+        replay
+            .report
+            .problems
+            .push(format!("proposal {proposal} was offered and never decided"));
+    }
+    Ok(())
+}
+
+/// One session's entries being replayed in a scratch folder.
+struct Replay<'a, 'r> {
+    session: Session,
+    /// The scratch folder; dropped after the session that uses it.
+    work: tempfile::TempDir,
+    root: &'a Path,
+    source_root: PathBuf,
+    writers: &'a HashMap<&'a str, &'a str>,
+    report: &'r mut ReplayReport,
+    docs: HashMap<&'a str, DocId>,
+    /// Documents whose original was replaced: their entries are not checkable
+    /// until a later Save or checkpoint whose inputs are still available.
+    replaced: HashSet<&'a str>,
+    /// Documents restarted at such a baseline: undo cannot reach before it.
+    rebased: HashSet<&'a str>,
+    /// Replay entry id -> logged entry id, to check undo and redo targets.
+    ids: HashMap<String, String>,
+}
+
+impl<'a> Replay<'a, '_> {
+    fn problem(&mut self, e: &LogEntry, msg: impl std::fmt::Display) {
+        self.report
+            .problems
+            .push(format!("{} {} {}: {msg}", e.id, e.op.name(), e.doc));
+    }
+
+    fn entry(&mut self, e: &'a LogEntry) -> Result<()> {
         if matches!(
             e.op,
             Op::CreateSangerReview { .. } | Op::CreateSequence { .. }
         ) {
-            replaced.remove(e.doc.as_str());
-            rebased.remove(e.doc.as_str());
-        }
-        if let Op::CreateSangerReview { review } = &e.op {
-            docs.remove(e.doc.as_str());
+            self.replaced.remove(e.doc.as_str());
+            self.rebased.remove(e.doc.as_str());
+            self.docs.remove(e.doc.as_str());
             if !safe_key(&e.doc) {
-                problem("unsafe document identity".into());
-                continue;
+                self.problem(e, "unsafe document identity");
+                return Ok(());
             }
-            match session.create_sanger_review_with_key(&e.doc, &review_record_at(root, review)) {
-                Ok(id) if session.state(id)?.matches_recorded(&e.state) => {
-                    session.restore_replay_paths(id, work.path(), &source_root);
-                    docs.insert(&e.doc, id);
-                }
-                Ok(_) => problem("created review state differs".into()),
-                Err(error) => problem(error.to_string()),
-            }
-            continue;
-        }
-        if let Op::CreateSequence { name, residues } = &e.op {
-            docs.remove(e.doc.as_str());
-            if !safe_key(&e.doc) {
-                problem("unsafe document identity".into());
-                continue;
-            }
-            match session.create_sequence_with_key(&e.doc, name, residues) {
-                Ok(id) if session.state(id)?.matches_recorded(&e.state) => {
-                    docs.insert(&e.doc, id);
-                }
-                Ok(_) => problem("created sequence state differs".into()),
-                Err(error) => problem(error.to_string()),
-            }
-            continue;
+            return self.create(e);
         }
         let checkpoint = e.source.as_ref().is_some_and(|source| source.checkpoint);
         let baseline = match &e.op {
-            Op::Open { path } if !checkpoint || replaced.contains(e.doc.as_str()) => Some(path),
+            Op::Open { path } if !checkpoint || self.replaced.contains(e.doc.as_str()) => {
+                Some(path)
+            }
             // A journal cut back after a save starts the document there.
             Op::Save { path }
-                if replaced.contains(e.doc.as_str()) || !docs.contains_key(e.doc.as_str()) =>
+                if self.replaced.contains(e.doc.as_str())
+                    || !self.docs.contains_key(e.doc.as_str()) =>
             {
                 Some(path)
             }
             _ => None,
         };
         if let Some(path) = baseline {
-            let restart = !matches!(e.op, Op::Open { .. }) || checkpoint;
-            // A refused baseline must not leave later edits targeting an older document.
-            docs.remove(e.doc.as_str());
-            if !safe_key(path) || !safe_key(&e.doc) || (!restart && path != &e.doc) {
-                problem("unsafe or inconsistent document identity".into());
-                continue;
-            }
-            match materialise(root, &source_root, work.path(), &e.result.hashes) {
-                Ok(()) => match session.open(&work.path().join(path)) {
-                    Ok(id) => {
-                        session.restore_replay_paths(id, work.path(), &source_root);
-                        if restart {
-                            if let Some(source) = &e.source
-                                && let Err(err) = session.restore_recovery_ids(id, source)
-                            {
-                                problem(err.to_string());
-                                continue;
-                            }
-                            if !session.state(id)?.matches_recorded(&e.state) {
-                                problem("baseline state differs".into());
-                                continue;
-                            }
-                            rebased.insert(&e.doc);
-                        } else {
-                            rebased.remove(e.doc.as_str());
-                        }
-                        replaced.remove(e.doc.as_str());
-                        docs.insert(&e.doc, id);
-                    }
-                    Err(err) => problem(format!("can't open: {err}")),
-                },
-                Err(InputFailure::Replaced(_)) => {
-                    replaced.insert(&e.doc);
-                    report.unchecked += 1;
-                }
-                Err(InputFailure::Invalid(msg)) => problem(msg),
-            }
-            continue;
+            return self.baseline(e, path, checkpoint);
         }
-        if replaced.contains(e.doc.as_str()) {
-            report.unchecked += 1;
-            continue;
+        if self.replaced.contains(e.doc.as_str()) {
+            self.report.unchecked += 1;
+            return Ok(());
         }
         if let Op::Open { .. } = &e.op {
-            if docs.get(e.doc.as_str()).is_none_or(|doc| {
-                !session
-                    .state(*doc)
-                    .is_ok_and(|state| state.matches_recorded(&e.state))
-            }) {
-                let replayed = docs.get(e.doc.as_str()).map(|doc| session.state(*doc));
-                problem(format!(
-                    "checkpoint state differs: recorded {:?}, replayed {replayed:?}",
-                    e.state
-                ));
+            let replayed = self
+                .docs
+                .get(e.doc.as_str())
+                .map(|doc| self.session.state(*doc));
+            if !replayed
+                .as_ref()
+                .is_some_and(|state| state.as_ref().is_ok_and(|s| s.matches_recorded(&e.state)))
+            {
+                self.problem(
+                    e,
+                    format!(
+                        "checkpoint state differs: recorded {:?}, replayed {replayed:?}",
+                        e.state
+                    ),
+                );
             }
-            continue;
+            return Ok(());
         }
-        let Some(&doc) = docs.get(e.doc.as_str()) else {
-            problem("document wasn't opened".into());
-            continue;
+        let Some(&doc) = self.docs.get(e.doc.as_str()) else {
+            self.problem(e, "document wasn't opened");
+            return Ok(());
         };
+        if !self.apply(e, doc) {
+            return Ok(());
+        }
+        let state = self.session.state(doc)?;
+        if !state.matches_recorded(&e.state) {
+            self.report.problems.push(format!(
+                "{} {}: state {state:?}, expected {:?}",
+                e.id,
+                e.op.name(),
+                e.state
+            ));
+        }
+        Ok(())
+    }
+
+    /// A Sanger review or a sequence the session created.
+    fn create(&mut self, e: &'a LogEntry) -> Result<()> {
+        let (created, review) = match &e.op {
+            Op::CreateSangerReview { review } => (
+                self.session
+                    .create_sanger_review_with_key(&e.doc, &review_record_at(self.root, review)),
+                true,
+            ),
+            Op::CreateSequence { name, residues } => (
+                self.session
+                    .create_sequence_with_key(&e.doc, name, residues),
+                false,
+            ),
+            _ => return Ok(()),
+        };
+        match created {
+            Ok(id) if self.session.state(id)?.matches_recorded(&e.state) => {
+                if review {
+                    self.session
+                        .restore_replay_paths(id, self.work.path(), &self.source_root);
+                }
+                self.docs.insert(&e.doc, id);
+            }
+            Ok(_) => {
+                let what = if review { "review" } else { "sequence" };
+                self.problem(e, format!("created {what} state differs"));
+            }
+            Err(error) => self.problem(e, error),
+        }
+        Ok(())
+    }
+
+    /// Open the document afresh from the files the entry recorded.
+    fn baseline(&mut self, e: &'a LogEntry, path: &str, checkpoint: bool) -> Result<()> {
+        let restart = !matches!(e.op, Op::Open { .. }) || checkpoint;
+        // A refused baseline must not leave later edits targeting an older document.
+        self.docs.remove(e.doc.as_str());
+        if !safe_key(path) || !safe_key(&e.doc) || (!restart && path != e.doc) {
+            self.problem(e, "unsafe or inconsistent document identity");
+            return Ok(());
+        }
+        let opened = match materialise(
+            self.root,
+            &self.source_root,
+            self.work.path(),
+            &e.result.hashes,
+        ) {
+            Ok(()) => self.session.open(&self.work.path().join(path)),
+            Err(InputFailure::Replaced(_)) => {
+                self.replaced.insert(&e.doc);
+                self.report.unchecked += 1;
+                return Ok(());
+            }
+            Err(InputFailure::Invalid(msg)) => {
+                self.problem(e, msg);
+                return Ok(());
+            }
+        };
+        let id = match opened {
+            Ok(id) => id,
+            Err(err) => {
+                self.problem(e, format!("can't open: {err}"));
+                return Ok(());
+            }
+        };
+        self.session
+            .restore_replay_paths(id, self.work.path(), &self.source_root);
+        if restart {
+            if let Some(source) = &e.source
+                && let Err(err) = self.session.restore_recovery_ids(id, source)
+            {
+                self.problem(e, err);
+                return Ok(());
+            }
+            if !self.session.state(id)?.matches_recorded(&e.state) {
+                self.problem(e, "baseline state differs");
+                return Ok(());
+            }
+            self.rebased.insert(&e.doc);
+        } else {
+            self.rebased.remove(e.doc.as_str());
+        }
+        self.replaced.remove(e.doc.as_str());
+        self.docs.insert(&e.doc, id);
+        Ok(())
+    }
+
+    /// Apply or check one edit, save, extraction, undo or redo. False when an
+    /// undo or redo reaches before a restart, which leaves the document
+    /// uncheckable.
+    fn apply(&mut self, e: &'a LogEntry, doc: DocId) -> bool {
         match &e.op {
             // Species metadata records the original folder as its relocation
             // base. Hash against that destination, not replay's disposable root.
             Op::Save { path, .. } => match basecraft_protocol::records::writing_as(
-                writers
+                self.writers
                     .get(e.id.as_str())
                     .copied()
                     .unwrap_or(basecraft_protocol::VERSION),
-                || session.save_hashes_at(doc, &source_root.join(path)),
+                || {
+                    self.session
+                        .save_hashes_at(doc, &self.source_root.join(path))
+                },
             ) {
                 Ok(got) => {
                     let want: Vec<&String> = e.result.hashes.iter().map(|(_, h)| h).collect();
                     if got.iter().collect::<Vec<_>>() != want {
-                        problem(format!("saved content differs: {got:?} vs {want:?}"));
+                        self.problem(e, format!("saved content differs: {got:?} vs {want:?}"));
                     }
                 }
-                Err(err) => problem(err.to_string()),
+                Err(err) => self.problem(e, err),
             },
             Op::Extract {
                 start,
@@ -220,14 +308,17 @@ fn replay_session(
                 segments,
                 reverse,
                 ..
-            } => match session.extract_hash(doc, (*start, *end), segments, *reverse) {
+            } => match self
+                .session
+                .extract_hash(doc, (*start, *end), segments, *reverse)
+            {
                 Ok(got) => {
                     let want = e.result.hashes.first().map(|(_, h)| h.as_str());
                     if Some(got.as_str()) != want {
-                        problem(format!("extracted content differs: {got} vs {want:?}"));
+                        self.problem(e, format!("extracted content differs: {got} vs {want:?}"));
                     }
                 }
-                Err(err) => problem(err.to_string()),
+                Err(err) => self.problem(e, err),
             },
             // External tools aren't re-run: their outputs are new files,
             // and opening one later checks it against its stored copy.
@@ -240,56 +331,48 @@ fn replay_session(
             | Op::ProposalDecide { .. } => {}
             Op::Undo { of } | Op::Redo { of } => {
                 let r = if matches!(e.op, Op::Undo { .. }) {
-                    session.undo_single(doc)
+                    self.session.undo_single(doc)
                 } else {
-                    session.redo_single(doc)
+                    self.session.redo_single(doc)
                 };
                 match r {
-                    Ok(replayed) if ids.get(&replayed) == Some(of) => {}
+                    Ok(replayed) if self.ids.get(&replayed) == Some(of) => {}
                     // Undo or redo reaching before a restart is not checkable.
-                    _ if rebased.contains(e.doc.as_str()) => {
-                        docs.remove(e.doc.as_str());
-                        replaced.insert(&e.doc);
-                        report.unchecked += 1;
-                        continue;
+                    _ if self.rebased.contains(e.doc.as_str()) => {
+                        self.docs.remove(e.doc.as_str());
+                        self.replaced.insert(&e.doc);
+                        self.report.unchecked += 1;
+                        return false;
                     }
                     Ok(replayed) => {
-                        problem(format!("targets {:?}, expected {of}", ids.get(&replayed)));
+                        let target = self.ids.get(&replayed).cloned();
+                        self.problem(e, format!("targets {target:?}, expected {of}"));
                     }
-                    Err(err) => problem(err.to_string()),
+                    Err(err) => self.problem(e, err),
                 }
             }
-            op => {
-                match session.apply_as(doc, sanger_record_at(root, op.clone()), e.actor.clone()) {
-                    Ok(out) => {
-                        ids.insert(out.entry_id, e.id.clone());
-                        if out.feature.map(|f| f.0) != e.result.feature {
-                            problem(format!(
+            op => match self.session.apply_as(
+                doc,
+                sanger_record_at(self.root, op.clone()),
+                e.actor.clone(),
+            ) {
+                Ok(out) => {
+                    self.ids.insert(out.entry_id, e.id.clone());
+                    if out.feature.map(|f| f.0) != e.result.feature {
+                        self.problem(
+                            e,
+                            format!(
                                 "feature id {:?}, expected {:?}",
                                 out.feature, e.result.feature
-                            ));
-                        }
+                            ),
+                        );
                     }
-                    Err(err) => problem(err.to_string()),
                 }
-            }
+                Err(err) => self.problem(e, err),
+            },
         }
-        let state = session.state(doc)?;
-        if !state.matches_recorded(&e.state) {
-            report.problems.push(format!(
-                "{} {}: state {state:?}, expected {:?}",
-                e.id,
-                e.op.name(),
-                e.state
-            ));
-        }
+        true
     }
-    for proposal in proposals.undecided() {
-        report
-            .problems
-            .push(format!("proposal {proposal} was offered and never decided"));
-    }
-    Ok(())
 }
 
 /// The entries of one session so far and where each offer sits, to check
@@ -694,39 +777,11 @@ fn recover_entries(
         .in_project(project.cloned())
         .staged();
     let source_root = recorded_source_root(root, entries.iter());
-    let pending_path = root.join("pending-save.json");
-    if pending_path.is_file() {
-        let pending: basecraft_protocol::records::PendingSave =
-            basecraft_protocol::records::decode(&std::fs::read(&pending_path)?)?;
-        if !pending.baseline.result.hashes.is_empty()
-            && pending.baseline.result.hashes.iter().all(|(path, hash)| {
-                scratch_key(path).is_ok()
-                    && basecraft_io::hash_file(&source_root.join(path))
-                        .ok()
-                        .as_ref()
-                        == Some(hash)
-            })
-        {
-            let index = entries
-                .iter()
-                .position(|entry| {
-                    entry.session == pending.baseline.session && entry.id > pending.baseline.id
-                })
-                .unwrap_or(entries.len());
-            entries.insert(index, pending.baseline);
-        }
-    }
-
+    insert_pending_baseline(root, &source_root, &mut entries)?;
     let mut documents = std::collections::BTreeMap::<String, DocId>::new();
     let mut baselines = std::collections::BTreeMap::<String, Vec<usize>>::new();
     for (index, entry) in entries.iter().enumerate() {
-        if matches!(
-            entry.op,
-            Op::Open { .. }
-                | Op::CreateSequence { .. }
-                | Op::CreateSangerReview { .. }
-                | Op::Save { .. }
-        ) {
+        if is_baseline(&entry.op) {
             baselines.entry(entry.doc.clone()).or_default().push(index);
         }
     }
@@ -739,41 +794,15 @@ fn recover_entries(
         let mut failures = Vec::new();
         for index in candidates.into_iter().rev() {
             let entry = &entries[index];
-            let damaged = |detail| damaged(root, detail);
-            scratch_key(&key).map_err(damaged)?;
-            let opened = match &entry.op {
-                Op::CreateSequence { name, residues } => {
-                    session.create_sequence_with_key(&key, name, residues)
-                }
-                Op::CreateSangerReview { review } => session
-                    .create_sanger_review_with_key(&key, &review_record_at(root, review))
-                    .inspect(|&doc| {
-                        session.restore_replay_paths(doc, staging.path(), &source_root);
-                    }),
-                Op::Open { path } | Op::Save { path } => {
-                    if !entry.result.hashes.iter().any(|(key, _)| key == path) {
-                        return Err(damaged("unsafe or inconsistent recovery baseline".into()));
-                    }
-                    let local = staging.path().join(scratch_key(path).map_err(damaged)?);
-                    match materialise(root, &source_root, staging.path(), &entry.result.hashes) {
-                        Ok(()) => session.open(&local).and_then(|doc| {
-                            let source = entry.source.as_ref().ok_or_else(|| {
-                                damaged("Recovery baseline has no source record".into())
-                            })?;
-                            session.restore_recovery_ids(doc, source)?;
-                            let original = source_root.join(path);
-                            session.restore_replay_paths(
-                                doc,
-                                local.parent().expect("scratch parent"),
-                                original.parent().expect("source parent"),
-                            );
-                            Ok(doc)
-                        }),
-                        Err(detail) => Err(damaged(detail.to_string())),
-                    }
-                }
-                _ => unreachable!("baseline operation"),
-            };
+            scratch_key(&key).map_err(|detail| damaged(root, detail))?;
+            let opened = open_baseline(
+                &mut session,
+                root,
+                staging.path(),
+                &source_root,
+                &key,
+                entry,
+            )?;
             match opened {
                 Ok(doc)
                     if session
@@ -807,15 +836,7 @@ fn recover_entries(
         let Some(baseline) = selected.get(&entry.doc) else {
             continue;
         };
-        if index <= *baseline
-            || matches!(
-                entry.op,
-                Op::Open { .. }
-                    | Op::CreateSequence { .. }
-                    | Op::CreateSangerReview { .. }
-                    | Op::Save { .. }
-            )
-        {
+        if index <= *baseline || is_baseline(&entry.op) {
             continue;
         }
         let doc = documents[&entry.doc];
@@ -870,9 +891,101 @@ fn recover_entries(
     })
 }
 
-/// Lifetime owner only. Session Slots retain all receipt authority. Dropping or
-/// cancelling removes only this attempt's disposable stage; originals survive.
-/// A failed pre-publication call leaves the attempt available for a fresh check.
+/// An entry a document can be restarted from.
+fn is_baseline(op: &Op) -> bool {
+    matches!(
+        op,
+        Op::Open { .. }
+            | Op::CreateSequence { .. }
+            | Op::CreateSangerReview { .. }
+            | Op::Save { .. }
+    )
+}
+
+/// A save that was interrupted left its baseline in `pending-save.json`.
+/// When the files it names still have their hashes, it goes into `entries`
+/// after the entries of its session that came before it.
+fn insert_pending_baseline(
+    root: &Path,
+    source_root: &Path,
+    entries: &mut Vec<LogEntry>,
+) -> Result<()> {
+    let pending_path = root.join("pending-save.json");
+    if !pending_path.is_file() {
+        return Ok(());
+    }
+    let pending: basecraft_protocol::records::PendingSave =
+        basecraft_protocol::records::decode(&std::fs::read(&pending_path)?)?;
+    if !pending.baseline.result.hashes.is_empty()
+        && pending.baseline.result.hashes.iter().all(|(path, hash)| {
+            scratch_key(path).is_ok()
+                && basecraft_io::hash_file(&source_root.join(path))
+                    .ok()
+                    .as_ref()
+                    == Some(hash)
+        })
+    {
+        let index = entries
+            .iter()
+            .position(|entry| {
+                entry.session == pending.baseline.session && entry.id > pending.baseline.id
+            })
+            .unwrap_or(entries.len());
+        entries.insert(index, pending.baseline);
+    }
+    Ok(())
+}
+
+/// Open document `key` in the recovery session from baseline `entry`. The
+/// outer error stops recovery; the inner one only rules out this baseline.
+fn open_baseline(
+    session: &mut Session,
+    root: &Path,
+    staging: &Path,
+    source_root: &Path,
+    key: &str,
+    entry: &LogEntry,
+) -> Result<Result<DocId>> {
+    let damaged = |detail| damaged(root, detail);
+    Ok(match &entry.op {
+        Op::CreateSequence { name, residues } => {
+            session.create_sequence_with_key(key, name, residues)
+        }
+        Op::CreateSangerReview { review } => session
+            .create_sanger_review_with_key(key, &review_record_at(root, review))
+            .inspect(|&doc| {
+                session.restore_replay_paths(doc, staging, source_root);
+            }),
+        Op::Open { path } | Op::Save { path } => {
+            if !entry.result.hashes.iter().any(|(key, _)| key == path) {
+                return Err(damaged("unsafe or inconsistent recovery baseline".into()));
+            }
+            let local = staging.join(scratch_key(path).map_err(damaged)?);
+            match materialise(root, source_root, staging, &entry.result.hashes) {
+                Ok(()) => session.open(&local).and_then(|doc| {
+                    let source = entry
+                        .source
+                        .as_ref()
+                        .ok_or_else(|| damaged("Recovery baseline has no source record".into()))?;
+                    session.restore_recovery_ids(doc, source)?;
+                    let original = source_root.join(path);
+                    session.restore_replay_paths(
+                        doc,
+                        local.parent().expect("scratch parent"),
+                        original.parent().expect("source parent"),
+                    );
+                    Ok(doc)
+                }),
+                Err(detail) => Err(damaged(detail.to_string())),
+            }
+        }
+        _ => unreachable!("baseline operation"),
+    })
+}
+
+/// A recovery in progress, written into a staging folder. Dropping or
+/// cancelling it removes only that folder; the originals stay. If a step
+/// before publishing fails, the attempt can be checked and tried again.
 pub struct RecoveryAttempt {
     session: Session,
     staging: Option<tempfile::TempDir>,
@@ -901,8 +1014,8 @@ struct RecoveryDocument {
 pub enum RecoveryPhase {
     /// A writer has not completed. A failed write may still have partial effects.
     PendingWrite,
-    /// The writer completed; only finalization remains. Evidence may need fresh
-    /// consent, or an unobservable/changed stage may require reconstruction.
+    /// The document is written; only its records remain. The user may need to
+    /// answer a new save check, or a changed staging folder may need rebuilding.
     NeedsFinalization,
     /// The directory rename completed. Sync/registration may subsequently have
     /// failed; use the publish result for completion or `PublishedWithFailure`.
@@ -919,7 +1032,7 @@ pub struct RecoveryDocumentStatus {
     pub written: bool,
 }
 
-/// In-memory snapshot only. No receipt, Session access or validation authority.
+/// Where a recovery attempt stands, as last recorded in memory.
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct RecoveryStatus {
     pub destination: PathBuf,
@@ -927,7 +1040,7 @@ pub struct RecoveryStatus {
     pub documents: Vec<RecoveryDocumentStatus>,
     pub damage: Option<String>,
     pub warnings: Vec<crate::session::SaveWarning>,
-    pub evidence_actions: Vec<crate::session::EvidenceAction>,
+    pub evidence_actions: Vec<crate::session::AppliedAnswer>,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -937,7 +1050,7 @@ pub struct RecoveryCompletion {
     pub warnings: Vec<crate::session::SaveWarning>,
     pub damage: Option<String>,
     pub registered_stores: Vec<PathBuf>,
-    pub evidence_actions: Vec<crate::session::EvidenceAction>,
+    pub evidence_actions: Vec<crate::session::AppliedAnswer>,
 }
 
 /// Rename completed, but a later independent sync/registration did not. The
@@ -973,7 +1086,7 @@ fn artifacts(root: &Path) -> Result<Vec<ArtifactObservation>> {
                 object_identity(path, OrdinaryKind::File)?,
                 Some((
                     basecraft_io::hash_file(path)?,
-                    crate::records::input_evidence::stamp(path)?,
+                    crate::records::run_inputs::stamp(path)?,
                 )),
             )
         } else {
@@ -999,9 +1112,8 @@ fn artifacts(root: &Path) -> Result<Vec<ArtifactObservation>> {
 }
 
 impl RecoveryAttempt {
-    /// Read stored progress without filesystem IO, hashing, validation or
-    /// minting/consuming a receipt. `NeedsFinalization` is not a readiness claim:
-    /// only publish can validate current artifacts/evidence and promote them.
+    /// The recorded progress, without reading any file. `NeedsFinalization`
+    /// does not mean ready: only `publish` checks the files and moves them.
     /// Published does not distinguish successful completion from post-rename
     /// failure; those details remain in the existing publish result.
     pub fn status(&self) -> Result<RecoveryStatus> {
@@ -1049,7 +1161,7 @@ impl RecoveryAttempt {
     pub fn warnings(&self) -> &[crate::session::SaveWarning] {
         &self.warnings
     }
-    pub fn evidence_actions(&self) -> Result<Vec<crate::session::EvidenceAction>> {
+    pub fn evidence_actions(&self) -> Result<Vec<crate::session::AppliedAnswer>> {
         self.session.recovery_actions()
     }
     pub fn document_for_check(&self, check: &crate::session::SaveCheck) -> Option<usize> {
@@ -1106,7 +1218,7 @@ impl RecoveryAttempt {
         &self,
         document: usize,
         token: &str,
-        known: crate::records::input_evidence::SavePolicy,
+        known: crate::records::run_inputs::SavePolicy,
         acknowledge_incomplete: bool,
     ) -> Result<crate::session::SaveDecision> {
         self.validate()?;
@@ -1132,7 +1244,7 @@ impl RecoveryAttempt {
         document: usize,
         decision: Option<crate::session::SaveDecision>,
     ) -> Result<()> {
-        // A refusal before saving withdraws the consent; a failed withdrawal wins.
+        // A refusal before saving withdraws the answer; if withdrawing fails, that error wins.
         let refuse = |session: &mut Session, error: Error| {
             decision
                 .as_ref()
@@ -1155,13 +1267,12 @@ impl RecoveryAttempt {
         };
         let finalizing = doc.written;
         let observed = if doc.written {
-            let _evidence =
-                match crate::records::input_evidence::Mutation::begin_in(self.session.project()) {
-                    Ok(guard) => guard,
-                    Err(error) => return Err(refuse(&mut self.session, error)),
-                };
+            let _locks = match crate::records::run_inputs::lock_in(self.session.project()) {
+                Ok(locks) => locks,
+                Err(error) => return Err(refuse(&mut self.session, error)),
+            };
             self.session
-                .recovery_finalize(id, doc.saved.as_ref(), decision)?
+                .finish_recovered_document(id, doc.saved.as_ref(), decision)?
         } else {
             let path = if decision.is_some() {
                 Some(self.session_path(document)?)
@@ -1174,8 +1285,8 @@ impl RecoveryAttempt {
                     .save_with_decision(id, path.as_deref(), decision),
                 None => self.session.save_recovery(id),
             };
-            // Failed writes can leave partial owned output; Session retains its
-            // existing acceptance rules. This is an observation, never consent.
+            // A failed write can leave part of its output; the session decides
+            // what to keep. Recording the outcome here answers nothing.
             let outcome = match outcome {
                 Ok(outcome) => outcome,
                 Err(error) => {
@@ -1229,7 +1340,7 @@ impl RecoveryAttempt {
         {
             for doc in &mut self.documents {
                 if let Some(observation) = &mut doc.saved {
-                    observation.require_final_decision();
+                    observation.require_new_answer();
                 }
             }
         }
@@ -1239,7 +1350,7 @@ impl RecoveryAttempt {
     fn publish_inner(&mut self) -> Result<RecoveryCompletion> {
         self.validate()?;
         let _target = crate::records::save_guard::lock(&self.destination)?;
-        let evidence = crate::records::input_evidence::Mutation::begin_in(self.session.project())?;
+        let _locks = crate::records::run_inputs::lock_in(self.session.project())?;
         for doc in &self.documents {
             if !doc.written {
                 return Err(crate::error::invalid(
@@ -1247,7 +1358,7 @@ impl RecoveryAttempt {
                 ));
             }
             self.session
-                .recovery_finalize(doc.id, doc.saved.as_ref(), None)?;
+                .finish_recovered_document(doc.id, doc.saved.as_ref(), None)?;
         }
         let stage = self.validate()?.to_path_buf();
         let stores = self.session.recovery_stores()?;
@@ -1295,7 +1406,7 @@ impl RecoveryAttempt {
             }
             for run in stores {
                 let final_run = run.relocated(&stage, &self.destination)?;
-                evidence.register(&final_run)?;
+                crate::records::run_inputs::register(&final_run)?;
                 let store = final_run
                     .directory()
                     .parent()

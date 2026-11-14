@@ -164,7 +164,7 @@ impl Session {
         self.docs[id.0]
             .source_stamps
             .iter()
-            .any(|(path, before)| *before != crate::records::input_evidence::stamp(path).ok())
+            .any(|(path, before)| *before != crate::records::run_inputs::stamp(path).ok())
     }
 
     /// The record names more than one record in a sequence document's file
@@ -175,7 +175,7 @@ impl Session {
 
     pub(super) fn refresh_source_stamps(&mut self, id: DocId) {
         for (path, stamp) in &mut self.docs[id.0].source_stamps {
-            *stamp = crate::records::input_evidence::stamp(path).ok();
+            *stamp = crate::records::run_inputs::stamp(path).ok();
         }
     }
 
@@ -309,7 +309,7 @@ impl Session {
         if self.log.is_none() || self.storage_root == self.root || self.storage_root.is_dir() {
             return Ok(());
         }
-        let foreign = crate::records::input_evidence::foreign_basecraft(&self.root);
+        let foreign = crate::records::run_inputs::foreign_basecraft(&self.root);
         let reason = if let Some(reason) = foreign {
             reason.to_owned()
         } else {
@@ -411,14 +411,14 @@ impl Session {
             return Ok(None);
         }
         if let Some((path, stamp, hash)) = &slot.saved_target {
-            let current = crate::records::input_evidence::stamp(path)?;
+            let current = crate::records::run_inputs::stamp(path)?;
             if current != *stamp {
                 return Err(changed_on_disk(path.clone()));
             }
             return Ok(Some((path.clone(), current, hash.clone())));
         }
         let path = self.resolve(&slot.key).canonicalize()?;
-        let current = crate::records::input_evidence::stamp(&path)?;
+        let current = crate::records::run_inputs::stamp(&path)?;
         if current != slot.disk_stamp {
             return Err(invalid(
                 "source changed since opening; reopen it before analysis",

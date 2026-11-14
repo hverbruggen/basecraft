@@ -950,7 +950,7 @@ mod moved_and_failed_recovery_tests {
 
     #[test]
     fn referenced_review_uses_shared_cancel_preserve_and_break_policy() {
-        use crate::records::input_evidence::{self as inputs, SavePolicy};
+        use crate::records::run_inputs::{self as inputs, SavePolicy};
         // Registered stores must outlive every iteration in this test profile.
         let mut fixtures = Vec::new();
         for policy in [SavePolicy::PreserveCopy, SavePolicy::BreakEvidence] {
@@ -960,10 +960,11 @@ mod moved_and_failed_recovery_tests {
             let path = folder.join("review.json");
             review.save(&path).unwrap();
             let before = std::fs::read(&path).unwrap();
-            let ledger = inputs::reference_input_with_dependencies(
+            let ledger = inputs::reference_input(
                 &folder.join("downstream.fa"),
                 &path,
                 &basecraft_io::hash_file(&path).unwrap(),
+                None,
                 &[],
                 "test downstream review",
                 None,
@@ -993,7 +994,7 @@ mod moved_and_failed_recovery_tests {
             if policy == SavePolicy::PreserveCopy {
                 assert_eq!(
                     input.state,
-                    basecraft_protocol::input_records::EvidenceState::Preserved
+                    basecraft_protocol::input_records::InputState::Preserved
                 );
                 assert_eq!(
                     std::fs::read(ledger.directory().join("preserved-input")).unwrap(),
@@ -1002,7 +1003,7 @@ mod moved_and_failed_recovery_tests {
             } else {
                 assert_eq!(
                     input.state,
-                    basecraft_protocol::input_records::EvidenceState::Broken
+                    basecraft_protocol::input_records::InputState::Broken
                 );
             }
             assert_eq!(

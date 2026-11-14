@@ -5,10 +5,11 @@ use std::path::Path;
 
 fn reference(root: &Path, source: &Path) -> ArtifactRun {
     std::fs::create_dir_all(root).unwrap();
-    records::reference_input_with_dependencies(
+    records::reference_input(
         &root.join("result.txt"),
         source,
         &basecraft_io::hash_file(source).unwrap(),
+        None,
         &[],
         "index test",
         None,
@@ -104,10 +105,7 @@ fn current_writer_updates_source_index() {
     reference.path = records::relative(run.directory(), &other).unwrap();
     reference.stamp = records::stamp(&other).unwrap();
     reference.hash = basecraft_io::hash_file(&other).unwrap();
-    records::Mutation::begin()
-        .unwrap()
-        .write_input(run.directory(), &input)
-        .unwrap();
+    records::write_input(run.directory(), &input).unwrap();
     let check = records::check(&other).unwrap();
     assert!(check.is_complete());
     assert_eq!(check.conflict.analyses.len(), 1);
@@ -133,19 +131,13 @@ fn failed_dependency_update_cannot_hide_a_later_relinked_source() {
             "bundle": records::relative(dependent.directory(), owner.directory()).unwrap()
         }]),
     );
-    records::Mutation::begin()
-        .unwrap()
-        .write_input(dependent.directory(), &input)
-        .unwrap();
+    records::write_input(dependent.directory(), &input).unwrap();
     let mut input = records::read_input(owner.directory()).unwrap();
     let source = input.source.as_mut().unwrap();
     source.path = records::relative(owner.directory(), &b).unwrap();
     source.hash = basecraft_io::hash_file(&b).unwrap();
     source.stamp = records::stamp(&b).unwrap();
-    records::Mutation::begin()
-        .unwrap()
-        .write_input(owner.directory(), &input)
-        .unwrap();
+    records::write_input(owner.directory(), &input).unwrap();
     let check = records::check(&b).unwrap();
     assert!(
         !check.is_complete(),
@@ -476,10 +468,11 @@ fn a_project_save_reads_one_bucket_of_its_index() {
         std::fs::create_dir_all(&results).unwrap();
         let source = folder.join(format!("data/input-{i}.fasta"));
         std::fs::write(&source, b">a\nACGT\n").unwrap();
-        records::reference_input_with_dependencies(
+        records::reference_input(
             &results.join("out.txt"),
             &source,
             &basecraft_io::hash_file(&source).unwrap(),
+            None,
             &[],
             "index test",
             Some(&project),

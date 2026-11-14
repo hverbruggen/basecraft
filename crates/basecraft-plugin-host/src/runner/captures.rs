@@ -1,5 +1,5 @@
 use crate::Result;
-use basecraft_ops::{records::ArtifactRun, records::Mutation, sanger_review::CapturedInput};
+use basecraft_ops::{records::ArtifactRun, sanger_review::CapturedInput};
 use basecraft_protocol::provenance::FileStamp;
 use std::path::Path;
 
@@ -37,13 +37,12 @@ pub(super) fn freeze(
 /// The input record of one `frozen` input, referencing its source. The
 /// stamp it had when frozen shows whether it changed since.
 pub(super) fn register(
-    mutation: &Mutation,
     anchor: &Path,
     frozen: &super::prepare::FrozenSource,
     origin: &str,
     project: Option<&basecraft_ops::project::Project>,
 ) -> Result<ArtifactRun> {
-    Ok(mutation.reference_input_with_dependencies(
+    Ok(basecraft_ops::records::reference_input(
         anchor,
         &frozen.source,
         &frozen.hash,

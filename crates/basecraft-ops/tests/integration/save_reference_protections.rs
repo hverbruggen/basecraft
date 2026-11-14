@@ -6,7 +6,7 @@ use std::path::Path;
 use basecraft_ops::{
     DocId, Error, Session,
     records::ArtifactRun,
-    records::{self, EvidenceConflict, SavePolicy},
+    records::{self, InputConflict, SavePolicy},
 };
 use basecraft_protocol::Op;
 
@@ -30,10 +30,11 @@ fn folder(root: &Path, name: &str) -> std::path::PathBuf {
 }
 
 fn reference(root: &Path, source: &Path) -> ArtifactRun {
-    records::reference_input_with_dependencies(
+    records::reference_input(
         &root.join("result.txt"),
         source,
         &basecraft_io::hash_file(source).unwrap(),
+        None,
         &[],
         "save protection regression",
         None,
@@ -48,9 +49,9 @@ fn edited(root: &Path, file: &Path) -> (Session, DocId) {
     (session, doc)
 }
 
-fn conflict(error: Error) -> EvidenceConflict {
+fn conflict(error: Error) -> InputConflict {
     match error {
-        Error::EvidenceConflict(conflict) => *conflict,
+        Error::InputConflict(conflict) => *conflict,
         other => panic!("expected structured evidence conflict, got {other:?}"),
     }
 }
@@ -100,7 +101,7 @@ fn registered_other_folder_policies_preserve_original_and_pending_edits() {
                 assert_eq!(std::fs::read(&source).unwrap(), ORIGINAL);
                 assert_eq!(
                     records::read_input(run.directory()).unwrap().state,
-                    basecraft_protocol::input_records::EvidenceState::Referenced
+                    basecraft_protocol::input_records::InputState::Referenced
                 );
                 continue;
             }
@@ -114,12 +115,12 @@ fn registered_other_folder_policies_preserve_original_and_pending_edits() {
                 assert_eq!(std::fs::read(retained).unwrap(), ORIGINAL);
                 assert_eq!(
                     input.state,
-                    basecraft_protocol::input_records::EvidenceState::Preserved
+                    basecraft_protocol::input_records::InputState::Preserved
                 );
             } else {
                 assert_eq!(
                     input.state,
-                    basecraft_protocol::input_records::EvidenceState::Broken
+                    basecraft_protocol::input_records::InputState::Broken
                 );
                 assert!(
                     records::verified_source(run.directory(), input.source.as_ref().unwrap())
@@ -246,7 +247,7 @@ fn lexical_old_path_still_guards_missing_or_replaced_source() {
             .unwrap();
             assert_eq!(
                 records::read_input(run.directory()).unwrap().state,
-                basecraft_protocol::input_records::EvidenceState::Broken
+                basecraft_protocol::input_records::InputState::Broken
             );
             assert!(std::fs::read_to_string(source).unwrap().contains("ATGT"));
             assert_eq!(std::fs::read(&moved).unwrap(), ORIGINAL);
@@ -265,10 +266,11 @@ fn registered_transitive_dependencies_are_included_in_session_conflict() {
         let other = data.join("independent.fasta");
         std::fs::write(&other, b">other\nTTTT\n").unwrap();
         let dependent = |ancestor: &ArtifactRun| {
-            records::reference_input_with_dependencies(
+            records::reference_input(
                 &elsewhere.join("dependent.txt"),
                 &other,
                 &basecraft_io::hash_file(&other).unwrap(),
+                None,
                 &[ancestor.directory().to_owned()],
                 "dependent regression",
                 None,
@@ -298,7 +300,7 @@ fn registered_transitive_dependencies_are_included_in_session_conflict() {
         for run in [&child, &grandchild] {
             assert_eq!(
                 records::read_input(run.directory()).unwrap().state,
-                basecraft_protocol::input_records::EvidenceState::Referenced
+                basecraft_protocol::input_records::InputState::Referenced
             );
             let reference = records::read_input(parent.directory())
                 .unwrap()

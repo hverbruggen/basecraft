@@ -51,7 +51,7 @@ fn symlink_namespace_and_staged_symlinks_are_rejected() {
 }
 
 fn reference_run(root: &std::path::Path, source: &std::path::Path, id: &str) -> ArtifactRun {
-    use basecraft_ops::records::{self, SubmittedInput};
+    use basecraft_ops::records::{self, RunInput};
     use basecraft_protocol::provenance::InputReference;
     let run = ArtifactRun::create(None, &root.join(format!("{id}.fasta")), id).unwrap();
     records::write_json(
@@ -62,7 +62,7 @@ fn reference_run(root: &std::path::Path, source: &std::path::Path, id: &str) -> 
     let hash = basecraft_io::hash_file(source).unwrap();
     records::write_input(
         run.directory(),
-        &SubmittedInput {
+        &RunInput {
             schema_version: 1,
             source: Some(InputReference {
                 path: records::relative(run.directory(), source).unwrap(),
@@ -72,8 +72,8 @@ fn reference_run(root: &std::path::Path, source: &std::path::Path, id: &str) -> 
             }),
             submitted_hash: hash,
             submitted_size: std::fs::metadata(source).unwrap().len(),
-            transformation: "canonical-fasta-v1".into(),
-            state: "referenced".into(),
+            transformation: basecraft_protocol::input_records::Transformation::CanonicalFasta,
+            state: basecraft_protocol::input_records::InputState::Referenced,
             analysis_run: None,
             proposal_target: None,
             upstream: Vec::new(),
@@ -107,7 +107,7 @@ fn reference_lifecycle_multiple_analyses_preserve_break_trash_and_cancel() {
         let input = records::read_input(run.directory()).unwrap();
         assert_eq!(
             input.state,
-            basecraft_protocol::input_records::EvidenceState::Preserved
+            basecraft_protocol::input_records::InputState::Preserved
         );
         let path =
             records::verified_source(run.directory(), input.source.as_ref().unwrap()).unwrap();
@@ -148,7 +148,7 @@ fn changed_missing_and_failed_copy_cannot_claim_preserved_evidence() {
     assert!(records::resolve(&conflict, SavePolicy::PreserveCopy).is_err());
     assert_eq!(
         records::read_input(run.directory()).unwrap().state,
-        basecraft_protocol::input_records::EvidenceState::Referenced
+        basecraft_protocol::input_records::InputState::Referenced
     );
     std::fs::remove_dir(run.directory().join("preserved-input")).unwrap();
     std::fs::write(&source, ">a\nTTTT\n>b\nTTTT\n").unwrap();
@@ -156,7 +156,7 @@ fn changed_missing_and_failed_copy_cannot_claim_preserved_evidence() {
     let input = records::read_input(run.directory()).unwrap();
     assert_eq!(
         input.state,
-        basecraft_protocol::input_records::EvidenceState::Referenced
+        basecraft_protocol::input_records::InputState::Referenced
     );
     assert!(records::verified_source(run.directory(), input.source.as_ref().unwrap()).is_err());
     std::fs::remove_file(&source).unwrap();
@@ -232,7 +232,7 @@ fn session_save_policies_and_copy_failure_leave_source_safe() {
         if policy == SavePolicy::Cancel {
             assert!(matches!(
                 decided_save::save_with_policy(&mut session, doc, None, policy),
-                Err(basecraft_ops::Error::EvidenceConflict(_))
+                Err(basecraft_ops::Error::InputConflict(_))
             ));
             assert_eq!(std::fs::read_to_string(&source).unwrap(), original);
         } else {
@@ -252,7 +252,7 @@ fn session_save_policies_and_copy_failure_leave_source_safe() {
                 SavePolicy::RemoveAnalysis => assert!(!run.directory().exists()),
                 SavePolicy::BreakEvidence => assert_eq!(
                     records::read_input(run.directory()).unwrap().state,
-                    basecraft_protocol::input_records::EvidenceState::Broken
+                    basecraft_protocol::input_records::InputState::Broken
                 ),
                 SavePolicy::Cancel => {}
             }
@@ -277,12 +277,12 @@ fn export_and_extraction_cannot_bypass_known_input_guard() {
     });
     assert!(matches!(
         export,
-        Err(basecraft_ops::Error::EvidenceConflict(_))
+        Err(basecraft_ops::Error::InputConflict(_))
     ));
     assert!(!wrote);
     assert!(matches!(
         session.extract(doc, (0, 4), &[], false, &source, None),
-        Err(basecraft_ops::Error::EvidenceConflict(_))
+        Err(basecraft_ops::Error::InputConflict(_))
     ));
     assert_eq!(std::fs::read_to_string(source).unwrap(), original);
 }
@@ -366,10 +366,11 @@ fn multi_input_verification_uses_only_declared_owners_and_never_bypasses_breaks(
     std::fs::write(&source_a, b"first").unwrap();
     std::fs::write(&source_b, b"second").unwrap();
     let make_ledger = |source: &std::path::Path| {
-        records::reference_input_with_dependencies(
+        records::reference_input(
             &temp.path().join("result.txt"),
             source,
             &basecraft_io::hash_file(source).unwrap(),
+            None,
             &[],
             "test input",
             None,
@@ -389,7 +390,7 @@ fn multi_input_verification_uses_only_declared_owners_and_never_bypasses_breaks(
         &main,
         &dependencies,
         b"submitted view",
-        "identity-v1",
+        basecraft_protocol::input_records::Transformation::Identity,
         "test",
     )
     .unwrap();
@@ -405,7 +406,7 @@ fn multi_input_verification_uses_only_declared_owners_and_never_bypasses_breaks(
     wrong_size.stamp.size += 1;
     assert!(records::verified_source(main.directory(), &wrong_size).is_err());
     let mut broken = records::read_input(same_hash.directory()).unwrap();
-    broken.state = "broken".into();
+    broken.state = basecraft_protocol::input_records::InputState::Broken;
     records::write_input(same_hash.directory(), &broken).unwrap();
     for dependencies in [
         dependencies.to_vec(),
@@ -415,7 +416,7 @@ fn multi_input_verification_uses_only_declared_owners_and_never_bypasses_breaks(
             &main,
             &dependencies,
             b"submitted view",
-            "identity-v1",
+            basecraft_protocol::input_records::Transformation::Identity,
             "test",
         )
         .unwrap();
@@ -436,7 +437,7 @@ fn multi_input_verification_uses_only_declared_owners_and_never_bypasses_breaks(
         &main,
         &[undeclared.directory().to_owned()],
         b"submitted view",
-        "identity-v1",
+        basecraft_protocol::input_records::Transformation::Identity,
         "test",
     )
     .unwrap();
@@ -454,12 +455,12 @@ fn preserved_primary_is_not_replaced_by_a_matching_ancestor_with_missing_origina
     let hash = basecraft_io::hash_file(&source).unwrap();
     let anchor = temp.path().join("result.txt");
     let ancestor =
-        records::reference_input_with_dependencies(&anchor, &source, &hash, &[], "ancestor", None)
-            .unwrap();
-    let main = records::reference_input_with_dependencies(
+        records::reference_input(&anchor, &source, &hash, None, &[], "ancestor", None).unwrap();
+    let main = records::reference_input(
         &anchor,
         &source,
         &hash,
+        None,
         &[ancestor.directory().to_owned()],
         "primary",
         None,
@@ -472,7 +473,7 @@ fn preserved_primary_is_not_replaced_by_a_matching_ancestor_with_missing_origina
     let reference = input.source.clone().unwrap();
     let preserved = main.directory().join("preserved-input");
     std::fs::write(&preserved, bytes).unwrap();
-    input.state = "preserved".into();
+    input.state = basecraft_protocol::input_records::InputState::Preserved;
     records::write_input(main.directory(), &input).unwrap();
     std::fs::remove_file(&source).unwrap();
     assert_eq!(
@@ -482,7 +483,7 @@ fn preserved_primary_is_not_replaced_by_a_matching_ancestor_with_missing_origina
     assert_eq!(std::fs::read(&preserved).unwrap(), bytes);
     // A matching explicit break still fails closed, even with a good primary.
     let mut broken = records::read_input(ancestor.directory()).unwrap();
-    broken.state = "broken".into();
+    broken.state = basecraft_protocol::input_records::InputState::Broken;
     records::write_input(ancestor.directory(), &broken).unwrap();
     assert!(
         records::verified_source(main.directory(), &reference)

@@ -54,7 +54,7 @@ fn current_records_round_trip() {
     // Specific prefixes precede their wider families. The bool selects writers
     // that serialize via Value (recursive key sorting) instead of direct serde.
     let formats: &[(&str, Encoder, bool)] = &[
-        ("submitted-input-", encode::<SubmittedInput>, false),
+        ("submitted-input-", encode::<RunInput>, false),
         ("metadata-manifest", encode::<MetadataManifest>, false),
         ("query-preparation", encode::<QueryPlan>, false),
         ("document-record", encode::<DocumentRecord>, false),

@@ -1,6 +1,6 @@
 #![cfg(feature = "test-counters")]
 use basecraft_ops::{
-    records::Mutation,
+    records,
     sanger_review::CapturedInput,
     sanger_review::{SangerRun, instrument_review},
 };
@@ -53,18 +53,16 @@ fn instrument_rendering_and_submission_share_one_trace_capture() {
     );
     let frozen = root.join("caller.ab1");
     capture.write(&frozen).unwrap();
-    Mutation::begin()
-        .unwrap()
-        .reference_input_with_dependencies(
-            &root.join("analysis"),
-            capture.path(),
-            capture.hash(),
-            Some(capture.stamp()),
-            &[],
-            "fixture caller",
-            None,
-        )
-        .unwrap();
+    records::reference_input(
+        &root.join("analysis"),
+        capture.path(),
+        capture.hash(),
+        Some(capture.stamp()),
+        &[],
+        "fixture caller",
+        None,
+    )
+    .unwrap();
     one_read(&path);
     assert_eq!(std::fs::read(&frozen).unwrap(), capture.bytes());
     let before = capture.bytes().to_vec();

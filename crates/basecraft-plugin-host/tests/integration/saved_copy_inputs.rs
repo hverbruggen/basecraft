@@ -1,5 +1,5 @@
-//! Independent combined-storage lifecycle regression probes, on registered runs.
-// Preserve the independently reviewed assertions verbatim.
+//! A saved copy of an analysed file keeps its run inputs: Save As, relink,
+//! export and repeated preserve answers.
 #![allow(clippy::assert_is_empty)]
 use crate::common;
 

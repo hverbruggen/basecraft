@@ -1,17 +1,12 @@
-//! One transient save receipt owner and the common authorization implementation.
+//! The check before a save and the user's answer to it.
 //!
-//! Each live document owns exactly one non-cloning `PendingSaveCheck`. Advisory
-//! checks may be cloned/serialized, but cannot recreate its pending cell. The
-//! caller resolves the origin in its existing document collection and consumes
-//! before validation, locks or IO. Foreign owners and older tokens cannot spend
-//! a receipt. Errors may supersede the requested document's pending check.
-//!
-//! Callers construct the complete fresh scope under their existing guards and
-//! retain ownership of source validation, document writes, logs and publication.
-//! Authorization resolves known evidence through the existing evidence owner;
-//! it returns only advisory warnings, never a reusable permit.
-//! Finalization authorizes evidence effects without invoking a document writer.
-//! The diagnostic shape (including full tagged object identities) is unchanged.
+//! A save over a file that analyses used, or whose records could not all be
+//! checked, needs an answer. The session shows the user a `SaveCheck` with a
+//! token; the answer comes back as a `SaveDecision` naming that token. Each
+//! open document holds at most one pending check, and an answer is used once:
+//! a copied or older check cannot be answered. When the save runs, it checks
+//! again under its locks; if anything changed, the answer no longer counts
+//! and the user gets the new check. Nothing here is written to disk.
 use crate::error::changed_on_disk;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -19,11 +14,11 @@ use std::sync::Mutex;
 use basecraft_platform::files::ObjectIdentity;
 use serde::Serialize;
 
-use crate::records::input_evidence::{EvidenceCheck, InspectionIssue, SavePolicy};
+use crate::records::run_inputs::{InputCheck, SavePolicy, UncheckedRecord};
 use crate::{Result, error::invalid};
 
-/// A fresh advisory check, or the fresh scope returned after refusing stale
-/// consent. Fields cannot be changed to manufacture consent.
+/// What a save would affect, shown to the user before they answer. Also
+/// returned when an answer was given to an older check.
 #[derive(Clone, Debug, Serialize)]
 pub struct SaveCheck {
     pub(super) token: String,
@@ -35,12 +30,14 @@ pub struct SaveCheck {
 
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct SaveScope {
-    pub(crate) evidence: EvidenceCheck,
+    pub(crate) evidence: InputCheck,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) additional_evidence: Vec<EvidenceCheck>,
+    pub(crate) additional_evidence: Vec<InputCheck>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) publication: Option<(PathBuf, ObjectIdentity)>,
-    pub(crate) finalization: bool,
+    /// The check made after a recovery wrote the document.
+    #[serde(rename = "finalization")]
+    pub(crate) after_write: bool,
     pub(crate) session: String,
     pub(crate) document: usize,
     pub(crate) document_key: String,
@@ -66,8 +63,7 @@ pub(crate) struct TargetRevision {
 }
 
 impl SaveCheck {
-    /// Builds an check from the caller's complete guarded context, without
-    /// publishing a receipt. Only the live owner can publish consent for it.
+    /// A check for `scope`, not yet the document's pending check.
     pub(crate) fn from_scope(scope: SaveScope) -> Result<Self> {
         let scope_revision = scope.revision()?;
         Ok(Self {
@@ -77,7 +73,7 @@ impl SaveCheck {
         })
     }
 
-    pub fn evidence(&self) -> &EvidenceCheck {
+    pub fn evidence(&self) -> &InputCheck {
         &self.scope.evidence
     }
 
@@ -89,22 +85,22 @@ impl SaveCheck {
         &self.scope.target
     }
 
-    /// Session-local, single-attempt token for a later adapter request.
+    /// The token an answer to this check names; valid once, in this session.
     pub fn token(&self) -> &str {
         &self.token
     }
 
-    /// Ordered, target-specific checks. Policy capabilities and backing ledgers
-    /// remain separate even when two groups name the same logical analysis.
-    pub fn evidence_groups(&self) -> impl Iterator<Item = &EvidenceCheck> {
+    /// The check of the target, then of each other file the save replaces.
+    /// Two of them may name the same analysis; each keeps its own options.
+    pub fn evidence_groups(&self) -> impl Iterator<Item = &InputCheck> {
         std::iter::once(&self.scope.evidence).chain(&self.scope.additional_evidence)
     }
 
     pub(crate) fn complete(&self) -> bool {
-        self.evidence_groups().all(EvidenceCheck::is_complete)
+        self.evidence_groups().all(InputCheck::is_complete)
     }
 
-    pub(crate) fn issues(&self) -> Vec<InspectionIssue> {
+    pub(crate) fn issues(&self) -> Vec<UncheckedRecord> {
         self.evidence_groups()
             .flat_map(|group| group.issues.clone())
             .collect()
@@ -113,15 +109,15 @@ impl SaveCheck {
     pub(super) fn resolve(
         &self,
         policy: SavePolicy,
-        actions: Option<&std::sync::Mutex<Vec<EvidenceAction>>>,
+        actions: Option<&std::sync::Mutex<Vec<AppliedAnswer>>>,
     ) -> Result<()> {
-        // Validate EVERY group before the first durable evidence mutation.
+        // Refuse before changing any run input if one group cannot take the answer.
         for group in self.evidence_groups() {
             if group.conflict.analyses.is_empty() {
                 continue;
             }
             if policy == SavePolicy::Cancel {
-                return Err(crate::Error::EvidenceConflict(Box::new(
+                return Err(crate::Error::InputConflict(Box::new(
                     group.conflict.clone(),
                 )));
             }
@@ -144,13 +140,13 @@ impl SaveCheck {
                 })
                 .transpose()?;
             if let Some(actions) = &mut actions {
-                actions.push(EvidenceAction {
+                actions.push(AppliedAnswer {
                     conflict: group.conflict.clone(),
                     policy,
                     completed: false,
                 });
             }
-            crate::records::input_evidence::resolve_group(&group.conflict, policy, &mut removed)?;
+            crate::records::run_inputs::resolve_group(&group.conflict, policy, &mut removed)?;
             if let Some(actions) = &mut actions
                 && let Some(action) = actions.last_mut()
             {
@@ -160,9 +156,9 @@ impl SaveCheck {
         Ok(())
     }
 
-    /// A post-write check may describe newly discovered issues. It must
-    /// force finalization consent, never grant consent from that check.
-    pub(crate) fn require_final_decision(&mut self) {
+    /// A check made after writing may find something new: the user must
+    /// answer it, rather than this check counting as answered.
+    pub(crate) fn require_new_answer(&mut self) {
         self.scope_revision.clear();
     }
 
@@ -179,9 +175,8 @@ impl SaveCheck {
         Ok(same)
     }
 
-    /// Consumes this advisory snapshot. `acknowledge_incomplete` is independent
-    /// of known policy. `SaveDecision` is neither `Clone` nor `Deserialize`; Session
-    /// also consumes the token, so cloning an advisory snapshot cannot replay it.
+    /// The user's answer: `known` for the analyses that used the file, and
+    /// whether to save although some records could not be checked.
     pub fn decide(self, known: SavePolicy, acknowledge_incomplete: bool) -> SaveDecision {
         SaveDecision {
             check: self,
@@ -208,11 +203,10 @@ pub struct SaveOutcome {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "code", rename_all = "snake_case")]
 pub enum SaveWarning {
-    EvidenceNotChecked { issues: Vec<InspectionIssue> },
+    EvidenceNotChecked { issues: Vec<UncheckedRecord> },
 }
 
-/// The single pending cell. Moving the owner retains consent; cloning or
-/// deserializing advisory checks never creates another owner.
+/// A document's one pending check, which an answer must match.
 #[derive(Default)]
 pub(crate) struct PendingSaveCheck {
     pending: Mutex<Option<SaveCheck>>,
@@ -244,7 +238,7 @@ impl PendingSaveCheck {
             .map(|check| check.clone().decide(known, acknowledge_incomplete)))
     }
 
-    /// Resolve only within the supplied live owner, before touching any cell.
+    /// The document an answer is for, if it belongs to session `owner`.
     pub(crate) fn origin(owner: &str, decision: &SaveDecision) -> Option<usize> {
         (decision.check.scope.session == owner).then_some(decision.check.scope.document)
     }
@@ -283,15 +277,16 @@ impl PendingSaveCheck {
         Ok(())
     }
 
-    /// Called under the target/evidence guards. Nonwaivable source validation
-    /// runs after consent checks but before any known-evidence effect.
-    pub(crate) fn consent(
+    /// Under the save's locks: refuse a missing, stale or insufficient answer,
+    /// then run `validate_source`, then carry out the answer for the analyses
+    /// that used the file.
+    pub(crate) fn apply_answer(
         &self,
         fresh: &SaveCheck,
         decision: Option<(SaveDecision, bool)>,
         policy: SavePolicy,
         validate_source: impl FnOnce() -> Result<()>,
-        actions: Option<&Mutex<Vec<EvidenceAction>>>,
+        actions: Option<&Mutex<Vec<AppliedAnswer>>>,
     ) -> Result<Vec<SaveWarning>> {
         if let Some((decision, consumed)) = decision {
             self.validate_decision(fresh, &decision, consumed)?;
@@ -316,14 +311,14 @@ impl PendingSaveCheck {
         })
     }
 
-    /// A matching post-write check needs no new decision. Changed scope
-    /// requires a fresh receipt; explicit decisions authorize evidence only.
-    pub(crate) fn authorize_finalization(
+    /// After a recovery wrote its files: a check equal to `expected` needs no
+    /// new answer; otherwise an answer must be given and is carried out.
+    pub(crate) fn apply_recovery_answer(
         &self,
         fresh: &SaveCheck,
         expected: Option<&SaveCheck>,
         decision: Option<(SaveDecision, bool)>,
-        actions: Option<&Mutex<Vec<EvidenceAction>>>,
+        actions: Option<&Mutex<Vec<AppliedAnswer>>>,
     ) -> Result<()> {
         if let Some((decision, consumed)) = decision {
             self.validate_decision(fresh, &decision, consumed)?;
@@ -356,11 +351,11 @@ pub(crate) fn target_revision(target: &Path) -> Result<Option<TargetRevision>> {
     }))
 }
 
-/// Known-evidence writes are separate effects. An incomplete action may have
-/// modified some backing ledgers before failure; it is never a rollback claim.
+/// The user's answer as applied to one conflict. Each run input is written
+/// on its own, so one that did not complete may have changed some of them.
 #[derive(Clone, Debug, Serialize)]
-pub struct EvidenceAction {
-    pub conflict: crate::records::input_evidence::EvidenceConflict,
+pub struct AppliedAnswer {
+    pub conflict: crate::records::run_inputs::InputConflict,
     pub policy: SavePolicy,
     pub completed: bool,
 }

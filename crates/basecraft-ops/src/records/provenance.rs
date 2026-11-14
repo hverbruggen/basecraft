@@ -455,7 +455,7 @@ impl SavedHistory {
         events: &mut HashSet<String>,
         records: &mut HashSet<(PathBuf, String)>,
     ) -> Result<()> {
-        let upstream = crate::records::input_evidence::read_input(bundle)
+        let upstream = crate::records::run_inputs::read_input(bundle)
             .map(|input| input.upstream)
             .unwrap_or_default();
         for link in upstream {
@@ -520,12 +520,12 @@ pub fn verify(result: &Path, project: Option<&crate::project::Project>) -> Resul
     let bundle = bundle_for_result(result, project);
     let mut issues = verify_records(&bundle, &publication)?;
     if bundle.join("input.json").is_file() {
-        if crate::records::input_evidence::read_input(&bundle)?.state
-            == basecraft_protocol::input_records::EvidenceState::Broken
+        if crate::records::run_inputs::read_input(&bundle)?.state
+            == basecraft_protocol::input_records::InputState::Broken
         {
             issues.push("Input evidence explicitly broken".into());
         }
-        match crate::records::input_evidence::verify_ancestors(&bundle) {
+        match crate::records::run_inputs::verify_ancestors(&bundle) {
             Ok(upstream) => issues.extend(upstream),
             Err(e) => issues.push(format!("Upstream evidence unavailable: {e}")),
         }
@@ -548,7 +548,7 @@ pub fn verify(result: &Path, project: Option<&crate::project::Project>) -> Resul
                     artifact.id
                 ));
             }
-            if let Err(e) = crate::records::input_evidence::verified_source(&bundle, reference) {
+            if let Err(e) = crate::records::run_inputs::verified_source(&bundle, reference) {
                 issues.push(format!("{}: {e}", artifact.id));
             }
         }
@@ -641,7 +641,7 @@ pub(crate) fn verify_records(bundle: &Path, current: &Publication) -> Result<Vec
                         artifact.id
                     ));
                 }
-                if let Err(e) = crate::records::input_evidence::verified_source(bundle, reference) {
+                if let Err(e) = crate::records::run_inputs::verified_source(bundle, reference) {
                     issues.push(format!("{}: {e}", artifact.id));
                 }
             }
@@ -710,19 +710,19 @@ fn link_selected_inputs<'a>(
         return Ok(());
     }
     let mut input = if path.is_file() {
-        crate::records::input_evidence::read_input(bundle)?
+        crate::records::run_inputs::read_input(bundle)?
     } else {
         let output = publication
             .outputs
             .first()
             .ok_or_else(|| invalid("input publication has no result"))?;
-        crate::records::input_evidence::SubmittedInput {
+        crate::records::run_inputs::RunInput {
             schema_version: 1,
             source: None,
             submitted_hash: output.hash.clone(),
             submitted_size: output.size,
-            transformation: "identity-v1".into(),
-            state: "generated".into(),
+            transformation: basecraft_protocol::input_records::Transformation::Identity,
+            state: basecraft_protocol::input_records::InputState::Generated,
             analysis_run: None,
             proposal_target: None,
             upstream: Vec::new(),
@@ -751,7 +751,7 @@ fn link_selected_inputs<'a>(
         input
             .extra
             .insert("sanger_input_events".into(), serde_json::json!(processed));
-        return crate::records::input_evidence::write_json(&path, &input);
+        return crate::records::run_inputs::write_json(&path, &input);
     }
     let mut upstream = input.upstream.clone();
     // Keep ownership of selected edges separate from unrelated scientific inputs.
@@ -790,7 +790,7 @@ fn link_selected_inputs<'a>(
         }
         processed.retain(|id| id.as_str() != Some(event.as_str()));
     }
-    let inherited = crate::records::input_evidence::ancestors(bundle)?;
+    let inherited = crate::records::run_inputs::ancestors(bundle)?;
     for (event, dependency) in dependencies {
         if processed.iter().any(|id| id.as_str() == Some(event)) {
             continue;
@@ -812,9 +812,9 @@ fn link_selected_inputs<'a>(
                 return Err(invalid("Inherited selected input identity differs"));
             }
         } else {
-            let directory = crate::records::input_evidence::registered_run(id, expected, bundle)?;
+            let directory = crate::records::run_inputs::registered_run(id, expected, bundle)?;
             let reference = basecraft_protocol::input_records::UpstreamLink {
-                bundle: (crate::records::input_evidence::relative(
+                bundle: (crate::records::run_inputs::relative(
                     &bundle.canonicalize()?,
                     &directory,
                 )?)
@@ -843,7 +843,7 @@ fn link_selected_inputs<'a>(
     input
         .extra
         .insert("sanger_input_events".into(), serde_json::json!(processed));
-    crate::records::input_evidence::write_json(&path, &input)
+    crate::records::run_inputs::write_json(&path, &input)
 }
 
 /// Publish a finished analysis run into its own bundle, keeping the events and
@@ -1033,7 +1033,7 @@ pub fn package(
             .join("input.json")
             .is_file()
     {
-        return crate::records::input_evidence::package(result, destination, project);
+        return crate::records::run_inputs::package(result, destination, project);
     }
     let issues = verify(result, project)?;
     if !issues.is_empty() {

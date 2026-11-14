@@ -33,7 +33,7 @@ mod proposals;
 #[cfg(test)]
 mod retention_tests;
 mod save;
-pub(crate) mod save_consent;
+pub(crate) mod save_answer;
 mod save_decision;
 #[cfg(test)]
 mod save_failure_tests;
@@ -42,7 +42,7 @@ mod saved_mark_tests;
 mod tool_runs;
 pub use open::{objects_dir, recovery_folder};
 pub use proposals::{ProposalResult, SequenceOffer};
-pub use save_decision::{EvidenceAction, SaveCheck, SaveDecision, SaveOutcome, SaveWarning};
+pub use save_decision::{AppliedAnswer, SaveCheck, SaveDecision, SaveOutcome, SaveWarning};
 pub use tool_runs::ToolRunRecord;
 pub mod support_import;
 use crate::{Error, Result};
@@ -69,7 +69,7 @@ struct Slot {
     key: String,
     content: Loaded,
     generation: u64,
-    pending_check: save_consent::PendingSaveCheck,
+    pending_check: save_answer::PendingSaveCheck,
     undo: Vec<Applied>,
     redo: Vec<Applied>,
     /// Edits older than the undo limit: still in effect, no longer undoable.
@@ -180,7 +180,7 @@ pub struct Outcome {
 
 /// Target-save and evidence locks held while writing an export or extract.
 struct DerivedTarget {
-    _evidence: crate::records::input_evidence::SaveLock,
+    _evidence: crate::records::run_inputs::SaveLock,
 }
 
 enum ReplayMode {
@@ -200,7 +200,7 @@ pub struct Session {
     local_provenance_root: PathBuf,
     tracked: bool,
     write_publication: crate::documents::WritePublication,
-    evidence_actions: Mutex<Vec<save_decision::EvidenceAction>>,
+    evidence_actions: Mutex<Vec<save_decision::AppliedAnswer>>,
     replay_mode: ReplayMode,
     /// Journal entries written so far, a change token for readers.
     journaled: u64,

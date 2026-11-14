@@ -65,7 +65,7 @@ impl Session {
         let path = crate::files::companion_path(self.companion_project(), &self.resolve(&main));
         let key = self.relative(&path);
         let known = slot.source_stamps.iter().find(|(p, _)| p == &path);
-        let now = crate::records::input_evidence::stamp(&path).ok();
+        let now = crate::records::run_inputs::stamp(&path).ok();
         if known.map_or(now.is_some(), |(_, known)| *known != now) {
             return Err(Error::ChangedOnDisk { path });
         }
@@ -97,7 +97,7 @@ impl Session {
             None
         };
         // Keep what the session knows of the files on disk, as a save does.
-        let stamp = crate::records::input_evidence::stamp(&path).ok();
+        let stamp = crate::records::run_inputs::stamp(&path).ok();
         let slot = &mut self.docs[id.0];
         slot.absent_sidecars.retain(|absent| absent != &key);
         if let Some(hash) = hash {

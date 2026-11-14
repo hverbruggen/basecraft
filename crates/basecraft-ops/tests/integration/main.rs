@@ -1,10 +1,12 @@
 //! basecraft-ops integration tests, built as one test binary.
 //! Suites that need the test-counters or test-heap features are separate binaries in tests/.
 mod additional_record_formats;
+mod alignment_link_recovery;
 mod alignment_save;
 mod alphabet_answer;
 mod alphabet_testdata;
 mod analysis_store;
+mod automatic_rooting;
 mod compact;
 #[path = "../support/decided_save.rs"]
 mod decided_save;
@@ -43,15 +45,12 @@ mod renames;
 mod replay;
 mod replay_retained;
 mod report_record_formats;
-mod review_completed_batch;
-mod review_link_recovery;
-mod review_tree_links;
 mod rooting_corrections;
-mod rooting_review;
 #[path = "../support/sanger_fixture.rs"]
 mod sanger_fixture;
 mod sanger_secondary_evidence;
 mod sanger_session;
+mod save_as_alignment_links;
 mod save_history_size;
 mod save_index;
 mod save_reference_protections;
@@ -62,6 +61,7 @@ mod store_registry_formats;
 mod submission;
 #[path = "../support/submission_run.rs"]
 mod submission_run;
+mod submission_run_validation;
 mod submitted_input_record_formats;
 mod support_import;
 mod tool_run_record;

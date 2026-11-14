@@ -176,20 +176,21 @@ pub fn reference_input(
     hash: &str,
     project: Option<&crate::project::Project>,
 ) -> Result<crate::records::analysis_store::ArtifactRun> {
-    reference_input_with_dependencies(anchor, source, hash, &[], project)
+    reference_species_input(anchor, source, hash, &[], project)
 }
 
-fn reference_input_with_dependencies(
+fn reference_species_input(
     anchor: &std::path::Path,
     source: &std::path::Path,
     hash: &str,
     dependencies: &[PathBuf],
     project: Option<&crate::project::Project>,
 ) -> Result<crate::records::analysis_store::ArtifactRun> {
-    crate::records::input_evidence::reference_input_with_dependencies(
+    crate::records::run_inputs::reference_input(
         anchor,
         source,
         hash,
+        None,
         dependencies,
         "Explicit species workspace input reference",
         project,
@@ -257,7 +258,7 @@ pub fn checked_alignment(
     if bundle.join("input.json").is_file() {
         let mut candidates = vec![bundle.clone()];
         candidates.extend(
-            crate::records::input_evidence::ancestors(&bundle)?
+            crate::records::run_inputs::ancestors(&bundle)?
                 .into_iter()
                 .map(|(p, _)| p),
         );
@@ -265,7 +266,7 @@ pub fn checked_alignment(
             if !candidate.join("input.json").is_file() {
                 continue;
             }
-            let input = crate::records::input_evidence::read_input(&candidate)?;
+            let input = crate::records::run_inputs::read_input(&candidate)?;
             let accepted = input
                 .source
                 .as_ref()
@@ -283,15 +284,15 @@ pub fn checked_alignment(
 }
 
 fn checked_workspace_input(run: &std::path::Path, hash: &str) -> Result<PathBuf> {
-    let input = crate::records::input_evidence::read_input(run)?;
-    if input.state == basecraft_protocol::input_records::EvidenceState::Broken {
+    let input = crate::records::run_inputs::read_input(run)?;
+    if input.state == basecraft_protocol::input_records::InputState::Broken {
         return Err(damaged(
             run,
             "Workspace input evidence was explicitly broken",
         ));
     }
     let source = if let Some(reference) = &input.source {
-        crate::records::input_evidence::verified_source(run, reference)?
+        crate::records::run_inputs::verified_source(run, reference)?
     } else {
         crate::records::analysis_store::submitted_input(run)
             .ok_or_else(|| damaged(run, "Retained workspace input is missing"))?
@@ -317,12 +318,12 @@ pub fn checked_display_tree(
         return Ok(Some(PathBuf::from(path)));
     };
     let run = std::path::Path::new(run);
-    let input = crate::records::input_evidence::read_input(run)?;
-    if input.state == basecraft_protocol::input_records::EvidenceState::Broken {
+    let input = crate::records::run_inputs::read_input(run)?;
+    if input.state == basecraft_protocol::input_records::InputState::Broken {
         return Err(damaged(run, "Display tree evidence was explicitly broken"));
     }
     let source = if let Some(reference) = &input.source {
-        crate::records::input_evidence::verified_source(run, reference)?
+        crate::records::run_inputs::verified_source(run, reference)?
     } else {
         crate::records::analysis_store::submitted_input(run)
             .ok_or_else(|| damaged(run, "Retained workspace input is missing"))?
@@ -582,7 +583,7 @@ fn combined_hypotheses(
                     .map(|run| run.directory().to_path_buf())
             })
             .transpose()?;
-        let evidence = reference_input_with_dependencies(
+        let evidence = reference_species_input(
             &anchor,
             path,
             &hash,

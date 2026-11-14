@@ -1,5 +1,5 @@
-//! Independent review regressions. These assert the safe
-//! contract, adapted to confirmed selection and retained registered-run evidence.
+//! A submission run passes validation only with a matching, complete,
+//! successful outcome for the inputs it was given.
 
 use crate::submission_run;
 use std::path::{Path, PathBuf};
@@ -56,7 +56,7 @@ fn outcome(root: &Path, package: &Path, exit_code: i32) -> Value {
 }
 
 #[test]
-fn review_nonzero_tool_exit_cannot_pass_with_warning_report() {
+fn nonzero_tool_exit_cannot_pass_with_warning_report() {
     crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let package = package(dir.path(), "batch");
@@ -68,7 +68,7 @@ fn review_nonzero_tool_exit_cannot_pass_with_warning_report() {
 }
 
 #[test]
-fn review_old_outcome_cannot_validate_regenerated_inputs() {
+fn old_outcome_cannot_validate_regenerated_inputs() {
     crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
@@ -97,7 +97,7 @@ fn review_old_outcome_cannot_validate_regenerated_inputs() {
 }
 
 #[test]
-fn review_accession_uses_export_identity_despite_original_name_collision() {
+fn accession_uses_export_identity_despite_original_name_collision() {
     crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     package(dir.path(), "batch");
@@ -121,7 +121,7 @@ fn review_accession_uses_export_identity_despite_original_name_collision() {
 }
 
 #[test]
-fn review_metadata_partial_write_reports_completed_table_replacements() {
+fn metadata_partial_write_reports_completed_table_replacements() {
     crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
