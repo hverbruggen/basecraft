@@ -5,7 +5,7 @@ use basecraft_protocol::{DocState, Feature, Op};
 
 use super::Document;
 use crate::Result;
-use crate::error::invalid;
+use crate::error::{invalid, unsupported};
 use crate::files::{self, Format, HashingWriter, Opened};
 use crate::session::{Inverse, normalise};
 
@@ -142,7 +142,9 @@ impl Document for Opened {
         _publication: &super::WritePublication,
     ) -> Result<super::PreparedWrite> {
         if format != self.format {
-            return Err(invalid("saving to a different format isn't supported yet"));
+            return Err(unsupported(
+                "saving to a different format isn't supported yet",
+            ));
         }
         let mut prepared = super::PreparedWrite::default();
         let hash = prepared.push(target, |w| files::write_main(self, w))?;
@@ -288,7 +290,7 @@ pub(crate) fn execute_sequence(
         | Op::AlnMoveRows { .. }
         | Op::AlnRenameRow { .. }
         | Op::AlnAddSequences { .. }
-        | Op::AlnRemoveRows { .. } => Err(invalid(format!("{} needs an alignment", op.name()))),
+        | Op::AlnRemoveRows { .. } => Err(unsupported(format!("{} needs an alignment", op.name()))),
         Op::TreeReroot { .. }
         | Op::TreeMidpointRoot {}
         | Op::TreeMinimumVarianceRoot {}
@@ -302,18 +304,18 @@ pub(crate) fn execute_sequence(
         | Op::TreePlaceLabel { .. }
         | Op::TreeAddSupport { .. }
         | Op::TreeRemoveSupport { .. }
-        | Op::TreeStyle { .. } => Err(invalid(format!("{} needs a tree", op.name()))),
-        Op::DelimitationEdit { .. } => Err(invalid("this needs a delimitation workspace")),
+        | Op::TreeStyle { .. } => Err(unsupported(format!("{} needs a tree", op.name()))),
+        Op::DelimitationEdit { .. } => Err(unsupported("this needs a delimitation workspace")),
         // Handled by the opened sequence, which keeps the alphabet.
-        Op::SetAlphabet { .. } => Err(invalid("set the alphabet on the open document")),
-        Op::MetadataEdit { .. } => Err(invalid("this needs the project metadata")),
-        Op::SangerReview { .. } | Op::SangerSelect { .. } | Op::SangerUpdate { .. } => Err(
-            crate::Error::Unsupported("choose a Sanger review document".into()),
-        ),
-        Op::SubmissionEdit { .. } => Err(invalid("this needs a submission document")),
-        Op::JobFinished { .. } => Err(invalid("use log_job_finished")),
+        Op::SetAlphabet { .. } => Err(unsupported("set the alphabet on the open document")),
+        Op::MetadataEdit { .. } => Err(unsupported("this needs the project metadata")),
+        Op::SangerReview { .. } | Op::SangerSelect { .. } | Op::SangerUpdate { .. } => {
+            Err(unsupported("choose a Sanger review document"))
+        }
+        Op::SubmissionEdit { .. } => Err(unsupported("this needs a submission document")),
+        Op::JobFinished { .. } => Err(unsupported("use log_job_finished")),
         Op::ProposalOffer { .. } | Op::ProposalDecide { .. } => {
-            Err(invalid("use apply_sequence_proposals"))
+            Err(unsupported("use apply_sequence_proposals"))
         }
         Op::Open { .. }
         | Op::CreateSangerReview { .. }
@@ -323,7 +325,7 @@ pub(crate) fn execute_sequence(
         | Op::Export { .. }
         | Op::ToolRun { .. }
         | Op::Undo { .. }
-        | Op::Redo { .. } => Err(invalid(format!("{} is not an edit", op.name()))),
+        | Op::Redo { .. } => Err(unsupported(format!("{} is not an edit", op.name()))),
     }
 }
 
@@ -345,7 +347,7 @@ fn undo_sequence(doc: &mut SequenceDoc, inverse: &Inverse) -> Result<()> {
         | Inverse::SangerSelect(_)
         | Inverse::SangerUpdate(_)
         | Inverse::SangerReview { .. }
-        | Inverse::Submission(_) => return Err(invalid("undo of the wrong kind of edit")),
+        | Inverse::Submission(_) => return Err(unsupported("undo of the wrong kind of edit")),
     }
     Ok(())
 }

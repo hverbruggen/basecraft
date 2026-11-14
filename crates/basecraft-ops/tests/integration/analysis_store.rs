@@ -1,33 +1,22 @@
 use crate::decided_save;
 
-use basecraft_ops::records::{ArtifactDestination, ArtifactRun};
+use basecraft_ops::records::ArtifactRun;
 
 #[test]
 fn hidden_runs_reserve_stage_and_publish_without_replacing_files() {
     crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let output = temp.path().join("result.nwk");
-    let run = ArtifactRun::create(&output, "run-1").unwrap();
-    assert!(ArtifactRun::create(&output, "run-1").is_err());
+    let run = ArtifactRun::create(None, &output, "run-1").unwrap();
+    assert!(ArtifactRun::create(None, &output, "run-1").is_err());
     assert!(run.artifact("../escape").is_err());
     assert!(run.artifact("/escape").is_err());
     std::fs::write(run.staging("bootstrap.nex").unwrap(), "replicates").unwrap();
-    let hidden = run
-        .publish("bootstrap.nex", ArtifactDestination::default())
-        .unwrap();
+    let hidden = run.publish("bootstrap.nex").unwrap();
     assert_eq!(std::fs::read_to_string(hidden).unwrap(), "replicates");
     std::fs::write(run.staging("bootstrap.nex").unwrap(), "replacement").unwrap();
-    assert!(
-        run.publish("bootstrap.nex", ArtifactDestination::Metadata)
-            .is_err()
-    );
+    assert!(run.publish("bootstrap.nex").is_err());
     assert!(run.staging("bootstrap.nex").unwrap().is_file());
-    std::fs::write(run.staging("visible.nex").unwrap(), "explicit export").unwrap();
-    assert_eq!(
-        run.publish("visible.nex", ArtifactDestination::WorkingDirectory)
-            .unwrap(),
-        temp.path().join("visible.nex")
-    );
     assert!(!temp.path().join("bootstrap.nex").exists());
 }
 
@@ -38,7 +27,7 @@ fn foreign_namespace_is_never_adopted_or_migrated() {
     let namespace = temp.path().join(".basecraft/analyses-v1");
     std::fs::create_dir_all(&namespace).unwrap();
     std::fs::write(namespace.join("user-data"), "untouched").unwrap();
-    assert!(ArtifactRun::create(&temp.path().join("out"), "run").is_err());
+    assert!(ArtifactRun::create(None, &temp.path().join("out"), "run").is_err());
     assert_eq!(
         std::fs::read_to_string(namespace.join("user-data")).unwrap(),
         "untouched"
@@ -53,26 +42,26 @@ fn symlink_namespace_and_staged_symlinks_are_rejected() {
     let temp = tempfile::tempdir().unwrap();
     let elsewhere = tempfile::tempdir().unwrap();
     std::os::unix::fs::symlink(elsewhere.path(), temp.path().join(".basecraft")).unwrap();
-    assert!(ArtifactRun::create(&temp.path().join("out"), "run").is_err());
+    assert!(ArtifactRun::create(None, &temp.path().join("out"), "run").is_err());
     assert_eq!(std::fs::read_dir(elsewhere.path()).unwrap().count(), 0);
     std::fs::remove_file(temp.path().join(".basecraft")).unwrap();
-    let run = ArtifactRun::create(&temp.path().join("out"), "run").unwrap();
+    let run = ArtifactRun::create(None, &temp.path().join("out"), "run").unwrap();
     std::os::unix::fs::symlink("/etc/passwd", run.staging("bad").unwrap()).unwrap();
-    assert!(run.publish("bad", ArtifactDestination::Metadata).is_err());
+    assert!(run.publish("bad").is_err());
 }
 
 fn reference_run(root: &std::path::Path, source: &std::path::Path, id: &str) -> ArtifactRun {
     use basecraft_ops::records::{self, SubmittedInput};
     use basecraft_protocol::provenance::InputReference;
-    let run = ArtifactRun::create(&root.join(format!("{id}.fasta")), id).unwrap();
+    let run = ArtifactRun::create(None, &root.join(format!("{id}.fasta")), id).unwrap();
     records::write_json(
         &run.directory().join("run.json"),
         &serde_json::json!({"result":format!("{id}.fasta")}),
     )
     .unwrap();
     let hash = basecraft_io::hash_file(source).unwrap();
-    records::write_json(
-        &run.directory().join("input.json"),
+    records::write_input(
+        run.directory(),
         &SubmittedInput {
             schema_version: 1,
             source: Some(InputReference {
@@ -337,17 +326,19 @@ fn nested_collection_bindings_reopen_without_changing_sibling_bindings() {
     crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();
     let output = temp.path().join("single.txt");
-    let run = ArtifactRun::create(&output, "nested").unwrap();
+    let run = ArtifactRun::create(None, &output, "nested").unwrap();
     std::fs::write(&output, b"single").unwrap();
-    run.bind(&output).unwrap();
+    run.bind(None, &output, &basecraft_io::hash_file(&output).unwrap())
+        .unwrap();
     let collection = temp.path().join("collection/subdir");
     std::fs::create_dir_all(&collection).unwrap();
     let member = collection.join("member.txt");
     std::fs::write(&member, b"member").unwrap();
-    run.bind(&member).unwrap();
+    run.bind(None, &member, &basecraft_io::hash_file(&member).unwrap())
+        .unwrap();
     for path in [&output, &member] {
         assert_eq!(
-            ArtifactRun::for_result(path).unwrap().as_deref(),
+            ArtifactRun::for_result(None, path).unwrap().as_deref(),
             Some(run.directory())
         );
     }
@@ -355,12 +346,12 @@ fn nested_collection_bindings_reopen_without_changing_sibling_bindings() {
     let other = temp.path().join("other/member.txt");
     std::fs::create_dir_all(other.parent().unwrap()).unwrap();
     std::fs::write(&other, b"unrelated").unwrap();
-    assert!(ArtifactRun::for_result(&other).unwrap().is_none());
+    assert!(ArtifactRun::for_result(None, &other).unwrap().is_none());
     // Discovery retains access to the ledger after edits so the provenance
     // verifier can diagnose changed bytes rather than losing the record.
     std::fs::write(&member, b"changed").unwrap();
     assert_eq!(
-        ArtifactRun::for_result(&member).unwrap().as_deref(),
+        ArtifactRun::for_result(None, &member).unwrap().as_deref(),
         Some(run.directory())
     );
 }
@@ -388,7 +379,7 @@ fn multi_input_verification_uses_only_declared_owners_and_never_bypasses_breaks(
     let a = make_ledger(&source_a);
     let b = make_ledger(&source_b);
     let same_hash = make_ledger(&source_b);
-    let main = ArtifactRun::create(&temp.path().join("result.txt"), "multi-source").unwrap();
+    let main = ArtifactRun::create(None, &temp.path().join("result.txt"), "multi-source").unwrap();
     let dependencies = [
         a.directory().to_owned(),
         b.directory().to_owned(),
@@ -415,7 +406,7 @@ fn multi_input_verification_uses_only_declared_owners_and_never_bypasses_breaks(
     assert!(records::verified_source(main.directory(), &wrong_size).is_err());
     let mut broken = records::read_input(same_hash.directory()).unwrap();
     broken.state = "broken".into();
-    records::write_json(&same_hash.directory().join("input.json"), &broken).unwrap();
+    records::write_input(same_hash.directory(), &broken).unwrap();
     for dependencies in [
         dependencies.to_vec(),
         dependencies.into_iter().rev().collect(),
@@ -440,7 +431,7 @@ fn multi_input_verification_uses_only_declared_owners_and_never_bypasses_breaks(
     let undeclared = make_ledger(&source_a);
     let mut altered = records::read_input(undeclared.directory()).unwrap();
     altered.source = Some(reference.clone());
-    records::write_json(&undeclared.directory().join("input.json"), &altered).unwrap();
+    records::write_input(undeclared.directory(), &altered).unwrap();
     records::link_generated_input(
         &main,
         &[undeclared.directory().to_owned()],
@@ -482,7 +473,7 @@ fn preserved_primary_is_not_replaced_by_a_matching_ancestor_with_missing_origina
     let preserved = main.directory().join("preserved-input");
     std::fs::write(&preserved, bytes).unwrap();
     input.state = "preserved".into();
-    records::write_json(&main.directory().join("input.json"), &input).unwrap();
+    records::write_input(main.directory(), &input).unwrap();
     std::fs::remove_file(&source).unwrap();
     assert_eq!(
         records::verified_source(main.directory(), &reference).unwrap(),
@@ -492,11 +483,93 @@ fn preserved_primary_is_not_replaced_by_a_matching_ancestor_with_missing_origina
     // A matching explicit break still fails closed, even with a good primary.
     let mut broken = records::read_input(ancestor.directory()).unwrap();
     broken.state = "broken".into();
-    records::write_json(&ancestor.directory().join("input.json"), &broken).unwrap();
+    records::write_input(ancestor.directory(), &broken).unwrap();
     assert!(
         records::verified_source(main.directory(), &reference)
             .unwrap_err()
             .to_string()
             .contains("explicitly broken")
     );
+}
+
+#[test]
+fn a_binding_is_found_only_where_the_files_records_are_kept() {
+    crate::isolated_profile::isolate!();
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project");
+    let result = project.join("data/result.txt");
+    std::fs::create_dir_all(result.parent().unwrap()).unwrap();
+    std::fs::write(&result, b"result").unwrap();
+    let hash = basecraft_io::hash_file(&result).unwrap();
+    // A project around the chosen one binds the file in its own .basecraft.
+    let outer = basecraft_ops::project::Project::new(temp.path()).unwrap();
+    let above = ArtifactRun::create(Some(&outer), &result, "above").unwrap();
+    above.bind(Some(&outer), &result, &hash).unwrap();
+    let chosen = basecraft_ops::project::Project::new(&project).unwrap();
+    // In the project, only the project's .basecraft counts (rule 2.5).
+    assert!(
+        ArtifactRun::for_result(Some(&chosen), &result)
+            .unwrap()
+            .is_none()
+    );
+    let run = ArtifactRun::create(Some(&chosen), &result, "inside").unwrap();
+    run.bind(Some(&chosen), &result, &hash).unwrap();
+    assert!(project.join(".basecraft/analyses-v1/runs/inside").is_dir());
+    assert!(!project.join("data/.basecraft").exists());
+    assert_eq!(
+        ArtifactRun::for_result(Some(&chosen), &result)
+            .unwrap()
+            .as_deref(),
+        Some(run.directory())
+    );
+    // As a loose file its binding goes beside it, naming the run above.
+    above.bind(None, &result, &hash).unwrap();
+    assert_eq!(
+        ArtifactRun::for_result(None, &result).unwrap().as_deref(),
+        Some(above.directory())
+    );
+}
+
+#[test]
+fn a_home_above_the_project_is_no_binding_of_its_files() {
+    crate::isolated_profile::isolate!();
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path().canonicalize().unwrap();
+    let result = work.join("data/result.txt");
+    std::fs::create_dir_all(result.parent().unwrap()).unwrap();
+    std::fs::write(&result, b"result").unwrap();
+    let hash = basecraft_io::hash_file(&result).unwrap();
+    // A loose run in `work` binds its output in `work/data` with home "..".
+    let run = ArtifactRun::create(None, &work.join("run.txt"), "above").unwrap();
+    run.bind(None, &result, &hash).unwrap();
+    assert!(ArtifactRun::for_result(None, &result).unwrap().is_some());
+    // Chosen as the project, `work/data` never reaches the run above it.
+    let project = basecraft_ops::project::Project::new(work.join("data")).unwrap();
+    assert!(
+        ArtifactRun::for_result(Some(&project), &result)
+            .unwrap()
+            .is_none()
+    );
+    assert!(run.bind(Some(&project), &result, &hash).is_err());
+}
+
+#[test]
+fn a_moved_folder_whose_run_stayed_behind_has_no_binding() {
+    crate::isolated_profile::isolate!();
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path().join("work");
+    std::fs::create_dir_all(work.join("data")).unwrap();
+    let run = ArtifactRun::create(None, &work.join("run.txt"), "behind").unwrap();
+    let tree = work.join("data/tree.nwk");
+    std::fs::write(&tree, "(a,b);").unwrap();
+    let hash = basecraft_io::hash_file(&tree).unwrap();
+    run.bind(None, &tree, &hash).unwrap();
+    // The folder moves with its .basecraft; the home it names is gone.
+    let moved = temp.path().join("moved");
+    std::fs::rename(work.join("data"), &moved).unwrap();
+    let tree = moved.join("tree.nwk");
+    assert!(ArtifactRun::for_result(None, &tree).unwrap().is_none());
+    assert!(ArtifactRun::for_result_with_hash(None, &tree, &hash).is_err());
+    // The tree still opens, without the run's metadata.
+    assert!(basecraft_ops::files::load(&tree).is_ok());
 }

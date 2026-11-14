@@ -1,129 +1,171 @@
-//! The Tasks view's job index: one small record per run in the `.basecraft`
-//! of the run's home (its project's root, or the folder it ran in outside a
-//! project), each pointing at the run's own `runtime.json`, which stays
-//! authoritative. Reading creates no folders.
+//! The Tasks view's list of runs (D28): each run's own `runtime.json` in
+//! the analysis store of each home, a project's root or the folder of a
+//! loose file. A run's `execution.json` says which process ran it and on
+//! what. Reading creates no folders.
+use basecraft_protocol::operation::OperationOutcome;
 use basecraft_protocol::provenance::Publication;
+use serde::Serialize;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-/// Where the Tasks view's record of job `id` lives, for a run whose records
-/// belong to `home`: a project root, or the folder of a loose file.
-pub fn job_index_path(home: &Path, id: &str) -> PathBuf {
-    home.join(".basecraft/jobs").join(id).join("manifest.json")
+/// One row of the Tasks view.
+#[derive(Debug, Serialize)]
+struct Task {
+    id: String,
+    operation: String,
+    status: String,
+    source: TaskSource,
+    outputs: BTreeMap<String, String>,
+    primary_output: Option<String>,
+    diagnostics: String,
+    effective_parameters: serde_json::Value,
+    record_path: PathBuf,
 }
 
-/// The job records kept in the `.basecraft` of each of `homes`, whatever tabs
-/// are open. Reading creates no directories.
+#[derive(Debug, Serialize)]
+struct TaskSource {
+    path: Option<PathBuf>,
+}
+
+#[derive(Debug, Default, Serialize)]
+struct Tasks {
+    jobs: Vec<Task>,
+    warnings: Vec<String>,
+}
+
+/// The runs kept in the `.basecraft` of each of `homes`, whatever tabs are
+/// open, newest first. Without `previous`, only this process's runs.
 pub fn jobs(previous: bool, homes: &[PathBuf]) -> crate::Result<serde_json::Value> {
     let mut folders: Vec<_> = homes
         .iter()
         .filter_map(|home| home.canonicalize().ok())
-        .map(|home| home.join(".basecraft/jobs"))
+        .map(|home| home.join(".basecraft/analyses-v1/runs"))
         .collect();
     folders.sort();
     folders.dedup();
     let folders: Vec<_> = folders.iter().map(PathBuf::as_path).collect();
-    job_records(&folders, previous, basecraft_platform::process_instance())
+    Ok(serde_json::to_value(job_records(
+        &folders,
+        previous,
+        basecraft_platform::process_instance(),
+    ))?)
 }
 
-fn job_records(folders: &[&Path], previous: bool, owner: &str) -> crate::Result<serde_json::Value> {
-    let mut runs = Vec::new();
+fn job_records(folders: &[&Path], previous: bool, owner: &str) -> Tasks {
+    let mut tasks = Tasks::default();
     let mut budget = TaskReadBudget(64 << 20);
-    let mut warnings = Vec::new();
-    let mut listings = Vec::new();
-    for &folder in folders {
-        // The folder is `<home>/.basecraft/jobs`; its records' paths are
-        // relative to the home.
-        let home = folder.parent().and_then(Path::parent).unwrap_or(folder);
-        match std::fs::read_dir(folder) {
-            Ok(listing) => listings.push(listing.map(move |entry| (home, entry))),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e.into()),
-        }
-    }
-    for (index, (home, entry)) in listings.into_iter().flatten().enumerate() {
-        if index >= 4096 {
-            warnings.push("Showing at most 4096 retained runs".into());
-            break;
-        }
-        let entry = entry?;
-        if !entry.file_type()?.is_dir() {
+    let mut seen = 0;
+    'folders: for &folder in folders {
+        let Ok(listing) = std::fs::read_dir(folder) else {
             continue;
-        }
-        let path = entry.path().join("manifest.json");
-        let result = budget.read(&path).and_then(|b| {
-            basecraft_protocol::records::decode::<serde_json::Value>(&b).map_err(Into::into)
-        });
-        match result {
-            Ok(mut run) => {
-                if !run.is_object()
-                    || run["schema_version"] != 1
-                    || !run["id"].is_string()
-                    || !run["status"].is_string()
-                    || !run["operation"].is_string()
-                    || !run["source"]["path"]
-                        .as_str()
-                        .is_some_and(|p| Path::new(p).is_relative())
-                    || !run["outputs"].is_object()
-                {
-                    warnings.push(format!(
-                        "Unsupported or malformed task record: {}",
-                        path.display()
-                    ));
-                    continue;
-                }
-                let current = run["owner_instance"].as_str() == Some(owner);
-                if !previous && !current {
-                    continue;
-                }
-                let source = home.join(run["source"]["path"].as_str().unwrap_or_default());
-                run["source"]["path"] = serde_json::json!(source);
-                // A Sanger stage's own pointers; one outside the home is dropped.
-                for field in ["primary_output", "artifact_run"] {
-                    if let Some(path) = run.get(field).and_then(serde_json::Value::as_str) {
-                        run[field] = serde_json::json!(inside(home, path));
-                    }
-                }
-                if run.get("runtime_record").is_some()
-                    && let Err(error) = reconcile_task_receipt(&mut run, home, &mut budget)
-                {
-                    let notice = format!(
-                        "Canonical task receipt unavailable or unsupported for {}: {error}",
-                        path.display()
-                    );
-                    run["status"] = "Completion unconfirmed; receipt unavailable".into();
-                    run["outputs"] = serde_json::Value::Object(serde_json::Map::new());
-                    run["artifacts"] = serde_json::Value::Array(Vec::new());
-                    run["errors"] = serde_json::Value::Array(Vec::new());
-                    run["warnings"] = serde_json::Value::Array(Vec::new());
-                    run["effective_parameters"] = serde_json::Value::Null;
-                    run["primary_output"] = serde_json::Value::Null;
-                    run["diagnostics"] = serde_json::json!(notice);
-                    run["receipt_confirmed"] = false.into();
-                    warnings.push(notice);
-                }
-                if matches!(
-                    run["status"].as_str(),
-                    Some("queued" | "running" | "cancelling" | "finalizing")
-                ) && !current
-                {
-                    // A PID alone is insufficient to prove a previous owner is still alive.
-                    run["status"] = "Previous owner; completion unconfirmed".into();
-                }
-                if let Some(object) = run.as_object_mut() {
-                    object.remove("source_record");
-                }
-                run["record_path"] = serde_json::json!(path);
-                runs.push(run);
+        };
+        for entry in listing.flatten() {
+            let run = entry.path();
+            let runtime = run.join("runtime.json");
+            // Input ledgers and other records hold no runtime record.
+            if !runtime.is_file() {
+                continue;
             }
-            Err(e) => warnings.push(format!("Could not read {}: {e}", path.display())),
-        }
-        if budget.0 == 0 {
-            warnings.push("Retained task display reached its 64 MiB reading limit, including canonical receipts. Evidence remains available at its recorded location.".into());
-            break;
+            seen += 1;
+            if seen > 4096 {
+                tasks
+                    .warnings
+                    .push("Showing at most 4096 retained runs".into());
+                break 'folders;
+            }
+            match task(&run, &runtime, previous, owner, &mut budget) {
+                Ok(Some(task)) => tasks.jobs.push(task),
+                Ok(None) => {}
+                Err(error) => tasks.warnings.push(format!(
+                    "Could not read the run record {}: {error}",
+                    runtime.display()
+                )),
+            }
+            if budget.0 == 0 {
+                tasks.warnings.push("Retained task display reached its 64 MiB reading limit. Evidence remains available at its recorded location.".into());
+                break 'folders;
+            }
         }
     }
-    runs.sort_by(|a, b| b["started"].as_str().cmp(&a["started"].as_str()));
-    Ok(serde_json::json!({"jobs":runs, "warnings":warnings}))
+    // Run identities are ULIDs, so this is newest first.
+    tasks.jobs.sort_by(|a, b| b.id.cmp(&a.id));
+    tasks
+}
+
+/// The row for the run in `run`, unless it belongs to another process and
+/// only this one's are wanted.
+fn task(
+    run: &Path,
+    runtime: &Path,
+    previous: bool,
+    owner: &str,
+    budget: &mut TaskReadBudget,
+) -> crate::Result<Option<Task>> {
+    let (outcome, writer) =
+        basecraft_protocol::records::decode_written::<OperationOutcome>(&budget.read(runtime)?)?;
+    if outcome.schema != 1 {
+        return Err(crate::error::invalid(
+            basecraft_protocol::records::other_format(&writer, outcome.schema, 1),
+        ));
+    }
+    // A tool run names its process and source in `run.json` when it is
+    // made; a Sanger stage in its `execution.json`.
+    let record = |name: &str, budget: &mut TaskReadBudget| budget.read(&run.join(name)).ok();
+    let made = record("run.json", budget).and_then(|bytes| {
+        basecraft_protocol::records::decode::<basecraft_protocol::records::AnalysisRun>(&bytes).ok()
+    });
+    let execution = record("execution.json", budget).and_then(|bytes| {
+        basecraft_protocol::records::decode::<basecraft_protocol::records::RunRecord>(&bytes).ok()
+    });
+    let process = made
+        .as_ref()
+        .and_then(|made| made.process_instance.as_deref());
+    let process = process.or_else(|| execution.as_ref().map(|e| e.process_instance.as_str()));
+    let current = process == Some(owner);
+    if !previous && !current {
+        return Ok(None);
+    }
+    let source = made
+        .as_ref()
+        .and_then(|made| made.source.as_deref())
+        .or_else(|| {
+            let mut inputs = execution.as_ref()?.inputs.values().flatten();
+            inputs.find_map(|input| input.original_path.as_deref())
+        });
+    let source = source.map(|path| run.join(path));
+    let primary = task_primary_output(&outcome, runtime, budget);
+    let mut status = serde_json::to_value(outcome.state)?
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    if !outcome.state.terminal() && !current {
+        // A PID alone is insufficient to prove a previous owner is still alive.
+        status = "Previous owner; completion unconfirmed".into();
+    }
+    let mut diagnostics: Vec<_> = outcome
+        .errors
+        .iter()
+        .map(|error| error.message.clone())
+        .chain(outcome.warnings.iter().cloned())
+        .collect();
+    if let Err(error) = &primary {
+        diagnostics.push(format!("Primary result unavailable: {error}"));
+    }
+    Ok(Some(Task {
+        id: outcome.run_id.clone(),
+        operation: outcome.operation.clone(),
+        status,
+        source: TaskSource { path: source },
+        outputs: outcome
+            .artifacts
+            .iter()
+            .map(|artifact| (artifact.path.clone(), artifact.digest.clone()))
+            .collect(),
+        primary_output: primary.ok().flatten(),
+        diagnostics: diagnostics.join("\n"),
+        effective_parameters: outcome.effective_parameters,
+        record_path: runtime.to_path_buf(),
+    }))
 }
 
 /// Charge both discovery and canonical evidence, including malformed JSON. The
@@ -145,75 +187,6 @@ impl TaskReadBudget {
         }
         crate::records::provenance::read_record_with_budget(path, &mut self.0)
     }
-}
-
-/// A path a job record names, relative to its home and inside it.
-fn inside(home: &Path, path: &str) -> Option<PathBuf> {
-    normal_task_path(Path::new(path)).then(|| home.join(path))
-}
-
-fn reconcile_task_receipt(
-    run: &mut serde_json::Value,
-    home: &Path,
-    budget: &mut TaskReadBudget,
-) -> crate::Result<()> {
-    use basecraft_protocol::operation::OperationOutcome;
-    // The pointer is relative to the record's home, so a copied project reads
-    // its own receipt. Listing never searches for or rewrites evidence.
-    let path = run["runtime_record"]
-        .as_str()
-        .and_then(|path| inside(home, path))
-        .ok_or_else(|| {
-            crate::error::invalid("runtime receipt pointer must be a path inside the record's home")
-        })?;
-    run["runtime_record"] = serde_json::json!(path);
-    let path = path.as_path();
-    let (outcome, writer) =
-        basecraft_protocol::records::decode_written::<OperationOutcome>(&budget.read(path)?)?;
-    if outcome.schema != 1 {
-        return Err(crate::error::invalid(
-            basecraft_protocol::records::other_format(&writer, outcome.schema, 1),
-        ));
-    }
-    if run["id"] != outcome.run_id || run["operation"] != outcome.operation {
-        return Err(crate::error::invalid("operation receipt identity mismatch"));
-    }
-    let primary = task_primary_output(&outcome, path, budget);
-    run["status"] = serde_json::to_value(outcome.state)?;
-    run["effective_parameters"] = outcome.effective_parameters;
-    run["outputs"] = serde_json::to_value(
-        outcome
-            .artifacts
-            .iter()
-            .map(|artifact| (artifact.path.clone(), artifact.digest.clone()))
-            .collect::<std::collections::BTreeMap<_, _>>(),
-    )?;
-    run["artifacts"] = serde_json::to_value(&outcome.artifacts)?;
-    run["primary_output"] =
-        serde_json::json!(primary.as_ref().ok().and_then(|path| path.as_deref()));
-    run["diagnostics"] = serde_json::json!(
-        outcome
-            .errors
-            .iter()
-            .map(|error| error.message.as_str())
-            .chain(outcome.warnings.iter().map(String::as_str))
-            .collect::<Vec<_>>()
-            .join("\n")
-    );
-    run["errors"] = serde_json::to_value(outcome.errors)?;
-    run["warnings"] = serde_json::to_value(outcome.warnings)?;
-    if let Err(error) = primary {
-        let notice = format!("Primary result unavailable: {error}");
-        run["diagnostics"] = serde_json::json!(
-            format!(
-                "{}\n{notice}",
-                run["diagnostics"].as_str().unwrap_or_default()
-            )
-            .trim()
-        );
-    }
-    run["receipt_confirmed"] = true.into();
-    Ok(())
 }
 
 /// Publication outputs are ordered by the runner with exported results first.
@@ -319,37 +292,57 @@ fn normal_task_path(path: &Path) -> bool {
 mod tests {
     use super::*;
 
-    fn registered_fixture(
-        root: &Path,
-        state: &str,
-    ) -> (std::path::PathBuf, std::path::PathBuf, serde_json::Value) {
-        let jobs = root.join(".basecraft/jobs");
-        let receipt = root.join("run/runtime.json");
+    fn write(path: &Path, value: &serde_json::Value) {
+        std::fs::write(path, basecraft_protocol::records::encode(value).unwrap()).unwrap();
+    }
+
+    /// The run record of a process `owner`, on `input.afa` in the home.
+    fn execution(owner: &str) -> serde_json::Value {
+        let record = basecraft_protocol::records::RunRecord {
+            process_instance: owner.into(),
+            inputs: BTreeMap::from([(
+                "alignment".into(),
+                vec![basecraft_protocol::operation::InvocationInputEvidence {
+                    original_path: Some("../../../../input.afa".into()),
+                    source_hash: None,
+                    submitted_hash: "b3:x".into(),
+                    transformation: "identity-v1".into(),
+                    run_directory: ".".into(),
+                }],
+            )]),
+            ..basecraft_protocol::records::RunRecord::new(
+                "test/run@1".into(),
+                "1".into(),
+                "t".into(),
+            )
+        };
+        serde_json::to_value(record).unwrap()
+    }
+
+    /// A run in the store of `home`, in `state`, made by process "current".
+    fn run_fixture(home: &Path, state: &str) -> (PathBuf, PathBuf, serde_json::Value) {
+        let runs = home.join(".basecraft/analyses-v1/runs");
+        let receipt = runs.join("registered/runtime.json");
         std::fs::create_dir_all(receipt.parent().unwrap()).unwrap();
-        std::fs::create_dir_all(jobs.join("registered")).unwrap();
         let outcome = serde_json::json!({"schema":1,"run_id":"registered","operation":"test/run@1","state":state,
             "pins":{"generation":"g","package_digest":"p","descriptor_digest":"d"},
             "requested_parameters":{},"effective_parameters":{"canonical":true},"data":null,
             "artifacts":[],"proposals":null,"warnings":["canonical warning"],
             "errors":[{"code":"tool_failure","message":"canonical error","operation":"test/run@1"}],"evidence":null});
-        std::fs::write(
-            &receipt,
-            basecraft_protocol::records::encode(&outcome).unwrap(),
-        )
-        .unwrap();
-        let index = serde_json::json!({"schema_version":1,"id":"registered","status":"completed","operation":"test/run@1",
-            "owner_instance":"current","source":{"path":"input.afa"},"outputs":{"stale.nwk":"stale"},
-            "primary_output":"stale.nwk","diagnostics":"stale error","runtime_record":"run/runtime.json"});
-        std::fs::write(
-            jobs.join("registered/manifest.json"),
-            basecraft_protocol::records::encode(&index).unwrap(),
-        )
-        .unwrap();
-        (jobs, receipt, outcome)
+        write(&receipt, &outcome);
+        write(
+            &receipt.with_file_name("execution.json"),
+            &execution("current"),
+        );
+        (runs, receipt, outcome)
+    }
+
+    fn rows(runs: &Path, previous: bool, owner: &str) -> serde_json::Value {
+        serde_json::to_value(job_records(&[runs], previous, owner)).unwrap()
     }
 
     #[test]
-    fn task_receipts_override_stale_index_for_every_state_and_previous_owner() {
+    fn tasks_list_each_runs_own_record_for_every_state_and_owner() {
         for state in [
             "queued",
             "running",
@@ -362,22 +355,24 @@ mod tests {
             "interrupted",
         ] {
             let temp = tempfile::tempdir().unwrap();
-            let (jobs, receipt, outcome) = registered_fixture(temp.path(), state);
-            let index = jobs.join("registered/manifest.json");
-            let before = std::fs::read(&index).unwrap();
-            let rows = job_records(&[&jobs], false, "current").unwrap();
-            let row = &rows["jobs"][0];
+            let (runs, receipt, _) = run_fixture(temp.path(), state);
+            let before = std::fs::read(&receipt).unwrap();
+            let listed = rows(&runs, false, "current");
+            let row = &listed["jobs"][0];
             assert_eq!(row["status"], state);
             assert_eq!(row["outputs"], serde_json::json!({}));
             assert!(row["primary_output"].is_null());
             assert_eq!(row["diagnostics"], "canonical error\ncanonical warning");
             assert_eq!(row["effective_parameters"]["canonical"], true);
-            assert_eq!(row["receipt_confirmed"], true);
             assert_eq!(
-                job_records(&[&jobs], false, "new-owner").unwrap()["jobs"],
+                row["source"]["path"],
+                serde_json::json!(runs.join("registered/../../../../input.afa"))
+            );
+            assert_eq!(
+                rows(&runs, false, "new-owner")["jobs"],
                 serde_json::json!([])
             );
-            let previous = job_records(&[&jobs], true, "new-owner").unwrap();
+            let previous = rows(&runs, true, "new-owner");
             if ["queued", "running", "cancelling", "finalizing"].contains(&state) {
                 assert_eq!(
                     previous["jobs"][0]["status"],
@@ -386,70 +381,73 @@ mod tests {
             } else {
                 assert_eq!(previous["jobs"][0]["status"], state);
             }
-            assert_eq!(std::fs::read(index).unwrap(), before);
-            assert_eq!(
-                std::fs::read(receipt).unwrap(),
-                basecraft_protocol::records::encode(&outcome).unwrap()
-            );
+            // Listing writes nothing.
+            assert_eq!(std::fs::read(receipt).unwrap(), before);
         }
     }
 
     #[test]
-    fn task_receipts_refuse_missing_moved_corrupt_future_and_mismatched_evidence() {
-        for damage in [
-            "missing",
-            "moved",
-            "corrupt",
-            "future",
-            "run",
-            "operation",
-            "bad-pointer",
-        ] {
-            let temp = tempfile::tempdir().unwrap();
-            let (jobs, receipt, mut outcome) = registered_fixture(temp.path(), "completed");
-            match damage {
-                "missing" => std::fs::remove_file(&receipt).unwrap(),
-                "moved" => std::fs::rename(&receipt, receipt.with_extension("moved")).unwrap(),
-                "corrupt" => std::fs::write(&receipt, "{\"schema\":1,").unwrap(),
-                "bad-pointer" => {
-                    let index = jobs.join("registered/manifest.json");
-                    let mut value: serde_json::Value =
-                        serde_json::from_slice(&std::fs::read(&index).unwrap()).unwrap();
-                    value["runtime_record"] = serde_json::json!(42);
-                    std::fs::write(index, basecraft_protocol::records::encode(&value).unwrap())
-                        .unwrap();
-                }
-                field => {
-                    match field {
-                        "future" => outcome["schema"] = serde_json::json!(999),
-                        "run" => outcome["run_id"] = serde_json::json!("other"),
-                        _ => outcome["operation"] = serde_json::json!("other"),
-                    }
-                    std::fs::write(
-                        &receipt,
-                        basecraft_protocol::records::encode(&outcome).unwrap(),
-                    )
-                    .unwrap();
-                }
+    fn a_run_names_its_process_and_source_before_the_tool_has_run() {
+        let temp = tempfile::tempdir().unwrap();
+        let (runs, receipt, _) = run_fixture(temp.path(), "running");
+        // Before the tool runs there is no execution.json, only run.json.
+        std::fs::remove_file(receipt.with_file_name("execution.json")).unwrap();
+        let made = serde_json::json!({"schema_version":1,"id":"registered","result":"out.fasta",
+            "status":"prepared","process_instance":"current","source":"../../../../open.afa"});
+        write(&receipt.with_file_name("run.json"), &made);
+        let listed = rows(&runs, false, "current");
+        assert_eq!(listed["jobs"][0]["status"], "running");
+        assert_eq!(
+            listed["jobs"][0]["source"]["path"],
+            serde_json::json!(runs.join("registered/../../../../open.afa"))
+        );
+        let previous = rows(&runs, true, "later");
+        assert_eq!(
+            previous["jobs"][0]["status"],
+            "Previous owner; completion unconfirmed"
+        );
+    }
+
+    #[test]
+    fn a_damaged_run_record_is_a_warning_and_other_records_are_skipped() {
+        let temp = tempfile::tempdir().unwrap();
+        assert_eq!(
+            rows(&temp.path().join("absent"), true, "current")["jobs"],
+            serde_json::json!([])
+        );
+        assert!(!temp.path().join("absent").exists());
+        let (runs, receipt, mut outcome) = run_fixture(temp.path(), "completed");
+        // An input ledger has no runtime record and is no task.
+        std::fs::create_dir_all(runs.join("ledger")).unwrap();
+        std::fs::write(runs.join("ledger/input.json"), b"{}").unwrap();
+        for damage in ["corrupt", "future"] {
+            if damage == "corrupt" {
+                std::fs::write(&receipt, "{\"schema\":1,").unwrap();
+            } else {
+                outcome["schema"] = serde_json::json!(999);
+                write(&receipt, &outcome);
             }
-            let rows = job_records(&[&jobs], false, "current").unwrap();
-            let row = &rows["jobs"][0];
-            assert_eq!(
-                row["status"], "Completion unconfirmed; receipt unavailable",
-                "{damage}"
-            );
-            assert_eq!(row["receipt_confirmed"], false);
-            assert!(row["primary_output"].is_null());
-            assert_eq!(row["outputs"], serde_json::json!({}));
-            assert_eq!(rows["warnings"].as_array().unwrap().len(), 1);
+            let listed = rows(&runs, true, "current");
+            assert_eq!(listed["jobs"], serde_json::json!([]), "{damage}");
+            assert_eq!(listed["warnings"].as_array().unwrap().len(), 1, "{damage}");
         }
+        let file = std::fs::File::create(&receipt).unwrap();
+        file.set_len((64 << 20) + 1).unwrap();
+        let listed = rows(&runs, true, "current");
+        assert!(
+            listed["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|warning| warning.as_str().unwrap().contains("64 MiB"))
+        );
     }
 
     #[test]
     fn task_primary_result_uses_real_distance_primary_member_not_bootstrap_order() {
         use basecraft_protocol::operation::{ArtifactVisibility, OperationContract};
         let temp = tempfile::tempdir().unwrap();
-        let (jobs, receipt, mut outcome) = registered_fixture(temp.path(), "completed");
+        let (runs, receipt, mut outcome) = run_fixture(temp.path(), "completed");
         let root = receipt.parent().unwrap();
         let tree = root.join("artifacts/tree.nwk");
         let bootstrap = root.join("artifacts/bootstrap-run.partial.nex");
@@ -519,7 +517,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            job_records(&[&jobs], false, "current").unwrap()["jobs"][0]["primary_output"],
+            rows(&runs, false, "current")["jobs"][0]["primary_output"],
             tree.to_str().unwrap()
         );
         outcome["artifacts"][0]["path"] =
@@ -533,7 +531,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            job_records(&[&jobs], false, "current").unwrap()["jobs"][0]["primary_output"],
+            rows(&runs, false, "current")["jobs"][0]["primary_output"],
             tree.to_str().unwrap()
         );
         outcome["state"] = serde_json::json!("finalizing");
@@ -542,9 +540,7 @@ mod tests {
             basecraft_protocol::records::encode(&outcome).unwrap(),
         )
         .unwrap();
-        assert!(
-            job_records(&[&jobs], false, "current").unwrap()["jobs"][0]["primary_output"].is_null()
-        );
+        assert!(rows(&runs, false, "current")["jobs"][0]["primary_output"].is_null());
         outcome["state"] = serde_json::json!("completed");
         // A canonical visible export of that exact primary member wins.
         let export = temp.path().join("inferred.nwk");
@@ -570,7 +566,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            job_records(&[&jobs], false, "current").unwrap()["jobs"][0]["primary_output"],
+            rows(&runs, false, "current")["jobs"][0]["primary_output"],
             export.to_str().unwrap()
         );
         // Stale export digest cannot override the valid retained primary.
@@ -581,7 +577,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            job_records(&[&jobs], false, "current").unwrap()["jobs"][0]["primary_output"],
+            rows(&runs, false, "current")["jobs"][0]["primary_output"],
             tree.to_str().unwrap()
         );
         // Missing primary must not substitute the bootstrap collection.
@@ -591,9 +587,7 @@ mod tests {
             basecraft_protocol::records::encode(&outcome).unwrap(),
         )
         .unwrap();
-        assert!(
-            job_records(&[&jobs], false, "current").unwrap()["jobs"][0]["primary_output"].is_null()
-        );
+        assert!(rows(&runs, false, "current")["jobs"][0]["primary_output"].is_null());
         // A genuinely supporting-only descriptor never offers a primary.
         descriptor.outputs.get_mut("artifacts").unwrap().visibility =
             ArtifactVisibility::Supporting;
@@ -612,16 +606,15 @@ mod tests {
             basecraft_protocol::records::encode(&outcome).unwrap(),
         )
         .unwrap();
-        assert!(
-            job_records(&[&jobs], false, "current").unwrap()["jobs"][0]["primary_output"].is_null()
-        );
+        assert!(rows(&runs, false, "current")["jobs"][0]["primary_output"].is_null());
         descriptor.outputs.get_mut("artifacts").unwrap().visibility = ArtifactVisibility::Result;
         std::fs::write(
             &descriptor_path,
             basecraft_protocol::records::encode(&descriptor).unwrap(),
         )
         .unwrap();
-        let row = &job_records(&[&jobs], false, "current").unwrap()["jobs"][0];
+        let rows = rows(&runs, false, "current");
+        let row = &rows["jobs"][0];
         assert!(row["primary_output"].is_null());
         assert!(
             row["diagnostics"]
@@ -634,228 +627,20 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn task_nonregular_evidence_is_rejected_in_bounded_subprocess() {
-        use std::os::unix::fs::PermissionsExt;
-        const CHILD: &str = "BASECRAFT_TASK_FIFO_CHILD";
-        if let Some(root) = std::env::var_os(CHILD) {
-            let rows = job_records(
-                &[&Path::new(&root).join(".basecraft/jobs")],
-                false,
-                "current",
-            )
-            .unwrap();
-            let text = rows.to_string();
-            assert!(text.contains("not a regular file"), "{text}");
-            assert!(!text.contains("reading limit"), "{text}");
-            assert!(
-                rows["jobs"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .any(|row| row["id"] == "regular")
-            );
-            return;
-        }
-        for location in ["index", "runtime", "publication"] {
-            let temp = tempfile::tempdir().unwrap();
-            let (jobs, receipt, mut outcome) = registered_fixture(temp.path(), "completed");
-            let path = match location {
-                "index" => jobs.join("registered/manifest.json"),
-                "runtime" => receipt.clone(),
-                _ => {
-                    outcome["artifacts"] = serde_json::json!([{ "role":"artifacts","path":"/tree.nwk","digest":"hash"}]);
-                    std::fs::write(
-                        &receipt,
-                        basecraft_protocol::records::encode(&outcome).unwrap(),
-                    )
-                    .unwrap();
-                    receipt.parent().unwrap().join("manifest.json")
-                }
-            };
-            if path.exists() {
-                std::fs::remove_file(&path).unwrap();
-            }
-            assert!(
-                std::process::Command::new("mkfifo")
-                    .arg(&path)
-                    .status()
-                    .unwrap()
-                    .success()
-            );
-            std::fs::create_dir_all(jobs.join("regular")).unwrap();
-            std::fs::write(jobs.join("regular/manifest.json"), basecraft_protocol::records::encode(&serde_json::json!({"schema_version":1,"id":"regular","operation":"legacy","status":"completed","source":{"path":"input"},"outputs":{},"owner_instance":"current"})).unwrap()).unwrap();
-            let test = crate::isolated_profile::test_name();
-            let mut child = crate::isolated_profile::relaunch(&test)
-                .env(CHILD, temp.path())
-                .stdout(std::process::Stdio::piped())
-                .spawn()
-                .unwrap();
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-            loop {
-                if child.try_wait().unwrap().is_some() {
-                    let output = child.wait_with_output().unwrap();
-                    crate::isolated_profile::assert_one_passed(&test, &output);
-                    break;
-                }
-                if std::time::Instant::now() >= deadline {
-                    child.kill().unwrap();
-                    child.wait().unwrap();
-                    panic!("{location} FIFO hung the retained Tasks query");
-                }
-                std::thread::sleep(std::time::Duration::from_millis(20));
-            }
-        }
+    fn a_record_that_is_no_regular_file_is_refused_without_opening_it() {
         let temp = tempfile::tempdir().unwrap();
-        let regular = temp.path().join("regular.json");
-        let link = temp.path().join("regular-link.json");
-        std::fs::write(&regular, "{}").unwrap();
-        std::os::unix::fs::symlink(&regular, &link).unwrap();
-        assert_eq!(
-            crate::records::provenance::read_record(&link).unwrap(),
-            b"{}"
-        );
+        let (runs, receipt, _) = run_fixture(temp.path(), "completed");
+        let fifo = receipt.with_file_name("execution.json");
+        std::fs::remove_file(&fifo).unwrap();
+        let made = std::process::Command::new("mkfifo").arg(&fifo).status();
+        assert!(made.unwrap().success());
+        // Opening a FIFO would block; the budget looks before it opens.
         let mut budget = TaskReadBudget(1024);
+        assert!(budget.read(&fifo).is_err());
         assert!(budget.read(temp.path()).is_err());
         assert_eq!(budget.0, 1024);
-        let mut permissions = std::fs::metadata(&regular).unwrap().permissions();
-        permissions.set_mode(0o0);
-        std::fs::set_permissions(&regular, permissions).unwrap();
-        // Root may bypass permissions; normal validation runs as an unprivileged user.
-        if std::fs::File::open(&regular).is_err() {
-            assert!(budget.read(&regular).is_err());
-            assert_eq!(budget.0, 1024);
-        }
-    }
-
-    #[test]
-    fn registered_legacy_and_sanger_tasks_coexist_without_listing_writes() {
-        let temp = tempfile::tempdir().unwrap();
-        let (jobs, _, _) = registered_fixture(temp.path(), "partial");
-        for (id, primary) in [
-            ("legacy", serde_json::Value::Null),
-            ("sanger", serde_json::json!("called.fa")),
-        ] {
-            let directory = jobs.join(id);
-            std::fs::create_dir_all(&directory).unwrap();
-            let value = serde_json::json!({"schema_version":1,"id":id,"status":"completed","operation":id,
-                "source":{"path":"input"},"outputs":{},"primary_output":primary,"owner_instance":"current"});
-            std::fs::write(
-                directory.join("manifest.json"),
-                basecraft_protocol::records::encode(&value).unwrap(),
-            )
-            .unwrap();
-        }
-        let first = job_records(&[&jobs], false, "current").unwrap();
-        let second = job_records(&[&jobs], true, "current").unwrap();
-        assert_eq!(first, second);
-        let rows = first["jobs"].as_array().unwrap();
-        assert_eq!(rows.len(), 3);
-        assert_eq!(
-            rows.iter().filter(|row| row["id"] == "registered").count(),
-            1
-        );
-        assert_eq!(
-            rows.iter().find(|row| row["id"] == "sanger").unwrap()["primary_output"],
-            serde_json::json!(temp.path().join("called.fa"))
-        );
-        assert_eq!(std::fs::read_dir(&jobs).unwrap().count(), 3);
-        assert_eq!(job_records(&[&jobs], false, "current").unwrap(), first);
-    }
-
-    #[test]
-    fn task_read_budget_includes_receipts_and_caps_each_file() {
-        let temp = tempfile::tempdir().unwrap();
-        let (jobs, receipt, _) = registered_fixture(temp.path(), "completed");
-        let index = jobs.join("registered/manifest.json");
-        let size = std::fs::metadata(&index).unwrap().len();
-        let mut budget = TaskReadBudget(size + 1);
-        budget.read(&index).unwrap();
-        assert!(budget.read(&receipt).is_err());
-        assert_eq!(budget.0, 0);
-        let file = std::fs::File::create(&receipt).unwrap();
-        file.set_len((64 << 20) + 1).unwrap();
-        assert!(crate::records::provenance::read_record(&receipt).is_err());
-        let rows = job_records(&[&jobs], false, "current").unwrap();
-        assert_eq!(rows["jobs"][0]["receipt_confirmed"], false);
-        assert!(
-            rows["warnings"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|warning| warning.as_str().unwrap().contains("64 MiB"))
-        );
-    }
-
-    #[test]
-    fn a_moved_home_reads_its_own_receipt_and_absolute_pointers_are_refused() {
-        let temp = tempfile::tempdir().unwrap();
-        let (_, receipt, _) = registered_fixture(&temp.path().join("a"), "completed");
-        let moved = temp.path().join("b");
-        std::fs::rename(temp.path().join("a"), &moved).unwrap();
-        let jobs = moved.join(".basecraft/jobs");
-        let row = &job_records(&[&jobs], false, "current").unwrap()["jobs"][0];
-        assert_eq!(row["receipt_confirmed"], true, "{row}");
-        assert_eq!(
-            row["runtime_record"],
-            serde_json::json!(moved.join("run/runtime.json"))
-        );
-        assert_eq!(
-            row["source"]["path"],
-            serde_json::json!(moved.join("input.afa"))
-        );
-        let index = jobs.join("registered/manifest.json");
-        let mut value: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&index).unwrap()).unwrap();
-        value["runtime_record"] = serde_json::json!(receipt);
-        std::fs::write(&index, value.to_string()).unwrap();
-        let row = &job_records(&[&jobs], false, "current").unwrap()["jobs"][0];
-        assert_eq!(row["receipt_confirmed"], false, "{row}");
-        value["runtime_record"] = serde_json::json!("../a/run/runtime.json");
-        value["source"]["path"] = serde_json::json!(moved.join("input.afa"));
-        std::fs::write(&index, value.to_string()).unwrap();
-        let rows = job_records(&[&jobs], false, "current").unwrap();
-        assert_eq!(rows["jobs"], serde_json::json!([]), "{rows}");
-    }
-
-    #[test]
-    fn task_records_handle_missing_malformed_and_previous_owners() {
-        let dir = tempfile::tempdir().unwrap();
-        let jobs = dir.path().join(".basecraft/jobs");
-        assert_eq!(
-            job_records(&[&jobs], false, "current").unwrap()["jobs"],
-            serde_json::json!([])
-        );
-        assert!(!jobs.exists());
-        for (id, value) in [
-            ("broken", serde_json::json!([])),
-            (
-                "current",
-                serde_json::json!({"schema_version":1,"id":"current","status":"running","operation":"align","source":{"path":"a.fasta"},"outputs":{},"owner_instance":"current"}),
-            ),
-            (
-                "previous",
-                serde_json::json!({"schema_version":1,"id":"previous","status":"running","operation":"align","source":{"path":"a.fasta"},"outputs":{},"owner_instance":"previous"}),
-            ),
-        ] {
-            std::fs::create_dir_all(jobs.join(id)).unwrap();
-            // A list can't carry the stamp: it is a broken record either way.
-            let bytes = basecraft_protocol::records::encode(&value)
-                .unwrap_or_else(|_| value.to_string().into_bytes());
-            std::fs::write(jobs.join(id).join("manifest.json"), bytes).unwrap();
-        }
-        let current = job_records(&[&jobs], false, "current").unwrap();
-        assert_eq!(current["jobs"].as_array().unwrap().len(), 1);
-        assert_eq!(current["jobs"][0]["status"], "running");
-        assert_eq!(current["warnings"].as_array().unwrap().len(), 1);
-        let all = job_records(&[&jobs], true, "current").unwrap();
-        assert_eq!(all["jobs"].as_array().unwrap().len(), 2);
-        assert!(
-            all["jobs"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|j| j["id"] == "previous"
-                    && j["status"] == "Previous owner; completion unconfirmed")
-        );
+        // Without its run record a run counts as another process's.
+        assert_eq!(rows(&runs, false, "current")["jobs"], serde_json::json!([]));
+        assert_eq!(rows(&runs, true, "current")["jobs"][0]["id"], "registered");
     }
 }

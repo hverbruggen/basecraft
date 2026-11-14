@@ -62,7 +62,7 @@ impl Session {
             (_, Some(opened)) => opened.doc.stated_alphabet().cloned(),
             _ => return Ok(()),
         };
-        let path = self.companion_path(&self.resolve(&main));
+        let path = crate::files::companion_path(self.companion_project(), &self.resolve(&main));
         let key = self.relative(&path);
         let known = slot.source_stamps.iter().find(|(p, _)| p == &path);
         let now = crate::records::input_evidence::stamp(&path).ok();

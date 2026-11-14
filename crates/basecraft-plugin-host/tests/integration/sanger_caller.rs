@@ -38,7 +38,7 @@ plugin.run()
 "#;
 
 /// A caller that hangs is cancelled after 60 s and fails the test.
-fn called(caller: &mut SangerCaller) -> Result<CalledDraft, String> {
+fn called(caller: &mut SangerCaller) -> basecraft_plugin_host::Result<CalledDraft> {
     let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let watchdog = cancel.clone();
     std::thread::spawn(move || {
@@ -153,9 +153,10 @@ fn the_caller_service_returns_checks_reuses_and_refuses_drafts() {
     let mut future = receipt.clone();
     future.schema = 99;
     assert!(verify_completed_result(&future, &query).is_err());
-    let fake = basecraft_ops::records::ArtifactRun::create(&source, "0000-future").unwrap();
+    let fake = basecraft_ops::records::ArtifactRun::create(None, &source, "0000-future").unwrap();
     basecraft_ops::records::write_json(&fake.artifact("runtime.json").unwrap(), &future).unwrap();
-    let corrupt = basecraft_ops::records::ArtifactRun::create(&source, "0001-corrupt").unwrap();
+    let corrupt =
+        basecraft_ops::records::ArtifactRun::create(None, &source, "0001-corrupt").unwrap();
     std::fs::write(
         corrupt.artifact("runtime.json").unwrap(),
         b"corrupt receipt",
@@ -181,12 +182,13 @@ fn the_caller_service_returns_checks_reuses_and_refuses_drafts() {
         .unwrap() = u32::MAX;
     record(&misplaced);
     assert!(caller.start(&source, &sha256, 17).unwrap().is_none());
-    assert!(
-        called(&mut caller)
-            .err()
-            .unwrap()
-            .contains("do not fit the original trace")
-    );
+    assert!(matches!(
+        called(&mut caller),
+        Err(basecraft_plugin_host::Error::Refused {
+            code: basecraft_protocol::operation::OperationErrorCode::PluginProtocolViolation,
+            ..
+        })
+    ));
     record(&recorded);
 
     // A cancelled run is detached; a source replaced mid-run gives no draft,

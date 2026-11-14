@@ -86,8 +86,8 @@ that references the same file still guards it. Records without the field
 behave as before.
 
 Evidence states are `referenced`, `generated`, `preserved` and `broken`.
-Before replacement, the shared Session save guard inspects known stores and
-ancestor-folder stores, using metadata only. It lists direct and declared downstream
+Before replacement, the shared Session save guard inspects the stores the
+analysis index lists for the file, using metadata only. It lists direct and declared downstream
 analyses. Cancel performs no replacement. Preserve-copy verifies/copies the actual
 old source into affected direct runs before any replacement and publishes evidence
 state before save. Candidate bytes are verified in a temporary file before
@@ -189,8 +189,8 @@ companions use their current formats; there are no older-format migration paths.
 
 Bindings select the hidden run for a primary/component basename. The run retains
 `execution.json`, a compact `run.json`, optional publication/reports and declared
-artifacts. Job records in `.basecraft/jobs` point to the artifact run rather than
-retaining duplicate clean inputs. Optional provenance None/LocalOnly remains
+artifacts. A run's `runtime.json` is its job record (D28); clean inputs are
+referenced, not copied. Optional provenance None/LocalOnly remains
 separate from the minimum analysis/evidence record needed for these protections.
 Complete export is explicit: it materializes the dependency closure in a new
 package and provides a standard tree/alignment association when applicable.

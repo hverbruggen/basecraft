@@ -466,7 +466,7 @@ fn incomplete_inspection_keeps_descendants_ownership_and_backing() {
         let mut input = records::read_input(ledger.directory()).unwrap();
         input.analysis_run =
             Some(records::relative(ledger.directory(), child.directory()).unwrap());
-        records::write_json(&ledger.artifact("input.json").unwrap(), &input).unwrap();
+        records::write_input(ledger.directory(), &input).unwrap();
         // Damage in this very store must not discard any successfully read
         // ledger, known descendant, logical owner or backing decision.
         let damaged = reference(&anchor, &unrelated);

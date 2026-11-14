@@ -1,4 +1,5 @@
 //! Tree payload behavior; Session retains identity, links, history and publication.
+use crate::error::unsupported;
 use std::path::{Path, PathBuf};
 
 use basecraft_docs::FeatureId;
@@ -61,7 +62,7 @@ impl Document for OpenedTree {
 
     fn revert(&mut self, inverse: &Inverse) -> Result<()> {
         let Inverse::Tree(before) = inverse else {
-            return Err(Error::Unsupported("undo of the wrong kind of edit".into()));
+            return Err(unsupported("undo of the wrong kind of edit"));
         };
         self.doc.undo_edit(before);
         Ok(())
@@ -75,9 +76,7 @@ impl Document for OpenedTree {
         format: Format,
     ) -> Result<Option<crate::records::links::PreparedLinks>> {
         if format != Format::Tree {
-            return Err(Error::Unsupported(
-                "a tree can only be saved as a tree file".into(),
-            ));
+            return Err(unsupported("a tree can only be saved as a tree file"));
         }
         if crate::records::links::document_entry(original)?
             == crate::records::links::document_entry(target)?
@@ -105,9 +104,7 @@ impl Document for OpenedTree {
         _publication: &super::WritePublication,
     ) -> Result<super::PreparedWrite> {
         if format != Format::Tree {
-            return Err(Error::Unsupported(
-                "a tree can only be saved as a tree file".into(),
-            ));
+            return Err(unsupported("a tree can only be saved as a tree file"));
         }
         let mut prepared = super::PreparedWrite::default();
         let sidecar = files::companion_path(project, target);
@@ -122,12 +119,17 @@ impl Document for OpenedTree {
 
     fn finish_write(
         &self,
+        project: Option<&crate::project::Project>,
         target: &Path,
-        _: &[(PathBuf, String)],
+        written: &[(PathBuf, String)],
         _: Option<&crate::records::analysis_store::ArtifactRun>,
         _: &super::WritePublication,
     ) -> Result<()> {
-        crate::records::analysis_store::ArtifactRun::refresh_binding(target)
+        let hash = match written.iter().find(|(path, _)| path == target) {
+            Some((_, hash)) => hash.clone(),
+            None => basecraft_io::hash_file(target)?,
+        };
+        crate::records::analysis_store::ArtifactRun::refresh_binding(project, target, &hash)
     }
 
     fn saved_hashes(

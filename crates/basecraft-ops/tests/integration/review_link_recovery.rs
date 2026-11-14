@@ -103,7 +103,7 @@ fn guarded_partial_save_supports_retry_and_manual_intended_recovery() {
             } else {
                 let link = AlignmentLink::read_view(&output).unwrap();
                 assert_eq!(link.source, if mode == 2 { view } else { source });
-                let retained = link.checked_alignment(&output, &reopened).unwrap();
+                let retained = link.checked_alignment(None, &output, &reopened).unwrap();
                 let expected = if mode == 2 { "CC" } else { "AA" };
                 assert_eq!(
                     std::fs::read_to_string(retained).unwrap(),

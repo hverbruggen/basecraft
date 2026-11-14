@@ -14,16 +14,17 @@ pub(crate) mod publish;
 pub(crate) mod replay;
 pub(crate) mod save_guard;
 
-pub use analysis_store::{ArtifactDestination, ArtifactRun};
+pub use analysis_store::ArtifactRun;
 pub use document_record::{DocumentRecord, MethodsParagraph, Report, ReportExt};
 pub use input_evidence::{
     AffectedAnalysis, BackgroundWait, EvidenceConflict, InspectionCode, InspectionIssue,
     InspectionRelevance, Mutation, SavePolicy, SubmittedInput, check, check_in, conflicts,
     conflicts_in, link_generated_input, lock, preserve_input, read_input,
     reference_input_with_dependencies, register, reindex, relative, relink, resolve, stamp,
-    verified_source, verify_ancestors, wait_in_background, write_json, write_plain_json,
+    verified_source, verify_ancestors, wait_in_background, write_input, write_json,
+    write_plain_json,
 };
-pub use jobs::{job_index_path, jobs};
+pub use jobs::jobs;
 pub use links::{
     AlignmentLink, AlignmentLinkExt, metadata_present, sidecar, sidecar_in, view_sidecar,
     view_sidecar_in,

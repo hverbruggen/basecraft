@@ -1,0 +1,190 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ValidatedResult",
+  "description": "A run folder's `validated.json`: the plugin's result as the host accepted\nit, and each file validation accepted, as (output role, path, hash). A\nrepair publishes from it.",
+  "type": "object",
+  "properties": {
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "maxItems": 3,
+        "minItems": 3,
+        "prefixItems": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "string"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "basecraft": {
+      "description": "The basecraft version that wrote this file.",
+      "type": "string"
+    },
+    "result": {
+      "$ref": "#/$defs/InvokeResult"
+    }
+  },
+  "required": [
+    "result",
+    "artifacts",
+    "basecraft"
+  ],
+  "$defs": {
+    "ExecutionInfo": {
+      "type": "object",
+      "properties": {
+        "argv": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "environment": {
+          "description": "Only scientific environment settings, never the whole process environment.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "methods": {
+          "description": "Frozen scientific description and citations supplied by the plugin.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MethodsInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "methods_template": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "preprocessing": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "resolved_parameters": {
+          "type": "object",
+          "additionalProperties": true,
+          "default": {}
+        }
+      },
+      "required": [
+        "argv"
+      ]
+    },
+    "InvokeResult": {
+      "description": "`invoke` result: proposed operations against the snapshot's version,\nand for operations that write files, what they wrote and with which tool.",
+      "type": "object",
+      "properties": {
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PluginArtifact"
+          }
+        },
+        "data": true,
+        "execution": {
+          "description": "Actual process evidence supplied by newer plugins; absence stays unknown.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExecutionInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ops": {
+          "description": "Journal operations; their shape is defined once, in journal-entry.schema.json.",
+          "type": "array",
+          "default": [],
+          "items": true
+        },
+        "tool": {
+          "description": "The external program that did the work.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "MethodsInfo": {
+      "type": "object",
+      "properties": {
+        "citations": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "description": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "description"
+      ]
+    },
+    "PluginArtifact": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "Relative to the allocated output for this role, never a destination.",
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "path"
+      ]
+    },
+    "ToolInfo": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ]
+    }
+  }
+}

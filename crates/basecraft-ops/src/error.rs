@@ -57,8 +57,34 @@ pub enum Error {
         basecraft_protocol::VERSION
     )]
     NewerFieldsDropped(Vec<(PathBuf, basecraft_protocol::records::UnknownFields)>),
+    /// Bad input that fits no other kind.
     #[error("invalid operation: {0}")]
     Invalid(String),
+    /// A choice the request needs and has no default for: what to choose.
+    #[error("{0}")]
+    MissingChoice(String),
+    /// The destination already holds something basecraft will not replace.
+    #[error("{0}")]
+    OutputConflict(String),
+    /// An earlier step has to happen first (save, export, review, relink).
+    #[error("{0}")]
+    NotReady(String),
+    /// What the request was prepared from has changed; prepare it again.
+    #[error("{0}")]
+    Outdated(String),
+    /// The person cancelled the work; what it would have replaced is kept.
+    #[error("{0}")]
+    Cancelled(String),
+    /// The submission package was written, but the document recording the
+    /// export could not be saved.
+    #[error(
+        "package written but export identities were not saved: {0}; keep this document open and retry saving before importing accessions"
+    )]
+    PackageNotRecorded(Box<Error>),
+    #[error(transparent)]
+    Preferences(#[from] basecraft_platform::settings::Error),
+    #[error(transparent)]
+    AppPaths(#[from] basecraft_platform::paths::PathError),
     #[error("{0}")]
     EvidenceConflict(Box<crate::records::input_evidence::EvidenceConflict>),
     #[error("evidence_check_incomplete: could not check all analysis evidence")]
@@ -91,6 +117,9 @@ pub enum Error {
     Addition(#[from] crate::alignment_add::AdditionError),
     #[error(transparent)]
     DisplayTree(#[from] crate::delimitation::DisplayTreeError),
+    /// Why a row or tip rename can't go ahead.
+    #[error(transparent)]
+    Rename(#[from] crate::renames::RenameRefusal),
     #[error("This project has no specimen metadata")]
     NoMetadata,
     /// The work named needs a chosen project and there is none.
@@ -122,29 +151,57 @@ pub(crate) fn invalid(msg: impl Into<String>) -> Error {
     Error::Invalid(msg.into())
 }
 
+pub(crate) fn damaged(path: impl Into<PathBuf>, detail: impl Into<String>) -> Error {
+    Error::Damaged {
+        path: path.into(),
+        detail: detail.into(),
+    }
+}
+
+pub(crate) fn unsupported(msg: impl Into<String>) -> Error {
+    Error::Unsupported(msg.into())
+}
+
+pub(crate) fn limit(what: impl Into<String>, limit: u64) -> Error {
+    Error::Limit {
+        what: what.into(),
+        limit,
+    }
+}
+
+pub(crate) fn changed_on_disk(path: impl Into<PathBuf>) -> Error {
+    Error::ChangedOnDisk { path: path.into() }
+}
+
 impl Error {
     /// The single mapping shared by CLI, MCP, and registered operation jobs.
     pub fn operation_code(&self) -> basecraft_protocol::operation::OperationErrorCode {
+        use basecraft_platform::settings::Error as Preferences;
         use basecraft_protocol::operation::OperationErrorCode as Code;
         match self {
-            Self::StaleRevision { .. } => Code::StaleRevision,
+            Self::StaleRevision { .. } | Self::Outdated(_) => Code::StaleRevision,
             Self::ChangedOnDisk { .. } | Self::AlignmentChanged { .. } => Code::ChangedOnDisk,
             Self::NotFound { .. } | Self::FolderUnavailable { .. } | Self::NoMetadata => {
                 Code::NotFound
             }
-            Self::Damaged { .. } => Code::Damaged,
-            Self::Limit { .. } => Code::Limit,
-            Self::Unsupported(_) => Code::Unsupported,
+            Self::Damaged { .. } | Self::Preferences(Preferences::Invalid(_)) => Code::Damaged,
+            Self::Busy(_) | Self::Preferences(Preferences::Busy) => Code::Busy,
+            Self::Unsupported(_) | Self::AppPaths(_) => Code::Unsupported,
+            Self::OutputConflict(_)
+            | Self::Access(crate::access::AccessError::DestinationExists) => Code::OutputConflict,
+            Self::Limit { .. } | Self::Format(basecraft_io::Error::TooLarge(_)) => Code::Limit,
+            Self::NotReady(_) => Code::NotReady,
+            Self::Cancelled(_) => Code::Cancelled,
+            Self::PackageNotRecorded(_) => Code::PublicationIncomplete,
             Self::RecordNamesRepeat(_) => Code::RecordNamesRepeat,
             Self::NewerFieldsDropped(_) => Code::NewerFieldsDropped,
-            Self::Busy(_) => Code::Busy,
             Self::UnknownDocument { .. } => Code::UnknownDocument,
             Self::WrongKind { .. } => Code::WrongDocumentKind,
             Self::Access(crate::access::AccessError::Denied(_)) => Code::PermissionDenied,
-            Self::Access(crate::access::AccessError::DestinationExists) => Code::OutputConflict,
             Self::Access(crate::access::AccessError::Io(e))
             | Self::Io(e)
-            | Self::Format(basecraft_io::Error::Io(e)) => {
+            | Self::Format(basecraft_io::Error::Io(e))
+            | Self::Preferences(Preferences::Io(e)) => {
                 if e.kind() == std::io::ErrorKind::PermissionDenied {
                     Code::PermissionDenied
                 } else {
@@ -162,7 +219,8 @@ impl Error {
                 | crate::delimitation::DisplayTreeError::NotOneTree { .. },
             )
             | Self::NotALabelField(_) => Code::InvalidArguments,
-            Self::NoProject(_)
+            Self::MissingChoice(_)
+            | Self::NoProject(_)
             | Self::DisplayTree(crate::delimitation::DisplayTreeError::NoneAttached) => {
                 Code::MissingChoice
             }
@@ -176,6 +234,21 @@ impl Error {
             Self::PublishedWithFailure(_) => Code::PublishedWithFailure,
             Self::NothingTo(_) => Code::NothingToDo,
             Self::ReadOnlyFolder { .. } => Code::ReadOnlyFolder,
+            Self::Rename(refusal) => {
+                use crate::renames::RenameRefusal as Refusal;
+                match refusal {
+                    Refusal::NotFound { .. } => Code::NotFound,
+                    Refusal::NameTaken { .. } | Refusal::SubmissionRowTaken { .. } => {
+                        Code::OutputConflict
+                    }
+                    Refusal::Ambiguous { .. } => Code::RecordNamesRepeat,
+                    Refusal::MetadataNotOpen { .. } | Refusal::SubmissionNotOpen { .. } => {
+                        Code::NotReady
+                    }
+                    Refusal::UsedByWorkspace { .. } => Code::Unsupported,
+                    Refusal::Unreadable { .. } => Code::Damaged,
+                }
+            }
         }
     }
 

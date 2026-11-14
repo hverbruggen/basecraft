@@ -95,7 +95,7 @@ fn builds_a_tree_with_fasttree_and_logs_the_run() {
     let link = basecraft_ops::records::AlignmentLink::read(&output).unwrap();
     assert!(link.inferred);
     assert_eq!(link.source, file);
-    assert!(link.checked_alignment(&output, t).is_ok());
+    assert!(link.checked_alignment(None, &output, t).is_ok());
 
     let runs = common::tool_run_events(&session, doc);
     assert_eq!(runs.len(), 1);
@@ -140,7 +140,7 @@ fn a_mixed_alignment_is_refused_before_launch() {
     .unwrap();
     let mut session = Session::new(root);
     let doc = session.open(&file).unwrap();
-    let error = common::refused_in(&common::bundled(), &mut session, |s| {
+    let (_, error) = common::refused_in(&common::bundled(), &mut session, |s| {
         json!({"operation":"basecraft.fasttree/tree@1","inputs":{"alignment":common::document(s, doc)},
             "parameters":{},"destinations":{"artifacts/tree.nwk":"mixed.fasttree.nwk"}})
     });

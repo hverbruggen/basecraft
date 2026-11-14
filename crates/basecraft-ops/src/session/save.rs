@@ -2,6 +2,7 @@
 use super::SaveCheck;
 use super::{DerivedTarget, DocId, Error, Op, OpResult, Path, Result, files, invalid};
 use super::{SaveDecision, SaveOutcome, Session};
+use crate::error::{changed_on_disk, damaged};
 
 use super::SaveWarning;
 use crate::records::input_evidence::SavePolicy;
@@ -152,7 +153,7 @@ impl Session {
         );
 
         // 1. Find and reserve the analyses that may use the target.
-        let written = Self::written_stores(&target.path)?;
+        let written = self.written_stores(id, &target.path)?;
         let mut evidence_lock = crate::records::input_evidence::lock_save(
             &target.path,
             &written,
@@ -451,7 +452,7 @@ impl Session {
         }
         for (source, stamp) in stamps {
             if crate::records::save_guard::change_stamp(&source)? != stamp {
-                return Err(Error::ChangedOnDisk { path: source });
+                return Err(changed_on_disk(source));
             }
         }
         self.check_absent_target(id, target)?;
@@ -544,13 +545,13 @@ impl Session {
             self.docs[id.0].saved_target = Some((target.to_path_buf(), stamp, expected[0].clone()));
         }
         if main_written && now.as_ref() != before {
-            return Err(Error::Damaged {
-                path: target.into(),
-                detail: format!(
+            return Err(damaged(
+                target,
+                format!(
                     "data saved; provenance or sidecar incomplete: {error}. Recovery remains at {}",
                     self.storage_root.display()
                 ),
-            });
+            ));
         }
         Err(error)
     }
@@ -597,9 +598,7 @@ impl Session {
     ) -> Result<()> {
         for key in &self.docs[id.0].absent_sidecars {
             if self.resolve(key).exists() {
-                return Err(Error::ChangedOnDisk {
-                    path: self.resolve(key),
-                });
+                return Err(changed_on_disk(self.resolve(key)));
             }
         }
         for (key, hash) in &self.docs[id.0].accepted_hashes {
@@ -608,7 +607,7 @@ impl Session {
                 checked.filter(|(path, _)| crate::records::save_guard::same_target(path, &source))
             {
                 if actual != hash {
-                    return Err(Error::ChangedOnDisk { path: source });
+                    return Err(changed_on_disk(source));
                 }
             } else {
                 crate::records::save_guard::check_hash(&source, hash)?;
@@ -641,18 +640,32 @@ impl Session {
         };
         #[cfg(test)]
         super::save_failure_tests::fail_write(super::save_failure_tests::WriteStep::Replace)?;
-        let write = || document.publish_write(prepared, target, publication);
+        let project = self.companion_project();
+        let new_run = prepared
+            .run
+            .as_ref()
+            .map(|run| run.directory().to_path_buf());
+        let write = || document.publish_write(project, prepared, target, publication);
         let (hashes, outputs) = if let Some(links) = links {
             links.publish(write)?
         } else {
             (write()?, Vec::new())
         };
+        if new_run.is_some() && original == target {
+            // The save bound the document's own file to a new run, in every
+            // slot that has it open.
+            let key = self.docs[id.0].key.clone();
+            for slot in self.docs.iter_mut().filter(|slot| slot.key == key) {
+                slot.run.clone_from(&new_run);
+            }
+        }
         let hashes = hashes
             .into_iter()
             .map(|(path, hash)| (self.relative(&path), hash))
             .collect();
         self.log_save(id, target, hashes)?;
         if !outputs.is_empty() {
+            let outputs = crate::session::ToolRunRecord::hashed(outputs)?;
             self.record_tool_run(
                 id,
                 self.actor.clone(),
@@ -732,13 +745,13 @@ impl Session {
             self.recorded_save(id, target, &entry, effective);
         }
         if let Some(error) = history_error {
-            return Err(Error::Damaged {
-                path: target.into(),
-                detail: format!(
+            return Err(damaged(
+                target,
+                format!(
                     "data saved; history incomplete: {error}. Recovery remains at {}",
                     self.storage_root.display()
                 ),
-            });
+            ));
         }
         Ok(())
     }
@@ -855,20 +868,18 @@ impl Session {
         }
     }
 
-    /// Stores this save may write after the data: the store of a bound result
-    /// (binding, history) and the target folder's store (new hidden runs).
-    /// They are reserved exclusively up front, never upgraded later.
-    fn written_stores(target: &Path) -> Result<Vec<std::path::PathBuf>> {
-        let mut stores: Vec<_> = crate::records::analysis_store::ArtifactRun::for_result(target)?
-            .and_then(|run| run.parent().and_then(Path::parent).map(Path::to_path_buf))
-            .into_iter()
-            .collect();
-        if let Some(folder) = target.parent() {
-            let store = folder.join(".basecraft/analyses-v1");
-            if store.is_dir() {
-                stores.push(store);
-            }
-        }
+    /// The stores this save may write after the data: the one that holds the
+    /// target's binding and any run the save makes, in the project or beside
+    /// a loose file (rule 2.5), and that of the run the document's file is
+    /// bound to, which takes its history. Reserved exclusively up front,
+    /// never upgraded later.
+    fn written_stores(&self, id: DocId, target: &Path) -> Result<Vec<std::path::PathBuf>> {
+        let base = crate::project::Project::base_of(self.companion_project(), target)?;
+        let mut stores = vec![base.join(".basecraft/analyses-v1")];
+        let run = self.docs[id.0].run.as_deref();
+        stores.extend(run.and_then(|run| Some(run.parent()?.parent()?.to_path_buf())));
+        stores.dedup();
+        stores.retain(|store| store.is_dir());
         Ok(stores)
     }
 
@@ -895,9 +906,7 @@ impl Session {
         if let Some(expected) = expected
             && crate::records::input_evidence::stamp(target)? != *expected
         {
-            return Err(Error::ChangedOnDisk {
-                path: target.into(),
-            });
+            return Err(changed_on_disk(target));
         }
         Ok(())
     }

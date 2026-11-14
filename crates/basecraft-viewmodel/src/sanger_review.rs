@@ -2068,7 +2068,7 @@ mod tests {
         let Ok(path) = std::env::var("BASECRAFT_SANGER_EVIDENCE") else {
             return;
         };
-        let mut draft = SangerDraft::read(std::path::Path::new(&path)).unwrap();
+        let mut draft: SangerDraft = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
         if std::env::var("BASECRAFT_SANGER_REVERSE").as_deref() == Ok("1") {
             draft = draft.reverse_complemented();
         }
@@ -2082,8 +2082,8 @@ mod tests {
             assert!(lane.column_events.iter().flatten().count() > 500);
         }
         let source = std::env::var("BASECRAFT_SANGER_REFERENCE").unwrap();
-        let placement = <SangerPlacement as basecraft_docs::sanger::SangerPlacementExt>::read(
-            std::path::Path::new(&std::env::var("BASECRAFT_SANGER_PLACEMENT").unwrap()),
+        let placement: SangerPlacement = serde_json::from_slice(
+            &std::fs::read(std::env::var("BASECRAFT_SANGER_PLACEMENT").unwrap()).unwrap(),
         )
         .unwrap();
         let indexed = Arc::new(

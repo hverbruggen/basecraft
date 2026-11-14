@@ -1,5 +1,7 @@
 //! Read-only discovery and atomic managed-package selection. No install hooks.
 
+use crate::error::protocol;
+use basecraft_protocol::operation::OperationErrorCode as Code;
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -32,7 +34,7 @@ pub struct RegistryConfig {
 
 impl RegistryConfig {
     pub fn discover() -> Result<Self> {
-        let paths = AppPaths::discover().map_err(|e| Error::Protocol(e.to_string()))?;
+        let paths = AppPaths::discover().map_err(basecraft_ops::Error::from)?;
         let bundled = crate::installation::plugins();
         Ok(Self {
             bundled,
@@ -55,8 +57,9 @@ pub struct Package {
 impl Package {
     pub fn verify(&self) -> Result<()> {
         if package_digest(&self.manifest.dir)? != self.digest {
-            return Err(Error::Protocol(
-                "plugin_changed: package contents changed; refresh registry".into(),
+            return Err(Error::refused(
+                Code::PluginChanged,
+                "package contents changed; refresh registry",
             ));
         }
         if let Some(runtime) = &self.manifest.managed_runtime {
@@ -113,11 +116,11 @@ fn load_index(config: &RegistryConfig) -> Result<InstallationIndex> {
     file.take((MAX_DESCRIPTOR_BYTES + 1) as u64)
         .read_to_end(&mut bytes)?;
     if bytes.len() > MAX_DESCRIPTOR_BYTES {
-        return Err(Error::Protocol("plugin index exceeds size limit".into()));
+        return Err(protocol("plugin index exceeds size limit"));
     }
     let index: InstallationIndex = basecraft_protocol::records::decode(&bytes)?;
     if index.schema != 1 {
-        return Err(Error::Protocol("unsupported plugin index version".into()));
+        return Err(protocol("unsupported plugin index version"));
     }
     Ok(index)
 }
@@ -212,14 +215,12 @@ impl Registry {
                 let mut manifest = Manifest::load(&path)?;
                 contract::validate_plugin_id(&manifest.id)?;
                 if origin != Origin::Bundled && manifest.id.starts_with("basecraft.") {
-                    return Err(Error::Protocol(
-                        "basecraft.* identities are reserved for bundled packages".into(),
+                    return Err(protocol(
+                        "basecraft.* identities are reserved for bundled packages",
                     ));
                 }
                 if expected_id.as_ref().is_some_and(|id| id != &manifest.id) {
-                    return Err(Error::Protocol(
-                        "installed package identity mismatch".into(),
-                    ));
+                    return Err(protocol("installed package identity mismatch"));
                 }
                 let descriptors = manifest.operation_contract()?.operations;
                 let digest = package_digest(&path)?;
@@ -233,7 +234,7 @@ impl Registry {
                     };
                     let runtime = directory.and_then(|d| index.runtimes.get(d)).filter(|r| {
                         matches!(origin, Origin::Managed | Origin::Bundled) && r.package_digest == digest
-                    }).ok_or_else(|| Error::Protocol("managed plugin runtime unavailable; install or reinstall this package to provision dependencies".into()))?;
+                    }).ok_or_else(|| protocol("managed plugin runtime unavailable; install or reinstall this package to provision dependencies"))?;
                     runtime.verify()?;
                     manifest.managed_runtime = Some(runtime.clone());
                     Some(runtime.interpreter.clone())
@@ -314,19 +315,21 @@ impl Registry {
 
     pub fn resolve(&self, id: &str, pins: Option<&OperationPins>) -> Result<&RegisteredOperation> {
         let operation = self.operations.get(id).ok_or_else(|| {
-            Error::Protocol(format!("plugin_unavailable: unknown operation {id}"))
+            Error::refused(Code::PluginUnavailable, format!("unknown operation {id}"))
         })?;
         if !operation.package.enabled {
-            return Err(Error::Protocol("plugin_disabled".into()));
+            return Err(Error::refused(Code::PluginDisabled, ""));
         }
         if pins.is_some_and(|p| p != &operation.pins(&self.generation)) {
-            return Err(Error::Protocol(
-                "plugin_changed: stale registry pins; discover again".into(),
+            return Err(Error::refused(
+                Code::PluginChanged,
+                "stale registry pins; discover again",
             ));
         }
         if operation.package.interpreter.is_none() {
-            return Err(Error::Protocol(
-                "plugin_unavailable: configure BASECRAFT_PYTHON or install python3".into(),
+            return Err(Error::refused(
+                Code::PluginUnavailable,
+                "configure BASECRAFT_PYTHON or install python3",
             ));
         }
         operation.package.verify()?;
@@ -345,42 +348,46 @@ pub fn package_digest(root: &Path) -> Result<String> {
             .map_err(|e| Error::Protocol(e.to_string()))?;
         let name = relative
             .to_str()
-            .ok_or_else(|| Error::Protocol("package paths must be UTF-8".into()))?;
+            .ok_or_else(|| protocol("package paths must be UTF-8"))?;
         hashes.push((name.to_owned(), basecraft_io::hash_file(&path)?));
     }
     Ok(basecraft_io::hash_bytes(&serde_json::to_vec(&hashes)?))
 }
 
+/// The files that make up a package. Python's bytecode caches are not part of
+/// it: running the plugin's Python must not change the package's digest.
 fn package_files(root: &Path) -> Result<Vec<PathBuf>> {
     fn visit(dir: &Path, files: &mut Vec<PathBuf>, bytes: &mut u64, depth: usize) -> Result<()> {
         if depth > 32 {
-            return Err(Error::Protocol(
-                "package directory depth limit exceeded".into(),
-            ));
+            return Err(protocol("package directory depth limit exceeded"));
         }
         for entry in std::fs::read_dir(dir)? {
             let entry = entry?;
-            let metadata = entry.path().symlink_metadata()?;
+            let path = entry.path();
+            if path.file_name() == Some("__pycache__".as_ref())
+                || path.extension() == Some("pyc".as_ref())
+            {
+                continue;
+            }
+            let metadata = path.symlink_metadata()?;
             if metadata.is_dir() {
                 visit(&entry.path(), files, bytes, depth + 1)?;
             } else if metadata.is_file() {
                 *bytes = bytes.saturating_add(metadata.len());
                 files.push(entry.path());
                 if files.len() > MAX_PACKAGE_FILES || *bytes > MAX_PACKAGE_BYTES {
-                    return Err(Error::Protocol("package file/byte limit exceeded".into()));
+                    return Err(protocol("package file/byte limit exceeded"));
                 }
             } else {
-                return Err(Error::Protocol(
-                    "plugin package contains a symbolic link or special file".into(),
+                return Err(protocol(
+                    "plugin package contains a symbolic link or special file",
                 ));
             }
         }
         Ok(())
     }
     if root.symlink_metadata()?.file_type().is_symlink() {
-        return Err(Error::Protocol(
-            "plugin package root cannot be a symbolic link".into(),
-        ));
+        return Err(protocol("plugin package root cannot be a symbolic link"));
     }
     let mut files = Vec::new();
     visit(root, &mut files, &mut 0, 0)?;
@@ -395,7 +402,7 @@ fn write_index(
     let parent = config
         .index
         .parent()
-        .ok_or_else(|| Error::Protocol("index needs parent directory".into()))?;
+        .ok_or_else(|| protocol("index needs parent directory"))?;
     std::fs::create_dir_all(parent)?;
     let lock = config.index.with_extension("lock");
     let index_lock = std::fs::OpenOptions::new()
@@ -404,20 +411,18 @@ fn write_index(
         .truncate(false)
         .open(&lock)
         .map_err(|e| {
-            Error::Protocol(format!(
+            protocol(format!(
                 "cannot lock plugin index (another install may be active): {e}"
             ))
         })?;
     if !index_lock.try_lock_exclusive()? {
-        return Err(Error::Protocol(
-            "plugin index is locked by another installation".into(),
-        ));
+        return Err(protocol("plugin index is locked by another installation"));
     }
     let mut index = load_index(config)?;
     change(&mut index)?;
     let bytes = basecraft_protocol::records::encode(&index)?;
     if bytes.len() > MAX_DESCRIPTOR_BYTES {
-        return Err(Error::Protocol("plugin index exceeds size limit".into()));
+        return Err(protocol("plugin index exceeds size limit"));
     }
     basecraft_io::write_atomic(&config.index, |out| std::io::Write::write_all(out, &bytes))?;
     Ok(())
@@ -443,27 +448,23 @@ pub fn provision_bundled_with_pixi(config: &RegistryConfig, id: &str, pixi: &Pat
         .filter(|manifest| manifest.id == id)
         .collect::<Vec<_>>();
     if source.len() != 1 {
-        return Err(Error::Protocol(
-            "expected one bundled package with this identity".into(),
-        ));
+        return Err(protocol("expected one bundled package with this identity"));
     }
     let manifest = &source[0];
     let spec = manifest
         .runtime
         .as_ref()
-        .ok_or_else(|| Error::Protocol("bundled package has no declared runtime".into()))?;
+        .ok_or_else(|| protocol("bundled package has no declared runtime"))?;
     if spec.lock.is_none() {
-        return Err(Error::Protocol(
-            "bundled dependencies require a frozen runtime lock; stage a qualified deployment package before provisioning (see its packaging documentation); no latest fallback".into(),
+        return Err(protocol(
+            "bundled dependencies require a frozen runtime lock; stage a qualified deployment package before provisioning (see its packaging documentation); no latest fallback",
         ));
     }
     let digest = package_digest(&manifest.dir)?;
     let key = runtime_key(id, &digest);
     if let Some(runtime) = load_index(config)?.runtimes.get(&key) {
         if runtime.package_digest != digest {
-            return Err(Error::Protocol(
-                "bundled runtime package digest mismatch".into(),
-            ));
+            return Err(protocol("bundled runtime package digest mismatch"));
         }
         runtime.verify()?;
         return Ok(());
@@ -471,13 +472,14 @@ pub fn provision_bundled_with_pixi(config: &RegistryConfig, id: &str, pixi: &Pat
     let root = config
         .packages
         .parent()
-        .ok_or_else(|| Error::Protocol("packages need parent directory".into()))?
+        .ok_or_else(|| protocol("packages need parent directory"))?
         .join("plugin-runtimes");
     let runtime = crate::runtime::provision_with(manifest, &digest, &root, pixi)?
-        .ok_or_else(|| Error::Protocol("bundled runtime missing".into()))?;
+        .ok_or_else(|| protocol("bundled runtime missing"))?;
     if package_digest(&manifest.dir)? != digest {
-        return Err(Error::Protocol(
-            "plugin_changed: bundled package changed during provisioning".into(),
+        return Err(Error::refused(
+            Code::PluginChanged,
+            "bundled package changed during provisioning",
         ));
     }
     write_index(config, |index| {
@@ -497,9 +499,7 @@ pub fn install_with_pixi(config: &RegistryConfig, source: &Path, pixi: &Path) ->
     let manifest = Manifest::load(source)?;
     contract::validate_plugin_id(&manifest.id)?;
     if manifest.id.starts_with("basecraft.") {
-        return Err(Error::Protocol(
-            "basecraft.* is reserved for bundled packages".into(),
-        ));
+        return Err(protocol("basecraft.* is reserved for bundled packages"));
     }
     let digest = package_digest(source)?;
     let directory = format!("{}-{}", manifest.id, digest.replace(':', "-"));
@@ -519,15 +519,16 @@ pub fn install_with_pixi(config: &RegistryConfig, source: &Path, pixi: &Path) ->
         std::fs::copy(file, target)?;
     }
     if package_digest(pending.path())? != digest {
-        return Err(Error::Protocol(
-            "plugin_changed: package changed during installation".into(),
+        return Err(Error::refused(
+            Code::PluginChanged,
+            "package changed during installation",
         ));
     }
     let snapshot = Manifest::load(pending.path())?;
     let runtime_root = config
         .packages
         .parent()
-        .ok_or_else(|| Error::Protocol("packages need parent directory".into()))?
+        .ok_or_else(|| protocol("packages need parent directory"))?
         .join("plugin-runtimes");
     let runtime = crate::runtime::provision_with(&snapshot, &digest, &runtime_root, pixi)?;
     // Serialize package publication and runtime selection together. Any failure
@@ -535,7 +536,7 @@ pub fn install_with_pixi(config: &RegistryConfig, source: &Path, pixi: &Path) ->
     write_index(config, |index| {
         if destination.exists() {
             if package_digest(&destination)? != digest {
-                return Err(Error::Protocol("installed package digest mismatch".into()));
+                return Err(protocol("installed package digest mismatch"));
             }
         } else {
             std::fs::rename(pending.path(), &destination)?;
@@ -551,7 +552,7 @@ pub fn install_with_pixi(config: &RegistryConfig, source: &Path, pixi: &Path) ->
 
 pub fn set_enabled(config: &RegistryConfig, id: &str, enabled: bool) -> Result<()> {
     if !Registry::load(config)?.packages.contains_key(id) {
-        return Err(Error::Protocol("unknown plugin".into()));
+        return Err(protocol("unknown plugin"));
     }
     write_index(config, |index| {
         if enabled {
@@ -566,7 +567,7 @@ pub fn set_enabled(config: &RegistryConfig, id: &str, enabled: bool) -> Result<(
 pub fn remove(config: &RegistryConfig, id: &str) -> Result<()> {
     write_index(config, |index| {
         if index.active.remove(id).is_none() {
-            return Err(Error::Protocol("unknown managed plugin".into()));
+            return Err(protocol("unknown managed plugin"));
         }
         Ok(())
     })
@@ -577,7 +578,7 @@ pub fn register_editable(config: &RegistryConfig, path: &Path) -> Result<()> {
     let manifest = Manifest::load(&path)?;
     contract::validate_plugin_id(&manifest.id)?;
     if manifest.id.starts_with("basecraft.") {
-        return Err(Error::Protocol("basecraft.* is reserved".into()));
+        return Err(protocol("basecraft.* is reserved"));
     }
     package_digest(&path)?;
     write_index(config, |index| {
@@ -626,7 +627,7 @@ fn configured_python(origin: Origin) -> Option<PathBuf> {
 pub fn require_enabled(id: &str) -> Result<()> {
     let config = RegistryConfig::discover()?;
     if load_index(&config)?.disabled.contains(id) {
-        return Err(Error::Protocol("plugin_disabled".into()));
+        return Err(Error::refused(Code::PluginDisabled, ""));
     }
     Ok(())
 }

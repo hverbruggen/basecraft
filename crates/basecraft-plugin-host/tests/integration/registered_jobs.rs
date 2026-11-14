@@ -748,17 +748,25 @@ fn document_inputs_read_the_session_revision_and_record_history() {
             )
         ]
     );
-    // The Tasks view lists registered runs and points at their own record.
-    let tasks = basecraft_ops::records::jobs(true, &[temp.path().to_path_buf()]).unwrap();
-    let listed = tasks["jobs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|task| task["id"] == clean.run_id.as_str())
-        .cloned()
-        .unwrap();
-    assert_eq!(listed["status"], "completed");
-    assert!(Path::new(listed["runtime_record"].as_str().unwrap()).is_file());
+    // The Tasks view lists this process's runs, each named by the document
+    // it read, saved or not, and points at their own record.
+    let tasks = basecraft_ops::records::jobs(false, &[temp.path().to_path_buf()]).unwrap();
+    for run in [&clean, &edited] {
+        let listed = tasks["jobs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|task| task["id"] == run.run_id.as_str())
+            .cloned()
+            .unwrap();
+        assert_eq!(listed["status"], "completed");
+        assert!(Path::new(listed["record_path"].as_str().unwrap()).is_file());
+        let listed_source = Path::new(listed["source"]["path"].as_str().unwrap());
+        assert_eq!(
+            listed_source.canonicalize().unwrap(),
+            source.canonicalize().unwrap()
+        );
+    }
     // A failed document-bound run is recorded as an attempt, without a result.
     let request = json!({"operation":"org.example.registry-fixture/count@1","inputs":{"sources":document(&session)},
             "parameters":{"mode":"fail"},"destinations":{"report":"failed.json"}});
@@ -780,7 +788,10 @@ fn document_inputs_read_the_session_revision_and_record_history() {
         "test",
         &mut session,
     );
-    assert!(stale.unwrap_err().to_string().contains("stale_revision"));
+    assert_eq!(
+        basecraft_plugin_host::jobs::error_code(&stale.unwrap_err()),
+        basecraft_protocol::operation::OperationErrorCode::StaleRevision
+    );
     assert!(!temp.path().join("stale.json").exists());
 }
 
@@ -838,13 +849,16 @@ fn job_records_stay_with_the_data_when_the_private_folder_is_deleted() {
     if state.exists() {
         std::fs::remove_dir_all(&state).unwrap();
     }
+    // Each run's own record is its job record (D28).
+    let runs = |home: &Path| home.join(".basecraft/analyses-v1/runs");
     assert!(
-        project
-            .join(".basecraft/jobs")
+        runs(&project)
             .join(&plugin.run_id)
-            .is_dir()
+            .join("runtime.json")
+            .is_file()
     );
-    assert!(loose.join(".basecraft/jobs").join(&sanger).is_dir());
+    assert!(runs(&loose).join(&sanger).join("runtime.json").is_file());
+    assert!(!project.join(".basecraft/jobs").exists());
     let listed = basecraft_ops::records::jobs(true, &[project, loose]).unwrap();
     let ids: std::collections::BTreeMap<_, _> = listed["jobs"]
         .as_array()
@@ -1008,7 +1022,7 @@ fn unequal_alignment_inputs_are_refused_before_execution_for_files_and_documents
             .is_err()
     );
     let mut manager = JobManager::default();
-    let expected = "plugin protocol: This operation requires aligned sequences of equal length. These sequences have different lengths; align them first.";
+    let expected = "This operation requires aligned sequences of equal length. These sequences have different lengths; align them first.";
     for route in ["file", "clean", "edited", "undo"] {
         if route == "edited" {
             session
@@ -1043,7 +1057,12 @@ fn unequal_alignment_inputs_are_refused_before_execution_for_files_and_documents
             "test",
             &mut session,
         );
-        assert_eq!(result.unwrap_err().to_string(), expected, "{route}");
+        let error = result.unwrap_err();
+        assert_eq!(
+            basecraft_plugin_host::jobs::error_code(&error),
+            basecraft_protocol::operation::OperationErrorCode::UnsupportedInput
+        );
+        assert_eq!(error.to_string(), expected, "{route}");
         assert!(!root.path().join("result.json").exists());
         assert_eq!(std::fs::read_to_string(&source).unwrap(), original);
     }
@@ -1421,12 +1440,13 @@ fn registered_target_preparation_preserves_permissions_and_session_identity() {
             Some(&mut session),
         )
         .err()
-        .unwrap()
-        .to_string();
-        assert!(
-            error.contains("permission_denied: saving a target document needs writes"),
+        .unwrap();
+        assert_eq!(
+            basecraft_plugin_host::jobs::error_code(&error),
+            basecraft_protocol::operation::OperationErrorCode::PermissionDenied,
             "{error}"
         );
+        assert_eq!(error.to_string(), "saving a target document needs writes");
         assert!(!session.is_open(basecraft_ops::DocId(0)));
     }
     let prepared = prepare(Some(file), true, Some(&mut session)).unwrap();
@@ -1445,17 +1465,17 @@ fn registered_target_preparation_preserves_permissions_and_session_identity() {
         (
             "doc",
             json!(usize::MAX.to_string()),
-            "stale_revision: target document changed",
+            "target document changed",
         ),
         (
             "generation",
             json!(session.generation(id).unwrap() + 1),
-            "stale_revision: target document changed",
+            "target document changed",
         ),
         (
             "revision",
             json!(session.revision(id).unwrap() + 1),
-            "stale_revision: target document changed",
+            "target document changed",
         ),
     ] {
         let mut stale = document.clone();

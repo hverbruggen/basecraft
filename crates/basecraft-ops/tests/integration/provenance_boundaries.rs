@@ -91,13 +91,14 @@ fn hidden_binding_errors_never_fall_back_to_adjacent_metadata() {
     let companion = files::companion_path(None, &path);
     std::fs::create_dir_all(companion.parent().unwrap()).unwrap();
     std::fs::write(companion, &metadata).unwrap();
-    let run = ArtifactRun::create(&path, "metadata-test").unwrap();
+    let run = ArtifactRun::create(None, &path, "metadata-test").unwrap();
     std::fs::write(
         run.artifact("forest.nwk.basecraft.json").unwrap(),
         &metadata,
     )
     .unwrap();
-    run.bind(&path).unwrap();
+    run.bind(None, &path, &basecraft_io::hash_file(&path).unwrap())
+        .unwrap();
     assert!(files::load_tree(&path).is_ok());
     let sidecar = run.artifact("forest.nwk.basecraft.json").unwrap();
     std::fs::remove_file(&sidecar).unwrap();
@@ -131,7 +132,7 @@ fn hidden_binding_errors_never_fall_back_to_adjacent_metadata() {
     std::fs::write(&path, "((a,b)90,c);\n(x,y,z);\n").unwrap();
     assert!(files::load_tree(&path).unwrap().metadata_warning.is_some());
     assert!(
-        ArtifactRun::for_result(&path).unwrap().is_some(),
+        ArtifactRun::for_result(None, &path).unwrap().is_some(),
         "writer lookup must remain available"
     );
 }
@@ -428,14 +429,15 @@ fn saving_a_forest_preserves_other_members_and_refreshes_bound_identity() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("forest.nwk");
     std::fs::write(&file, "((a,b)90,c);\n((x,y)42,z);\n").unwrap();
-    let run = ArtifactRun::create(&file, "forest-save").unwrap();
+    let run = ArtifactRun::create(None, &file, "forest-save").unwrap();
     let tree = files::load_tree(&file).unwrap().doc;
     let mut metadata = Vec::new();
     files::tree_companion(&tree, &basecraft_io::hash_file(&file).unwrap())
         .write(&mut metadata)
         .unwrap();
     std::fs::write(run.artifact("forest.nwk.basecraft.json").unwrap(), metadata).unwrap();
-    run.bind(&file).unwrap();
+    run.bind(None, &file, &basecraft_io::hash_file(&file).unwrap())
+        .unwrap();
     let mut session = Session::new(dir.path());
     let doc = session.open(&file).unwrap();
     session

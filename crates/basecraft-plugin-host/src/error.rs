@@ -20,6 +20,29 @@ pub enum Error {
     Protocol(String),
     #[error("plugin protocol: {0}")]
     Contract(#[from] crate::contract::ContractError),
+    /// A refusal callers act on by its code; the message says why, for people.
+    #[error("{}", if message.is_empty() { code.as_str() } else { message.as_str() })]
+    Refused {
+        code: basecraft_protocol::operation::OperationErrorCode,
+        message: String,
+    },
+}
+
+/// A plugin or host step that broke the protocol; the text says how.
+pub(crate) fn protocol(message: impl Into<String>) -> Error {
+    Error::Protocol(message.into())
+}
+
+impl Error {
+    pub fn refused(
+        code: basecraft_protocol::operation::OperationErrorCode,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::Refused {
+            code,
+            message: message.into(),
+        }
+    }
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

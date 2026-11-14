@@ -293,7 +293,11 @@ mod typed_error_tests {
         assert_eq!(outputs, [basecraft_ops::records::sidecar(&tree)]);
         std::fs::write(&source, b">a\nTC\n>b\nTT\n").unwrap();
         let changed = link
-            .checked_alignment(&tree, &basecraft_ops::files::load_tree(&tree).unwrap().doc)
+            .checked_alignment(
+                None,
+                &tree,
+                &basecraft_ops::files::load_tree(&tree).unwrap().doc,
+            )
             .unwrap_err();
         let oversized = root.path().join("oversized.json");
         std::fs::File::create(&oversized)
@@ -304,10 +308,6 @@ mod typed_error_tests {
         for (error, code) in [(changed, "changed_on_disk"), (limit, "limit")] {
             assert_eq!(error.code(), code);
             assert_eq!(error_value(&error)["errors"][0]["code"], code);
-            assert_eq!(
-                basecraft_plugin_host::jobs::ops_error_code(&error).as_str(),
-                code
-            );
         }
     }
 
@@ -380,7 +380,7 @@ mod typed_error_tests {
             assert_eq!(error_value(&error)["errors"][0]["code"], code);
             let outcome = basecraft_plugin_host::jobs::error_value(
                 "test",
-                basecraft_plugin_host::jobs::ops_error_code(&error),
+                error.operation_code(),
                 error.to_string(),
             );
             assert_eq!(outcome["errors"][0]["code"], code);

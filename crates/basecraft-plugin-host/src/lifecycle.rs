@@ -1,5 +1,6 @@
 //! Execution policy for verified, pinned bundled external side effects.
 //! Ordinary analyses retain their existing prompt process cancellation.
+use crate::error::protocol;
 use std::{
     fs::OpenOptions,
     path::Path,
@@ -68,20 +69,20 @@ impl Lifecycle {
             inputs
                 .get(name)
                 .and_then(|paths| paths.first())
-                .ok_or_else(|| Error::Protocol(format!("retained receipt needs {name} input")))
+                .ok_or_else(|| protocol(format!("retained receipt needs {name} input")))
         };
         let receipt = required("receipt")?;
         let query = required("query")?;
         let run = query
             .parent()
-            .ok_or_else(|| Error::Protocol("missing query evidence directory".into()))?;
+            .ok_or_else(|| protocol("missing query evidence directory"))?;
         let input = basecraft_ops::records::read_input(run)?;
         if input.state != basecraft_protocol::input_records::EvidenceState::Generated
             || Some(input.transformation.as_str()) != transformation
             || input.submitted_hash != basecraft_io::hash_file(query)?
         {
-            return Err(Error::Protocol(
-                "retained query differs from shared input evidence".into(),
+            return Err(protocol(
+                "retained query differs from shared input evidence",
             ));
         }
         let mut diagnostics = basecraft_ops::records::verify_ancestors(run)?;
@@ -90,14 +91,12 @@ impl Lifecycle {
             let publication = basecraft_ops::records::inspect(receipt, None)?;
             let hash = basecraft_io::hash_file(receipt)?;
             if !publication.outputs.iter().any(|output| output.hash == hash) {
-                return Err(Error::Protocol(
-                    "retained receipt differs from published artifact identity".into(),
+                return Err(protocol(
+                    "retained receipt differs from published artifact identity",
                 ));
             }
         } else if receipt != &run.join("pending/receipt") && receipt != &run.join("receipt") {
-            return Err(Error::Protocol(
-                "unpublished receipt must be in its allocated run".into(),
-            ));
+            return Err(protocol("unpublished receipt must be in its allocated run"));
         }
         Ok(diagnostics)
     }
@@ -124,8 +123,8 @@ impl Lifecycle {
         if !self.external() {
             return Ok(None);
         }
-        let paths = basecraft_platform::paths::AppPaths::discover()
-            .map_err(|e| Error::Protocol(e.to_string()))?;
+        let paths =
+            basecraft_platform::paths::AppPaths::discover().map_err(basecraft_ops::Error::from)?;
         std::fs::create_dir_all(&paths.state)?;
         let lock = OpenOptions::new()
             .create(true)
@@ -136,9 +135,7 @@ impl Lifecycle {
         let stamp = paths.state.join("ncbi-contact.json");
         loop {
             if cancelled.load(Ordering::Acquire) {
-                return Err(Error::Protocol(
-                    "cancelled before upload; nothing sent".into(),
-                ));
+                return Err(protocol("cancelled before upload; nothing sent"));
             }
             if lock.try_lock_exclusive()? {
                 break;
@@ -152,17 +149,15 @@ impl Lifecycle {
         };
         loop {
             if cancelled.load(Ordering::Acquire) {
-                return Err(Error::Protocol(
-                    "cancelled before upload; nothing sent".into(),
-                ));
+                return Err(protocol("cancelled before upload; nothing sent"));
             }
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map_err(|e| Error::Protocol(e.to_string()))?
                 .as_secs_f64();
             if !previous.is_finite() || previous > now + 60.0 {
-                return Err(Error::Protocol(
-                    "NCBI contact clock changed; retry after correcting clock".into(),
+                return Err(protocol(
+                    "NCBI contact clock changed; retry after correcting clock",
                 ));
             }
             if now - previous >= 10.0 {
@@ -184,7 +179,7 @@ impl Lifecycle {
         let data = result
             .data
             .as_deref()
-            .ok_or_else(|| Error::Protocol("external submission missing data".into()))?;
+            .ok_or_else(|| protocol("external submission missing data"))?;
         let mut summary = plan.clone();
         if let Some(object) = summary.as_object_mut() {
             object.remove("fasta");
@@ -201,7 +196,9 @@ impl Lifecycle {
             || result.artifacts[0].role != "receipt"
             || result.artifacts[0].path != "."
         {
-            return Err(Error::Protocol("external submission identity mismatch; status unknown; do not automatically resubmit".into()));
+            return Err(protocol(
+                "external submission identity mismatch; status unknown; do not automatically resubmit",
+            ));
         }
         Ok(())
     }
@@ -217,14 +214,16 @@ impl Lifecycle {
         let data = result
             .data
             .as_deref()
-            .ok_or_else(|| Error::Protocol("external submission missing data".into()))?;
+            .ok_or_else(|| protocol("external submission missing data"))?;
         let stored: Value = serde_json::from_slice(&basecraft_ops::records::read_record(receipt)?)?;
         if &stored != data
             || data["query_hash"] != plan["query_hash"]
             || data["approval_hash"] != plan["approval_hash"]
             || data["plan"]["records"] != plan["records"]
         {
-            return Err(Error::Protocol("external submission receipt/query identity mismatch; submission status unknown; do not resubmit automatically".into()));
+            return Err(protocol(
+                "external submission receipt/query identity mismatch; submission status unknown; do not resubmit automatically",
+            ));
         }
         Ok(())
     }

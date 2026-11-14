@@ -1,6 +1,6 @@
 //! Provenance publication from a session's document history.
-use crate::error::invalid;
-use crate::{Error, Result};
+use crate::Result;
+use crate::error::{changed_on_disk, damaged, invalid};
 use basecraft_protocol::provenance::Publication;
 use basecraft_protocol::{Actor, LogEntry, Op};
 use std::collections::BTreeMap;
@@ -25,6 +25,8 @@ pub(crate) struct History<'a> {
     /// Records the session knows, with the ids of the edits in effect in each.
     pub(crate) known: [Option<(String, Vec<String>)>; 2],
     pub(crate) origin_bundle: &'a Path,
+    /// The run the document's own file is bound to.
+    pub(crate) run: Option<&'a Path>,
     pub(crate) delimitation: bool,
 }
 
@@ -36,6 +38,16 @@ pub(crate) struct StagedRecord {
 }
 
 impl History<'_> {
+    /// The run `target` is bound to: the kept one for the document's own
+    /// file, else looked up.
+    fn bound(&self, target: &Path) -> Result<Option<PathBuf>> {
+        if std::path::absolute(target)? == std::path::absolute(self.root.join(self.key))? {
+            Ok(self.run.map(Path::to_path_buf))
+        } else {
+            crate::records::analysis_store::ArtifactRun::for_result(self.project, target)
+        }
+    }
+
     /// Every event of the document this session knows, oldest first.
     fn events(&self) -> impl Iterator<Item = &LogEntry> {
         self.recorded
@@ -52,9 +64,8 @@ impl History<'_> {
     pub(crate) fn save(&self, target: &Path, save: &LogEntry) -> Result<StagedRecord> {
         use basecraft_protocol::provenance::{ArtifactRevision, Completeness};
         let _scope = crate::records::input_evidence::lock_in(self.project)?;
-        let bundle = if let Some(hidden) =
-            crate::records::analysis_store::ArtifactRun::for_result(target)?
-        {
+        let bound = self.bound(target)?;
+        let bundle = if let Some(hidden) = bound.clone() {
             hidden
         } else if let Some(bundle) = self
             .project
@@ -189,26 +200,21 @@ impl History<'_> {
                     Ok(())
                 })?;
             }
-            crate::records::input_evidence::write_json(&bundle.join("input.json"), &input)?;
+            crate::records::input_evidence::write_input(&bundle, &input)?;
         }
         let retain =
             |path: &Path, hash: &str, revision: String, name: String| -> Result<ArtifactRevision> {
                 let bytes = std::fs::read(path)?;
                 basecraft_io::counters::record_read(path, bytes.len() as u64);
                 if basecraft_io::hash_bytes(&bytes) != hash {
-                    return Err(Error::ChangedOnDisk {
-                        path: path.to_path_buf(),
-                    });
+                    return Err(changed_on_disk(path));
                 }
                 let relative = format!("artifacts/{}", hash.trim_start_matches("b3:"));
                 let dest = bundle.join(&relative);
                 if !dest.exists() {
                     basecraft_io::write_atomic(&dest, |w| w.write_all(&bytes))?;
                 } else if basecraft_io::hash_file(&dest)? != hash {
-                    return Err(Error::Damaged {
-                        path: dest,
-                        detail: "retained artifact hash differs".into(),
-                    });
+                    return Err(damaged(dest, "retained artifact hash differs"));
                 }
                 Ok(ArtifactRevision {
                     id: revision,
@@ -256,15 +262,14 @@ impl History<'_> {
         }
         let mut outputs = Vec::new();
         for (key, hash) in &save.result.hashes {
-            let logical_name =
-                if crate::records::analysis_store::ArtifactRun::for_result(target)?.is_some() {
-                    crate::records::input_evidence::relative(
-                        &target.parent().unwrap_or(Path::new(".")).canonicalize()?,
-                        &self.root.join(key).canonicalize()?,
-                    )?
-                } else {
-                    name(key)
-                };
+            let logical_name = if bound.is_some() {
+                crate::records::input_evidence::relative(
+                    &target.parent().unwrap_or(Path::new(".")).canonicalize()?,
+                    &self.root.join(key).canonicalize()?,
+                )?
+            } else {
+                name(key)
+            };
             outputs.push(ArtifactRevision {
                 id: format!("{}:output:{}", save.id, outputs.len()),
                 logical_name,
@@ -403,7 +408,7 @@ impl History<'_> {
         if !self.tracked {
             return Ok(());
         }
-        let run = crate::records::ArtifactRun::create(path, &activity.id)?;
+        let run = crate::records::ArtifactRun::create(self.project, path, &activity.id)?;
         let bundle = run.directory().to_path_buf();
         std::fs::create_dir_all(&bundle)?;
         let (reference, hash, size, logical_name) = if let Some((source, stamp, hash)) = source {
@@ -468,7 +473,7 @@ impl History<'_> {
             origin_run: None,
             extra: BTreeMap::from([("extraction".into(), serde_json::to_value(extraction)?)]),
         };
-        crate::records::write_json(&bundle.join("input.json"), &input)?;
+        crate::records::write_input(&bundle, &input)?;
         run.write_run(
             basecraft_protocol::records::AnalysisRunStatus::Saved,
             path.file_name()
@@ -487,6 +492,7 @@ impl History<'_> {
             reference,
         };
         let (events, effective_edits, withdrawn) = portable_analysis_activity(snapshot, activity)?;
+        let output_hash = basecraft_io::hash_file(path)?;
         let publication = Publication {
             schema_version: 1,
             id: activity.id.clone(),
@@ -499,7 +505,7 @@ impl History<'_> {
             outputs: vec![ArtifactRevision {
                 id: format!("{}:result", activity.id),
                 logical_name: name(&path.to_string_lossy()),
-                hash: basecraft_io::hash_file(path)?,
+                hash: output_hash.clone(),
                 size: std::fs::metadata(path)?.len(),
                 retained: None,
                 reference: None,
@@ -516,7 +522,7 @@ impl History<'_> {
             report_template_version: 2,
         };
         crate::records::publish(&bundle, &publication)?;
-        run.bind(path)?;
+        run.bind(self.project, path, &output_hash)?;
         Ok(())
     }
 }

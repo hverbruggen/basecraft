@@ -1,4 +1,5 @@
 //! Inspectable portable save history. No bundle content is ever executed.
+use crate::error::{damaged, limit, unsupported};
 use crate::{Result, error::invalid};
 use basecraft_protocol::{
     Actor, DocState, LogEntry, OpResult,
@@ -18,10 +19,20 @@ pub fn companion(path: &Path) -> PathBuf {
 /// The final fallback is the original companion spelling, even if it does not
 /// exist. Selection does not validate content or establish complete provenance.
 pub fn bundle_for_result(result: &Path, project: Option<&crate::project::Project>) -> PathBuf {
-    if let Ok(Some(hidden)) = crate::records::analysis_store::ArtifactRun::for_result(result)
+    let run = crate::records::analysis_store::ArtifactRun::for_result(project, result);
+    bundle_of(project, result, run.ok().flatten().as_deref())
+}
+
+/// [`bundle_for_result`] for a result whose bound `run`, if any, is known.
+pub fn bundle_of(
+    project: Option<&crate::project::Project>,
+    result: &Path,
+    run: Option<&Path>,
+) -> PathBuf {
+    if let Some(hidden) = run
         && hidden.join("manifest.json").is_file()
     {
-        return hidden;
+        return hidden.to_path_buf();
     }
     let standalone = companion(result);
     if standalone.join("manifest.json").is_file() {
@@ -73,10 +84,7 @@ pub(crate) fn read_record_from_open(
 ) -> Result<Vec<u8>> {
     use std::io::Read as _;
     let limit = (*remaining).min(64 << 20).min(cap);
-    let too_long = || crate::Error::Limit {
-        what: "provenance record reading".into(),
-        limit,
-    };
+    let too_long = || crate::error::limit("provenance record reading", limit);
     if length > limit {
         return Err(too_long());
     }
@@ -109,23 +117,22 @@ pub fn retained_file(
     })
 }
 
-/// Move a run's file to a new file in the project, never replacing one
-/// (D26). The receipt names the file's inode before the move, so a later
-/// repair adopts only the file this run moved.
+/// Move a run's file, whose hash the caller knows, to a new file in the
+/// project, never replacing one (D26). The receipt names the file's inode
+/// before the move, so a later repair adopts only the file this run moved.
+/// A copy across file systems is checked against `hash`.
 pub fn move_file(source: &Path, destination: &Path, hash: &str, receipt: &Path) -> Result<()> {
-    let check = |file: &Path| {
-        if basecraft_io::hash_file(file)? == hash {
-            Ok(())
-        } else {
-            Err(invalid("member changed before export"))
-        }
-    };
-    check(source)?;
     move_into_project(
         source,
         destination,
         |file| write_receipt(receipt, destination, hash, file),
-        check,
+        |copy| {
+            if basecraft_io::hash_file(copy)? == hash {
+                Ok(())
+            } else {
+                Err(invalid("member changed before export"))
+            }
+        },
     )
 }
 
@@ -224,10 +231,10 @@ pub fn verify_export(destination: &Path, hash: &str, receipt: &Path) -> Result<(
         || receipt.size != metadata.len()
         || basecraft_io::hash_file(destination)? != hash
     {
-        return Err(crate::Error::Damaged {
-            path: destination.to_path_buf(),
-            detail: "output_conflict: member ownership or bytes changed; repair refused".into(),
-        });
+        return Err(damaged(
+            destination,
+            "member ownership or bytes changed; repair refused",
+        ));
     }
     Ok(())
 }
@@ -247,7 +254,7 @@ fn copy_atomic(source: &Path, target: &Path) -> Result<()> {
 
 pub fn inspect(result: &Path, project: Option<&crate::project::Project>) -> Result<Publication> {
     // A damaged hidden binding is an error, never a reason to use stale legacy context.
-    crate::records::analysis_store::ArtifactRun::for_result(result)?;
+    crate::records::analysis_store::ArtifactRun::for_result(project, result)?;
     let bundle = bundle_for_result(result, project);
     let manifest = bundle.join("manifest.json");
     if project.is_none() && !manifest.is_file() {
@@ -280,16 +287,14 @@ pub fn latest(bundle: &Path) -> Result<Option<(Publication, String)>> {
     let pointer: basecraft_protocol::provenance::LatestRecord =
         basecraft_protocol::records::decode(&read_record(&manifest)?)?;
     if pointer.schema_version != 1 {
-        return Err(crate::Error::Unsupported(
-            "unsupported provenance schema version".into(),
-        ));
+        return Err(unsupported("unsupported provenance schema version"));
     }
     let (publication, hash) = read_publication(bundle, &pointer.id, &mut (64 << 20))?;
     if hash != pointer.hash {
-        return Err(crate::Error::Damaged {
-            path: record_path(bundle, &pointer.id)?,
-            detail: "the latest history record changed after it was saved".into(),
-        });
+        return Err(damaged(
+            record_path(bundle, &pointer.id)?,
+            "the latest history record changed after it was saved",
+        ));
     }
     Ok(Some((publication, hash)))
 }
@@ -401,10 +406,7 @@ fn ancestry(bundle: &Path, latest: Publication) -> Result<(Vec<Publication>, Vec
             continue;
         }
         if visited.len() > 10_000 {
-            return Err(crate::Error::Limit {
-                what: "history records".into(),
-                limit: 10_000,
-            });
+            return Err(limit("history records", 10_000));
         }
         let mut parents = std::collections::HashSet::new();
         let reads: Vec<_> = record
@@ -464,10 +466,7 @@ impl SavedHistory {
                 continue;
             }
             if records.len() > 10_000 {
-                return Err(crate::Error::Limit {
-                    what: "history records".into(),
-                    limit: 10_000,
-                });
+                return Err(limit("history records", 10_000));
             }
             let gap = |reason| HistoryGap {
                 record: link.id.clone(),
@@ -558,7 +557,8 @@ pub fn verify(result: &Path, project: Option<&crate::project::Project>) -> Resul
     if publication.outputs.is_empty() {
         return Err(invalid("publication has no output"));
     }
-    let hidden = crate::records::analysis_store::ArtifactRun::for_result(result)?.is_some();
+    let hidden =
+        crate::records::analysis_store::ArtifactRun::for_result(project, result)?.is_some();
     // The companion is published by its file name; it lives where
     // `companion_path` keeps it, not beside the result.
     let companion = crate::files::companion_path(project, result);
@@ -630,10 +630,7 @@ pub(crate) fn verify_records(bundle: &Path, current: &Publication) -> Result<Vec
                 let size = std::fs::metadata(&retained)?.len();
                 artifact_bytes = artifact_bytes.saturating_add(size);
                 if artifact_bytes > 8u64 << 30 {
-                    return Err(crate::Error::Limit {
-                        what: "ancestry artifact verification".into(),
-                        limit: 8 << 30,
-                    });
+                    return Err(limit("ancestry artifact verification", 8 << 30));
                 }
                 if size != artifact.size || basecraft_io::hash_file(&retained)? != artifact.hash {
                     issues.push(format!("{}: ancestor retained bytes differ", artifact.id));
@@ -669,10 +666,7 @@ fn stage_json(
 ) -> Result<()> {
     let bytes = basecraft_protocol::records::encode(value)?;
     if bytes.len() > 64 << 20 {
-        return Err(crate::Error::Limit {
-            what: "provenance record publication".into(),
-            limit: 64 << 20,
-        });
+        return Err(limit("provenance record publication", 64 << 20));
     }
     prepared.push(path, |w| w.write_all(&bytes))?;
     Ok(())
@@ -803,9 +797,7 @@ fn link_selected_inputs<'a>(
             continue;
         }
         if dependency.schema_version != 1 {
-            return Err(crate::Error::Unsupported(
-                "Unsupported selected input dependency".into(),
-            ));
+            return Err(unsupported("Unsupported selected input dependency"));
         }
         let id = dependency.id.as_str();
         if id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
@@ -977,10 +969,7 @@ pub(crate) fn stage<'a>(
     let mut prepared = crate::documents::PreparedWrite::default();
     let record = basecraft_protocol::records::encode(publication)?;
     if record.len() > 64 << 20 {
-        return Err(crate::Error::Limit {
-            what: "provenance record publication".into(),
-            limit: 64 << 20,
-        });
+        return Err(limit("provenance record publication", 64 << 20));
     }
     prepared.push(&record_path(bundle, &publication.id)?, |w| {
         w.write_all(&record)
@@ -1103,7 +1092,7 @@ pub fn package(
     destination: &Path,
     project: Option<&crate::project::Project>,
 ) -> Result<()> {
-    if crate::records::analysis_store::ArtifactRun::for_result(result)?.is_some()
+    if crate::records::analysis_store::ArtifactRun::for_result(project, result)?.is_some()
         || bundle_for_result(result, project)
             .join("input.json")
             .is_file()

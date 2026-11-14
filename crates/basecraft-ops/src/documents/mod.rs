@@ -3,6 +3,7 @@
 //! Seven payloads share identity, journal, undo and save ownership. Each payload
 //! supplies its own edits and serializer; scientific review history stays specialised.
 
+use crate::error::{damaged, unsupported};
 use std::path::{Path, PathBuf};
 
 use basecraft_docs::FeatureId;
@@ -129,21 +130,16 @@ impl PreparedWrite {
             } else {
                 file.persist(&path)
             };
-            persisted.map_err(|error| crate::Error::Damaged {
-                path: path.clone(),
-                detail: format!("partial save: replaced {}; file replacement failed: {}. Keep the open document and retry saving", replaced.join(", "), error.error),
-            })?;
+            persisted.map_err(|error| damaged(path.clone(), format!("partial save: replaced {}; file replacement failed: {}. Keep the open document and retry saving", replaced.join(", "), error.error)))?;
             replaced.push(path.display().to_string());
         }
         for path in self.stale {
             match std::fs::remove_file(&path) {
                 Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-                    return Err(crate::Error::Damaged {
+                    return Err(damaged(
                         path,
-                        detail: format!(
-                            "saved, but an outdated companion could not be removed: {error}"
-                        ),
-                    });
+                        format!("saved, but an outdated companion could not be removed: {error}"),
+                    ));
                 }
                 _ => {}
             }
@@ -288,14 +284,10 @@ pub(crate) trait Document {
     /// Detached proposal staging retains the same payload and writer metadata.
     /// Unsupported kinds cannot be mutated through the proposal route.
     fn proposal_candidate(&self) -> Result<crate::files::Loaded> {
-        Err(crate::Error::Unsupported(
-            "this document kind does not support proposals".into(),
-        ))
+        Err(unsupported("this document kind does not support proposals"))
     }
     fn apply_proposal(&mut self, _op: &Op) -> Result<(Inverse, Option<FeatureId>)> {
-        Err(crate::Error::Unsupported(
-            "this document kind does not support proposals".into(),
-        ))
+        Err(unsupported("this document kind does not support proposals"))
     }
     fn revision(&self, generation: u64) -> u64;
     fn fingerprint(&self) -> DocState;
@@ -342,7 +334,7 @@ pub(crate) trait Document {
         publication: &WritePublication,
     ) -> Result<Vec<(PathBuf, String)>> {
         let prepared = self.prepare_write(project, target, format, recovery_root, publication)?;
-        self.publish_write(prepared, target, publication)
+        self.publish_write(project, prepared, target, publication)
     }
     fn prepare_write(
         &self,
@@ -354,6 +346,7 @@ pub(crate) trait Document {
     ) -> Result<PreparedWrite>;
     fn publish_write(
         &self,
+        project: Option<&crate::project::Project>,
         prepared: PreparedWrite,
         target: &Path,
         publication: &WritePublication,
@@ -362,11 +355,12 @@ pub(crate) trait Document {
         let mut prepared = prepared;
         prepared.create = matches!(publication, WritePublication::Create);
         let hashes = prepared.publish()?;
-        self.finish_write(target, &hashes, run.as_ref(), publication)?;
+        self.finish_write(project, target, &hashes, run.as_ref(), publication)?;
         Ok(hashes)
     }
     fn finish_write(
         &self,
+        _project: Option<&crate::project::Project>,
         _target: &Path,
         _hashes: &[(PathBuf, String)],
         _run: Option<&crate::records::analysis_store::ArtifactRun>,

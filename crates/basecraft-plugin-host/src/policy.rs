@@ -1,8 +1,10 @@
 //! Caller-owned path/effect restrictions, shared by all operation adapters.
 //! This constrains host actions; trusted plugin code is not OS-sandboxed.
 
+use crate::error::protocol;
 use basecraft_ops::access::{Access, AccessError, Denial, ResourceAction};
 use basecraft_platform::files::{identity, link_count};
+use basecraft_protocol::operation::OperationErrorCode as Code;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 
@@ -99,7 +101,7 @@ pub struct DocumentBinding {
 }
 
 fn denied(message: &str) -> Error {
-    Error::Protocol(format!("permission_denied: {message}"))
+    Error::refused(Code::PermissionDenied, message)
 }
 
 impl SessionPolicy {
@@ -199,7 +201,7 @@ impl SessionPolicy {
 
     pub fn check(&self, operation: &RegisteredOperation) -> Result<()> {
         if !operation.package.enabled {
-            return Err(Error::Protocol("plugin_disabled".into()));
+            return Err(Error::refused(Code::PluginDisabled, ""));
         }
         if !self.permits(operation) {
             return Err(denied("operation requires writes; session is read-only"));
@@ -220,7 +222,7 @@ impl SessionPolicy {
             .map_err(|error| match error {
                 AccessError::Denied(reason) => denied(&reason.to_string()),
                 AccessError::DestinationExists => {
-                    Error::Protocol("output_conflict: destination already exists".into())
+                    Error::refused(Code::OutputConflict, "destination already exists")
                 }
                 AccessError::Io(error) => error.into(),
             })
@@ -352,7 +354,7 @@ impl SessionPolicy {
     ) -> Result<ResolvedBindings> {
         self.check(operation)?;
         if request.operation != operation.id {
-            return Err(Error::Protocol("operation identity mismatch".into()));
+            return Err(protocol("operation identity mismatch"));
         }
         if request
             .inputs
@@ -363,8 +365,9 @@ impl SessionPolicy {
                 .keys()
                 .any(|k| destination_role(operation, k).is_none())
         {
-            return Err(Error::Protocol(
-                "invalid_arguments: unknown input/destination binding".into(),
+            return Err(Error::refused(
+                Code::InvalidArguments,
+                "unknown input/destination binding",
             ));
         }
         let mut inputs = BTreeMap::new();
@@ -375,9 +378,10 @@ impl SessionPolicy {
             let values = request.inputs.get(name).map_or(&[][..], Vec::as_slice);
             count = count.saturating_add(values.len());
             if values.len() < binding.min || values.len() > binding.max || count > MAX_INPUT_FILES {
-                return Err(Error::Protocol(format!(
-                    "invalid_arguments: input cardinality for {name}"
-                )));
+                return Err(Error::refused(
+                    Code::InvalidArguments,
+                    format!("input cardinality for {name}"),
+                ));
             }
             let mut files = Vec::new();
             let mut bound = Vec::new();
@@ -426,8 +430,9 @@ impl SessionPolicy {
                         .ok_or_else(|| denied("missing filename"))?,
                 );
             if !unique.insert(key) {
-                return Err(Error::Protocol(
-                    "output_conflict: destinations alias each other".into(),
+                return Err(Error::refused(
+                    Code::OutputConflict,
+                    "destinations alias each other",
                 ));
             }
             destinations.insert(name.clone(), resolved);

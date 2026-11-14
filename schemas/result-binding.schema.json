@@ -1,15 +1,22 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ResultBinding",
-  "description": "Existing hidden association written by `ArtifactRun::bind`. Runtime readers\nretain their selective version, namespace, path and content-hash checks.",
+  "description": "A result's link to the run that made it, written by `ArtifactRun::bind`\nin the `.basecraft` where the result's records are kept: its project's,\nor the one beside a loose result.",
   "type": "object",
   "properties": {
     "basecraft": {
       "description": "The basecraft version that wrote this file.",
       "type": "string"
     },
+    "home": {
+      "description": "The folder whose `.basecraft` holds the run, relative to the folder\nwhose `.basecraft` holds this binding; absent when they are the same.\nA loose result in a subfolder of the folder a run was made in has one.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "result": {
-      "description": "UTF-8 relative filename, using the existing writer's path conversion.",
+      "description": "The result's path, relative to the folder that holds this binding.",
       "type": "string"
     },
     "result_hash": {

@@ -5,6 +5,7 @@
 //! document state as recorded; each save must produce files with the
 //! recorded hashes. Nothing in the project is written.
 
+use crate::error::{damaged, limit};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -563,10 +564,7 @@ pub fn recovery_sessions(roots: &[std::path::PathBuf]) -> Result<Vec<std::path::
         }
     }
     if sessions.len() > 256 {
-        return Err(crate::Error::Limit {
-            what: "recovery sessions".into(),
-            limit: 256,
-        });
+        return Err(limit("recovery sessions", 256));
     }
     // Session folders are named by ULID, which sorts by time.
     sessions.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
@@ -623,11 +621,11 @@ fn strict_entries(root: &Path) -> Result<Vec<LogEntry>> {
             .ok()
             .filter(|prefix| prefix.problem.is_some());
         match kept {
-            Some(prefix) => crate::Error::Damaged { path: root.to_path_buf(), detail: format!(
+            Some(prefix) => damaged(root, format!(
                 "the recovery journal is damaged ({}); nothing was recovered. The {} verified journal events before the damage can be recovered explicitly with `basecraft recover --verified-prefix`; the journal is left unchanged",
                 prefix.problem.unwrap_or_default(),
                 prefix.entries.len()
-            ) },
+            )),
             None => error,
         }
     })
@@ -741,10 +739,7 @@ fn recover_entries(
         let mut failures = Vec::new();
         for index in candidates.into_iter().rev() {
             let entry = &entries[index];
-            let damaged = |detail| Error::Damaged {
-                path: root.to_path_buf(),
-                detail,
-            };
+            let damaged = |detail| damaged(root, detail);
             scratch_key(&key).map_err(damaged)?;
             let opened = match &entry.op {
                 Op::CreateSequence { name, residues } => {
@@ -798,10 +793,7 @@ fn recover_entries(
         }
     }
     if documents.is_empty() {
-        return Err(Error::Damaged {
-            path: root.to_path_buf(),
-            detail: skipped.join("\n"),
-        });
+        return Err(damaged(root, skipped.join("\n")));
     }
     let damage = match (damage, skipped.is_empty()) {
         (damage, true) => damage,
@@ -846,10 +838,10 @@ fn recover_entries(
             }
         }
         if !session.state(doc)?.matches_recorded(&entry.state) {
-            return Err(crate::Error::Damaged {
-                path: root.join("events.jsonl"),
-                detail: format!("recovery state differs at {}", entry.id),
-            });
+            return Err(damaged(
+                root.join("events.jsonl"),
+                format!("recovery state differs at {}", entry.id),
+            ));
         }
     }
     session.recovery_placement(staging.path().to_path_buf(), destination.clone());
@@ -1296,6 +1288,9 @@ impl RecoveryAttempt {
             // The stage was a loose folder; each recovered document's
             // companion now moves to where the project keeps it.
             for output in &completion.outputs {
+                if let Some(project) = self.session.project() {
+                    crate::records::ArtifactRun::settle_binding(project, output)?;
+                }
                 crate::files::settle_companion(self.session.project(), output)?;
             }
             for run in stores {

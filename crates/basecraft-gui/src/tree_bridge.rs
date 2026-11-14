@@ -782,10 +782,6 @@ impl qobject::TreeController {
                 Ok(())
             }
             Err(msg) => {
-                let msg = msg
-                    .strip_prefix("invalid operation: ")
-                    .unwrap_or(&msg)
-                    .to_string();
                 self.as_mut().fail(&msg);
                 Err(msg)
             }
@@ -814,8 +810,8 @@ impl qobject::TreeController {
                     self.with_doc(|tree| {
                         use basecraft_ops::records::AlignmentLink;
                         let _ = AlignmentLink::checked_view_in(project, &path, tree);
-                        AlignmentLink::read_view_in(project, &path)
-                            .map_or_else(|e| e.to_string(), |link| link.status(&path, tree))
+                        let link = AlignmentLink::read_view_in(project, &path);
+                        link.map_or_else(|e| e.to_string(), |l| l.status(project, &path, tree))
                     })
                 )
                 .unwrap_or_default();
@@ -877,7 +873,7 @@ impl qobject::TreeController {
                         source.to_string_lossy().into_owned(),
                         basecraft_io::hash_file(&source)?,
                     )],
-                    &outputs,
+                    &basecraft_ops::session::ToolRunRecord::hashed(outputs)?,
                 ),
             )?;
             Ok(())

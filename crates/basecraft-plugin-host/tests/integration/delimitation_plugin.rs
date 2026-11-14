@@ -143,12 +143,11 @@ fn exact_identity_precedes_public_tree_inference_and_restores_specimens() {
         if std::env::var_os("BASECRAFT_CAPTURE_WORKFLOW_RECORDS").is_some() {
             let fixtures =
                 Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/records-v1");
-            for (file, name) in [
-                ("stages.json", "workflow-stages.json"),
-                ("validated-artifacts.json", "validated-artifacts.json"),
-            ] {
-                std::fs::copy(common::evidence(&outcome).join(file), fixtures.join(name)).unwrap();
-            }
+            std::fs::copy(
+                common::evidence(&outcome).join("stages.json"),
+                fixtures.join("workflow-stages.json"),
+            )
+            .unwrap();
         }
         assert_eq!(stages.len(), 3);
         for stage in &stages {
@@ -420,12 +419,16 @@ fn tree_methods_update_one_canonical_spart_and_export_without_sources() {
     }
     // A second workspace never replaces the canonical one.
     let before = std::fs::read(&canonical).unwrap();
-    let refused = common::refused_in(&registry, &mut session, |s| {
+    let (code, refused) = common::refused_in(&registry, &mut session, |s| {
         json!({"operation":"basecraft.delimitation/workspace_tree@1",
             "inputs":{"tree":common::document(s, input)},
             "parameters":{},"destinations":{"workspace":"species.spart"}})
     });
-    assert!(refused.contains("output_conflict"), "{refused}");
+    assert_eq!(
+        code,
+        basecraft_protocol::operation::OperationErrorCode::OutputConflict,
+        "{refused}"
+    );
     assert_eq!(before, std::fs::read(&canonical).unwrap());
     let issues = basecraft_ops::records::verify(&canonical, None).unwrap();
     assert!(issues.is_empty(), "{issues:?}");
@@ -679,7 +682,7 @@ fn concurrent_species_publication_never_replaces_another_run() {
         ["source.nwk", "species.spart"]
     );
     assert_eq!(
-        basecraft_ops::records::ArtifactRun::for_result(&canonical)
+        basecraft_ops::records::ArtifactRun::for_result(None, &canonical)
             .unwrap()
             .unwrap(),
         common::evidence(winner)
@@ -744,7 +747,7 @@ fn optional_display_tree_uses_hidden_reference_first_companions() {
     // The link resolves to exactly the alignment the run read: the referenced
     // source in the canonical FASTA the descriptor's view submits.
     assert_eq!(link.source, source);
-    let snapshot = link.checked_alignment(&display, &tree.doc).unwrap();
+    let snapshot = link.checked_alignment(None, &display, &tree.doc).unwrap();
     let basecraft_ops::files::Loaded::Alignment(alignment) =
         basecraft_ops::files::load(&source).unwrap()
     else {

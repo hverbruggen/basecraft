@@ -59,6 +59,28 @@ fn discovery_is_passive_and_installation_defaults_to_enabled() {
 }
 
 #[test]
+fn python_bytecode_caches_are_not_package_contents() {
+    crate::isolated_profile::isolate!();
+    let temp = tempfile::tempdir().unwrap();
+    let config = config(temp.path());
+    registry::install(&config, &fixture()).unwrap();
+    let name = "org.example.registry-fixture/count@1";
+    let loaded = Registry::load(&config).unwrap();
+    let package = &loaded.resolve(name, None).unwrap().package;
+    let dir = package.manifest.dir.clone();
+    let digest = registry::package_digest(&dir).unwrap();
+    // What running the plugin's Python leaves behind.
+    std::fs::create_dir(dir.join("__pycache__")).unwrap();
+    std::fs::write(dir.join("__pycache__/plugin.cpython-313.pyc"), b"cache").unwrap();
+    std::fs::write(dir.join("stray.pyc"), b"cache").unwrap();
+    assert_eq!(registry::package_digest(&dir).unwrap(), digest);
+    package.verify().unwrap();
+    // Real contents still count.
+    std::fs::write(dir.join("notes.txt"), b"added").unwrap();
+    assert_ne!(registry::package_digest(&dir).unwrap(), digest);
+}
+
+#[test]
 fn updates_refresh_without_mutating_pins() {
     crate::isolated_profile::isolate!();
     let temp = tempfile::tempdir().unwrap();

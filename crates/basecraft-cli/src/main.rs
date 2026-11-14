@@ -672,12 +672,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     ),
                 ),
                 (
-                    "collection-intent",
-                    schemars::schema_for!(
-                        basecraft_protocol::publication_records::CollectionIntent
-                    ),
-                ),
-                (
                     "collection-export-intent",
                     schemars::schema_for!(
                         basecraft_protocol::publication_records::CollectionExportIntent
@@ -722,8 +716,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     schemars::schema_for!(basecraft_protocol::report_records::Report),
                 ),
                 (
-                    "validated-artifacts",
-                    schemars::schema_for!(Vec<(String, std::path::PathBuf, String)>),
+                    "validated-result",
+                    schemars::schema_for!(basecraft_protocol::records::ValidatedResult),
                 ),
                 (
                     "workflow-stages",
@@ -861,10 +855,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     "sanger-request",
                     schemars::schema_for!(basecraft_protocol::sanger_records::SangerRequest),
                 ),
-                (
-                    "sanger-job-record",
-                    schemars::schema_for!(basecraft_protocol::sanger_records::SangerJobRecord),
-                ),
                 ("report-citations", schemars::schema_for!(Vec<String>)),
                 (
                     "submitted-input",
@@ -899,10 +889,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 (
                     "run-record",
                     schemars::schema_for!(basecraft_protocol::records::RunRecord),
-                ),
-                (
-                    "local-job-index",
-                    schemars::schema_for!(basecraft_protocol::records::LocalJobIndex),
                 ),
                 (
                     "store-marker",

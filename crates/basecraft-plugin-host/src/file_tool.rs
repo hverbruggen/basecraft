@@ -1,8 +1,9 @@
 //! Shared input freezing, support semantics and publication.
 
+use crate::error::protocol;
 use std::path::{Path, PathBuf};
 
-use crate::{Error, Result};
+use crate::Result;
 
 /// Producer-declared support semantics win over numeric-range guesses.
 pub(crate) fn producer_support<'a>(
@@ -92,16 +93,21 @@ pub fn output_beside(file: &Path, suffix: &str, ext: &str) -> PathBuf {
     }
 }
 
-/// Freeze and verify the accepted bytes for a registered operation.
-pub(crate) fn freeze_file(source: &Path, destination: &Path) -> Result<String> {
+/// Copy the accepted bytes for a registered operation and hash them in the
+/// same read. The source's stamp, taken before and after, shows whether it
+/// changed meanwhile; the stamp is returned with the hash.
+pub(crate) fn freeze_file(
+    source: &Path,
+    destination: &Path,
+) -> Result<(String, basecraft_protocol::provenance::FileStamp)> {
     let before = basecraft_ops::records::stamp(source)?;
-    std::fs::copy(source, destination)?;
-    let hash = basecraft_io::hash_file(destination)?;
-    if before != basecraft_ops::records::stamp(source)? || basecraft_io::hash_file(source)? != hash
-    {
-        return Err(Error::Protocol("input changed during submission".into()));
+    let mut copy = basecraft_ops::files::HashingWriter::new(std::fs::File::create(destination)?);
+    let mut reader = std::io::BufReader::with_capacity(1 << 20, std::fs::File::open(source)?);
+    std::io::copy(&mut reader, &mut copy)?;
+    if before != basecraft_ops::records::stamp(source)? {
+        return Err(protocol("input changed during submission"));
     }
-    Ok(hash)
+    Ok((copy.hash(), before))
 }
 
 #[cfg(test)]

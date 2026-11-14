@@ -1,5 +1,6 @@
 //! Combining saved hypotheses preserves identities, lineage and exact source evidence.
-use crate::{DocId, Result, Session, error::invalid, files};
+use crate::error::{changed_on_disk, damaged, invalid};
+use crate::{DocId, Error, Result, Session, files};
 use basecraft_protocol::{Op, delimitation::DelimitationEdit};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -36,18 +37,6 @@ pub fn linked_alignment(session: &Session, doc: DocId) -> Result<Option<&str>> {
             })
             .map(String::as_str)
     }))
-}
-
-/// Publish a new canonical exchange file without replacing a user file. The
-/// authoritative workspace is hidden; native per-fit SPARTs stay in their runs.
-pub fn publish_workspace(
-    target: &std::path::Path,
-    work: &basecraft_protocol::delimitation::DelimitationWorkspace,
-    run: &crate::records::analysis_store::ArtifactRun,
-) -> Result<()> {
-    let name = stage_workspace(target, work, run)?;
-    run.publish_primary(&name)?;
-    run.bind(target)
 }
 
 /// Which specimens of a new workspace were linked to the project roster.
@@ -147,6 +136,7 @@ pub const WORKSPACE_RECEIPT: &str = "workspace-export.json";
 /// may lie anywhere in the project; never replaces an existing file. The
 /// staged file moves there with a receipt; the run keeps no copy (D26).
 pub fn publish_workspace_to(
+    project: Option<&crate::project::Project>,
     target: &std::path::Path,
     work: &basecraft_protocol::delimitation::DelimitationWorkspace,
     run: &crate::records::analysis_store::ArtifactRun,
@@ -154,7 +144,7 @@ pub fn publish_workspace_to(
     let staged = run.staging(&stage_workspace(target, work, run)?)?;
     let hash = basecraft_io::hash_file(&staged)?;
     crate::records::move_file(&staged, target, &hash, &run.artifact(WORKSPACE_RECEIPT)?)?;
-    run.bind(target)
+    run.bind(project, target, &hash)
 }
 
 /// Stage the SPART and its sidecar in the run; returns the staged name.
@@ -208,6 +198,7 @@ fn reference_input_with_dependencies(
 
 /// Retain declared contributing ledgers, not copies of clean original inputs.
 pub(crate) fn dependencies(
+    project: Option<&crate::project::Project>,
     work: &basecraft_protocol::delimitation::DelimitationWorkspace,
 ) -> Result<Vec<PathBuf>> {
     let mut runs = BTreeSet::new();
@@ -227,11 +218,11 @@ pub(crate) fn dependencies(
                     .ok_or_else(|| invalid("Species report has no path"))?,
             );
             if report["hash"].as_str() != Some(basecraft_io::hash_file(path)?.as_str()) {
-                return Err(crate::Error::ChangedOnDisk {
-                    path: path.to_path_buf(),
-                });
+                return Err(changed_on_disk(path));
             }
-            if let Some(run) = crate::records::analysis_store::ArtifactRun::for_result(path)? {
+            if let Some(run) =
+                crate::records::analysis_store::ArtifactRun::for_result(project, path)?
+            {
                 runs.insert(run);
             }
         }
@@ -286,7 +277,7 @@ pub fn checked_alignment(
     }
     let path = PathBuf::from(path);
     if basecraft_io::hash_file(&path)? != *hash {
-        return Err(crate::Error::ChangedOnDisk { path: path.clone() });
+        return Err(changed_on_disk(path.clone()));
     }
     Ok(Some(path))
 }
@@ -294,18 +285,19 @@ pub fn checked_alignment(
 fn checked_workspace_input(run: &std::path::Path, hash: &str) -> Result<PathBuf> {
     let input = crate::records::input_evidence::read_input(run)?;
     if input.state == basecraft_protocol::input_records::EvidenceState::Broken {
-        return Err(invalid("Workspace input evidence was explicitly broken"));
+        return Err(damaged(
+            run,
+            "Workspace input evidence was explicitly broken",
+        ));
     }
     let source = if let Some(reference) = &input.source {
         crate::records::input_evidence::verified_source(run, reference)?
     } else {
         crate::records::analysis_store::submitted_input(run)
-            .ok_or_else(|| invalid("Retained workspace input is missing"))?
+            .ok_or_else(|| damaged(run, "Retained workspace input is missing"))?
     };
     if basecraft_io::hash_file(&source)? != hash {
-        return Err(crate::Error::ChangedOnDisk {
-            path: source.clone(),
-        });
+        return Err(changed_on_disk(source.clone()));
     }
     Ok(source)
 }
@@ -320,22 +312,20 @@ pub fn checked_display_tree(
         if let Some(hash) = work.exchange_fields.get("basecraft_display_hash")
             && &basecraft_io::hash_file(std::path::Path::new(path))? != hash
         {
-            return Err(crate::Error::ChangedOnDisk {
-                path: PathBuf::from(path),
-            });
+            return Err(changed_on_disk(PathBuf::from(path)));
         }
         return Ok(Some(PathBuf::from(path)));
     };
     let run = std::path::Path::new(run);
     let input = crate::records::input_evidence::read_input(run)?;
     if input.state == basecraft_protocol::input_records::EvidenceState::Broken {
-        return Err(invalid("Display tree evidence was explicitly broken"));
+        return Err(damaged(run, "Display tree evidence was explicitly broken"));
     }
     let source = if let Some(reference) = &input.source {
         crate::records::input_evidence::verified_source(run, reference)?
     } else {
         crate::records::analysis_store::submitted_input(run)
-            .ok_or_else(|| invalid("Retained workspace input is missing"))?
+            .ok_or_else(|| damaged(run, "Retained workspace input is missing"))?
     };
     if work
         .exchange_fields
@@ -343,7 +333,7 @@ pub fn checked_display_tree(
         .map(String::as_str)
         != Some(basecraft_io::hash_file(&source)?.as_str())
     {
-        return Err(crate::Error::ChangedOnDisk { path: source });
+        return Err(changed_on_disk(source));
     }
     Ok(Some(source))
 }
@@ -473,8 +463,8 @@ pub fn analysis_result_edits(
         .collect::<BTreeSet<_>>()
         != work.specimens.iter().map(|s| &s.id).collect()
     {
-        return Err(invalid(
-            "Analysis specimen mapping differs; result saved separately",
+        return Err(Error::Outdated(
+            "Analysis specimen mapping differs; result saved separately".into(),
         ));
     }
     let report_hash = basecraft_io::hash_file(output)?;
@@ -547,7 +537,7 @@ fn combined_hypotheses(
     let mut hypotheses = vec![];
     for path in paths {
         let hash = basecraft_io::hash_file(path)?;
-        let sidecar = session.companion_path(path);
+        let sidecar = crate::files::companion_path(session.companion_project(), path);
         let side_hash = if sidecar.exists() {
             Some(basecraft_io::hash_file(&sidecar)?)
         } else {
@@ -561,12 +551,12 @@ fn combined_hypotheses(
                 None
             }) != side_hash
         {
-            return Err(crate::Error::ChangedOnDisk { path: path.clone() });
+            return Err(changed_on_disk(path.clone()));
         }
         if let Some(wanted) = keep.and_then(|keep| keep.get(path)) {
             let available = work.hypotheses.iter().map(|h| h.id.clone()).collect();
             if !wanted.is_subset(&available) {
-                return Err(invalid(format!(
+                return Err(Error::Outdated(format!(
                     "Selected hypothesis no longer exists in {}",
                     path.display()
                 )));
@@ -712,11 +702,13 @@ pub fn combine_to(
     keep: Option<&CombineSelection>,
 ) -> Result<DocId> {
     if paths.len() < 2 {
-        return Err(invalid(
-            "Choose at least two saved species hypothesis files",
+        return Err(Error::MissingChoice(
+            "Choose at least two saved species hypothesis files".into(),
         ));
     }
-    if output.try_exists()? || session.companion_path(output).try_exists()? {
+    if output.try_exists()?
+        || crate::files::companion_path(session.companion_project(), output).try_exists()?
+    {
         return Err(std::io::Error::new(
             std::io::ErrorKind::AlreadyExists,
             "Choose a new filename for the combined hypotheses",
@@ -752,12 +744,16 @@ pub fn combine_to(
             ));
         }
         if keep.values().all(BTreeSet::is_empty) {
-            return Err(invalid("Choose at least one hypothesis to combine"));
+            return Err(Error::MissingChoice(
+                "Choose at least one hypothesis to combine".into(),
+            ));
         }
     }
     let doc = session.open(&paths[0])?;
     if !session.is_delimitation(doc) {
-        return Err(invalid("Choose saved species hypothesis files"));
+        return Err(Error::MissingChoice(
+            "Choose saved species hypothesis files".into(),
+        ));
     }
     let generation = session.generation(doc)?;
     let revision = session.revision(doc)?;
@@ -767,8 +763,8 @@ pub fn combine_to(
         let wanted = keep.get(&paths[0]).cloned().unwrap_or_default();
         let available: BTreeSet<_> = current.hypotheses.iter().map(|h| h.id.clone()).collect();
         if !wanted.is_subset(&available) {
-            return Err(invalid(
-                "Selected hypothesis no longer exists in the first input",
+            return Err(Error::Outdated(
+                "Selected hypothesis no longer exists in the first input".into(),
             ));
         }
         let dropped = available

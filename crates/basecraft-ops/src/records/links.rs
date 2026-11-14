@@ -1,6 +1,7 @@
 //! Tree–alignment links: the linked file by path, size, modification time
 //! and hash, with no copy (D25), or the exact input of the run that inferred
 //! the tree.
+use crate::error::damaged;
 use crate::{Result, error::invalid};
 use basecraft_docs::TreeDoc;
 use std::{
@@ -32,7 +33,7 @@ pub fn sidecar(tree: &Path) -> PathBuf {
 /// to, else with the tree's other records in the `.basecraft` that holds
 /// them (D23), never beside the tree.
 pub fn sidecar_in(project: Option<&crate::project::Project>, tree: &Path) -> PathBuf {
-    if let Ok(Some(run)) = crate::records::analysis_store::ArtifactRun::for_result(tree) {
+    if let Ok(Some(run)) = crate::records::analysis_store::ArtifactRun::for_result(project, tree) {
         return hidden_sidecar(&run, tree);
     }
     crate::project::Project::document_record_with(project, tree, ".alignment.json")
@@ -105,10 +106,10 @@ fn previous_metadata(path: &Path) -> Result<PreviousMetadata> {
             Ok(PreviousMetadata::Symlink(std::fs::read_link(path)?))
         }
         Ok(metadata) if metadata.is_file() => Ok(PreviousMetadata::File(std::fs::read(path)?)),
-        Ok(_) => Err(crate::Error::Damaged {
-            path: path.to_path_buf(),
-            detail: format!("association metadata is not a file: {}", path.display()),
-        }),
+        Ok(_) => Err(damaged(
+            path,
+            format!("association metadata is not a file: {}", path.display()),
+        )),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(PreviousMetadata::Absent),
         Err(error) => Err(error.into()),
     }
@@ -120,11 +121,16 @@ struct StagedLink {
 
 impl StagedLink {
     /// The link as the tree at `to` records it: paths relative to `to`.
-    fn copy(link: &AlignmentLink, from: &Path, to: &Path) -> Result<Self> {
+    fn copy(
+        project: Option<&crate::project::Project>,
+        link: &AlignmentLink,
+        from: &Path,
+        to: &Path,
+    ) -> Result<Self> {
         let mut copied = link.clone();
         copied.source = relative_to(&link.source, to)?;
         if link.schema == 2 {
-            copied.analysis_run = Some(relative_to(&link.evidence_run(from)?, to)?);
+            copied.analysis_run = Some(relative_to(&link.evidence_run(project, from)?, to)?);
         }
         Ok(Self {
             metadata: basecraft_protocol::records::encode(&copied)?,
@@ -170,7 +176,7 @@ impl PreparedLinks {
         // touching its tree. A linked file is checked when it is used.
         for link in origin.into_iter().chain(view.iter()) {
             if link.schema == 2 {
-                link.verified_run_input(from)?;
+                link.verified_run_input(project, from)?;
             }
         }
         let previous_origin = previous_metadata(&sidecar_in(project, to))?;
@@ -179,11 +185,11 @@ impl PreparedLinks {
             project: project.cloned(),
             target: to.to_path_buf(),
             origin: origin
-                .map(|link| StagedLink::copy(link, from, to))
+                .map(|link| StagedLink::copy(project, link, from, to))
                 .transpose()?,
             view: view
                 .as_ref()
-                .map(|link| StagedLink::copy(link, from, &view_tree(to)))
+                .map(|link| StagedLink::copy(project, link, from, &view_tree(to)))
                 .transpose()?,
             previous_origin,
             previous_view,
@@ -242,9 +248,9 @@ impl PreparedLinks {
             }
             Ok((result, outputs))
         };
-        finish().map_err(|error| crate::Error::Damaged { path: recovery_path.clone(), detail: format!(
+        finish().map_err(|error| damaged(recovery_path.clone(), format!(
             "Save As incomplete; alignment association may be unavailable; recovery metadata at {}: {error}", recovery_path.display()
-        ) })
+        )))
     }
 }
 
@@ -337,6 +343,7 @@ pub trait AlignmentLinkExt: Sized {
         source: &Path,
     ) -> Result<Vec<PathBuf>>;
     fn create_referenced(
+        project: Option<&crate::project::Project>,
         tree: &Path,
         source: &Path,
         input: &Path,
@@ -379,17 +386,35 @@ pub trait AlignmentLinkExt: Sized {
         tree_path: &Path,
         tree: &TreeDoc,
     ) -> Result<(Self, PathBuf)>;
-    fn status(&self, tree_path: &Path, tree: &TreeDoc) -> String;
+    fn status(
+        &self,
+        project: Option<&crate::project::Project>,
+        tree_path: &Path,
+        tree: &TreeDoc,
+    ) -> String;
     /// The alignment to use; writes nothing. See
     /// [`AlignmentLinkExt::checked_view_in`].
-    fn checked_alignment(&self, tree_path: &Path, tree: &TreeDoc) -> Result<PathBuf>;
+    fn checked_alignment(
+        &self,
+        project: Option<&crate::project::Project>,
+        tree_path: &Path,
+        tree: &TreeDoc,
+    ) -> Result<PathBuf>;
     fn source_changed(&self) -> bool;
 }
 
 // Evidence helpers remain private to ops; protocol contains only wire data.
 trait LinkEvidence {
-    fn evidence_run(&self, tree_path: &Path) -> Result<PathBuf>;
-    fn verified_run_input(&self, tree_path: &Path) -> Result<PathBuf>;
+    fn evidence_run(
+        &self,
+        project: Option<&crate::project::Project>,
+        tree_path: &Path,
+    ) -> Result<PathBuf>;
+    fn verified_run_input(
+        &self,
+        project: Option<&crate::project::Project>,
+        tree_path: &Path,
+    ) -> Result<PathBuf>;
     fn linked_file(&self) -> Result<LinkedFile>;
 }
 
@@ -424,7 +449,11 @@ impl LinkEvidence for AlignmentLink {
         }
     }
 
-    fn evidence_run(&self, tree_path: &Path) -> Result<PathBuf> {
+    fn evidence_run(
+        &self,
+        project: Option<&crate::project::Project>,
+        tree_path: &Path,
+    ) -> Result<PathBuf> {
         let name = self
             .analysis_run
             .as_deref()
@@ -435,7 +464,8 @@ impl LinkEvidence for AlignmentLink {
             .join(name)
             .canonicalize()?;
         // Never trust an arbitrary run supplied by association metadata.
-        if let Some(bound) = crate::records::analysis_store::ArtifactRun::for_result(tree_path)?
+        if let Some(bound) =
+            crate::records::analysis_store::ArtifactRun::for_result(project, tree_path)?
             && bound != run
         {
             return Err(invalid(
@@ -450,12 +480,16 @@ impl LinkEvidence for AlignmentLink {
         Ok(run)
     }
 
-    fn verified_run_input(&self, tree_path: &Path) -> Result<PathBuf> {
+    fn verified_run_input(
+        &self,
+        project: Option<&crate::project::Project>,
+        tree_path: &Path,
+    ) -> Result<PathBuf> {
         let submitted = self
             .submitted_hash
             .as_deref()
             .ok_or_else(|| invalid("reference association has no submitted input"))?;
-        let run = self.evidence_run(tree_path)?;
+        let run = self.evidence_run(project, tree_path)?;
         let input = crate::records::input_evidence::read_input(&run)?;
         if input.state == basecraft_protocol::input_records::EvidenceState::Broken {
             return Err(invalid("alignment evidence explicitly broken"));
@@ -531,6 +565,7 @@ impl AlignmentLinkExt for AlignmentLink {
     /// Reference-first inferred association. Clean disk input is never copied;
     /// dirty submitted input is already retained once by the job's artifact run.
     fn create_referenced(
+        project: Option<&crate::project::Project>,
         tree: &Path,
         source: &Path,
         input: &Path,
@@ -555,7 +590,7 @@ impl AlignmentLinkExt for AlignmentLink {
         };
         let metadata = hidden_sidecar(run.directory(), tree);
         crate::records::input_evidence::write_json(&metadata, &link)?;
-        run.bind(tree)?;
+        run.bind(project, tree, &basecraft_io::hash_file(tree)?)?;
         Ok(vec![metadata])
     }
 
@@ -588,9 +623,13 @@ impl AlignmentLinkExt for AlignmentLink {
     }
 
     fn read_in(project: Option<&crate::project::Project>, tree: &Path) -> Result<Self> {
-        crate::records::analysis_store::ArtifactRun::for_result(tree)?;
+        let sidecar = match crate::records::analysis_store::ArtifactRun::for_result(project, tree)?
+        {
+            Some(run) => hidden_sidecar(&run, tree),
+            None => crate::project::Project::document_record_with(project, tree, ".alignment.json"),
+        };
         let (metadata, writer) = basecraft_protocol::records::decode_written::<serde_json::Value>(
-            &std::fs::read(sidecar_in(project, tree))?,
+            &std::fs::read(sidecar)?,
         )?;
         if let Some(reason) = metadata
             .get("unavailable")
@@ -637,7 +676,12 @@ impl AlignmentLinkExt for AlignmentLink {
     }
 
     /// Status describes retained evidence and never reads changed source data as input.
-    fn status(&self, tree_path: &Path, tree: &TreeDoc) -> String {
+    fn status(
+        &self,
+        project: Option<&crate::project::Project>,
+        tree_path: &Path,
+        tree: &TreeDoc,
+    ) -> String {
         let label = if self.inferred {
             "Source alignment"
         } else {
@@ -645,7 +689,7 @@ impl AlignmentLinkExt for AlignmentLink {
         };
         let mut status = format!("{label}: {}", self.source.display());
         if self.schema == 2 {
-            return match self.evidence_run(tree_path).and_then(|run| {
+            return match self.evidence_run(project, tree_path).and_then(|run| {
                 crate::records::input_evidence::read_input(&run).map(|input| (run, input))
             }) {
                 Ok((_, input))
@@ -698,9 +742,14 @@ impl AlignmentLinkExt for AlignmentLink {
         status
     }
 
-    fn checked_alignment(&self, tree_path: &Path, tree: &TreeDoc) -> Result<PathBuf> {
+    fn checked_alignment(
+        &self,
+        project: Option<&crate::project::Project>,
+        tree_path: &Path,
+        tree: &TreeDoc,
+    ) -> Result<PathBuf> {
         let alignment = if self.schema == 2 {
-            self.verified_run_input(tree_path)?
+            self.verified_run_input(project, tree_path)?
         } else if matches!(self.linked_file()?, LinkedFile::Changed) {
             return Err(crate::Error::AlignmentChanged {
                 path: self.source.clone(),
@@ -757,7 +806,7 @@ fn checked(
         basecraft_io::write_atomic(&sidecar_in(project, linked), |out| out.write_all(&bytes))?;
         link.source_stamp = Some(stamp);
     }
-    let alignment = link.checked_alignment(tree_path, tree)?;
+    let alignment = link.checked_alignment(project, tree_path, tree)?;
     Ok((link, alignment))
 }
 
@@ -779,7 +828,7 @@ mod tests {
         session.save(doc, Some(&output)).unwrap();
         let link = AlignmentLink::read(&output).unwrap();
         assert_eq!(
-            link.checked_alignment(&output, session.tree(doc).unwrap())
+            link.checked_alignment(None, &output, session.tree(doc).unwrap())
                 .unwrap(),
             source.canonicalize().unwrap()
         );
@@ -803,7 +852,7 @@ mod tests {
         assert_eq!(outputs, [sidecar(&tree_path)], "no copy of the alignment");
         let link = AlignmentLink::read(&tree_path).unwrap();
         assert!(!link.inferred);
-        assert!(link.status(&tree_path, &tree).contains("unchanged"));
+        assert!(link.status(None, &tree_path, &tree).contains("unchanged"));
         // Rewritten with the same bytes: the new time is stored silently.
         let before = link.source_stamp.clone().unwrap();
         let file = std::fs::File::options().write(true).open(&source).unwrap();
@@ -823,7 +872,7 @@ mod tests {
         ));
         assert!(
             stored
-                .status(&tree_path, &tree)
+                .status(None, &tree_path, &tree)
                 .contains("changed since it was linked")
         );
         std::fs::write(&source, ">a\nAAC\n>a\nATC\n").unwrap();

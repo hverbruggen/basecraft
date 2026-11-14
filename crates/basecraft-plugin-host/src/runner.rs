@@ -9,7 +9,7 @@ pub use prepare::recorded_request;
 
 use basecraft_ops::records::AlignmentLinkExt;
 use basecraft_platform::files::link_count;
-use basecraft_protocol::publication_records::{CollectionExportIntent, CollectionIntent};
+use basecraft_protocol::publication_records::CollectionExportIntent;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{
@@ -17,10 +17,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use basecraft_ops::{
-    records,
-    records::{ArtifactDestination, ArtifactRun},
-};
+use basecraft_ops::{records, records::ArtifactRun};
 use basecraft_protocol::{
     operation::{
         ExecutionFamily, InputReference, InputView, InvocationContext, InvocationInputEvidence,
@@ -29,7 +26,7 @@ use basecraft_protocol::{
     },
     plugin::InvokeResult,
     provenance::ArtifactRevision,
-    records::{JobIndexPlugin, JobIndexSource, LocalJobIndex, RUN_RECORD_SCHEMA, RunRecord},
+    records::{RUN_RECORD_SCHEMA, RunRecord},
 };
 use serde_json::Value;
 
@@ -360,7 +357,7 @@ impl PreparedOperation {
                 if root.join(&*path) == retained {
                     continue;
                 }
-                let hash = file_tool::freeze_file(&root.join(&*path), &retained)?;
+                let (hash, _) = file_tool::freeze_file(&root.join(&*path), &retained)?;
                 self.ledger_inputs.push(records::retained_file(
                     &self.run,
                     &name,
@@ -592,9 +589,12 @@ impl PreparedOperation {
                 &plan,
             )?;
         }
-        records::write_json(&self.run.artifact("validated.json")?, result)?;
-        records::write_plain_json(&self.run.artifact("validated-artifacts.json")?, &validated)?;
-        Ok(validated)
+        let record = basecraft_protocol::records::ValidatedResult {
+            result: result.clone(),
+            artifacts: validated,
+        };
+        records::write_json(&self.run.artifact("validated.json")?, &record)?;
+        Ok(record.artifacts)
     }
 
     /// Record a receipt after each write; later failure remains partial and all
@@ -643,9 +643,11 @@ impl PreparedOperation {
     /// Publish the species workspace in a validated run's result as a new
     /// SPART file in the project.
     fn publish_workspace(&self, destination: &str) -> Result<(PathBuf, Option<String>)> {
-        let validated: Vec<(String, PathBuf, String)> = serde_json::from_slice(
-            &basecraft_ops::records::read_record(&self.run.artifact("validated-artifacts.json")?)?,
-        )?;
+        let validated =
+            basecraft_protocol::records::decode::<basecraft_protocol::records::ValidatedResult>(
+                &basecraft_ops::records::read_record(&self.run.artifact("validated.json")?)?,
+            )?
+            .artifacts;
         let name = self.species_result_name();
         let (role, staged, hash) = validated
             .iter()
@@ -678,7 +680,12 @@ impl PreparedOperation {
         let roster =
             basecraft_ops::delimitation::link_roster(&self.policy.root, &self.run, &mut work)?;
         let target = self.policy.path(destination, true)?;
-        basecraft_ops::delimitation::publish_workspace_to(&target, &work, &self.run)?;
+        basecraft_ops::delimitation::publish_workspace_to(
+            self.project.as_ref(),
+            &target,
+            &work,
+            &self.run,
+        )?;
         Ok((target, roster.summary()))
     }
 
@@ -699,8 +706,8 @@ impl PreparedOperation {
 
     /// An exported tree gets what the retained member has: its run binding,
     /// producer support semantics and the link to the alignment it came from.
-    fn finalise_exported_tree(&self, role: &str, tree: &Path) -> Result<()> {
-        self.run.bind(tree)?;
+    fn finalise_exported_tree(&self, role: &str, tree: &Path, hash: &str) -> Result<()> {
+        self.run.bind(self.project.as_ref(), tree, hash)?;
         file_tool::write_tree_companion(
             tree,
             file_tool::producer_support(&self.operation.descriptor, &self.parameters),
@@ -737,6 +744,7 @@ impl PreparedOperation {
             ),
         };
         basecraft_ops::records::AlignmentLink::create_referenced(
+            self.project.as_ref(),
             tree,
             &source,
             Path::new(frozen),
@@ -752,7 +760,7 @@ impl PreparedOperation {
     pub(crate) fn tool_run<'a>(
         &'a self,
         inputs: &'a [(String, String)],
-        outputs: &'a [PathBuf],
+        outputs: &'a [(PathBuf, String)],
     ) -> (
         basecraft_protocol::Actor,
         basecraft_ops::session::ToolRunRecord<'a>,
@@ -794,71 +802,10 @@ impl PreparedOperation {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
     }
+    /// Write the run's status, its `runtime.json`, which is also what the
+    /// Tasks view lists (D28).
     pub fn persist(&self, outcome: &OperationOutcome) -> Result<()> {
-        let runtime = self.run.artifact("runtime.json")?;
-        records::write_json(&runtime, outcome)?;
-        self.write_task_index(outcome, &runtime)
-    }
-
-    /// The Tasks view lists runs from small index records in the `.basecraft`
-    /// of the run's home: the session's project when it holds the run, else
-    /// the folder the run is in. This one only points at the run's own
-    /// `runtime.json`, which stays the authoritative record. Its paths are
-    /// relative to the home, so the record travels with a copied project.
-    fn write_task_index(&self, outcome: &OperationOutcome, runtime: &Path) -> Result<()> {
-        let home = basecraft_ops::project::Project::base_of(
-            self.project.as_ref(),
-            &self.run.working_directory().join(".basecraft"),
-        )?;
-        let relative = |path: &Path| records::relative(&home, path);
-        let source = self.document.as_ref().map_or_else(
-            || {
-                self.context
-                    .input_evidence
-                    .values()
-                    .flatten()
-                    .find_map(|evidence| evidence.original_path.as_deref())
-                    .map(|path| relative(&self.run_path(path)))
-                    .transpose()
-                    .map(Option::unwrap_or_default)
-            },
-            |target| relative(&target.path),
-        )?;
-        let outputs = outcome
-            .artifacts
-            .iter()
-            .map(|artifact| {
-                Ok((
-                    relative(Path::new(&artifact.path))?,
-                    artifact.digest.clone(),
-                ))
-            })
-            .collect::<Result<_>>()?;
-        let index = serde_json::to_value(LocalJobIndex {
-            schema_version: 1,
-            id: self.run.id().into(),
-            status: outcome.state,
-            owner_instance: basecraft_platform::process_instance().into(),
-            started: self.started.clone(),
-            ended: outcome
-                .state
-                .terminal()
-                .then(basecraft_platform::now_rfc3339),
-            plugin: JobIndexPlugin {
-                id: self.operation.package.manifest.id.clone(),
-                version: self.operation.package.manifest.version.clone(),
-            },
-            operation: self.operation.id.clone(),
-            effective_parameters: outcome.effective_parameters.clone(),
-            initiator: self.initiator.clone(),
-            source: JobIndexSource { path: source },
-            outputs,
-            diagnostics: outcome.errors.first().map(|error| error.message.clone()),
-            runtime_record: relative(runtime)?.into(),
-        })?;
-        let path = records::job_index_path(&home, self.run.id());
-        std::fs::create_dir_all(path.parent().unwrap_or(&path))?;
-        records::write_json(&path, &index)?;
+        records::write_json(&self.run.artifact("runtime.json")?, outcome)?;
         Ok(())
     }
 }
@@ -902,23 +849,51 @@ fn sources_from_upstream(directory: &Path) -> Result<Vec<PathBuf>> {
         .collect())
 }
 
+/// Whether the collection at `root` holds exactly the `expected` members
+/// with those hashes, each an ordinary file with one link.
 fn verify_collection(root: &Path, expected: &BTreeMap<PathBuf, String>) -> Result<()> {
+    check_members(root, expected)?;
+    for (relative, hash) in expected {
+        if basecraft_io::hash_file(&root.join(relative))? != *hash {
+            return Err(Error::Protocol(
+                "collection bytes changed after validation".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// [`verify_collection`] without reading the members, for a collection
+/// whose hashes validation has just taken.
+fn check_members(root: &Path, expected: &BTreeMap<PathBuf, String>) -> Result<()> {
     let metadata = root.symlink_metadata()?;
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
         return Err(Error::Protocol("collection root is unsafe".into()));
     }
     let mut actual = BTreeSet::new();
     scan_files(root, &mut actual, 0)?;
+    // Validation refused any analysis store a plugin wrote, so one here
+    // holds the bindings of loose members, kept beside them (rule 2.5).
+    actual.retain(|path| {
+        !path.strip_prefix(root).is_ok_and(|member| {
+            let parts: Vec<_> = member
+                .components()
+                .map(std::path::Component::as_os_str)
+                .collect();
+            parts
+                .windows(2)
+                .any(|pair| pair == [".basecraft", "analyses-v1"])
+        })
+    });
     if actual != expected.keys().map(|path| root.join(path)).collect() {
         return Err(Error::Protocol(
             "collection members differ from validated output".into(),
         ));
     }
-    for (relative, hash) in expected {
-        let path = root.join(relative);
-        if link_count(&path)? != 1 || basecraft_io::hash_file(&path)? != *hash {
+    for relative in expected.keys() {
+        if link_count(&root.join(relative))? != 1 {
             return Err(Error::Protocol(
-                "collection bytes changed after validation".into(),
+                "collection member has another link after validation".into(),
             ));
         }
     }

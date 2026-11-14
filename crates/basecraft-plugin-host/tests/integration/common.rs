@@ -11,7 +11,9 @@ use basecraft_plugin_host::{
     policy::SessionPolicy,
     registry::{Registry, RegistryConfig},
 };
-use basecraft_protocol::operation::{OperationOutcome, OperationRequest, RuntimeState};
+use basecraft_protocol::operation::{
+    OperationErrorCode, OperationOutcome, OperationRequest, RuntimeState,
+};
 use serde_json::{Value, json};
 
 const DEADLINE: Duration = Duration::from_secs(300);
@@ -122,11 +124,14 @@ pub fn refused_in(
     registry: &Registry,
     session: &mut Session,
     request: impl FnOnce(&Session) -> Value,
-) -> String {
+) -> (OperationErrorCode, String) {
     let mut manager = JobManager::default();
     match submit_in(&mut manager, registry, session, request) {
         Ok(accepted) => panic!("request was accepted: {accepted:#?}"),
-        Err(error) => error.to_string(),
+        Err(error) => (
+            basecraft_plugin_host::jobs::error_code(&error),
+            error.to_string(),
+        ),
     }
 }
 

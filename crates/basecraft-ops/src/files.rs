@@ -1,5 +1,6 @@
 //! Opening and saving documents by file format.
 
+use crate::error::{damaged, limit, unsupported};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -81,12 +82,7 @@ pub enum Kind {
 pub fn kind(path: &Path) -> Result<Kind> {
     match Format::from_path(path)? {
         Format::SangerReview => {
-            crate::sanger_review::SangerReview::load(path).map_err(|detail| {
-                crate::Error::Damaged {
-                    path: path.into(),
-                    detail,
-                }
-            })?;
+            crate::sanger_review::SangerReview::load(path)?;
             return Ok(Kind::SangerReview);
         }
         Format::Delimitation => return Ok(Kind::Delimitation),
@@ -224,11 +220,7 @@ pub fn load_in(project: Option<&crate::project::Project>, path: &Path) -> Result
     let format = Format::from_path(path)?;
     match format {
         Format::SangerReview => crate::sanger_review::SangerReview::load(path)
-            .map(|review| Loaded::SangerReview(Box::new(review)))
-            .map_err(|detail| crate::Error::Damaged {
-                path: path.into(),
-                detail,
-            }),
+            .map(|review| Loaded::SangerReview(Box::new(review))),
         Format::GenBank => Ok(Loaded::Sequence(opened_genbank(
             genbank::open_hashed(path)?.0,
         ))),
@@ -355,20 +347,13 @@ pub(crate) fn capture_load(
         Format::GenBank => unreachable!("streamed above"),
         Format::SangerReview => {
             if main.bytes().len() > 64 * 1024 * 1024 {
-                return Err(Error::Limit {
-                    what: "Sanger review bytes".into(),
-                    limit: 64 * 1024 * 1024,
-                });
+                return Err(limit("Sanger review bytes", 64 * 1024 * 1024));
             }
-            let review = crate::sanger_review::SangerReview::decode(main.bytes(), path).map_err(
-                |detail| Error::Damaged {
-                    path: path.into(),
-                    detail,
-                },
-            )?;
+            let review = crate::sanger_review::SangerReview::decode(main.bytes(), path)?;
             Loaded::SangerReview(Box::new(review))
         }
         Format::Tree => Loaded::Tree(load_tree_bytes(
+            project,
             path,
             &main,
             &files[0].2,
@@ -377,6 +362,7 @@ pub(crate) fn capture_load(
         )?),
         Format::Delimitation => {
             let (work, ignored) = load_delimitation_bytes(
+                project,
                 path,
                 main.bytes(),
                 &files[0].2,
@@ -566,7 +552,7 @@ pub fn gff_sidecar(path: &Path) -> PathBuf {
 /// in the `.basecraft` of `project` or of its own folder, keyed by its
 /// relative path ([`crate::project::Project::document_record`]).
 pub fn companion_path(project: Option<&crate::project::Project>, path: &Path) -> PathBuf {
-    if let Ok(Some(run)) = crate::records::analysis_store::ArtifactRun::for_result(path) {
+    if let Ok(Some(run)) = crate::records::analysis_store::ArtifactRun::for_result(project, path) {
         return run_companion(&run, path);
     }
     crate::project::Project::document_record(project, path)
@@ -675,7 +661,7 @@ pub(crate) fn settle_companion(
     if loose == kept || !loose.is_file() {
         return Ok(());
     }
-    if crate::records::analysis_store::ArtifactRun::for_result(document)?.is_some() {
+    if crate::records::analysis_store::ArtifactRun::for_result(project, document)?.is_some() {
         // The save wrote the companion into the result's run; the loose one
         // is the input recovery replayed from.
         std::fs::remove_file(&loose)?;
@@ -754,7 +740,7 @@ fn read_companion(
 ) -> Result<Companion> {
     let (companion, writer) = basecraft_protocol::records::decode_written::<Companion>(bytes)?;
     if companion.version != COMPANION_VERSION {
-        return Err(Error::Unsupported(format!(
+        return Err(unsupported(format!(
             "{}: {}",
             path.display(),
             basecraft_protocol::records::other_format(
@@ -765,18 +751,15 @@ fn read_companion(
         )));
     }
     if companion.exchange_hash != exchange_hash {
-        return Err(Error::Damaged {
-            path: path.into(),
-            detail: "the file it describes was changed outside basecraft".into(),
-        });
+        return Err(damaged(
+            path,
+            "the file it describes was changed outside basecraft",
+        ));
     }
     if let Some(tree) = tree
         && companion.tree.as_ref().map(|t| &t.tree_hash) != Some(&tree_hash(tree))
     {
-        return Err(Error::Damaged {
-            path: path.into(),
-            detail: "Tree metadata describes a different tree".into(),
-        });
+        return Err(damaged(path, "Tree metadata describes a different tree"));
     }
     Ok(companion)
 }
@@ -803,6 +786,7 @@ pub(crate) fn load_tree_from(
         Err(error) => (None, Some(error.to_string())),
     };
     load_tree_bytes(
+        project,
         path,
         source,
         &basecraft_io::hash_bytes(source.bytes()),
@@ -814,6 +798,7 @@ pub(crate) fn load_tree_from(
 /// `captured_side` is the companion and its bytes, read with the main
 /// file; `side_issue` says why the companion could not be read.
 fn load_tree_bytes(
+    project: Option<&crate::project::Project>,
     path: &Path,
     source: &Source,
     exchange_hash: &str,
@@ -839,8 +824,11 @@ fn load_tree_bytes(
             return Err(Error::Io(io::Error::other(issue)));
         }
         // A broken hidden binding never falls back to the companion beside the file.
-        let run =
-            crate::records::analysis_store::ArtifactRun::for_result_with_hash(path, exchange_hash)?;
+        let run = crate::records::analysis_store::ArtifactRun::for_result_with_hash(
+            project,
+            path,
+            exchange_hash,
+        )?;
         let bound = run.is_some();
         let (sidecar, side) = match run {
             Some(run) => {
@@ -1628,11 +1616,18 @@ pub fn load_delimitation_in(
     let (source, hash) = Source::open_hashed(path)?;
     let companion = companion_path(project, path);
     let side = read_optional(&companion)?;
-    load_delimitation_bytes(path, source.bytes(), &hash, (&companion, side.as_ref()))
-        .map(|(work, _)| work)
+    load_delimitation_bytes(
+        project,
+        path,
+        source.bytes(),
+        &hash,
+        (&companion, side.as_ref()),
+    )
+    .map(|(work, _)| work)
 }
 
 fn load_delimitation_bytes(
+    project: Option<&crate::project::Project>,
     path: &Path,
     bytes: &[u8],
     exchange_hash: &str,
@@ -1649,7 +1644,7 @@ fn load_delimitation_bytes(
         basecraft_io::spart::parse_text(text)?
     };
     // A broken hidden binding never falls back to the companion beside the file.
-    let hidden = crate::records::analysis_store::ArtifactRun::for_result(path)?;
+    let hidden = crate::records::analysis_store::ArtifactRun::for_result(project, path)?;
     if hidden.is_some() && captured_side.is_none() {
         return Err(crate::error::invalid(
             "Hidden species workspace metadata is missing; restore its folder context or explicitly open a standalone SPART copy",
@@ -1658,10 +1653,8 @@ fn load_delimitation_bytes(
     let mut warning = None;
     if let Some(source) = captured_side {
         let side = read_companion(companion, source.bytes(), exchange_hash, None).and_then(|c| {
-            c.delimitation.ok_or_else(|| Error::Damaged {
-                path: companion.to_path_buf(),
-                detail: "the companion holds no species workspace".into(),
-            })
+            c.delimitation
+                .ok_or_else(|| damaged(companion, "the companion holds no species workspace"))
         });
         match side {
             Ok(side) => {

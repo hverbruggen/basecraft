@@ -432,6 +432,8 @@ pub enum OperationErrorCode {
     /// A choice the command needs and has no default for was not given (D1):
     /// a setting, the project, or the display tree to draw on.
     MissingChoice,
+    /// An earlier step has to happen first: save, export, review or relink.
+    NotReady,
     /// A setting the operation does not have.
     UnknownSetting,
 }
@@ -475,6 +477,7 @@ impl OperationErrorCode {
             Self::EvidenceIncomplete => "evidence_incomplete",
             Self::ReadOnlyFolder => "read_only_folder",
             Self::MissingChoice => "missing_choice",
+            Self::NotReady => "not_ready",
             Self::UnknownSetting => "unknown_setting",
         }
     }

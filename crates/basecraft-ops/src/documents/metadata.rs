@@ -5,7 +5,7 @@ use basecraft_protocol::{DocState, Op};
 
 use super::Document;
 use crate::Result;
-use crate::error::invalid;
+use crate::error::{invalid, unsupported};
 use crate::files::Format;
 use crate::metadata::OpenedMetadata;
 use crate::session::Inverse;
@@ -49,7 +49,7 @@ impl Document for OpenedMetadata {
 
     fn revert(&mut self, inverse: &Inverse) -> Result<()> {
         let Inverse::Metadata(undo) = inverse else {
-            return Err(invalid("undo of the wrong kind of edit"));
+            return Err(unsupported("undo of the wrong kind of edit"));
         };
         undo.undo(&mut self.metadata);
         Ok(())
@@ -68,7 +68,7 @@ impl Document for OpenedMetadata {
         _publication: &super::WritePublication,
     ) -> Result<super::PreparedWrite> {
         if format != Format::Metadata {
-            return Err(crate::Error::Unsupported(format!(
+            return Err(unsupported(format!(
                 "project metadata is saved as {}",
                 crate::metadata::MANIFEST
             )));

@@ -1,8 +1,9 @@
 //! Registered sub-runs for explicit alignment workflows. The parent alone owns
 //! the receiving document and its revision/application/undo boundary.
+use crate::error::protocol;
 use crate::{Error, Result, jobs::JobManager, policy::SessionPolicy, registry::Registry};
 use basecraft_protocol::{
-    operation::{OperationOutcome, OperationRequest, RuntimeState},
+    operation::{InputReference, OperationOutcome, OperationRequest, RuntimeState},
     plugin::InvokeResult,
 };
 use serde_json::{Value, json};
@@ -29,17 +30,17 @@ pub(crate) struct AlignmentWorkflow<'a> {
 impl AlignmentWorkflow<'_> {
     fn stage(&mut self, operation: &str, inputs: &Value, parameters: &Value) -> Result<PathBuf> {
         if self.cancelled.load(Ordering::Acquire) {
-            return Err(Error::Protocol("cancelled before workflow stage".into()));
+            return Err(protocol("cancelled before workflow stage"));
         }
         let descriptor = &self.registry.resolve(operation, None)?.descriptor;
         // The workflow descriptor is the superset. Pass only parameters declared
         // by each stage, retaining the normalized nested settings in its receipt.
         let properties = descriptor.parameters["properties"]
             .as_object()
-            .ok_or_else(|| Error::Protocol("stage parameters must be an object".into()))?;
+            .ok_or_else(|| protocol("stage parameters must be an object"))?;
         let parameters: serde_json::Map<_, _> = parameters
             .as_object()
-            .ok_or_else(|| Error::Protocol("workflow parameters must be an object".into()))?
+            .ok_or_else(|| protocol("workflow parameters must be an object"))?
             .iter()
             .filter(|(key, _)| properties.contains_key(*key))
             .map(|(key, value)| (key.clone(), value.clone()))
@@ -67,14 +68,14 @@ impl AlignmentWorkflow<'_> {
             .evidence
             .as_ref()
             .map(PathBuf::from)
-            .ok_or_else(|| Error::Protocol("stage has no retained evidence".into()))?;
+            .ok_or_else(|| protocol("stage has no retained evidence"))?;
         *self
             .stages
             .last_mut()
-            .ok_or_else(|| Error::Protocol("stage receipt is missing".into()))? = outcome.clone();
+            .ok_or_else(|| protocol("stage receipt is missing"))? = outcome.clone();
         self.persist()?;
         if outcome.state != RuntimeState::Completed {
-            return Err(Error::Protocol(format!(
+            return Err(protocol(format!(
                 "workflow stage {} ended {:?}: {} (evidence: {})",
                 operation,
                 outcome.state,
@@ -108,7 +109,7 @@ impl AlignmentWorkflow<'_> {
                 stage
                     .evidence
                     .as_ref()
-                    .ok_or_else(|| Error::Protocol("stage evidence missing".into()))?,
+                    .ok_or_else(|| protocol("stage evidence missing"))?,
             );
             if upstream.iter().any(|parent| parent.id == stage.run_id) {
                 continue;
@@ -132,12 +133,11 @@ impl AlignmentWorkflow<'_> {
             .workflow_stages
             .get(name)
             .cloned()
-            .ok_or_else(|| Error::Protocol(format!("workflow has no {name} operation")))
+            .ok_or_else(|| protocol(format!("workflow has no {name} operation")))
     }
 
     pub fn run(&mut self, method: &str, effective: Value) -> Result<InvokeResult> {
-        let fit =
-            workflow_fit(method).ok_or_else(|| Error::Protocol("unknown host workflow".into()))?;
+        let fit = workflow_fit(method).ok_or_else(|| protocol("unknown host workflow"))?;
         let root = self.parent.run.artifact("stages")?;
         std::fs::create_dir(&root)?;
         // This durable accepted input is shared by all stages. A child must not
@@ -151,7 +151,7 @@ impl AlignmentWorkflow<'_> {
         )?;
         let prepare = self.stage(
             &self.stage_operation("prepare")?,
-            &json!({"alignment":[{"kind":"file","path":source}]}),
+            &file_inputs(&[("alignment", &source)]),
             &effective,
         )?;
         let report: Value = serde_json::from_slice(&std::fs::read(prepare.join("result.json"))?)?;
@@ -200,9 +200,7 @@ impl AlignmentWorkflow<'_> {
                 })
             })
         {
-            return Err(Error::Protocol(
-                "Prepared representative alignment changed".into(),
-            ));
+            return Err(protocol("Prepared representative alignment changed"));
         }
         let mut params = effective.clone();
         params["deduplicate"] = json!(unique);
@@ -213,9 +211,10 @@ impl AlignmentWorkflow<'_> {
         } else {
             "all specimens"
         });
-        let mut inputs = json!({"alignment":[{"kind":"file","path": if fit == "asap" { &alignment } else { &source }}]});
+        let fitted = if fit == "asap" { &alignment } else { &source };
+        let mut inputs = vec![("alignment", fitted.clone())];
         if fit == "asap" && unique {
-            inputs["full_alignment"] = json!([{"kind":"file","path":source}]);
+            inputs.push(("full_alignment", source.clone()));
         }
         if unique {
             let mapping = prepare.join("result.json.haplotypes.json");
@@ -225,26 +224,34 @@ impl AlignmentWorkflow<'_> {
                     Path::new(path).file_name() == mapping.file_name() && digest == &hash
                 })
             }) {
-                return Err(Error::Protocol("Prepared haplotype mapping changed".into()));
+                return Err(protocol("Prepared haplotype mapping changed"));
             }
             params["mapping_hash"] = json!(hash);
-            inputs["mapping"] = json!([{"kind":"file","path":mapping}]);
+            inputs.push(("mapping", mapping));
         }
         if fit != "asap" {
             let mut tree_params = effective;
             tree_params["method"] = json!("upgma");
             let tree = self.stage(
                 &self.stage_operation("tree")?,
-                &json!({"alignment":[{"kind":"file","path":alignment}]}),
+                &file_inputs(&[("alignment", &alignment)]),
                 &tree_params,
             )?;
-            inputs["tree"] = json!([{"kind":"file","path":tree.join("tree.nwk")}]);
+            inputs.push(("tree", tree.join("tree.nwk")));
             params["rooted"] = json!(true);
             params["units"] = json!("relative time from equal-rate UPGMA distances; uncalibrated");
             params["tree_inference"] =
                 json!("UPGMA equal-rate clustering from retained aligned sequences");
         }
-        let result = self.stage(&self.stage_operation("fit")?, &inputs, &params)?;
+        let inputs: Vec<_> = inputs
+            .iter()
+            .map(|(name, path)| (*name, path.as_path()))
+            .collect();
+        let result = self.stage(
+            &self.stage_operation("fit")?,
+            &file_inputs(&inputs),
+            &params,
+        )?;
         let target = &self
             .parent
             .run_path(&self.parent.context.outputs["artifacts"]);
@@ -324,4 +331,14 @@ impl AlignmentWorkflow<'_> {
             ..InvokeResult::default()
         })
     }
+}
+
+/// Stage inputs that name one file each.
+fn file_inputs(files: &[(&str, &Path)]) -> Value {
+    let inputs = files.iter().map(|(name, path)| {
+        let path = path.to_string_lossy().into_owned();
+        let input = serde_json::to_value(InputReference::File { path }).unwrap_or_default();
+        ((*name).to_owned(), Value::Array(vec![input]))
+    });
+    Value::Object(inputs.collect())
 }

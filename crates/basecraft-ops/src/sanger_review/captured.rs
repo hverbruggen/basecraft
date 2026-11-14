@@ -1,6 +1,7 @@
 //! Owned bytes shared by trace parsing, evidence registration and tool submission.
+use crate::Result;
+use crate::error::{changed_on_disk, limit};
 use crate::records::input_evidence::stamp;
-use crate::{Error, Result};
 use basecraft_protocol::provenance::FileStamp;
 use std::{
     path::{Path, PathBuf},
@@ -20,15 +21,12 @@ impl CapturedInput {
         let path = path.canonicalize()?;
         let before = stamp(&path)?;
         if before.size > 128 * 1024 * 1024 {
-            return Err(Error::Limit {
-                what: "captured trace bytes".into(),
-                limit: 128 * 1024 * 1024,
-            });
+            return Err(limit("captured trace bytes", 128 * 1024 * 1024));
         }
         let (bytes, hash, sha256) =
             basecraft_io::Source::open_hashed_with_sha256(&path, 128 * 1024 * 1024)?;
         if stamp(&path)? != before {
-            return Err(Error::ChangedOnDisk { path });
+            return Err(changed_on_disk(path));
         }
         Ok(Self {
             path,
@@ -55,9 +53,7 @@ impl CapturedInput {
     }
     pub fn check_current(&self) -> Result<()> {
         if stamp(&self.path)? != self.stamp {
-            return Err(Error::ChangedOnDisk {
-                path: self.path.clone(),
-            });
+            return Err(changed_on_disk(self.path.clone()));
         }
         Ok(())
     }
@@ -65,27 +61,5 @@ impl CapturedInput {
         self.check_current()?;
         basecraft_io::write_atomic(path, |writer| writer.write_all(&self.bytes))?;
         Ok(())
-    }
-}
-
-impl crate::records::input_evidence::Mutation {
-    pub fn reference_captured(
-        &self,
-        anchor: &Path,
-        capture: &CapturedInput,
-        dependencies: &[PathBuf],
-        origin: &str,
-        project: Option<&crate::project::Project>,
-    ) -> Result<crate::records::analysis_store::ArtifactRun> {
-        capture.check_current()?;
-        crate::records::input_evidence::reference_input_locked(
-            anchor,
-            capture.path(),
-            capture.hash(),
-            dependencies,
-            origin,
-            Some(capture.stamp()),
-            project,
-        )
     }
 }

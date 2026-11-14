@@ -88,10 +88,14 @@ fn forest_members_share_one_alignment_snapshot() {
     let registry = common::bundled();
     let parameters = json!({"model":"p"});
     // A result never replaces its own input.
-    let refused = common::refused_in(&registry, &mut session, |s| {
+    let (code, refused) = common::refused_in(&registry, &mut session, |s| {
         tree_request(s, doc, &parameters, "forest.afa")
     });
-    assert!(refused.contains("output_conflict"), "{refused}");
+    assert_eq!(
+        code,
+        basecraft_protocol::operation::OperationErrorCode::OutputConflict,
+        "{refused}"
+    );
     assert_eq!(std::fs::read_to_string(&input).unwrap(), original);
     let outcome = common::run_in(&registry, &mut session, |s| {
         tree_request(s, doc, &parameters, "forest.nwk")
@@ -106,7 +110,7 @@ fn forest_members_share_one_alignment_snapshot() {
         let link = basecraft_ops::records::AlignmentLink::read(&path).unwrap();
         assert_eq!(link.source, main.source);
         assert!(
-            link.checked_alignment(&path, session.tree(tree).unwrap())
+            link.checked_alignment(None, &path, session.tree(tree).unwrap())
                 .is_ok()
         );
     }
@@ -166,7 +170,7 @@ fn bootstrap_provenance_success_and_withheld_support_replay() {
                 let link = basecraft_ops::records::AlignmentLink::read(&output).unwrap();
                 assert!(link.inferred);
                 assert_eq!(link.source, input);
-                assert!(link.checked_alignment(&output, generated).is_ok());
+                assert!(link.checked_alignment(None, &output, generated).is_ok());
                 session.save(tree, None).unwrap();
                 let reopened = basecraft_ops::files::load_tree(&output).unwrap().doc;
                 assert_eq!(reopened.supports()[0].name, "Bootstrap");
@@ -219,7 +223,7 @@ fn reference_tree_save_as_and_complete_export_retain_alignment_and_support() {
     let link = basecraft_ops::records::AlignmentLink::read(&copied).unwrap();
     assert_eq!(link.schema, 2);
     assert!(
-        link.checked_alignment(&copied, session.tree(tree).unwrap())
+        link.checked_alignment(None, &copied, session.tree(tree).unwrap())
             .is_ok()
     );
     assert!(
@@ -241,7 +245,7 @@ fn reference_tree_save_as_and_complete_export_retain_alignment_and_support() {
         basecraft_protocol::SupportKind::Bootstrap
     );
     let link = basecraft_ops::records::AlignmentLink::read(&exported).unwrap();
-    assert!(link.checked_alignment(&exported, &tree).is_ok());
+    assert!(link.checked_alignment(None, &exported, &tree).is_ok());
     assert!(Path::new(&common::evidence(&outcome)).is_dir());
 }
 
