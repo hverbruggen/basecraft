@@ -169,7 +169,7 @@ def main():
                             return result
 
                         doc = (session.create_submission(document, f"{name}.afa") if route == "python"
-                               else call("submission_create", {"path": document, "alignment": f"{name}.afa"}))["document"]
+                               else call("submission_new", {"path": document, "alignment": f"{name}.afa"}))["document"]
 
                         def edit_doc(edit, route=route, doc=doc):
                             if route == "python":

@@ -21,10 +21,7 @@ pub(crate) fn bundled(plugin: &str, operation: &str) -> String {
 /// The collection member that holds an operation's main result, such as
 /// `tree.nwk`, as its descriptor declares it.
 pub(crate) fn primary_member(operation: &str) -> Result<String, String> {
-    crate::plugins::descriptor(operation)?
-        .outputs
-        .iter()
-        .find_map(|(role, output)| Some(format!("{role}/{}", output.primary.as_ref()?)))
+    basecraft_plugin_host::species_analysis::primary_member(&crate::plugins::descriptor(operation)?)
         .ok_or_else(|| format!("{operation} declares no primary result"))
 }
 
@@ -82,34 +79,14 @@ impl DocumentJob {
         })
     }
 
-    /// Submit `operation` on project files with `target` as the request's
-    /// target: a species workspace analysing a file it references receives
-    /// the run in its history and its hypotheses.
-    pub fn submit_files(
+    /// Submit a request that is ready, such as a species analysis
+    /// (`basecraft_plugin_host::species_analysis::prepare`).
+    pub fn submit_request(
         session: &mut Session,
-        target: DocId,
-        operation: &str,
-        inputs: &BTreeMap<String, Vec<PathBuf>>,
-        parameters: serde_json::Value,
-        exports: &[(String, PathBuf)],
+        request: OperationRequest,
     ) -> Result<Self, String> {
         let registry = crate::plugins::registry().map_err(|error| error.to_string())?;
         let policy = SessionPolicy::new(session.root(), true).map_err(|error| error.to_string())?;
-        // The same request the CLI's `run` makes for files, aimed at `target`.
-        let outputs = exports.iter().cloned().collect();
-        let mut request = basecraft_ops::requests::file_request(
-            &policy.root,
-            operation,
-            inputs,
-            parameters,
-            &outputs,
-        )
-        .map_err(|error| error.to_string())?;
-        request.target = Some(InputReference::Document {
-            doc: target.0.to_string(),
-            generation: session.generation(target).map_err(|e| e.to_string())?,
-            revision: session.revision(target).map_err(|e| e.to_string())?,
-        });
         let mut manager = JobManager::default();
         let accepted = manager
             .submit_in_session(&registry, request, policy, "GUI", session)
@@ -160,36 +137,6 @@ impl DocumentJob {
             .evidence
             .map(|evidence| PathBuf::from(evidence).join("progress"))
     }
-}
-
-/// The parameters an operation's descriptor declares; others are refused.
-pub(crate) fn declared_parameters(
-    operation: &str,
-) -> Result<std::collections::BTreeSet<String>, String> {
-    Ok(crate::plugins::descriptor(operation)?
-        .parameters
-        .get("properties")
-        .and_then(serde_json::Value::as_object)
-        .map(|properties| properties.keys().cloned().collect())
-        .unwrap_or_default())
-}
-
-/// The input an operation reads `path` through: its only input, or the one
-/// whose view matches a tree or an alignment file.
-pub(crate) fn input_role(operation: &str, path: &Path) -> Result<String, String> {
-    use basecraft_protocol::operation::InputView;
-    let inputs = &crate::plugins::descriptor(operation)?.inputs;
-    let tree = basecraft_ops::files::Format::from_path(path).ok()
-        == Some(basecraft_ops::files::Format::Tree);
-    inputs
-        .iter()
-        .find(|(_, binding)| {
-            inputs.len() == 1
-                || (tree && binding.view == InputView::Newick)
-                || (!tree && binding.view == InputView::AlignedFasta)
-        })
-        .map(|(role, _)| role.clone())
-        .ok_or_else(|| format!("{operation} cannot read {}", path.display()))
 }
 
 /// A retained result file of a completed run, by file name.

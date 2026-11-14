@@ -17,5 +17,6 @@ mod sanger_commands;
 #[path = "../../../basecraft-ops/tests/support/sanger_fixture.rs"]
 mod sanger_fixture;
 mod saved_records;
+mod table_routes;
 mod tree_commands;
 mod warned_saves;

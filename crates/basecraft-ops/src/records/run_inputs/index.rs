@@ -531,7 +531,7 @@ fn lost(
             InspectionCode::RegistryUnavailable,
             bucket,
             format!(
-                "the analysis index here is missing; `basecraft records reindex {}` rebuilds it",
+                "the analysis index here is missing; `basecraft --project {} records reindex` rebuilds it",
                 project.display()
             ),
         );

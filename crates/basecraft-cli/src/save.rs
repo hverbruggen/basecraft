@@ -1,22 +1,10 @@
-//! Headless presentation of the shared Session save boundary.
-use std::path::Path;
-
+//! The command line's save options and the JSON it prints for a failure.
 use basecraft_ops::{
-    DocId, Error, Session,
+    Error,
     access::{AccessError, Denial},
     records::SavePolicy,
 };
-use serde::Deserialize;
 use serde_json::{Value, json};
-
-/// Wire choices are explicit; the Session, never this snapshot, owns authority.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct Decision {
-    pub token: String,
-    pub known_policy: SavePolicy,
-    pub acknowledge_incomplete: bool,
-}
 
 #[derive(Clone, Copy, Default, clap::Args)]
 pub(crate) struct Options {
@@ -35,39 +23,11 @@ pub(crate) struct Options {
 }
 
 impl Options {
-    pub fn save(
-        self,
-        session: &mut Session,
-        doc: DocId,
-        path: Option<&Path>,
-        no_overwrite: bool,
-    ) -> basecraft_ops::Result<()> {
-        if self.drop_newer_fields {
-            session.drop_newer_fields(doc)?;
-        }
-        if self.acknowledge_incomplete_evidence || self.save_known_policy != SavePolicy::Cancel {
-            let check = session.check_save(doc, path)?;
-            let decision = session.decide_save(
-                doc,
-                path,
-                check.token(),
-                self.save_known_policy,
-                self.acknowledge_incomplete_evidence,
-            )?;
-            let outcome = if no_overwrite {
-                session.save_new_with_decision(doc, path, decision)?
-            } else {
-                session.save_with_decision(doc, path, decision)?
-            };
-            // Existing commands retain stdout contracts. Never discard warned success.
-            if !outcome.warnings.is_empty() {
-                eprintln!("{}", json!({"state":"saved", "warnings":outcome.warnings}));
-            }
-            Ok(())
-        } else if no_overwrite {
-            session.save_new(doc, path)
-        } else {
-            session.save(doc, path)
+    pub fn answers(self) -> basecraft_ops::commands::SaveAnswers {
+        basecraft_ops::commands::SaveAnswers {
+            known_policy: self.save_known_policy,
+            acknowledge_incomplete: self.acknowledge_incomplete_evidence,
+            drop_newer_fields: self.drop_newer_fields,
         }
     }
 }

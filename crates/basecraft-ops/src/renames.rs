@@ -245,7 +245,7 @@ pub fn apply(session: &mut Session, plan: RenamePlan) -> Result<()> {
 
 /// Names that occur more than once, and the renames that would make every
 /// name unique by numbering each occurrence: `a`, `a` become `a.1`, `a.2`.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
 pub struct DuplicateNames {
     pub names: Vec<String>,
     /// In order of the entries; each renames the next entry called `from`.

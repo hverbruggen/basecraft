@@ -170,7 +170,7 @@ with Session(project, writes=True) as session:
     assert not (blocked / 'inner' / 'new.fasta').exists()
 
     for route in ['save_check', 'save']:
-        for path in [42, None, {}, '../outside.fasta', 'escape/outside.fasta']:
+        for path in [42, {}, '../outside.fasta', 'escape/outside.fasta']:
             refuses(route, lambda: session.call(route, {'document':doc, 'path':path}), 'invalid_arguments')
         # Missing destination ancestry is an IO failure, not malformed JSON.
         refuses(route, lambda: session.call(route, {'document':doc, 'path':'missing/inner/new.fasta'}), 'io_error')

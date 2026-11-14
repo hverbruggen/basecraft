@@ -148,7 +148,7 @@ that holds a project checks the project's root store: if it names the save's
 bucket while that bucket does not name the store, the index was lost, so the
 store is inspected and the save asks. When the project's whole index is
 missing, every store in the project is checked this way, once per process.
-`basecraft records reindex <project>` rebuilds the index of every store in
+`basecraft --project <project> records reindex` rebuilds the index of every store in
 the project from their ledgers; it holds each store's lock from before it
 reads the ledgers, and writers take that lock before adding entries.
 

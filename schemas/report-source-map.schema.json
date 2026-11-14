@@ -7,7 +7,7 @@
   },
   "$defs": {
     "ReportSourceMapEntry": {
-      "description": "One paragraph's activity references, shared by both unversioned map arrays.",
+      "description": "One paragraph's activity references in a report's source map.",
       "type": "object",
       "properties": {
         "activities": {
