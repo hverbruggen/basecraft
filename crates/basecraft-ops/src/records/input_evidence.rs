@@ -303,6 +303,16 @@ impl Inspection {
         self.issue_for(code, InspectionRelevance::Unknown, location, error);
     }
 
+    /// An issue for `error`, placed at the record a damaged or missing
+    /// error names, so the reason does not repeat its path.
+    fn issue_from(&mut self, code: InspectionCode, location: &Path, error: crate::Error) {
+        match error {
+            crate::Error::Damaged { path, detail } => self.issue(code, &path, detail),
+            crate::Error::NotFound { path } => self.issue(code, &path, "was not found"),
+            error => self.issue(code, location, error),
+        }
+    }
+
     fn issue_for(
         &mut self,
         code: InspectionCode,
@@ -1060,7 +1070,7 @@ fn scan_store(store: &Path, target: &Path, scan: &mut StoreScan, inspection: &mu
                 scan.analyses.extend(analysis);
             }
             Ok(None) => {}
-            Err(error) => inspection.issue(
+            Err(error) => inspection.issue_from(
                 InspectionCode::LedgerInvalid,
                 &run.join("input.json"),
                 error,
@@ -1174,7 +1184,7 @@ fn inspect(target: &Path, stores: &[PathBuf], mut inspection: Inspection) -> Res
                 let path = &parent.bundle;
                 match depends_on_inspected(&run.join(path), &analyses, &mut inspection) {
                     Ok(found) => dependent |= found,
-                    Err(error) => inspection.issue(
+                    Err(error) => inspection.issue_from(
                         InspectionCode::DependencyUnavailable,
                         &run.join(path),
                         error,
@@ -2016,9 +2026,9 @@ fn materialize(
     target: &Path,
     artifact: &mut basecraft_protocol::provenance::ArtifactRevision,
 ) -> Result<()> {
-    let source = match (&artifact.reference, &artifact.retained) {
-        (Some(reference), _) => verified_source(directory, reference)?,
-        (None, Some(retained)) => directory.join(retained),
+    let (source, referenced) = match (&artifact.reference, &artifact.retained) {
+        (Some(reference), _) => (verified_source(directory, reference)?, true),
+        (None, Some(retained)) => (directory.join(retained), false),
         (None, None) => return Ok(()),
     };
     let name = format!("artifacts/{}", artifact.hash.trim_start_matches("b3:"));
@@ -2029,7 +2039,12 @@ fn materialize(
     if std::fs::metadata(&destination)?.len() != artifact.size
         || basecraft_io::hash_file(&destination)? != artifact.hash
     {
-        return Err(damaged(source, "evidence changed during export"));
+        // A referenced file was verified just before: it changed meanwhile.
+        return Err(if referenced {
+            changed_on_disk(source)
+        } else {
+            damaged(source, "evidence changed during export")
+        });
     }
     artifact.retained = Some(name);
     artifact.reference = None;
@@ -2366,6 +2381,25 @@ mod store_scan_tests {
         )
         .unwrap();
         run
+    }
+
+    #[test]
+    fn a_damaged_ledger_is_an_issue_at_its_path_without_repeating_it() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("input.nwk");
+        std::fs::write(&source, "(a:1,b:1);").unwrap();
+        let run = fixture(root.path(), &source);
+        let ledger = run.directory().join("input.json");
+        std::fs::write(&ledger, b"{").unwrap();
+        let check = check_in(&source, &[run.store().into()]).unwrap();
+        let issue = &check.issues[0];
+        assert_eq!(issue.code, InspectionCode::LedgerInvalid);
+        assert_eq!(issue.location, ledger);
+        assert!(
+            !issue.reason.contains(&*root.path().to_string_lossy()),
+            "{}",
+            issue.reason
+        );
     }
 
     #[test]

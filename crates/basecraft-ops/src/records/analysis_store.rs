@@ -358,9 +358,8 @@ impl ArtifactRun {
             return Err(damaged(&binding, "mismatched result binding"));
         }
         if expected_hash.is_some_and(|hash| bound.result_hash != hash) {
-            return Err(damaged(
-                &binding,
-                "result contents differ from the hidden binding; metadata was not applied",
+            return Err(Error::Outdated(
+                "result contents differ from the hidden binding; metadata was not applied".into(),
             ));
         }
         // A run that is gone, or whose folder moved away, leaves no binding.
