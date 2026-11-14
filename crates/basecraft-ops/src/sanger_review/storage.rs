@@ -892,76 +892,6 @@ impl SangerReview {
     }
 }
 
-/// Package relocation changes only derived location metadata. Original embedded
-/// evidence, hashes and all manual/undo/export events remain byte-for-byte values.
-pub(crate) fn relocate_package(
-    original: &Path,
-    copied: &Path,
-    bundle: &Path,
-    paths: &BTreeMap<PathBuf, String>,
-) -> crate::Result<()> {
-    let bytes = crate::records::provenance::read_record(copied)?;
-    let (mut stored, writer) =
-        basecraft_protocol::records::decode_written::<super::StoredCallSets>(&bytes)?;
-    if stored.version != 3 {
-        return Err(crate::Error::Unsupported(
-            basecraft_protocol::records::other_format(&writer, stored.version, 3),
-        ));
-    }
-    for set in &mut stored.sets {
-        relocate_stored(set, original, copied, bundle, paths)?;
-    }
-    let value = serde_json::to_value(stored)?;
-    inputs::write_json(copied, &value)
-}
-
-fn relocate_stored(
-    stored: &mut StoredReview,
-    original: &Path,
-    copied: &Path,
-    bundle: &Path,
-    paths: &BTreeMap<PathBuf, String>,
-) -> crate::Result<()> {
-    let parent = base(original)?;
-    stored
-        .evidence
-        .map_paths(|p| Ok(basecraft_platform::files::lexical(&parent.join(p))))?;
-    for source in &mut stored.evidence.sources {
-        let key = &source.path;
-        let hash = paths
-            .get(key)
-            .ok_or_else(|| damaged(copied, "Sanger package is missing a referenced input"))?;
-        source.path = PathBuf::from(inputs::relative(
-            &base(copied)?,
-            &bundle
-                .join("artifacts")
-                .join(hash.trim_start_matches("b3:")),
-        )?);
-        source.ledger = None;
-        source.reference = None;
-    }
-    if let Some(placement) = &mut stored.evidence.placement {
-        let hash = paths
-            .get(&placement.path)
-            .ok_or_else(|| damaged(copied, "Sanger package is missing placement evidence"))?;
-        placement.path = PathBuf::from(inputs::relative(
-            &base(copied)?,
-            &bundle
-                .join("artifacts")
-                .join(hash.trim_start_matches("b3:")),
-        )?);
-    }
-    stored.evidence.runs.clear();
-    // Every relocated artifact must already have been verified/materialized.
-    for source in &stored.evidence.sources {
-        let path = copied.parent().unwrap_or(Path::new(".")).join(&source.path);
-        if !basecraft_io::sha256_file(&path)?.eq_ignore_ascii_case(&source.sha256) {
-            return Err(damaged(&path, "Sanger exported source SHA-256 differs"));
-        }
-    }
-    Ok(())
-}
-
 fn placement_source_matches(original: &Path, placed: &Path) -> bool {
     if original == placed {
         return true;
@@ -1001,13 +931,6 @@ fn same_file(a: &Path, b: &Path) -> crate::Result<bool> {
         return Ok(a == b);
     }
     Ok(false)
-}
-
-pub(crate) fn is_review(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("json"))
-        && super::evidence_kind(path) == Some(super::EvidenceKind::Review)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1393,37 +1316,7 @@ mod tests {
     }
 
     #[test]
-    fn complete_review_export_survives_missing_originals_and_another_move() {
-        let tmp = tempfile::tempdir().unwrap();
-        let folder = tmp.path().join("original");
-        let (mut review, _) = draft(&folder);
-        edit(&mut review);
-        let exact = review.draft_json.clone();
-        let path = folder.join("specimen.sanger-review.json");
-        review.save(&path).unwrap();
-        let package = tmp.path().join("package");
-        crate::records::provenance::package(&path, &package, None).unwrap();
-        std::fs::remove_dir_all(folder).unwrap();
-        let moved = tmp.path().join("moved-export");
-        std::fs::rename(&package, &moved).unwrap();
-        let path = moved.join("specimen.sanger-review.json");
-        let reopened = ReviewSession::load(&path).unwrap();
-        assert_eq!(reopened.draft_json, exact);
-        assert_eq!(reopened.events(), review.events());
-        assert_eq!(reopened.unresolved(), 1);
-        assert!(reopened.working_draft().unwrap().inputs[0].path.is_file());
-        assert_eq!(
-            crate::records::provenance::verify(&path, None).unwrap(),
-            Vec::<String>::new()
-        );
-        let mut saved_again = reopened;
-        saved_again
-            .save(&moved.join("another.sanger-review.json"))
-            .unwrap();
-    }
-
-    #[test]
-    fn consensus_requires_resolution_and_complete_export_includes_resumable_review() {
+    fn consensus_requires_resolution() {
         let tmp = tempfile::tempdir().unwrap();
         let folder = tmp.path().join("original");
         let (mut review, _) = draft(&folder);
@@ -1441,16 +1334,6 @@ mod tests {
             crate::records::provenance::verify(&output, None).unwrap(),
             Vec::<String>::new()
         );
-        let package = tmp.path().join("export");
-        crate::records::provenance::package(&output, &package, None).unwrap();
-        std::fs::remove_dir_all(folder).unwrap();
-        let resumed = ReviewSession::load(&package.join("consensus.sanger-review.json")).unwrap();
-        assert_eq!(resumed.resolved_sequence().as_deref(), Some("AC"));
-        assert!(resumed.working_draft().is_ok());
-        assert_eq!(
-            crate::records::provenance::verify(&package.join("consensus.fa"), None).unwrap(),
-            Vec::<String>::new()
-        );
     }
 
     #[test]
@@ -1462,11 +1345,6 @@ mod tests {
         let original = std::fs::read(&trace).unwrap();
         std::fs::write(&trace, b"ABIFdifferent bytes").unwrap();
         assert!(ReviewSession::load(&path).unwrap().working_draft().is_err());
-        assert!(
-            crate::records::provenance::package(&path, &tmp.path().join("bad-export"), None)
-                .is_err()
-        );
-        assert!(!tmp.path().join("bad-export").exists());
         std::fs::remove_file(&trace).unwrap();
         assert!(ReviewSession::load(&path).unwrap().working_draft().is_err());
         std::fs::write(&trace, &original).unwrap();
@@ -1479,8 +1357,6 @@ mod tests {
         let resolved = reopened.working_draft().unwrap();
         assert_eq!(std::fs::read(&resolved.inputs[0].path).unwrap(), original);
         assert_eq!(std::fs::read(&trace).unwrap(), b"ABIFnew user data");
-        crate::records::provenance::package(&path, &tmp.path().join("preserved-export"), None)
-            .unwrap();
     }
 
     #[test]
@@ -1535,7 +1411,7 @@ mod tests {
     }
 
     #[test]
-    fn multiple_read_and_placement_evidence_export_with_exact_original_mappings() {
+    fn multiple_reads_and_a_placement_reopen_with_exact_mappings() {
         let tmp = tempfile::tempdir().unwrap();
         let folder = tmp.path().join("original");
         let (first, trace) = draft(&folder);
@@ -1601,10 +1477,7 @@ mod tests {
             .unwrap();
         let path = folder.join("multi.sanger-review.json");
         review.save(&path).unwrap();
-        let package = tmp.path().join("export");
-        crate::records::provenance::package(&path, &package, None).unwrap();
-        std::fs::remove_dir_all(folder).unwrap();
-        let reopened = ReviewSession::load(&package.join("multi.sanger-review.json")).unwrap();
+        let reopened = ReviewSession::load(&path).unwrap();
         assert_eq!(reopened.draft_json, review.draft_json);
         assert_eq!(reopened.working_draft().unwrap().inputs.len(), 2);
         let restored = reopened.placement().unwrap().unwrap();
@@ -1615,7 +1488,7 @@ mod tests {
     }
 
     #[test]
-    fn alignment_addition_retains_review_ancestry_and_packages_without_originals() {
+    fn alignment_addition_retains_review_ancestry() {
         let tmp = tempfile::tempdir().unwrap();
         let folder = tmp.path().join("original");
         let (mut review, _) = draft(&folder);
@@ -1647,26 +1520,6 @@ mod tests {
         session.save(doc, Some(&result)).unwrap();
         assert_eq!(
             crate::records::provenance::verify(&result, None).unwrap(),
-            Vec::<String>::new()
-        );
-        let package = tmp.path().join("export");
-        crate::records::provenance::package(&result, &package, None).unwrap();
-        drop(session);
-        std::fs::remove_dir_all(&folder).unwrap();
-        let result = package.join("added.afa");
-        assert_eq!(
-            crate::records::provenance::verify(&result, None).unwrap(),
-            Vec::<String>::new()
-        );
-        let mut session = crate::Session::recoverable(&package).unwrap();
-        let doc = session.open(&result).unwrap();
-        let saved_again = package.join("saved-again.afa");
-        let packaged_bytes = std::fs::read(&result).unwrap();
-        // Save As to a new path is never blocked by the deleted original project.
-        session.save(doc, Some(&saved_again)).unwrap();
-        assert_eq!(std::fs::read(&saved_again).unwrap(), packaged_bytes);
-        assert_eq!(
-            crate::records::provenance::verify(&saved_again, None).unwrap(),
             Vec::<String>::new()
         );
     }

@@ -9,7 +9,6 @@ mod storage;
 use crate::error::{damaged, invalid, limit, unsupported};
 use basecraft_docs::sanger::SangerDraftExt;
 pub use storage::{CheckedAddition, SangerRun, check_addition, record_addition};
-pub(crate) use storage::{is_review, relocate_package};
 
 use std::path::{Path, PathBuf};
 
@@ -692,17 +691,6 @@ mod call_set_tests {
         reopened.select_call_set(&computed_id).unwrap();
         assert_eq!(reopened.decision(0), Some(&ReviewChoice::Edit('C')));
         assert_eq!(std::fs::read(&session.draft_path).unwrap(), original);
-        let package = tmp.path().join("package");
-        crate::records::provenance::package(&saved, &package, None).unwrap();
-        std::fs::remove_file(&session.draft_path).unwrap();
-        let packaged = ReviewSession::load(&package.join("review.json")).unwrap();
-        assert!(packaged.working_draft().is_ok());
-        assert!(
-            packaged
-                .retained
-                .iter()
-                .all(|set| set.working_draft().is_ok())
-        );
     }
 
     #[test]

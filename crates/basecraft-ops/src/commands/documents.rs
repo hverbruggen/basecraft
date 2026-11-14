@@ -135,10 +135,6 @@ pub(super) const COMMANDS: &[Command] = &[
         help: "Check a saved result against its recorded hashes and retained inputs; runs no \
                 tools. Replay is a separate check.",
         args: &[path("The result.")] },
-    Command { name: "provenance package", writes: true, routes: All, run: provenance_package,
-        help: "Copy a verified result with its retained exact inputs into a new folder; runs no \
-                tools.",
-        args: &[path("The result."), output("The new folder.")] },
     Command { name: "replay", writes: false, routes: All, run: replay,
         help: "Replay the project's operation log in a scratch session and report problems.",
         args: &[] },
@@ -422,14 +418,6 @@ fn provenance_verify(call: &mut Call) -> Result<Value> {
         call.fail();
     }
     Ok(json!({"verified": issues.is_empty(), "issues": issues}))
-}
-
-fn provenance_package(call: &mut Call) -> Result<Value> {
-    let output = call.path("output")?;
-    records::package(&call.path("path")?, &output, call.session.project())?;
-    Ok(serde_json::to_value(super::Fields::from([(
-        "package", output,
-    )]))?)
 }
 
 fn replay(call: &mut Call) -> Result<Value> {

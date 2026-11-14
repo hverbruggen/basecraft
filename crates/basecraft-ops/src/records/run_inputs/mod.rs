@@ -4,7 +4,6 @@
 mod check;
 mod index;
 mod locks;
-mod package;
 mod relink;
 mod resolve;
 
@@ -16,7 +15,6 @@ pub use check::{
 pub(crate) use index::foreign_basecraft;
 pub use locks::{BackgroundWait, Locks, lock, lock_in, wait_in_background};
 pub(crate) use locks::{SaveLock, lock_save};
-pub use package::package;
 pub(crate) use relink::{ancestors, source_location};
 pub use relink::{relink, verified_source, verify_ancestors};
 pub(crate) use resolve::resolve_group;

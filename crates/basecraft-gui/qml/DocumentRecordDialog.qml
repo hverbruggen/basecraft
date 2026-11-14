@@ -152,7 +152,6 @@ AppDialog {
             AppButton { objectName: "openMethodsProvenance"; text: "Open provenance"; visible: dialog.page === 1; onClicked: dialog.page = 0 }
             AppButton { text: "Export report…"; enabled: !!dialog.report.revision; onClicked: dialog.exportReport(JSON.stringify(dialog.report)) }
             AppButton { text: "Check saved files"; onClicked: dialog.verify() }
-            AppButton { text: "Export reproduction package…"; onClicked: dialog.packageRecord() }
             AppButton { text: "Record folder"; onClicked: dialog.openRecordFolder() }
         }
     }

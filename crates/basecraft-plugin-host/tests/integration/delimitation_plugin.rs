@@ -336,7 +336,7 @@ fn asap_sampling_restores_roster_and_replays() {
 }
 
 #[test]
-fn tree_methods_update_one_canonical_spart_and_export_without_sources() {
+fn tree_methods_update_one_canonical_spart() {
     isolated_profile::isolate!();
     require_engine();
     let parent = tempfile::tempdir().unwrap();
@@ -440,8 +440,6 @@ fn tree_methods_update_one_canonical_spart_and_export_without_sources() {
         basecraft_ops::records::verify(&copied, None).unwrap(),
         Vec::<String>::new()
     );
-    let package = parent.path().join("package");
-    basecraft_ops::records::package(&copied, &package, None).unwrap();
     let expected = session
         .delimitation(doc)
         .unwrap()
@@ -450,16 +448,7 @@ fn tree_methods_update_one_canonical_spart_and_export_without_sources() {
         .map(|h| h.groups.clone())
         .collect::<Vec<_>>();
     drop(session);
-    std::fs::rename(&root, parent.path().join("unavailable")).unwrap();
-    std::fs::rename(&saved_folder, parent.path().join("saved-unavailable")).unwrap();
-    let relocated_package = parent.path().join("relocated-package");
-    std::fs::rename(&package, &relocated_package).unwrap();
-    let exported = relocated_package.join("species.spart");
-    assert_eq!(
-        basecraft_ops::records::verify(&exported, None).unwrap(),
-        Vec::<String>::new()
-    );
-    let work = basecraft_ops::files::load_delimitation(&exported).unwrap();
+    let work = basecraft_ops::files::load_delimitation(&copied).unwrap();
     assert_eq!(
         work.hypotheses
             .iter()

@@ -81,15 +81,9 @@ fn synthetic_large_clean_source_has_metadata_only_evidence_and_relocates() {
         basecraft_ops::records::verify(&result, None).unwrap(),
         Vec::<String>::new()
     );
-    let package = dir.path().join("package");
-    basecraft_ops::records::package(&result, &package, None).unwrap();
     std::fs::remove_file(moved.join("input.fasta")).unwrap();
     assert_ne!(
         basecraft_ops::records::verify(&result, None).unwrap(),
-        Vec::<String>::new()
-    );
-    assert_eq!(
-        basecraft_ops::records::verify(&package.join("aligned.fasta"), None).unwrap(),
         Vec::<String>::new()
     );
 }
@@ -171,7 +165,7 @@ fn common_save_route_preserves_actual_original_and_dirty_submitted_input() {
 }
 
 #[test]
-fn downstream_evidence_follows_preservation_and_complete_export_keeps_dependency_closure() {
+fn downstream_evidence_follows_preservation() {
     crate::isolated_profile::isolate!();
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source.afa");
@@ -193,17 +187,10 @@ fn downstream_evidence_follows_preservation_and_complete_export_keeps_dependency
         basecraft_ops::records::verify(&second, None).unwrap(),
         Vec::<String>::new()
     );
-    let package = root.path().join("portable");
-    basecraft_ops::records::package(&second, &package, None).unwrap();
     let first_run = ArtifactRun::for_result(None, &first).unwrap().unwrap();
     std::fs::write(common::verified_input(&first_run), ">a\nTTTT\n>b\nTTTT\n").unwrap();
     assert_ne!(
         basecraft_ops::records::verify(&second, None).unwrap(),
-        Vec::<String>::new()
-    );
-    std::fs::remove_file(first).unwrap();
-    assert_eq!(
-        basecraft_ops::records::verify(&package.join("second.afa"), None).unwrap(),
         Vec::<String>::new()
     );
 }
@@ -262,85 +249,6 @@ fn save_as_descendants_receive_each_explicit_evidence_decision() {
             SavePolicy::Cancel => unreachable!(),
         }
     }
-}
-
-#[test]
-fn complete_export_remaps_history_and_retains_original_records_without_store() {
-    crate::isolated_profile::isolate!();
-    let root = tempfile::tempdir().unwrap();
-    let source = root.path().join("source.afa");
-    std::fs::write(&source, ">a\nAAAA\n>b\nAAAT\n").unwrap();
-    let first = root.path().join("first.afa");
-    let saved = root.path().join("saved.afa");
-    let registry = common::copy_aligner(root.path());
-    let mut session = Session::recoverable(root.path()).unwrap();
-    common::align_copy(&registry, &mut session, &source, &first);
-    let doc = session.open(&first).unwrap();
-    for residue in ["T", "C"] {
-        session
-            .apply(
-                doc,
-                Op::AlnReplace {
-                    row: 0,
-                    start: 0,
-                    end: 1,
-                    residues: residue.into(),
-                },
-            )
-            .unwrap();
-        session.save(doc, None).unwrap();
-    }
-    session.save(doc, Some(&saved)).unwrap();
-    let bundle = basecraft_ops::records::bundle_for_result(&saved, None);
-    let originals: Vec<_> = std::fs::read_dir(bundle.join("records"))
-        .unwrap()
-        .map(|e| std::fs::read(e.unwrap().path()).unwrap())
-        .collect();
-    let package = root.path().join("portable");
-    basecraft_ops::records::package(&saved, &package, None).unwrap();
-    let exported = package.join("saved.afa");
-    let exported_bundle = basecraft_ops::records::bundle_for_result(&exported, None);
-    let publication = basecraft_ops::records::inspect(&exported, None).unwrap();
-    for bytes in originals {
-        let hash = basecraft_io::hash_bytes(&bytes);
-        let artifact = publication
-            .inputs
-            .iter()
-            .find(|a| a.hash == hash)
-            .expect("original immutable JSON retained");
-        assert_eq!(
-            std::fs::read(exported_bundle.join(artifact.retained.as_ref().unwrap())).unwrap(),
-            bytes
-        );
-    }
-    std::fs::remove_file(source).unwrap();
-    std::fs::rename(
-        root.path().join(".basecraft"),
-        root.path().join("unavailable-store"),
-    )
-    .unwrap();
-    // A loose file's history is in that .basecraft too (D23): it went with
-    // the store.
-    assert!(!bundle.exists());
-    assert_eq!(
-        basecraft_ops::records::verify(&exported, None).unwrap(),
-        Vec::<String>::new()
-    );
-    // Archived immutable records participate in package verification too.
-    let archive = publication
-        .inputs
-        .iter()
-        .find(|a| a.logical_name.starts_with("original-record-"))
-        .unwrap();
-    std::fs::write(
-        exported_bundle.join(archive.retained.as_ref().unwrap()),
-        "corrupt",
-    )
-    .unwrap();
-    assert_ne!(
-        basecraft_ops::records::verify(&exported, None).unwrap(),
-        Vec::<String>::new()
-    );
 }
 
 #[test]
