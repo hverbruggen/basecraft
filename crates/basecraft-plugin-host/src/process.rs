@@ -330,7 +330,7 @@ impl PluginProcess {
                 .as_ref()
                 .is_some_and(|flag| flag.load(Ordering::Acquire))
             {
-                return Err(Error::refused(Code::Cancelled, String::new()));
+                return Err(Error::refused(Code::Cancelled, ""));
             }
             if self
                 .deadline

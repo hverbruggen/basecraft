@@ -1,5 +1,6 @@
 //! Sanger adapters for the common artifact store and one-source evidence ledgers.
 use super::{SangerReview, StoredReview};
+use crate::error::{changed_on_disk, limit};
 use crate::{
     Error,
     error::{damaged, invalid},
@@ -81,7 +82,7 @@ fn source(
         project,
     )?;
     if !basecraft_io::sha256_file(&path)?.eq_ignore_ascii_case(sha256) {
-        return Err(crate::Error::ChangedOnDisk { path });
+        return Err(changed_on_disk(path));
     }
     let reference = inputs::read_input(ledger.directory())?.source;
     Ok(Source {
@@ -155,7 +156,7 @@ impl SourceAccess for Source {
                 .transpose()?
                 .unwrap_or(false)
         {
-            return Err(crate::Error::ChangedOnDisk { path });
+            return Err(changed_on_disk(path));
         }
         Ok(path)
     }
@@ -167,7 +168,7 @@ impl SourceAccess for Source {
                 r.hash != capture.hash() || r.stamp.size != capture.bytes().len() as u64
             })
         {
-            return Err(crate::Error::ChangedOnDisk { path });
+            return Err(changed_on_disk(path));
         }
         Ok(capture)
     }
@@ -275,10 +276,7 @@ impl SangerRun {
             ));
         }
         if paths.len() > 4 {
-            return Err(crate::Error::Limit {
-                what: "Sanger input files".into(),
-                limit: 4,
-            });
+            return Err(limit("Sanger input files", 4));
         }
         let mut evidence = ReviewEvidence::default();
         let mut captures = Vec::new();
@@ -466,9 +464,7 @@ impl SangerRun {
                 .find(|capture| capture.path() == source.path)
             {
                 if location.canonicalize()? != capture.path() {
-                    return Err(crate::Error::ChangedOnDisk {
-                        path: source.path.clone(),
-                    });
+                    return Err(changed_on_disk(source.path.clone()));
                 }
                 capture.check_current()?;
             } else {
@@ -688,9 +684,7 @@ impl SangerReview {
                 crate::sanger_review::CapturedInput::open(&read.path)
             }?;
             if !capture.sha256().eq_ignore_ascii_case(&read.sha256) {
-                return Err(Error::ChangedOnDisk {
-                    path: read.path.clone(),
-                });
+                return Err(changed_on_disk(read.path.clone()));
             }
             cache.insert(read.path.clone(), capture.clone());
             captures.push(capture);
@@ -783,9 +777,7 @@ impl SangerReview {
             return Ok(None);
         };
         if basecraft_io::hash_file(&support.path)? != support.hash {
-            return Err(Error::ChangedOnDisk {
-                path: support.path.clone(),
-            });
+            return Err(changed_on_disk(support.path.clone()));
         }
         let mut placement: SangerPlacement =
             super::read_evidence(&support.path, SangerPlacement::validate)?;
@@ -843,10 +835,7 @@ impl SangerReview {
         let bytes =
             basecraft_protocol::records::encode(&self.stored_with_evidence(path, evidence)?)?;
         if bytes.len() > 64 * 1024 * 1024 {
-            return Err(Error::Limit {
-                what: "Sanger review bytes".into(),
-                limit: 64 * 1024 * 1024,
-            });
+            return Err(limit("Sanger review bytes", 64 * 1024 * 1024));
         }
         Ok(bytes)
     }

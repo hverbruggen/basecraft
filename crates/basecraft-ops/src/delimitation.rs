@@ -1,4 +1,5 @@
 //! Combining saved hypotheses preserves identities, lineage and exact source evidence.
+use crate::error::changed_on_disk;
 use crate::{DocId, Result, Session, error::invalid, files};
 use basecraft_protocol::{Op, delimitation::DelimitationEdit};
 use std::{
@@ -227,9 +228,7 @@ pub(crate) fn dependencies(
                     .ok_or_else(|| invalid("Species report has no path"))?,
             );
             if report["hash"].as_str() != Some(basecraft_io::hash_file(path)?.as_str()) {
-                return Err(crate::Error::ChangedOnDisk {
-                    path: path.to_path_buf(),
-                });
+                return Err(changed_on_disk(path));
             }
             if let Some(run) = crate::records::analysis_store::ArtifactRun::for_result(path)? {
                 runs.insert(run);
@@ -286,7 +285,7 @@ pub fn checked_alignment(
     }
     let path = PathBuf::from(path);
     if basecraft_io::hash_file(&path)? != *hash {
-        return Err(crate::Error::ChangedOnDisk { path: path.clone() });
+        return Err(changed_on_disk(path.clone()));
     }
     Ok(Some(path))
 }
@@ -303,9 +302,7 @@ fn checked_workspace_input(run: &std::path::Path, hash: &str) -> Result<PathBuf>
             .ok_or_else(|| invalid("Retained workspace input is missing"))?
     };
     if basecraft_io::hash_file(&source)? != hash {
-        return Err(crate::Error::ChangedOnDisk {
-            path: source.clone(),
-        });
+        return Err(changed_on_disk(source.clone()));
     }
     Ok(source)
 }
@@ -320,9 +317,7 @@ pub fn checked_display_tree(
         if let Some(hash) = work.exchange_fields.get("basecraft_display_hash")
             && &basecraft_io::hash_file(std::path::Path::new(path))? != hash
         {
-            return Err(crate::Error::ChangedOnDisk {
-                path: PathBuf::from(path),
-            });
+            return Err(changed_on_disk(PathBuf::from(path)));
         }
         return Ok(Some(PathBuf::from(path)));
     };
@@ -343,7 +338,7 @@ pub fn checked_display_tree(
         .map(String::as_str)
         != Some(basecraft_io::hash_file(&source)?.as_str())
     {
-        return Err(crate::Error::ChangedOnDisk { path: source });
+        return Err(changed_on_disk(source));
     }
     Ok(Some(source))
 }
@@ -561,7 +556,7 @@ fn combined_hypotheses(
                 None
             }) != side_hash
         {
-            return Err(crate::Error::ChangedOnDisk { path: path.clone() });
+            return Err(changed_on_disk(path.clone()));
         }
         if let Some(wanted) = keep.and_then(|keep| keep.get(path)) {
             let available = work.hypotheses.iter().map(|h| h.id.clone()).collect();

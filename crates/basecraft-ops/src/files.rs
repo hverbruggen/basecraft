@@ -1,6 +1,6 @@
 //! Opening and saving documents by file format.
 
-use crate::error::damaged;
+use crate::error::{damaged, limit};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -345,10 +345,7 @@ pub(crate) fn capture_load(
         Format::GenBank => unreachable!("streamed above"),
         Format::SangerReview => {
             if main.bytes().len() > 64 * 1024 * 1024 {
-                return Err(Error::Limit {
-                    what: "Sanger review bytes".into(),
-                    limit: 64 * 1024 * 1024,
-                });
+                return Err(limit("Sanger review bytes", 64 * 1024 * 1024));
             }
             let review = crate::sanger_review::SangerReview::decode(main.bytes(), path)?;
             Loaded::SangerReview(Box::new(review))

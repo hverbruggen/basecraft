@@ -5,7 +5,7 @@
 //! document state as recorded; each save must produce files with the
 //! recorded hashes. Nothing in the project is written.
 
-use crate::error::damaged;
+use crate::error::{damaged, limit};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -564,10 +564,7 @@ pub fn recovery_sessions(roots: &[std::path::PathBuf]) -> Result<Vec<std::path::
         }
     }
     if sessions.len() > 256 {
-        return Err(crate::Error::Limit {
-            what: "recovery sessions".into(),
-            limit: 256,
-        });
+        return Err(limit("recovery sessions", 256));
     }
     // Session folders are named by ULID, which sorts by time.
     sessions.sort_by(|a, b| a.file_name().cmp(&b.file_name()));

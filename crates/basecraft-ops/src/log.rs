@@ -1,7 +1,7 @@
 //! Append-only JSON Lines log, one stream per machine, rotated monthly:
 //! `<project>/.basecraft/log/<host>/<YYYY-MM>.jsonl`.
 
-use crate::error::damaged;
+use crate::error::{damaged, limit};
 use std::fmt::Write as _;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
@@ -307,10 +307,7 @@ impl Lines {
         for (number, line) in (sequence..).zip(&self.lines) {
             numbered(&mut bytes, line, number);
             if bytes.len() as u64 > BATCH_LIMIT {
-                return Err(crate::Error::Limit {
-                    what: "operation journal batch".into(),
-                    limit: BATCH_LIMIT,
-                });
+                return Err(limit("operation journal batch", BATCH_LIMIT));
             }
         }
         Ok(bytes)
@@ -371,14 +368,14 @@ fn read_entries(root: &Path, lenient: bool) -> Result<(Vec<(LogEntry, String)>, 
                 let bytes = fs::metadata(&file)?.len();
                 total_bytes = total_bytes.saturating_add(bytes);
                 if bytes > 16 << 20 || total_bytes > 128 << 20 {
-                    return Err(crate::Error::Limit {
-                        what: "journal reading".into(),
-                        limit: if bytes > 16 << 20 {
+                    return Err(limit(
+                        "journal reading",
+                        if bytes > 16 << 20 {
                             16 << 20
                         } else {
                             128 << 20
                         },
-                    });
+                    ));
                 }
                 for line in BufReader::new(File::open(&file)?).lines() {
                     let line = line?;
@@ -437,10 +434,7 @@ fn verified_segment(
 ) -> Result<VerifiedPrefix> {
     let file = File::open(path)?;
     if file.metadata()?.len() > 16 << 20 {
-        return Err(crate::Error::Limit {
-            what: "journal segment reading".into(),
-            limit: 16 << 20,
-        });
+        return Err(limit("journal segment reading", 16 << 20));
     }
     let mut reader = BufReader::new(file);
     let mut prefix = VerifiedPrefix {
@@ -530,10 +524,7 @@ pub fn verified_session_prefix(root: &Path) -> Result<VerifiedPrefix> {
             );
             prefix.verified_bytes += segment.verified_bytes;
             if prefix.verified_bytes > 128 << 20 {
-                return Err(crate::Error::Limit {
-                    what: "journal session reading".into(),
-                    limit: 128 << 20,
-                });
+                return Err(limit("journal session reading", 128 << 20));
             }
             if let Some(problem) = segment.problem {
                 prefix.problem = Some(format!("{}: {problem}", file.display()));

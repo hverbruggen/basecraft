@@ -7,7 +7,10 @@ use basecraft_protocol::facts::{Alphabet, Fact, FactSource};
 use basecraft_protocol::{Feature, Strand};
 use serde_json::{Value, json};
 
-use crate::{Result, error::invalid};
+use crate::{
+    Result,
+    error::{invalid, limit},
+};
 
 pub const NUCLEOTIDE_LIMIT: usize = 1_000_000;
 pub const PROTEIN_LIMIT: usize = 100_000;
@@ -191,10 +194,7 @@ pub fn prepare(queries: &[Query], settings: &Value) -> Result<Plan> {
         return Err(invalid("BLAST query contains no records"));
     }
     if queries.len() > 4096 {
-        return Err(crate::Error::Limit {
-            what: "BLAST query records per submission".into(),
-            limit: 4096,
-        });
+        return Err(limit("BLAST query records per submission", 4096));
     }
     let alphabet = settings["alphabet"].as_str().unwrap_or("");
     let (allowed, limit) = match alphabet {

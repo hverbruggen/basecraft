@@ -105,7 +105,7 @@ impl PreparedOperation {
                     if !repair || recorded.is_none_or(|known| known.identity != current) {
                         return Err(Error::refused(
                             Code::OutputConflict,
-                            "collection destination exists".into(),
+                            "collection destination exists",
                         ));
                     }
                 } else if !path.exists() {
@@ -148,7 +148,7 @@ impl PreparedOperation {
                     if retained != staging && (!repair || !intent.is_file()) {
                         return Err(Error::refused(
                             Code::OutputConflict,
-                            "retained collection already exists".into(),
+                            "retained collection already exists",
                         ));
                     }
                     // A repair finds members already moved to the project.

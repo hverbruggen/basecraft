@@ -6,6 +6,7 @@ mod captured;
 mod edit;
 pub use captured::CapturedInput;
 mod storage;
+use crate::error::{damaged, limit};
 use basecraft_docs::sanger::SangerDraftExt;
 pub use storage::{CheckedAddition, SangerRun, check_addition, record_addition};
 pub(crate) use storage::{is_review, relocate_package};
@@ -14,7 +15,6 @@ use std::path::{Path, PathBuf};
 
 use basecraft_docs::sanger::{ReviewReference, ReviewSettings, SangerDraft};
 
-use crate::error::damaged;
 use crate::{Error, Result};
 
 /// The largest Sanger draft or placement basecraft reads.
@@ -36,10 +36,7 @@ fn parse_evidence<T: serde::de::DeserializeOwned>(
     check: impl Fn(&T) -> std::result::Result<(), String>,
 ) -> Result<T> {
     if bytes.len() as u64 > EVIDENCE_LIMIT {
-        return Err(Error::Limit {
-            what: "Sanger evidence bytes".into(),
-            limit: EVIDENCE_LIMIT,
-        });
+        return Err(limit("Sanger evidence bytes", EVIDENCE_LIMIT));
     }
     let value: T = serde_json::from_slice(bytes).map_err(|e| damaged(path, e.to_string()))?;
     check(&value).map_err(|e| damaged(path, e))?;
@@ -306,10 +303,7 @@ impl SangerReview {
     pub fn load(path: &Path) -> Result<Self> {
         let bytes = std::fs::read(path)?;
         if bytes.len() as u64 > REVIEW_LIMIT {
-            return Err(Error::Limit {
-                what: "Sanger review bytes".into(),
-                limit: REVIEW_LIMIT,
-            });
+            return Err(limit("Sanger review bytes", REVIEW_LIMIT));
         }
         Self::decode(&bytes, path)
     }
@@ -438,10 +432,7 @@ impl SangerReview {
             return Err(Error::Invalid("Sanger call sets cannot be nested".into()));
         }
         if self.retained.len() >= 31 {
-            return Err(Error::Limit {
-                what: "Sanger call sets".into(),
-                limit: 32,
-            });
+            return Err(limit("Sanger call sets", 32));
         }
         if self.draft.inputs.len() != 1
             || session.draft.inputs.len() != 1

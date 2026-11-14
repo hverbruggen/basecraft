@@ -1,7 +1,6 @@
 //! Provenance publication from a session's document history.
-use crate::error::damaged;
-use crate::error::invalid;
-use crate::{Error, Result};
+use crate::Result;
+use crate::error::{changed_on_disk, damaged, invalid};
 use basecraft_protocol::provenance::Publication;
 use basecraft_protocol::{Actor, LogEntry, Op};
 use std::collections::BTreeMap;
@@ -197,9 +196,7 @@ impl History<'_> {
                 let bytes = std::fs::read(path)?;
                 basecraft_io::counters::record_read(path, bytes.len() as u64);
                 if basecraft_io::hash_bytes(&bytes) != hash {
-                    return Err(Error::ChangedOnDisk {
-                        path: path.to_path_buf(),
-                    });
+                    return Err(changed_on_disk(path));
                 }
                 let relative = format!("artifacts/{}", hash.trim_start_matches("b3:"));
                 let dest = bundle.join(&relative);

@@ -9,6 +9,7 @@
 //! and [`record_validation`] reads its reports back into the package.
 //! Everything here is local preparation: a clean table2asn report is not
 //! archive acceptance.
+use crate::error::{changed_on_disk, damaged, invalid};
 use basecraft_protocol::submission_records::{
     PackageDocument, PackageIssues, PackageRecord, PackageTools, SubmissionPackage,
 };
@@ -31,7 +32,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::Error;
-use crate::error::{damaged, invalid};
 use crate::{DocId, Result, Session};
 
 /// Submission documents are named `<name>.submission.json`.
@@ -172,23 +172,17 @@ pub fn plan_inclusion_submission(
         .ok_or_else(|| Error::MissingChoice("Choose a source alignment".into()))?;
     let hash = basecraft_io::hash_file(&project.join(&source.document))?;
     if hash != source.hash {
-        return Err(Error::ChangedOnDisk {
-            path: project.join(&source.document),
-        });
+        return Err(changed_on_disk(project.join(&source.document)));
     }
     let metadata_stamp = metadata_evidence(project)?;
     let (meta, metadata_hash) = project_metadata(project)?;
     let rows = read_rows(&project.join(&source.document))?;
     // Detect replacement between hashing and reading; immutable byte input is cached by GUI review separately.
     if basecraft_io::hash_file(&project.join(&source.document))? != hash {
-        return Err(Error::ChangedOnDisk {
-            path: project.join(&source.document),
-        });
+        return Err(changed_on_disk(project.join(&source.document)));
     }
     if metadata_evidence(project)? != metadata_stamp {
-        return Err(Error::ChangedOnDisk {
-            path: crate::metadata::manifest_path(project),
-        });
+        return Err(changed_on_disk(crate::metadata::manifest_path(project)));
     }
     let records: Vec<_> = rows
         .iter()
@@ -326,9 +320,7 @@ pub fn project_metadata(project: &Path) -> Result<(ProjectMetadata, Option<Strin
     let manifest_hash = basecraft_io::hash_file(&manifest)?;
     let opened = crate::metadata::load(&manifest)?;
     if metadata_evidence(project)? != before {
-        return Err(Error::ChangedOnDisk {
-            path: manifest.clone(),
-        });
+        return Err(changed_on_disk(manifest.clone()));
     }
     Ok((opened.metadata, Some(manifest_hash)))
 }
@@ -415,9 +407,7 @@ pub fn review_submission_cached_with_stage(
     {
         let (metadata, read_hash) = project_metadata(project)?;
         if read_hash != metadata_hash || metadata_evidence(project)? != metadata_stamp {
-            return Err(Error::ChangedOnDisk {
-                path: manifest.clone(),
-            });
+            return Err(changed_on_disk(manifest.clone()));
         }
         cache.metadata = Some((metadata_stamp.clone(), metadata));
     }
@@ -440,7 +430,7 @@ pub fn review_submission_cached_with_stage(
                 {
                     let parsed = read_rows(&path)?;
                     if basecraft_io::hash_file(&path)? != hash {
-                        return Err(Error::ChangedOnDisk { path: path.clone() });
+                        return Err(changed_on_disk(path.clone()));
                     }
                     cache.source = Some((source.clone(), std::sync::Arc::new(parsed)));
                 }

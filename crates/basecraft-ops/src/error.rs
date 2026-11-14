@@ -155,6 +155,17 @@ pub(crate) fn damaged(path: impl Into<PathBuf>, detail: impl Into<String>) -> Er
     }
 }
 
+pub(crate) fn limit(what: impl Into<String>, limit: u64) -> Error {
+    Error::Limit {
+        what: what.into(),
+        limit,
+    }
+}
+
+pub(crate) fn changed_on_disk(path: impl Into<PathBuf>) -> Error {
+    Error::ChangedOnDisk { path: path.into() }
+}
+
 impl Error {
     /// The single mapping shared by CLI, MCP, and registered operation jobs.
     pub fn operation_code(&self) -> basecraft_protocol::operation::OperationErrorCode {

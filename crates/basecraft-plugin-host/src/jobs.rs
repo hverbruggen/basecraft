@@ -471,7 +471,7 @@ impl JobManager {
             if existing != &digest {
                 return Err(Error::refused(
                     OperationErrorCode::InvalidArguments,
-                    "request key reused with different inputs".into(),
+                    "request key reused with different inputs",
                 ));
             }
             return self.get(id);
@@ -585,8 +585,9 @@ impl JobManager {
         if job.prepared.sequence.is_some()
             && !job.proposal_activity_recorded.load(Ordering::Acquire)
         {
-            return Err(Error::refused(OperationErrorCode::EvidenceIncomplete,
-                "proposal tool-run activity was not recorded; publication-only repair cannot restore the owning session journal".into(),
+            return Err(Error::refused(
+                OperationErrorCode::EvidenceIncomplete,
+                "proposal tool-run activity was not recorded; publication-only repair cannot restore the owning session journal",
             ));
         }
         let result = basecraft_protocol::records::decode(&basecraft_ops::records::read_record(
@@ -930,7 +931,7 @@ fn finalize_document(
             if session.generation(target.doc)? != generation {
                 return Err(Error::refused(
                     OperationErrorCode::StaleRevision,
-                    "target changed after result attachment; save remains incomplete".into(),
+                    "target changed after result attachment; save remains incomplete",
                 ));
             }
             session.save(target.doc, None)?;
@@ -953,7 +954,7 @@ fn finalize_document(
         if progress.generation != Some(session.generation(target.doc)?) {
             return Err(Error::refused(
                 OperationErrorCode::StaleRevision,
-                "target changed before terminal history publication".into(),
+                "target changed before terminal history publication",
             ));
         }
         session.save_history(target.doc)?;

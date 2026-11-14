@@ -93,7 +93,7 @@ fn document_view(
         )),
         _ => Err(Error::refused(
             Code::UnsupportedInput,
-            "document kind does not match the input view".into(),
+            "document kind does not match the input view",
         )),
     }
 }
@@ -164,7 +164,7 @@ fn prepare_inputs(
                     if session.generation(id)? != *generation || checked.version() != *revision {
                         return Err(Error::refused(
                             Code::StaleRevision,
-                            "snapshot target changed".into(),
+                            "snapshot target changed",
                         ));
                     }
                     for (role, path) in &request.destinations {
@@ -225,7 +225,7 @@ fn prepare_inputs(
                         {
                             return Err(Error::refused(
                                 Code::StaleRevision,
-                                "input document changed".into(),
+                                "input document changed",
                             ));
                         }
                         if view == InputView::AlignedFasta && session.is_alignment(id) {
@@ -290,7 +290,7 @@ fn prepare_inputs(
                 if generated_count > 1 {
                     return Err(Error::refused(
                         Code::UnsupportedInput,
-                        "save the document before combining it with other inputs".into(),
+                        "save the document before combining it with other inputs",
                     ));
                 }
             }
@@ -324,7 +324,7 @@ fn prepare_target(
                     if !policy.document_write {
                         return Err(Error::refused(
                             Code::PermissionDenied,
-                            "saving a target document needs writes".into(),
+                            "saving a target document needs writes",
                         ));
                     }
                     (session.open(&policy.path(path, false)?)?, true)
@@ -344,7 +344,7 @@ fn prepare_target(
                     {
                         return Err(Error::refused(
                             Code::StaleRevision,
-                            "target document changed".into(),
+                            "target document changed",
                         ));
                     }
                     (id, false)

@@ -73,7 +73,7 @@ pub fn describe(registry: &Registry, operation: &str) -> Result<Value> {
     let op = registry.operations.get(operation).ok_or_else(|| {
         basecraft_plugin_host::Error::refused(
             basecraft_protocol::operation::OperationErrorCode::PluginUnavailable,
-            "unknown operation".into(),
+            "unknown operation",
         )
     })?;
     Ok(

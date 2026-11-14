@@ -2,7 +2,7 @@
 use super::SaveCheck;
 use super::{DerivedTarget, DocId, Error, Op, OpResult, Path, Result, files, invalid};
 use super::{SaveDecision, SaveOutcome, Session};
-use crate::error::damaged;
+use crate::error::{changed_on_disk, damaged};
 
 use super::SaveWarning;
 use crate::records::input_evidence::SavePolicy;
@@ -452,7 +452,7 @@ impl Session {
         }
         for (source, stamp) in stamps {
             if crate::records::save_guard::change_stamp(&source)? != stamp {
-                return Err(Error::ChangedOnDisk { path: source });
+                return Err(changed_on_disk(source));
             }
         }
         self.check_absent_target(id, target)?;
@@ -598,9 +598,7 @@ impl Session {
     ) -> Result<()> {
         for key in &self.docs[id.0].absent_sidecars {
             if self.resolve(key).exists() {
-                return Err(Error::ChangedOnDisk {
-                    path: self.resolve(key),
-                });
+                return Err(changed_on_disk(self.resolve(key)));
             }
         }
         for (key, hash) in &self.docs[id.0].accepted_hashes {
@@ -609,7 +607,7 @@ impl Session {
                 checked.filter(|(path, _)| crate::records::save_guard::same_target(path, &source))
             {
                 if actual != hash {
-                    return Err(Error::ChangedOnDisk { path: source });
+                    return Err(changed_on_disk(source));
                 }
             } else {
                 crate::records::save_guard::check_hash(&source, hash)?;
@@ -896,9 +894,7 @@ impl Session {
         if let Some(expected) = expected
             && crate::records::input_evidence::stamp(target)? != *expected
         {
-            return Err(Error::ChangedOnDisk {
-                path: target.into(),
-            });
+            return Err(changed_on_disk(target));
         }
         Ok(())
     }

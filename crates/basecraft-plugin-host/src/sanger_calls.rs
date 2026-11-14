@@ -20,7 +20,7 @@ use basecraft_protocol::operation::{
 };
 
 fn refused(code: Code, message: impl Into<String>) -> Error {
-    Error::refused(code, message.into())
+    Error::refused(code, message)
 }
 use serde_json::json;
 use std::path::{Path, PathBuf};

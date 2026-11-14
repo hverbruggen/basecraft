@@ -31,9 +31,12 @@ pub enum Error {
 impl Error {
     pub fn refused(
         code: basecraft_protocol::operation::OperationErrorCode,
-        message: String,
+        message: impl Into<String>,
     ) -> Self {
-        Self::Refused { code, message }
+        Self::Refused {
+            code,
+            message: message.into(),
+        }
     }
 }
 

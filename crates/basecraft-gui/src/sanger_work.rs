@@ -188,7 +188,7 @@ fn directory(outcome: &OperationOutcome) -> Result<&Path> {
     outcome.evidence.as_deref().map(Path::new).ok_or_else(|| {
         Error::refused(
             Code::EvidenceIncomplete,
-            "Operation receipt has no evidence directory".into(),
+            "Operation receipt has no evidence directory",
         )
     })
 }

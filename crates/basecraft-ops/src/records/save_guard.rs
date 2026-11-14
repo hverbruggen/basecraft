@@ -1,5 +1,6 @@
 //! Shared save reservation and accepted-byte checks. Domain serializers and
 //! recovery remain with their document owners. Lock order: target, then evidence.
+use crate::error::changed_on_disk;
 use std::path::{Path, PathBuf};
 
 use crate::{Result, error::invalid};
@@ -90,9 +91,7 @@ impl Drop for HeldElsewhere {
 
 pub(crate) fn check_hash(path: &Path, expected: &str) -> Result<()> {
     if basecraft_io::hash_file(path)? != expected {
-        return Err(crate::Error::ChangedOnDisk {
-            path: path.to_path_buf(),
-        });
+        return Err(changed_on_disk(path));
     }
     Ok(())
 }

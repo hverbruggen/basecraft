@@ -100,7 +100,7 @@ pub struct DocumentBinding {
 }
 
 fn denied(message: &str) -> Error {
-    Error::refused(Code::PermissionDenied, message.into())
+    Error::refused(Code::PermissionDenied, message)
 }
 
 impl SessionPolicy {
@@ -200,7 +200,7 @@ impl SessionPolicy {
 
     pub fn check(&self, operation: &RegisteredOperation) -> Result<()> {
         if !operation.package.enabled {
-            return Err(Error::refused(Code::PluginDisabled, String::new()));
+            return Err(Error::refused(Code::PluginDisabled, ""));
         }
         if !self.permits(operation) {
             return Err(denied("operation requires writes; session is read-only"));
@@ -221,7 +221,7 @@ impl SessionPolicy {
             .map_err(|error| match error {
                 AccessError::Denied(reason) => denied(&reason.to_string()),
                 AccessError::DestinationExists => {
-                    Error::refused(Code::OutputConflict, "destination already exists".into())
+                    Error::refused(Code::OutputConflict, "destination already exists")
                 }
                 AccessError::Io(error) => error.into(),
             })
@@ -366,7 +366,7 @@ impl SessionPolicy {
         {
             return Err(Error::refused(
                 Code::InvalidArguments,
-                "unknown input/destination binding".into(),
+                "unknown input/destination binding",
             ));
         }
         let mut inputs = BTreeMap::new();
@@ -431,7 +431,7 @@ impl SessionPolicy {
             if !unique.insert(key) {
                 return Err(Error::refused(
                     Code::OutputConflict,
-                    "destinations alias each other".into(),
+                    "destinations alias each other",
                 ));
             }
             destinations.insert(name.clone(), resolved);

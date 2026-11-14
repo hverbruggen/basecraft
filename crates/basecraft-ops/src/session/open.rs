@@ -1,7 +1,7 @@
 //! Document loading and baseline tracking.
 use super::Session;
 use super::{DocId, Op, OpResult, Path, PathBuf, Result, Slot, files, invalid};
-use crate::error::damaged;
+use crate::error::{changed_on_disk, damaged};
 
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct SavedMark(pub(super) Option<String>);
@@ -130,9 +130,7 @@ impl Session {
                 .is_some_and(|entry| matches!(entry.op, Op::Open { .. }))
                 && !slot.baseline_logged
             {
-                return Err(crate::Error::ChangedOnDisk {
-                    path: self.resolve(&slot.key),
-                });
+                return Err(changed_on_disk(self.resolve(&slot.key)));
             }
             if self.log.is_some() {
                 if let Some(entry) = self.recovery_checkpoint(id)? {
@@ -406,7 +404,7 @@ impl Session {
         if let Some((path, stamp, hash)) = &slot.saved_target {
             let current = crate::records::input_evidence::stamp(path)?;
             if current != *stamp {
-                return Err(crate::Error::ChangedOnDisk { path: path.clone() });
+                return Err(changed_on_disk(path.clone()));
             }
             return Ok(Some((path.clone(), current, hash.clone())));
         }

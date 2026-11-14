@@ -12,6 +12,7 @@
 //! it returns only advisory warnings, never a reusable permit.
 //! Finalization authorizes evidence effects without invoking a document writer.
 //! The diagnostic shape (including full tagged object identities) is unchanged.
+use crate::error::changed_on_disk;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -347,9 +348,7 @@ pub(crate) fn target_revision(target: &Path) -> Result<Option<TargetRevision>> {
     };
     let hash = basecraft_io::hash_file(target)?;
     if crate::records::save_guard::change_stamp(target)?.as_ref() != Some(&stamp) {
-        return Err(crate::Error::ChangedOnDisk {
-            path: target.into(),
-        });
+        return Err(changed_on_disk(target));
     }
     Ok(Some(TargetRevision {
         hash,

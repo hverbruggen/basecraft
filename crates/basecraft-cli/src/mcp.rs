@@ -15,7 +15,7 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 /// A refusal MCP callers act on by its code.
 fn refused(code: Code, message: &str) -> Box<dyn std::error::Error> {
-    basecraft_plugin_host::Error::refused(code, message.into()).into()
+    basecraft_plugin_host::Error::refused(code, message).into()
 }
 
 /// Who drives this MCP session. Edits are recorded with the matching actor
@@ -1112,7 +1112,7 @@ pub fn serve(root: &Path, writable: bool, kind: ClientKind, model: &str) -> Resu
                                 args["job"].as_str().ok_or_else(|| {
                                     basecraft_plugin_host::Error::refused(
                                         Code::InvalidArguments,
-                                        "missing string job".into(),
+                                        "missing string job",
                                     )
                                 })
                             };

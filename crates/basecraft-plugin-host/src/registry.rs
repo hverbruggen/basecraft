@@ -58,7 +58,7 @@ impl Package {
         if package_digest(&self.manifest.dir)? != self.digest {
             return Err(Error::refused(
                 Code::PluginChanged,
-                "package contents changed; refresh registry".into(),
+                "package contents changed; refresh registry",
             ));
         }
         if let Some(runtime) = &self.manifest.managed_runtime {
@@ -319,18 +319,18 @@ impl Registry {
             Error::refused(Code::PluginUnavailable, format!("unknown operation {id}"))
         })?;
         if !operation.package.enabled {
-            return Err(Error::refused(Code::PluginDisabled, String::new()));
+            return Err(Error::refused(Code::PluginDisabled, ""));
         }
         if pins.is_some_and(|p| p != &operation.pins(&self.generation)) {
             return Err(Error::refused(
                 Code::PluginChanged,
-                "stale registry pins; discover again".into(),
+                "stale registry pins; discover again",
             ));
         }
         if operation.package.interpreter.is_none() {
             return Err(Error::refused(
                 Code::PluginUnavailable,
-                "configure BASECRAFT_PYTHON or install python3".into(),
+                "configure BASECRAFT_PYTHON or install python3",
             ));
         }
         operation.package.verify()?;
@@ -482,7 +482,7 @@ pub fn provision_bundled_with_pixi(config: &RegistryConfig, id: &str, pixi: &Pat
     if package_digest(&manifest.dir)? != digest {
         return Err(Error::refused(
             Code::PluginChanged,
-            "bundled package changed during provisioning".into(),
+            "bundled package changed during provisioning",
         ));
     }
     write_index(config, |index| {
@@ -526,7 +526,7 @@ pub fn install_with_pixi(config: &RegistryConfig, source: &Path, pixi: &Path) ->
     if package_digest(pending.path())? != digest {
         return Err(Error::refused(
             Code::PluginChanged,
-            "package changed during installation".into(),
+            "package changed during installation",
         ));
     }
     let snapshot = Manifest::load(pending.path())?;
@@ -632,7 +632,7 @@ fn configured_python(origin: Origin) -> Option<PathBuf> {
 pub fn require_enabled(id: &str) -> Result<()> {
     let config = RegistryConfig::discover()?;
     if load_index(&config)?.disabled.contains(id) {
-        return Err(Error::refused(Code::PluginDisabled, String::new()));
+        return Err(Error::refused(Code::PluginDisabled, ""));
     }
     Ok(())
 }
