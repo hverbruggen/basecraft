@@ -228,7 +228,8 @@ Then, from the repository folder:
 ```sh
 pixi install          # Python environment and bundled external tools
 just install          # build and install the app and command-line tool
-just check            # formatting, linting and tests
+just lint             # formatting and linting
+just check            # tests
 ```
 
 
