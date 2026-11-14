@@ -22,7 +22,7 @@ pub(crate) struct SupportImportParams {
     pub(crate) matched: usize,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
 pub struct SupportImport {
     /// Names of the support sets added, in order.
     pub added: Vec<String>,

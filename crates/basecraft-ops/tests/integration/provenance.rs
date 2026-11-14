@@ -77,10 +77,10 @@ fn edit_undo_redo_save_move_verify_and_report() {
     assert!(!bundle.join("reports").exists());
     assert!(bundle.join("README.md").is_file());
     let reports = dir.path().join("reports-out");
-    let (publication, history) = records::saved_history(&moved, None).unwrap();
-    records::write_reports(&reports, &publication, history).unwrap();
+    let report = records::DocumentRecord::saved_report(&moved, None).unwrap();
+    records::ReportExt::export(&report, &reports).unwrap();
     assert!(
-        std::fs::read_to_string(reports.join("reports/methods.generated.md"))
+        std::fs::read_to_string(reports.join("methods.generated.md"))
             .unwrap()
             .contains("Replaced")
     );

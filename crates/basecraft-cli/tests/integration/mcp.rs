@@ -491,6 +491,79 @@ fn species_mcp_uses_the_canonical_workspace_contract() {
     );
 }
 
+/// One species analysis, prepared by the plugin host for the window, the CLI
+/// and MCP: the same workspace gets the same hypotheses on both routes.
+#[test]
+fn species_analysis_runs_the_same_on_the_cli_and_mcp() {
+    crate::isolated_profile::isolate!();
+    let parent = tempfile::tempdir().unwrap();
+    let root = parent.path().join("working");
+    std::fs::create_dir(&root).unwrap();
+    let profile = parent.path().join("profile");
+    std::fs::write(
+        root.join("source.nwk"),
+        "((a:0.1,b:0.1):0.9,(c:0.2,d:0.2):0.8);\n",
+    )
+    .unwrap();
+    let mut client = Client::start(&root, &profile);
+    for name in ["mcp.spart", "cli.spart"] {
+        let created = client.run(
+            "basecraft.delimitation.workspace_tree.v1",
+            json!({"inputs":{"tree":[{"kind":"file","path":"source.nwk"}]},"parameters":{},
+                "destinations":{"workspace":name}}),
+        );
+        assert_eq!(created["state"], "completed", "{created}");
+    }
+    let opened = client.call("open", json!({"path":"mcp.spart"}));
+    let doc = opened["result"]["structuredContent"]["document"].clone();
+    let prepared = client.call(
+        "delimitation_analysis_request",
+        json!({"document":doc,"method":"gmyc_single","input":"source.nwk","rooted":true}),
+    );
+    let prepared = &prepared["result"]["structuredContent"];
+    assert_eq!(
+        prepared["request"]["operation"],
+        "basecraft.delimitation/gmyc_single@1"
+    );
+    assert_eq!(prepared["output"], Value::Null);
+    let fitted = client.run(
+        "basecraft.delimitation.gmyc_single.v1",
+        prepared["request"].clone(),
+    );
+    assert_eq!(fitted["state"], "completed", "{fitted}");
+    let saved = client.call("save", json!({"document":doc}));
+    assert_eq!(saved["result"]["isError"], false, "{saved}");
+    client.close();
+    let cli = Command::new(env!("CARGO_BIN_EXE_basecraft"))
+        .args([
+            "--project",
+            root.to_str().unwrap(),
+            "delimitation",
+            "analyse",
+        ])
+        .arg(root.join("cli.spart"))
+        .args(["--method", "gmyc_single", "--input"])
+        .arg(root.join("source.nwk"))
+        .arg("--rooted")
+        .env("BASECRAFT_PROFILE_DIR", &profile)
+        .output()
+        .unwrap();
+    assert!(
+        cli.status.success(),
+        "{}",
+        String::from_utf8_lossy(&cli.stderr)
+    );
+    let names = |file: &str| {
+        let work = basecraft_ops::files::load_delimitation(&root.join(file)).unwrap();
+        work.hypotheses
+            .iter()
+            .map(|h| (h.name.clone(), h.groups.len()))
+            .collect::<Vec<_>>()
+    };
+    assert_ne!(names("mcp.spart"), Vec::new());
+    assert_eq!(names("cli.spart"), names("mcp.spart"));
+}
+
 #[test]
 fn tree_mcp_routes_share_hidden_storage() {
     crate::isolated_profile::isolate!();
@@ -575,7 +648,9 @@ fn tree_mcp_routes_share_hidden_storage() {
         verified_mcp["result"]["structuredContent"],
         json!({"verified":true,"issues":[]})
     );
-    assert!(cli(&["provenance", "verify", nj.to_str().unwrap()]).starts_with("done"));
+    let verified: Value =
+        serde_json::from_str(&cli(&["provenance", "verify", nj.to_str().unwrap()])).unwrap();
+    assert_eq!(verified, json!({"verified":true,"issues":[]}));
     assert!(replayed["result"]["structuredContent"]["problems"].is_array());
     let mut visible: Vec<_> = std::fs::read_dir(&root)
         .unwrap()
@@ -719,8 +794,6 @@ fn metadata_tools_respect_write_permission_and_plan_before_applying() {
         .unwrap();
     assert!(text.contains("permission_denied"), "{text}");
     assert!(!d.path().join("metadata").exists());
-    let pattern =
-        json!({"name":"p","separator":"|","fields":[{"role":"specimen"},{"role":"taxon"}]});
     let replies = session(
         d.path(),
         true,
@@ -728,14 +801,14 @@ fn metadata_tools_respect_write_permission_and_plan_before_applying() {
             request(1, "metadata_open", json!({"create":true})),
             request(
                 2,
-                "metadata_plan_headers",
-                json!({"document":0,"request":{"document":"rbcL.fasta","pattern":pattern}}),
+                "metadata_import_headers",
+                json!({"path":"rbcL.fasta","separator":"|","fields":["specimen","taxon"]}),
             ),
             request(3, "read", json!({"document":0})),
             request(
                 4,
-                "metadata_plan_headers",
-                json!({"document":0,"request":{"document":"../outside.fasta","pattern":pattern}}),
+                "metadata_import_headers",
+                json!({"path":"../outside.fasta","separator":"|","fields":["specimen","taxon"]}),
             ),
         ],
     );
@@ -763,7 +836,7 @@ fn submission_tools_respect_write_permission_and_edit_through_apply() {
         &[
             request(
                 1,
-                "submission_create",
+                "submission_new",
                 json!({"path":"its.submission.json","alignment":"its.afa"}),
             ),
             request(2, "submission_submitter", json!({"set":{"city":"Hobart"}})),
@@ -782,7 +855,7 @@ fn submission_tools_respect_write_permission_and_edit_through_apply() {
         &[
             request(
                 1,
-                "submission_create",
+                "submission_new",
                 json!({"path":"its.submission.json","alignment":"its.afa"}),
             ),
             request(
@@ -830,7 +903,7 @@ fn submission_selection_confirmation_is_shared_by_mcp_export_and_apply() {
         &[
             request(
                 1,
-                "submission_create",
+                "submission_new",
                 json!({"path":"a.submission.json", "alignment":"a.afa"}),
             ),
             request(2, "submission_review", json!({"document":0})),
@@ -896,11 +969,7 @@ fn wrong_kind_requests_fail_without_mutation_and_the_server_remains_usable() {
         json!({"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"checked-access","version":"1"}}}),
         json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
         request(1, "open", json!({"path":"input.afa"})),
-        request(
-            2,
-            "metadata_status",
-            json!({"document":0,"file":"input.afa"}),
-        ),
+        request(2, "submission_review", json!({"document":0})),
         request(
             3,
             "import_support",

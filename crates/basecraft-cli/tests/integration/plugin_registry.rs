@@ -40,6 +40,8 @@ fn external_metadata_install_warning_and_disable_policy_from_outside_repository(
         value(&installed)["installed"],
         "org.example.registry-fixture"
     );
+    let listed = value(&run(temp.path(), &["plugins", "list"]));
+    assert_eq!(listed["packages"][0]["runtime"], "unverified");
     let warning = String::from_utf8(installed.stderr).unwrap();
     assert!(warning.contains("user account's permissions"));
     assert!(warning.contains("responsible for checking"));

@@ -21,16 +21,15 @@ history is explicitly unknown. Independent completeness dimensions describe know
 ancestry, input availability, execution specification and replay verification.
 A hash check does not set replay verification or prove authorship.
 
-`basecraft provenance methods RESULT --output DIRECTORY` writes `reports/` with
-`history.md`, `methods.generated.md`, `parameters.tsv`, `source-map.json` and a
-frozen report manifest (template version 2). Nothing writes them on save. Generated
+`basecraft methods FILE --output DIRECTORY` writes the report the History
+window exports (listed below) into the folder. Nothing writes it on save. Generated
 prose describes typed edits factually; it does not invent trimming rationales,
 earlier laboratory methods, or unknown tool arguments/versions. Tool-specific
 methods/citation templates and
 validated RO-Crate export remain separate future interfaces.
 
-CLI: `basecraft provenance inspect|verify RESULT`, `basecraft provenance methods
-RESULT --output DIRECTORY`, `basecraft provenance package RESULT --output DIRECTORY`.
+CLI: `basecraft provenance inspect|verify RESULT`, `basecraft methods FILE --output
+DIRECTORY`, `basecraft provenance package RESULT --output DIRECTORY`.
 The package operation requires all recorded input/output bytes to verify and copies
 live sidecars as well as the bundle into a new destination. It executes nothing and
 makes no claim that unavailable external software can reproduce the result.

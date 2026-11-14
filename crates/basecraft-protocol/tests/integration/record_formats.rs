@@ -112,8 +112,6 @@ fn current_records_round_trip() {
             (encode::<Vec<String>>, true)
         } else if name.starts_with("export-report-") {
             (encode::<ReportExportManifest>, true)
-        } else if name.starts_with("provenance-report-") {
-            (encode::<ProvenanceReportManifest>, true)
         } else {
             let (_, encoder, sorted) = formats
                 .iter()

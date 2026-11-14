@@ -209,17 +209,14 @@ use basecraft_protocol::{
 use basecraft_viewmodel::delimitation::{self, Selection};
 use basecraft_viewmodel::species_analysis::{self, First};
 
-use crate::document_jobs::{
-    DocumentJob, Finished, bundled, declared_parameters, failure, input_role, primary_member,
-    result_file,
-};
+use crate::document_jobs::{DocumentJob, Finished, bundled, failure, result_file};
 
 /// A registered analysis running for this workspace; dropping it cancels it.
 struct RunningAnalysis {
     work: basecraft_ops::work::Work,
-    display_job: bool,
-    display_rooted: bool,
-    display_output: PathBuf,
+    method: analysis::Method,
+    /// Where a display tree goes.
+    output: PathBuf,
     generation: u64,
     identity: (String, String),
 }
@@ -1580,12 +1577,10 @@ impl qobject::DelimitationController {
         self.as_mut().rust_mut().analysis_tree = input.to_string();
         let method = analysis::Method::parse(&method.to_string());
         let display_job = method.as_ref().is_ok_and(|m| m.is_display());
-        let display_rooted = matches!(method, Ok(analysis::Method::DisplayUpgma));
         let result = (|| -> Result<_, String> {
             let r = self.rust();
             let (session, doc) = r.session.as_ref().zip(r.doc).ok_or("No workspace open")?;
             let method = method.map_err(|e| e.to_string())?;
-            let declared = declared_parameters(&method.operation())?;
             let (input, shown) = (input.to_string(), r.display_path.to_string());
             let hypothesis = r.active_hypothesis.to_string();
             let request = analysis::Request {
@@ -1596,63 +1591,41 @@ impl qobject::DelimitationController {
                 hypothesis: &hypothesis,
                 shown_tree: Path::new(&shown),
             };
-            let run =
-                analysis::run(session, doc, &request, &declared).map_err(|e| e.to_string())?;
-            let role = input_role(&run.operation, &run.input)?;
-            let exports = if display_job {
-                vec![(primary_member(&run.operation)?, run.output.clone())]
-            } else {
-                Vec::new()
-            };
-            Ok((
-                run.operation,
-                role,
-                run.input,
-                run.parameters,
-                exports,
-                run.output,
-                session.generation(doc).map_err(|e| e.to_string())?,
-                (
-                    session.id().to_owned(),
-                    session.doc_key(doc).map_err(|e| e.to_string())?.to_owned(),
-                ),
-            ))
+            let registry = crate::plugins::registry().map_err(|e| e.to_string())?;
+            let job =
+                basecraft_plugin_host::species_analysis::prepare(&registry, session, doc, &request)
+                    .map_err(|e| e.to_string())?;
+            let generation = session.generation(doc).map_err(|e| e.to_string())?;
+            let key = session.doc_key(doc).map_err(|e| e.to_string())?.to_owned();
+            Ok((job, generation, (session.id().to_owned(), key)))
         })();
-        let (operation, role, analysis_input, params, exports, output, generation, identity) =
-            match result {
-                Ok(job) => job,
-                Err(e) => {
-                    self.as_mut().fail(&e);
-                    if display_job {
-                        self.display_done(false);
-                    } else {
-                        self.analysis_done(false);
-                    }
-                    return;
+        let (job, generation, identity) = match result {
+            Ok(job) => job,
+            Err(e) => {
+                self.as_mut().fail(&e);
+                if display_job {
+                    self.display_done(false);
+                } else {
+                    self.analysis_done(false);
                 }
-            };
+                return;
+            }
+        };
+        let (method, output, request) = (job.method, job.output, job.request);
+        let operation = request.operation.clone();
         let thread = self.qt_thread();
         let submitted = {
             let mut state = self.as_mut().rust_mut();
             let state = &mut *state;
             match state.doc {
-                Some(doc) => crate::document_jobs::run_operation(
+                Some(_) => crate::document_jobs::run_operation(
                     thread,
                     crate::jobs::Listing {
                         operation: operation.clone(),
                         source: state.file_path.to_string(),
                     },
                     &mut state.session,
-                    move |session| {
-                        DocumentJob::submit_files(
-                            session,
-                            doc,
-                            &operation,
-                            &[(role, vec![analysis_input])].into(),
-                            params,
-                            &exports,
-                        )
-                    },
+                    move |session| DocumentJob::submit_request(session, request),
                     qobject::DelimitationController::analysis_progress,
                     qobject::DelimitationController::finish_analysis,
                 ),
@@ -1673,9 +1646,8 @@ impl qobject::DelimitationController {
         };
         self.as_mut().rust_mut().analysis = Some(RunningAnalysis {
             work,
-            display_job,
-            display_rooted,
-            display_output: output,
+            method,
+            output,
             generation,
             identity,
         });
@@ -1700,7 +1672,7 @@ impl qobject::DelimitationController {
                     .rust_mut()
                     .analysis
                     .take()
-                    .is_some_and(|analysis| analysis.display_job);
+                    .is_some_and(|analysis| analysis.method.is_display());
                 self.as_mut().set_busy(false);
                 self.as_mut().fail(&error);
                 if display_job {
@@ -1714,7 +1686,7 @@ impl qobject::DelimitationController {
         let Some(analysis) = self.as_mut().rust_mut().analysis.take() else {
             return;
         };
-        let display_job = analysis.display_job;
+        let display_job = analysis.method.is_display();
         let applied = (|| -> Result<(Value, Vec<String>), String> {
             if outcome.state != basecraft_protocol::operation::RuntimeState::Completed {
                 return Err(failure(&outcome));
@@ -1737,13 +1709,9 @@ impl qobject::DelimitationController {
                 return Err("Analysis completed for its saved input; workspace changed, so result remains an artifact".into());
             }
             if display_job {
-                return Ok((json!({"display_tree":analysis.display_output}), Vec::new()));
+                return Ok((json!({"display_tree":analysis.output}), Vec::new()));
             }
-            let name = if outcome.operation.starts_with("basecraft.host/") {
-                "fit.json"
-            } else {
-                "result.json"
-            };
+            let name = analysis.method.result_name();
             let result = result_file(&outcome, name).ok_or("Analysis returned no result")?;
             // The session already added its hypotheses when it recorded the run.
             let value: Value = std::fs::read(&result)
@@ -1762,9 +1730,10 @@ impl qobject::DelimitationController {
             Ok((value, relative)) => {
                 if display_job {
                     if let Some(path) = value["display_tree"].as_str() {
-                        let success = self
-                            .as_mut()
-                            .attach_tree(&QString::from(path), analysis.display_rooted);
+                        let success = self.as_mut().attach_tree(
+                            &QString::from(path),
+                            analysis.method == analysis::Method::DisplayUpgma,
+                        );
                         self.as_mut().display_done(success);
                     }
                     return;

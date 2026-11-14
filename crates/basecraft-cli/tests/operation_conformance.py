@@ -239,7 +239,7 @@ def main():
             str(reads / "cli-alignment.fasta"), "--label", "HV1")
         client = Mcp(binary, project, env)
         try:
-            created = client.tool("sanger_review_create", {"read": "reads/forward.ab1",
+            created = client.tool("sanger_review", {"read": "reads/forward.ab1",
                                   "output": "reads/mcp.sanger-review.json"})
             assert not created["isError"], created
             document = created["structuredContent"]["document"]
@@ -995,20 +995,11 @@ def main():
         try:
             opened = mcp_meta.tool("metadata_open", {"create": True})["structuredContent"]
             doc = opened["document"]
-            pattern = {"name": "CLI", "separator": "|", "fields": [
-                {"role": "specimen"}, {"role": "taxon"}, {"role": "column", "column": "eventDate"}]}
-            first = mcp_meta.tool("metadata_plan_headers", {"document": doc, "request": {
-                "document": "rbcL.fasta", "pattern": pattern}})["structuredContent"]
-            state = mcp_meta.tool("state", {"document": doc})["structuredContent"]
-            mcp_meta.tool("apply", {"document": doc, "version": state["version"], "operation": {
-                "op": "metadata.edit", "params": {"edit": {"action": "apply",
-                                                           "changes": first["changes"]}}}})
-            second = mcp_meta.tool("metadata_plan_sheet", {"document": doc, "request": {
-                "path": "sheet.csv"}})["structuredContent"]
-            state = mcp_meta.tool("state", {"document": doc})["structuredContent"]
-            mcp_meta.tool("apply", {"document": doc, "version": state["version"], "operation": {
-                "op": "metadata.edit", "params": {"edit": {"action": "apply",
-                                                           "changes": second["changes"]}}}})
+            first = mcp_meta.tool("metadata_import_headers", {
+                "path": "rbcL.fasta", "separator": "|", "fields": fields,
+                "apply": True})["structuredContent"]
+            second = mcp_meta.tool("metadata_import_sheet", {
+                "path": "sheet.csv", "apply": True})["structuredContent"]
             mcp_meta.tool("save", {"document": doc})
             plans["mcp"] = (first, second)
         finally:
@@ -1092,13 +1083,13 @@ def main():
                 try:
                     meta = connection.tool("metadata_open", {})["structuredContent"]["document"]
                     for request in (record_links, link_request, promote):
-                        plan = connection.tool("metadata_consumer", {"document": meta, "request": request})["structuredContent"]
+                        plan = connection.tool("metadata_consumer", {"request": request})["structuredContent"]
                         target = meta if request != link_request else connection.tool("open", {"path": plan["target"]})["structuredContent"]["document"]
                         version = connection.tool("state", {"document": target})["structuredContent"]["version"]
                         connection.tool("apply", {"document": target, "version": version, "operation": plan["operation"]})
                         connection.tool("save", {"document": target})
-                    partition = connection.tool("metadata_consumer", {"document": meta, "request": {"action": "partitions"}})["structuredContent"]
-                    label_result = connection.tool("metadata_consumer", {"document": meta, "request": labels})["structuredContent"]
+                    partition = connection.tool("metadata_consumer", {"request": {"action": "partitions"}})["structuredContent"]
+                    label_result = connection.tool("metadata_consumer", {"request": labels})["structuredContent"]
                 finally:
                     connection.close()
             saved = next(p for p in partition["partitions"] if p["id"] == "project-result")
@@ -1203,7 +1194,7 @@ def main():
                                        "--project", str(cli_project))
             mcp_sub = Mcp(binary, projects["mcp"], sub_env)
             try:
-                created = mcp_sub.tool("submission_create", {"path": "its.submission.json",
+                created = mcp_sub.tool("submission_new", {"path": "its.submission.json",
                                                              "alignment": "ITS.afa"})["structuredContent"]
                 doc = created["document"]
                 assert created["kind"] == "submission", created
