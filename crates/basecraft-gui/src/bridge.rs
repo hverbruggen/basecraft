@@ -144,8 +144,6 @@ pub mod qobject {
         #[qinvokable]
         fn parent_folder_url(self: &GenomeController, path: &QString) -> QUrl;
         #[qinvokable]
-        fn export_svg(self: Pin<&mut GenomeController>, path: &QString);
-        #[qinvokable]
         fn export_figure(
             self: Pin<&mut GenomeController>,
             path: &QString,
@@ -224,11 +222,6 @@ pub mod qobject {
         /// project when it lies outside it.
         #[qinvokable]
         fn relative_path(self: &GenomeController, path: &QString) -> QString;
-        /// Write a readable account of this run's activity in the projects
-        /// of `files` (one path per line) to a text file; returns its path.
-        /// "alignment" or "sequence": which editor a file opens in.
-        #[qinvokable]
-        fn file_kind(self: &GenomeController, path: &QString) -> QString;
 
         /// Right-click at a point. Returns JSON describing what the context
         /// menu should offer: `{"feature": id or -1, "label", "selection": bool,
@@ -763,10 +756,6 @@ impl qobject::GenomeController {
         self.as_mut().set_scroll_pos(pos);
     }
 
-    pub fn export_svg(self: Pin<&mut Self>, path: &QString) {
-        self.export_figure(path, 0, false);
-    }
-
     pub fn new_sequence_error(&self, name: &QString, text: &QString) -> QString {
         Session::validate_new_sequence(&name.to_string(), &text.to_string())
             .err()
@@ -1272,10 +1261,6 @@ impl qobject::GenomeController {
             .or_else(|| path.strip_prefix(file_folder(&path)).ok())
             .unwrap_or(&path);
         QString::from(&rel.to_string_lossy().into_owned())
-    }
-
-    pub fn file_kind(&self, path: &QString) -> QString {
-        QString::from(file_kind(Path::new(&path.to_string())))
     }
 
     /// Run `f` on the open document's session, if any.

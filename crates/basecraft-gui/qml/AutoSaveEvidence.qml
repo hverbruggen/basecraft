@@ -55,9 +55,7 @@ Item {
         ignoreUnknownSignals: true
         function onSaveQuestion(check) {
             root.target = ""
-            const asked = JSON.parse(check)
-            if (asked.check) Qt.callLater(() => root.ask(asked.check))
-            else if (asked.error) root.failed(asked.error)
+            Qt.callLater(() => root.ask(JSON.parse(check).check))
         }
     }
     FileDialog {

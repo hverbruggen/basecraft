@@ -162,8 +162,6 @@ pub mod qobject {
         #[cxx_name = "taxaSelected"]
         fn taxa_selected(self: Pin<&mut AlignmentController>, names: QString);
         #[qinvokable]
-        fn export_svg(self: Pin<&mut AlignmentController>, path: &QString);
-        #[qinvokable]
         fn export_figure(
             self: Pin<&mut AlignmentController>,
             path: &QString,
@@ -691,10 +689,6 @@ impl qobject::AlignmentController {
                 false
             }
         }
-    }
-
-    pub fn export_svg(self: Pin<&mut Self>, path: &QString) {
-        self.export_figure(path, 0, false);
     }
 
     pub fn export_figure_selection(

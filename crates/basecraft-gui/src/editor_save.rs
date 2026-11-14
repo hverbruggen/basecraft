@@ -226,12 +226,12 @@ macro_rules! auto_save {
             fn save_error(mut self: std::pin::Pin<&mut Self>, error: &basecraft_ops::Error) {
                 self.as_mut().report("error", &format!("Changed but not saved: {error}"));
                 // The question carries its check, so the window shows it without checking again.
-                let check = match crate::editor_save::question(error) {
-                    Some(check) => Some(crate::editor_save::check_json(Ok(check))),
-                    None if matches!(error, basecraft_ops::Error::EvidenceConflict(_)) => Some(self.check_save(&cxx_qt_lib::QString::default())),
-                    None => None,
-                };
-                if let Some(check) = check { self.save_question(check); }
+                let check = crate::editor_save::question(error).or_else(|| {
+                    let conflict = matches!(error, basecraft_ops::Error::EvidenceConflict(_));
+                    let (session, doc) = self.rust().session.as_ref().zip(self.rust().doc).filter(|_| conflict)?;
+                    session.check_save(doc, None).ok()
+                });
+                if let Some(check) = check { self.save_question(crate::editor_save::check_json(Ok(check))); }
             }
             pub fn check_save(&self, path: &cxx_qt_lib::QString) -> cxx_qt_lib::QString {
                 let target = path.to_string();

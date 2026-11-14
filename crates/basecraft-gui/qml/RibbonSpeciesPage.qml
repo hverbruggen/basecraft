@@ -4,7 +4,6 @@ import QtQuick.Layouts
 
 // Species: a delimitation workspace, its display tree and hypotheses.
 RibbonPage {
-    // The main window: the open document and the window's own functions.
     required property var app
     required property var specimenMetadata
     required property var rosterConsumer

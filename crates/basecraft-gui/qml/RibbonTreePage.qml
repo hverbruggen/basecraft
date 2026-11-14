@@ -4,7 +4,6 @@ import QtQuick.Layouts
 
 // Tree: the selected clade, the order of clades, support values and figures.
 RibbonPage {
-    // The main window: the open document and the window's own functions.
     required property var app
     required property var operationWindow
     required property var cladeEditor

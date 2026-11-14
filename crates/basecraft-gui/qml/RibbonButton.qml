@@ -12,5 +12,5 @@ AppCommandButton {
     defaultKeyHint: appWindow ? appWindow.commandList.key(commandId) : ""
     enabled: appWindow !== null && appWindow.current !== null
     iconName: appWindow ? appWindow.commandList.icon(commandId) : ""
-    Component.onCompleted: if (appWindow) appWindow.registerRibbonCommand(commandAction)
+    Component.onCompleted: appWindow.registerRibbonCommand(commandAction)
 }

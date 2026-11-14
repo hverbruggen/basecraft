@@ -4,7 +4,6 @@ import QtQuick.Layouts
 
 // Trace: reviewing Sanger calls, issues, masking and the consensus.
 RibbonPage {
-    // The main window: the open document and the window's own functions.
     required property var app
     // The FASTA motif fits the shared compact symbol band.
     component ExportConsensusButton: RibbonButton {

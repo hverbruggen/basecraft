@@ -4,7 +4,6 @@ import QtQuick.Layouts
 
 // File: the project, saving and the document record.
 RibbonPage {
-    // The main window: the open document and the window's own functions.
     required property var app
     required property var combinePicker
     required property var projectCommand

@@ -158,8 +158,6 @@ pub mod qobject {
         #[qinvokable]
         fn request_save(self: Pin<&mut DelimitationController>, path: &QString) -> QString;
         #[qinvokable]
-        fn export_svg(self: Pin<&mut DelimitationController>, path: &QString);
-        #[qinvokable]
         fn export_statistics(self: Pin<&mut DelimitationController>, path: &QString);
         #[qinvokable]
         fn export_analysis(self: Pin<&mut DelimitationController>, path: &QString);
@@ -1437,10 +1435,6 @@ impl qobject::DelimitationController {
             }
             None => false,
         }
-    }
-    pub fn export_svg(self: Pin<&mut Self>, path: &QString) {
-        let theme = crate::appearance::current().theme.clone();
-        self.export_with(path, &theme, None);
     }
     fn export_with(
         mut self: Pin<&mut Self>,

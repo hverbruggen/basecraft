@@ -4,7 +4,6 @@ import QtQuick.Layouts
 
 // Export: figures, specimen preparation and the complete GenBank workflow.
 RibbonPage {
-    // The main window: the open document and the window's own functions.
     required property var app
     required property var exportSvgCommand
     required property var exportPngCommand

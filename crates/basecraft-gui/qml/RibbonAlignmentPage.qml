@@ -4,7 +4,6 @@ import QtQuick.Layouts
 
 // Alignment: edits on the selected block, its columns and rows.
 RibbonPage {
-    // The main window: the open document and the window's own functions.
     required property var app
     required property var renameDialog
     spacing: 6 * app.ribbonSizeFactor

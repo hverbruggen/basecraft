@@ -4,7 +4,6 @@ import QtQuick.Layouts
 
 // Sequence: annotations, their sequences and searches.
 RibbonPage {
-    // The main window: the open document and the window's own functions.
     required property var app
     required property var addAnnotationCommand
     required property var editor

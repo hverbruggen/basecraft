@@ -4,7 +4,6 @@ import QtQuick.Layouts
 
 // Phylogeny: tree inference from the open alignment.
 RibbonPage {
-    // The main window: the open document and the window's own functions.
     required property var app
     required property var toolSettings
     spacing: 6 * app.ribbonSizeFactor

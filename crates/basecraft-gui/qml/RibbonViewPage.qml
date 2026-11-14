@@ -4,7 +4,6 @@ import QtQuick.Layouts
 
 // View: zoom, what the document shows, find and text.
 RibbonPage {
-    // The main window: the open document and the window's own functions.
     required property var app
     required property var findCommand
     required property var textRepresentationCommand
