@@ -3,9 +3,7 @@ use super::*;
 
 #[test]
 fn pre_session_refusal_discards_actual_consent() {
-    let Some(root) = crate::isolated_profile::enter(
-        "records::replay::attempt_boundary_tests::pre_session_refusal_discards_actual_consent",
-    ) else {
+    let Some(root) = crate::isolated_profile::enter() else {
         return;
     };
     let source = root.join("source");

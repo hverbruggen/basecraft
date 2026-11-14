@@ -15,9 +15,7 @@ fn changed_original_is_rejected_before_editing() {
 
 #[test]
 fn recovery_starts_at_completed_save() {
-    let Some(root) = crate::isolated_profile::enter(
-        "session::retention_tests::recovery_starts_at_completed_save",
-    ) else {
+    let Some(root) = crate::isolated_profile::enter() else {
         return;
     };
     let source = root.join("source");
@@ -40,9 +38,7 @@ fn recovery_starts_at_completed_save() {
 
 #[test]
 fn recovery_checkpoints_external_edits_and_undo_and_needs_replaced_originals() {
-    let Some(root) = crate::isolated_profile::enter(
-        "session::retention_tests::recovery_checkpoints_external_edits_and_undo_and_needs_replaced_originals",
-    ) else {
+    let Some(root) = crate::isolated_profile::enter() else {
         return;
     };
     for size in [4, 101 * 1024 * 1024] {
@@ -142,9 +138,7 @@ fn recovery_checkpoints_external_edits_and_undo_and_needs_replaced_originals() {
 #[test]
 fn cross_device_recovery_after_save_as_and_interrupted_save() {
     use std::os::unix::fs::MetadataExt;
-    let Some(root) = crate::isolated_profile::enter(
-        "session::retention_tests::cross_device_recovery_after_save_as_and_interrupted_save",
-    ) else {
+    let Some(root) = crate::isolated_profile::enter() else {
         return;
     };
     let disk = tempfile::tempdir_in("/dev/shm").unwrap();
@@ -215,9 +209,7 @@ fn cross_device_recovery_after_save_as_and_interrupted_save() {
 
 #[test]
 fn recovery_uses_an_immutable_object_after_the_original_changes() {
-    let Some(root) = crate::isolated_profile::enter(
-        "session::retention_tests::recovery_uses_an_immutable_object_after_the_original_changes",
-    ) else {
+    let Some(root) = crate::isolated_profile::enter() else {
         return;
     };
     let path = root.join("sequence.fa");
@@ -241,9 +233,7 @@ fn recovery_uses_an_immutable_object_after_the_original_changes() {
 
 #[test]
 fn recovery_after_save_keeps_feature_ids_and_external_save_as() {
-    let Some(root) = crate::isolated_profile::enter(
-        "session::retention_tests::recovery_after_save_keeps_feature_ids_and_external_save_as",
-    ) else {
+    let Some(root) = crate::isolated_profile::enter() else {
         return;
     };
     let source = root.join("source");
@@ -285,9 +275,7 @@ fn recovery_after_save_keeps_feature_ids_and_external_save_as() {
 
 #[test]
 fn external_document_checkpoint_stays_inside_recovery_storage() {
-    let Some(root) = crate::isolated_profile::enter(
-        "session::retention_tests::external_document_checkpoint_stays_inside_recovery_storage",
-    ) else {
+    let Some(root) = crate::isolated_profile::enter() else {
         return;
     };
     let project = root.join("project");
@@ -310,9 +298,7 @@ fn external_document_checkpoint_stays_inside_recovery_storage() {
 #[cfg(target_os = "linux")]
 #[test]
 fn missing_cross_device_document_does_not_block_other_recovery() {
-    let Some(root) = crate::isolated_profile::enter(
-        "session::retention_tests::missing_cross_device_document_does_not_block_other_recovery",
-    ) else {
+    let Some(root) = crate::isolated_profile::enter() else {
         return;
     };
     let source = tempfile::tempdir_in("/dev/shm").unwrap();

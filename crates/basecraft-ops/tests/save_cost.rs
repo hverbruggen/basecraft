@@ -12,7 +12,7 @@ static ALLOCATOR: basecraft_io::heap::Allocator = basecraft_io::heap::Allocator;
 
 #[test]
 fn save_streams_small_and_large_documents_once() {
-    let Some(root) = isolated_profile::enter("save_streams_small_and_large_documents_once") else {
+    let Some(root) = isolated_profile::enter() else {
         return;
     };
     for (extension, kind) in [

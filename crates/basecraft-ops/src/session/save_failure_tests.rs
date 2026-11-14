@@ -13,9 +13,7 @@ fn fixture(root: &Path) -> (Session, DocId, PathBuf) {
 
 #[test]
 fn failed_intent_keeps_original_and_edits_for_retry() {
-    let Some(root) = crate::isolated_profile::enter(
-        "session::save_failure_tests::failed_intent_keeps_original_and_edits_for_retry",
-    ) else {
+    let Some(root) = crate::isolated_profile::enter() else {
         return;
     };
     let (mut session, id, target) = fixture(&root);
@@ -31,9 +29,7 @@ fn failed_intent_keeps_original_and_edits_for_retry() {
 
 #[test]
 fn failed_provenance_keeps_recovery_and_retry_accepts_written_data() {
-    let Some(root) = crate::isolated_profile::enter(
-        "session::save_failure_tests::failed_provenance_keeps_recovery_and_retry_accepts_written_data",
-    ) else {
+    let Some(root) = crate::isolated_profile::enter() else {
         return;
     };
     let (mut session, id, target) = fixture(&root);
@@ -93,9 +89,7 @@ fn crash_before_and_after_replacement_recovers_the_edits() {
 
 #[test]
 fn new_destination_and_history_preserve_existing_bytes() {
-    let Some(root) = crate::isolated_profile::enter(
-        "session::save_failure_tests::new_destination_and_history_preserve_existing_bytes",
-    ) else {
+    let Some(root) = crate::isolated_profile::enter() else {
         return;
     };
     let (mut session, id, target) = fixture(&root);
@@ -138,9 +132,7 @@ pub(super) fn fail_write(step: WriteStep) -> Result<()> {
 
 #[test]
 fn late_write_failures_retain_recovery_and_retry() {
-    let Some(root) = crate::isolated_profile::enter(
-        "session::save_failure_tests::late_write_failures_retain_recovery_and_retry",
-    ) else {
+    let Some(root) = crate::isolated_profile::enter() else {
         return;
     };
     for (name, step) in [
@@ -189,9 +181,7 @@ fn failed_save_journal_keeps_previous_history_and_recovers_written_data() {
 
 #[test]
 fn recovery_inspection_failure_retries_without_replacing_written_data() {
-    let Some(root) = crate::isolated_profile::enter(
-        "session::save_failure_tests::recovery_inspection_failure_retries_without_replacing_written_data",
-    ) else {
+    let Some(root) = crate::isolated_profile::enter() else {
         return;
     };
     let (session, _, original) = fixture(&root);

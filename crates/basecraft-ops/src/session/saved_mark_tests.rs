@@ -2,9 +2,7 @@ use super::*;
 
 #[test]
 fn undo_redo_and_branching_follow_the_saved_revision() {
-    let Some(_profile) = crate::isolated_profile::enter(
-        "session::saved_mark_tests::undo_redo_and_branching_follow_the_saved_revision",
-    ) else {
+    let Some(_profile) = crate::isolated_profile::enter() else {
         return;
     };
     let dir = tempfile::tempdir().unwrap();

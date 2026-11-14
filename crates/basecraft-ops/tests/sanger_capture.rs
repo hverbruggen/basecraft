@@ -27,9 +27,7 @@ fn one_read(path: &std::path::Path) {
 }
 #[test]
 fn instrument_rendering_and_submission_share_one_trace_capture() {
-    let Some(root) =
-        isolated_profile::enter("instrument_rendering_and_submission_share_one_trace_capture")
-    else {
+    let Some(root) = isolated_profile::enter() else {
         return;
     };
     let path = trace(&root);
@@ -75,9 +73,7 @@ fn instrument_rendering_and_submission_share_one_trace_capture() {
 }
 #[test]
 fn explicit_sanger_run_registers_both_identities_in_one_read() {
-    let Some(root) =
-        isolated_profile::enter("explicit_sanger_run_registers_both_identities_in_one_read")
-    else {
+    let Some(root) = isolated_profile::enter() else {
         return;
     };
     let path = trace(&root);
@@ -99,9 +95,7 @@ fn explicit_sanger_run_registers_both_identities_in_one_read() {
 #[test]
 fn large_alignment_context_still_registers_as_streamed_evidence() {
     use std::io::{Read, Write};
-    let Some(root) =
-        isolated_profile::enter("large_alignment_context_still_registers_as_streamed_evidence")
-    else {
+    let Some(root) = isolated_profile::enter() else {
         return;
     };
     let path = root.join("reference.afa");

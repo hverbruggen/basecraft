@@ -183,7 +183,7 @@ inspection over size, so the plugin writes compact ones.
 cargo test -p basecraft-distance
 cargo build -p basecraft-distance
 BASECRAFT_DISTANCE_TEST_BINARY=/absolute/path/to/basecraft-distance \
-  cargo test -p basecraft-plugin-host --test distance_plugin
+  cargo test -p basecraft-plugin-host --test integration distance_plugin::
 ```
 
 Tests cover model formulas and saturation, scalar/packed agreement, every available CPU
