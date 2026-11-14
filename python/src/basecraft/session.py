@@ -505,6 +505,34 @@ class Session:
         self._metadata(document)
         return self.call("metadata_insdc", {"specimen": specimen})
 
+    # Species workspaces
+
+    def species_analysis(self, document, method, input, *, rooted=False, settings=None,
+                         hypothesis=None, timeout=None):
+        """Run a species analysis on an open workspace, as the window does.
+
+        ``method`` is a name such as ``"ptp"`` or ``"display_nj"``. The run is a job
+        of this session aimed at the workspace, whose history records it and which
+        receives its hypotheses; a display tree is attached as the workspace's
+        display tree. Save the workspace afterwards. Returns the run's outcome.
+        """
+        arguments = {"document": document, "method": method, "input": str(input),
+                     "rooted": rooted}
+        if settings is not None:
+            arguments["settings"] = settings
+        if hypothesis is not None:
+            arguments["hypothesis"] = hypothesis
+        prepared = self.call("delimitation_analysis_request", arguments)
+        request = prepared["request"]
+        outcome = self.run(request["operation"], inputs=request["inputs"],
+                           parameters=request["parameters"],
+                           destinations=request["destinations"], target=request["target"],
+                           timeout=timeout)
+        if prepared["output"] is not None:
+            self.call("delimitation_display_tree",
+                      {"document": document, "tree": prepared["output"]})
+        return outcome
+
     # GenBank marker submissions
 
     def create_submission(self, path, alignment):

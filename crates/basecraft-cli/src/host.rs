@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use basecraft_ops::commands::Kind::{Document, File, Files, NewFile, Text, Texts};
+use basecraft_ops::commands::Kind::{Document, File, Files, Flag, Json, NewFile, Text, Texts};
 use basecraft_ops::commands::{Arg, Call, Command, Routes};
 use basecraft_ops::{Error, Session};
 use basecraft_plugin_host::registry::{self, Registry, RegistryConfig};
@@ -27,6 +27,28 @@ pub const GROUPS: &[(&str, &str)] = &[
 ];
 
 const ID: Arg = Arg::new("id", Text, "The package ID.").positional();
+const WORKSPACE: Arg = Arg::new("document", Document, "The species workspace.").positional();
+const METHOD: Arg = arg(
+    "method",
+    basecraft_ops::commands::Kind::Choice(basecraft_ops::species_analysis::METHODS),
+    "The analysis, or display_upgma, display_nj or display_iqtree for a display tree.",
+);
+const INPUT: Arg = arg("input", File, "The tree or alignment the analysis reads.");
+const ROOTED: Arg = arg("rooted", Flag, "The input tree is rooted.");
+const SETTINGS: Arg = arg(
+    "settings",
+    Json(OBJECT),
+    "Settings by name, such as {\"seed\": 2}.",
+)
+.optional();
+const HYPOTHESIS: Arg = arg(
+    "hypothesis",
+    Text,
+    "The hypothesis group statistics describe.",
+)
+.optional();
+const OBJECT: &str = r#"{"type": "object"}"#;
+
 /// Scripts pass `--json`; these commands print only JSON anyway.
 const JSON: Arg = Arg::new(
     "json",
@@ -240,6 +262,26 @@ pub const COMMANDS: &[Command] = &[
         true,
         Routes::CommandLine,
         validate_submission
+    ),
+    command!(
+        "delimitation analyse",
+        "Run a species analysis, or infer a display tree, on a species workspace and save it: \
+            the same run the window starts. The workspace's history records the run; its \
+            hypotheses are added, or the inferred tree becomes its display tree.",
+        [WORKSPACE, METHOD, INPUT, ROOTED, SETTINGS, HYPOTHESIS],
+        true,
+        Routes::CommandLine,
+        analyse
+    ),
+    command!(
+        "delimitation analysis-request",
+        "The operation request for a species analysis of an open workspace, with the workspace \
+            as its target. Run it with the operation's tool; for a display tree, then attach \
+            `output` with delimitation_display_tree.",
+        [WORKSPACE, METHOD, INPUT, ROOTED, SETTINGS, HYPOTHESIS],
+        true,
+        Routes::LiveSession,
+        analysis_request
     ),
 ];
 
@@ -633,6 +675,53 @@ fn run_plugin(call: &mut Call) -> Result<Value> {
     }
     call.edits(target.ok_or("operation returned no target document")?);
     Ok(outcome)
+}
+
+/// The species analysis the arguments ask for on the workspace argument.
+fn species_analysis(
+    call: &mut Call,
+    registry: &Registry,
+) -> Result<(
+    basecraft_ops::DocId,
+    basecraft_plugin_host::species_analysis::Analysis,
+)> {
+    use basecraft_ops::species_analysis::{Method, Request};
+    let doc = call.doc("document")?;
+    let input = call.path("input")?;
+    let shown = call.session.delimitation(doc)?.view.display_tree.clone();
+    let request = Request {
+        method: Method::parse(call.text("method")?)?,
+        input: &input,
+        rooted: call.flag("rooted")?,
+        settings: call.json("settings")?.unwrap_or_default(),
+        hypothesis: call.optional_text("hypothesis")?.unwrap_or_default(),
+        shown_tree: Path::new(shown.as_deref().unwrap_or_default()),
+    };
+    let analysis =
+        basecraft_plugin_host::species_analysis::prepare(registry, call.session, doc, &request)?;
+    Ok((doc, analysis))
+}
+
+fn analyse(call: &mut Call) -> Result<Value> {
+    let registry = Registry::load(&config()?)?;
+    let (doc, analysis) = species_analysis(call, &registry)?;
+    let policy = SessionPolicy::new(call.session.root(), true)?;
+    let (outcome, _) = run_foreground(&registry, &analysis.request, policy, call.session)?;
+    if outcome["state"] != "completed" {
+        call.fail();
+        return Ok(outcome);
+    }
+    if analysis.method.is_display() {
+        basecraft_ops::delimitation::attach_display_tree(call.session, doc, &analysis.output)?;
+    }
+    Ok(outcome)
+}
+
+fn analysis_request(call: &mut Call) -> Result<Value> {
+    let registry = Registry::load(&config()?)?;
+    let (_, analysis) = species_analysis(call, &registry)?;
+    let output = analysis.method.is_display().then_some(analysis.output);
+    Ok(json!({"request": analysis.request, "output": output}))
 }
 
 fn validate_submission(call: &mut Call) -> Result<Value> {

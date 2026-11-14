@@ -152,6 +152,25 @@ fn numbering_an_alignment_records_the_edit() {
     assert_eq!(renames, 2, "{events:?}");
 }
 
+/// D29: the records of a GenBank file are renamed in the file, a run its
+/// history records.
+#[test]
+fn numbering_records_records_the_rewrite() {
+    crate::isolated_profile::isolate!();
+    let temp = tempfile::tempdir().unwrap();
+    let profile = temp.path().join("profile");
+    let file = temp.path().join("two.gb");
+    let record = "LOCUS       ABC          4 bp    DNA\nORIGIN\n        1 acgt\n//\n";
+    std::fs::write(&file, record.repeat(2)).unwrap();
+    ok(basecraft(&profile, &["number-duplicates", text(&file)]));
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        record.replace("ABC   ", "ABC.1 ") + &record.replace("ABC   ", "ABC.2 ")
+    );
+    let history = ok(basecraft(&profile, &["history", text(&file), "--json"]));
+    assert!(history.contains("number_records"), "{history}");
+}
+
 /// `mcp` takes its project as its argument and leaves saves to its client.
 #[test]
 fn mcp_refuses_the_command_line_options_it_would_ignore() {

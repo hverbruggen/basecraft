@@ -491,6 +491,79 @@ fn species_mcp_uses_the_canonical_workspace_contract() {
     );
 }
 
+/// One species analysis, prepared by the plugin host for the window, the CLI
+/// and MCP: the same workspace gets the same hypotheses on both routes.
+#[test]
+fn species_analysis_runs_the_same_on_the_cli_and_mcp() {
+    crate::isolated_profile::isolate!();
+    let parent = tempfile::tempdir().unwrap();
+    let root = parent.path().join("working");
+    std::fs::create_dir(&root).unwrap();
+    let profile = parent.path().join("profile");
+    std::fs::write(
+        root.join("source.nwk"),
+        "((a:0.1,b:0.1):0.9,(c:0.2,d:0.2):0.8);\n",
+    )
+    .unwrap();
+    let mut client = Client::start(&root, &profile);
+    for name in ["mcp.spart", "cli.spart"] {
+        let created = client.run(
+            "basecraft.delimitation.workspace_tree.v1",
+            json!({"inputs":{"tree":[{"kind":"file","path":"source.nwk"}]},"parameters":{},
+                "destinations":{"workspace":name}}),
+        );
+        assert_eq!(created["state"], "completed", "{created}");
+    }
+    let opened = client.call("open", json!({"path":"mcp.spart"}));
+    let doc = opened["result"]["structuredContent"]["document"].clone();
+    let prepared = client.call(
+        "delimitation_analysis_request",
+        json!({"document":doc,"method":"gmyc_single","input":"source.nwk","rooted":true}),
+    );
+    let prepared = &prepared["result"]["structuredContent"];
+    assert_eq!(
+        prepared["request"]["operation"],
+        "basecraft.delimitation/gmyc_single@1"
+    );
+    assert_eq!(prepared["output"], Value::Null);
+    let fitted = client.run(
+        "basecraft.delimitation.gmyc_single.v1",
+        prepared["request"].clone(),
+    );
+    assert_eq!(fitted["state"], "completed", "{fitted}");
+    let saved = client.call("save", json!({"document":doc}));
+    assert_eq!(saved["result"]["isError"], false, "{saved}");
+    client.close();
+    let cli = Command::new(env!("CARGO_BIN_EXE_basecraft"))
+        .args([
+            "--project",
+            root.to_str().unwrap(),
+            "delimitation",
+            "analyse",
+        ])
+        .arg(root.join("cli.spart"))
+        .args(["--method", "gmyc_single", "--input"])
+        .arg(root.join("source.nwk"))
+        .arg("--rooted")
+        .env("BASECRAFT_PROFILE_DIR", &profile)
+        .output()
+        .unwrap();
+    assert!(
+        cli.status.success(),
+        "{}",
+        String::from_utf8_lossy(&cli.stderr)
+    );
+    let names = |file: &str| {
+        let work = basecraft_ops::files::load_delimitation(&root.join(file)).unwrap();
+        work.hypotheses
+            .iter()
+            .map(|h| (h.name.clone(), h.groups.len()))
+            .collect::<Vec<_>>()
+    };
+    assert_ne!(names("mcp.spart"), Vec::new());
+    assert_eq!(names("cli.spart"), names("mcp.spart"));
+}
+
 #[test]
 fn tree_mcp_routes_share_hidden_storage() {
     crate::isolated_profile::isolate!();

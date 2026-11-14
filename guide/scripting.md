@@ -253,6 +253,15 @@ See [headless save decisions](headless-saving.md) for structured save checks,
 one-attempt acknowledgement, independent known-analysis policies and warnings.
 
 
+A species analysis runs as the window runs it. `basecraft --project P delimitation
+analyse species.spart --method ptp --input tree.nwk --rooted` runs it, records it in
+the workspace's history, adds its hypotheses and saves the workspace; `display_upgma`,
+`display_nj` and `display_iqtree` infer a display tree instead and attach it. In a
+session, `session.species_analysis(doc, "ptp", "tree.nwk", rooted=True)` does the same
+as a job of the session; save the workspace afterwards. MCP clients call
+`delimitation_analysis_request` and run the returned request with the operation's
+tool.
+
 Linked-alignment inspection uses the same read-only selector as species-workspace
 open in the GUI. `basecraft delimitation linked-alignment species.spart --project
 /project` prints `{"path": <string or null>}`. MCP's

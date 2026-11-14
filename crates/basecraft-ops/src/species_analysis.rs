@@ -29,6 +29,23 @@ pub enum Method {
     GroupStatistics,
 }
 
+/// Every method's name, as [`Method::parse`] reads it.
+pub const METHODS: &[&str] = &[
+    "display_upgma",
+    "display_nj",
+    "display_iqtree",
+    "gmyc_single",
+    "gmyc_multiple",
+    "gmyc_alignment_single",
+    "gmyc_alignment_multiple",
+    "ptp",
+    "mptp",
+    "asap",
+    "relative_time",
+    "haplotypes",
+    "group_statistics",
+];
+
 /// The settings a request may pass on to the operation. Its descriptor
 /// then keeps only those it declares.
 const SETTINGS: [&str; 13] = [
@@ -69,6 +86,16 @@ impl Method {
             self,
             Self::DisplayUpgma | Self::DisplayNj | Self::DisplayIqtree
         )
+    }
+
+    /// The result file a completed run's fit or partition is read from:
+    /// `fit.json` when the host inferred the tree first, else `result.json`.
+    pub fn result_name(self) -> &'static str {
+        if self.starts_from_alignment() {
+            "fit.json"
+        } else {
+            "result.json"
+        }
     }
 
     /// The run starts from the alignment: the host infers the tree first.
@@ -253,7 +280,9 @@ mod tests {
             Method::GroupStatistics,
         ] {
             assert_eq!(Method::parse(&method.name()).unwrap(), method);
+            assert!(METHODS.contains(&method.name().as_str()));
         }
+        assert_eq!(METHODS.len(), 13);
         assert!(matches!(
             Method::parse("bpp"),
             Err(Error::Unsupported(text)) if text == "Unknown analysis"

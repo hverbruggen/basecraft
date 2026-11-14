@@ -81,10 +81,10 @@ pub(super) const COMMANDS: &[Command] = &[
     Command { name: "number-duplicates", writes: true, routes: All, run: number_duplicates,
         help: "Number duplicate record, row or tip names: `a`, `a` become `a.1`, `a.2`. An \
                 alignment or tree is renamed as one edit in its history, which a live session can \
-                undo. The records of another FASTA or \
-                GenBank file are renamed in the file itself, which must not be open; that change \
-                cannot be undone and is not in the file's history. Links that named a duplicated \
-                name are listed for relinking.",
+                undo. The records of another FASTA or GenBank file are renamed in the file \
+                itself, recorded in its history; refused while it has unsaved edits, and an open \
+                copy keeps the old names until opened again. Links that named a duplicated name \
+                are listed for relinking.",
         args: &[path("The file.")] },
     Command { name: "sanger review", writes: true, routes: All, run: sanger_review,
         help: "Start a review of a Sanger read (.ab1) from its instrument calls and save it as a \
@@ -290,10 +290,18 @@ fn number_duplicates(call: &mut Call) -> Result<Value> {
         },
     };
     let Some(doc) = doc else {
+        // Other record files are renamed in the file itself, a run recorded
+        // in its history. An open copy keeps the old names, so it is not one
+        // the command line saves afterwards.
         let found = renames::duplicate_records(call.session, &path)?.unwrap_or_default();
-        if !found.names.is_empty() {
-            renames::number_records(call.session, &path, &found)?;
+        if found.names.is_empty() {
+            return Ok(serde_json::to_value(found)?);
         }
+        let doc = match super::open_at(call.session, &path)? {
+            Some(doc) => doc,
+            None => call.session.open(&path)?,
+        };
+        let found = renames::number_open_records(call.session, doc)?;
         return Ok(serde_json::to_value(found)?);
     };
     let found = renames::duplicates(call.session, doc)?.unwrap_or_default();
