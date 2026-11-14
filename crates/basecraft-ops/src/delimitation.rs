@@ -141,18 +141,18 @@ pub fn link_roster(
 }
 
 /// Publish a run's species workspace as a new SPART file at `target`, which
-/// may lie anywhere in the project; never replaces an existing file.
+/// may lie anywhere in the project; never replaces an existing file. The
+/// staged file moves there; the run keeps no copy (D26).
 pub fn publish_workspace_to(
     target: &std::path::Path,
     work: &basecraft_protocol::delimitation::DelimitationWorkspace,
     run: &crate::records::analysis_store::ArtifactRun,
 ) -> Result<()> {
     let name = stage_workspace(target, work, run)?;
-    run.publish(
-        &name,
-        crate::records::analysis_store::ArtifactDestination::Metadata,
+    basecraft_platform::atomic::rename_noreplace(&run.staging(&name)?, target)?;
+    basecraft_platform::files::sync_directory(
+        target.parent().unwrap_or(std::path::Path::new(".")),
     )?;
-    run.publish_secondary(&name, target)?;
     run.bind(target)
 }
 

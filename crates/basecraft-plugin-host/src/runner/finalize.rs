@@ -2,7 +2,7 @@
 use super::{
     ArtifactDestination, ArtifactRevision, BTreeMap, CollectionExportIntent, CollectionIntent,
     Error, InvokeResult, OperationOutcome, Path, PathBuf, PreparedOperation, PublishedArtifact,
-    Result, export_collection, records, verify_collection,
+    Result, records, verify_collection,
 };
 
 /// Files published into the project: destination, the run's copy if it
@@ -69,59 +69,22 @@ impl PreparedOperation {
                 })?;
                 expected.insert(relative.to_path_buf(), (*hash).clone());
             }
-            if retained == staging || retained.exists() {
-                if retained != staging && (!repair || !intent.is_file()) {
-                    return Err(Error::Protocol(
-                        "output_conflict: retained collection already exists".into(),
-                    ));
-                }
-                // A repair finds members already moved to the project.
-                let leaving = self.member_exports(role, &expected)?;
-                let present: BTreeMap<_, _> = expected
-                    .iter()
-                    .filter(|(member, _)| {
-                        retained.join(member).exists()
-                            || !leaving.iter().any(|(gone, _)| gone == *member)
-                    })
-                    .map(|(member, hash)| (member.clone(), hash.clone()))
-                    .collect();
-                verify_collection(&retained, &present)?;
-            } else {
-                verify_collection(&staging, &expected)?;
-                records::write_json(
-                    &intent,
-                    &serde_json::to_value(CollectionIntent {
-                        schema: 1,
-                        members: expected.clone(),
-                    })?,
-                )?;
-                for path in expected.keys() {
-                    basecraft_platform::files::sync_file(&staging.join(path))?;
-                }
-                self.run.publish_collection(role)?;
-            }
-            // Members with a destination of their own leave the run (D26).
             let leaving = self.member_exports(role, &expected)?;
-            let kept: BTreeMap<_, _> = expected
-                .iter()
-                .filter(|(member, _)| !leaving.iter().any(|(gone, _)| gone == *member))
-                .map(|(member, hash)| (member.clone(), hash.clone()))
-                .collect();
-            record_collection(outcome, role, &retained, &kept);
-            self.persist(outcome)?;
-            if let Some(destination) = self.request.destinations.get(role) {
-                let destination_path = self.policy.root.join(destination);
+            let whole = self.request.destinations.get(role);
+            if let Some(destination) = whole {
+                // The whole collection moves into the project (D26).
+                let path = self.policy.root.join(destination);
                 let intent = self
                     .run
                     .artifact(&format!("collection-{role}-export.json"))?;
-                if destination_path.exists() {
+                if path.exists() {
                     if !repair || !intent.is_file() {
                         return Err(Error::Protocol(
                             "output_conflict: collection destination exists".into(),
                         ));
                     }
-                    verify_collection(&destination_path, &expected)?;
                 } else {
+                    verify_collection(&staging, &expected)?;
                     let destination = self.policy.path(destination, true)?;
                     records::write_json(
                         &intent,
@@ -131,16 +94,69 @@ impl PreparedOperation {
                             members: expected.clone(),
                         })?,
                     )?;
-                    export_collection(&retained, &destination, &expected)?;
+                    for member in expected.keys() {
+                        basecraft_platform::files::sync_file(&staging.join(member))?;
+                    }
+                    basecraft_platform::atomic::rename_noreplace(&staging, &destination)?;
+                    basecraft_platform::files::sync_directory(
+                        destination.parent().unwrap_or(Path::new(".")),
+                    )?;
                 }
-                record_collection(outcome, role, &destination_path, &expected);
-                self.persist(outcome)?;
+                verify_collection(&path, &expected)?;
+                record_collection(outcome, role, &path, &expected);
+                for member in expected.keys() {
+                    moved.insert(retained.join(member), path.join(member));
+                }
+            } else {
+                if retained == staging || retained.exists() {
+                    if retained != staging && (!repair || !intent.is_file()) {
+                        return Err(Error::Protocol(
+                            "output_conflict: retained collection already exists".into(),
+                        ));
+                    }
+                    // A repair finds members already moved to the project.
+                    let present: BTreeMap<_, _> = expected
+                        .iter()
+                        .filter(|(member, _)| {
+                            retained.join(member).exists()
+                                || !leaving.iter().any(|(gone, _)| gone == *member)
+                        })
+                        .map(|(member, hash)| (member.clone(), hash.clone()))
+                        .collect();
+                    verify_collection(&retained, &present)?;
+                } else {
+                    verify_collection(&staging, &expected)?;
+                    records::write_json(
+                        &intent,
+                        &serde_json::to_value(CollectionIntent {
+                            schema: 1,
+                            members: expected.clone(),
+                        })?,
+                    )?;
+                    for path in expected.keys() {
+                        basecraft_platform::files::sync_file(&staging.join(path))?;
+                    }
+                    self.run.publish_collection(role)?;
+                }
+                // Members with a destination of their own leave the run.
+                let kept: BTreeMap<_, _> = expected
+                    .iter()
+                    .filter(|(member, _)| !leaving.iter().any(|(gone, _)| gone == *member))
+                    .map(|(member, hash)| (member.clone(), hash.clone()))
+                    .collect();
+                record_collection(outcome, role, &retained, &kept);
             }
+            self.persist(outcome)?;
+            // A member asked for both in the moved collection and as a file of
+            // its own is copied: the user asked for two files.
+            let home = whole.map_or_else(|| retained.clone(), |d| self.policy.root.join(d));
             for (member, destination) in leaving {
                 let hash = &expected[&member];
-                self.publish_member(role, &retained.join(&member), hash, &destination, outcome)?;
-                let path = self.policy.root.join(&destination);
-                moved.insert(retained.join(&member), path);
+                let source = home.join(&member);
+                self.publish_member(role, &source, hash, &destination, whole.is_some(), outcome)?;
+                if whole.is_none() {
+                    moved.insert(retained.join(&member), self.policy.root.join(&destination));
+                }
                 exports.push((destination, None, hash.clone()));
             }
             collections.insert(role.clone(), retained);
@@ -234,6 +250,15 @@ impl PreparedOperation {
                 });
                 continue;
             }
+            if let Some(destination) = self.request.destinations.get(role) {
+                // The output moves into the project; the run keeps its path
+                // and hash (D26).
+                self.publish_member(role, path, digest, destination, false, outcome)?;
+                let label = format!("output-{index}");
+                let published = self.policy.root.join(destination);
+                publication_outputs.push(self.project_file(&label, &published, digest)?);
+                continue;
+            }
             let retained = self.run.artifact(&name)?;
             if outcome
                 .artifacts
@@ -260,29 +285,6 @@ impl PreparedOperation {
                     digest: digest.clone(),
                 });
                 self.persist(outcome)?;
-            }
-            if let Some(destination) = self.request.destinations.get(role) {
-                let expected = self.policy.root.join(destination);
-                if outcome
-                    .artifacts
-                    .iter()
-                    .any(|a| a.path == expected.display().to_string() && &a.digest == digest)
-                {
-                    if basecraft_io::hash_file(&expected)? != *digest {
-                        return Err(Error::Protocol(
-                            "published destination changed; repair refused".into(),
-                        ));
-                    }
-                } else {
-                    let destination = self.policy.path(destination, true)?;
-                    self.run.publish_secondary(&name, &destination)?;
-                    outcome.artifacts.push(PublishedArtifact {
-                        role: role.clone(),
-                        path: destination.display().to_string(),
-                        digest: digest.clone(),
-                    });
-                    self.persist(outcome)?;
-                }
             }
             let store = self
                 .run
@@ -343,14 +345,7 @@ impl PreparedOperation {
                 .iter()
                 .find(|artifact| artifact.path == path.display().to_string())
                 .ok_or_else(|| Error::Protocol("missing workspace publication receipt".into()))?;
-            let name = path
-                .file_name()
-                .ok_or_else(|| Error::Protocol("workspace has no name".into()))?;
-            exports.push((
-                destination.clone(),
-                Some(self.run.artifact(&name.to_string_lossy())?),
-                artifact.digest.clone(),
-            ));
+            exports.push((destination.clone(), None, artifact.digest.clone()));
         }
         Ok(())
     }
@@ -463,9 +458,10 @@ impl PreparedOperation {
     fn publish_member(
         &self,
         role: &str,
-        retained: &Path,
+        source: &Path,
         hash: &str,
         destination: &str,
+        copy: bool,
         outcome: &mut OperationOutcome,
     ) -> Result<()> {
         let destination_path = self.policy.root.join(destination);
@@ -486,7 +482,16 @@ impl PreparedOperation {
                 records::verify_export(&destination_path, hash, &intent)?;
             } else {
                 let destination = self.policy.path(destination, true)?;
-                records::move_file(retained, &destination, hash, &intent)?;
+                let source = if copy {
+                    let copied = intent.with_extension("copy");
+                    basecraft_io::write_atomic(&copied, |w| {
+                        std::io::copy(&mut std::fs::File::open(source)?, w).map(|_| ())
+                    })?;
+                    copied
+                } else {
+                    source.to_path_buf()
+                };
+                records::move_file(&source, &destination, hash, &intent)?;
             }
             outcome.artifacts.push(PublishedArtifact {
                 role: role.into(),

@@ -368,7 +368,8 @@ fn publication_failures_receipt_before_promotion_and_retry() {
                 .finalize(&result, &validated, &mut outcome, false)
                 .is_err()
         );
-        assert_eq!(prepared.run.artifact("report").unwrap().is_dir(), visible);
+        // A collection bound for the project never sits in the run (D26).
+        assert!(!prepared.run.artifact("report").unwrap().is_dir());
         assert!(!temp.path().join("visible λ collection").exists());
         std::fs::remove_dir(&intent).unwrap();
         std::fs::write(&intent, b"stale intent").unwrap();
@@ -462,9 +463,10 @@ fn publication_invalid_native_paths_return_json_at_producer_boundary() {
         .finalize(&result, &validated, &mut outcome, false)
         .unwrap_err();
     assert!(matches!(error, Error::Json(_)), "{error}");
-    assert!(prepared.run.artifact("report").unwrap().is_dir());
-    assert_eq!(outcome.artifacts.len(), validated.len());
-    assert!(prepared.run.artifact("runtime.json").unwrap().is_file());
+    // Nothing moved: the collection is still where the tool wrote it.
+    assert!(!prepared.run.artifact("report").unwrap().exists());
+    assert!(validated.iter().all(|(_, path, _)| path.is_file()));
+    assert_eq!(outcome.artifacts, []);
     assert_eq!(std::fs::read(intent).unwrap(), b"old export intent");
     assert_eq!(std::fs::read_dir(native_root).unwrap().count(), 0);
     // EX13: direct existing helper boundary after copy/hash/sync/metadata.

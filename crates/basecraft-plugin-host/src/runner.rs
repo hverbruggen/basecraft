@@ -924,32 +924,5 @@ fn verify_collection(root: &Path, expected: &BTreeMap<PathBuf, String>) -> Resul
     }
     Ok(())
 }
-fn export_collection(
-    source: &Path,
-    destination: &Path,
-    expected: &BTreeMap<PathBuf, String>,
-) -> Result<()> {
-    let parent = destination
-        .parent()
-        .ok_or_else(|| Error::Protocol("missing collection destination parent".into()))?;
-    let pending = tempfile::Builder::new()
-        .prefix(".basecraft-export-")
-        .tempdir_in(parent)?;
-    for (relative, hash) in expected {
-        let target = pending.path().join(relative);
-        if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::copy(source.join(relative), &target)?;
-        if basecraft_io::hash_file(&target)? != *hash {
-            return Err(Error::Protocol("collection changed during export".into()));
-        }
-        basecraft_platform::files::sync_file(&target)?;
-    }
-    basecraft_platform::atomic::rename_noreplace(pending.path(), destination)?;
-    basecraft_platform::files::sync_directory(parent)?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod record_format_tests;
