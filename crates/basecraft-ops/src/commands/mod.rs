@@ -137,35 +137,18 @@ const fn arg(name: &'static str, kind: Kind, help: &'static str) -> Arg {
 }
 
 /// The first words that group commands on the command line, with their help.
+#[rustfmt::skip]
 pub const GROUPS: &[(&str, &str)] = &[
-    (
-        "delimitation",
-        "Species workspaces and saved species hypotheses.",
-    ),
-    (
-        "tree",
-        "Tree edits by name: reroot on an outgroup, ladderize, rotate a clade, label tips.",
-    ),
-    (
-        "sanger",
-        "Sanger reads: start a review from a read's calls, decide columns, export or add the consensus.",
-    ),
-    (
-        "provenance",
-        "Inspect, verify or package the readable provenance of saved results.",
-    ),
-    (
-        "records",
-        "Maintain the records basecraft keeps in a project's `.basecraft` folder.",
-    ),
-    (
-        "metadata",
-        "The project's specimen metadata: roster, identifications, record links and collection columns; imports and the .ods template.",
-    ),
-    (
-        "submission",
-        "GenBank marker submissions: row decisions, reading frames, the package, table2asn validation and accessions.",
-    ),
+    ("delimitation", "Species workspaces and saved species hypotheses."),
+    ("tree", "Tree edits by name: reroot on an outgroup, ladderize, rotate a clade, label tips."),
+    ("sanger", "Sanger reads: start a review from a read's calls, decide columns, export or add \
+        the consensus."),
+    ("provenance", "Inspect, verify or package the readable provenance of saved results."),
+    ("records", "Maintain the records basecraft keeps in a project's `.basecraft` folder."),
+    ("metadata", "The project's specimen metadata: roster, identifications, record links and \
+        collection columns; imports and the .ods template."),
+    ("submission", "GenBank marker submissions: row decisions, reading frames, the package, \
+        table2asn validation and accessions."),
 ];
 
 /// Every command, in the order help lists them.

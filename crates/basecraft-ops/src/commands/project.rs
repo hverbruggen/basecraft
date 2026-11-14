@@ -28,61 +28,99 @@ pub(super) const COMMANDS: &[Command] = &[
         help: "Create empty specimen metadata tables in the project's `metadata/` folder.",
         args: &[] },
     Command { name: "metadata show", writes: false, routes: All, run: metadata_show,
-        help: "The project's specimen metadata: roster, taxa, identifications and links, with notices from reading it.",
+        help: "The project's specimen metadata: roster, taxa, identifications and links, with \
+                notices from reading it.",
         args: &[] },
     Command { name: "metadata import-headers", writes: false, routes: All, run: import_headers,
-        help: "Plan an import from structured FASTA headers, or with apply, apply the plan as one undoable edit.",
+        help: "Plan an import from structured FASTA headers, or with apply, apply the plan as one \
+                undoable edit.",
         args: &[file("The FASTA file, inside the project."), arg("separator", Text, "The field separator, such as `|`."),
-            arg("fields", List, "What each field holds: specimen, taxon, record, ignore (or -), or a column name such as eventDate."),
+            arg("fields", List, "What each field holds: specimen, taxon, record, ignore (or -), or \
+                    a column name such as eventDate."),
             arg("save_pattern", Text, "Remember the pattern under this name.").optional(),
             IMPORT_NEW, IMPORT_OVERWRITE, IMPORT_APPLY] },
     Command { name: "metadata import-sheet", writes: false, routes: All, run: import_sheet,
-        help: "Plan an import from a spreadsheet (.ods, .xlsx, .csv or .tsv), or with apply, apply the plan as one undoable edit. Returns the plan with the mapping used.",
+        help: "Plan an import from a spreadsheet (.ods, .xlsx, .csv or .tsv), or with apply, apply \
+                the plan as one undoable edit. Returns the plan with the mapping used.",
         args: &[file("The spreadsheet."),
-            arg("map", Texts, "HEADER=TARGET, repeatable. TARGET is specimen, record, taxon, ignore or a column name. Without any, the mapping is guessed from the headers.").optional(),
+            arg("map", Texts, "HEADER=TARGET, repeatable. TARGET is specimen, record, taxon, \
+                    ignore or a column name. Without any, the mapping is guessed from the headers.").optional(),
             arg("sequences", File, "The sequence file whose records the `record` column names.").optional(),
             arg("save_mapping", Text, "Remember the mapping under this name.").optional(),
             IMPORT_NEW, IMPORT_OVERWRITE, IMPORT_APPLY] },
     Command { name: "metadata template", writes: true, routes: All, run: metadata_template,
-        help: "Write an .ods template, every cell text, pre-filled for each record of a sequence file in the project.",
+        help: "Write an .ods template, every cell text, pre-filled for each record of a sequence \
+                file in the project.",
         args: &[file("The sequence file."), arg("output", NewFile, "The new .ods file.")] },
     Command { name: "metadata status", writes: false, routes: All, run: metadata_status,
         help: "List a sequence file's records that are not linked to a specimen.",
         args: &[file("The sequence file.")] },
     Command { name: "metadata insdc", writes: false, routes: All, run: metadata_insdc,
-        help: "Derive a specimen's INSDC source qualifiers from its Darwin Core columns and current identification, with the required ones still missing.",
+        help: "Derive a specimen's INSDC source qualifiers from its Darwin Core columns and \
+                current identification, with the required ones still missing.",
         args: &[given("specimen", Text, "The specimen's roster ID.")] },
     Command { name: "metadata consumer", writes: false, routes: All, run: metadata_consumer,
-        help: "Inspect project partitions or metadata labels, or plan explicit workspace roster links or result promotion. request: {action: partitions} | {action: link_records, document: project path, links: {record ID: roster ID}} | {action: labels, document, records: [scientific ID], fields: [specimen|genus|species|accession|{column:{name}}]} | {action: link_workspace, workspace: project path, links: {workspace ID: roster ID}} | {action: promote_partition, workspace, hypothesis, id}. A plan returns its target and typed operation; apply makes the edit. Missing or conflicting roster links refuse promotion.",
-        args: &[given("request", Json(OBJECT), "The request."), arg("apply", Flag, "Apply the planned edit to its target.")] },
+        help: "Inspect project partitions or metadata labels, or plan explicit workspace roster \
+                links or result promotion. request: {action: partitions} | {action: link_records, \
+                document: project path, links: {record ID: roster ID}} | {action: labels, \
+                document, records: [scientific ID], fields: \
+                [specimen|genus|species|accession|{column:{name}}]} | {action: link_workspace, \
+                workspace: project path, links: {workspace ID: roster ID}} | {action: \
+                promote_partition, workspace, hypothesis, id}. A plan returns its target and typed \
+                operation; apply makes the edit. Missing or conflicting roster links refuse \
+                promotion.",
+        args: &[given("request", Json(OBJECT), "The request."), arg("apply", Flag, "Apply the \
+                planned edit to its target.")] },
     Command { name: "submission new", writes: true, routes: All, run: submission_new,
-        help: "Create a GenBank marker submission document (NAME.submission.json) for an aligned FASTA inside the project, and open it. Edit it with submission edit (see schemas/submission-edit.schema.json).",
+        help: "Create a GenBank marker submission document (NAME.submission.json) for an aligned \
+                FASTA inside the project, and open it. Edit it with submission edit (see \
+                schemas/submission-edit.schema.json).",
         args: &[given("path", NewFile, "The new submission file."), arg("alignment", File, "The aligned FASTA file.")] },
     Command { name: "submission show", writes: false, routes: All, run: submission_show,
         help: "The submission document as JSON.",
         args: &[document("The submission.")] },
     Command { name: "submission review", writes: false, routes: All, run: submission_review,
-        help: "Prepare a submission's records from its source alignment and the project metadata and list every local issue: extraction (ungapped, ambiguity kept, terminal unknowns, masked columns, export IDs), specimen source qualifiers, organism names, features, and reading frames detected per record (confirm them with submission frames). Accession-aware row choices and evidence are local unverified heuristics. Before export, confirm the selection with the edit {action: confirm_selection, selection_hash: <returned selection_hash>}; source, selection or evidence changes need confirming again. Blocking issues keep the package from being ready.",
+        help: "Prepare a submission's records from its source alignment and the project metadata \
+                and list every local issue: extraction (ungapped, ambiguity kept, terminal \
+                unknowns, masked columns, export IDs), specimen source qualifiers, organism names, \
+                features, and reading frames detected per record (confirm them with submission \
+                frames). Accession-aware row choices and evidence are local unverified heuristics. \
+                Before export, confirm the selection with the edit {action: confirm_selection, \
+                selection_hash: <returned selection_hash>}; source, selection or evidence changes \
+                need confirming again. Blocking issues keep the package from being ready.",
         args: &[document("The submission.")] },
     Command { name: "submission edit", writes: true, routes: All, run: submission_edit,
-        help: "Apply one submission.edit ({action: set_rows | set_batch | set_frames | set_export | set_publication | set_source | set_accessions | confirm_selection | apply_inclusion, ...}) as one undoable edit.",
+        help: "Apply one submission.edit ({action: set_rows | set_batch | set_frames | set_export \
+                | set_publication | set_source | set_accessions | confirm_selection | \
+                apply_inclusion, ...}) as one undoable edit.",
         args: &[document("The submission."),
-            given("edit", Json(OBJECT), "The edit, such as {\"action\":\"set_rows\",\"rows\":[{\"record\":\"x\",\"decision\":\"exclude\"}]}.")] },
+            given("edit", Json(OBJECT), "The edit, such as \
+                    {\"action\":\"set_rows\",\"rows\":[{\"record\":\"x\",\"decision\":\"exclude\"}]}.")] },
     Command { name: "submission frames", writes: true, routes: All, run: submission_frames,
-        help: "Confirm reading frames: the detected frame of every record that has exactly one, or set RECORD=CODON_START. Returns the frames.",
-        args: &[document("The submission."), arg("confirm_detected", Flag, "Confirm every uniquely detected frame not yet confirmed."),
+        help: "Confirm reading frames: the detected frame of every record that has exactly one, or \
+                set RECORD=CODON_START. Returns the frames.",
+        args: &[document("The submission."), arg("confirm_detected", Flag, "Confirm every uniquely \
+                detected frame not yet confirmed."),
             arg("set", Texts, "RECORD=1|2|3, repeatable.").optional()] },
     Command { name: "submission export", writes: true, routes: All, run: submission_export,
-        help: "Write the submission package (genbank/ .fsa .src .tbl .sbt, records, specimens, coordinate map, README, package.json) to a folder in the project. Needs the current selection confirmed. Same inputs give identical files. Returns the input hash and status.",
+        help: "Write the submission package (genbank/ .fsa .src .tbl .sbt, records, specimens, \
+                coordinate map, README, package.json) to a folder in the project. Needs the \
+                current selection confirmed. Same inputs give identical files. Returns the input \
+                hash and status.",
         args: &[document("The submission."), arg("output", NewFile, "The package folder.")] },
     Command { name: "submission validation-request", writes: true, routes: All, run: validation_request,
-        help: "The OperationRequest that validates an exported package with table2asn. Run it as the operation basecraft.table2asn/validate@1, then pass its outcome to submission record-validation.",
+        help: "The OperationRequest that validates an exported package with table2asn. Run it as \
+                the operation basecraft.table2asn/validate@1, then pass its outcome to submission \
+                record-validation.",
         args: &[given("package", File, "The package folder.")] },
     Command { name: "submission record-validation", writes: true, routes: All, run: record_validation,
-        help: "Read a finished table2asn run's reports into the package: issues mapped to records and specimens, status (passed, errors, unavailable, failed), .sqn and .gbf copied to genbank/. Local validation only, not archive acceptance.",
+        help: "Read a finished table2asn run's reports into the package: issues mapped to records \
+                and specimens, status (passed, errors, unavailable, failed), .sqn and .gbf copied \
+                to genbank/. Local validation only, not archive acceptance.",
         args: &[given("package", File, "The package folder."), arg("outcome", Json(OBJECT), "The run's outcome.")] },
     Command { name: "submission accessions", writes: false, routes: All, run: submission_accessions,
-        help: "Match the accession list NCBI returned (lines with a sequence ID and an accession) to the submission's records; with apply, record them as one undoable edit.",
+        help: "Match the accession list NCBI returned (lines with a sequence ID and an accession) \
+                to the submission's records; with apply, record them as one undoable edit.",
         args: &[document("The submission."), given("list", File, "The accession list file.").optional(),
             arg("text", Text, "The accession list itself, instead of a file.").optional(),
             arg("apply", Flag, "Record the matched accessions.")] },
@@ -90,16 +128,24 @@ pub(super) const COMMANDS: &[Command] = &[
         help: "Write a publication table of records, specimens, organisms and accessions.",
         args: &[document("The submission."), arg("output", NewFile, "The new table file.")] },
     Command { name: "submission submitter", writes: false, routes: All, run: submitter,
-        help: "The submitter contact preference used for .sbt files and the required fields still missing; with set (fields such as first_name, last_name, email, institution, city, country), update it.",
+        help: "The submitter contact preference used for .sbt files and the required fields still \
+                missing; with set (fields such as first_name, last_name, email, institution, city, \
+                country), update it.",
         args: &[arg("set", Json(OBJECT), "Fields to change.").optional()] },
     Command { name: "submission inclusion-preview", writes: false, routes: All, run: inclusion_preview,
-        help: "Preview identifier inclusion with a typed rule (whole identifier or one-based literal field; exact, contains, starts, ends, wildcard or regex). Manual decisions are kept by default; missing or empty fields are unresolved. Apply the whole returned plan with the edit {action: apply_inclusion, plan: ...}; stale or changed plans are refused. Matching is not accession verification. Writes nothing.",
+        help: "Preview identifier inclusion with a typed rule (whole identifier or one-based \
+                literal field; exact, contains, starts, ends, wildcard or regex). Manual decisions \
+                are kept by default; missing or empty fields are unresolved. Apply the whole \
+                returned plan with the edit {action: apply_inclusion, plan: ...}; stale or changed \
+                plans are refused. Matching is not accession verification. Writes nothing.",
         args: &[document("The submission."), given("rule", Json(OBJECT), "The rule.")] },
     Command { name: "submission inclusion-presets", writes: false, routes: All, run: inclusion_presets,
-        help: "The project's named inclusion rules; with save, first save a named rule in the shared metadata import settings.",
+        help: "The project's named inclusion rules; with save, first save a named rule in the \
+                shared metadata import settings.",
         args: &[arg("save", Json(OBJECT), "A named rule to save.").optional()] },
     Command { name: "delimitation linked-alignment", writes: false, routes: All, run: linked_alignment,
-        help: "The species workspace's unverified alignment hint: path, a string or null, keeping an explicit empty string. Does not read or check that path.",
+        help: "The species workspace's unverified alignment hint: path, a string or null, keeping \
+                an explicit empty string. Does not read or check that path.",
         args: &[document("The species workspace.")] },
     Command { name: "delimitation candidates", writes: false, routes: All, run: candidates,
         help: "Saved species hypotheses in recommendation order; writes nothing.",
@@ -108,11 +154,14 @@ pub(super) const COMMANDS: &[Command] = &[
         help: "Suggest a free combined SPART filename beside the last input; writes nothing.",
         args: &[given("paths", Files, "The hypothesis files.")] },
     Command { name: "delimitation combine", writes: true, routes: All, run: combine,
-        help: "Combine saved hypotheses into a new SPART or SPART XML file. Without selection all are kept; a selection maps input paths to hypothesis IDs, and inputs it leaves out keep none. An existing output or companion is refused.",
+        help: "Combine saved hypotheses into a new SPART or SPART XML file. Without selection all \
+                are kept; a selection maps input paths to hypothesis IDs, and inputs it leaves out \
+                keep none. An existing output or companion is refused.",
         args: &[given("paths", Files, "Two or more hypothesis files."), arg("output", NewFile, "The new file."),
             arg("selection", Json(SELECTION), "Input path to the hypothesis IDs to keep.").optional()] },
     Command { name: "delimitation display-tree", writes: true, routes: All, run: display_tree,
-        help: "Attach a tree file (one tree, Newick or NEXUS) as the display tree of a species workspace; the file is kept as its evidence.",
+        help: "Attach a tree file (one tree, Newick or NEXUS) as the display tree of a species \
+                workspace; the file is kept as its evidence.",
         args: &[document("The species workspace."), arg("tree", File, "The tree file.")] },
 ];
 

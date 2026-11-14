@@ -34,55 +34,78 @@ pub(super) const COMMANDS: &[Command] = &[
     Command { name: "edit", writes: true, routes: CommandLine, run: edit,
         help: "Apply typed JSON operations to a document and save it.",
         args: &[document("The file."),
-            given("operation", Operations, "One JSON operation, or an array applied in one session before saving.")] },
+            given("operation", Operations, "One JSON operation, or an array applied in one session \
+                    before saving.")] },
     Command { name: "save-check", writes: false, routes: All, run: save_check,
-        help: "Inspect a save without writing. In a live session the returned token is good for one save of this session; a newer check replaces it.",
-        args: &[document("The document."), arg("path", NewFile, "Check a save to this new file instead.").optional()] },
+        help: "Inspect a save without writing. In a live session the returned token is good for \
+                one save of this session; a newer check replaces it.",
+        args: &[document("The document."), arg("path", NewFile, "Check a save to this new file \
+                instead.").optional()] },
     Command { name: "extract", writes: true, routes: All, run: extract,
-        help: "Extract a zero-based, half-open sequence range to a new GenBank file with source ancestry. Optional splice segments are in biological order, followed by an optional reverse complement. Existing destinations are refused.",
+        help: "Extract a zero-based, half-open sequence range to a new GenBank file with source \
+                ancestry. Optional splice segments are in biological order, followed by an \
+                optional reverse complement. Existing destinations are refused.",
         args: &[document("The sequence."), given("start", Number, "First position, from 0."),
             given("end", Number, "Position after the last one."), output("The new GenBank file."),
             arg("segments", Json(SEGMENTS), "Ordered splice segments as [[start,end],...].").default("[]"),
             arg("reverse", Flag, "Reverse-complement the extract."),
-            arg("record", Text, "Check that this is the open (first) record of a file of several. Other records can't be extracted yet.").optional(),
+            arg("record", Text, "Check that this is the open (first) record of a file of several. \
+                    Other records can't be extracted yet.").optional(),
             arg("version", Number, "Refuse unless the document is still at this version.").optional()] },
     Command { name: "import-support", writes: true, routes: All, run: import_support,
-        help: "Add the support values of another tree file to a tree as one undoable edit. The source is recorded as a referenced input, not copied.",
+        help: "Add the support values of another tree file to a tree as one undoable edit. The \
+                source is recorded as a referenced input, not copied.",
         args: &[document("The tree."), path("The tree file whose support values to add."),
             arg("name", Text, "Name for the imported support set; empty keeps the source's names.").default("")] },
     Command { name: "tree reroot", writes: true, routes: All, run: tree_reroot,
-        help: "Root the tree on the branch above the outgroup: one tip, or the smallest clade holding every tip given.",
-        args: &[document("The tree."), arg("outgroup", Texts, "An outgroup tip; repeat for a clade.")] },
+        help: "Root the tree on the branch above the outgroup: one tip, or the smallest clade \
+                holding every tip given.",
+        args: &[document("The tree."), arg("outgroup", Texts, "An outgroup tip; repeat for a \
+                clade.")] },
     Command { name: "tree ladderize", writes: true, routes: All, run: tree_ladderize,
         help: "Order every node's branches by size.",
         args: &[document("The tree."),
-            arg("order", Choice(&["smallest-first", "largest-first"]), "Smallest clades first (on top), or largest first.")] },
+            arg("order", Choice(&["smallest-first", "largest-first"]), "Smallest clades first (on \
+                    top), or largest first.")] },
     Command { name: "tree rotate", writes: true, routes: All, run: tree_rotate,
         help: "Reverse the order of a clade's branches.",
-        args: &[document("The tree."), arg("clade", Texts, "The clade: one tip, or tips whose smallest clade it is; repeat.")] },
+        args: &[document("The tree."), arg("clade", Texts, "The clade: one tip, or tips whose \
+                smallest clade it is; repeat.")] },
     Command { name: "tree labels", writes: true, routes: All, run: tree_labels,
-        help: "Label the tips from the project's specimen table. Tips whose link is missing or ambiguous keep their own name (kept_own_name counts them). One undoable style edit.",
-        args: &[document("The tree."), arg("fields", List, "Fields in order: specimen, genus, species, accession, column:NAME.")] },
+        help: "Label the tips from the project's specimen table. Tips whose link is missing or \
+                ambiguous keep their own name (kept_own_name counts them). One undoable style \
+                edit.",
+        args: &[document("The tree."), arg("fields", List, "Fields in order: specimen, genus, \
+                species, accession, column:NAME.")] },
     Command { name: "number-duplicates", writes: true, routes: All, run: number_duplicates,
-        help: "Number duplicate record, row or tip names: `a`, `a` become `a.1`, `a.2`. An alignment or tree is renamed as one undoable edit; the records of another FASTA or GenBank file are renamed in the file itself, which must not be open. Links that named a duplicated name are listed for relinking.",
+        help: "Number duplicate record, row or tip names: `a`, `a` become `a.1`, `a.2`. An \
+                alignment or tree is renamed as one undoable edit; the records of another FASTA or \
+                GenBank file are renamed in the file itself, which must not be open. Links that \
+                named a duplicated name are listed for relinking.",
         args: &[path("The file.")] },
     Command { name: "sanger review", writes: true, routes: All, run: sanger_review,
-        help: "Start a review of a Sanger read (.ab1) from its instrument calls and save it as a new review file.",
+        help: "Start a review of a Sanger read (.ab1) from its instrument calls and save it as a \
+                new review file.",
         args: &[given("read", File, "The read."), output("The new review file.")] },
     Command { name: "sanger decide", writes: true, routes: All, run: sanger_decide,
-        help: "Decide draft columns of a Sanger review: accept the call, reject it, set it back to pending, or give the base to put there. Logged and undoable.",
-        args: &[document("The review."), arg("columns", Text, "Draft columns from 1: `12`, `12,15` or `12-14`."),
+        help: "Decide draft columns of a Sanger review: accept the call, reject it, set it back to \
+                pending, or give the base to put there. Logged and undoable.",
+        args: &[document("The review."), arg("columns", Text, "Draft columns from 1: `12`, `12,15` \
+                or `12-14`."),
             arg("choice", Text, "`accept`, `reject`, `pending`, or a base (IUPAC, `-` for a gap).")] },
     Command { name: "sanger export", writes: true, routes: All, run: sanger_export,
         help: "Export a review's consensus as FASTA. Every column must be decided.",
         args: &[document("The review."), output("The new FASTA file."),
             arg("label", Text, "The sequence's name in the FASTA file, such as the specimen ID.")] },
     Command { name: "sanger add", writes: true, routes: All, run: sanger_add,
-        help: "Add a review's consensus to an alignment as a new last row, recording the review as its evidence. Every column must be decided. The row is not placed: align afterwards (`run mafft/align`).",
+        help: "Add a review's consensus to an alignment as a new last row, recording the review as \
+                its evidence. Every column must be decided. The row is not placed: align \
+                afterwards (`run mafft/align`).",
         args: &[document("The review."), arg("alignment", Document, "The alignment."),
             arg("label", Text, "The row's name, such as the specimen ID.")] },
     Command { name: "alphabet", writes: false, routes: All, run: alphabet,
-        help: "What an alignment or sequence is written in: the stated alphabet or basecraft's guess, and each sequence's guess.",
+        help: "What an alignment or sequence is written in: the stated alphabet or basecraft's \
+                guess, and each sequence's guess.",
         args: &[document("The file.")] },
     Command { name: "index", writes: false, routes: All, run: index,
         help: "Index a FASTA file (or load its cached index) and print a summary.",
@@ -90,33 +113,42 @@ pub(super) const COMMANDS: &[Command] = &[
     Command { name: "fetch", writes: false, routes: All, run: fetch,
         help: "Residues `start..end` (from 0, half-open) of one record of a FASTA file.",
         args: &[path("The FASTA file."), given("record", Text, "The record's name."),
-            given("start", Number, "First residue, from 0."), given("end", Number, "Residue after the last one.")] },
+            given("start", Number, "First residue, from 0."), given("end", Number, "Residue after \
+                    the last one.")] },
     Command { name: "history", writes: false, routes: All, run: history,
-        help: "Readable history of a saved file's exact current contents, including saved Sanger reviews. Writes nothing.",
+        help: "Readable history of a saved file's exact current contents, including saved Sanger \
+                reviews. Writes nothing.",
         args: &[path("The file."), arg("json", Flag, "The whole record as JSON.")] },
     Command { name: "methods", writes: false, routes: All, run: methods,
-        help: "The methods text of a saved file; with output, also export the report the History window exports: methods, history, record, parameters, source map, citations and manifest.",
+        help: "The methods text of a saved file; with output, also export the report the History \
+                window exports: methods, history, record, parameters, source map, citations and \
+                manifest.",
         args: &[path("The file."), arg("json", Flag, "The whole record as JSON."),
             arg("output", NewFile, "Export the report into this folder.").optional()] },
     Command { name: "provenance inspect", writes: false, routes: All, run: provenance_inspect,
         help: "Read the provenance publication of a saved result.",
         args: &[path("The result.")] },
     Command { name: "provenance verify", writes: false, routes: All, run: provenance_verify,
-        help: "Check a saved result against its recorded hashes and retained inputs; runs no tools. Replay is a separate check.",
+        help: "Check a saved result against its recorded hashes and retained inputs; runs no \
+                tools. Replay is a separate check.",
         args: &[path("The result.")] },
     Command { name: "provenance package", writes: true, routes: All, run: provenance_package,
-        help: "Copy a verified result with its retained exact inputs into a new folder; runs no tools.",
+        help: "Copy a verified result with its retained exact inputs into a new folder; runs no \
+                tools.",
         args: &[path("The result."), output("The new folder.")] },
     Command { name: "replay", writes: false, routes: All, run: replay,
         help: "Replay the project's operation log in a scratch session and report problems.",
         args: &[] },
     Command { name: "records reindex", writes: true, routes: All, run: reindex,
-        help: "Rebuild the project's analysis indexes from its analysis records, after an index was damaged, deleted or left out of a copy.",
+        help: "Rebuild the project's analysis indexes from its analysis records, after an index \
+                was damaged, deleted or left out of a copy.",
         args: &[] },
     Command { name: "recover", writes: true, routes: All, run: recover,
-        help: "Reconstruct an unsaved session with all its call sets into a new folder; never overwrites inputs. With a project, the recovered files keep their records in it.",
+        help: "Reconstruct an unsaved session with all its call sets into a new folder; never \
+                overwrites inputs. With a project, the recovered files keep their records in it.",
         args: &[given("session", File, "The session's recovery folder."), output("The new folder."),
-            arg("verified_prefix", Flag, "After a crash damaged the journal: recover only the edits before the first damaged line. The journal itself is left unchanged.")] },
+            arg("verified_prefix", Flag, "After a crash damaged the journal: recover only the \
+                    edits before the first damaged line. The journal itself is left unchanged.")] },
     Command { name: "preferences", writes: false, routes: All, run: preferences,
         help: "The validated shared preferences as JSON, without creating files.",
         args: &[] },
@@ -125,7 +157,8 @@ pub(super) const COMMANDS: &[Command] = &[
         args: &[given("dir", NewFile, "The folder.")] },
 ];
 
-const SEGMENTS: &str = r#"{"type":"array","items":{"type":"array","items":{"type":"integer","minimum":0},"minItems":2,"maxItems":2}}"#;
+const SEGMENTS: &str = r#"{"type": "array", "items": {"type": "array", "minItems": 2, "maxItems": 2,
+    "items": {"type": "integer", "minimum": 0}}}"#;
 
 fn new_sequence(call: &mut Call) -> Result<Value> {
     let output = call.path("output")?;

@@ -21,7 +21,8 @@ pub(super) const COMMANDS: &[Command] = &[
         help: "Inspect document dimensions, version and undo state.",
         args: &[document("The document.")] },
     Command { name: "read", writes: false, routes: LiveSession, run: read,
-        help: "Read a residue range (of one row of an alignment), or a tree's tips and style, a species workspace, the metadata or a submission.",
+        help: "Read a residue range (of one row of an alignment), or a tree's tips and style, a \
+                species workspace, the metadata or a submission.",
         args: &[document("The document."), arg("start", Number, "First residue, from 0.").default("0"),
             arg("end", Number, "Residue after the last one.").optional(),
             arg("row", Number, "The alignment row, from 0.").optional()] },
@@ -36,19 +37,31 @@ pub(super) const COMMANDS: &[Command] = &[
         help: "Redo one edit group.",
         args: &[document("The document.")] },
     Command { name: "save", writes: true, routes: LiveSession, run: save,
-        help: "Save a document, optionally to a new project path. An existing other file is never replaced.",
+        help: "Save a document, optionally to a new project path. An existing other file is never \
+                replaced.",
         args: &[document("The document."), arg("path", NewFile, "Save to this new file instead.").optional(),
-            arg("decision", Json(DECISION), "The decision on a check from save_check: its token, the policy for analyses that used the file, and whether to save although some could not be checked.").optional(),
-            arg("drop_newer_fields", Flag, "Save even when a file written by a later basecraft holds fields this version does not know; they are dropped.")] },
+            arg("decision", Json(DECISION), "The decision on a check from save_check: its token, \
+                    the policy for analyses that used the file, and whether to save although some \
+                    could not be checked.").optional(),
+            arg("drop_newer_fields", Flag, "Save even when a file written by a later basecraft \
+                    holds fields this version does not know; they are dropped.")] },
     Command { name: "document record", writes: false, routes: LiveSession, run: document_record,
-        help: "Read history and methods for this session's current revision, including unsaved edits.",
+        help: "Read history and methods for this session's current revision, including unsaved \
+                edits.",
         args: &[document("The document.")] },
     Command { name: "metadata open", writes: false, routes: LiveSession, run: metadata_open,
-        help: "Open the project's specimen metadata (roster, taxa, identifications, record links, typed collection columns) as a document. With create, write empty tables first if the project has none. Edit it with apply and metadata.edit operations; save it with save.",
+        help: "Open the project's specimen metadata (roster, taxa, identifications, record links, \
+                typed collection columns) as a document. With create, write empty tables first if \
+                the project has none. Edit it with apply and metadata.edit operations; save it \
+                with save.",
         args: &[arg("create", Flag, "Write empty tables first when the project has none.")] },
 ];
 
-const DECISION: &str = r#"{"type":"object","additionalProperties":false,"required":["token","known_policy","acknowledge_incomplete"],"properties":{"token":{"type":"string"},"known_policy":{"type":"string","enum":["cancel","preserve_copy","break_evidence","remove_analysis"]},"acknowledge_incomplete":{"type":"boolean"}}}"#;
+const DECISION: &str = r#"{"type": "object", "additionalProperties": false,
+    "required": ["token", "known_policy", "acknowledge_incomplete"],
+    "properties": {"token": {"type": "string"}, "acknowledge_incomplete": {"type": "boolean"},
+        "known_policy": {"type": "string",
+            "enum": ["cancel", "preserve_copy", "break_evidence", "remove_analysis"]}}}"#;
 
 /// A client's decision on a save check. The session, not this copy, owns the
 /// check it names.

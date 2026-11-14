@@ -102,12 +102,10 @@ fn run(
                 }
             }
             "methods" => {
-                let (publication, history) = records::saved_history(result, project)?;
-                records::write_reports(destination, &publication, history)?;
-                Ok(format!(
-                    "Generated reports: {}",
-                    destination.join("reports").display()
-                ))
+                // D30: the same export as the History window's report export.
+                let report = records::DocumentRecord::saved_report(result, project)?;
+                records::ReportExt::export(&report, destination)?;
+                Ok(format!("Generated reports: {}", destination.display()))
             }
             "package" => {
                 records::package(result, destination, project)?;

@@ -50,38 +50,197 @@ macro_rules! command {
 }
 
 pub const COMMANDS: &[Command] = &[
-    command!("delimitation figures", "Write a species workspace's comparison figure on its display tree as SVG files in a folder, in publication style: one with every hypothesis (NAME.svg) and one per hypothesis (NAME.ID.svg). Each is recorded as an export.",
-        [Arg::new("document", Document, "The species workspace.").positional(), arg("output", NewFile, "The folder.").short('o')],
-        true, Routes::All, figures_command),
-    command!("plugins list", "Discover packages without executing their code.", [JSON], false, Routes::CommandLine, plugins_list),
-    command!("plugins validate", "Validate a package's static metadata only; never imports the entry script.", [DIRECTORY], false, Routes::CommandLine, plugins_validate),
-    command!("plugins install", "Install local trusted code. Successful installation enables it immediately.", [DIRECTORY], true, Routes::CommandLine, plugins_install),
-    command!("plugins provision-bundled", "Provision frozen dependencies for the exact installed bundled plugin. Deployment runs this before launch; discovery never installs anything.", [ID], true, Routes::CommandLine, plugins_provision),
-    command!("plugins disable", "Disable an installed package.", [ID], true, Routes::CommandLine, plugins_disable),
-    command!("plugins enable", "Enable an installed package.", [ID], true, Routes::CommandLine, plugins_enable),
-    command!("plugins remove", "Remove a package from the active selection; retained package versions and run evidence remain.", [ID], true, Routes::CommandLine, plugins_remove),
-    command!("plugins register-editable", "Register a trusted development folder without copying it.", [DIRECTORY], true, Routes::CommandLine, plugins_register),
-    command!("operations list", "Every installed operation with its descriptor, pins, enabled state and origin, and registry diagnostics.", [JSON], false, Routes::CommandLine, operations_list),
-    command!("operations describe", "Describe one installed operation by ID (plugin/name@major).", [Arg::new("operation", Text, "The operation ID.").positional(), JSON], false, Routes::CommandLine, operations_describe),
-    command!("operations run", "Run an OperationRequest in the foreground in the project; prints one terminal JSON outcome.",
-        [Arg::new("operation", Text, "The operation ID.").positional(), arg("request", File, "The request file."), JSON],
-        true, Routes::CommandLine, operations_run),
-    command!("run", "Run one tool on files: input files in, new result files out, no open or save step. `basecraft run mafft/align rbcL.fasta -o rbcL.aln.fasta`. With the project the run belongs to it; without it the first input is a loose file and the run's records go beside it.",
-        [Arg::new("operation", Text, "The operation: its full ID, or a part that names one, such as `mafft/align`.").positional(),
-         Arg::new("files", Files, "Input files, for an operation that takes one input role.").positional().optional(),
-         arg("input", Texts, "An input file for a named role: ROLE=FILE; repeat for several.").optional(),
-         arg("output", Texts, "Where a result goes: FILE for the operation's one result, or ROLE=FILE (ROLE/MEMBER=FILE inside a collection).").short('o').optional(),
-         arg("param", Texts, "A setting: NAME=VALUE. VALUE is read as JSON when it parses, else as text.").optional()],
-        true, Routes::CommandLine, run_files),
-    command!("plugin", "Run an installed or registered plugin's sequence operation on a file, apply what it proposes and save the file.",
-        [Arg::new("plugin", File, "The plugin folder, with a plugin.toml.").positional(),
-         Arg::new("file", File, "The sequence file.").positional(),
-         Arg::new("operation", Text, "The operation's name.").positional(),
-         Arg::new("params", Texts, "Parameters as key=value; values parse as JSON if they can.").positional().optional()],
-        true, Routes::CommandLine, run_plugin),
-    command!("submission validate", "Validate an exported package with table2asn (the registered operation basecraft.table2asn/validate@1) and record its reports.",
+    command!(
+        "delimitation figures",
+        "Write a species workspace's comparison figure on its display \
+            tree as SVG files in a folder, in publication style: one with every hypothesis \
+            (NAME.svg) and one per hypothesis (NAME.ID.svg). Each is recorded as an export.",
+        [
+            Arg::new("document", Document, "The species workspace.").positional(),
+            arg("output", NewFile, "The folder.").short('o')
+        ],
+        true,
+        Routes::All,
+        figures_command
+    ),
+    command!(
+        "plugins list",
+        "Discover packages without executing their code.",
+        [JSON],
+        false,
+        Routes::CommandLine,
+        plugins_list
+    ),
+    command!(
+        "plugins validate",
+        "Validate a package's static metadata only; never imports the \
+            entry script.",
+        [DIRECTORY],
+        false,
+        Routes::CommandLine,
+        plugins_validate
+    ),
+    command!(
+        "plugins install",
+        "Install local trusted code. Successful installation enables it \
+            immediately.",
+        [DIRECTORY],
+        true,
+        Routes::CommandLine,
+        plugins_install
+    ),
+    command!(
+        "plugins provision-bundled",
+        "Provision frozen dependencies for the exact installed \
+            bundled plugin. Deployment runs this before launch; discovery never installs anything.",
+        [ID],
+        true,
+        Routes::CommandLine,
+        plugins_provision
+    ),
+    command!(
+        "plugins disable",
+        "Disable an installed package.",
+        [ID],
+        true,
+        Routes::CommandLine,
+        plugins_disable
+    ),
+    command!(
+        "plugins enable",
+        "Enable an installed package.",
+        [ID],
+        true,
+        Routes::CommandLine,
+        plugins_enable
+    ),
+    command!(
+        "plugins remove",
+        "Remove a package from the active selection; retained package \
+            versions and run evidence remain.",
+        [ID],
+        true,
+        Routes::CommandLine,
+        plugins_remove
+    ),
+    command!(
+        "plugins register-editable",
+        "Register a trusted development folder without copying \
+            it.",
+        [DIRECTORY],
+        true,
+        Routes::CommandLine,
+        plugins_register
+    ),
+    command!(
+        "operations list",
+        "Every installed operation with its descriptor, pins, enabled \
+            state and origin, and registry diagnostics.",
+        [JSON],
+        false,
+        Routes::CommandLine,
+        operations_list
+    ),
+    command!(
+        "operations describe",
+        "Describe one installed operation by ID (plugin/name@major).",
+        [
+            Arg::new("operation", Text, "The operation ID.").positional(),
+            JSON
+        ],
+        false,
+        Routes::CommandLine,
+        operations_describe
+    ),
+    command!(
+        "operations run",
+        "Run an OperationRequest in the foreground in the project; prints \
+            one terminal JSON outcome.",
+        [
+            Arg::new("operation", Text, "The operation ID.").positional(),
+            arg("request", File, "The request file."),
+            JSON
+        ],
+        true,
+        Routes::CommandLine,
+        operations_run
+    ),
+    command!(
+        "run",
+        "Run one tool on files: input files in, new result files out, no open or save \
+            step. `basecraft run mafft/align rbcL.fasta -o rbcL.aln.fasta`. With the project the \
+            run belongs to it; without it the first input is a loose file and the run's records go \
+            beside it.",
+        [
+            Arg::new(
+                "operation",
+                Text,
+                "The operation: its full ID, or a part that names one, such \
+                as `mafft/align`."
+            )
+            .positional(),
+            Arg::new(
+                "files",
+                Files,
+                "Input files, for an operation that takes one input role."
+            )
+            .positional()
+            .optional(),
+            arg(
+                "input",
+                Texts,
+                "An input file for a named role: ROLE=FILE; repeat for several."
+            )
+            .optional(),
+            arg(
+                "output",
+                Texts,
+                "Where a result goes: FILE for the operation's one result, or \
+                 ROLE=FILE (ROLE/MEMBER=FILE inside a collection)."
+            )
+            .short('o')
+            .optional(),
+            arg(
+                "param",
+                Texts,
+                "A setting: NAME=VALUE. VALUE is read as JSON when it parses, else as \
+                 text."
+            )
+            .optional()
+        ],
+        true,
+        Routes::CommandLine,
+        run_files
+    ),
+    command!(
+        "plugin",
+        "Run an installed or registered plugin's sequence operation on a file, \
+            apply what it proposes and save the file.",
+        [
+            Arg::new("plugin", File, "The plugin folder, with a plugin.toml.").positional(),
+            Arg::new("file", File, "The sequence file.").positional(),
+            Arg::new("operation", Text, "The operation's name.").positional(),
+            Arg::new(
+                "params",
+                Texts,
+                "Parameters as key=value; values parse as JSON if they can."
+            )
+            .positional()
+            .optional()
+        ],
+        true,
+        Routes::CommandLine,
+        run_plugin
+    ),
+    command!(
+        "submission validate",
+        "Validate an exported package with table2asn (the registered \
+            operation basecraft.table2asn/validate@1) and record its reports.",
         [Arg::new("package", File, "The package folder.").positional()],
-        true, Routes::CommandLine, validate_submission),
+        true,
+        Routes::CommandLine,
+        validate_submission
+    ),
 ];
 
 /// An ops error stays itself; any other passes through as a host error.
@@ -133,7 +292,8 @@ fn config() -> Result<RegistryConfig> {
 fn plugins_list(_: &mut Call) -> Result<Value> {
     let registry = Registry::load(&config()?)?;
     let packages: Vec<_> = registry.packages.values().map(|p| json!({"id":p.manifest.id,"version":p.manifest.version,
-        "schema":p.manifest.schema,"enabled":p.enabled,"origin":p.origin,"digest":p.digest,"runtime":"unverified"})).collect();
+        "schema":p.manifest.schema,"enabled":p.enabled,"origin":p.origin,"digest":p.digest,"runtime":" \
+                unverified"})).collect();
     Ok(
         json!({"generation":registry.generation,"packages":packages,"diagnostics":registry.diagnostics}),
     )
@@ -423,9 +583,17 @@ fn run_plugin(call: &mut Call) -> Result<Value> {
                 && op.descriptor.name == operation
                 && op.package.manifest.dir.canonicalize().ok().as_ref() == Some(&directory)
         })
-        .ok_or("This plugin directory is not an installed or registered package. Register it with `basecraft plugins register-editable DIR`, then run it again or use `basecraft operations run`")?;
+        .ok_or(
+            "This plugin directory is not an installed or registered package. Register it with \
+                `basecraft plugins register-editable DIR`, then run it again or use `basecraft \
+                operations run`",
+        )?;
     if registered.descriptor.family != ExecutionFamily::SequenceProposal {
-        return Err("`plugin` applies sequence proposals only; run file analyses with `basecraft operations run`".into());
+        return Err(
+            "`plugin` applies sequence proposals only; run file analyses with `basecraft \
+                operations run`"
+                .into(),
+        );
     }
     let binding = registered
         .descriptor

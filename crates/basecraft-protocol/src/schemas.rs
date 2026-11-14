@@ -42,7 +42,6 @@ schemas! {
     "alignment-link-unavailable" => link_records::AlignmentLinkUnavailable,
     "collection-export-intent" => publication_records::CollectionExportIntent,
     "member-export-receipt" => publication_records::MemberExportReceipt,
-    "provenance-report-manifest" => report_records::ProvenanceReportManifest,
     "report-export-manifest" => report_records::ReportExportManifest,
     "report-source-map" => Vec<report_records::ReportSourceMapEntry>,
     "report-citations" => Vec<String>,
