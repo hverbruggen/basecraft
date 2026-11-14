@@ -1058,14 +1058,16 @@ mod moved_and_failed_recovery_tests {
                 choice: ReviewChoice::Edit('T'),
             })
             .unwrap();
-        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "sanger_review::moved_and_failed_recovery_tests::simultaneous_review_writers_accept_only_one_revision"])
+        let test = crate::isolated_profile::test_name();
+        let child = crate::isolated_profile::relaunch(&test)
             .env("BASECRAFT_SANGER_WRITER_TARGET", &path)
-            .spawn().unwrap();
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
         wait_for(&path.with_extension("ready"));
         std::fs::write(path.with_extension("go"), b"go").unwrap();
         let parent_saved = parent.save(&path).is_ok();
-        assert!(child.wait().unwrap().success());
+        crate::isolated_profile::assert_one_passed(&test, &child.wait_with_output().unwrap());
         let child_saved =
             std::fs::read_to_string(path.with_extension("result")).unwrap() == "saved";
         assert_ne!(parent_saved, child_saved);

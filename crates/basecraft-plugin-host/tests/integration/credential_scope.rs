@@ -106,18 +106,13 @@ fn credential_scope_and_redaction() {
     // Spawn our own test child with fake ambient inputs; never mutate this
     // process's shared environment or require real user credentials.
     if std::env::var_os("BASECRAFT_CREDENTIAL_TEST_CHILD").is_none() {
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                &crate::isolated_profile::test_name(),
-                "--nocapture",
-            ])
+        let output = crate::isolated_profile::relaunch(&crate::isolated_profile::test_name())
             .env("BASECRAFT_CREDENTIAL_TEST_CHILD", "1")
             .env("BASECRAFT_ZENODO_TOKEN", "synthetic-ambient-secret")
             .env("BASECRAFT_UNRELATED_SETTING", "preserved")
-            .status()
+            .output()
             .unwrap();
-        assert!(status.success());
+        crate::isolated_profile::assert_one_passed(&crate::isolated_profile::test_name(), &output);
         return;
     }
     // A bundled package receives the credentials it declares from the user's

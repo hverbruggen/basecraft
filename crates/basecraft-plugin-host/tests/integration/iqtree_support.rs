@@ -3,7 +3,6 @@
 //! fake executable supplies known Newick bytes without an ML run.
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::{Duration, Instant};
 
 use basecraft_plugin_host::{
@@ -149,17 +148,12 @@ prefix.with_suffix('.treefile').write_text(f'((t0:1,t1:1){label}:1,(t2:1,t3:1)99
     )
     .unwrap();
     std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let status = Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            &crate::isolated_profile::test_name(),
-            "--nocapture",
-        ])
+    let output = crate::isolated_profile::relaunch(&crate::isolated_profile::test_name())
         .env("BASECRAFT_IQTREE_SUPPORT_CHILD", "1")
         .env("BASECRAFT_IQTREE_SUPPORT_ROOT", temporary.path())
         .env("BASECRAFT_IQTREE", &executable)
         .env("BASECRAFT_PROFILE_DIR", temporary.path().join("profile"))
-        .status()
+        .output()
         .unwrap();
-    assert!(status.success());
+    crate::isolated_profile::assert_one_passed(&crate::isolated_profile::test_name(), &output);
 }

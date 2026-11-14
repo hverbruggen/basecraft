@@ -1,35 +1,8 @@
 use std::path::Path;
 
+use crate::indexed_kind::indexed_kind;
 use basecraft_io::fasta;
 use basecraft_ops::files::{self, Kind, LONGEST_ALIGNMENT_ROW};
-
-#[cfg(feature = "test-heap")]
-#[global_allocator]
-static ALLOCATOR: basecraft_io::heap::Allocator = basecraft_io::heap::Allocator;
-
-// The pre-streaming decision, kept independent of the production summary.
-fn indexed_kind(path: &Path) -> basecraft_ops::Result<Kind> {
-    let file = fasta::IndexedFasta::open(path)?;
-    let named = path
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("afa"))
-        || path
-            .file_stem()
-            .and_then(|s| Path::new(s).extension())
-            .is_some_and(|e| e.eq_ignore_ascii_case("aln"));
-    let rows = file.index.records.len() >= 2
-        && file
-            .index
-            .records
-            .iter()
-            .all(|r| r.len <= LONGEST_ALIGNMENT_ROW)
-        && !files::gff_sidecar(path).exists();
-    Ok(if named || rows {
-        Kind::Alignment
-    } else {
-        Kind::Sequence
-    })
-}
 
 fn compare(path: &Path) {
     let old = indexed_kind(path);
@@ -180,81 +153,5 @@ fn summary_facts_match_index() {
                 bytes: data.len() as u64
             }
         );
-    }
-}
-
-#[cfg(feature = "test-heap")]
-#[test]
-fn bounded_classifier_heap() {
-    use std::io::Write;
-    crate::isolated_profile::isolate!();
-
-    // Instrumentation is process-wide: isolate from the other test threads.
-    if std::env::var_os("BASECRAFT_CLASSIFIER_HEAP_CHILD").is_none() {
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                &crate::isolated_profile::test_name(),
-                "--nocapture",
-            ])
-            .env("BASECRAFT_CLASSIFIER_HEAP_CHILD", "1")
-            .output()
-            .unwrap();
-        println!("{}", String::from_utf8_lossy(&output.stdout));
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        return;
-    }
-    let dir = tempfile::tempdir().unwrap();
-    for shape in ["records", "header", "sequence"] {
-        for count in [100, 100_000] {
-            let path = dir.path().join("rows.fasta");
-            let mut file = std::io::BufWriter::new(std::fs::File::create(&path).unwrap());
-            match shape {
-                "header" => file.write_all(b">").unwrap(),
-                "sequence" => file.write_all(b">a\n").unwrap(),
-                _ => {}
-            }
-            for _ in 0..count {
-                file.write_all(if shape == "records" {
-                    b">a description\nACGT\nA\nACGTAC\n"
-                } else {
-                    b"ACGTACGTACGTACGT"
-                })
-                .unwrap();
-            }
-            if shape != "records" {
-                file.write_all(b"\n>b\nT\n").unwrap();
-            }
-            file.flush().unwrap();
-            drop(file);
-            #[cfg(feature = "test-counters")]
-            basecraft_io::counters::reset();
-            let measurement = basecraft_io::heap::Measurement::start().unwrap();
-            let kind = files::kind(&path).unwrap();
-            let new = measurement.finish().unwrap();
-            #[cfg(feature = "test-counters")]
-            {
-                let counts = basecraft_io::counters::snapshot();
-                assert_eq!(counts.unresolved_reads, 0);
-                assert_eq!(
-                    counts.reads[&path.canonicalize().unwrap()],
-                    basecraft_io::counters::Reads {
-                        full_reads: 1,
-                        bytes: path.metadata().unwrap().len(),
-                    }
-                );
-            }
-            assert_eq!(indexed_kind(&path).unwrap(), kind);
-            println!(
-                "shape={shape} count={count} file_bytes={} stream_requested_peak={}",
-                path.metadata().unwrap().len(),
-                new.incremental_peak_bytes
-            );
-            assert!(new.incremental_peak_bytes < 32 * 1024);
-        }
     }
 }

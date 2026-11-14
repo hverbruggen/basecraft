@@ -246,12 +246,7 @@ fn two_hundred_stores_fifty_runs_open_no_unrelated_ledgers() {
     ] {
         measure_save(&root, label, residue, true);
     }
-    let cold = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            &crate::isolated_profile::test_name(),
-            "--nocapture",
-        ])
+    let cold = crate::isolated_profile::relaunch(&crate::isolated_profile::test_name())
         .env("BASECRAFT_INDEX_COLD", "1")
         .output()
         .unwrap();
@@ -260,7 +255,7 @@ fn two_hundred_stores_fifty_runs_open_no_unrelated_ledgers() {
         String::from_utf8_lossy(&cold.stdout),
         String::from_utf8_lossy(&cold.stderr)
     );
-    assert!(cold.status.success());
+    crate::isolated_profile::assert_one_passed(&crate::isolated_profile::test_name(), &cold);
 }
 
 #[cfg(feature = "test-counters")]

@@ -162,13 +162,12 @@ fn zenodo_cancel_retains_remote_identity_and_repair_does_not_resubmit() {
 fn zenodo_headless_ambient_provider_delivers_only_to_accepted_bundled_draft() {
     crate::isolated_profile::isolate!();
     if std::env::var_os("BASECRAFT_ZENODO_TEST_CHILD").is_none() {
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", &crate::isolated_profile::test_name()])
+        let output = crate::isolated_profile::relaunch(&crate::isolated_profile::test_name())
             .env("BASECRAFT_ZENODO_TEST_CHILD", "1")
             .env("BASECRAFT_ZENODO_TOKEN", "synthetic-runtime-secret")
-            .status()
+            .output()
             .unwrap();
-        assert!(status.success());
+        crate::isolated_profile::assert_one_passed(&crate::isolated_profile::test_name(), &output);
         return;
     }
     let temp = tempfile::tempdir().unwrap();

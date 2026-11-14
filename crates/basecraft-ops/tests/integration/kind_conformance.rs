@@ -7,7 +7,6 @@ use std::{
     collections::BTreeMap,
     fmt::Debug,
     path::{Path, PathBuf},
-    process::Command,
 };
 
 use basecraft_ops::{DocId, Session, log, metadata, records, submission};
@@ -43,12 +42,7 @@ fn scenario<T: Debug + PartialEq>(
 ) {
     if std::env::var("BASECRAFT_KIND_CONFORMANCE_CHILD").as_deref() != Ok(name) {
         let isolated = tempfile::tempdir().unwrap();
-        let status = Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                &crate::isolated_profile::test_name(),
-                "--nocapture",
-            ])
+        let output = crate::isolated_profile::relaunch(&crate::isolated_profile::test_name())
             .env("BASECRAFT_KIND_CONFORMANCE_CHILD", name)
             .env("BASECRAFT_PROFILE_DIR", isolated.path().join("profile"))
             .env("BASECRAFT_STATE_DIR", isolated.path().join("state"))
@@ -56,9 +50,9 @@ fn scenario<T: Debug + PartialEq>(
             .env("TMPDIR", isolated.path())
             .env("TMP", isolated.path())
             .env("TEMP", isolated.path())
-            .status()
+            .output()
             .unwrap();
-        assert!(status.success(), "{name}: isolated scenario failed");
+        crate::isolated_profile::assert_one_passed(&crate::isolated_profile::test_name(), &output);
         return;
     }
     let dir = tempfile::tempdir().unwrap();

@@ -58,13 +58,12 @@ fn the_caller_service_returns_checks_reuses_and_refuses_drafts() {
     let Some(bundle) = std::env::var_os("BASECRAFT_SANGER_CALLER_BUNDLE") else {
         let temp = tempfile::tempdir().unwrap();
         let bundle = temp.path().join("bundle");
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", &crate::isolated_profile::test_name()])
+        let output = crate::isolated_profile::relaunch(&crate::isolated_profile::test_name())
             .env("BASECRAFT_SANGER_CALLER_BUNDLE", &bundle)
             .env("BASECRAFT_PLUGINS", &bundle)
-            .status()
+            .output()
             .unwrap();
-        assert!(status.success());
+        crate::isolated_profile::assert_one_passed(&crate::isolated_profile::test_name(), &output);
         return;
     };
     let bundle = PathBuf::from(bundle);

@@ -12,7 +12,7 @@ use std::{
     io::{BufRead, BufReader, Write},
     os::unix::net::{UnixListener, UnixStream},
     path::{Path, PathBuf},
-    process::{Child, Command},
+    process::Child,
     time::Duration,
 };
 
@@ -44,24 +44,36 @@ impl Drop for Worker {
         }
     }
 }
+impl Worker {
+    /// Waits for the worker and checks that its test ran and passed.
+    fn finish(&mut self) {
+        let mut stdout = Vec::new();
+        let mut pipe = self.0.stdout.take().unwrap();
+        std::io::Read::read_to_end(&mut pipe, &mut stdout).unwrap();
+        let status = self.0.wait().unwrap();
+        let output = std::process::Output {
+            status,
+            stdout,
+            stderr: Vec::new(),
+        };
+        crate::isolated_profile::assert_one_passed("publication_worker", &output);
+    }
+}
 fn spawn(root: &Path, role: &str, mode: &str) -> (Worker, Barrier) {
     let socket = root.join(format!("{role}.sock"));
     let listener = UnixListener::bind(&socket).unwrap();
-    let child = Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            &crate::isolated_profile::sibling("publication_worker"),
-            "--nocapture",
-        ])
-        .env("BASECRAFT_PUBLICATION_ROLE", role)
-        .env("BASECRAFT_PUBLICATION_MODE", mode)
-        .env("BASECRAFT_PUBLICATION_ROOT", root)
-        .env("BASECRAFT_PROFILE_DIR", root.join("profile"))
-        .env("BASECRAFT_STATE_DIR", root.join("profile/state"))
-        .env("BASECRAFT_CACHE_DIR", root.join("profile/cache"))
-        .env("TMPDIR", root)
-        .spawn()
-        .unwrap();
+    let child =
+        crate::isolated_profile::relaunch(&crate::isolated_profile::sibling("publication_worker"))
+            .env("BASECRAFT_PUBLICATION_ROLE", role)
+            .env("BASECRAFT_PUBLICATION_MODE", mode)
+            .env("BASECRAFT_PUBLICATION_ROOT", root)
+            .env("BASECRAFT_PROFILE_DIR", root.join("profile"))
+            .env("BASECRAFT_STATE_DIR", root.join("profile/state"))
+            .env("BASECRAFT_CACHE_DIR", root.join("profile/cache"))
+            .env("TMPDIR", root)
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
     (Worker(child), Barrier::new(listener.accept().unwrap().0))
 }
 fn scenario(mode: &str) {
@@ -85,8 +97,8 @@ fn scenario(mode: &str) {
         saving.send("resume");
         saving.expect("saved");
     }
-    assert!(registrar.0.wait().unwrap().success());
-    assert!(saver.0.wait().unwrap().success());
+    registrar.finish();
+    saver.finish();
     assert_eq!(
         std::fs::read(root.path().join("input.fasta")).unwrap(),
         b">gene\nATGT\n"
@@ -283,8 +295,8 @@ fn retention_scenario(mode: &str) {
         saving.expect("saved");
         retaining.send("verify");
     }
-    assert!(retainer.0.wait().unwrap().success());
-    assert!(saver.0.wait().unwrap().success());
+    retainer.finish();
+    saver.finish();
     assert_eq!(
         std::fs::read(root.path().join("input.fasta")).unwrap(),
         b">gene\nATGT\n"

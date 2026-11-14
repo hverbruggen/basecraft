@@ -557,7 +557,7 @@ use crate::recovery_windows;
 #[test]
 #[ignore = "requires native Windows NTFS, cmd.exe junction creation and symlink privilege/Developer Mode; run with --ignored"]
 fn windows_reparse_destinations_are_occupied() {
-    let Some(root) = recovery_windows::enter() else {
+    let Some(root) = crate::isolated_profile::enter() else {
         return;
     };
     let session = source(&root, 1);

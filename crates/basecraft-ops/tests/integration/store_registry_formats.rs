@@ -2,7 +2,7 @@
 use basecraft_ops::{records, records::ArtifactRun};
 use basecraft_platform::paths::AppPaths;
 use serde_json::json;
-use std::{path::Path, process::Command};
+use std::path::Path;
 
 fn capture(name: &str, bytes: &[u8]) {
     if let Some(directory) = std::env::var_os("BASECRAFT_STORE_CAPTURE") {
@@ -16,19 +16,14 @@ fn store_writer_bytes_and_validation() {
     crate::isolated_profile::isolate!();
     if std::env::var_os("BASECRAFT_STORE_CHILD").is_none() {
         let root = tempfile::tempdir().unwrap();
-        let status = Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                &crate::isolated_profile::test_name(),
-                "--nocapture",
-            ])
+        let output = crate::isolated_profile::relaunch(&crate::isolated_profile::test_name())
             .env("BASECRAFT_STORE_CHILD", root.path())
             .env("BASECRAFT_PROFILE_DIR", root.path().join("profile"))
             .env("BASECRAFT_STATE_DIR", root.path().join("profile/state"))
             .env("BASECRAFT_CACHE_DIR", root.path().join("profile/cache"))
-            .status()
+            .output()
             .unwrap();
-        assert!(status.success());
+        crate::isolated_profile::assert_one_passed(&crate::isolated_profile::test_name(), &output);
         return;
     }
     let root = std::path::PathBuf::from(std::env::var_os("BASECRAFT_STORE_CHILD").unwrap());

@@ -128,7 +128,10 @@ fn blast_local_publication_failure_retains_rid_and_repairs_without_execution() {
     std::fs::write(temp.path().join("export.json"), "unrelated").unwrap();
     // The mock returns its accepted response once released, or after five seconds.
     std::fs::write(evidence.join("release"), "").unwrap();
+    let released = Instant::now();
     let result = wait(&jobs, &id);
+    // Five seconds means the mock never saw the release and timed out instead.
+    assert!(released.elapsed() < Duration::from_secs(5));
     assert_eq!(result.state, RuntimeState::Partial, "{result:?}");
     assert_eq!(result.data.as_ref().unwrap()["rid"], "ABCD1234567");
     std::fs::remove_file(temp.path().join("export.json")).unwrap();

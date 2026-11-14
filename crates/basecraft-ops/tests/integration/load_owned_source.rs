@@ -524,17 +524,12 @@ fn isolated_capture_test(name: &str) -> bool {
         return true;
     }
     let isolated = tempfile::tempdir().unwrap();
-    let status = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            &crate::isolated_profile::test_name(),
-            "--nocapture",
-        ])
+    let output = crate::isolated_profile::relaunch(&crate::isolated_profile::test_name())
         .env("BASECRAFT_CAPTURE_TEST_CHILD", name)
         .env("BASECRAFT_PROFILE_DIR", isolated.path().join("profile"))
-        .status()
+        .output()
         .unwrap();
-    assert!(status.success(), "isolated capture test failed: {name}");
+    crate::isolated_profile::assert_one_passed(&crate::isolated_profile::test_name(), &output);
     false
 }
 

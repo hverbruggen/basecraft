@@ -690,13 +690,17 @@ mod tests {
             );
             std::fs::create_dir_all(jobs.join("regular")).unwrap();
             std::fs::write(jobs.join("regular/manifest.json"), basecraft_protocol::records::encode(&serde_json::json!({"schema_version":1,"id":"regular","operation":"legacy","status":"completed","source":{"path":"input"},"outputs":{},"owner_instance":"current"})).unwrap()).unwrap();
-            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-                .args(["--exact", "records::document_record::tests::task_nonregular_evidence_is_rejected_in_bounded_subprocess", "--nocapture"])
-                .env(CHILD, temp.path()).spawn().unwrap();
+            let test = crate::isolated_profile::test_name();
+            let mut child = crate::isolated_profile::relaunch(&test)
+                .env(CHILD, temp.path())
+                .stdout(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
             loop {
-                if let Some(status) = child.try_wait().unwrap() {
-                    assert!(status.success(), "{location}");
+                if child.try_wait().unwrap().is_some() {
+                    let output = child.wait_with_output().unwrap();
+                    crate::isolated_profile::assert_one_passed(&test, &output);
                     break;
                 }
                 if std::time::Instant::now() >= deadline {

@@ -7,7 +7,7 @@ use basecraft_ops::{
 };
 use basecraft_platform::paths::AppPaths;
 use basecraft_protocol::Op;
-use std::{path::Path, process::Command};
+use std::path::Path;
 
 const ORIGINAL: &[u8] = b">gene\nACGT\n";
 
@@ -341,20 +341,15 @@ fn registered_dependency_after_query_refuses_stale_consent() {
         let (mut session, doc, file) = setup(root);
         damage(root, &file);
         let check = session.check_save(doc, None).unwrap();
-        let output = Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                &isolated_profile::sibling("late_registrar"),
-                "--nocapture",
-            ])
-            .env("BASECRAFT_LATE_REGISTRATION", &file)
-            .env("BASECRAFT_LATE_ANCHOR", root.join("late-result.txt"))
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
+        let output =
+            crate::isolated_profile::relaunch(&isolated_profile::sibling("late_registrar"))
+                .env("BASECRAFT_LATE_REGISTRATION", &file)
+                .env("BASECRAFT_LATE_ANCHOR", root.join("late-result.txt"))
+                .output()
+                .unwrap();
+        crate::isolated_profile::assert_one_passed(
+            &isolated_profile::sibling("late_registrar"),
+            &output,
         );
         let error = session
             .save_with_decision(doc, None, check.decide(SavePolicy::Cancel, true))

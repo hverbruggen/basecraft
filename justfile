@@ -40,7 +40,7 @@ check:
     python3 tools/isolated_tests.py
     cargo test --workspace --doc
     cargo test -p basecraft-io --features test-counters,test-heap --lib heap::tests
-    cargo test -p basecraft-ops --features test-counters,test-heap --test budgets --test heap_budgets --test open_memory --test tree_edit_memory --test sanger_edit_memory --test save_cost
+    cargo test -p basecraft-ops --features test-counters,test-heap --test budgets --test heap_budgets --test open_memory --test tree_edit_memory --test sanger_edit_memory --test save_cost --test sanger_capture --test classifier_heap
 
 # Everything. Run before every push.
 ci: lint check schemas-check deny protocol-license replay qml-test

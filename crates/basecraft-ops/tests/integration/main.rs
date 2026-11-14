@@ -13,6 +13,8 @@ mod document_facts;
 mod document_records;
 mod fasta_classification;
 mod guarded_evidence_publication;
+#[path = "../support/indexed_kind.rs"]
+mod indexed_kind;
 mod integrity_binding_formats;
 #[path = "../support/isolated_profile.rs"]
 mod isolated_profile;

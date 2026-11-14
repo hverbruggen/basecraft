@@ -576,17 +576,12 @@ else:
     Path(output+'.txt').write_text('Best score for '+rate+' coalescent rate: -1\nNull-model score: -2\nNumber of delimited species: 2\nLRT: passed\nSpecies 1:\na\nb\nSpecies 2:\nc\nd\n')
 ").unwrap();
     std::fs::set_permissions(&upstream, std::fs::Permissions::from_mode(0o700)).unwrap();
-    let status = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            &crate::isolated_profile::test_name(),
-            "--nocapture",
-        ])
+    let output = crate::isolated_profile::relaunch(&crate::isolated_profile::test_name())
         .env("BASECRAFT_MPTP_FIXTURE_CHILD", "1")
         .env("BASECRAFT_MPTP", &upstream)
-        .status()
+        .output()
         .unwrap();
-    assert!(status.success());
+    crate::isolated_profile::assert_one_passed(&crate::isolated_profile::test_name(), &output);
 }
 
 fn ptp_cases() {

@@ -203,19 +203,19 @@ fn two_profiles_add_to_one_index_at_once() {
         .into_iter()
         .map(|who| {
             let profile = root.join(format!("profile-{who}"));
-            std::process::Command::new(std::env::current_exe().unwrap())
-                .args(["--exact", &name, "--nocapture"])
+            isolated_profile::relaunch(&name)
                 .env("BASECRAFT_INDEX_WRITER", who)
                 .env("BASECRAFT_INDEX_DATA", &data)
                 .env("BASECRAFT_PROFILE_DIR", &profile)
                 .env("BASECRAFT_STATE_DIR", profile.join("state"))
                 .env("BASECRAFT_CACHE_DIR", profile.join("cache"))
+                .stdout(std::process::Stdio::piped())
                 .spawn()
                 .unwrap()
         })
         .collect();
-    for mut writer in writers {
-        assert!(writer.wait().unwrap().success());
+    for writer in writers {
+        isolated_profile::assert_one_passed(&name, &writer.wait_with_output().unwrap());
     }
     assert_eq!(index_files(&data).len(), 40);
     for entry in std::fs::read_dir(&data).unwrap().flatten() {
