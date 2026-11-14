@@ -148,62 +148,32 @@ pub enum Loaded {
     Tree(OpenedTree),
 }
 
+/// `Some(payload)` when the loaded document is of that kind.
+macro_rules! payload_of_kind {
+    ($($name:ident: $variant:ident => $payload:ty),* $(,)?) => {
+        $(pub(crate) fn $name(&self) -> Option<&$payload> {
+            if let Self::$variant(payload) = self {
+                Some(payload)
+            } else {
+                None
+            }
+        })*
+    };
+}
+
 impl Loaded {
-    pub(crate) fn sanger_review(&self) -> Option<&crate::sanger_review::SangerReview> {
-        if let Self::SangerReview(payload) = self {
-            Some(payload)
-        } else {
-            None
-        }
+    payload_of_kind! {
+        sanger_review: SangerReview => crate::sanger_review::SangerReview,
+        sequence: Sequence => Opened,
+        alignment: Alignment => OpenedAlignment,
+        tree: Tree => OpenedTree,
+        metadata: Metadata => crate::metadata::OpenedMetadata,
+        submission: Submission => basecraft_protocol::submission::Submission,
+        delimitation: Delimitation => basecraft_protocol::delimitation::DelimitationWorkspace,
     }
 
     pub(crate) fn sanger_review_mut(&mut self) -> Option<&mut crate::sanger_review::SangerReview> {
         if let Self::SangerReview(payload) = self {
-            Some(payload)
-        } else {
-            None
-        }
-    }
-
-    pub(crate) fn sequence(&self) -> Option<&Opened> {
-        if let Self::Sequence(payload) = self {
-            Some(payload)
-        } else {
-            None
-        }
-    }
-    pub(crate) fn alignment(&self) -> Option<&OpenedAlignment> {
-        if let Self::Alignment(payload) = self {
-            Some(payload)
-        } else {
-            None
-        }
-    }
-    pub(crate) fn tree(&self) -> Option<&OpenedTree> {
-        if let Self::Tree(payload) = self {
-            Some(payload)
-        } else {
-            None
-        }
-    }
-    pub(crate) fn metadata(&self) -> Option<&crate::metadata::OpenedMetadata> {
-        if let Self::Metadata(payload) = self {
-            Some(payload)
-        } else {
-            None
-        }
-    }
-    pub(crate) fn submission(&self) -> Option<&basecraft_protocol::submission::Submission> {
-        if let Self::Submission(payload) = self {
-            Some(payload)
-        } else {
-            None
-        }
-    }
-    pub(crate) fn delimitation(
-        &self,
-    ) -> Option<&basecraft_protocol::delimitation::DelimitationWorkspace> {
-        if let Self::Delimitation(payload) = self {
             Some(payload)
         } else {
             None

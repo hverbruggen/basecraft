@@ -29,10 +29,6 @@ impl Session {
     /// Unlike a separate [`files::kind`] probe, this does not reread the main
     /// file to classify it. Existing companion validation still applies.
     pub fn open_classified(&mut self, path: &Path) -> Result<(DocId, files::Kind)> {
-        self.open_inner(path)
-    }
-
-    pub(super) fn open_inner(&mut self, path: &Path) -> Result<(DocId, files::Kind)> {
         let format = files::Format::from_path(path)?;
         let captured = files::capture_load(self.companion_project(), path, format)?;
         let content = captured.content;

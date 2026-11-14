@@ -68,16 +68,6 @@ pub(crate) fn is_tree(path: &Path) -> bool {
         .is_some_and(|extension| extension.eq_ignore_ascii_case("nwk"))
 }
 
-/// Both execution families promote only validated staging files through the
-/// common store's no-clobber primitive.
-pub(crate) fn publish_artifact(
-    run: &basecraft_ops::records::ArtifactRun,
-    name: &str,
-    location: basecraft_ops::records::ArtifactDestination,
-) -> Result<PathBuf> {
-    Ok(run.publish(name, location)?)
-}
-
 pub fn output_beside(file: &Path, suffix: &str, ext: &str) -> PathBuf {
     let dir = file.parent().unwrap_or(Path::new("."));
     let name = file
