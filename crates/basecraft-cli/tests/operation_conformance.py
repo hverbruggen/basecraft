@@ -309,15 +309,17 @@ def main():
         record("tree reroot, ladderize and rotate by name: same tree from CLI and MCP")
 
         # A display tree attached to a species workspace (D1): the CLI and MCP
-        # attach the same tree through the same call and save it.
+        # attach the same tree through the same call and save it. Both work in
+        # the project; without --project the CLI's workspace would be a loose
+        # file, with its records beside it (rule 2.5).
         species = project / "species"
         species.mkdir()
         fixtures = Path(__file__).resolve().parents[3] / "testdata/fixtures/compact/species-delimitation"
         shutil.copy(fixtures / "time.nwk", species / "time.nwk")
         for route in ("cli", "mcp"):
             shutil.copy(fixtures / "hypotheses.spart", species / f"{route}.spart")
-        attached, _ = cli("delimitation", "display-tree", str(species / "cli.spart"),
-                          "--tree", str(species / "time.nwk"))
+        attached, _ = cli("--project", str(project), "delimitation", "display-tree",
+                          str(species / "cli.spart"), "--tree", str(species / "time.nwk"))
         client = Mcp(binary, project, env)
         try:
             shown = {}
@@ -341,8 +343,8 @@ def main():
         record("display tree attached to a species workspace: same from CLI and MCP")
 
         # Batch figures (D1): all hypotheses, then one each, the same from CLI and MCP.
-        drawn, _ = cli("delimitation", "figures", str(species / "cli.spart"),
-                       "-o", str(species / "cli-figures"))
+        drawn, _ = cli("--project", str(project), "delimitation", "figures",
+                       str(species / "cli.spart"), "-o", str(species / "cli-figures"))
         client = Mcp(binary, project, env)
         try:
             opened = client.tool("open", {"path": "species/mcp.spart"})["structuredContent"]
