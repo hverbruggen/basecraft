@@ -5,7 +5,11 @@ use super::{
     Result, export_collection, file_tool, records, verify_collection,
 };
 
-type PublishedFiles = Vec<(String, PathBuf, String)>;
+/// Files published into the project: destination, the run's copy if it
+/// keeps one, and hash.
+type PublishedFiles = Vec<(String, Option<PathBuf>, String)>;
+/// Run paths of files moved into the project, and where they went.
+type Moved = BTreeMap<PathBuf, PathBuf>;
 
 impl PreparedOperation {
     pub fn finalize(
@@ -18,8 +22,10 @@ impl PreparedOperation {
         if self.lifecycle.external() && !self.run.artifact("execution.json")?.is_file() {
             return Err(Error::Protocol("execution evidence unavailable; retain RID and receipt; publication-only repair cannot invent missing execution evidence".into()));
         }
-        let (collections, mut exports) = self.publish_collections(validated, outcome, repair)?;
-        let mut publication_outputs = self.publish_artifacts(validated, &collections, outcome)?;
+        let (collections, mut exports, moved) =
+            self.publish_collections(validated, outcome, repair)?;
+        let mut publication_outputs =
+            self.publish_artifacts(validated, &collections, &moved, outcome)?;
         self.publish_workspace_export(outcome, &mut exports)?;
         self.record_exports(&exports, &mut publication_outputs)?;
         self.record_outcome(result, publication_outputs, outcome)
@@ -30,8 +36,9 @@ impl PreparedOperation {
         validated: &[(String, PathBuf, String)],
         outcome: &mut OperationOutcome,
         repair: bool,
-    ) -> Result<(BTreeMap<String, PathBuf>, PublishedFiles)> {
+    ) -> Result<(BTreeMap<String, PathBuf>, PublishedFiles, Moved)> {
         let mut collections = BTreeMap::new();
+        let mut moved = Moved::new();
         // Visible copies are publication outputs too, so verifying one checks
         // its bytes; they come first, as the run's primary results.
         let mut exports = Vec::new();
@@ -68,7 +75,17 @@ impl PreparedOperation {
                         "output_conflict: retained collection already exists".into(),
                     ));
                 }
-                verify_collection(&retained, &expected)?;
+                // A repair finds members already moved to the project.
+                let leaving = self.member_exports(role, &expected)?;
+                let present: BTreeMap<_, _> = expected
+                    .iter()
+                    .filter(|(member, _)| {
+                        retained.join(member).exists()
+                            || !leaving.iter().any(|(gone, _)| gone == *member)
+                    })
+                    .map(|(member, hash)| (member.clone(), hash.clone()))
+                    .collect();
+                verify_collection(&retained, &present)?;
             } else {
                 verify_collection(&staging, &expected)?;
                 records::write_json(
@@ -83,7 +100,14 @@ impl PreparedOperation {
                 }
                 self.run.publish_collection(role)?;
             }
-            record_collection(outcome, role, &retained, &expected);
+            // Members with a destination of their own leave the run (D26).
+            let leaving = self.member_exports(role, &expected)?;
+            let kept: BTreeMap<_, _> = expected
+                .iter()
+                .filter(|(member, _)| !leaving.iter().any(|(gone, _)| gone == *member))
+                .map(|(member, hash)| (member.clone(), hash.clone()))
+                .collect();
+            record_collection(outcome, role, &retained, &kept);
             self.persist(outcome)?;
             if let Some(destination) = self.request.destinations.get(role) {
                 let destination_path = self.policy.root.join(destination);
@@ -112,75 +136,80 @@ impl PreparedOperation {
                 record_collection(outcome, role, &destination_path, &expected);
                 self.persist(outcome)?;
             }
-            for (key, destination) in &self.request.destinations {
-                let Some((member_role, Some(member))) =
-                    crate::policy::destination_role(&self.operation, key)
-                else {
-                    continue;
-                };
-                if member_role != role {
-                    continue;
-                }
-                let hash = expected.get(member).ok_or_else(|| {
-                    Error::Protocol(format!(
-                        "invalid_arguments: {role} has no member {}",
-                        member.display()
-                    ))
-                })?;
-                self.publish_member(role, &retained.join(member), hash, destination, outcome)?;
-                exports.push((destination.clone(), retained.join(member), hash.clone()));
-                // Component trees of a forest travel with their primary tree.
-                if member == Path::new("tree.nwk") {
-                    let stem = Path::new(destination)
-                        .file_stem()
-                        .map_or_else(String::new, |stem| stem.to_string_lossy().into_owned());
-                    for index in 1.. {
-                        let component = PathBuf::from(format!("tree.component-{index}.nwk"));
-                        let Some(hash) = expected.get(&component) else {
-                            break;
-                        };
-                        let target = Path::new(destination)
-                            .with_file_name(format!("{stem}.component-{index}.nwk"))
-                            .display()
-                            .to_string();
-                        self.publish_member(
-                            role,
-                            &retained.join(&component),
-                            hash,
-                            &target,
-                            outcome,
-                        )?;
-                        exports.push((target, retained.join(&component), hash.clone()));
-                    }
-                }
-            }
-            if binding.bootstrap_exports && self.parameters["bootstrap_destination"] == "working" {
-                for (member, hash) in &expected {
-                    let name = member.to_string_lossy();
-                    if name.starts_with(&format!("bootstrap-{}", self.run.id()))
-                        && name.ends_with(".nex")
-                    {
-                        let destination = self.bootstrap_destination(member);
-                        self.publish_member(
-                            role,
-                            &retained.join(member),
-                            hash,
-                            &destination,
-                            outcome,
-                        )?;
-                        exports.push((destination, retained.join(member), hash.clone()));
-                    }
-                }
+            for (member, destination) in leaving {
+                let hash = &expected[&member];
+                self.publish_member(role, &retained.join(&member), hash, &destination, outcome)?;
+                let path = self.policy.root.join(&destination);
+                moved.insert(retained.join(&member), path);
+                exports.push((destination, None, hash.clone()));
             }
             collections.insert(role.clone(), retained);
         }
-        Ok((collections, exports))
+        Ok((collections, exports, moved))
+    }
+
+    /// The members of collection `role` that go to project files of their
+    /// own: the requested member destinations, a forest's component trees
+    /// after its tree, and bootstrap trees asked for in the working folder.
+    fn member_exports(
+        &self,
+        role: &str,
+        expected: &BTreeMap<PathBuf, String>,
+    ) -> Result<Vec<(PathBuf, String)>> {
+        let mut leaving = Vec::new();
+        for (key, destination) in &self.request.destinations {
+            let Some((member_role, Some(member))) =
+                crate::policy::destination_role(&self.operation, key)
+            else {
+                continue;
+            };
+            if member_role != role {
+                continue;
+            }
+            if !expected.contains_key(member) {
+                return Err(Error::Protocol(format!(
+                    "invalid_arguments: {role} has no member {}",
+                    member.display()
+                )));
+            }
+            leaving.push((member.to_path_buf(), destination.clone()));
+            // Component trees of a forest travel with their primary tree.
+            if member == Path::new("tree.nwk") {
+                let stem = Path::new(destination)
+                    .file_stem()
+                    .map_or_else(String::new, |stem| stem.to_string_lossy().into_owned());
+                for index in 1.. {
+                    let component = PathBuf::from(format!("tree.component-{index}.nwk"));
+                    if !expected.contains_key(&component) {
+                        break;
+                    }
+                    let target = Path::new(destination)
+                        .with_file_name(format!("{stem}.component-{index}.nwk"))
+                        .display()
+                        .to_string();
+                    leaving.push((component, target));
+                }
+            }
+        }
+        let binding = &self.operation.descriptor.outputs[role];
+        if binding.bootstrap_exports && self.parameters["bootstrap_destination"] == "working" {
+            for member in expected.keys() {
+                let name = member.to_string_lossy();
+                if name.starts_with(&format!("bootstrap-{}", self.run.id()))
+                    && name.ends_with(".nex")
+                {
+                    leaving.push((member.clone(), self.bootstrap_destination(member)));
+                }
+            }
+        }
+        Ok(leaving)
     }
 
     fn publish_artifacts(
         &self,
         validated: &[(String, PathBuf, String)],
         collections: &BTreeMap<String, PathBuf>,
+        moved: &Moved,
         outcome: &mut OperationOutcome,
     ) -> Result<Vec<ArtifactRevision>> {
         let mut publication_outputs = Vec::new();
@@ -191,13 +220,18 @@ impl PreparedOperation {
                     .strip_prefix(self.run_path(&self.context.outputs[role]))
                     .map_err(|_| Error::Protocol("collection member escapes allocation".into()))?;
                 let retained = retained.join(relative);
-                publication_outputs.push(records::retained_file(
-                    &self.run,
-                    &format!("output-{index}"),
-                    records::relative(&self.policy.root, &retained)?,
-                    &retained,
-                    digest.clone(),
-                )?);
+                let label = format!("output-{index}");
+                publication_outputs.push(match moved.get(&retained) {
+                    // The run keeps only the moved file's path and hash.
+                    Some(destination) => self.project_file(&label, destination, digest)?,
+                    None => records::retained_file(
+                        &self.run,
+                        &label,
+                        records::relative(&self.policy.root, &retained)?,
+                        &retained,
+                        digest.clone(),
+                    )?,
+                });
                 continue;
             }
             let retained = self.run.artifact(&name)?;
@@ -270,7 +304,7 @@ impl PreparedOperation {
     fn publish_workspace_export(
         &self,
         outcome: &mut OperationOutcome,
-        exports: &mut Vec<(String, PathBuf, String)>,
+        exports: &mut PublishedFiles,
     ) -> Result<()> {
         if let Some(destination) = self
             .request
@@ -314,7 +348,7 @@ impl PreparedOperation {
                 .ok_or_else(|| Error::Protocol("workspace has no name".into()))?;
             exports.push((
                 destination.clone(),
-                self.run.artifact(&name.to_string_lossy())?,
+                Some(self.run.artifact(&name.to_string_lossy())?),
                 artifact.digest.clone(),
             ));
         }
@@ -323,20 +357,23 @@ impl PreparedOperation {
 
     fn record_exports(
         &self,
-        exports: &[(String, PathBuf, String)],
+        exports: &PublishedFiles,
         publication_outputs: &mut Vec<ArtifactRevision>,
     ) -> Result<()> {
         let mut exported = Vec::new();
         for (destination, retained, hash) in exports {
             let path = self.policy.root.join(destination);
-            let export = records::retained_file(
-                &self.run,
-                &format!("export-{}", exported.len()),
-                records::relative(&self.policy.root, &path)?,
-                retained,
-                hash.clone(),
-            )?;
-            exported.push(export);
+            let label = format!("export-{}", exported.len());
+            exported.push(match retained {
+                Some(retained) => records::retained_file(
+                    &self.run,
+                    &label,
+                    records::relative(&self.policy.root, &path)?,
+                    retained,
+                    hash.clone(),
+                )?,
+                None => self.project_file(&label, &path, hash)?,
+            });
             // An exported tree's support semantics and alignment link travel
             // with it, so a complete export keeps them.
             if path
@@ -407,8 +444,22 @@ impl PreparedOperation {
         }
         Ok(())
     }
-    /// Export one member of a published collection to a new file in the
-    /// project, recording it in the outcome. Idempotent for a recorded export.
+    /// A published output that lives in the project, not in the run: the
+    /// record names it relative to the project and keeps its hash.
+    fn project_file(&self, label: &str, path: &Path, hash: &str) -> Result<ArtifactRevision> {
+        Ok(ArtifactRevision {
+            id: format!("{}:{label}", self.run.id()),
+            logical_name: records::relative(&self.policy.root, path)?,
+            hash: hash.into(),
+            size: std::fs::metadata(path)?.len(),
+            retained: None,
+            reference: None,
+        })
+    }
+
+    /// Move one member of a published collection to a new file in the
+    /// project (D26), recording it in the outcome. Idempotent for a recorded
+    /// move.
     fn publish_member(
         &self,
         role: &str,
@@ -435,7 +486,7 @@ impl PreparedOperation {
                 records::verify_export(&destination_path, hash, &intent)?;
             } else {
                 let destination = self.policy.path(destination, true)?;
-                records::export_file(retained, &destination, hash, &intent)?;
+                records::move_file(retained, &destination, hash, &intent)?;
             }
             outcome.artifacts.push(PublishedArtifact {
                 role: role.into(),

@@ -1,9 +1,7 @@
 //! Publication ownership, collision and retry behavior.
 use super::*;
 use crate::registry::{Registry, RegistryConfig};
-use basecraft_ops::records::{
-    export_file as export_member, verify_export as verify_member_receipt,
-};
+use basecraft_ops::records::{move_file as export_member, verify_export as verify_member_receipt};
 use basecraft_platform::files::identity;
 use basecraft_protocol::operation::{OperationPins, RuntimeState};
 use serde_json::json;
@@ -407,6 +405,7 @@ fn publication_failures_receipt_before_promotion_and_retry() {
     std::fs::remove_file(&destination).unwrap();
     std::fs::write(&receipt, b"stale receipt").unwrap();
     export_member(&source, &destination, &hash, &receipt).unwrap();
+    assert!(!source.exists(), "the run keeps no copy (D26)");
     verify_member_receipt(&destination, &hash, &receipt).unwrap();
     assert_eq!(
         std::fs::read(&receipt).unwrap(),

@@ -354,14 +354,12 @@ fn bootstrap_destination_publishes_working_copy_and_repairs_late_collision() {
         );
         common::assert_completed(&outcome);
         let name = format!("bootstrap-{}.nex", outcome.run_id);
-        let retained = common::member(&outcome, &name);
+        let retained = common::evidence(&outcome).join("artifacts").join(&name);
         let visible = root.path().join(&name);
+        // Moved to the working folder, or kept in the run; never both (D26).
         assert_eq!(visible.exists(), destination == "working");
+        assert_eq!(retained.exists(), destination == "metadata");
         if visible.exists() {
-            assert_eq!(
-                std::fs::read(&visible).unwrap(),
-                std::fs::read(retained).unwrap()
-            );
             assert_eq!(
                 basecraft_ops::records::verify(&visible, None).unwrap(),
                 Vec::<String>::new()

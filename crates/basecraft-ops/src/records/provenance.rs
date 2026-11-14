@@ -124,23 +124,57 @@ pub fn retained_file(
     })
 }
 
-/// Copy a run's file to a new file in the project, never replacing one. The
-/// receipt names the new file's inode before the rename, so a later repair
-/// adopts only a file this run created.
-pub fn export_file(source: &Path, destination: &Path, hash: &str, receipt: &Path) -> Result<()> {
-    use basecraft_platform::files::identity;
+/// Move a run's file to a new file in the project, never replacing one
+/// (D26). The receipt names the file's inode before the move, so a later
+/// repair adopts only the file this run moved. Across file systems the file
+/// is copied to a new file there and the run's file is removed.
+pub fn move_file(source: &Path, destination: &Path, hash: &str, receipt: &Path) -> Result<()> {
     let parent = destination
         .parent()
         .ok_or_else(|| invalid("missing destination parent"))?;
-    let pending = tempfile::Builder::new()
-        .prefix(".basecraft-export-")
-        .tempfile_in(parent)?;
-    std::fs::copy(source, pending.path())?;
-    if basecraft_io::hash_file(pending.path())? != hash {
-        return Err(invalid("member changed during export"));
+    if basecraft_io::hash_file(source)? != hash {
+        return Err(invalid("member changed before export"));
     }
-    pending.as_file().sync_all()?;
-    let (device, inode) = identity(pending.path())?;
+    write_receipt(receipt, destination, hash, source)?;
+    match basecraft_platform::atomic::rename_noreplace(source, destination) {
+        Err(error) if error.kind() == std::io::ErrorKind::CrossesDevices => {
+            let pending = tempfile::Builder::new()
+                .prefix(".basecraft-export-")
+                .tempfile_in(parent)?;
+            std::fs::copy(source, pending.path())?;
+            if basecraft_io::hash_file(pending.path())? != hash {
+                return Err(invalid("member changed during export"));
+            }
+            pending.as_file().sync_all()?;
+            write_receipt(receipt, destination, hash, pending.path())?;
+            no_replace(basecraft_platform::atomic::rename_noreplace(
+                pending.path(),
+                destination,
+            ))?;
+            std::fs::remove_file(source)?;
+        }
+        moved => no_replace(moved)?,
+    }
+    basecraft_platform::files::sync_directory(parent)?;
+    if let Some(folder) = source.parent() {
+        basecraft_platform::files::sync_directory(folder)?;
+    }
+    Ok(())
+}
+
+fn no_replace(renamed: std::io::Result<()>) -> Result<()> {
+    renamed.map_err(|error| {
+        if error.kind() == std::io::ErrorKind::AlreadyExists {
+            crate::access::AccessError::DestinationExists.into()
+        } else {
+            crate::Error::from(error)
+        }
+    })
+}
+
+/// The receipt of a move: `file` is the file that becomes `destination`.
+fn write_receipt(receipt: &Path, destination: &Path, hash: &str, file: &Path) -> Result<()> {
+    let (device, inode) = basecraft_platform::files::identity(file)?;
     crate::records::write_json(
         receipt,
         &serde_json::to_value(
@@ -150,22 +184,13 @@ pub fn export_file(source: &Path, destination: &Path, hash: &str, receipt: &Path
                 hash: hash.into(),
                 device,
                 inode,
-                size: pending.as_file().metadata()?.len(),
+                size: std::fs::metadata(file)?.len(),
             },
         )?,
-    )?;
-    basecraft_platform::atomic::rename_noreplace(pending.path(), destination).map_err(|error| {
-        if error.kind() == std::io::ErrorKind::AlreadyExists {
-            crate::access::AccessError::DestinationExists.into()
-        } else {
-            crate::Error::from(error)
-        }
-    })?;
-    basecraft_platform::files::sync_directory(parent)?;
-    Ok(())
+    )
 }
 
-/// Whether `destination` is still the file [`export_file`] created, with the
+/// Whether `destination` is still the file [`move_file`] put there, with the
 /// same bytes. Matching bytes alone never authorize adopting another file.
 pub fn verify_export(destination: &Path, hash: &str, receipt: &Path) -> Result<()> {
     use basecraft_platform::files::{identity, link_count};
