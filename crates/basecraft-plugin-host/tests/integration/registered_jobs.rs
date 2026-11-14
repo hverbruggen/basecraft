@@ -758,7 +758,7 @@ fn document_inputs_read_the_session_revision_and_record_history() {
         .cloned()
         .unwrap();
     assert_eq!(listed["status"], "completed");
-    assert!(Path::new(listed["runtime_record"].as_str().unwrap()).is_file());
+    assert!(Path::new(listed["record_path"].as_str().unwrap()).is_file());
     // A failed document-bound run is recorded as an attempt, without a result.
     let request = json!({"operation":"org.example.registry-fixture/count@1","inputs":{"sources":document(&session)},
             "parameters":{"mode":"fail"},"destinations":{"report":"failed.json"}});
@@ -838,13 +838,16 @@ fn job_records_stay_with_the_data_when_the_private_folder_is_deleted() {
     if state.exists() {
         std::fs::remove_dir_all(&state).unwrap();
     }
+    // Each run's own record is its job record (D28).
+    let runs = |home: &Path| home.join(".basecraft/analyses-v1/runs");
     assert!(
-        project
-            .join(".basecraft/jobs")
+        runs(&project)
             .join(&plugin.run_id)
-            .is_dir()
+            .join("runtime.json")
+            .is_file()
     );
-    assert!(loose.join(".basecraft/jobs").join(&sanger).is_dir());
+    assert!(runs(&loose).join(&sanger).join("runtime.json").is_file());
+    assert!(!project.join(".basecraft/jobs").exists());
     let listed = basecraft_ops::records::jobs(true, &[project, loose]).unwrap();
     let ids: std::collections::BTreeMap<_, _> = listed["jobs"]
         .as_array()

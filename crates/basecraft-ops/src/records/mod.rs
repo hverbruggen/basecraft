@@ -24,7 +24,7 @@ pub use input_evidence::{
     verified_source, verify_ancestors, wait_in_background, write_input, write_json,
     write_plain_json,
 };
-pub use jobs::{job_index_path, jobs};
+pub use jobs::jobs;
 pub use links::{
     AlignmentLink, AlignmentLinkExt, metadata_present, sidecar, sidecar_in, view_sidecar,
     view_sidecar_in,

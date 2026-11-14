@@ -861,10 +861,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     "sanger-request",
                     schemars::schema_for!(basecraft_protocol::sanger_records::SangerRequest),
                 ),
-                (
-                    "sanger-job-record",
-                    schemars::schema_for!(basecraft_protocol::sanger_records::SangerJobRecord),
-                ),
                 ("report-citations", schemars::schema_for!(Vec<String>)),
                 (
                     "submitted-input",
@@ -899,10 +895,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 (
                     "run-record",
                     schemars::schema_for!(basecraft_protocol::records::RunRecord),
-                ),
-                (
-                    "local-job-index",
-                    schemars::schema_for!(basecraft_protocol::records::LocalJobIndex),
                 ),
                 (
                     "store-marker",

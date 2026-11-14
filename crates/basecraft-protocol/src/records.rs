@@ -27,7 +27,6 @@ pub const STAMPED: &[&str] = &[
     "Companion",
     "IndexedFolders",
     "InstallationIndex",
-    "LocalJobIndex",
     "MemberExportReceipt",
     "MetadataManifest",
     "OperationOutcome",
@@ -43,7 +42,6 @@ pub const STAMPED: &[&str] = &[
     "ResultBinding",
     "RunRecord",
     "Runtime",
-    "SangerJobRecord",
     "SangerRequest",
     "SavedCallSets",
     "SavedReview",
@@ -440,44 +438,6 @@ pub struct RunRuntime {
     pub manifest_digest: String,
     pub reported_versions: BTreeMap<String, String>,
     pub executable_digests: BTreeMap<String, String>,
-}
-
-/// The existing two-field plugin identity in the local index. Neither `Actor`'s
-/// tagged representation nor `OperationPins` has this shape.
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct JobIndexPlugin {
-    pub id: String,
-    pub version: String,
-}
-
-/// Existing display path wrapper; not a hashed `InputReference` or a new path rule.
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct JobIndexSource {
-    pub path: String,
-}
-
-/// Lightweight `.basecraft/jobs/<id>/manifest.json` of the run's home (its
-/// project, or the folder that holds the run). Every path is relative to that
-/// home and `/`-separated. The pointed-to `OperationOutcome` in runtime.json
-/// stays authoritative; this is not `JobRecord`.
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct LocalJobIndex {
-    pub schema_version: u32,
-    pub id: String,
-    pub status: crate::operation::RuntimeState,
-    pub owner_instance: String,
-    pub started: String,
-    /// Explicit null for nonterminal states; never omitted by the writer.
-    pub ended: Option<String>,
-    pub plugin: JobIndexPlugin,
-    pub operation: String,
-    pub effective_parameters: Value,
-    pub initiator: String,
-    pub source: JobIndexSource,
-    pub outputs: BTreeMap<String, String>,
-    /// First runtime error message or explicit null.
-    pub diagnostics: Option<String>,
-    pub runtime_record: PathBuf,
 }
 
 /// Existing rollback-durability poison marker. Recovery refuses its presence,

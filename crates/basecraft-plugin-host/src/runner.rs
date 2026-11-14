@@ -29,7 +29,7 @@ use basecraft_protocol::{
     },
     plugin::InvokeResult,
     provenance::ArtifactRevision,
-    records::{JobIndexPlugin, JobIndexSource, LocalJobIndex, RUN_RECORD_SCHEMA, RunRecord},
+    records::{RUN_RECORD_SCHEMA, RunRecord},
 };
 use serde_json::Value;
 
@@ -800,71 +800,10 @@ impl PreparedOperation {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
     }
+    /// Write the run's status, its `runtime.json`, which is also what the
+    /// Tasks view lists (D28).
     pub fn persist(&self, outcome: &OperationOutcome) -> Result<()> {
-        let runtime = self.run.artifact("runtime.json")?;
-        records::write_json(&runtime, outcome)?;
-        self.write_task_index(outcome, &runtime)
-    }
-
-    /// The Tasks view lists runs from small index records in the `.basecraft`
-    /// of the run's home: the session's project when it holds the run, else
-    /// the folder the run is in. This one only points at the run's own
-    /// `runtime.json`, which stays the authoritative record. Its paths are
-    /// relative to the home, so the record travels with a copied project.
-    fn write_task_index(&self, outcome: &OperationOutcome, runtime: &Path) -> Result<()> {
-        let home = basecraft_ops::project::Project::base_of(
-            self.project.as_ref(),
-            &self.run.working_directory().join(".basecraft"),
-        )?;
-        let relative = |path: &Path| records::relative(&home, path);
-        let source = self.document.as_ref().map_or_else(
-            || {
-                self.context
-                    .input_evidence
-                    .values()
-                    .flatten()
-                    .find_map(|evidence| evidence.original_path.as_deref())
-                    .map(|path| relative(&self.run_path(path)))
-                    .transpose()
-                    .map(Option::unwrap_or_default)
-            },
-            |target| relative(&target.path),
-        )?;
-        let outputs = outcome
-            .artifacts
-            .iter()
-            .map(|artifact| {
-                Ok((
-                    relative(Path::new(&artifact.path))?,
-                    artifact.digest.clone(),
-                ))
-            })
-            .collect::<Result<_>>()?;
-        let index = serde_json::to_value(LocalJobIndex {
-            schema_version: 1,
-            id: self.run.id().into(),
-            status: outcome.state,
-            owner_instance: basecraft_platform::process_instance().into(),
-            started: self.started.clone(),
-            ended: outcome
-                .state
-                .terminal()
-                .then(basecraft_platform::now_rfc3339),
-            plugin: JobIndexPlugin {
-                id: self.operation.package.manifest.id.clone(),
-                version: self.operation.package.manifest.version.clone(),
-            },
-            operation: self.operation.id.clone(),
-            effective_parameters: outcome.effective_parameters.clone(),
-            initiator: self.initiator.clone(),
-            source: JobIndexSource { path: source },
-            outputs,
-            diagnostics: outcome.errors.first().map(|error| error.message.clone()),
-            runtime_record: relative(runtime)?.into(),
-        })?;
-        let path = records::job_index_path(&home, self.run.id());
-        std::fs::create_dir_all(path.parent().unwrap_or(&path))?;
-        records::write_json(&path, &index)?;
+        records::write_json(&self.run.artifact("runtime.json")?, outcome)?;
         Ok(())
     }
 }

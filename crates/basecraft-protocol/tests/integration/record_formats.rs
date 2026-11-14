@@ -64,7 +64,6 @@ fn current_records_round_trip() {
         ("sanger-saved-review", encode::<SavedReview>, true),
         ("sanger-saved-call-sets", encode::<SavedCallSets>, true),
         ("sanger-request", encode::<SangerRequest>, true),
-        ("sanger-execution", encode::<SangerJobRecord>, true),
         ("journal-entry", encode::<JournalEntry>, true),
         ("activity-input-run", encode::<ActivityInputRun>, true),
         (
@@ -89,7 +88,6 @@ fn current_records_round_trip() {
         ("indexed-folders", encode::<IndexedFolders>, false),
         ("store", encode::<StoreMarker>, true),
         ("execution-", encode::<RunRecord>, true),
-        ("job-index-", encode::<LocalJobIndex>, true),
         ("integrity-", encode::<RecoveryIntegrityError>, true),
         ("binding", encode::<ResultBinding>, true),
         ("run-", encode::<AnalysisRun>, true),

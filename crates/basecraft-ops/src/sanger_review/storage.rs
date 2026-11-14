@@ -5,10 +5,9 @@ use crate::{
 };
 use basecraft_docs::sanger::SangerPlacementExt;
 use basecraft_docs::sanger::{SangerDraft, SangerPlacement};
+use basecraft_protocol::operation::RuntimeState;
 use basecraft_protocol::provenance::{ArtifactRevision, Completeness, Publication};
-use basecraft_protocol::sanger_records::{
-    SangerJobRecord, SangerJobSource, SangerJobStatus, SangerRequest,
-};
+use basecraft_protocol::sanger_records::SangerRequest;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -331,7 +330,7 @@ impl SangerRun {
             started: basecraft_platform::now_rfc3339(),
         };
         result.write_run_record()?;
-        result.status(SangerJobStatus::Running, None, None)?;
+        result.status(RuntimeState::Running, None)?;
         Ok(result)
     }
 
@@ -350,10 +349,6 @@ impl SangerRun {
     }
     pub fn artifact(&self, name: &str) -> crate::Result<PathBuf> {
         self.run.artifact(name)
-    }
-
-    fn job_path(&self) -> PathBuf {
-        crate::records::job_index_path(&self.base, self.run.id())
     }
 
     /// The stage's run record, as every tool run has one: its sources with
@@ -392,46 +387,47 @@ impl SangerRun {
         inputs::write_json(&self.run.artifact("execution.json")?, &record)
     }
 
-    fn status(
-        &self,
-        status: SangerJobStatus,
-        result: Option<&Path>,
-        diagnostic: Option<&str>,
-    ) -> crate::Result<()> {
-        let value = serde_json::to_value(SangerJobRecord {
-            schema_version: 1,
-            id: self.run.id().into(),
-            owner_instance: basecraft_platform::process_instance().into(),
-            status,
-            operation: self.operation.clone(),
-            started: self.started.clone(),
-            // Paths relative to the home, so the record travels with it.
-            source: SangerJobSource {
-                path: self
-                    .evidence
-                    .sources
-                    .first()
-                    .map(|s| inputs::relative(&self.base, &s.location()?).map(PathBuf::from))
-                    .transpose()?,
+    /// Write the stage's status as its run's `runtime.json`, the record
+    /// the Tasks view lists (D28).
+    fn status(&self, state: RuntimeState, diagnostic: Option<&str>) -> crate::Result<()> {
+        let operation = self.operation.clone();
+        let errors = diagnostic.map(|message| basecraft_protocol::operation::OperationError {
+            code: basecraft_protocol::operation::OperationErrorCode::ToolFailure,
+            message: message.into(),
+            field: None,
+            operation: operation.clone(),
+            run_id: Some(self.run.id().into()),
+            evidence: None,
+        });
+        inputs::write_json(
+            &self.run.artifact("runtime.json")?,
+            &basecraft_protocol::operation::OperationOutcome {
+                schema: 1,
+                operation,
+                run_id: self.run.id().into(),
+                state,
+                pins: basecraft_protocol::operation::OperationPins {
+                    generation: String::new(),
+                    package_digest: String::new(),
+                    descriptor_digest: String::new(),
+                },
+                requested_parameters: serde_json::Value::Null,
+                effective_parameters: serde_json::Value::Null,
+                data: None,
+                artifacts: Vec::new(),
+                proposals: None,
+                warnings: Vec::new(),
+                errors: errors.into_iter().collect(),
+                evidence: Some(self.run.directory().display().to_string()),
             },
-            outputs: std::collections::BTreeMap::new(),
-            primary_output: result
-                .map(|path| inputs::relative(&self.base, path).map(PathBuf::from))
-                .transpose()?,
-            diagnostics: diagnostic.map(str::to_owned),
-            artifact_run: Some(inputs::relative(&self.base, self.run.directory())?.into()),
-            extra: std::collections::BTreeMap::new(),
-        })?;
-        let path = self.job_path();
-        std::fs::create_dir_all(path.parent().ok_or_else(|| invalid("job has no parent"))?)?;
-        inputs::write_json(&path, &value)
+        )
     }
 
     pub fn failed(&self, diagnostic: &str) -> crate::Result<()> {
         if self.terminal.get() {
             return Err(invalid("Sanger run already terminated"));
         }
-        self.status(SangerJobStatus::Failed, None, Some(diagnostic))?;
+        self.status(RuntimeState::Failed, Some(diagnostic))?;
         self.terminal.set(true);
         Ok(())
     }
@@ -440,7 +436,7 @@ impl SangerRun {
         if self.terminal.get() {
             return Err(invalid("Sanger run already terminated"));
         }
-        self.status(SangerJobStatus::Cancelled, None, Some(diagnostic))?;
+        self.status(RuntimeState::Cancelled, Some(diagnostic))?;
         self.terminal.set(true);
         Ok(())
     }
@@ -502,7 +498,7 @@ impl SangerRun {
         publication.events.push(entry);
         crate::records::provenance::publish(self.directory(), &publication)?;
         self.evidence.runs.push(self.directory().into());
-        self.status(SangerJobStatus::SupportRetained, None, None)?;
+        self.status(RuntimeState::Completed, None)?;
         self.terminal.set(true);
         Ok(self)
     }
@@ -514,8 +510,7 @@ impl Drop for SangerRun {
             // Best effort during unwinding/early validation failure. The durable
             // reservation and pre-execution record survive even if this write fails.
             let _ = self.status(
-                SangerJobStatus::Interrupted,
-                None,
+                RuntimeState::Interrupted,
                 Some("Sanger support was not published; owned files retained"),
             );
         }
@@ -1552,9 +1547,10 @@ mod tests {
             .unwrap();
         assert!(partial.is_file());
         let job: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(run.job_path()).unwrap()).unwrap();
-        assert_eq!(job["status"], "failed");
-        assert!(job["primary_output"].is_null());
+            serde_json::from_slice(&std::fs::read(run.artifact("runtime.json").unwrap()).unwrap())
+                .unwrap();
+        assert_eq!(job["state"], "failed");
+        assert_eq!(job["artifacts"], serde_json::json!([]));
         assert!(trace.is_file());
     }
 
@@ -1725,7 +1721,7 @@ mod tests {
                 .unwrap();
             let directory = run.directory().to_path_buf();
             std::fs::write(run.artifact("partial").unwrap(), b"recover me").unwrap();
-            let job = run.job_path();
+            let job = run.artifact("runtime.json").unwrap();
             if cancelled {
                 run.cancelled("explicit cancellation").unwrap();
                 assert!(
@@ -1742,7 +1738,7 @@ mod tests {
             let record: serde_json::Value =
                 serde_json::from_slice(&std::fs::read(job).unwrap()).unwrap();
             assert_eq!(
-                record["status"],
+                record["state"],
                 if cancelled {
                     "cancelled"
                 } else {
