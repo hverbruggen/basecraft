@@ -748,17 +748,25 @@ fn document_inputs_read_the_session_revision_and_record_history() {
             )
         ]
     );
-    // The Tasks view lists registered runs and points at their own record.
-    let tasks = basecraft_ops::records::jobs(true, &[temp.path().to_path_buf()]).unwrap();
-    let listed = tasks["jobs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|task| task["id"] == clean.run_id.as_str())
-        .cloned()
-        .unwrap();
-    assert_eq!(listed["status"], "completed");
-    assert!(Path::new(listed["record_path"].as_str().unwrap()).is_file());
+    // The Tasks view lists this process's runs, each named by the document
+    // it read, saved or not, and points at their own record.
+    let tasks = basecraft_ops::records::jobs(false, &[temp.path().to_path_buf()]).unwrap();
+    for run in [&clean, &edited] {
+        let listed = tasks["jobs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|task| task["id"] == run.run_id.as_str())
+            .cloned()
+            .unwrap();
+        assert_eq!(listed["status"], "completed");
+        assert!(Path::new(listed["record_path"].as_str().unwrap()).is_file());
+        let listed_source = Path::new(listed["source"]["path"].as_str().unwrap());
+        assert_eq!(
+            listed_source.canonicalize().unwrap(),
+            source.canonicalize().unwrap()
+        );
+    }
     // A failed document-bound run is recorded as an attempt, without a result.
     let request = json!({"operation":"org.example.registry-fixture/count@1","inputs":{"sources":document(&session)},
             "parameters":{"mode":"fail"},"destinations":{"report":"failed.json"}});

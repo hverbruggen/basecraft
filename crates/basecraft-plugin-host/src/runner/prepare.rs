@@ -849,6 +849,14 @@ fn allocate_run(
         .transpose()?;
     let mutation = records::Mutation::begin_in(project)?;
     let run = ArtifactRun::create(project, &anchor, &run_id)?;
+    // What the Tasks view names the run by before the tool has run. A run
+    // without exports is named by its operation.
+    let source = inputs.document.as_ref().map(|target| target.path.clone());
+    let source = source.or_else(|| sources.first().map(|input| input.source.clone()));
+    let result = exported_name
+        .clone()
+        .unwrap_or_else(|| operation.id.clone());
+    run.write_tool_run(result, source.as_deref())?;
     let mut ledger_inputs = Vec::new();
     let mut upstream = Vec::new();
     let mut first_input = None;
@@ -929,17 +937,8 @@ fn allocate_run(
     let primary_input_owner = first_input.as_ref().map(|(_, owner)| owner.clone());
     if let Some((mut input, _)) = first_input {
         input.upstream = upstream;
+        // The save guard names a registered run by its run.json, written above.
         mutation.write_input(run.directory(), &input)?;
-        // The save guard names a registered run by its run.json and treats a
-        // missing one as damage, as for every other registered run. A run
-        // without exports is named by its operation.
-        let result = exported_name
-            .clone()
-            .unwrap_or_else(|| operation.id.clone());
-        run.write_run(
-            basecraft_protocol::records::AnalysisRunStatus::Prepared,
-            Some(result),
-        )?;
         mutation.register(&run)?;
     }
     let mut allocated = AllocatedRun {

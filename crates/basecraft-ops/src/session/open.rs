@@ -47,10 +47,10 @@ impl Session {
             .filter(|(_, stamp)| stamp.is_none())
             .map(|(path, _)| self.relative(path))
             .collect();
-        let run =
-            crate::records::analysis_store::ArtifactRun::for_result(self.project.as_ref(), path);
+        let project = self.companion_project();
+        let run = crate::records::analysis_store::ArtifactRun::for_result(project, path);
         let bundle = crate::records::provenance::bundle_of(
-            self.project.as_ref(),
+            project,
             path,
             run.as_ref().ok().and_then(Option::as_deref),
         );

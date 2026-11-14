@@ -178,24 +178,56 @@ impl ArtifactRun {
         Ok(self.directory.join(name))
     }
 
-    /// Write this run's `run.json` with its status and the result it is named by.
+    /// Write this run's `run.json` with its status and the result it is named
+    /// by. A tool run keeps the process and source it was made with.
     pub fn write_run(
         &self,
         status: basecraft_protocol::records::AnalysisRunStatus,
         result: Option<String>,
     ) -> Result<()> {
-        crate::records::input_evidence::write_json(
-            &self.artifact("run.json")?,
-            // Sorted keys, as every run.json has been written.
-            &serde_json::to_value(basecraft_protocol::records::AnalysisRun {
-                schema_version: 1,
-                id: self.id().into(),
-                result,
-                status,
-                outputs: None,
-                extra: std::collections::BTreeMap::new(),
-            })?,
-        )
+        let made = std::fs::read(self.artifact("run.json")?)
+            .ok()
+            .and_then(|bytes| {
+                basecraft_protocol::records::decode::<basecraft_protocol::records::AnalysisRun>(
+                    &bytes,
+                )
+                .ok()
+            });
+        let (process_instance, source) =
+            made.map_or((None, None), |m| (m.process_instance, m.source));
+        self.write_run_record(basecraft_protocol::records::AnalysisRun {
+            schema_version: 1,
+            id: self.id().into(),
+            result,
+            status,
+            outputs: None,
+            process_instance,
+            source,
+            extra: std::collections::BTreeMap::new(),
+        })
+    }
+
+    /// The `run.json` of a tool run made by this process on `source`, the
+    /// file or document it was started on.
+    pub fn write_tool_run(&self, result: String, source: Option<&Path>) -> Result<()> {
+        self.write_run_record(basecraft_protocol::records::AnalysisRun {
+            schema_version: 1,
+            id: self.id().into(),
+            result: Some(result),
+            status: basecraft_protocol::records::AnalysisRunStatus::Prepared,
+            outputs: None,
+            process_instance: Some(basecraft_platform::process_instance().into()),
+            source: source
+                .map(|source| crate::records::input_evidence::relative(&self.directory, source))
+                .transpose()?,
+            extra: std::collections::BTreeMap::new(),
+        })
+    }
+
+    fn write_run_record(&self, record: basecraft_protocol::records::AnalysisRun) -> Result<()> {
+        // Sorted keys, as every run.json has been written.
+        let record = serde_json::to_value(record)?;
+        crate::records::input_evidence::write_json(&self.artifact("run.json")?, &record)
     }
 
     /// Stream here, close/sync successfully, then publish. Pending data is never
@@ -326,6 +358,13 @@ impl ArtifactRun {
             ));
         }
         component(&bound.run)?;
+        // A run that is gone, or whose folder moved away, leaves no binding.
+        let missing = || match expected_hash {
+            Some(_) => Err(invalid(
+                "bound analysis run is missing; metadata was not applied",
+            )),
+            None => Ok(None),
+        };
         let store = match &bound.home {
             None => store,
             Some(home) => {
@@ -335,23 +374,26 @@ impl ArtifactRun {
                 {
                     return Err(invalid("unsafe result binding home"));
                 }
-                let store = base
-                    .join(home)
-                    .canonicalize()?
-                    .join(".basecraft/analyses-v1");
+                let Ok(folder) = base.join(home).canonicalize() else {
+                    return missing();
+                };
+                // A file of the project has no run outside it (rule 2.5).
+                if project.is_some_and(|project| base == project.root())
+                    && !folder.starts_with(&base)
+                {
+                    return Ok(None);
+                }
+                let store = folder.join(".basecraft/analyses-v1");
+                if !store.exists() {
+                    return missing();
+                }
                 Self::validate_store(&store)?;
                 store
             }
         };
         let run = store.join("runs").join(&bound.run);
         if !run.exists() {
-            return if expected_hash.is_some() {
-                Err(invalid(
-                    "bound analysis run is missing; metadata was not applied",
-                ))
-            } else {
-                Ok(None)
-            };
+            return missing();
         }
         let metadata = run.symlink_metadata()?;
         if !metadata.is_dir() || metadata.file_type().is_symlink() {
@@ -452,6 +494,11 @@ impl ArtifactRun {
                 None,
             )
         } else {
+            if project.is_some_and(|project| base == project.root())
+                && !self.working_directory.starts_with(&base)
+            {
+                return Err(invalid("the run lies outside the project (rule 2.5)"));
+            }
             let home = crate::records::input_evidence::relative(&base, &self.working_directory)?;
             (Self::store_at(&base)?, Some(home))
         };

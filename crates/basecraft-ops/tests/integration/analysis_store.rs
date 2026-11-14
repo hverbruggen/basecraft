@@ -529,3 +529,47 @@ fn a_binding_is_found_only_where_the_files_records_are_kept() {
         Some(above.directory())
     );
 }
+
+#[test]
+fn a_home_above_the_project_is_no_binding_of_its_files() {
+    crate::isolated_profile::isolate!();
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path().canonicalize().unwrap();
+    let result = work.join("data/result.txt");
+    std::fs::create_dir_all(result.parent().unwrap()).unwrap();
+    std::fs::write(&result, b"result").unwrap();
+    let hash = basecraft_io::hash_file(&result).unwrap();
+    // A loose run in `work` binds its output in `work/data` with home "..".
+    let run = ArtifactRun::create(None, &work.join("run.txt"), "above").unwrap();
+    run.bind(None, &result, &hash).unwrap();
+    assert!(ArtifactRun::for_result(None, &result).unwrap().is_some());
+    // Chosen as the project, `work/data` never reaches the run above it.
+    let project = basecraft_ops::project::Project::new(work.join("data")).unwrap();
+    assert!(
+        ArtifactRun::for_result(Some(&project), &result)
+            .unwrap()
+            .is_none()
+    );
+    assert!(run.bind(Some(&project), &result, &hash).is_err());
+}
+
+#[test]
+fn a_moved_folder_whose_run_stayed_behind_has_no_binding() {
+    crate::isolated_profile::isolate!();
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path().join("work");
+    std::fs::create_dir_all(work.join("data")).unwrap();
+    let run = ArtifactRun::create(None, &work.join("run.txt"), "behind").unwrap();
+    let tree = work.join("data/tree.nwk");
+    std::fs::write(&tree, "(a,b);").unwrap();
+    let hash = basecraft_io::hash_file(&tree).unwrap();
+    run.bind(None, &tree, &hash).unwrap();
+    // The folder moves with its .basecraft; the home it names is gone.
+    let moved = temp.path().join("moved");
+    std::fs::rename(work.join("data"), &moved).unwrap();
+    let tree = moved.join("tree.nwk");
+    assert!(ArtifactRun::for_result(None, &tree).unwrap().is_none());
+    assert!(ArtifactRun::for_result_with_hash(None, &tree, &hash).is_err());
+    // The tree still opens, without the run's metadata.
+    assert!(basecraft_ops::files::load(&tree).is_ok());
+}

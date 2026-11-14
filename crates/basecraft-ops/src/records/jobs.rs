@@ -108,27 +108,31 @@ fn task(
             basecraft_protocol::records::other_format(&writer, outcome.schema, 1),
         ));
     }
-    let execution = budget
-        .read(&run.join("execution.json"))
-        .ok()
-        .and_then(|bytes| {
-            basecraft_protocol::records::decode::<basecraft_protocol::records::RunRecord>(&bytes)
-                .ok()
-        });
-    let current = execution
+    // A tool run names its process and source in `run.json` when it is
+    // made; a Sanger stage in its `execution.json`.
+    let record = |name: &str, budget: &mut TaskReadBudget| budget.read(&run.join(name)).ok();
+    let made = record("run.json", budget).and_then(|bytes| {
+        basecraft_protocol::records::decode::<basecraft_protocol::records::AnalysisRun>(&bytes).ok()
+    });
+    let execution = record("execution.json", budget).and_then(|bytes| {
+        basecraft_protocol::records::decode::<basecraft_protocol::records::RunRecord>(&bytes).ok()
+    });
+    let process = made
         .as_ref()
-        .is_some_and(|execution| execution.process_instance == owner);
+        .and_then(|made| made.process_instance.as_deref());
+    let process = process.or_else(|| execution.as_ref().map(|e| e.process_instance.as_str()));
+    let current = process == Some(owner);
     if !previous && !current {
         return Ok(None);
     }
-    let source = execution.as_ref().and_then(|execution| {
-        execution
-            .inputs
-            .values()
-            .flatten()
-            .find_map(|input| input.original_path.as_deref())
-            .map(|path| run.join(path))
-    });
+    let source = made
+        .as_ref()
+        .and_then(|made| made.source.as_deref())
+        .or_else(|| {
+            let mut inputs = execution.as_ref()?.inputs.values().flatten();
+            inputs.find_map(|input| input.original_path.as_deref())
+        });
+    let source = source.map(|path| run.join(path));
     let primary = task_primary_output(&outcome, runtime, budget);
     let mut status = serde_json::to_value(outcome.state)?
         .as_str()
@@ -380,6 +384,28 @@ mod tests {
             // Listing writes nothing.
             assert_eq!(std::fs::read(receipt).unwrap(), before);
         }
+    }
+
+    #[test]
+    fn a_run_names_its_process_and_source_before_the_tool_has_run() {
+        let temp = tempfile::tempdir().unwrap();
+        let (runs, receipt, _) = run_fixture(temp.path(), "running");
+        // Before the tool runs there is no execution.json, only run.json.
+        std::fs::remove_file(receipt.with_file_name("execution.json")).unwrap();
+        let made = serde_json::json!({"schema_version":1,"id":"registered","result":"out.fasta",
+            "status":"prepared","process_instance":"current","source":"../../../../open.afa"});
+        write(&receipt.with_file_name("run.json"), &made);
+        let listed = rows(&runs, false, "current");
+        assert_eq!(listed["jobs"][0]["status"], "running");
+        assert_eq!(
+            listed["jobs"][0]["source"]["path"],
+            serde_json::json!(runs.join("registered/../../../../open.afa"))
+        );
+        let previous = rows(&runs, true, "later");
+        assert_eq!(
+            previous["jobs"][0]["status"],
+            "Previous owner; completion unconfirmed"
+        );
     }
 
     #[test]

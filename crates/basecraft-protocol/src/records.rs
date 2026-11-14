@@ -508,6 +508,14 @@ pub struct AnalysisRun {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<Vec<crate::provenance::ArtifactRevision>>")]
     pub outputs: Option<Vec<Value>>,
+    /// A tool run's process, written when the run is made, so the Tasks view
+    /// can tell this process's runs from earlier ones before the tool ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_instance: Option<String>,
+    /// The file or document a tool run was started on, relative to the run
+    /// folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
