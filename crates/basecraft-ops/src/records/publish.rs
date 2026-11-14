@@ -1,7 +1,7 @@
 //! Provenance publication from a session's document history.
 use crate::Result;
 use crate::error::{changed_on_disk, damaged, invalid};
-use basecraft_protocol::provenance::Publication;
+use basecraft_protocol::provenance::{ArtifactRevision, Publication};
 use basecraft_protocol::{Actor, LogEntry, Op};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -62,7 +62,7 @@ impl History<'_> {
     /// Pending recovery baselines join the journal with the Save record, so
     /// they count as recorded events here.
     pub(crate) fn save(&self, target: &Path, save: &LogEntry) -> Result<StagedRecord> {
-        use basecraft_protocol::provenance::{ArtifactRevision, Completeness};
+        use basecraft_protocol::provenance::Completeness;
         let _scope = crate::records::run_inputs::lock_in(self.project)?;
         let bound = self.bound(target)?;
         let bundle = if let Some(hidden) = bound.clone() {
@@ -76,253 +76,29 @@ impl History<'_> {
             crate::records::provenance::companion(target)
         };
         std::fs::create_dir_all(bundle.join("artifacts"))?;
-        let source_bundle = self.origin_bundle.to_path_buf();
-        let mut previous_bundle = if bundle.join("manifest.json").exists() {
-            &bundle
-        } else {
-            &source_bundle
-        };
-        let mut previous = crate::records::provenance::latest(previous_bundle)?.map(|(p, _)| p);
-        // A newly allocated output-support record is not the accepted document
-        // history. Prefer the opened origin when the writer has just bound one.
-        if previous_bundle != &source_bundle
-            && previous
-                .as_ref()
-                .is_some_and(|p| p.events.is_empty() && p.effective_edits.is_empty())
-            && let Some((publication, _)) = crate::records::provenance::latest(&source_bundle)?
-        {
-            previous_bundle = &source_bundle;
-            previous = Some(publication);
-        }
-        // The open of this session, not one in the saved history.
-        let baseline_hash = self
-            .unsaved
-            .iter()
-            .chain(self.pending)
-            .chain(self.recorded[1])
-            .find(|e| e.doc == self.key && matches!(e.op, Op::Open { .. }))
-            .and_then(|e| e.result.hashes.first())
-            .map(|(_, hash)| hash);
-        let previous = previous.filter(|p| {
-            p.session == self.session || p.outputs.first().map(|a| &a.hash) == baseline_hash
-        });
+        let (previous_bundle, previous) = self.parent(&bundle)?;
         let parents = previous
             .as_ref()
             .map(|p| vec![p.id.clone()])
             .unwrap_or_default();
         // Save As carries the contributing history rather than leaving dangling
         // references into the source's companion.
-        if previous.is_some() && previous_bundle != &bundle {
-            for subdirectory in ["artifacts", "records"] {
-                copy_ancestry(
-                    &previous_bundle.join(subdirectory),
-                    &bundle.join(subdirectory),
-                    0,
-                )?;
-            }
-            if self.delimitation {
-                // Species publications retain immutable generated files in their
-                // run. Copied parent records still resolve those checked paths
-                // in the new bundle; clean source references remain references.
-                for entry in std::fs::read_dir(previous_bundle.join("records"))? {
-                    let entry = entry?;
-                    let record: Publication = basecraft_protocol::records::decode(
-                        &crate::records::provenance::read_record(&entry.path())?,
-                    )?;
-                    for output in record.outputs {
-                        let Some(name) = output.retained else {
-                            continue;
-                        };
-                        if Path::new(&name)
-                            .components()
-                            .any(|c| !matches!(c, std::path::Component::Normal(_)))
-                        {
-                            return Err(invalid("Unsafe retained species output path"));
-                        }
-                        let destination = bundle.join(&name);
-                        if destination.is_file() {
-                            continue;
-                        }
-                        let source = previous_bundle.join(&name);
-                        if basecraft_io::hash_file(&source)? != output.hash {
-                            return Err(invalid("Retained species output changed"));
-                        }
-                        if let Some(parent) = destination.parent() {
-                            std::fs::create_dir_all(parent)?;
-                        }
-                        basecraft_io::write_atomic(&destination, |w| {
-                            std::io::copy(&mut std::fs::File::open(&source)?, w)?;
-                            Ok(())
-                        })?;
-                        if basecraft_io::hash_file(&destination)? != output.hash {
-                            return Err(invalid("Species output changed during Save As"));
-                        }
-                    }
-                }
+        if previous.is_some() && previous_bundle != bundle {
+            self.copy_history(&previous_bundle, &bundle)?;
+            if previous_bundle.join("input.json").is_file() {
+                link_save_as_input(&previous_bundle, &bundle)?;
             }
         }
-        // Save As keeps a live reference to the contributing run's evidence
-        // decisions; it does not automatically copy unchanged source files.
-        if previous.is_some()
-            && previous_bundle != &bundle
-            && previous_bundle.join("input.json").is_file()
-        {
-            let mut input = crate::records::run_inputs::read_input(previous_bundle)?;
-            let mut upstream = input.upstream.clone();
-            for reference in &mut upstream {
-                reference.bundle = crate::records::run_inputs::relative(
-                    &bundle.canonicalize()?,
-                    &previous_bundle.join(&reference.bundle).canonicalize()?,
-                )?
-                .into();
-            }
-            if bundle.join("input.json").is_file() {
-                let current = crate::records::run_inputs::read_input(&bundle)?;
-                for dependency in &current.upstream {
-                    if !upstream.contains(dependency) {
-                        upstream.push(dependency.clone());
-                    }
-                }
-            }
-            if !upstream.is_empty() {
-                input.upstream = upstream;
-            }
-            if input.source.is_some() {
-                input.origin_run = Some(crate::records::run_inputs::relative(
-                    &bundle.canonicalize()?,
-                    &previous_bundle.canonicalize()?,
-                )?);
-            } else if let Some(previous) =
-                crate::records::analysis_store::submitted_input(previous_bundle)
-            {
-                basecraft_io::write_atomic(&bundle.join(previous.file_name().unwrap()), |w| {
-                    std::io::copy(&mut std::fs::File::open(&previous)?, w)?;
-                    Ok(())
-                })?;
-            }
-            crate::records::run_inputs::write_input(&bundle, &input)?;
-        }
-        let retain =
-            |path: &Path, hash: &str, revision: String, name: String| -> Result<ArtifactRevision> {
-                let bytes = std::fs::read(path)?;
-                basecraft_io::counters::record_read(path, bytes.len() as u64);
-                if basecraft_io::hash_bytes(&bytes) != hash {
-                    return Err(changed_on_disk(path));
-                }
-                let relative = format!("artifacts/{}", hash.trim_start_matches("b3:"));
-                let dest = bundle.join(&relative);
-                if !dest.exists() {
-                    basecraft_io::write_atomic(&dest, |w| w.write_all(&bytes))?;
-                } else if basecraft_io::hash_file(&dest)? != hash {
-                    return Err(damaged(dest, "retained artifact hash differs"));
-                }
-                Ok(ArtifactRevision {
-                    id: revision,
-                    logical_name: name,
-                    hash: hash.into(),
-                    size: bytes.len() as u64,
-                    retained: Some(relative),
-                    reference: None,
-                })
-            };
-        let mut inputs = Vec::new();
-        let unsaved = || {
-            self.unsaved
-                .iter()
-                .chain(self.pending)
-                .filter(|e| e.doc == self.key)
-        };
-        for event in unsaved().filter(|e| matches!(e.op, Op::Open { .. })) {
-            for (key, hash) in &event.result.hashes {
-                inputs.push(ArtifactRevision {
-                    id: format!("{}:input:{}", event.id, inputs.len()),
-                    logical_name: name(key),
-                    hash: hash.clone(),
-                    size: event
-                        .source
-                        .as_ref()
-                        .and_then(|source| source.files.iter().find(|file| file.path == *key))
-                        .map_or(0, |file| file.stamp.size),
-                    retained: None,
-                    reference: None,
-                });
-            }
-        }
-        for event in unsaved() {
-            if let Op::CreateSangerReview { review } | Op::SangerUpdate { review } = &event.op {
-                let source = crate::session::objects_dir(self.storage_root)
-                    .join(review.hash.trim_start_matches("b3:"));
-                inputs.push(retain(
-                    &source,
-                    &review.hash,
-                    format!("{}:review", event.id),
-                    "Sanger analysis record".into(),
-                )?);
-            }
-        }
-        let mut outputs = Vec::new();
-        for (key, hash) in &save.result.hashes {
-            let logical_name = if bound.is_some() {
-                crate::records::run_inputs::relative(
-                    &target.parent().unwrap_or(Path::new(".")).canonicalize()?,
-                    &self.root.join(key).canonicalize()?,
-                )?
-            } else {
-                name(key)
-            };
-            outputs.push(ArtifactRevision {
-                id: format!("{}:output:{}", save.id, outputs.len()),
-                logical_name,
-                hash: hash.clone(),
-                size: save
-                    .source
-                    .as_ref()
-                    .and_then(|source| source.files.iter().find(|file| file.path == *key))
-                    .map_or(0, |file| file.stamp.size),
-                retained: None,
-                reference: None,
-            });
-        }
-        // Records use logical names and anonymous agents. The recovery
-        // journal keeps exact paths; those paths are not portable.
-        let mut events: Vec<_> = unsaved().cloned().collect();
-        // A save's own record is staged with its history, before the journal append.
-        if !events.iter().any(|event| event.id == save.id) {
-            events.push(save.clone());
-        }
-        for event in &mut events {
-            event.doc = name(&target.to_string_lossy());
-            if let Some(source) = &mut event.source {
-                source.root = PathBuf::from(".");
-                for file in &mut source.files {
-                    file.path = name(&file.path);
-                }
-            }
-            if let Op::Open { path } | Op::Save { path, .. } = &mut event.op {
-                path.clone_from(&event.doc);
-            }
-            portable(event);
-        }
+        let inputs = self.inputs(&bundle)?;
+        let outputs = self.outputs(target, save, bound.is_some())?;
+        let events = self.portable_events(target, save);
         let mut current = self.effective.clone();
-        events.iter_mut().for_each(portable);
         for activity in &mut current {
             redact_operation_paths(&mut activity.operation);
         }
         // The record lists only what changed against its parent: edits that
         // now take effect, and parent edits undone since.
-        let parent_effective: Vec<String> = match &previous {
-            None => Vec::new(),
-            Some(parent) => match self.known.iter().flatten().find(|(id, _)| *id == parent.id) {
-                Some((_, ids)) => ids.clone(),
-                None => {
-                    crate::records::provenance::SavedHistory::read(previous_bundle, parent.clone())?
-                        .effective
-                        .into_iter()
-                        .map(|edit| edit.id)
-                        .collect()
-                }
-            },
-        };
+        let parent_effective = self.parent_effective(previous.as_ref(), &previous_bundle)?;
         let current_ids: Vec<String> = current.iter().map(|edit| edit.id.clone()).collect();
         let now: std::collections::HashSet<_> = current_ids.iter().collect();
         let before: std::collections::HashSet<_> = parent_effective.iter().collect();
@@ -373,6 +149,238 @@ impl History<'_> {
             write,
             effective: current_ids,
         })
+    }
+
+    /// The bundle holding the record this save follows, and that record: the
+    /// latest in `bundle`, or else in the bundle the document was opened from.
+    /// None when the latest record belongs to another session and another
+    /// file than the one this session opened.
+    fn parent(&self, bundle: &Path) -> Result<(PathBuf, Option<Publication>)> {
+        let source_bundle = self.origin_bundle.to_path_buf();
+        let mut previous_bundle = if bundle.join("manifest.json").exists() {
+            bundle.to_path_buf()
+        } else {
+            source_bundle.clone()
+        };
+        let mut previous = crate::records::provenance::latest(&previous_bundle)?.map(|(p, _)| p);
+        // A newly allocated output-support record is not the accepted document
+        // history. Prefer the opened origin when the writer has just bound one.
+        if previous_bundle != source_bundle
+            && previous
+                .as_ref()
+                .is_some_and(|p| p.events.is_empty() && p.effective_edits.is_empty())
+            && let Some((publication, _)) = crate::records::provenance::latest(&source_bundle)?
+        {
+            previous_bundle = source_bundle;
+            previous = Some(publication);
+        }
+        // The open of this session, not one in the saved history.
+        let baseline_hash = self
+            .unsaved
+            .iter()
+            .chain(self.pending)
+            .chain(self.recorded[1])
+            .find(|e| e.doc == self.key && matches!(e.op, Op::Open { .. }))
+            .and_then(|e| e.result.hashes.first())
+            .map(|(_, hash)| hash);
+        let previous = previous.filter(|p| {
+            p.session == self.session || p.outputs.first().map(|a| &a.hash) == baseline_hash
+        });
+        Ok((previous_bundle, previous))
+    }
+
+    /// Save As: copy the parent bundle's records and artifacts into `bundle`.
+    /// A species workspace's records name generated files kept in the parent
+    /// bundle; those are copied too, checked by hash.
+    fn copy_history(&self, previous_bundle: &Path, bundle: &Path) -> Result<()> {
+        for subdirectory in ["artifacts", "records"] {
+            copy_ancestry(
+                &previous_bundle.join(subdirectory),
+                &bundle.join(subdirectory),
+                0,
+            )?;
+        }
+        if !self.delimitation {
+            return Ok(());
+        }
+        for entry in std::fs::read_dir(previous_bundle.join("records"))? {
+            let entry = entry?;
+            let record: Publication = basecraft_protocol::records::decode(
+                &crate::records::provenance::read_record(&entry.path())?,
+            )?;
+            for output in record.outputs {
+                let Some(name) = output.retained else {
+                    continue;
+                };
+                if Path::new(&name)
+                    .components()
+                    .any(|c| !matches!(c, std::path::Component::Normal(_)))
+                {
+                    return Err(invalid("Unsafe retained species output path"));
+                }
+                let destination = bundle.join(&name);
+                if destination.is_file() {
+                    continue;
+                }
+                let source = previous_bundle.join(&name);
+                if basecraft_io::hash_file(&source)? != output.hash {
+                    return Err(invalid("Retained species output changed"));
+                }
+                if let Some(parent) = destination.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                basecraft_io::write_atomic(&destination, |w| {
+                    std::io::copy(&mut std::fs::File::open(&source)?, w)?;
+                    Ok(())
+                })?;
+                if basecraft_io::hash_file(&destination)? != output.hash {
+                    return Err(invalid("Species output changed during Save As"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The files this save's record names as inputs: those the document was
+    /// opened from, and the Sanger reviews it created or changed, kept in
+    /// `bundle`.
+    fn inputs(&self, bundle: &Path) -> Result<Vec<ArtifactRevision>> {
+        let retain =
+            |path: &Path, hash: &str, revision: String, name: String| -> Result<ArtifactRevision> {
+                let bytes = std::fs::read(path)?;
+                basecraft_io::counters::record_read(path, bytes.len() as u64);
+                if basecraft_io::hash_bytes(&bytes) != hash {
+                    return Err(changed_on_disk(path));
+                }
+                let relative = format!("artifacts/{}", hash.trim_start_matches("b3:"));
+                let dest = bundle.join(&relative);
+                if !dest.exists() {
+                    basecraft_io::write_atomic(&dest, |w| w.write_all(&bytes))?;
+                } else if basecraft_io::hash_file(&dest)? != hash {
+                    return Err(damaged(dest, "retained artifact hash differs"));
+                }
+                Ok(ArtifactRevision {
+                    id: revision,
+                    logical_name: name,
+                    hash: hash.into(),
+                    size: bytes.len() as u64,
+                    retained: Some(relative),
+                    reference: None,
+                })
+            };
+        let mut inputs = Vec::new();
+        for event in self
+            .unsaved_events()
+            .filter(|e| matches!(e.op, Op::Open { .. }))
+        {
+            for (key, hash) in &event.result.hashes {
+                inputs.push(ArtifactRevision {
+                    id: format!("{}:input:{}", event.id, inputs.len()),
+                    logical_name: name(key),
+                    hash: hash.clone(),
+                    size: file_size(event, key),
+                    retained: None,
+                    reference: None,
+                });
+            }
+        }
+        for event in self.unsaved_events() {
+            if let Op::CreateSangerReview { review } | Op::SangerUpdate { review } = &event.op {
+                let source = crate::session::objects_dir(self.storage_root)
+                    .join(review.hash.trim_start_matches("b3:"));
+                inputs.push(retain(
+                    &source,
+                    &review.hash,
+                    format!("{}:review", event.id),
+                    "Sanger analysis record".into(),
+                )?);
+            }
+        }
+        Ok(inputs)
+    }
+
+    /// The files `save` wrote, named by file name, or for a result bound to
+    /// a run by their path from the target's folder.
+    fn outputs(
+        &self,
+        target: &Path,
+        save: &LogEntry,
+        bound: bool,
+    ) -> Result<Vec<ArtifactRevision>> {
+        let mut outputs = Vec::new();
+        for (key, hash) in &save.result.hashes {
+            let logical_name = if bound {
+                crate::records::run_inputs::relative(
+                    &target.parent().unwrap_or(Path::new(".")).canonicalize()?,
+                    &self.root.join(key).canonicalize()?,
+                )?
+            } else {
+                name(key)
+            };
+            outputs.push(ArtifactRevision {
+                id: format!("{}:output:{}", save.id, outputs.len()),
+                logical_name,
+                hash: hash.clone(),
+                size: file_size(save, key),
+                retained: None,
+                reference: None,
+            });
+        }
+        Ok(outputs)
+    }
+
+    /// The document's journal entries not yet in a record.
+    fn unsaved_events(&self) -> impl Iterator<Item = &LogEntry> {
+        self.unsaved
+            .iter()
+            .chain(self.pending)
+            .filter(|e| e.doc == self.key)
+    }
+
+    /// The events since the last save and `save` itself, with file names in
+    /// place of paths and no host or user. The recovery journal keeps exact
+    /// paths; those paths are not portable.
+    fn portable_events(&self, target: &Path, save: &LogEntry) -> Vec<LogEntry> {
+        let mut events: Vec<_> = self.unsaved_events().cloned().collect();
+        // A save's own record is staged with its history, before the journal append.
+        if !events.iter().any(|event| event.id == save.id) {
+            events.push(save.clone());
+        }
+        for event in &mut events {
+            event.doc = name(&target.to_string_lossy());
+            if let Some(source) = &mut event.source {
+                source.root = PathBuf::from(".");
+                for file in &mut source.files {
+                    file.path = name(&file.path);
+                }
+            }
+            if let Op::Open { path } | Op::Save { path, .. } = &mut event.op {
+                path.clone_from(&event.doc);
+            }
+            portable(event);
+        }
+        events
+    }
+
+    /// The ids of the edits in effect in the parent record.
+    fn parent_effective(
+        &self,
+        previous: Option<&Publication>,
+        previous_bundle: &Path,
+    ) -> Result<Vec<String>> {
+        let Some(parent) = previous else {
+            return Ok(Vec::new());
+        };
+        if let Some((_, ids)) = self.known.iter().flatten().find(|(id, _)| *id == parent.id) {
+            return Ok(ids.clone());
+        }
+        Ok(
+            crate::records::provenance::SavedHistory::read(previous_bundle, parent.clone())?
+                .effective
+                .into_iter()
+                .map(|edit| edit.id)
+                .collect(),
+        )
     }
 
     /// Add a captured input revision and its recorded producing activity to an
@@ -524,6 +532,53 @@ impl History<'_> {
         run.bind(self.project, path, &output_hash)?;
         Ok(())
     }
+}
+
+/// Save As keeps a live reference to the contributing run's input decisions,
+/// rather than copying unchanged source files: `bundle`'s input record names
+/// the previous bundle's as its origin, or for a generated input copies the
+/// kept bytes.
+fn link_save_as_input(previous_bundle: &Path, bundle: &Path) -> Result<()> {
+    let mut input = crate::records::run_inputs::read_input(previous_bundle)?;
+    let mut upstream = input.upstream.clone();
+    for reference in &mut upstream {
+        reference.bundle = crate::records::run_inputs::relative(
+            &bundle.canonicalize()?,
+            &previous_bundle.join(&reference.bundle).canonicalize()?,
+        )?
+        .into();
+    }
+    if bundle.join("input.json").is_file() {
+        let current = crate::records::run_inputs::read_input(bundle)?;
+        for dependency in &current.upstream {
+            if !upstream.contains(dependency) {
+                upstream.push(dependency.clone());
+            }
+        }
+    }
+    input.upstream = upstream;
+    if input.source.is_some() {
+        input.origin_run = Some(crate::records::run_inputs::relative(
+            &bundle.canonicalize()?,
+            &previous_bundle.canonicalize()?,
+        )?);
+    } else if let Some(previous) = crate::records::analysis_store::submitted_input(previous_bundle)
+    {
+        basecraft_io::write_atomic(&bundle.join(previous.file_name().unwrap()), |w| {
+            std::io::copy(&mut std::fs::File::open(&previous)?, w)?;
+            Ok(())
+        })?;
+    }
+    crate::records::run_inputs::write_input(bundle, &input)
+}
+
+/// The size a journal event's source records for file `key`, or 0.
+fn file_size(event: &LogEntry, key: &str) -> u64 {
+    event
+        .source
+        .as_ref()
+        .and_then(|source| source.files.iter().find(|file| file.path == *key))
+        .map_or(0, |file| file.stamp.size)
 }
 
 /// A path's file name, for records that must not carry local paths.
