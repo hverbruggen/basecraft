@@ -6,6 +6,7 @@
 //! [`ChangeSet`] and the issues found. Callers show it for review and apply
 //! it as one `metadata.edit` operation, so GUI, CLI, Python and MCP edits
 //! share undo, replay and history.
+use crate::error::{damaged, invalid, unsupported};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -18,7 +19,7 @@ use basecraft_protocol::metadata::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::error::invalid;
+use crate::Error;
 
 use crate::{Result, Session};
 pub use basecraft_docs::metadata::{
@@ -103,38 +104,31 @@ pub(crate) fn load_with(
     let (value, writer) = basecraft_protocol::records::decode_written::<serde_json::Value>(
         read(manifest_path)?.0.bytes(),
     )
-    .map_err(|e| crate::Error::Damaged {
-        path: manifest_path.to_path_buf(),
-        detail: e.to_string(),
-    })?;
+    .map_err(|e| damaged(manifest_path, e.to_string()))?;
     if value["format"] != FORMAT {
-        return Err(crate::Error::Damaged {
-            path: manifest_path.to_path_buf(),
-            detail: format!("{MANIFEST} is not a Basecraft metadata manifest"),
-        });
+        return Err(damaged(
+            manifest_path,
+            format!("{MANIFEST} is not a Basecraft metadata manifest"),
+        ));
     }
     let version = value["version"].as_u64().unwrap_or(0);
     if version != u64::from(METADATA_VERSION) {
-        return Err(crate::Error::Unsupported(
+        return Err(Error::Unsupported(
             basecraft_protocol::records::other_format(&writer, version, METADATA_VERSION),
         ));
     }
-    let manifest: Manifest = basecraft_protocol::records::convert(value, &writer).map_err(|e| {
-        crate::Error::Damaged {
-            path: manifest_path.to_path_buf(),
-            detail: format!("{MANIFEST} is malformed: {e}"),
-        }
-    })?;
+    let manifest: Manifest = basecraft_protocol::records::convert(value, &writer)
+        .map_err(|e| damaged(manifest_path, format!("{MANIFEST} is malformed: {e}")))?;
     let mut notices = Vec::new();
     let mut read = |entry: &TableEntry, expected: &str| -> Result<basecraft_io::table::Sheet> {
         if entry.file != expected {
-            return Err(crate::Error::Damaged {
-                path: manifest_path.to_path_buf(),
-                detail: format!(
+            return Err(damaged(
+                manifest_path,
+                format!(
                     "{MANIFEST} names table {} where {expected} was expected",
                     entry.file
                 ),
-            });
+            ));
         }
         let (source, hash) = read(&dir.join(expected))?;
         let bytes = source.bytes();
@@ -143,10 +137,8 @@ pub(crate) fn load_with(
                 "{expected} was changed outside Basecraft since the last save; it was read and checked against its column types"
             ));
         }
-        basecraft_io::table::read_tsv(bytes).map_err(|e| crate::Error::Damaged {
-            path: dir.join(expected),
-            detail: format!("{expected}: {e}"),
-        })
+        basecraft_io::table::read_tsv(bytes)
+            .map_err(|e| damaged(dir.join(expected), format!("{expected}: {e}")))
     };
     let tables = &manifest.tables;
     let specimens = read(&tables.specimens, SPECIMENS)?;
@@ -158,20 +150,22 @@ pub(crate) fn load_with(
         .chain(columns.iter().map(|c| c.name.as_str()))
         .collect();
     if specimens.headers != expected {
-        return Err(crate::Error::Damaged {
-            path: dir.join(SPECIMENS),
-            detail: format!(
+        return Err(damaged(
+            dir.join(SPECIMENS),
+            format!(
                 "the columns of {SPECIMENS} differ from those declared in {MANIFEST}; import the edited table as a spreadsheet instead"
             ),
-        });
+        ));
     }
     let mut rows = Vec::with_capacity(specimens.rows.len());
     for (line, fields) in specimens.rows.iter().enumerate() {
         let mut cells = BTreeMap::new();
         for (column, text) in columns.iter().zip(&fields[1..]) {
-            let cell = parse_cell(column, text).map_err(|e| crate::Error::Damaged {
-                path: dir.join(SPECIMENS),
-                detail: format!("{SPECIMENS} line {}: {e}", line + 2),
+            let cell = parse_cell(column, text).map_err(|e| {
+                damaged(
+                    dir.join(SPECIMENS),
+                    format!("{SPECIMENS} line {}: {e}", line + 2),
+                )
             })?;
             if let Some(cell) = cell {
                 cells.insert(column.name.clone(), cell);
@@ -184,10 +178,10 @@ pub(crate) fn load_with(
     }
     let check = |sheet: &basecraft_io::table::Sheet, header: &[&str], file: &str| {
         if sheet.headers != header {
-            return Err(crate::Error::Damaged {
-                path: dir.join(file),
-                detail: format!("{file} has unexpected columns"),
-            });
+            return Err(damaged(
+                dir.join(file),
+                format!("{file} has unexpected columns"),
+            ));
         }
         Ok(())
     };
@@ -205,9 +199,11 @@ pub(crate) fn load_with(
                 submitted_name: optional(&f[2]),
                 taxid: optional(&f[3])
                     .map(|t| {
-                        t.parse().map_err(|_| crate::Error::Damaged {
-                            path: dir.join(TAXA),
-                            detail: format!("{TAXA} line {}: {t:?} is not a TaxID", line + 2),
+                        t.parse().map_err(|_| {
+                            damaged(
+                                dir.join(TAXA),
+                                format!("{TAXA} line {}: {t:?} is not a TaxID", line + 2),
+                            )
                         })
                     })
                     .transpose()?,
@@ -227,10 +223,10 @@ pub(crate) fn load_with(
                 date: optional(&f[4])
                     .map(|d| {
                         basecraft_protocol::metadata::PartialDate::parse(&d).map_err(|e| {
-                            crate::Error::Damaged {
-                                path: dir.join(IDENTIFICATIONS),
-                                detail: format!("{IDENTIFICATIONS} line {}: {e}", line + 2),
-                            }
+                            damaged(
+                                dir.join(IDENTIFICATIONS),
+                                format!("{IDENTIFICATIONS} line {}: {e}", line + 2),
+                            )
                         })
                     })
                     .transpose()?,
@@ -257,7 +253,7 @@ pub(crate) fn load_with(
         partitions: manifest.partitions,
         extra: manifest.extra,
     };
-    model::validate(&metadata).map_err(|e| invalid(e.0))?;
+    model::validate(&metadata).map_err(|e| damaged(manifest_path, e.0))?;
     Ok(OpenedMetadata { metadata, notices })
 }
 
@@ -359,7 +355,7 @@ pub fn create(project: &Path) -> Result<PathBuf> {
     let manifest = manifest_path(project);
     let paths = files(&manifest);
     if paths.iter().any(|p| p.exists()) {
-        return Err(invalid(format!(
+        return Err(Error::OutputConflict(format!(
             "{} already has metadata files; open them instead",
             project.join(DIRECTORY).display()
         )));
@@ -749,16 +745,17 @@ pub fn plan_headers(
     pattern: &HeaderPattern,
     options: ImportOptions,
 ) -> Result<Plan> {
+    let choose = |what: &str| Error::MissingChoice(what.into());
     if pattern.separator.is_empty() {
-        return Err(invalid("choose a field separator"));
+        return Err(choose("choose a field separator"));
     }
     if !pattern.fields.contains(&FieldTarget::Specimen) {
-        return Err(invalid("choose which header field holds the specimen ID"));
+        return Err(choose("choose which header field holds the specimen ID"));
     }
     let mut planner = Planner::new(meta, options, Some(document.into()));
     for (index, (record, header)) in headers.iter().enumerate() {
         let fields = basecraft_docs::metadata::header_fields(header, &pattern.separator)
-            .ok_or_else(|| invalid("choose a field separator"))?;
+            .ok_or_else(|| choose("choose a field separator"))?;
         let mut source = SourceRow {
             row: index + 1,
             specimen: String::new(),
@@ -840,7 +837,9 @@ pub fn plan_sheet(
         .map(|(h, _)| h)
         .collect();
     let [key] = keys.as_slice() else {
-        return Err(invalid("map exactly one column to the specimen ID"));
+        return Err(Error::MissingChoice(
+            "map exactly one column to the specimen ID".into(),
+        ));
     };
     let key = sheet
         .column(key)
@@ -1045,7 +1044,7 @@ pub fn write_template(
 /// Apply a reviewed change set as one undoable `metadata.edit`.
 pub fn apply_plan(session: &mut Session, doc: crate::DocId, changes: ChangeSet) -> Result<()> {
     if changes.is_empty() {
-        return Err(invalid("the import changes nothing"));
+        return Err(Error::NothingTo("import"));
     }
     session.apply(
         doc,
@@ -1196,7 +1195,7 @@ pub fn document_key(project: &Path, path: &Path) -> Result<String> {
     relative
         .to_str()
         .map(str::to_string)
-        .ok_or_else(|| invalid("file names must be UTF-8"))
+        .ok_or_else(|| unsupported("file names must be UTF-8"))
 }
 
 fn checked_metadata(session: &Session, doc: crate::DocId) -> Result<&ProjectMetadata> {
@@ -1346,7 +1345,7 @@ pub fn tip_label_style(
     }
     // The table's records are kept in its project, so it is read there.
     let mut reader = Session::unlogged(project.root()).in_project(Some(project.clone()));
-    let metadata = open(&mut reader, false)?.ok_or(crate::Error::NoMetadata)?;
+    let metadata = open(&mut reader, false)?.ok_or(Error::NoMetadata)?;
     let source = consumer_source(&reader, metadata)?;
     verify_label_owner(tree.style(), &source)?;
     let request = ConsumerRequest::Labels {
@@ -1408,7 +1407,7 @@ pub fn label_field(text: &str) -> Result<basecraft_protocol::metadata::LabelFiel
             Some(name) if !name.trim().is_empty() => LabelField::Column {
                 name: name.trim().to_owned(),
             },
-            _ => return Err(crate::Error::NotALabelField(other.to_owned())),
+            _ => return Err(Error::NotALabelField(other.to_owned())),
         },
     })
 }
@@ -1421,8 +1420,7 @@ pub fn consumer_plan(
     use basecraft_docs::metadata_consumers;
     use basecraft_protocol::{Op, metadata::MetadataEdit};
     let meta = checked_metadata(session, doc)?;
-    let metadata_hash =
-        basecraft_io::hash_bytes(&serde_json::to_vec(meta).map_err(|e| invalid(e.to_string()))?);
+    let metadata_hash = basecraft_io::hash_bytes(&serde_json::to_vec(meta)?);
     let (workspace, links, promotion) = match request {
         ConsumerRequest::Partitions => {
             return Ok(
@@ -1481,11 +1479,12 @@ pub fn consumer_plan(
     let mut reader = Session::unlogged(session.root());
     let work_doc = reader.open(&session.root().join(&key))?;
     if !reader.is_delimitation(work_doc) {
-        return Err(invalid("choose a delimitation workspace"));
+        return Err(Error::MissingChoice(
+            "choose a delimitation workspace".into(),
+        ));
     }
     let work = reader.delimitation(work_doc)?;
-    let workspace_hash =
-        basecraft_io::hash_bytes(&serde_json::to_vec(work).map_err(|e| invalid(e.to_string()))?);
+    let workspace_hash = basecraft_io::hash_bytes(&serde_json::to_vec(work)?);
     let (target, operation) = if let Some(links) = links {
         for roster in links.values() {
             if !meta.specimens.rows.iter().any(|s| &s.id == roster) {
@@ -1506,10 +1505,14 @@ pub fn consumer_plan(
         )
     } else {
         let stored = work.exchange_fields.get(basecraft_docs::delimitation::METADATA_REFERENCE)
-            .ok_or_else(|| invalid("Workspace roster links have no metadata owner; explicitly link them to this project before promoting"))?;
-        let stored: basecraft_protocol::provenance::InputReference =
-            serde_json::from_str(stored)
-                .map_err(|e| invalid(format!("Invalid workspace metadata reference: {e}")))?;
+            .ok_or_else(|| Error::NotReady("Workspace roster links have no metadata owner; explicitly link them to this project before promoting".into()))?;
+        let stored: basecraft_protocol::provenance::InputReference = serde_json::from_str(stored)
+            .map_err(|e| {
+            damaged(
+                session.root().join(&key),
+                format!("Invalid workspace metadata reference: {e}"),
+            )
+        })?;
         verify_consumer_owner(&stored, &consumer_source(session, doc)?)?;
         let (hypothesis, id) = promotion.ok_or_else(|| invalid("missing partition source"))?;
         let mut partition = metadata_consumers::project_partition(meta, work, hypothesis, id)
@@ -1528,8 +1531,7 @@ pub fn consumer_plan(
             .insert("source_workspace".into(), serde_json::json!(key));
         partition.provenance.parameters.insert(
             "metadata_source".into(),
-            serde_json::to_value(consumer_source(session, doc)?)
-                .map_err(|e| invalid(e.to_string()))?,
+            serde_json::to_value(consumer_source(session, doc)?)?,
         );
         (
             session.doc_key(doc)?.to_string(),
@@ -1554,17 +1556,21 @@ pub fn consumer_source(
     doc: crate::DocId,
 ) -> Result<basecraft_protocol::provenance::InputReference> {
     checked_metadata(session, doc)?;
-    let (_, stamp, hash) = session
-        .saved_source(doc)?
-        .ok_or_else(|| invalid("Save the specimen metadata before binding consumers"))?;
+    let (_, stamp, hash) = session.saved_source(doc)?.ok_or_else(|| {
+        Error::NotReady("Save the specimen metadata before binding consumers".into())
+    })?;
     let path = session.root().join(session.doc_key(doc)?);
-    let (_, history) = crate::records::provenance::saved_history(&path, session.project()).map_err(|_| invalid("Metadata owner evidence is unavailable; save its document history before binding consumers"))?;
+    let (_, history) = crate::records::provenance::saved_history(&path, session.project())
+        .map_err(|_| Error::NotReady("Metadata owner evidence is unavailable; save its document history before binding consumers".into()))?;
     let event = history
         .events
         .iter()
         .find(|e| matches!(e.op, basecraft_protocol::Op::Open { .. }))
         .ok_or_else(|| {
-            invalid("Metadata owner Open activity is unavailable; restore its provenance")
+            damaged(
+                &path,
+                "Metadata owner Open activity is unavailable; restore its provenance",
+            )
         })?;
     Ok(basecraft_protocol::provenance::InputReference {
         path: session.doc_key(doc)?.into(),
@@ -1586,7 +1592,9 @@ pub fn verify_consumer_owner(
         .and_then(serde_json::Value::as_str)
         .filter(|s| !s.is_empty())
         .ok_or_else(|| {
-            invalid("Stored metadata owner is missing; explicitly rebind the consumer")
+            Error::NotReady(
+                "Stored metadata owner is missing; explicitly rebind the consumer".into(),
+            )
         })?;
     if current.path != expected.path
         || current
@@ -1595,8 +1603,8 @@ pub fn verify_consumer_owner(
             .and_then(serde_json::Value::as_str)
             != Some(owner)
     {
-        return Err(invalid(
-            "Consumer belongs to different project metadata; identical specimen IDs do not establish ownership. Explicitly relink it to this project.",
+        return Err(Error::NotReady(
+            "Consumer belongs to different project metadata; identical specimen IDs do not establish ownership. Explicitly relink it to this project.".into(),
         ));
     }
     Ok(())
@@ -1612,6 +1620,6 @@ pub fn verify_label_owner(
         return Ok(());
     };
     let expected = serde_json::from_value(snapshot["metadata_source"].clone())
-        .map_err(|_| invalid("Label snapshot has no metadata owner; choose Original labels before explicitly composing a new snapshot"))?;
+        .map_err(|_| Error::NotReady("Label snapshot has no metadata owner; choose Original labels before explicitly composing a new snapshot".into()))?;
     verify_consumer_owner(&expected, source)
 }

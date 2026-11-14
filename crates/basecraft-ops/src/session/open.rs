@@ -1,6 +1,7 @@
 //! Document loading and baseline tracking.
 use super::Session;
 use super::{DocId, Op, OpResult, Path, PathBuf, Result, Slot, files, invalid};
+use crate::error::{changed_on_disk, damaged, unsupported};
 
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct SavedMark(pub(super) Option<String>);
@@ -129,9 +130,7 @@ impl Session {
                 .is_some_and(|entry| matches!(entry.op, Op::Open { .. }))
                 && !slot.baseline_logged
             {
-                return Err(crate::Error::ChangedOnDisk {
-                    path: self.resolve(&slot.key),
-                });
+                return Err(changed_on_disk(self.resolve(&slot.key)));
             }
             if self.log.is_some() {
                 if let Some(entry) = self.recovery_checkpoint(id)? {
@@ -176,11 +175,8 @@ impl Session {
         recovery_directory(&directory)?;
         let stage = tempfile::tempdir_in(&directory)?;
         let key = &self.docs[id.0].key;
-        let local =
-            crate::records::replay::scratch_key(key).map_err(|detail| crate::Error::Damaged {
-                path: self.storage_root.clone(),
-                detail,
-            })?;
+        let local = crate::records::replay::scratch_key(key)
+            .map_err(|detail| damaged(self.storage_root.clone(), detail))?;
         let target = stage.path().join(&local);
         let original = self.resolve(key);
         if let Some(parent) = target.parent() {
@@ -208,20 +204,15 @@ impl Session {
         )?;
         let mut hashes = Vec::new();
         for (path, hash) in written {
-            let name = basecraft_platform::files::inside(&path, stage.path()).ok_or_else(|| {
-                crate::Error::Unsupported("Recovery writer escaped its staging folder".into())
-            })?;
+            let name = basecraft_platform::files::inside(&path, stage.path())
+                .ok_or_else(|| unsupported("Recovery writer escaped its staging folder"))?;
             let name = if Path::new(key).is_absolute() {
                 original.parent().expect("source parent").join(
                     basecraft_platform::files::inside(
                         &path,
                         target.parent().expect("checkpoint parent"),
                     )
-                    .ok_or_else(|| {
-                        crate::Error::Unsupported(
-                            "Recovery writer escaped its document folder".into(),
-                        )
-                    })?,
+                    .ok_or_else(|| unsupported("Recovery writer escaped its document folder"))?,
                 )
             } else {
                 name
@@ -256,10 +247,7 @@ impl Session {
             files::Loaded::Tree(opened) => opened.doc.restore_node_ids(&source.node_ids),
             _ => Ok(()),
         };
-        result.map_err(|error| crate::Error::Damaged {
-            path: self.root.clone(),
-            detail: error.to_string(),
-        })
+        result.map_err(|error| damaged(self.root.clone(), error.to_string()))
     }
 
     pub(super) fn note_changed_on_disk(&mut self, id: DocId) {
@@ -411,7 +399,7 @@ impl Session {
         if let Some((path, stamp, hash)) = &slot.saved_target {
             let current = crate::records::input_evidence::stamp(path)?;
             if current != *stamp {
-                return Err(crate::Error::ChangedOnDisk { path: path.clone() });
+                return Err(changed_on_disk(path.clone()));
             }
             return Ok(Some((path.clone(), current, hash.clone())));
         }

@@ -782,10 +782,6 @@ impl qobject::TreeController {
                 Ok(())
             }
             Err(msg) => {
-                let msg = msg
-                    .strip_prefix("invalid operation: ")
-                    .unwrap_or(&msg)
-                    .to_string();
                 self.as_mut().fail(&msg);
                 Err(msg)
             }

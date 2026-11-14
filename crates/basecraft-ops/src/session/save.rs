@@ -2,6 +2,7 @@
 use super::SaveCheck;
 use super::{DerivedTarget, DocId, Error, Op, OpResult, Path, Result, files, invalid};
 use super::{SaveDecision, SaveOutcome, Session};
+use crate::error::{changed_on_disk, damaged};
 
 use super::SaveWarning;
 use crate::records::input_evidence::SavePolicy;
@@ -451,7 +452,7 @@ impl Session {
         }
         for (source, stamp) in stamps {
             if crate::records::save_guard::change_stamp(&source)? != stamp {
-                return Err(Error::ChangedOnDisk { path: source });
+                return Err(changed_on_disk(source));
             }
         }
         self.check_absent_target(id, target)?;
@@ -544,13 +545,13 @@ impl Session {
             self.docs[id.0].saved_target = Some((target.to_path_buf(), stamp, expected[0].clone()));
         }
         if main_written && now.as_ref() != before {
-            return Err(Error::Damaged {
-                path: target.into(),
-                detail: format!(
+            return Err(damaged(
+                target,
+                format!(
                     "data saved; provenance or sidecar incomplete: {error}. Recovery remains at {}",
                     self.storage_root.display()
                 ),
-            });
+            ));
         }
         Err(error)
     }
@@ -597,9 +598,7 @@ impl Session {
     ) -> Result<()> {
         for key in &self.docs[id.0].absent_sidecars {
             if self.resolve(key).exists() {
-                return Err(Error::ChangedOnDisk {
-                    path: self.resolve(key),
-                });
+                return Err(changed_on_disk(self.resolve(key)));
             }
         }
         for (key, hash) in &self.docs[id.0].accepted_hashes {
@@ -608,7 +607,7 @@ impl Session {
                 checked.filter(|(path, _)| crate::records::save_guard::same_target(path, &source))
             {
                 if actual != hash {
-                    return Err(Error::ChangedOnDisk { path: source });
+                    return Err(changed_on_disk(source));
                 }
             } else {
                 crate::records::save_guard::check_hash(&source, hash)?;
@@ -732,13 +731,13 @@ impl Session {
             self.recorded_save(id, target, &entry, effective);
         }
         if let Some(error) = history_error {
-            return Err(Error::Damaged {
-                path: target.into(),
-                detail: format!(
+            return Err(damaged(
+                target,
+                format!(
                     "data saved; history incomplete: {error}. Recovery remains at {}",
                     self.storage_root.display()
                 ),
-            });
+            ));
         }
         Ok(())
     }
@@ -895,9 +894,7 @@ impl Session {
         if let Some(expected) = expected
             && crate::records::input_evidence::stamp(target)? != *expected
         {
-            return Err(Error::ChangedOnDisk {
-                path: target.into(),
-            });
+            return Err(changed_on_disk(target));
         }
         Ok(())
     }

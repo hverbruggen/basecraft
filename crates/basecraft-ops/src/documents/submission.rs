@@ -6,7 +6,7 @@ use basecraft_protocol::{DocState, Op};
 
 use super::Document;
 use crate::Result;
-use crate::error::invalid;
+use crate::error::{invalid, unsupported};
 use crate::files::Format;
 use crate::session::Inverse;
 
@@ -64,7 +64,7 @@ impl Document for Submission {
 
     fn revert(&mut self, inverse: &Inverse) -> Result<()> {
         let Inverse::Submission(undo) = inverse else {
-            return Err(invalid("undo of the wrong kind of edit"));
+            return Err(unsupported("undo of the wrong kind of edit"));
         };
         undo.undo(self);
         Ok(())

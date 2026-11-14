@@ -99,6 +99,11 @@
           "const": "missing_choice"
         },
         {
+          "description": "An earlier step has to happen first: save, export, review or relink.",
+          "type": "string",
+          "const": "not_ready"
+        },
+        {
           "description": "A setting the operation does not have.",
           "type": "string",
           "const": "unknown_setting"

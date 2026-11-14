@@ -1,5 +1,6 @@
 //! Current index behavior; protocol's central registry checks the wire goldens.
 use super::*;
+use crate::error::protocol;
 
 fn config(root: &Path) -> RegistryConfig {
     RegistryConfig {
@@ -53,7 +54,7 @@ fn index_mutation_failures_preserve_previous_file() {
     assert_eq!(load_index(&config).unwrap().active["plugin"], "digest");
     assert!(load_index(&config).unwrap().disabled.is_empty());
     let original = std::fs::read(&config.index).unwrap();
-    assert!(write_index(&config, |_| Err(Error::Protocol("refused".into()))).is_err());
+    assert!(write_index(&config, |_| Err(protocol("refused"))).is_err());
     assert_eq!(std::fs::read(&config.index).unwrap(), original);
     assert!(
         write_index(&config, |index| {

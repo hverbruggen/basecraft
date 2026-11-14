@@ -1,4 +1,5 @@
 //! Inspectable portable save history. No bundle content is ever executed.
+use crate::error::{damaged, limit, unsupported};
 use crate::{Result, error::invalid};
 use basecraft_protocol::{
     Actor, DocState, LogEntry, OpResult,
@@ -73,10 +74,7 @@ pub(crate) fn read_record_from_open(
 ) -> Result<Vec<u8>> {
     use std::io::Read as _;
     let limit = (*remaining).min(64 << 20).min(cap);
-    let too_long = || crate::Error::Limit {
-        what: "provenance record reading".into(),
-        limit,
-    };
+    let too_long = || crate::error::limit("provenance record reading", limit);
     if length > limit {
         return Err(too_long());
     }
@@ -224,10 +222,10 @@ pub fn verify_export(destination: &Path, hash: &str, receipt: &Path) -> Result<(
         || receipt.size != metadata.len()
         || basecraft_io::hash_file(destination)? != hash
     {
-        return Err(crate::Error::Damaged {
-            path: destination.to_path_buf(),
-            detail: "output_conflict: member ownership or bytes changed; repair refused".into(),
-        });
+        return Err(damaged(
+            destination,
+            "member ownership or bytes changed; repair refused",
+        ));
     }
     Ok(())
 }
@@ -280,16 +278,14 @@ pub fn latest(bundle: &Path) -> Result<Option<(Publication, String)>> {
     let pointer: basecraft_protocol::provenance::LatestRecord =
         basecraft_protocol::records::decode(&read_record(&manifest)?)?;
     if pointer.schema_version != 1 {
-        return Err(crate::Error::Unsupported(
-            "unsupported provenance schema version".into(),
-        ));
+        return Err(unsupported("unsupported provenance schema version"));
     }
     let (publication, hash) = read_publication(bundle, &pointer.id, &mut (64 << 20))?;
     if hash != pointer.hash {
-        return Err(crate::Error::Damaged {
-            path: record_path(bundle, &pointer.id)?,
-            detail: "the latest history record changed after it was saved".into(),
-        });
+        return Err(damaged(
+            record_path(bundle, &pointer.id)?,
+            "the latest history record changed after it was saved",
+        ));
     }
     Ok(Some((publication, hash)))
 }
@@ -401,10 +397,7 @@ fn ancestry(bundle: &Path, latest: Publication) -> Result<(Vec<Publication>, Vec
             continue;
         }
         if visited.len() > 10_000 {
-            return Err(crate::Error::Limit {
-                what: "history records".into(),
-                limit: 10_000,
-            });
+            return Err(limit("history records", 10_000));
         }
         let mut parents = std::collections::HashSet::new();
         let reads: Vec<_> = record
@@ -464,10 +457,7 @@ impl SavedHistory {
                 continue;
             }
             if records.len() > 10_000 {
-                return Err(crate::Error::Limit {
-                    what: "history records".into(),
-                    limit: 10_000,
-                });
+                return Err(limit("history records", 10_000));
             }
             let gap = |reason| HistoryGap {
                 record: link.id.clone(),
@@ -630,10 +620,7 @@ pub(crate) fn verify_records(bundle: &Path, current: &Publication) -> Result<Vec
                 let size = std::fs::metadata(&retained)?.len();
                 artifact_bytes = artifact_bytes.saturating_add(size);
                 if artifact_bytes > 8u64 << 30 {
-                    return Err(crate::Error::Limit {
-                        what: "ancestry artifact verification".into(),
-                        limit: 8 << 30,
-                    });
+                    return Err(limit("ancestry artifact verification", 8 << 30));
                 }
                 if size != artifact.size || basecraft_io::hash_file(&retained)? != artifact.hash {
                     issues.push(format!("{}: ancestor retained bytes differ", artifact.id));
@@ -669,10 +656,7 @@ fn stage_json(
 ) -> Result<()> {
     let bytes = basecraft_protocol::records::encode(value)?;
     if bytes.len() > 64 << 20 {
-        return Err(crate::Error::Limit {
-            what: "provenance record publication".into(),
-            limit: 64 << 20,
-        });
+        return Err(limit("provenance record publication", 64 << 20));
     }
     prepared.push(path, |w| w.write_all(&bytes))?;
     Ok(())
@@ -803,9 +787,7 @@ fn link_selected_inputs<'a>(
             continue;
         }
         if dependency.schema_version != 1 {
-            return Err(crate::Error::Unsupported(
-                "Unsupported selected input dependency".into(),
-            ));
+            return Err(unsupported("Unsupported selected input dependency"));
         }
         let id = dependency.id.as_str();
         if id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
@@ -977,10 +959,7 @@ pub(crate) fn stage<'a>(
     let mut prepared = crate::documents::PreparedWrite::default();
     let record = basecraft_protocol::records::encode(publication)?;
     if record.len() > 64 << 20 {
-        return Err(crate::Error::Limit {
-            what: "provenance record publication".into(),
-            limit: 64 << 20,
-        });
+        return Err(limit("provenance record publication", 64 << 20));
     }
     prepared.push(&record_path(bundle, &publication.id)?, |w| {
         w.write_all(&record)

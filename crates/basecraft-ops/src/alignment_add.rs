@@ -67,9 +67,6 @@ pub enum AdditionError {
     NamesTaken(Vec<String>),
     #[error("Select one reviewed specimen at a time")]
     NotOneSpecimen,
-    /// The accepted review could not be kept as the addition's evidence.
-    #[error("{0}")]
-    Evidence(String),
 }
 
 fn bullets(names: &[String]) -> String {

@@ -1,6 +1,7 @@
 //! One staged proposal/commit owner. Kind adapters supply only candidate edits
 //! and fingerprints; Session retains pins, actors, journal and undo ownership.
 use super::{Applied, Inverse, Session, Slot};
+use crate::error::limit;
 use crate::{DocId, Result, error::invalid, files::Loaded};
 use basecraft_protocol::{
     Actor, LogEntry, Op, OpResult,
@@ -11,10 +12,7 @@ use basecraft_protocol::{
 const MAX_PROPOSALS: usize = 4096;
 
 fn too_many() -> crate::Error {
-    crate::Error::Limit {
-        what: "proposal count".into(),
-        limit: MAX_PROPOSALS as _,
-    }
+    limit("proposal count", MAX_PROPOSALS as _)
 }
 
 /// Edits a plugin offers for a sequence, as it sent them, pinned to the
@@ -220,10 +218,7 @@ impl Session {
                 )),
             );
             self.write_entries(&[batch.entries.swap_remove(0), refused])?;
-            return Err(crate::Error::Limit {
-                what: "proposal batch".into(),
-                limit: crate::log::BATCH_LIMIT,
-            });
+            return Err(limit("proposal batch", crate::log::BATCH_LIMIT));
         }
         let applied = self.commit_proposals(batch, Some(lines))?;
         Ok(ProposalResult { applied, skipped })

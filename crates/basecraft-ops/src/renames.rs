@@ -49,6 +49,8 @@ pub enum RenameRefusal {
     Unreadable { path: PathBuf },
 }
 
+impl std::error::Error for RenameRefusal {}
+
 impl std::fmt::Display for RenameRefusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -218,7 +220,7 @@ pub fn apply_op(session: &mut Session, doc: DocId, op: Op) -> Result<()> {
     };
     match plan(session, doc, &old, &new)? {
         Ok(plan) => apply(session, plan),
-        Err(refusal) => Err(crate::error::invalid(refusal.to_string())),
+        Err(refusal) => Err(refusal.into()),
     }
 }
 
