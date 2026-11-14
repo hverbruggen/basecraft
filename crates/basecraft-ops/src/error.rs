@@ -117,6 +117,9 @@ pub enum Error {
     Addition(#[from] crate::alignment_add::AdditionError),
     #[error(transparent)]
     DisplayTree(#[from] crate::delimitation::DisplayTreeError),
+    /// Why a row or tip rename can't go ahead.
+    #[error(transparent)]
+    Rename(#[from] crate::renames::RenameRefusal),
     #[error("This project has no specimen metadata")]
     NoMetadata,
     /// The work named needs a chosen project and there is none.
@@ -231,6 +234,21 @@ impl Error {
             Self::PublishedWithFailure(_) => Code::PublishedWithFailure,
             Self::NothingTo(_) => Code::NothingToDo,
             Self::ReadOnlyFolder { .. } => Code::ReadOnlyFolder,
+            Self::Rename(refusal) => {
+                use crate::renames::RenameRefusal as Refusal;
+                match refusal {
+                    Refusal::NotFound { .. } => Code::NotFound,
+                    Refusal::NameTaken { .. } | Refusal::SubmissionRowTaken { .. } => {
+                        Code::OutputConflict
+                    }
+                    Refusal::Ambiguous { .. } => Code::RecordNamesRepeat,
+                    Refusal::MetadataNotOpen { .. } | Refusal::SubmissionNotOpen { .. } => {
+                        Code::NotReady
+                    }
+                    Refusal::UsedByWorkspace { .. } => Code::Unsupported,
+                    Refusal::Unreadable { .. } => Code::Damaged,
+                }
+            }
         }
     }
 
