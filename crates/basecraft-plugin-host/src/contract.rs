@@ -14,8 +14,14 @@ use serde_json::{Map, Value, json};
 
 use crate::{Error, Result};
 
-fn invalid(message: impl Into<String>) -> Error {
-    Error::Protocol(format!("operation contract: {}", message.into()))
+/// The plugin's contract breaks a rule of the profile.
+fn rejected(message: impl Into<String>) -> Error {
+    ContractError::Rejected(message.into()).into()
+}
+
+/// A value (parameters, an answer, a result) does not fit its schema.
+fn bad_value(message: impl Into<String>) -> Error {
+    ContractError::Value(message.into()).into()
 }
 
 pub fn valid_name(name: &str) -> bool {
@@ -37,7 +43,7 @@ pub fn validate_plugin_id(id: &str) -> Result<()> {
                     .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
         })
     {
-        return Err(invalid(
+        return Err(rejected(
             "plugin ID must be lower-case reverse-domain segments (at most 80 bytes)",
         ));
     }
@@ -53,13 +59,13 @@ pub fn major(version: &str) -> Result<u16> {
                 || !s.bytes().all(|b| b.is_ascii_digit())
         })
     {
-        return Err(invalid("operation version must be major.minor.patch"));
+        return Err(rejected("operation version must be major.minor.patch"));
     }
     let n: u16 = parts[0]
         .parse()
-        .map_err(|_| invalid("invalid operation major"))?;
+        .map_err(|_| rejected("invalid operation major"))?;
     if !(1..=9999).contains(&n) {
-        return Err(invalid("operation major must be 1..9999"));
+        return Err(rejected("operation major must be 1..9999"));
     }
     Ok(n)
 }
@@ -67,7 +73,7 @@ pub fn major(version: &str) -> Result<u16> {
 pub fn operation_id(plugin: &str, descriptor: &OperationDescriptor) -> Result<String> {
     validate_plugin_id(plugin)?;
     if !valid_name(&descriptor.name) {
-        return Err(invalid("invalid local operation name"));
+        return Err(rejected("invalid local operation name"));
     }
     Ok(format!(
         "{plugin}/{}@{}",
@@ -95,14 +101,14 @@ pub struct BoundedSchema {
 impl BoundedSchema {
     pub fn compile(schema: &Value) -> Result<Self> {
         if serde_json::to_vec(schema)?.len() > MAX_DESCRIPTOR_BYTES {
-            return Err(invalid("schema exceeds descriptor byte limit"));
+            return Err(rejected("schema exceeds descriptor byte limit"));
         }
         let mut work = 0;
         let mut unique = false;
         inspect_schema(schema, schema, 0, &mut Vec::new(), &mut work, &mut unique)?;
         let validator = jsonschema::draft202012::options()
             .build(schema)
-            .map_err(|e| invalid(format!("invalid JSON Schema: {e}")))?;
+            .map_err(|e| rejected(format!("invalid JSON Schema: {e}")))?;
         Ok(Self {
             validator,
             work,
@@ -113,7 +119,7 @@ impl BoundedSchema {
     pub fn validate(&self, value: &Value) -> Result<()> {
         let bytes = serde_json::to_vec(value)?.len();
         if bytes > MAX_FRAME_BYTES {
-            return Err(invalid("value exceeds frame byte limit"));
+            return Err(bad_value("value exceeds frame byte limit"));
         }
         let nodes = value_nodes(value, 0)?.saturating_add(bytes);
         let work = self.work.saturating_mul(nodes);
@@ -126,14 +132,14 @@ impl BoundedSchema {
             work
         };
         if work > MAX_VALIDATION_WORK {
-            return Err(invalid("validation work budget exceeded"));
+            return Err(bad_value("validation work budget exceeded"));
         }
         self.validator.validate(value).map_err(|e| {
             // A missing field is named by the schema, never by the value.
             if let jsonschema::error::ValidationErrorKind::Required { property } = &e.kind {
                 let at = e.instance_path.to_string();
                 let name = property.as_str().unwrap_or("a field");
-                return invalid(if at.is_empty() {
+                return bad_value(if at.is_empty() {
                     format!("{name} is required")
                 } else {
                     format!("{name} is required at {at}")
@@ -153,7 +159,7 @@ impl BoundedSchema {
                 || "Value".into(),
                 |first| first.to_uppercase().chain(letters).collect::<String>(),
             );
-            invalid(format!(
+            bad_value(format!(
                 "{label}: value does not satisfy schema at {pointer}"
             ))
         })
@@ -175,7 +181,7 @@ fn max_array_len(value: &Value) -> usize {
 
 fn value_nodes(value: &Value, depth: usize) -> Result<usize> {
     if depth > MAX_NESTING {
-        return Err(invalid("value nesting limit exceeded"));
+        return Err(bad_value("value nesting limit exceeded"));
     }
     let children: Box<dyn Iterator<Item = &Value> + '_> = match value {
         Value::Object(m) => Box::new(m.values()),
@@ -186,7 +192,7 @@ fn value_nodes(value: &Value, depth: usize) -> Result<usize> {
     for child in children {
         nodes = nodes.saturating_add(value_nodes(child, depth + 1)?);
         if nodes > MAX_VALIDATION_WORK {
-            return Err(invalid("value work budget exceeded"));
+            return Err(bad_value("value work budget exceeded"));
         }
     }
     Ok(nodes)
@@ -202,29 +208,29 @@ fn inspect_schema<'a>(
 ) -> Result<()> {
     *work += 1;
     if depth > MAX_NESTING || *work > 4096 {
-        return Err(invalid("schema nesting/reference expansion limit exceeded"));
+        return Err(rejected("schema nesting/reference expansion limit exceeded"));
     }
     if schema.is_boolean() {
         return Ok(());
     }
     let map = schema
         .as_object()
-        .ok_or_else(|| invalid("schema must be an object or boolean"))?;
+        .ok_or_else(|| rejected("schema must be an object or boolean"))?;
     for (key, value) in map {
         match key.as_str() {
             "$schema" => {
                 if value != "https://json-schema.org/draft/2020-12/schema" {
-                    return Err(invalid("only JSON Schema draft 2020-12 is supported"));
+                    return Err(rejected("only JSON Schema draft 2020-12 is supported"));
                 }
             }
             "$ref" => {
-                let reference = value.as_str().ok_or_else(|| invalid("$ref must be text"))?;
+                let reference = value.as_str().ok_or_else(|| rejected("$ref must be text"))?;
                 if !reference.starts_with("#/$defs/") || refs.contains(&reference) {
-                    return Err(invalid("only acyclic local $defs references are supported"));
+                    return Err(rejected("only acyclic local $defs references are supported"));
                 }
                 let target = root
                     .pointer(&reference[1..])
-                    .ok_or_else(|| invalid("unresolved local reference"))?;
+                    .ok_or_else(|| rejected("unresolved local reference"))?;
                 refs.push(reference);
                 inspect_schema(root, target, depth + 1, refs, work, unique)?;
                 refs.pop();
@@ -232,7 +238,7 @@ fn inspect_schema<'a>(
             "$defs" | "properties" => {
                 for child in value
                     .as_object()
-                    .ok_or_else(|| invalid(format!("{key} must be an object")))?
+                    .ok_or_else(|| rejected(format!("{key} must be an object")))?
                     .values()
                 {
                     inspect_schema(root, child, depth + 1, refs, work, unique)?;
@@ -244,7 +250,7 @@ fn inspect_schema<'a>(
             "allOf" | "anyOf" | "oneOf" | "prefixItems" => {
                 for child in value
                     .as_array()
-                    .ok_or_else(|| invalid(format!("{key} must be an array")))?
+                    .ok_or_else(|| rejected(format!("{key} must be an array")))?
                 {
                     inspect_schema(root, child, depth + 1, refs, work, unique)?;
                 }
@@ -258,7 +264,7 @@ fn inspect_schema<'a>(
             | "title" | "description" | "default" | "examples" | "$comment" => {
                 *work = work.saturating_add(value_nodes(value, depth + 1)?);
             }
-            _ => return Err(invalid(format!("unsupported schema keyword {key}"))),
+            _ => return Err(rejected(format!("unsupported schema keyword {key}"))),
         }
     }
     Ok(())
@@ -293,22 +299,22 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
         || contract.operations.is_empty()
         || contract.operations.len() > MAX_OPERATIONS
     {
-        return Err(invalid("unsupported contract version or operation count"));
+        return Err(rejected("unsupported contract version or operation count"));
     }
     let mut queries = BTreeSet::new();
     for query in &contract.queries {
         if !valid_name(&query.name) || !queries.insert(&query.name) {
-            return Err(invalid("invalid or duplicate query name"));
+            return Err(rejected("invalid or duplicate query name"));
         }
         BoundedSchema::compile(&query.result)?;
     }
     let mut ids = BTreeSet::new();
     for descriptor in &contract.operations {
         if !ids.insert(operation_id(plugin, descriptor)?) {
-            return Err(invalid("duplicate operation identity"));
+            return Err(rejected("duplicate operation identity"));
         }
         if !valid_name(&descriptor.implementation) {
-            return Err(invalid("invalid implementation name"));
+            return Err(rejected("invalid implementation name"));
         }
         let needs = &descriptor.needs;
         if needs.credentials.len() > 8
@@ -316,10 +322,10 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
                 !valid_name(name) || !crate::policy::credential_environment(environment)
             })
         {
-            return Err(invalid("invalid runtime credential declaration"));
+            return Err(rejected("invalid runtime credential declaration"));
         }
         if descriptor.inputs.len() > MAX_BINDINGS || descriptor.outputs.len() > MAX_BINDINGS {
-            return Err(invalid("binding count limit exceeded"));
+            return Err(rejected("binding count limit exceeded"));
         }
         for (name, binding) in &descriptor.inputs {
             if !valid_name(name)
@@ -327,12 +333,12 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
                 || binding.max == 0
                 || binding.max > MAX_INPUT_FILES
             {
-                return Err(invalid("invalid input binding/cardinality"));
+                return Err(rejected("invalid input binding/cardinality"));
             }
             if (binding.view == InputView::SequenceSnapshot)
                 != (descriptor.family == ExecutionFamily::SequenceProposal)
             {
-                return Err(invalid("input view is incompatible with execution family"));
+                return Err(rejected("input view is incompatible with execution family"));
             }
             if !binding.alphabets.is_empty()
                 && !matches!(
@@ -342,7 +348,7 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
                         | InputView::SequenceSnapshot
                 )
             {
-                return Err(invalid(
+                return Err(rejected(
                     "only alignment and sequence inputs declare alphabets",
                 ));
             }
@@ -354,7 +360,7 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
                 || binding.max > MAX_ARTIFACTS
                 || (!binding.collection && binding.max != 1)
             {
-                return Err(invalid("invalid output binding/cardinality"));
+                return Err(rejected("invalid output binding/cardinality"));
             }
             if binding.primary.as_ref().is_some_and(|member| {
                 !binding.collection
@@ -363,14 +369,14 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
                         .components()
                         .any(|part| !matches!(part, std::path::Component::Normal(_)))
             }) {
-                return Err(invalid("a primary result is a member of a collection"));
+                return Err(rejected("a primary result is a member of a collection"));
             }
         }
         if descriptor.family == ExecutionFamily::SequenceProposal
             && (descriptor.inputs.len() != 1
                 || descriptor.inputs.values().any(|b| b.min != 1 || b.max != 1))
         {
-            return Err(invalid(
+            return Err(rejected(
                 "sequence proposals require exactly one snapshot binding",
             ));
         }
@@ -378,41 +384,41 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
             || (descriptor.family == ExecutionFamily::FileAnalysis
                 && descriptor.effects.document_write)
         {
-            return Err(invalid("effects do not match execution family/bindings"));
+            return Err(rejected("effects do not match execution family/bindings"));
         }
         let schema = descriptor
             .parameters
             .as_object()
-            .ok_or_else(|| invalid("parameters must be an object schema"))?;
+            .ok_or_else(|| rejected("parameters must be an object schema"))?;
         if schema.get("type") != Some(&json!("object"))
             || schema.get("additionalProperties") != Some(&Value::Bool(false))
         {
-            return Err(invalid(
+            return Err(rejected(
                 "parameters require type object and additionalProperties false",
             ));
         }
         let properties = schema
             .get("properties")
             .and_then(Value::as_object)
-            .ok_or_else(|| invalid("parameters require properties"))?;
+            .ok_or_else(|| rejected("parameters require properties"))?;
         if properties
             .keys()
             .any(|key| RESERVED.contains(&key.as_str()))
         {
-            return Err(invalid("reserved control parameter"));
+            return Err(rejected("reserved control parameter"));
         }
         for cpu in &needs.cpu_parameters {
             let field = properties
                 .get(cpu)
-                .ok_or_else(|| invalid("CPU binding is not a parameter"))?;
+                .ok_or_else(|| rejected("CPU binding is not a parameter"))?;
             if field.get("type") != Some(&json!("integer")) {
-                return Err(invalid("CPU parameter must be integer"));
+                return Err(rejected("CPU parameter must be integer"));
             }
         }
         if let Some(workflow) = &descriptor.host_workflow
             && crate::delimitation_pipeline::workflow_fit(workflow).is_none()
         {
-            return Err(invalid("unsupported host workflow"));
+            return Err(rejected("unsupported host workflow"));
         }
         let remote = descriptor
             .host
@@ -437,7 +443,7 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
                 }
             };
             if !valid {
-                return Err(invalid(
+                return Err(rejected(
                     "a remote service needs one receipt, and submissions and receipts a query transform",
                 ));
             }
@@ -453,7 +459,7 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
                     .values()
                     .any(|output| output.primary.is_some()))
         {
-            return Err(invalid(
+            return Err(rejected(
                 "a caller has one input, a primary output and an engine query",
             ));
         }
@@ -467,7 +473,7 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
                 .as_ref()
                 .is_some_and(|when| !properties.contains_key(when.parameter()))
             {
-                return Err(invalid("tree support condition is not a parameter"));
+                return Err(rejected("tree support condition is not a parameter"));
             }
         }
         if descriptor
@@ -476,7 +482,7 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
             .filter_map(|output| output.facts.when.as_ref())
             .any(|when| !properties.contains_key(when.parameter()))
         {
-            return Err(invalid("output facts condition is not a parameter"));
+            return Err(rejected("output facts condition is not a parameter"));
         }
         if let Some(workflow) = &descriptor.host_workflow {
             let stages = &needs.workflow_stages;
@@ -486,21 +492,21 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
             {
                 let id = stages
                     .get(stage)
-                    .ok_or_else(|| invalid("host workflow is missing a stage operation"))?;
+                    .ok_or_else(|| rejected("host workflow is missing a stage operation"))?;
                 let (package, local) = id
                     .split_once('/')
-                    .ok_or_else(|| invalid("invalid workflow operation id"))?;
+                    .ok_or_else(|| rejected("invalid workflow operation id"))?;
                 validate_plugin_id(package)?;
                 let (name, version) = local
                     .split_once('@')
-                    .ok_or_else(|| invalid("workflow operation needs a major version"))?;
+                    .ok_or_else(|| rejected("workflow operation needs a major version"))?;
                 if !valid_name(name)
                     || version
                         .parse::<u16>()
                         .ok()
                         .is_none_or(|n| !(1..=9999).contains(&n))
                 {
-                    return Err(invalid("invalid workflow operation id"));
+                    return Err(rejected("invalid workflow operation id"));
                 }
             }
         }
@@ -509,7 +515,7 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
             .as_ref()
             .is_some_and(|parameter| !properties.contains_key(parameter))
         {
-            return Err(invalid(
+            return Err(rejected(
                 "the contact email need names an undeclared parameter",
             ));
         }
@@ -522,7 +528,7 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
                 if let Some(defs) = schema.get("$defs") {
                     check
                         .as_object_mut()
-                        .ok_or_else(|| invalid("default requires object schema"))?
+                        .ok_or_else(|| rejected("default requires object schema"))?
                         .insert("$defs".into(), defs.clone());
                 }
                 BoundedSchema::compile(&check)?.validate(default)?;
@@ -545,6 +551,10 @@ pub enum ContractError {
         "operation contract: {operation} needs the setting {name}, which has no default; give it"
     )]
     MissingSetting { operation: String, name: String },
+    #[error("operation contract: {0}")]
+    Rejected(String),
+    #[error("operation contract: {0}")]
+    Value(String),
 }
 
 /// Fill only explicitly declared top-level defaults. No coercion or branch guessing.
@@ -552,12 +562,12 @@ pub fn normalize_parameters(descriptor: &OperationDescriptor, requested: &Value)
     let mut parameters = requested
         .as_object()
         .cloned()
-        .ok_or_else(|| invalid("parameters must be an object"))?;
+        .ok_or_else(|| bad_value("parameters must be an object"))?;
     let properties = descriptor
         .parameters
         .get("properties")
         .and_then(Value::as_object)
-        .ok_or_else(|| invalid("missing parameter properties"))?;
+        .ok_or_else(|| rejected("missing parameter properties"))?;
     if let Some(name) = parameters
         .keys()
         .find(|name| !properties.contains_key(*name))

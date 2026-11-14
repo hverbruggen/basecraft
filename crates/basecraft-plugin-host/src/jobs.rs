@@ -469,8 +469,8 @@ impl JobManager {
             && let Some((existing, id)) = self.requests.get(key)
         {
             if existing != &digest {
-                return Err(Error::Protocol(
-                    "invalid_arguments: request key reused with different inputs".into(),
+                return Err(Error::refused(OperationErrorCode::InvalidArguments,
+                    "request key reused with different inputs".into(),
                 ));
             }
             return self.get(id);
@@ -1129,17 +1129,22 @@ pub fn error_value(
 pub fn error_code(error: &Error) -> OperationErrorCode {
     use crate::contract::ContractError;
     match error {
-        Error::Ops(error) => return ops_error_code(error),
-        Error::Contract(ContractError::UnknownSetting { .. }) => {
-            return OperationErrorCode::UnknownSetting;
-        }
-        Error::Contract(ContractError::MissingSetting { .. }) => {
-            return OperationErrorCode::MissingChoice;
-        }
-        Error::Refused { code, .. } => return *code,
-        _ => {}
+        Error::Ops(error) => ops_error_code(error),
+        Error::Io(error) => basecraft_ops::Error::Io(std::io::Error::from(error.kind()))
+            .operation_code(),
+        Error::Contract(ContractError::UnknownSetting { .. }) => OperationErrorCode::UnknownSetting,
+        Error::Contract(ContractError::MissingSetting { .. }) => OperationErrorCode::MissingChoice,
+        Error::Contract(ContractError::Rejected(_)) => OperationErrorCode::IncompatibleContract,
+        Error::Refused { code, .. } => *code,
+        Error::Exited(_) => OperationErrorCode::PluginUnavailable,
+        Error::Timeout(_) => OperationErrorCode::Timeout,
+        Error::Contract(ContractError::Value(_))
+        | Error::Json(_)
+        | Error::Arrow(_)
+        | Error::Manifest { .. }
+        | Error::Remote { .. }
+        | Error::Protocol(_) => OperationErrorCode::InvalidArguments,
     }
-    OperationErrorCode::InvalidArguments
 }
 
 /// Preserve typed core failures across the CLI, MCP and registered job adapters.

@@ -364,8 +364,8 @@ impl SessionPolicy {
                 .keys()
                 .any(|k| destination_role(operation, k).is_none())
         {
-            return Err(Error::Protocol(
-                "invalid_arguments: unknown input/destination binding".into(),
+            return Err(Error::refused(Code::InvalidArguments,
+                "unknown input/destination binding".into(),
             ));
         }
         let mut inputs = BTreeMap::new();
@@ -376,8 +376,8 @@ impl SessionPolicy {
             let values = request.inputs.get(name).map_or(&[][..], Vec::as_slice);
             count = count.saturating_add(values.len());
             if values.len() < binding.min || values.len() > binding.max || count > MAX_INPUT_FILES {
-                return Err(Error::Protocol(format!(
-                    "invalid_arguments: input cardinality for {name}"
+                return Err(Error::refused(Code::InvalidArguments,format!(
+                    "input cardinality for {name}"
                 )));
             }
             let mut files = Vec::new();

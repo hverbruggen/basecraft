@@ -218,8 +218,8 @@ impl PreparedOperation {
                 continue;
             }
             if !expected.contains_key(member) {
-                return Err(Error::Protocol(format!(
-                    "invalid_arguments: {role} has no member {}",
+                return Err(Error::refused(Code::InvalidArguments,format!(
+                    "{role} has no member {}",
                     member.display()
                 )));
             }

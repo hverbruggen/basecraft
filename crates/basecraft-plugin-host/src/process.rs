@@ -3,6 +3,7 @@
 #[cfg(windows)]
 use crate::windows_transport::{BorrowedFd, OwnedFd, Receiver};
 use basecraft_platform::process::OwnedProcess;
+use basecraft_protocol::operation::OperationErrorCode as Code;
 use std::io::Read;
 #[cfg(windows)]
 use std::net::TcpListener;
@@ -329,7 +330,7 @@ impl PluginProcess {
                 .as_ref()
                 .is_some_and(|flag| flag.load(Ordering::Acquire))
             {
-                return Err(Error::Protocol("cancelled".into()));
+                return Err(Error::refused(Code::Cancelled, String::new()));
             }
             if self
                 .deadline
