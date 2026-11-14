@@ -2,7 +2,7 @@
 //! the receiving document and its revision/application/undo boundary.
 use crate::{Error, Result, jobs::JobManager, policy::SessionPolicy, registry::Registry};
 use basecraft_protocol::{
-    operation::{OperationOutcome, OperationRequest, RuntimeState},
+    operation::{InputReference, OperationOutcome, OperationRequest, RuntimeState},
     plugin::InvokeResult,
 };
 use serde_json::{Value, json};
@@ -151,7 +151,7 @@ impl AlignmentWorkflow<'_> {
         )?;
         let prepare = self.stage(
             &self.stage_operation("prepare")?,
-            &json!({"alignment":[{"kind":"file","path":source}]}),
+            &file_inputs(&[("alignment", &source)]),
             &effective,
         )?;
         let report: Value = serde_json::from_slice(&std::fs::read(prepare.join("result.json"))?)?;
@@ -213,9 +213,10 @@ impl AlignmentWorkflow<'_> {
         } else {
             "all specimens"
         });
-        let mut inputs = json!({"alignment":[{"kind":"file","path": if fit == "asap" { &alignment } else { &source }}]});
+        let fitted = if fit == "asap" { &alignment } else { &source };
+        let mut inputs = vec![("alignment", fitted.clone())];
         if fit == "asap" && unique {
-            inputs["full_alignment"] = json!([{"kind":"file","path":source}]);
+            inputs.push(("full_alignment", source.clone()));
         }
         if unique {
             let mapping = prepare.join("result.json.haplotypes.json");
@@ -228,23 +229,31 @@ impl AlignmentWorkflow<'_> {
                 return Err(Error::Protocol("Prepared haplotype mapping changed".into()));
             }
             params["mapping_hash"] = json!(hash);
-            inputs["mapping"] = json!([{"kind":"file","path":mapping}]);
+            inputs.push(("mapping", mapping));
         }
         if fit != "asap" {
             let mut tree_params = effective;
             tree_params["method"] = json!("upgma");
             let tree = self.stage(
                 &self.stage_operation("tree")?,
-                &json!({"alignment":[{"kind":"file","path":alignment}]}),
+                &file_inputs(&[("alignment", &alignment)]),
                 &tree_params,
             )?;
-            inputs["tree"] = json!([{"kind":"file","path":tree.join("tree.nwk")}]);
+            inputs.push(("tree", tree.join("tree.nwk")));
             params["rooted"] = json!(true);
             params["units"] = json!("relative time from equal-rate UPGMA distances; uncalibrated");
             params["tree_inference"] =
                 json!("UPGMA equal-rate clustering from retained aligned sequences");
         }
-        let result = self.stage(&self.stage_operation("fit")?, &inputs, &params)?;
+        let inputs: Vec<_> = inputs
+            .iter()
+            .map(|(name, path)| (*name, path.as_path()))
+            .collect();
+        let result = self.stage(
+            &self.stage_operation("fit")?,
+            &file_inputs(&inputs),
+            &params,
+        )?;
         let target = &self
             .parent
             .run_path(&self.parent.context.outputs["artifacts"]);
@@ -324,4 +333,14 @@ impl AlignmentWorkflow<'_> {
             ..InvokeResult::default()
         })
     }
+}
+
+/// Stage inputs that name one file each.
+fn file_inputs(files: &[(&str, &Path)]) -> Value {
+    let inputs = files.iter().map(|(name, path)| {
+        let path = path.to_string_lossy().into_owned();
+        let input = serde_json::to_value(InputReference::File { path }).unwrap_or_default();
+        ((*name).to_owned(), Value::Array(vec![input]))
+    });
+    Value::Object(inputs.collect())
 }

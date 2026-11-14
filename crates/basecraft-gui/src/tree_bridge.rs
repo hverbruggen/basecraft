@@ -865,7 +865,6 @@ impl qobject::TreeController {
                 session.tree(doc)?,
                 &source,
             )?;
-            let outputs = basecraft_ops::session::ToolRunRecord::hashed(outputs)?;
             session.record_tool_run(
                 doc,
                 basecraft_protocol::Actor::Human {
@@ -878,7 +877,7 @@ impl qobject::TreeController {
                         source.to_string_lossy().into_owned(),
                         basecraft_io::hash_file(&source)?,
                     )],
-                    &outputs,
+                    &basecraft_ops::session::ToolRunRecord::hashed(outputs)?,
                 ),
             )?;
             Ok(())
