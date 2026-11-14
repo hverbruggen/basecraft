@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "AlignmentLink",
-  "description": "Existing tree–alignment association, schema 1 (snapshot) or 2 (reference).\nField order and direct pretty serialization are part of the existing wire shape.",
+  "description": "A tree's link to an alignment. Schema 1: the linked file, by path, size,\nmodification time and hash; no copy is kept (D25). Schema 2: the exact\ninput of the analysis run that inferred the tree.",
   "type": "object",
   "properties": {
     "alignment_version": {
@@ -28,17 +28,30 @@
       "format": "uint32",
       "minimum": 0
     },
-    "snapshot": {
-      "type": "string"
-    },
-    "snapshot_hash": {
-      "type": "string"
-    },
     "source": {
       "type": "string"
     },
     "source_hash": {
+      "description": "Schema 1: the linked file's hash. Schema 2: the original's, if known.",
       "type": "string"
+    },
+    "source_stamp": {
+      "description": "Schema 1: the linked file's size and modification time when its hash\nwas last checked.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FileStamp"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "submitted_hash": {
+      "description": "Schema 2: the hash of the exact alignment the run used.",
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "additionalProperties": true,
@@ -46,10 +59,52 @@
     "schema",
     "source",
     "source_hash",
-    "snapshot",
-    "snapshot_hash",
     "alignment_version",
     "inferred",
     "basecraft"
-  ]
+  ],
+  "$defs": {
+    "FileStamp": {
+      "description": "Cheap change signal captured during an existing verified read. Matching time\nand length alone do not prove content identity.",
+      "type": "object",
+      "properties": {
+        "device": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "inode": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "modified_nanos": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "modified_seconds": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "size": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "size",
+        "modified_seconds",
+        "modified_nanos"
+      ]
+    }
+  }
 }

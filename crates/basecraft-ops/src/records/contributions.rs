@@ -7,7 +7,11 @@ type FeatureState<'a> = (Vec<&'a str>, Option<basecraft_protocol::Location>);
 
 /// Both reports and publication ancestry consume this projection. A run owns
 /// explicit edit identities, never a display label or the nearest historical run.
-pub(crate) fn project(events: &[LogEntry], effective: &mut Vec<EditActivity>) {
+pub(crate) fn project<'a>(
+    events: impl IntoIterator<Item = &'a LogEntry, IntoIter: Clone>,
+    effective: &mut Vec<EditActivity>,
+) {
+    let events = events.into_iter();
     let active: HashSet<_> = effective.iter().map(|e| e.id.as_str()).collect();
     // Feature IDs are stable within a session. GenBank/GFF saves compact deleted
     // slots; the next open assigns IDs in the saved feature order. Retain owner
@@ -17,7 +21,7 @@ pub(crate) fn project(events: &[LogEntry], effective: &mut Vec<EditActivity>) {
     let mut sessions = HashMap::new();
     let mut saved_documents: HashMap<&str, HashSet<&str>> = HashMap::new();
     let mut supports = HashMap::new();
-    for event in events {
+    for event in events.clone() {
         if matches!(event.op, Op::Save { .. })
             && let Some((_, hash)) = event.result.hashes.first()
         {
@@ -135,7 +139,7 @@ pub(crate) fn project(events: &[LogEntry], effective: &mut Vec<EditActivity>) {
         .chain(supports.values().copied())
         .chain(
             events
-                .iter()
+                .clone()
                 .filter(|event| {
                     active.contains(event.id.as_str()) && matches!(event.op, Op::SeqReplace { .. })
                 })
@@ -143,7 +147,7 @@ pub(crate) fn project(events: &[LogEntry], effective: &mut Vec<EditActivity>) {
         )
         .collect();
     let mut retained_runs = HashSet::new();
-    for event in events {
+    for event in events.clone() {
         if let Op::ToolRun {
             contributions: Some(contributions),
             ..

@@ -28,7 +28,7 @@ use basecraft_protocol::{
         PublishedArtifact,
     },
     plugin::InvokeResult,
-    provenance::{ArtifactRevision, Publication},
+    provenance::ArtifactRevision,
     records::{JobIndexPlugin, JobIndexSource, LocalJobIndex, RUN_RECORD_SCHEMA, RunRecord},
 };
 use serde_json::Value;
@@ -391,14 +391,13 @@ impl PreparedOperation {
             input.analysis_run = Some(records::relative(&directory, parent)?);
             let upstream = &mut input.upstream;
             for dependency in &dependencies {
-                let bytes = basecraft_ops::records::read_record(&dependency.join("manifest.json"))?;
-                let publication: Publication = basecraft_protocol::records::decode(&bytes)?;
+                let (publication, hash) = basecraft_ops::records::latest_record(dependency)?;
                 if !upstream.iter().any(|entry| entry.id == publication.id) {
                     upstream.push(basecraft_protocol::input_records::UpstreamLink {
                         bundle: (records::relative(&directory, &dependency.canonicalize()?)?)
                             .into(),
-                        id: publication.id.clone(),
-                        hash: basecraft_io::hash_bytes(&bytes),
+                        id: publication.id,
+                        hash,
                     });
                 }
             }
@@ -433,13 +432,10 @@ impl PreparedOperation {
                     continue;
                 }
                 if let Some(artifact) = stage.artifacts.first() {
-                    let publication = basecraft_ops::records::inspect(
+                    record.include_input(&basecraft_ops::records::DocumentRecord::saved(
                         Path::new(&artifact.path),
                         self.project.as_ref(),
-                    )?;
-                    record.include_input(
-                        &basecraft_ops::records::DocumentRecord::from_publication(&publication),
-                    );
+                    )?);
                 }
             }
         }
@@ -928,32 +924,5 @@ fn verify_collection(root: &Path, expected: &BTreeMap<PathBuf, String>) -> Resul
     }
     Ok(())
 }
-fn export_collection(
-    source: &Path,
-    destination: &Path,
-    expected: &BTreeMap<PathBuf, String>,
-) -> Result<()> {
-    let parent = destination
-        .parent()
-        .ok_or_else(|| Error::Protocol("missing collection destination parent".into()))?;
-    let pending = tempfile::Builder::new()
-        .prefix(".basecraft-export-")
-        .tempdir_in(parent)?;
-    for (relative, hash) in expected {
-        let target = pending.path().join(relative);
-        if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::copy(source.join(relative), &target)?;
-        if basecraft_io::hash_file(&target)? != *hash {
-            return Err(Error::Protocol("collection changed during export".into()));
-        }
-        basecraft_platform::files::sync_file(&target)?;
-    }
-    basecraft_platform::atomic::rename_noreplace(pending.path(), destination)?;
-    basecraft_platform::files::sync_directory(parent)?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod record_format_tests;

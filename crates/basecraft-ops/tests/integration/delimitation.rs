@@ -456,9 +456,7 @@ fn hidden_workspace_moves_with_its_folder_and_passive_open_writes_nothing() {
     assert_eq!(input.source.as_ref().unwrap().hash, hash);
     assert!(hash.starts_with("b3:"));
     assert!(!run.directory().join("preserved-input").exists());
-    let record: basecraft_protocol::provenance::Publication =
-        serde_json::from_slice(&std::fs::read(run.directory().join("manifest.json")).unwrap())
-            .unwrap();
+    let (record, _) = basecraft_ops::records::latest_record(run.directory()).unwrap();
     assert_eq!(record.origin, "Explicit species workspace input reference");
     assert!(record.inputs[0].retained.is_none());
 

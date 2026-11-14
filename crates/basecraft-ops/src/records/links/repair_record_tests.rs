@@ -27,12 +27,13 @@ fn original_recovery(
 ) -> Vec<u8> {
     basecraft_protocol::records::encode(&serde_json::json!({
         "schema": 1,
-        "note": "Save As association recovery: previous entries and intended metadata; snapshots are retained separately",
+        "note": "Save As association recovery: previous entries and intended metadata",
         "previous_origin": original_previous(previous_origin),
         "previous_view": original_previous(previous_view),
         "intended_origin": origin.map(|link| &link.metadata),
         "intended_view": view.map(|link| &link.metadata),
-    })).unwrap()
+    }))
+    .unwrap()
 }
 
 /// The guard names its recovery file by its path from the tree's folder:
@@ -75,16 +76,14 @@ fn repair_original_producer_bytes() {
             _ => unreachable!(),
         }
         // These are real DS03 writer captures used as opaque staged bytes.
-        // No new snapshots or analysis runs are needed to exercise publish.
+        // No analysis runs are needed to exercise publish.
         let origin = (mode > 0).then(|| StagedLink {
-            snapshot: None,
             metadata: include_bytes!(
-                "../../../../../testdata/fixtures/records-v1/link-snapshot-extra.json"
+                "../../../../../testdata/fixtures/records-v1/link-file-extra.json"
             )
             .to_vec(),
         });
         let view = (mode > 1).then(|| StagedLink {
-            snapshot: None,
             metadata: include_bytes!(
                 "../../../../../testdata/fixtures/records-v1/link-referenced-extra.json"
             )
@@ -157,13 +156,10 @@ fn invalid_utf8_prior_symlink_returns_error_before_publication() {
         let invalid_path = PathBuf::from(std::ffi::OsString::from_vec(vec![b'x', 255]));
         symlink(&invalid_path, bad).unwrap();
         std::fs::write(ordinary, b"old metadata").unwrap();
-        let snapshot = dir.path().join("retained.alignment.afa");
-        std::fs::write(&snapshot, b"retained snapshot").unwrap();
         let prepared = PreparedLinks {
             project: None,
             target: target.clone(),
             origin: Some(StagedLink {
-                snapshot: Some(snapshot.clone()),
                 metadata: b"intended".to_vec(),
             }),
             view: None,
@@ -188,7 +184,6 @@ fn invalid_utf8_prior_symlink_returns_error_before_publication() {
         assert_eq!(std::fs::read(&target).unwrap(), b"old tree");
         assert_eq!(std::fs::read(ordinary).unwrap(), b"old metadata");
         assert_eq!(std::fs::read_link(bad).unwrap(), invalid_path);
-        assert_eq!(std::fs::read(&snapshot).unwrap(), b"retained snapshot");
     }
 }
 

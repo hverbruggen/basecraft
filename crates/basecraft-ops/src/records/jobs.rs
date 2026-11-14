@@ -230,9 +230,15 @@ fn task_primary_output(
     let root = runtime
         .parent()
         .ok_or_else(|| crate::error::invalid("receipt has no directory"))?;
-    let (publication, writer) = basecraft_protocol::records::decode_written::<Publication>(
-        &budget.read(&root.join("manifest.json"))?,
-    )?;
+    // manifest.json names the run's latest record (D24).
+    let latest: basecraft_protocol::provenance::LatestRecord =
+        basecraft_protocol::records::decode(&budget.read(&root.join("manifest.json"))?)?;
+    let record = budget.read(&crate::records::provenance::record_path(root, &latest.id)?)?;
+    if basecraft_io::hash_bytes(&record) != latest.hash {
+        return Err(crate::error::invalid("the run's latest record changed"));
+    }
+    let (publication, writer) =
+        basecraft_protocol::records::decode_written::<Publication>(&record)?;
     if publication.schema_version != 1 {
         return Err(crate::error::invalid(
             basecraft_protocol::records::other_format(&writer, publication.schema_version, 1),
@@ -483,6 +489,7 @@ mod tests {
             .collect(),
             events: vec![],
             effective_edits: vec![],
+            withdrawn: Vec::new(),
             completeness: basecraft_protocol::provenance::Completeness {
                 ancestry_known: false,
                 input_bytes_available: true,
@@ -500,17 +507,12 @@ mod tests {
             &serde_json::to_vec(&descriptor).unwrap()
         ));
         let descriptor_path = root.join("descriptor.json");
-        let manifest = root.join("manifest.json");
         std::fs::write(
             &descriptor_path,
             basecraft_protocol::records::encode(&descriptor).unwrap(),
         )
         .unwrap();
-        std::fs::write(
-            &manifest,
-            basecraft_protocol::records::encode(&publication).unwrap(),
-        )
-        .unwrap();
+        crate::records::provenance::publish(root, &publication).unwrap();
         std::fs::write(
             &receipt,
             basecraft_protocol::records::encode(&outcome).unwrap(),
@@ -524,11 +526,7 @@ mod tests {
             serde_json::json!(root.join("artifacts/bootstrap-run.nex"));
         publication.outputs[0].logical_name = ".basecraft/run/artifacts/bootstrap-run.nex".into();
         publication.outputs[0].retained = Some("artifacts/bootstrap-run.nex".into());
-        std::fs::write(
-            &manifest,
-            basecraft_protocol::records::encode(&publication).unwrap(),
-        )
-        .unwrap();
+        crate::records::provenance::publish(root, &publication).unwrap();
         std::fs::write(
             &receipt,
             basecraft_protocol::records::encode(&outcome).unwrap(),
@@ -565,11 +563,7 @@ mod tests {
             .as_array_mut()
             .unwrap()
             .push(serde_json::json!({"role":"artifacts","path":export,"digest":"canonical"}));
-        std::fs::write(
-            &manifest,
-            basecraft_protocol::records::encode(&publication).unwrap(),
-        )
-        .unwrap();
+        crate::records::provenance::publish(root, &publication).unwrap();
         std::fs::write(
             &receipt,
             basecraft_protocol::records::encode(&outcome).unwrap(),

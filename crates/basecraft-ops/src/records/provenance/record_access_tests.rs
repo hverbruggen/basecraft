@@ -24,14 +24,13 @@ fn reads_keep_bytes_and_enforce_shared_budget() {
 
 #[test]
 fn growth_past_cap_charges_only_read_bytes() {
-    let label = RecordLimit::Provenance;
     let mut remaining = 100;
-    let error = read_record_from_open(std::io::Cursor::new(b"abcdef"), 0, &mut remaining, 4, label)
-        .unwrap_err();
+    let error =
+        read_record_from_open(std::io::Cursor::new(b"abcdef"), 0, &mut remaining, 4).unwrap_err();
     assert_eq!(remaining, 95);
     assert!(matches!(error, crate::Error::Limit { limit: 4, .. }));
-    let error = read_record_from_open(std::io::empty(), 65 << 20, &mut remaining, u64::MAX, label)
-        .unwrap_err();
+    let error =
+        read_record_from_open(std::io::empty(), 65 << 20, &mut remaining, u64::MAX).unwrap_err();
     assert!(matches!(error, crate::Error::Limit { .. }));
     assert_eq!(remaining, 95);
 }

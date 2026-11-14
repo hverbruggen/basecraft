@@ -18,7 +18,7 @@ pub fn retain(root: &Path, request: &Value, outcome: &mut Value) {
             records::reference_input_with_dependencies(&anchor, &source, &hash, &[], "test", None)
                 .unwrap();
         let record = records::read_input(ledger.directory()).unwrap();
-        upstream.push(json!({"bundle":records::relative(run.directory(),ledger.directory()).unwrap(), "id":ledger.id(),"hash":basecraft_io::hash_file(&ledger.artifact("manifest.json").unwrap()).unwrap()}));
+        upstream.push(json!({"bundle":records::relative(run.directory(),ledger.directory()).unwrap(), "id":ledger.id(),"hash":records::latest_record(ledger.directory()).unwrap().1}));
         let mut reference = record.source.clone().unwrap();
         reference.path = records::relative(run.directory(), &source).unwrap();
         if first.is_none() {
@@ -50,7 +50,7 @@ pub fn retain(root: &Path, request: &Value, outcome: &mut Value) {
     records::write_json(&run.artifact("execution.json").unwrap(), &json!({"schema":3,"operation":request["operation"],"package_version":"1","package_digest":"test-package","descriptor_digest":"test-descriptor","environment":{"interpreter":null,"runtime":null},"initiator":"test","executor":"test","process_instance":"test","inputs":evidence,"effective_parameters":{},"cpu_threads":1,"stdout":"","stderr":"","tool":null,"execution":null})).unwrap();
     records::write_json(&run.artifact("request.json").unwrap(), request).unwrap();
     records::write_json(&run.artifact("runtime.json").unwrap(), outcome).unwrap();
-    let publication = serde_json::from_value(json!({"schema_version":1,"id":run.id(),"session":"test","parents":[],"parent_hashes":{},"created":"2026-10-28T00:00:00Z","origin":"test","inputs":inputs,"outputs":outputs,"events":[],"effective_edits":[],"completeness":{"ancestry_known":false,"input_bytes_available":true,"execution_specification_available":true,"replay_verified":false},"report_template_version":2})).unwrap();
+    let publication = serde_json::from_value(json!({"schema_version":1,"id":run.id(),"session":"test","parents":[],"parent_hashes":{},"created":"2026-10-28T00:00:00Z","origin":"test","inputs":inputs,"outputs":outputs,"events":[],"effective_edits":[],"withdrawn":[],"completeness":{"ancestry_known":false,"input_bytes_available":true,"execution_specification_available":true,"replay_verified":false},"report_template_version":2})).unwrap();
     records::publish(run.directory(), &publication).unwrap();
     for artifact in artifacts {
         run.bind(Path::new(artifact["path"].as_str().unwrap()))

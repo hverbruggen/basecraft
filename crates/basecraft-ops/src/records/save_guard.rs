@@ -17,16 +17,17 @@ pub(crate) fn change_stamp(path: &Path) -> Result<Option<ChangeStamp>> {
             "save target must be an ordinary file".into(),
         ));
     }
+    // One read of the file's metadata gives the stamp and the change time.
+    let metadata = std::fs::metadata(path)?;
     #[cfg(unix)]
     let changed = {
         use std::os::unix::fs::MetadataExt;
-        let metadata = std::fs::metadata(path)?;
         (metadata.ctime(), metadata.ctime_nsec())
     };
     #[cfg(not(unix))]
     let changed = (0, 0);
     Ok(Some((
-        crate::records::input_evidence::stamp(path)?,
+        crate::records::input_evidence::stamp_metadata(path, &metadata)?,
         changed.0,
         changed.1,
     )))

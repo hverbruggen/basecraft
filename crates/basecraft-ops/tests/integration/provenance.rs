@@ -72,21 +72,17 @@ fn edit_undo_redo_save_move_verify_and_report() {
     std::fs::remove_file(&file).unwrap();
     std::fs::remove_dir_all(records::companion(&file)).unwrap();
     assert_eq!(records::verify(&moved, None).unwrap(), Vec::<String>::new());
-    let reports = records::companion(&moved).join("reports");
+    // Reports are written only on request, never into the history folder.
+    let bundle = records::companion(&moved);
+    assert!(!bundle.join("reports").exists());
+    assert!(bundle.join("README.md").is_file());
+    let reports = dir.path().join("reports-out");
+    let (publication, history) = records::saved_history(&moved, None).unwrap();
+    records::write_reports(&reports, &publication, history).unwrap();
     assert!(
-        std::fs::read_to_string(reports.join("methods.generated.md"))
+        std::fs::read_to_string(reports.join("reports/methods.generated.md"))
             .unwrap()
             .contains("Replaced")
-    );
-    std::fs::write(reports.join("methods.md"), "My reviewed prose").unwrap();
-    records::write_reports(
-        &records::companion(&moved),
-        &records::inspect(&moved, None).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(
-        std::fs::read_to_string(reports.join("methods.md")).unwrap(),
-        "My reviewed prose"
     );
 }
 
@@ -163,17 +159,11 @@ fn history_is_fingerprints_only_and_path_escape_is_detected() {
     );
     let mut publication = publication;
     publication.inputs[0].retained = Some("../gene.fasta".into());
-    std::fs::write(
-        records::companion(&file).join("manifest.json"),
-        basecraft_protocol::records::encode(&publication).unwrap(),
-    )
-    .unwrap();
-    assert!(
-        records::verify(&file, None)
-            .unwrap()
-            .iter()
-            .any(|e| e.contains("unsafe"))
-    );
+    replace_latest(&records::companion(&file), &publication);
+    assert!(records::verify(&file, None).map_or_else(
+        |error| error.to_string().contains("unsafe"),
+        |issues| issues.iter().any(|e| e.contains("unsafe"))
+    ));
 }
 
 #[test]
@@ -370,7 +360,10 @@ fn reopen_and_save_as_preserve_contributing_ancestry() {
     }
     let publication = records::inspect(&copy, None).unwrap();
     assert_eq!(publication.parents, vec![first.id]);
-    assert_eq!(publication.effective_edits.len(), 2);
+    // The copy's record holds its own edit; the first edit is its parent's.
+    assert_eq!(publication.effective_edits.len(), 1);
+    let (_, history) = records::saved_history(&copy, None).unwrap();
+    assert_eq!(history.effective.len(), 2);
     std::fs::remove_dir_all(records::companion(&file)).unwrap();
     assert_eq!(records::verify(&copy, None).unwrap(), Vec::<String>::new());
 }
@@ -471,13 +464,7 @@ fn ancestor_only_artifacts_and_duplicate_parent_references_are_checked() {
     );
     let mut current = records::inspect(&file, None).unwrap();
     current.parents.push(current.parents[0].clone());
-    let bytes = basecraft_protocol::records::encode(&current).unwrap();
-    std::fs::write(bundle.join("manifest.json"), &bytes).unwrap();
-    std::fs::write(
-        bundle.join("records").join(format!("{}.json", current.id)),
-        &bytes,
-    )
-    .unwrap();
+    replace_latest(&bundle, &current);
     assert!(
         records::verify(&file, None)
             .unwrap_err()
@@ -542,8 +529,10 @@ fn reopened_ancestry_survives_multiple_saves_and_changed_disk_records() {
     next.save(doc, None).unwrap();
     assert_eq!(
         records::inspect(&file, None).unwrap().effective_edits.len(),
-        3
+        1
     );
+    let (_, history) = records::saved_history(&file, None).unwrap();
+    assert_eq!(history.effective.len(), 3);
     assert_eq!(records::verify(&file, None).unwrap(), Vec::<String>::new());
     let record = next.document_record(doc).unwrap();
     std::fs::write(records::companion(&file).join("manifest.json"), "damaged").unwrap();
@@ -698,4 +687,24 @@ fn undo_reaches_a_fixed_depth_and_settled_edits_stay_in_effect() {
     assert!((10_000..edits).contains(&undone), "{undone}");
     // Back at the oldest undoable step, the document still differs from disk.
     assert!(session.document_record(doc).unwrap().unsaved);
+}
+
+/// Replace a history folder's latest record, as another program might.
+fn replace_latest(bundle: &std::path::Path, record: &basecraft_protocol::provenance::Publication) {
+    let bytes = basecraft_protocol::records::encode(record).unwrap();
+    std::fs::write(
+        bundle.join("records").join(format!("{}.json", record.id)),
+        &bytes,
+    )
+    .unwrap();
+    let pointer = basecraft_protocol::provenance::LatestRecord {
+        schema_version: 1,
+        id: record.id.clone(),
+        hash: basecraft_io::hash_bytes(&bytes),
+    };
+    std::fs::write(
+        bundle.join("manifest.json"),
+        basecraft_protocol::records::encode(&pointer).unwrap(),
+    )
+    .unwrap();
 }

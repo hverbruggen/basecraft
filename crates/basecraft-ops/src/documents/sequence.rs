@@ -125,8 +125,7 @@ impl Document for Opened {
         project: Option<&crate::project::Project>,
         target: &Path,
     ) -> Vec<PathBuf> {
-        let gff = files::write_sidecar(self, &mut std::io::sink()).is_some();
-        let gff = gff.then(|| files::gff_sidecar(target));
+        let gff = files::writes_gff(self).then(|| files::gff_sidecar(target));
         let facts = self
             .doc
             .stated_alphabet()
@@ -147,13 +146,9 @@ impl Document for Opened {
         }
         let mut prepared = super::PreparedWrite::default();
         let hash = prepared.push(target, |w| files::write_main(self, w))?;
-        let sidecar = files::gff_sidecar(target);
-        if format == Format::Fasta {
-            prepared.push(&sidecar, |w| {
-                if let Some(r) = files::write_sidecar(self, w) {
-                    r?;
-                }
-                Ok(())
+        if files::writes_gff(self) {
+            prepared.push(&files::gff_sidecar(target), |w| {
+                files::write_sidecar(self, w).unwrap_or(Ok(()))
             })?;
         }
         super::stage_companion(

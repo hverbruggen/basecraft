@@ -107,8 +107,10 @@ fn run_cases(root: &Path) {
         let exported = root.join(&destination).join("tree.nwk");
         check_tree(&exported, label, multi);
         check_tree(&root.join(format!("file-{suffix}.nwk")), label, multi);
+        // The tree moved to its own file; the run keeps no copy (D26).
         let retained = Path::new(completed.evidence.as_ref().unwrap()).join("artifacts/tree.nwk");
-        check_tree(&retained, label, multi);
+        assert!(!retained.exists());
+        let retained = root.join(format!("file-{suffix}.nwk"));
         let moved = root.join(format!("copied-{suffix}"));
         std::fs::create_dir(&moved).unwrap();
         // Copied by basecraft, the tree keeps its companion.

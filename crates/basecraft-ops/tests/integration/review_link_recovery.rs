@@ -31,18 +31,13 @@ fn guarded_partial_save_supports_retry_and_manual_intended_recovery() {
             let mut session = Session::new(root);
             let doc = session.open(&input).unwrap();
             if mode > 0 {
-                AlignmentLink::create(&input, &source, &source, 7, true, None).unwrap();
+                AlignmentLink::create(&input, &source, 7, true).unwrap();
             }
             if mode == 2 {
                 AlignmentLink::associate(&input, session.tree(doc).unwrap(), &view).unwrap();
             }
-            AlignmentLink::create(&output, &old, &old, 2, true, None).unwrap();
+            AlignmentLink::create(&output, &old, 2, true).unwrap();
             AlignmentLink::associate(&output, session.tree(doc).unwrap(), &old).unwrap();
-            let old_link = AlignmentLink::read_view(&output).unwrap();
-            let old_snapshot = old_link
-                .checked_snapshot(&output, session.tree(doc).unwrap())
-                .unwrap();
-            let old_bytes = std::fs::read(&old_snapshot).unwrap();
             let mut referents = Vec::new();
             for metadata in [records::sidecar(&output), records::view_sidecar(&output)] {
                 let referent = metadata.with_extension("previous.json");
@@ -50,17 +45,12 @@ fn guarded_partial_save_supports_retry_and_manual_intended_recovery() {
                 std::os::unix::fs::symlink(referent.file_name().unwrap(), &metadata).unwrap();
                 referents.push((referent.clone(), std::fs::read(referent).unwrap()));
             }
-            // Retained snapshots must suffice even after every original source disappears.
-            for path in [&source, &view, &old] {
-                std::fs::remove_file(path).unwrap();
-            }
             let presentation = files::companion_path(None, &output);
             std::fs::create_dir_all(&presentation).unwrap();
             let error = session.save(doc, Some(&output)).unwrap_err().to_string();
             assert!(error.contains("recovery metadata at"), "{error}");
             assert!(AlignmentLink::read(&output).is_err());
             assert!(AlignmentLink::read_view(&output).is_err());
-            assert_eq!(std::fs::read(&old_snapshot).unwrap(), old_bytes);
             let recovery_path = std::fs::read_dir(records::sidecar(&output).parent().unwrap())
                 .unwrap()
                 .map(|entry| entry.unwrap().path())
@@ -107,15 +97,13 @@ fn guarded_partial_save_supports_retry_and_manual_intended_recovery() {
             }
             let reopened = files::load_tree(&output).unwrap().doc;
             assert_eq!(reopened.to_newick(), session.tree(doc).unwrap().to_newick());
-            assert_eq!(std::fs::read(&old_snapshot).unwrap(), old_bytes);
             if mode == 0 {
                 assert!(!records::metadata_present(&records::sidecar(&output)).unwrap());
                 assert!(!records::metadata_present(&records::view_sidecar(&output)).unwrap());
             } else {
                 let link = AlignmentLink::read_view(&output).unwrap();
                 assert_eq!(link.source, if mode == 2 { view } else { source });
-                assert!(link.source_changed());
-                let retained = link.checked_snapshot(&output, &reopened).unwrap();
+                let retained = link.checked_alignment(&output, &reopened).unwrap();
                 let expected = if mode == 2 { "CC" } else { "AA" };
                 assert_eq!(
                     std::fs::read_to_string(retained).unwrap(),

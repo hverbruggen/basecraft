@@ -124,18 +124,16 @@ fn document_writer_bytes_require_a_version_bump() {
         let tree = root.path().join("tree.nwk");
         std::fs::write(&source, ">a\nAC\n>b\nAT\n").unwrap();
         std::fs::write(&tree, "(a,b);\n").unwrap();
-        AlignmentLink::create(&tree, &source, &source, 7, true, None).unwrap();
-        let bytes = std::fs::read_to_string(basecraft_ops::records::sidecar(&tree)).unwrap();
-        let link: AlignmentLink = serde_json::from_str(&bytes).unwrap();
-        // Allocation chooses a random unused snapshot name. Freeze only that
-        // name; retain the writer's ordering, whitespace and all other bytes.
-        let allocated = serde_json::to_string(&link.snapshot).unwrap();
-        golden(
-            "alignment-link",
-            "snapshot",
-            &tree,
-            bytes.replace(&allocated, "\"snapshot.afa\"").into_bytes(),
-        );
+        // A fixed time, so the recorded stamp is the same on every run.
+        std::fs::File::options()
+            .write(true)
+            .open(&source)
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::new(1_700_000_000, 5))
+            .unwrap();
+        AlignmentLink::create(&tree, &source, 7, true).unwrap();
+        let bytes = std::fs::read(basecraft_ops::records::sidecar(&tree)).unwrap();
+        golden("alignment-link", "file", &tree, bytes);
     }
     let metadata_fixture = ProjectMetadata {
         specimens: Table {
@@ -311,7 +309,7 @@ fn writer_versions(path: &Path) -> std::collections::BTreeMap<String, u32> {
     let formats: &[(&str, u32)] = match Format::from_path(path) {
         Ok(Format::Fasta) => &[("fasta", 1), ("gff3", 1), ("companion", 2)],
         Ok(Format::GenBank) => &[("genbank", 1)],
-        Ok(Format::Tree) => &[("newick", 1), ("companion", 2), ("alignment-link", 2)],
+        Ok(Format::Tree) => &[("newick", 1), ("companion", 2), ("alignment-link", 3)],
         Ok(Format::Delimitation) => &[("spart", 1), ("companion", 2)],
         Ok(Format::Metadata) => &[("metadata-manifest", 2), ("metadata-tsv", 1)],
         Ok(Format::Submission) => &[("submission", 3)],

@@ -807,9 +807,16 @@ impl qobject::TreeController {
         let linked = basecraft_ops::records::AlignmentLink::read_view_in(project, &path);
         let (source, status) = match linked {
             Ok(link) => {
+                // The shared check stores a touched file's new time (D25),
+                // so the status below does not hash it again.
                 let status = crate::bridge::checked_document!(
                     self.qt_thread(),
-                    self.with_doc(|tree| link.status(&path, tree))
+                    self.with_doc(|tree| {
+                        use basecraft_ops::records::AlignmentLink;
+                        let _ = AlignmentLink::checked_view_in(project, &path, tree);
+                        AlignmentLink::read_view_in(project, &path)
+                            .map_or_else(|e| e.to_string(), |link| link.status(&path, tree))
+                    })
                 )
                 .unwrap_or_default();
                 (link.source.to_string_lossy().into_owned(), status)
@@ -944,14 +951,14 @@ impl qobject::TreeController {
             &mut session,
             move |session, _| {
                 let tree = session.tree(doc).map_err(|e| e.to_string())?;
-                let link = basecraft_ops::records::AlignmentLink::read_view_in(
+                basecraft_ops::records::AlignmentLink::read_view_in(session.project(), &tree_path)
+                    .map_err(|e| format!("Link an alignment first: {e}"))?;
+                let (link, input) = basecraft_ops::records::AlignmentLink::checked_view_in(
                     session.project(),
                     &tree_path,
+                    tree,
                 )
-                .map_err(|e| format!("Link an alignment first: {e}"))?;
-                let input = link
-                    .checked_snapshot(&tree_path, tree)
-                    .map_err(|e| e.to_string())?;
+                .map_err(|e| e.to_string())?;
                 let output =
                     basecraft_plugin_host::file_tool::output_beside(&tree_path, "clade", "afa");
                 let registry = crate::plugins::registry().map_err(|e| e.to_string())?;
@@ -1006,7 +1013,7 @@ impl qobject::TreeController {
                 this.as_mut().set_busy(false);
                 match result {
                     Ok((output, source_changed)) => {
-                        this.as_mut().done(if source_changed { "Opened clades from the retained alignment snapshot; the source file has changed" } else { "Opened alignment for the selected clades" });
+                        this.as_mut().done(if source_changed { "Opened clades from the run's retained input; the original alignment is missing" } else { "Opened alignment for the selected clades" });
                         this.file_created(QString::from(output.to_string_lossy().as_ref()));
                     }
                     Err(error) => this.fail(&format!("Cannot extract clades: {error}")),

@@ -537,15 +537,22 @@ pub struct AnalysisRun {
     pub extra: BTreeMap<String, Value>,
 }
 
-/// Existing tree–alignment association, schema 1 (snapshot) or 2 (reference).
-/// Field order and direct pretty serialization are part of the existing wire shape.
+/// A tree's link to an alignment. Schema 1: the linked file, by path, size,
+/// modification time and hash; no copy is kept (D25). Schema 2: the exact
+/// input of the analysis run that inferred the tree.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct AlignmentLink {
     pub schema: u32,
     pub source: PathBuf,
+    /// Schema 1: the linked file's hash. Schema 2: the original's, if known.
     pub source_hash: String,
-    pub snapshot: PathBuf,
-    pub snapshot_hash: String,
+    /// Schema 1: the linked file's size and modification time when its hash
+    /// was last checked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_stamp: Option<crate::provenance::FileStamp>,
+    /// Schema 2: the hash of the exact alignment the run used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submitted_hash: Option<String>,
     pub alignment_version: u64,
     /// False for an explicitly associated imported tree: matching names is not inference provenance.
     pub inferred: bool,

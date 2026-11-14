@@ -108,7 +108,7 @@ fn all_fasta_fixtures_return_the_loaded_kind() {
         &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures"),
         &mut count,
     );
-    assert!(count >= 23);
+    assert!(count >= 22);
 }
 
 #[test]

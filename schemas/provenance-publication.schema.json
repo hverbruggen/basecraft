@@ -14,14 +14,14 @@
       "type": "string"
     },
     "effective_edits": {
-      "description": "Operations actually contributing to this revision, in causal order.",
+      "description": "Operations that contribute to this revision and did not contribute to\nits parents, in causal order.",
       "type": "array",
       "items": {
         "$ref": "#/$defs/EditActivity"
       }
     },
     "events": {
-      "description": "Full chronology, including undo/redo and abandoned branches, as journal\nentries (journal-entry.schema.json) without the checksum envelope."
+      "description": "What happened since the parent records, including undo, redo and\nabandoned branches, as journal entries (journal-entry.schema.json)\nwithout the checksum envelope. Earlier events are in the parents."
     },
     "id": {
       "type": "string"
@@ -66,6 +66,13 @@
     },
     "session": {
       "type": "string"
+    },
+    "withdrawn": {
+      "description": "Activity ids that contributed to the parents and no longer do: edits\nundone after the parent was saved.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     }
   },
   "required": [
@@ -79,6 +86,7 @@
     "outputs",
     "events",
     "effective_edits",
+    "withdrawn",
     "completeness",
     "report_template_version",
     "basecraft"

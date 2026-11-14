@@ -117,7 +117,7 @@ impl AlignmentWorkflow<'_> {
                 bundle: (basecraft_ops::records::relative(self.parent.run.directory(), directory)?)
                     .into(),
                 id: stage.run_id.clone(),
-                hash: basecraft_io::hash_file(&directory.join("manifest.json"))?,
+                hash: basecraft_ops::records::latest_record(directory)?.1,
             });
         }
         mutation.write_input(self.parent.run.directory(), &input)?;

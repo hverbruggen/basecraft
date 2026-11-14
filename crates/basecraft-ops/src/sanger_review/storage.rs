@@ -238,6 +238,7 @@ fn publication(run: &ArtifactRun, origin: &str, artifacts: Vec<ArtifactRevision>
         outputs: vec![],
         events: vec![],
         effective_edits: vec![],
+        withdrawn: Vec::new(),
         completeness: Completeness {
             ancestry_known: false,
             input_bytes_available: true,
@@ -1063,13 +1064,13 @@ impl SangerReview {
         let run = run
             .finish(std::slice::from_ref(&review))
             .map_err(|e| e.to_string())?;
-        let bytes = crate::records::provenance::read_record(&run.directory().join("manifest.json"))
+        let (_, hash) = crate::records::provenance::latest_record(run.directory())
             .map_err(|e| e.to_string())?;
         let evidence = AdditionEvidence {
             schema_version: 1,
             bundle: run.directory().into(),
             id: run.run.id().into(),
-            hash: basecraft_io::hash_bytes(&bytes),
+            hash,
             review: review.clone(),
             review_hash: basecraft_io::hash_file(&review).map_err(|e| e.to_string())?,
             sequence_hash: basecraft_io::hash_bytes(sequence.as_bytes()),
@@ -1092,10 +1093,9 @@ pub fn check_addition(descriptor: &str, sequence: &str) -> crate::Result<Checked
             "Reviewed sequence differs from its Sanger evidence",
         ));
     }
-    let bytes = crate::records::provenance::read_record(&evidence.bundle.join("manifest.json"))?;
-    let publication: Publication = basecraft_protocol::records::decode(&bytes)?;
+    let (publication, hash) = crate::records::provenance::latest_record(&evidence.bundle)?;
     if publication.id != evidence.id
-        || basecraft_io::hash_bytes(&bytes) != evidence.hash
+        || hash != evidence.hash
         || basecraft_io::hash_file(&evidence.review)? != evidence.review_hash
     {
         return Err(invalid("Sanger addition evidence changed"));
@@ -1561,9 +1561,7 @@ mod tests {
         std::fs::write(&reads, ">r1\nAC\n>r2\nAC\n").unwrap();
         let run = run.finish(&[evidence.clone(), reads]).unwrap();
         // The stage leaves exactly one tool run, which points at its run record.
-        let publication: Publication =
-            serde_json::from_slice(&std::fs::read(run.directory().join("manifest.json")).unwrap())
-                .unwrap();
+        let (publication, _) = crate::records::latest_record(run.directory()).unwrap();
         let tool_runs: Vec<_> = publication
             .events
             .iter()

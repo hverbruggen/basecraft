@@ -4,7 +4,7 @@ use basecraft_protocol::{
     Actor, DocState, LogEntry, OpResult,
     provenance::{ArtifactRevision, Completeness, Publication},
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write as _;
 use std::path::{Component, Path, PathBuf};
 
@@ -62,19 +62,7 @@ pub fn read_record(path: &Path) -> Result<Vec<u8>> {
 pub(crate) fn read_record_with_budget(path: &Path, remaining: &mut u64) -> Result<Vec<u8>> {
     let file = basecraft_platform::files::open_regular_read(path)?;
     let length = file.metadata()?.len();
-    read_record_from_open(file, length, remaining, 64 << 20, RecordLimit::Provenance)
-}
-
-#[derive(Clone, Copy)]
-pub(crate) enum RecordLimit {
-    Provenance,
-}
-impl RecordLimit {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Provenance => "provenance record reading",
-        }
-    }
+    read_record_from_open(file, length, remaining, 64 << 20)
 }
 
 pub(crate) fn read_record_from_open(
@@ -82,25 +70,22 @@ pub(crate) fn read_record_from_open(
     length: u64,
     remaining: &mut u64,
     cap: u64,
-    label: RecordLimit,
 ) -> Result<Vec<u8>> {
     use std::io::Read as _;
     let limit = (*remaining).min(64 << 20).min(cap);
+    let too_long = || crate::Error::Limit {
+        what: "provenance record reading".into(),
+        limit,
+    };
     if length > limit {
-        return Err(crate::Error::Limit {
-            what: label.label().into(),
-            limit,
-        });
+        return Err(too_long());
     }
     let mut bytes = Vec::new();
     let result = file.take(limit + 1).read_to_end(&mut bytes);
     *remaining = remaining.saturating_sub(bytes.len() as u64);
     result?;
     if bytes.len() as u64 > limit {
-        return Err(crate::Error::Limit {
-            what: label.label().into(),
-            limit,
-        });
+        return Err(too_long());
     }
     Ok(bytes)
 }
@@ -124,23 +109,89 @@ pub fn retained_file(
     })
 }
 
-/// Copy a run's file to a new file in the project, never replacing one. The
-/// receipt names the new file's inode before the rename, so a later repair
-/// adopts only a file this run created.
-pub fn export_file(source: &Path, destination: &Path, hash: &str, receipt: &Path) -> Result<()> {
-    use basecraft_platform::files::identity;
+/// Move a run's file to a new file in the project, never replacing one
+/// (D26). The receipt names the file's inode before the move, so a later
+/// repair adopts only the file this run moved.
+pub fn move_file(source: &Path, destination: &Path, hash: &str, receipt: &Path) -> Result<()> {
+    let check = |file: &Path| {
+        if basecraft_io::hash_file(file)? == hash {
+            Ok(())
+        } else {
+            Err(invalid("member changed before export"))
+        }
+    };
+    check(source)?;
+    move_into_project(
+        source,
+        destination,
+        |file| write_receipt(receipt, destination, hash, file),
+        check,
+    )
+}
+
+/// Move a run's file or folder to `destination`, which must not exist (D26).
+/// `mark` records what is about to become `destination` (a receipt or an
+/// intent) before it appears there. Across file systems the source is
+/// copied to a temporary in the destination's folder, synced, checked with
+/// `check`, marked and renamed into place, and only then removed, so one
+/// copy remains.
+pub fn move_into_project(
+    source: &Path,
+    destination: &Path,
+    mark: impl Fn(&Path) -> Result<()>,
+    check: impl Fn(&Path) -> Result<()>,
+) -> Result<()> {
     let parent = destination
         .parent()
         .ok_or_else(|| invalid("missing destination parent"))?;
-    let pending = tempfile::Builder::new()
-        .prefix(".basecraft-export-")
-        .tempfile_in(parent)?;
-    std::fs::copy(source, pending.path())?;
-    if basecraft_io::hash_file(pending.path())? != hash {
-        return Err(invalid("member changed during export"));
+    mark(source)?;
+    match basecraft_platform::atomic::rename_noreplace(source, destination) {
+        Err(error) if error.kind() == std::io::ErrorKind::CrossesDevices => {
+            let folder = source.is_dir();
+            let pending = tempfile::Builder::new()
+                .prefix(".basecraft-export-")
+                .tempdir_in(parent)?;
+            let copy = pending.path().join("moving");
+            if folder {
+                copy_tree(source, &copy)?;
+            } else {
+                copy_atomic(source, &copy)?;
+            }
+            basecraft_platform::files::sync_directory(pending.path())?;
+            check(&copy)?;
+            mark(&copy)?;
+            no_replace(basecraft_platform::atomic::rename_noreplace(
+                &copy,
+                destination,
+            ))?;
+            if folder {
+                std::fs::remove_dir_all(source)?;
+            } else {
+                std::fs::remove_file(source)?;
+            }
+        }
+        moved => no_replace(moved)?,
     }
-    pending.as_file().sync_all()?;
-    let (device, inode) = identity(pending.path())?;
+    basecraft_platform::files::sync_directory(parent)?;
+    if let Some(folder) = source.parent() {
+        basecraft_platform::files::sync_directory(folder)?;
+    }
+    Ok(())
+}
+
+fn no_replace(renamed: std::io::Result<()>) -> Result<()> {
+    renamed.map_err(|error| {
+        if error.kind() == std::io::ErrorKind::AlreadyExists {
+            crate::access::AccessError::DestinationExists.into()
+        } else {
+            crate::Error::from(error)
+        }
+    })
+}
+
+/// The receipt of a move: `file` is the file that becomes `destination`.
+fn write_receipt(receipt: &Path, destination: &Path, hash: &str, file: &Path) -> Result<()> {
+    let (device, inode) = basecraft_platform::files::identity(file)?;
     crate::records::write_json(
         receipt,
         &serde_json::to_value(
@@ -150,22 +201,13 @@ pub fn export_file(source: &Path, destination: &Path, hash: &str, receipt: &Path
                 hash: hash.into(),
                 device,
                 inode,
-                size: pending.as_file().metadata()?.len(),
+                size: std::fs::metadata(file)?.len(),
             },
         )?,
-    )?;
-    basecraft_platform::atomic::rename_noreplace(pending.path(), destination).map_err(|error| {
-        if error.kind() == std::io::ErrorKind::AlreadyExists {
-            crate::access::AccessError::DestinationExists.into()
-        } else {
-            crate::Error::from(error)
-        }
-    })?;
-    basecraft_platform::files::sync_directory(parent)?;
-    Ok(())
+    )
 }
 
-/// Whether `destination` is still the file [`export_file`] created, with the
+/// Whether `destination` is still the file [`move_file`] put there, with the
 /// same bytes. Matching bytes alone never authorize adopting another file.
 pub fn verify_export(destination: &Path, hash: &str, receipt: &Path) -> Result<()> {
     use basecraft_platform::files::{identity, link_count};
@@ -217,16 +259,264 @@ pub fn inspect(result: &Path, project: Option<&crate::project::Project>) -> Resu
         )
         .into());
     }
-    let publication: Publication = basecraft_protocol::records::decode(&read_record(&manifest)?)?;
-    if publication.schema_version != 1 {
+    latest(&bundle)?
+        .map(|(publication, _)| publication)
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "No saved history for this file",
+            )
+            .into()
+        })
+}
+
+/// The latest record of a history folder and the hash of its bytes, through
+/// `manifest.json`; `None` when the folder has no history.
+pub fn latest(bundle: &Path) -> Result<Option<(Publication, String)>> {
+    let manifest = bundle.join("manifest.json");
+    if !manifest.is_file() {
+        return Ok(None);
+    }
+    let pointer: basecraft_protocol::provenance::LatestRecord =
+        basecraft_protocol::records::decode(&read_record(&manifest)?)?;
+    if pointer.schema_version != 1 {
         return Err(crate::Error::Unsupported(
             "unsupported provenance schema version".into(),
         ));
     }
-    Ok(publication)
+    let (publication, hash) = read_publication(bundle, &pointer.id, &mut (64 << 20))?;
+    if hash != pointer.hash {
+        return Err(crate::Error::Damaged {
+            path: record_path(bundle, &pointer.id)?,
+            detail: "the latest history record changed after it was saved".into(),
+        });
+    }
+    Ok(Some((publication, hash)))
 }
 
-/// Validate exact retained bytes and the current result; never launch software.
+/// [`latest`] for a folder that must have history.
+pub fn latest_record(bundle: &Path) -> Result<(Publication, String)> {
+    latest(bundle)?.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("{} holds no saved history", bundle.display()),
+        )
+        .into()
+    })
+}
+
+/// `records/<id>.json` in a history folder; refuses an id that is not a
+/// plain record name.
+pub(crate) fn record_path(bundle: &Path, id: &str) -> Result<PathBuf> {
+    if id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+        return Err(invalid("unsafe publication identity"));
+    }
+    Ok(bundle.join("records").join(format!("{id}.json")))
+}
+
+/// One record and the hash of its bytes, counted against `budget`.
+fn read_publication(bundle: &Path, id: &str, budget: &mut u64) -> Result<(Publication, String)> {
+    let bytes = read_record_with_budget(&record_path(bundle, id)?, budget)?;
+    let publication: Publication = basecraft_protocol::records::decode(&bytes)?;
+    if publication.id != id || publication.schema_version != 1 {
+        return Err(invalid(
+            "unsupported or inconsistent history record identity or version",
+        ));
+    }
+    Ok((publication, basecraft_io::hash_bytes(&bytes)))
+}
+
+/// A parent record that could not be read: history before it is unknown.
+#[derive(Clone, Debug)]
+pub struct HistoryGap {
+    pub record: String,
+    /// When the record that names it was saved.
+    pub before: String,
+    pub reason: &'static str,
+}
+
+impl HistoryGap {
+    pub fn describe(&self) -> String {
+        format!(
+            "History before {} is incomplete: the saved record {} {}.",
+            self.before, self.record, self.reason
+        )
+    }
+}
+
+/// `latest` and the records it descends from, each after its parents. A
+/// parent that is missing or whose bytes differ from the hash its child
+/// recorded is a gap, not an error.
+fn ancestry(bundle: &Path, latest: Publication) -> Result<(Vec<Publication>, Vec<HistoryGap>)> {
+    /// A record still to read (its id, the hash its child expects and when
+    /// the child was saved), one to expand, or one whose parents are done.
+    enum Step {
+        Read(String, Option<String>, String),
+        Expand(Publication),
+        Done(Publication),
+    }
+    let mut budget = 128u64 << 20;
+    // A record is visited when it is expanded (or found unreadable), so one
+    // reached through two children still comes after all its own parents.
+    let mut visited = std::collections::HashSet::new();
+    let mut gaps = Vec::new();
+    let mut order = Vec::new();
+    let mut stack = vec![Step::Expand(latest)];
+    while let Some(step) = stack.pop() {
+        let record = match step {
+            Step::Done(record) => {
+                order.push(record);
+                continue;
+            }
+            Step::Expand(record) => record,
+            Step::Read(id, expected, before) => {
+                if visited.contains(&id) {
+                    continue;
+                }
+                let read = read_publication(bundle, &id, &mut budget);
+                let reason = match read {
+                    Ok((parent, hash)) if expected.as_deref() == Some(hash.as_str()) => {
+                        stack.push(Step::Expand(parent));
+                        continue;
+                    }
+                    Ok(_) => "has changed since it was saved",
+                    Err(crate::Error::Io(error))
+                        if error.kind() == std::io::ErrorKind::NotFound =>
+                    {
+                        "is missing"
+                    }
+                    Err(error @ crate::Error::Limit { .. }) => return Err(error),
+                    Err(_) => "cannot be read",
+                };
+                visited.insert(id.clone());
+                gaps.push(HistoryGap {
+                    record: id,
+                    before,
+                    reason,
+                });
+                continue;
+            }
+        };
+        if !visited.insert(record.id.clone()) {
+            continue;
+        }
+        if visited.len() > 10_000 {
+            return Err(crate::Error::Limit {
+                what: "history records".into(),
+                limit: 10_000,
+            });
+        }
+        let mut parents = std::collections::HashSet::new();
+        let reads: Vec<_> = record
+            .parents
+            .iter()
+            .map(|id| {
+                if !parents.insert(id) {
+                    return Err(invalid("duplicate parent identity"));
+                }
+                let expected = record.parent_hashes.get(id).cloned();
+                Ok(Step::Read(id.clone(), expected, record.created.clone()))
+            })
+            .collect::<Result<_>>()?;
+        stack.push(Step::Done(record));
+        // The first parent is read first.
+        stack.extend(reads.into_iter().rev());
+    }
+    Ok((order, gaps))
+}
+
+/// A document's saved history: every record up to the latest, read through
+/// the parent links, oldest first.
+#[derive(Clone, Debug, Default)]
+pub struct SavedHistory {
+    pub events: Vec<LogEntry>,
+    /// Edits in effect in the latest revision, oldest first.
+    pub effective: Vec<basecraft_protocol::provenance::EditActivity>,
+    pub gaps: Vec<HistoryGap>,
+}
+
+impl SavedHistory {
+    /// Read the records `latest` descends from. A parent that is missing or
+    /// whose bytes differ from its recorded hash is a gap, not an error.
+    /// The documents a folder's records were made from come first: the
+    /// records its input record links to (an analysis run's input, a Save As
+    /// source), read the same way.
+    pub fn read(bundle: &Path, latest: Publication) -> Result<Self> {
+        let mut history = Self::default();
+        history.read_into(bundle, latest, &mut HashSet::new(), &mut HashSet::new())?;
+        Ok(history)
+    }
+
+    fn read_into(
+        &mut self,
+        bundle: &Path,
+        latest: Publication,
+        events: &mut HashSet<String>,
+        records: &mut HashSet<(PathBuf, String)>,
+    ) -> Result<()> {
+        let upstream = crate::records::input_evidence::read_input(bundle)
+            .map(|input| input.upstream)
+            .unwrap_or_default();
+        for link in upstream {
+            let folder = bundle.join(&link.bundle);
+            let folder = folder.canonicalize().unwrap_or(folder);
+            if !records.insert((folder.clone(), link.id.clone())) {
+                continue;
+            }
+            if records.len() > 10_000 {
+                return Err(crate::Error::Limit {
+                    what: "history records".into(),
+                    limit: 10_000,
+                });
+            }
+            let gap = |reason| HistoryGap {
+                record: link.id.clone(),
+                before: latest.created.clone(),
+                reason,
+            };
+            match read_publication(&folder, &link.id, &mut (64 << 20)) {
+                Ok((input, hash)) if hash == link.hash => {
+                    self.read_into(&folder, input, events, records)?;
+                }
+                Ok(_) => self.gaps.push(gap("has changed since it was saved")),
+                Err(crate::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                    self.gaps.push(gap("is missing"));
+                }
+                Err(error @ crate::Error::Limit { .. }) => return Err(error),
+                Err(_) => self.gaps.push(gap("cannot be read")),
+            }
+        }
+        let (order, gaps) = ancestry(bundle, latest)?;
+        self.gaps.extend(gaps);
+        for mut record in order {
+            record
+                .events
+                .retain(|event| events.insert(event.id.clone()));
+            self.add(record);
+        }
+        Ok(())
+    }
+
+    /// The history of a record with no parents.
+    pub fn of(record: Publication) -> Self {
+        let mut history = Self::default();
+        history.add(record);
+        history
+    }
+
+    /// Add a record that descends from everything already in the history.
+    pub(crate) fn add(&mut self, record: Publication) {
+        let withdrawn: std::collections::HashSet<_> = record.withdrawn.into_iter().collect();
+        self.effective.retain(|edit| !withdrawn.contains(&edit.id));
+        for edit in record.effective_edits {
+            if !self.effective.iter().any(|known| known.id == edit.id) {
+                self.effective.push(edit);
+            }
+        }
+        self.events.extend(record.events);
+    }
+}
+
 pub fn verify(result: &Path, project: Option<&crate::project::Project>) -> Result<Vec<String>> {
     let publication = inspect(result, project)?;
     let bundle = bundle_for_result(result, project);
@@ -312,73 +602,28 @@ pub fn verify(result: &Path, project: Option<&crate::project::Project>) -> Resul
 
 pub(crate) fn verify_records(bundle: &Path, current: &Publication) -> Result<Vec<String>> {
     let mut issues = Vec::new();
-    let mut states = std::collections::HashMap::<String, u8>::new();
-    let mut hashes = std::collections::HashMap::<String, String>::new();
-    // Queue only identities and expected checksums, never parsed publications.
-    let mut stack = vec![(current.id.clone(), None, false)];
-    let mut scheduled = 1usize;
-    let mut record_bytes = 0u64;
+    let (stored, _) = read_publication(bundle, &current.id, &mut (64 << 20))?;
+    if serde_json::to_value(&stored)? != serde_json::to_value(current)? {
+        issues.push(format!(
+            "{}: immutable publication record differs",
+            current.id
+        ));
+    }
+    let (records, gaps) = ancestry(bundle, stored)?;
+    issues.extend(
+        gaps.iter()
+            .map(|gap| format!("{}: ancestor record {}", gap.record, gap.reason)),
+    );
+    // Effective edits may name an event of an earlier record, such as an
+    // edit redone after a save.
+    let mut events = std::collections::HashMap::new();
     let mut artifact_bytes = 0u64;
-    while let Some((id, expected_hash, leaving)) = stack.pop() {
-        if leaving {
-            states.insert(id, 2);
-            continue;
+    for publication in &records {
+        let own: std::collections::HashSet<_> = publication.events.iter().map(|e| &e.id).collect();
+        if own.len() != publication.events.len() {
+            issues.push(format!("{}: duplicate event identities", publication.id));
         }
-        if states.get(&id) == Some(&1) {
-            return Err(invalid("provenance ancestry contains a cycle"));
-        }
-        if let Some(hash) = hashes.get(&id) {
-            if expected_hash
-                .as_ref()
-                .is_some_and(|expected| expected != hash)
-            {
-                issues.push(format!("{id}: ancestor record hash differs"));
-            }
-            continue;
-        }
-        if id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
-            return Err(invalid("unsafe publication identity"));
-        }
-        let path = safe_relative(bundle, &format!("records/{id}.json"))?;
-        record_bytes = record_bytes.saturating_add(std::fs::metadata(&path)?.len());
-        if record_bytes > 128 << 20 {
-            return Err(crate::Error::Limit {
-                what: "provenance ancestry record verification".into(),
-                limit: 128 << 20,
-            });
-        }
-        let bytes = read_record(&path)?;
-        let hash = basecraft_io::hash_bytes(&bytes);
-        if expected_hash
-            .as_ref()
-            .is_some_and(|expected| *expected != hash)
-        {
-            issues.push(format!("{id}: ancestor record hash differs"));
-        }
-        hashes.insert(id.clone(), hash);
-        let publication: Publication = basecraft_protocol::records::decode(&bytes)?;
-        if publication.id != id || publication.schema_version != 1 {
-            return Err(invalid(
-                "unsupported or inconsistent ancestor identity/version",
-            ));
-        }
-        if id == current.id && serde_json::to_value(&publication)? != serde_json::to_value(current)?
-        {
-            issues.push(format!("{id}: immutable publication record differs"));
-        }
-        let events: std::collections::HashMap<_, _> =
-            publication.events.iter().map(|e| (&e.id, &e.op)).collect();
-        if events.len() != publication.events.len() {
-            issues.push(format!("{id}: duplicate event identities"));
-        }
-        for activity in &publication.effective_edits {
-            if events.get(&activity.id).copied() != Some(&activity.operation) {
-                issues.push(format!(
-                    "{}: effective activity has no matching event",
-                    activity.id
-                ));
-            }
-        }
+        events.extend(publication.events.iter().map(|e| (&e.id, &e.op)));
         for artifact in publication.inputs.iter().chain(&publication.outputs) {
             if let Some(relative) = &artifact.retained {
                 let retained = safe_relative(bundle, relative)?;
@@ -405,26 +650,13 @@ pub(crate) fn verify_records(bundle: &Path, current: &Publication) -> Result<Vec
                 }
             }
         }
-        let mut parents = std::collections::HashSet::new();
-        states.insert(id.clone(), 1);
-        stack.push((id, None, true));
-        for parent in &publication.parents {
-            if !parents.insert(parent) {
-                return Err(invalid("duplicate parent identity"));
-            }
-            scheduled += 1;
-            if scheduled > 10_000 {
-                return Err(crate::Error::Limit {
-                    what: "provenance ancestry references".into(),
-                    limit: 10_000,
-                });
-            }
-            let expected = publication
-                .parent_hashes
-                .get(parent)
-                .cloned()
-                .ok_or_else(|| invalid("ancestor record hash missing"))?;
-            stack.push((parent.clone(), Some(expected), false));
+    }
+    for activity in records.iter().flat_map(|record| &record.effective_edits) {
+        if events.get(&activity.id) != Some(&&activity.operation) {
+            issues.push(format!(
+                "{}: effective activity has no matching event",
+                activity.id
+            ));
         }
     }
     Ok(issues)
@@ -451,14 +683,21 @@ fn stage_json(
 // names a registered reference ledger (`input_run`), such as imported support
 // values. The event remains a ToolRun; edits, undo and replay are unchanged.
 // Processed events stay listed under the original `sanger_input_events` key.
-fn link_selected_inputs(bundle: &Path, publication: &Publication) -> Result<()> {
-    let mut effective = publication.effective_edits.clone();
-    crate::records::contributions::project(&publication.events, &mut effective);
+// `events` and `effective` are the whole history, the publication's own
+// record included.
+fn link_selected_inputs<'a>(
+    bundle: &Path,
+    publication: &Publication,
+    events: impl Iterator<Item = &'a LogEntry> + Clone,
+    effective: &[basecraft_protocol::provenance::EditActivity],
+) -> Result<()> {
+    let mut effective = effective.to_vec();
+    crate::records::contributions::project(events.clone(), &mut effective);
     let retained: std::collections::HashSet<_> = effective.iter().map(|e| e.id.as_str()).collect();
     // Each selected input names the run that retains its exact bytes.
     let mut dependencies: Vec<(&String, basecraft_protocol::records::ActivityInputRun)> =
         Vec::new();
-    for event in &publication.events {
+    for event in events {
         let basecraft_protocol::Op::ToolRun {
             input_run,
             contributions,
@@ -626,23 +865,37 @@ pub fn publish_run(
     inputs: Vec<ArtifactRevision>,
     outputs: Vec<ArtifactRevision>,
 ) -> Result<Publication> {
-    let (events, effective_edits) = std::fs::read(bundle.join("manifest.json"))
-        .ok()
-        .and_then(|bytes| basecraft_protocol::records::decode::<Publication>(&bytes).ok())
-        .map(|previous| (previous.events, previous.effective_edits))
-        .unwrap_or_default();
+    // An earlier record of another id is a parent (D24); the run's own
+    // record published again, on a repair, keeps what it holds.
+    let (mut events, mut effective_edits, mut withdrawn) = Default::default();
+    let (mut parents, mut parent_hashes) = (Vec::new(), BTreeMap::new());
+    match latest(bundle)? {
+        Some((previous, _)) if previous.id == id => {
+            (events, effective_edits, withdrawn) = (
+                previous.events,
+                previous.effective_edits,
+                previous.withdrawn,
+            );
+        }
+        Some((previous, hash)) => {
+            parent_hashes.insert(previous.id.clone(), hash);
+            parents.push(previous.id);
+        }
+        None => {}
+    }
     let publication = Publication {
         schema_version: 1,
         id: id.into(),
         session: basecraft_platform::process_instance().into(),
-        parents: vec![],
-        parent_hashes: BTreeMap::new(),
+        parents,
+        parent_hashes,
         created: basecraft_platform::now_rfc3339(),
         origin,
         inputs,
         outputs,
         events,
         effective_edits,
+        withdrawn,
         completeness: Completeness {
             ancestry_known: false,
             input_bytes_available: true,
@@ -698,56 +951,76 @@ pub fn file_run_entry(
     })
 }
 
-/// Artifacts must already be durable before this final manifest publication.
+/// Publish a record with no parents. Artifacts must already be durable.
 pub fn publish(bundle: &Path, publication: &Publication) -> Result<()> {
-    stage(bundle, publication)?.publish().map(|_| ())
+    stage(
+        bundle,
+        publication,
+        publication.events.iter(),
+        &publication.effective_edits,
+    )?
+    .publish()
+    .map(|_| ())
 }
 
-/// Stage the record, reports, README and manifest. They sync together on
-/// publication and are renamed in order, the manifest last.
-pub(crate) fn stage(
+/// Stage the record and `manifest.json`, which names it as the latest. They
+/// sync together on publication and are renamed in order, the manifest last.
+/// `events` and `effective` are the whole history, this record included.
+pub(crate) fn stage<'a>(
     bundle: &Path,
     publication: &Publication,
+    events: impl Iterator<Item = &'a LogEntry> + Clone,
+    effective: &[basecraft_protocol::provenance::EditActivity],
 ) -> Result<crate::documents::PreparedWrite> {
     std::fs::create_dir_all(bundle.join("records"))?;
-    link_selected_inputs(bundle, publication)?;
+    link_selected_inputs(bundle, publication, events, effective)?;
     let mut prepared = crate::documents::PreparedWrite::default();
+    let record = basecraft_protocol::records::encode(publication)?;
+    if record.len() > 64 << 20 {
+        return Err(crate::Error::Limit {
+            what: "provenance record publication".into(),
+            limit: 64 << 20,
+        });
+    }
+    prepared.push(&record_path(bundle, &publication.id)?, |w| {
+        w.write_all(&record)
+    })?;
     stage_json(
         &mut prepared,
-        &bundle
-            .join("records")
-            .join(format!("{}.json", publication.id)),
-        publication,
+        &bundle.join("manifest.json"),
+        &basecraft_protocol::provenance::LatestRecord {
+            schema_version: 1,
+            id: publication.id.clone(),
+            hash: basecraft_io::hash_bytes(&record),
+        },
     )?;
-    stage_reports(&mut prepared, bundle, publication)?;
-    prepared.push(&bundle.join("README.md"), |w| {
-        w.write_all(
-        b"# Basecraft provenance v1\n\nmanifest.json selects the latest publication. records/ holds immutable publication records; artifacts/ holds BLAKE3-addressed original and saved bytes. Reports are generated descriptions, not inferred laboratory protocols. Imported history before Basecraft is unknown. Checksums detect changes; they are not signatures. No file in this bundle should be executed to inspect or verify it.\n"
-    )
-    })?;
-    stage_json(&mut prepared, &bundle.join("manifest.json"), publication)?;
     Ok(prepared)
 }
 
-/// Deterministic evidence-based reports.
-pub fn write_reports(output: &Path, publication: &Publication) -> Result<()> {
-    let mut prepared = crate::documents::PreparedWrite::default();
-    stage_reports(&mut prepared, output, publication)?;
-    prepared.publish().map(|_| ())
+/// The latest record of a saved file and the whole history it ends.
+pub fn saved_history(
+    result: &Path,
+    project: Option<&crate::project::Project>,
+) -> Result<(Publication, SavedHistory)> {
+    let latest = inspect(result, project)?;
+    let history = SavedHistory::read(&bundle_for_result(result, project), latest.clone())?;
+    Ok((latest, history))
 }
 
-fn stage_reports(
-    prepared: &mut crate::documents::PreparedWrite,
+/// Write the readable reports of a saved revision into `output`, at the
+/// user's request; nothing writes them on save.
+pub fn write_reports(
     output: &Path,
     publication: &Publication,
+    history: SavedHistory,
 ) -> Result<()> {
+    let record =
+        crate::records::document_record::DocumentRecord::from_history(publication, history);
+    let mut prepared = crate::documents::PreparedWrite::default();
     std::fs::create_dir_all(output.join("reports"))?;
-    let report =
-        crate::records::document_record::DocumentRecord::from_publication(publication).report()?;
-    let history = report.history_text;
-    let methods = report.methods;
+    let report = record.report()?;
     let mut params = String::from("activity\toperation\tparameters_json\n");
-    for activity in &publication.effective_edits {
+    for activity in &record.effective {
         let _ = writeln!(
             params,
             "{}\t{}\t{}",
@@ -768,8 +1041,8 @@ fn stage_reports(
         })
         .collect::<serde_json::Result<Vec<_>>>()?;
     for (name, bytes) in [
-        ("history.md", history.as_bytes()),
-        ("methods.generated.md", methods.as_bytes()),
+        ("history.md", report.history_text.as_bytes()),
+        ("methods.generated.md", report.methods.as_bytes()),
         ("parameters.tsv", params.as_bytes()),
     ] {
         prepared.push(&output.join("reports").join(name), |w| w.write_all(bytes))?;
@@ -781,7 +1054,7 @@ fn stage_reports(
         w.write_all(&map)
     })?;
     stage_json(
-        prepared,
+        &mut prepared,
         &output.join("reports/manifest.json"),
         &serde_json::to_value(
             basecraft_protocol::report_records::ProvenanceReportManifest {
@@ -793,8 +1066,12 @@ fn stage_reports(
                 citations: report.citations,
             },
         )?,
-    )
+    )?;
+    prepared.publish().map(|_| ())
 }
+
+/// The README of an exported history folder.
+const BUNDLE_README: &[u8] = b"# Basecraft provenance v1\n\nmanifest.json names the latest record. records/ holds one immutable record per save; each names its parents, and together they are the file's history. artifacts/ holds BLAKE3-addressed original and saved bytes. Imported history before Basecraft is unknown. Checksums detect changes; they are not signatures. No file in this folder should be executed to inspect or verify it.\n";
 
 fn copy_tree(source: &Path, target: &Path) -> Result<()> {
     if std::fs::symlink_metadata(source)?.file_type().is_symlink() {
@@ -881,6 +1158,9 @@ pub fn package(
         std::fs::create_dir_all(folder)?;
     }
     copy_tree(&bundle_for_result(result, project), &packaged_bundle)?;
+    basecraft_io::write_atomic(&packaged_bundle.join("README.md"), |w| {
+        w.write_all(BUNDLE_README)
+    })?;
     // The copy carries its history beside it, outside any project.
     let copied_issues = verify(&copied, None)?;
     if !copied_issues.is_empty() {

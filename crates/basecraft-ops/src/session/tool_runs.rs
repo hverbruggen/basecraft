@@ -150,19 +150,23 @@ impl Session {
     /// A run may claim only edits this actor made in this document.
     fn check_owned_edits(&self, id: DocId, actor: &Actor, edits: &[String]) -> Result<()> {
         if self.tracked {
-            let key = &self.docs[id.0].key;
-            let owned = self.events.matching(|e| {
-                edits.contains(&e.id)
-                    && e.doc == *key
-                    && e.actor == *actor
-                    && matches!(
-                        e.op,
-                        Op::FeatureAdd { .. }
-                            | Op::FeatureUpdate { .. }
-                            | Op::TreeAddSupport { .. }
-                            | Op::SeqReplace { .. }
-                    )
-            })?;
+            let slot = &self.docs[id.0];
+            let owned: Vec<_> = slot
+                .recorded
+                .iter()
+                .chain(&slot.unsaved)
+                .filter(|e| {
+                    edits.contains(&e.id)
+                        && e.actor == *actor
+                        && matches!(
+                            e.op,
+                            Op::FeatureAdd { .. }
+                                | Op::FeatureUpdate { .. }
+                                | Op::TreeAddSupport { .. }
+                                | Op::SeqReplace { .. }
+                        )
+                })
+                .collect();
             if !edits.iter().all(|edit| owned.iter().any(|e| e.id == *edit)) {
                 return Err(invalid(
                     "activity names an unknown or differently owned edit",

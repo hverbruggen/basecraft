@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "CollectionExportIntent",
-  "description": "Visible collection destination and members, recorded before copying.",
+  "description": "A collection's project destination and members, recorded before the\ncollection's folder moves there (D26).",
   "type": "object",
   "properties": {
     "basecraft": {
@@ -10,6 +10,9 @@
     },
     "destination": {
       "type": "string"
+    },
+    "identity": {
+      "description": "The identity of the folder that becomes `destination`, as the\noperating system reports it (`platform` plus its fields), so a repair\nadopts only the folder this run moved."
     },
     "members": {
       "type": "object",
@@ -27,6 +30,7 @@
     "schema",
     "destination",
     "members",
+    "identity",
     "basecraft"
   ]
 }

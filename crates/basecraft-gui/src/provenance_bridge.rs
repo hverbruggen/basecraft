@@ -102,8 +102,8 @@ fn run(
                 }
             }
             "methods" => {
-                let publication = records::inspect(result, project)?;
-                records::write_reports(destination, &publication)?;
+                let (publication, history) = records::saved_history(result, project)?;
+                records::write_reports(destination, &publication, history)?;
                 Ok(format!(
                     "Generated reports: {}",
                     destination.join("reports").display()
@@ -144,9 +144,12 @@ impl qobject::AppProvenance {
             crate::chosen_project::chosen()
                 .map_err(basecraft_ops::Error::Invalid)
                 .and_then(|project| {
-                    basecraft_ops::records::inspect(Path::new(&path.to_string()), project.as_ref())
+                    basecraft_ops::records::DocumentRecord::saved(
+                        Path::new(&path.to_string()),
+                        project.as_ref(),
+                    )
                 })
-                .and_then(|p| basecraft_ops::records::DocumentRecord::from_publication(&p).report())
+                .and_then(|record| record.report())
                 .and_then(|r| serde_json::to_string(&r).map_err(Into::into))
                 .map_err(|e| e.to_string()),
         )

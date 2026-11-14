@@ -52,6 +52,7 @@ mod rooting_review;
 mod sanger_fixture;
 mod sanger_secondary_evidence;
 mod sanger_session;
+mod save_history_size;
 mod save_index;
 mod save_reference_protections;
 mod save_safety;

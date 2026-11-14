@@ -87,7 +87,10 @@ impl Session {
         );
         slot.accepted_hashes.clone_from(&hashes);
         slot.absent_sidecars = absent_sidecars;
-        slot.origin = origin;
+        if let Some((origin, history)) = origin {
+            slot.origin = Some(origin);
+            slot.origin_history = history;
+        }
         slot.origin_issue = origin_issue;
         slot.saved_at = Some(super::SavedMark(None));
         slot.source_stamps = captured.stamps;
@@ -327,10 +330,7 @@ impl Session {
             .ok_or_else(|| invalid("unknown document"))?;
         Ok(format!(
             "{}:{}:{}:{}",
-            self.id,
-            id.0,
-            slot.generation,
-            self.events.len()
+            self.id, id.0, slot.generation, self.journaled
         ))
     }
 
@@ -343,10 +343,13 @@ impl Session {
             .docs
             .get(id.0)
             .ok_or_else(|| invalid("unknown document"))?;
-        let mut record = slot.origin.as_ref().map_or_else(
-            || crate::records::document_record::DocumentRecord::empty(&slot.key),
-            crate::records::document_record::DocumentRecord::from_publication,
-        );
+        let mut record = match &slot.origin {
+            Some(origin) => crate::records::document_record::DocumentRecord::from_history(
+                origin,
+                slot.origin_history.clone(),
+            ),
+            None => crate::records::document_record::DocumentRecord::empty(&slot.key),
+        };
         if let Some(origin) = &slot.origin {
             record
                 .origins
@@ -367,16 +370,15 @@ impl Session {
         {
             record.events.push(baseline.clone());
         }
-        record
-            .events
-            .extend(self.events.matching(|e| e.doc == slot.key)?);
+        record.events.extend(slot.recorded.iter().cloned());
+        record.events.extend(slot.unsaved.iter().cloned());
         record.events.extend(
             self.pending_baselines
                 .iter()
                 .filter(|e| e.doc == slot.key)
                 .cloned(),
         );
-        record.effective.extend(slot.effective()?);
+        record.effective.extend(slot.effective());
         record.deduplicate();
         crate::records::contributions::project(&record.data.events, &mut record.data.effective);
         Ok(record)

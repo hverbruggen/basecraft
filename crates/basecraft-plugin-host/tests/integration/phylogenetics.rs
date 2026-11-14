@@ -63,7 +63,7 @@ fn trimal_and_iqtree_preserve_identifiers_and_provenance() {
         session.alignment(doc).unwrap().version()
     );
     let snapshot = link
-        .checked_snapshot(&tree, session.tree(tree_doc).unwrap())
+        .checked_alignment(&tree, session.tree(tree_doc).unwrap())
         .unwrap();
     let snapshot_doc = session.open(&snapshot).unwrap();
     assert_eq!(session.alignment(snapshot_doc).unwrap().read(0, 0, 1), b"T");

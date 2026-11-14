@@ -88,9 +88,7 @@ fn save_streams_small_and_large_documents_once() {
                 std::fs::read_dir(bundle.join("artifacts")).unwrap().count(),
                 0
             );
-            let record: basecraft_protocol::provenance::Publication =
-                serde_json::from_slice(&std::fs::read(bundle.join("manifest.json")).unwrap())
-                    .unwrap();
+            let (record, _) = basecraft_ops::records::latest_record(&bundle).unwrap();
             assert!(
                 record
                     .outputs

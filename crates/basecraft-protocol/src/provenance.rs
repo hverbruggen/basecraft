@@ -46,14 +46,28 @@ pub struct Publication {
     pub origin: String,
     pub inputs: Vec<ArtifactRevision>,
     pub outputs: Vec<ArtifactRevision>,
-    /// Full chronology, including undo/redo and abandoned branches, as journal
-    /// entries (journal-entry.schema.json) without the checksum envelope.
+    /// What happened since the parent records, including undo, redo and
+    /// abandoned branches, as journal entries (journal-entry.schema.json)
+    /// without the checksum envelope. Earlier events are in the parents.
     #[schemars(with = "serde_json::Value")]
     pub events: Vec<LogEntry>,
-    /// Operations actually contributing to this revision, in causal order.
+    /// Operations that contribute to this revision and did not contribute to
+    /// its parents, in causal order.
     pub effective_edits: Vec<EditActivity>,
+    /// Activity ids that contributed to the parents and no longer do: edits
+    /// undone after the parent was saved.
+    pub withdrawn: Vec<String>,
     pub completeness: Completeness,
     pub report_template_version: u32,
+}
+
+/// `manifest.json` of a history folder: which record is the latest. The
+/// record itself is `records/<id>.json`; `hash` is the BLAKE3 hash of its bytes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct LatestRecord {
+    pub schema_version: u32,
+    pub id: String,
+    pub hash: String,
 }
 
 /// Cheap change signal captured during an existing verified read. Matching time

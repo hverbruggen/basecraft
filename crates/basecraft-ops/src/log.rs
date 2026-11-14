@@ -67,7 +67,12 @@ impl LogWriter {
     /// One checked write with rollback on ordinary I/O failure. A power loss
     /// remains a journal recovery event, not a filesystem transaction.
     pub fn append_batch(&mut self, entries: &[LogEntry]) -> Result<()> {
-        let Some(entry) = entries.first() else {
+        self.append_lines(&Lines::of(entries)?)
+    }
+
+    /// [`LogWriter::append_batch`] for entries already encoded.
+    pub(crate) fn append_lines(&mut self, lines: &Lines) -> Result<()> {
+        let Some(month) = lines.month.clone() else {
             return Ok(());
         };
         if self.poisoned {
@@ -75,7 +80,6 @@ impl LogWriter {
                 "journal durability is uncertain; close this session and inspect recovery",
             ));
         }
-        let month = entry.t.get(..7).unwrap_or("unknown").to_string();
         if self
             .open
             .as_ref()
@@ -92,7 +96,7 @@ impl LogWriter {
             let file = OpenOptions::new().create(true).append(true).open(path)?;
             self.open = Some((month, (self.wrap)(file)));
         }
-        let line = encode(entries, self.sequence)?;
+        let line = lines.numbered(self.sequence)?;
         if let Some((_, f)) = &mut self.open {
             // One write per line: with O_APPEND, a crash can't interleave
             // half lines.
@@ -131,48 +135,194 @@ impl LogWriter {
                 }
                 return Err(error.into());
             }
-            self.sequence += entries.len() as u64;
+            self.sequence += lines.lines.len() as u64;
         }
         Ok(())
     }
 }
 
+impl LogWriter {
+    /// This writer's segment files, oldest first.
+    fn segments(&self) -> Result<Vec<PathBuf>> {
+        let mut files: Vec<PathBuf> = match fs::read_dir(&self.dir) {
+            Ok(entries) => entries
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|f| f.extension().is_some_and(|e| e == "jsonl"))
+                .filter(|f| stream_of(f) == self.stream)
+                .collect(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => return Err(error.into()),
+        };
+        files.sort();
+        Ok(files)
+    }
+
+    /// Rewrite the journal with only the entries `keep` accepts, in order, as
+    /// a new stream; then remove the old one. After a crash part way, both
+    /// streams may be there: readers skip entries they already read, so the
+    /// journal reads as it did before.
+    pub fn keep(&mut self, mut keep: impl FnMut(&LogEntry) -> bool) -> Result<()> {
+        if self.poisoned {
+            return Err(crate::error::invalid(
+                "journal durability is uncertain; close this session and inspect recovery",
+            ));
+        }
+        let old = self.segments()?;
+        let Some(last) = old.last() else {
+            return Ok(());
+        };
+        let mut kept = Vec::new();
+        for file in &old {
+            let segment = verified_prefix(file)?;
+            if let Some(problem) = segment.problem {
+                return Err(crate::Error::Damaged {
+                    path: file.clone(),
+                    detail: problem,
+                });
+            }
+            kept.extend(segment.entries.into_iter().filter(|entry| keep(entry)));
+        }
+        // The newest month keeps the new stream after the old one in name order.
+        let name = last.file_name().unwrap_or_default().to_string_lossy();
+        let month = name.get(..7).unwrap_or("unknown").to_owned();
+        // Later than the old stream, so it sorts after it.
+        let previous: ulid::Ulid = self.stream.parse().unwrap_or_default();
+        let stream = ulid::Ulid::generate()
+            .max(previous.increment().unwrap_or_else(|next| next))
+            .to_string();
+        let mut segment = 0;
+        let mut written = Vec::new();
+        let mut lines = Vec::new();
+        for (sequence, line) in (0u64..).zip(&Lines::of(&kept)?.lines) {
+            numbered(&mut lines, line, sequence);
+            if lines.len() as u64 >= BATCH_LIMIT {
+                written.push(self.write_segment(&month, &stream, segment, &lines)?);
+                lines.clear();
+                segment += 1;
+            }
+        }
+        written.push(self.write_segment(&month, &stream, segment, &lines)?);
+        basecraft_platform::files::sync_directory(&self.dir)?;
+        let path = written.last().expect("one segment");
+        self.open = Some((
+            month,
+            (self.wrap)(OpenOptions::new().append(true).open(path)?),
+        ));
+        self.stream = stream;
+        self.segment = segment;
+        self.sequence = kept.len() as u64;
+        // Newest first: a crash part way leaves a prefix of the old stream.
+        for file in old.iter().rev() {
+            fs::remove_file(file)?;
+        }
+        basecraft_platform::files::sync_directory(&self.dir)?;
+        Ok(())
+    }
+
+    fn write_segment(
+        &self,
+        month: &str,
+        stream: &str,
+        segment: u64,
+        lines: &[u8],
+    ) -> Result<PathBuf> {
+        let path = self
+            .dir
+            .join(format!("{month}-{stream}-{segment:06}.jsonl"));
+        basecraft_io::write_atomic(&path, |w| w.write_all(lines))?;
+        Ok(path)
+    }
+}
+
+/// The stream a segment file belongs to: `<month>-<stream>-<segment>.jsonl`.
+fn stream_of(file: &Path) -> String {
+    let stem = file.file_stem().unwrap_or_default().to_string_lossy();
+    let named = stem.rsplit_once('-').map_or(&*stem, |(named, _)| named);
+    named.get(8..).unwrap_or(named).to_owned()
+}
+
 /// The most bytes one journal batch may take.
 pub(crate) const BATCH_LIMIT: u64 = 8 << 20;
 
-/// `entries` as journal lines numbered from `sequence`, refused past
-/// [`BATCH_LIMIT`].
-fn encode(entries: &[LogEntry], sequence: u64) -> Result<Vec<u8>> {
-    let mut line = Vec::new();
-    for (offset, entry) in entries.iter().enumerate() {
-        let value = serde_json::to_value(entry)?;
-        let checksum = basecraft_io::hash_bytes(&serde_json::to_vec(&value)?);
-        let value = serde_json::to_value(basecraft_protocol::records::JournalEntry {
-            basecraft: basecraft_protocol::records::writing_version(),
-            checksum,
-            sequence: sequence + offset as u64,
-            entry: value,
-        })?;
-        serde_json::to_writer(&mut line, &value)?;
-        line.push(b'\n');
-        if line.len() as u64 > BATCH_LIMIT {
-            return Err(crate::Error::Limit {
-                what: "operation journal batch".into(),
-                limit: BATCH_LIMIT,
-            });
-        }
-    }
-    Ok(line)
+/// Journal lines, each without the sequence number the writer adds when it
+/// appends them, so a batch is encoded once to check its size and to write.
+#[derive(Default)]
+pub(crate) struct Lines {
+    /// The month of the first entry, which names the journal file.
+    month: Option<String>,
+    /// Each line and where its sequence number goes.
+    lines: Vec<(Vec<u8>, usize)>,
 }
 
-/// Whether `entries` fit in one journal batch. Counted with the widest
-/// sequence numbers, so a batch that fits here fits when written.
-pub(crate) fn fits_one_batch(entries: &[LogEntry]) -> Result<bool> {
-    match encode(entries, u64::MAX >> 1) {
-        Ok(_) => Ok(true),
-        Err(crate::Error::Limit { .. }) => Ok(false),
-        Err(error) => Err(error),
+impl Lines {
+    pub(crate) fn of(entries: &[LogEntry]) -> Result<Self> {
+        let mut lines = Self {
+            month: entries
+                .first()
+                .map(|entry| entry.t.get(..7).unwrap_or("unknown").to_owned()),
+            lines: Vec::new(),
+        };
+        for entry in entries {
+            // The checksum covers the entry's sorted compact JSON; the
+            // envelope's fields then join the same object.
+            let mut value = serde_json::to_value(entry)?;
+            let checksum = basecraft_io::hash_bytes(&serde_json::to_vec(&value)?);
+            // Keys sort, so `_sequence` follows `{"_checksum":"…",`.
+            let at = r#"{"_checksum":""#.len() + checksum.len() + r#"","#.len();
+            let fields = value.as_object_mut().expect("a journal entry is an object");
+            fields.insert("_checksum".into(), checksum.into());
+            fields.insert(
+                basecraft_protocol::records::WRITTEN_BY.into(),
+                basecraft_protocol::records::writing_version().into(),
+            );
+            let mut line = serde_json::to_vec(&value)?;
+            // The offset holds only while keys sort and `_checksum` is first.
+            if !line.starts_with(br#"{"_checksum":""#) || line.get(at - 1) != Some(&b',') {
+                return Err(crate::Error::Damaged {
+                    path: "journal".into(),
+                    detail: "journal line does not start with its checksum".into(),
+                });
+            }
+            line.push(b'\n');
+            lines.lines.push((line, at));
+        }
+        Ok(lines)
     }
+
+    /// Add `other`'s lines after these.
+    pub(crate) fn extend(&mut self, other: Self) {
+        self.month = self.month.take().or(other.month);
+        self.lines.extend(other.lines);
+    }
+
+    /// Whether the lines fit in one journal batch, counted with the widest
+    /// sequence numbers, so lines that fit here fit when written.
+    pub(crate) fn fit(&self) -> bool {
+        let widest = format!(r#""_sequence":{},"#, u64::MAX >> 1).len();
+        let bytes: usize = self.lines.iter().map(|(line, _)| line.len() + widest).sum();
+        bytes as u64 <= BATCH_LIMIT
+    }
+
+    /// The lines numbered from `sequence`, refused past [`BATCH_LIMIT`].
+    fn numbered(&self, sequence: u64) -> Result<Vec<u8>> {
+        let mut bytes = Vec::new();
+        for (number, line) in (sequence..).zip(&self.lines) {
+            numbered(&mut bytes, line, number);
+            if bytes.len() as u64 > BATCH_LIMIT {
+                return Err(crate::Error::Limit {
+                    what: "operation journal batch".into(),
+                    limit: BATCH_LIMIT,
+                });
+            }
+        }
+        Ok(bytes)
+    }
+}
+
+fn numbered(out: &mut Vec<u8>, (line, at): &(Vec<u8>, usize), number: u64) {
+    out.extend_from_slice(&line[..*at]);
+    out.extend_from_slice(format!(r#""_sequence":{number},"#).as_bytes());
+    out.extend_from_slice(&line[*at..]);
 }
 
 /// Every entry under a project's log directory, from all hosts. Within a
@@ -209,6 +359,9 @@ fn read_entries(root: &Path, lenient: bool) -> Result<(Vec<(LogEntry, String)>, 
         .collect();
     hosts.sort();
     let mut sequences = std::collections::HashMap::<String, u64>::new();
+    // A journal rewritten by `LogWriter::keep` can hold an entry twice after
+    // a crash; the first is the one read.
+    let mut seen = std::collections::HashSet::new();
     for host in hosts.into_iter().filter(|h| h.is_dir()) {
         // Monthly files sort by name.
         let mut files: Vec<PathBuf> = fs::read_dir(&host)?
@@ -238,7 +391,7 @@ fn read_entries(root: &Path, lenient: bool) -> Result<(Vec<(LogEntry, String)>, 
                         Ok(e) => {
                             let value: serde_json::Value = serde_json::from_str(&line)?;
                             if let Some(sequence) = value["_sequence"].as_u64() {
-                                let expected = sequences.entry(e.session.clone()).or_insert(0);
+                                let expected = sequences.entry(stream_of(&file)).or_insert(0);
                                 if sequence != *expected {
                                     return Err(crate::Error::Damaged {
                                         path: file.clone(),
@@ -246,6 +399,9 @@ fn read_entries(root: &Path, lenient: bool) -> Result<(Vec<(LogEntry, String)>, 
                                     });
                                 }
                                 *expected += 1;
+                            }
+                            if !seen.insert(e.id.clone()) {
+                                continue;
                             }
                             let writer = value[basecraft_protocol::records::WRITTEN_BY].as_str();
                             entries.push((e, writer.unwrap_or_default().to_owned()));
@@ -278,8 +434,8 @@ pub fn verified_prefix(path: &Path) -> Result<VerifiedPrefix> {
     verified_segment(path, None)
 }
 
-/// With `sequences`, each session's events must continue its numbering from
-/// earlier segments, as in `read_all`.
+/// With `sequences`, each stream's events must continue its numbering from
+/// its earlier segments, as in `read_all`.
 fn verified_segment(
     path: &Path,
     mut sequences: Option<&mut std::collections::HashMap<String, u64>>,
@@ -317,7 +473,7 @@ fn verified_segment(
                     return Err(crate::error::invalid("journal sequence gap"));
                 }
                 if let Some(sequences) = sequences.as_deref_mut() {
-                    let expected = sequences.entry(event.session.clone()).or_insert(0);
+                    let expected = sequences.entry(stream_of(path)).or_insert(0);
                     if sequence != *expected {
                         return Err(crate::error::invalid(
                             "journal sequence gap or reordered segment",
@@ -362,6 +518,7 @@ pub fn verified_session_prefix(root: &Path) -> Result<VerifiedPrefix> {
         .collect();
     hosts.sort();
     let mut sequences = std::collections::HashMap::<String, u64>::new();
+    let mut seen = std::collections::HashSet::new();
     for host in hosts {
         let mut files: Vec<PathBuf> = fs::read_dir(&host)?
             .filter_map(|e| e.ok().map(|e| e.path()))
@@ -370,7 +527,12 @@ pub fn verified_session_prefix(root: &Path) -> Result<VerifiedPrefix> {
         files.sort();
         for file in files {
             let segment = verified_segment(&file, Some(&mut sequences))?;
-            prefix.entries.extend(segment.entries);
+            prefix.entries.extend(
+                segment
+                    .entries
+                    .into_iter()
+                    .filter(|entry| seen.insert(entry.id.clone())),
+            );
             prefix.verified_bytes += segment.verified_bytes;
             if prefix.verified_bytes > 128 << 20 {
                 return Err(crate::Error::Limit {
@@ -937,6 +1099,43 @@ mod activity_tests {
         let prefix = verified_prefix(&journal).unwrap();
         assert_eq!(prefix.entries, entries[..1]);
         assert!(prefix.problem.unwrap().contains("checksum mismatch"));
+    }
+
+    #[test]
+    fn a_rewrite_cut_short_reads_as_the_journal_before_it() {
+        let root = tempfile::tempdir().unwrap();
+        let line = include_str!("../../../testdata/fixtures/records-v1/journal-entry.jsonl")
+            .lines()
+            .next()
+            .unwrap();
+        let entries: Vec<LogEntry> = ["01A", "01B", "01C"]
+            .iter()
+            .map(|id| LogEntry {
+                id: (*id).into(),
+                ..parse_entry(line).unwrap()
+            })
+            .collect();
+        let mut writer = LogWriter::new(root.path(), "host");
+        writer.append_batch(&entries).unwrap();
+        let old = writer.segments().unwrap();
+        let bytes: Vec<_> = old.iter().map(|path| fs::read(path).unwrap()).collect();
+        writer.keep(|entry| entry.id != "01A").unwrap();
+        assert_eq!(read_all(root.path()).unwrap(), entries[1..]);
+        writer.append(&entries[0]).unwrap();
+        assert_eq!(
+            read_all(root.path()).unwrap(),
+            [&entries[1..], &entries[..1]].concat()
+        );
+        // A crash before the old stream was removed: both streams are there,
+        // and the journal reads as the old one.
+        for (path, bytes) in old.iter().zip(&bytes) {
+            fs::write(path, bytes).unwrap();
+        }
+        assert_eq!(read_all(root.path()).unwrap(), entries);
+        assert_eq!(
+            verified_session_prefix(root.path()).unwrap().entries,
+            entries
+        );
     }
 
     #[test]

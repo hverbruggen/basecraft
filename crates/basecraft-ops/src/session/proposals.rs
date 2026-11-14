@@ -204,7 +204,8 @@ impl Session {
         decided.state = batch.candidate.as_document().fingerprint();
         batch.entries.insert(0, offered);
         batch.entries.push(decided);
-        if !crate::log::fits_one_batch(&batch.entries)? {
+        let lines = crate::log::Lines::of(&batch.entries)?;
+        if !lines.fit() {
             // The offer and its edits must land in one journal batch. Record
             // the offer as refused instead; an offer too large even for
             // that fails here unrecorded.
@@ -224,7 +225,7 @@ impl Session {
                 limit: crate::log::BATCH_LIMIT,
             });
         }
-        let applied = self.commit_proposals(batch)?;
+        let applied = self.commit_proposals(batch, Some(lines))?;
         Ok(ProposalResult { applied, skipped })
     }
 
@@ -243,7 +244,7 @@ impl Session {
         }
         let candidate = slot.content.as_document().proposal_candidate()?;
         let batch = self.stage_proposals(id, ops, &self.actor, candidate)?;
-        self.commit_proposals(batch)
+        self.commit_proposals(batch, None)
     }
 
     fn stage_proposals(
@@ -287,7 +288,12 @@ impl Session {
         })
     }
 
-    fn commit_proposals(&mut self, batch: PreparedBatch) -> Result<Vec<String>> {
+    /// `lines` are the entries already encoded, if they were.
+    fn commit_proposals(
+        &mut self,
+        batch: PreparedBatch,
+        lines: Option<crate::log::Lines>,
+    ) -> Result<Vec<String>> {
         let PreparedBatch {
             doc,
             generation,
@@ -319,7 +325,10 @@ impl Session {
             .collect();
         self.track(doc)?;
         self.docs[doc.0].undo.reserve(applied.len());
-        self.write_entries(&entries)?;
+        match lines {
+            Some(lines) => self.write_lines(&entries, lines)?,
+            None => self.write_entries(&entries)?,
+        }
         // All fallible preparation precedes the durable batch. Installing the
         // already checked payload requires no post-append downcast or I/O.
         let slot = &mut self.docs[doc.0];
@@ -399,7 +408,7 @@ mod tests {
         let generation = session.generation(doc).unwrap();
         let revision = session.revision(doc).unwrap();
         let journal = crate::log::read_all(dir.path()).unwrap();
-        let events = session.events.matching(|_| true).unwrap();
+        let events = session.document_record(doc).unwrap().events.clone();
         assert!(
             apply(
                 &mut session,
@@ -439,7 +448,7 @@ mod tests {
         assert_eq!(session.delimitation(doc).unwrap(), &before);
         assert_eq!(session.generation(doc).unwrap(), generation);
         assert!(session.can_redo(doc).unwrap());
-        assert_eq!(session.events.matching(|_| true).unwrap(), events);
+        assert_eq!(session.document_record(doc).unwrap().events.clone(), events);
         assert_eq!(crate::log::read_all(dir.path()).unwrap(), journal);
         assert_eq!(apply(&mut session, doc, &[]).unwrap(), Vec::<String>::new());
         assert!(session.can_redo(doc).unwrap());
@@ -456,10 +465,10 @@ mod tests {
             .unwrap();
         session.apply(doc, remove("partition-3")).unwrap();
         let after_edit = session.delimitation(doc).unwrap().clone();
-        let events = session.events.matching(|_| true).unwrap();
-        assert!(session.commit_proposals(batch).is_err());
+        let events = session.document_record(doc).unwrap().events.clone();
+        assert!(session.commit_proposals(batch, None).is_err());
         assert_eq!(session.delimitation(doc).unwrap(), &after_edit);
-        assert_eq!(session.events.matching(|_| true).unwrap(), events);
+        assert_eq!(session.document_record(doc).unwrap().events.clone(), events);
         assert_eq!(session.generation(doc).unwrap(), 1);
     }
 
@@ -490,7 +499,7 @@ mod tests {
             session.track(doc).unwrap();
             let before = session.delimitation(doc).unwrap().clone();
             let journal = journal_bytes(dir.path());
-            let events = session.events.matching(|_| true).unwrap();
+            let events = session.document_record(doc).unwrap().events.clone();
             let group = session.next_group;
             let faults = if sync_failure {
                 Faults {
@@ -509,7 +518,7 @@ mod tests {
             assert_eq!(session.delimitation(doc).unwrap(), &before);
             assert_eq!(session.generation(doc).unwrap(), 0);
             assert!(!session.can_undo(doc).unwrap());
-            assert_eq!(session.events.matching(|_| true).unwrap(), events);
+            assert_eq!(session.document_record(doc).unwrap().events.clone(), events);
             assert_eq!(session.next_group, group);
             assert_eq!(journal_bytes(dir.path()), journal);
             let ids = apply(&mut session, doc, &ops).unwrap();

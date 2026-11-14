@@ -1,23 +1,29 @@
 # Saved provenance and recovery v1
 
 `provenance-publication.schema.json` defines publication records. Metadata is JSON,
-not a database. `RESULT.provenance/manifest.json` atomically selects the current
-publication; `records/ID.json` keeps immutable publication records. Parent IDs
-establish ancestry; different revision IDs may have identical content hashes.
+not a database. A history folder's `manifest.json` (`provenance-latest.schema.json`)
+names the latest record and the hash of its bytes; `records/ID.json` keeps one
+immutable record per save. Parent IDs and parent hashes establish ancestry;
+different revision IDs may have identical content hashes.
 `artifacts/HEX` stores exact original/saved bytes addressed by BLAKE3 (`b3:HEX`).
 An explicit project (`.basecraft/project.toml`) stores each result's bundle in
 `.basecraft/provenance/BLAKE3(relative-result-path)/` instead of a companion.
 Local-only policy stores the bundle under application state `provenance/` and
 is not portable until explicitly packaged. None creates no permanent lineage.
 
-Each publication contains exact typed operations, full events including undo/redo,
-and effective edits contributing to the saved revision. Imported pre-Basecraft
+Each record holds the events since its parent, including undo/redo, the edits that
+took effect in this save (`effective_edits`) and the ids of parent edits undone since
+(`withdrawn`). The whole history is the records read from the first to the latest
+through their parents. A parent that is missing, or whose bytes no longer match the
+hash its child recorded, breaks the chain there; readers report the gap and show
+what came after it. Imported pre-Basecraft
 history is explicitly unknown. Independent completeness dimensions describe known
 ancestry, input availability, execution specification and replay verification.
 A hash check does not set replay verification or prove authorship.
 
-`reports/` contains `history.md`, `methods.generated.md`, `parameters.tsv`,
-`source-map.json` and a frozen report manifest (template version 1). Generated
+`basecraft provenance methods RESULT --output DIRECTORY` writes `reports/` with
+`history.md`, `methods.generated.md`, `parameters.tsv`, `source-map.json` and a
+frozen report manifest (template version 2). Nothing writes them on save. Generated
 prose describes typed edits factually; it does not invent trimming rationales,
 earlier laboratory methods, or unknown tool arguments/versions. Tool-specific
 methods/citation templates and
@@ -36,7 +42,10 @@ Opening is read-only. Recoverable sessions promote on first mutation/explicit
 execution into `.basecraft/recovery/SESSION/` of the project, or beside a loose file. The baseline and retained
 objects precede edits. Each UTF-8 JSONL event has `_sequence` and `_checksum`, whose
 value hashes the compact, key-sorted JSON event without framing fields. One writer
-owns each unique stream, rotated at 8 MiB. Entries are synced before acceptance;
+owns each unique stream, rotated at 8 MiB. After a save the writer rewrites the
+journal as a new stream with only what is still unsaved (the saved document's
+Save event onward) and then removes the old stream; a reader that finds both after
+a crash reads each event once, in the old stream's order. Entries are synced before acceptance;
 failed append rolls back its own tail, and uncertain rollback poisons the writer.
 Legacy unframed events remain readable. Strict readers reject gaps/corruption.
 `log::verified_prefix` returns the verified byte boundary without changing a torn

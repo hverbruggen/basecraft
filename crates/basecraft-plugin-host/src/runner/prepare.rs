@@ -878,11 +878,10 @@ fn allocate_run(
                     run_directory: ledger.directory().display().to_string(),
                 });
         }
-        let manifest = ledger.artifact("manifest.json")?;
         upstream.push(basecraft_protocol::input_records::UpstreamLink {
             bundle: (records::relative(run.directory(), ledger.directory())?).into(),
             id: (ledger.id()).to_owned(),
-            hash: basecraft_io::hash_file(&manifest)?,
+            hash: records::latest_record(ledger.directory())?.1,
         });
         let mut reference = record
             .source

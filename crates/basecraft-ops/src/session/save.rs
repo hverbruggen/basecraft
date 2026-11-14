@@ -155,7 +155,6 @@ impl Session {
         let written = Self::written_stores(&target.path)?;
         let mut evidence_lock = crate::records::input_evidence::lock_save(
             &target.path,
-            policy != SavePolicy::Cancel,
             &written,
             self.project.as_ref().map(crate::project::Project::root),
         )?;
@@ -176,10 +175,11 @@ impl Session {
 
         // 3. Stage every file and the recovery intent; nothing is replaced yet.
         self.track(id)?;
+        let format = self.save_format(id, &target.path)?;
         let mut prepared = self.docs[id.0].content.as_document().prepare_write(
             self.companion_project(),
             &target.path,
-            self.save_format(id, &target.path)?,
+            format,
             &self.storage_root,
             &self.write_publication,
         )?;
@@ -197,7 +197,7 @@ impl Session {
 
         // 4. Nothing changed while staging, then replace and record.
         self.recheck_before_write(id, &target, consented.as_ref(), stamps, before.as_ref())?;
-        let outcome = self.save_inner(id, target.save_as.as_deref(), prepared, before.is_none());
+        let outcome = self.save_inner(id, &target.path, format, prepared, before.is_none());
         self.finish_save(
             id,
             &target.path,
@@ -488,14 +488,12 @@ impl Session {
             if review || own {
                 self.docs[id.0].saved_at = Some(self.docs[id.0].mark());
             }
-            self.docs[id.0].saved_target = Some((
-                target.to_path_buf(),
-                crate::records::input_evidence::stamp(target)?,
-                expected[0].clone(),
-            ));
+            let stamp = crate::records::input_evidence::stamp(target)?;
             if own {
-                self.docs[id.0].disk_stamp = crate::records::input_evidence::stamp(target)?;
+                self.docs[id.0].disk_stamp = stamp.clone();
+                self.wrote_gff(id, target)?;
             }
+            self.docs[id.0].saved_target = Some((target.to_path_buf(), stamp, expected[0].clone()));
             if self.log.is_some() {
                 #[cfg(test)]
                 super::save_failure_tests::fail_write(
@@ -557,6 +555,22 @@ impl Session {
         Err(error)
     }
 
+    /// A GFF3 this save wrote for the document's own file is from now on
+    /// one that was read with it (D27): later saves write it again.
+    fn wrote_gff(&mut self, id: DocId, target: &Path) -> Result<()> {
+        if let files::Loaded::Sequence(opened) = self.docs[id.0].content_mut()
+            && opened.others.gff.is_none()
+            && files::writes_gff(opened)
+        {
+            let bytes = std::fs::read(files::gff_sidecar(target))?;
+            let name = opened.doc.name.clone();
+            opened.others.gff = Some(std::sync::Arc::new(basecraft_io::gff3::keep_others(
+                &bytes, &name,
+            )));
+        }
+        Ok(())
+    }
+
     /// A recovery write ends with a fresh check of its final destination.
     fn final_recovery_check(
         &mut self,
@@ -603,21 +617,19 @@ impl Session {
         Ok(())
     }
 
-    pub(super) fn save_inner(
+    /// Replace the files staged in `prepared` and record the save. The
+    /// caller has tracked the document and checked the target.
+    fn save_inner(
         &mut self,
         id: DocId,
-        path: Option<&Path>,
+        target: &Path,
+        format: files::Format,
         prepared: crate::documents::PreparedWrite,
         create: bool,
     ) -> Result<()> {
-        let target = path.map_or_else(|| self.resolve(&self.docs[id.0].key), Path::to_path_buf);
-        // An unchanged ordinary save neither rewrites data nor creates history.
-
-        self.track(id)?;
-        let format = self.save_format(id, &target)?;
         let original = self.resolve(&self.docs[id.0].key);
         let document = self.docs[id.0].content.as_document();
-        let links = document.prepare_links(self.companion_project(), &original, &target, format)?;
+        let links = document.prepare_links(self.companion_project(), &original, target, format)?;
         let publication = if create
             && matches!(
                 self.write_publication,
@@ -629,7 +641,7 @@ impl Session {
         };
         #[cfg(test)]
         super::save_failure_tests::fail_write(super::save_failure_tests::WriteStep::Replace)?;
-        let write = || document.publish_write(prepared, &target, publication);
+        let write = || document.publish_write(prepared, target, publication);
         let (hashes, outputs) = if let Some(links) = links {
             links.publish(write)?
         } else {
@@ -639,7 +651,7 @@ impl Session {
             .into_iter()
             .map(|(path, hash)| (self.relative(&path), hash))
             .collect();
-        self.log_save(id, &target, hashes)?;
+        self.log_save(id, target, hashes)?;
         if !outputs.is_empty() {
             self.record_tool_run(
                 id,
@@ -691,10 +703,14 @@ impl Session {
             self.history(id)
                 .and_then(|history| history.save(target, &entry))
         });
-        let (prepared, mut history_error) = match history {
-            Some(Ok(prepared)) => (prepared, None),
-            Some(Err(error)) => (crate::documents::PreparedWrite::default(), Some(error)),
-            None => (crate::documents::PreparedWrite::default(), None),
+        let (prepared, effective, mut history_error) = match history {
+            Some(Ok(staged)) => (staged.write, Some(staged.effective), None),
+            Some(Err(error)) => (
+                crate::documents::PreparedWrite::default(),
+                None,
+                Some(error),
+            ),
+            None => (crate::documents::PreparedWrite::default(), None, None),
         };
         let mut journal_written = false;
         let published = prepared.publish_with(|| {
@@ -709,6 +725,11 @@ impl Session {
             Err(error) if !journal_written => return Err(error),
             Err(error) => history_error = Some(error),
             Ok(_) => {}
+        }
+        if history_error.is_none()
+            && let Some(effective) = effective
+        {
+            self.recorded_save(id, target, &entry, effective);
         }
         if let Some(error) = history_error {
             return Err(Error::Damaged {
@@ -728,7 +749,6 @@ impl Session {
     pub(super) fn derived_target(&self, path: &Path) -> Result<DerivedTarget> {
         let mut evidence = crate::records::input_evidence::lock_save(
             path,
-            false,
             &[],
             self.project.as_ref().map(crate::project::Project::root),
         )?;
@@ -770,6 +790,45 @@ impl Session {
 }
 
 impl Session {
+    /// A save's history record is published. For the document's own file its
+    /// events move from the unsaved list to the recorded one, and the
+    /// recovery journal keeps only what is still unsaved (D24).
+    fn recorded_save(
+        &mut self,
+        id: DocId,
+        target: &Path,
+        entry: &basecraft_protocol::LogEntry,
+        effective: Vec<String>,
+    ) {
+        if target != self.resolve(&self.docs[id.0].key) {
+            return;
+        }
+        let slot = &mut self.docs[id.0];
+        slot.last_record = Some((entry.id.clone(), effective));
+        let saved = std::mem::take(&mut slot.unsaved);
+        slot.recorded.extend(saved);
+        let key = slot.key.clone();
+        let save = entry.id.clone();
+        // The same file open twice shares a key: the other slot's unsaved
+        // edits stay in the journal.
+        let shared = self.docs.iter().filter(|slot| slot.key == key).count() > 1;
+        if self.storage_root != self.root
+            && !shared
+            && let Some(log) = &mut self.log
+        {
+            // The Save entry is the document's recovery baseline from now on.
+            // The save is done either way: a journal that could not be cut
+            // back still recovers the same edits, it is only longer.
+            let mut before_save = true;
+            let _ = log.keep(|kept| {
+                if kept.id == save {
+                    before_save = false;
+                }
+                kept.doc != key || !before_save
+            });
+        }
+    }
+
     /// The Save record is durable: it becomes the recovery baseline and, for the
     /// document's own file, the accepted revision.
     fn accept_logged_save(

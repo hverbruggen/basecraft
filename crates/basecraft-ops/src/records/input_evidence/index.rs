@@ -538,6 +538,34 @@ fn lost(
 
 #[cfg(test)]
 mod tests {
+    /// A save replaces its target, so the file gets a new inode; the lock
+    /// still holds by path. Likewise a file created after it was locked.
+    #[test]
+    fn a_replaced_or_created_file_stays_locked() {
+        crate::isolated_profile::isolate!();
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("gene.fasta");
+        let created = root.path().join("new.fasta");
+        std::fs::write(&target, b">a\nACGT\n").unwrap();
+        let locks = super::super::lock().unwrap();
+        locks.source(&target).unwrap();
+        locks.source(&created).unwrap();
+        basecraft_io::write_atomic(&target, |w| std::io::Write::write_all(w, b">a\nTCGT\n"))
+            .unwrap();
+        std::fs::write(&created, b">b\nACGT\n").unwrap();
+        std::thread::spawn(move || {
+            for path in [target, created] {
+                let other = super::super::lock().unwrap();
+                assert!(
+                    matches!(other.source(&path), Err(crate::Error::Busy(_))),
+                    "{} was not locked",
+                    path.display()
+                );
+            }
+        })
+        .join()
+        .unwrap();
+    }
 
     #[test]
     fn unrelated_save_during_pending_index_update() {
@@ -600,7 +628,7 @@ mod tests {
         std::fs::write(&target, b">a\nACGT\n").unwrap();
         std::fs::write(&other, b">b\nACGT\n").unwrap();
         std::fs::hard_link(&target, &alias).unwrap();
-        let _first = super::super::lock_save(&target, false, &[], None).unwrap();
+        let _first = super::super::lock_save(&target, &[], None).unwrap();
         std::thread::spawn(move || {
             let mut session = crate::Session::new(other.parent().unwrap());
             let id = session.open(&other).unwrap();
@@ -622,18 +650,6 @@ mod tests {
         })
         .join()
         .unwrap();
-    }
-
-    #[test]
-    fn a_shared_hold_is_never_upgraded() {
-        crate::isolated_profile::isolate!();
-        let root = tempfile::tempdir().unwrap();
-        let locks = super::super::lock().unwrap();
-        locks.reserve([root.path().to_path_buf()], false).unwrap();
-        assert!(matches!(
-            locks.reserve([root.path().to_path_buf()], true),
-            Err(crate::Error::Busy(_))
-        ));
     }
 
     #[test]

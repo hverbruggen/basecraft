@@ -10,20 +10,12 @@ fn alignment(path: &Path, bases: &str) {
 fn inferred(root: &Path, name: &str, source: &Path) -> PathBuf {
     let path = root.join(format!("{name}.nwk"));
     std::fs::write(&path, "(a,b);").unwrap();
-    AlignmentLink::create(&path, source, source, 3, true, None).unwrap();
+    AlignmentLink::create(&path, source, 3, true).unwrap();
     path
 }
 
-fn snapshots(root: &Path) -> Vec<PathBuf> {
-    std::fs::read_dir(root)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .filter(|path| path.to_string_lossy().ends_with(".alignment.afa"))
-        .collect()
-}
-
 #[test]
-fn failed_relink_retains_old_bytes_without_the_old_source_and_supports_legacy_snapshot_names() {
+fn a_failed_relink_keeps_the_earlier_link() {
     crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
@@ -36,34 +28,22 @@ fn failed_relink_retains_old_bytes_without_the_old_source_and_supports_legacy_sn
     let path = inferred(root, "tree", &source);
     let tree = files::load_tree(&path).unwrap().doc;
     AlignmentLink::associate(&path, &tree, &other).unwrap();
-    let old = AlignmentLink::read_view(&path).unwrap();
-    let old_path = old.checked_snapshot(&path, &tree).unwrap();
-    let bytes = std::fs::read(&old_path).unwrap();
-    // Emulate an existing fixed-name snapshot from the earlier writer.
-    let legacy = root.join("tree.nwk.view.alignment.afa");
-    std::fs::rename(old_path, &legacy).unwrap();
     let metadata = records::view_sidecar(&path);
-    let mut value: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&metadata).unwrap()).unwrap();
-    value["snapshot"] = "tree.nwk.view.alignment.afa".into();
-    let original_metadata = serde_json::to_vec(&value).unwrap();
-    std::fs::write(&metadata, &original_metadata).unwrap();
-    std::fs::remove_file(&other).unwrap();
+    let original_metadata = std::fs::read(&metadata).unwrap();
     let backup = root.join("old-view.json");
     std::fs::rename(&metadata, &backup).unwrap();
     std::fs::create_dir(&metadata).unwrap();
     assert!(AlignmentLink::associate(&path, &tree, &replacement).is_err());
-    assert_eq!(std::fs::read(&legacy).unwrap(), bytes);
     std::fs::remove_dir(&metadata).unwrap();
     std::fs::rename(backup, &metadata).unwrap();
     let restored = AlignmentLink::read_view(&path).unwrap();
-    assert_eq!(restored.checked_snapshot(&path, &tree).unwrap(), legacy);
-    assert_eq!(std::fs::read(metadata).unwrap(), original_metadata);
+    assert_eq!(
+        restored.checked_alignment(&path, &tree).unwrap(),
+        other.canonicalize().unwrap()
+    );
+    assert_eq!(std::fs::read(&metadata).unwrap(), original_metadata);
     AlignmentLink::associate(&path, &tree, &replacement).unwrap();
-    let new = AlignmentLink::read_view(&path).unwrap();
-    assert_ne!(new.snapshot, restored.snapshot);
-    assert_eq!(std::fs::read(legacy).unwrap(), bytes);
-    assert_eq!(new.source, replacement);
+    assert_eq!(AlignmentLink::read_view(&path).unwrap().source, replacement);
 }
 
 #[test]
@@ -80,19 +60,13 @@ fn save_as_unlinked_document_clears_both_destination_associations_and_keeps_evid
     let output = inferred(root, "output", &source);
     let tree = files::load_tree(&input).unwrap().doc;
     AlignmentLink::associate(&output, &tree, &other).unwrap();
-    let previous: Vec<_> = snapshots(root)
-        .iter()
-        .map(|path| (path.clone(), std::fs::read(path).unwrap()))
-        .collect();
     let mut session = Session::new(root);
     let doc = session.open(&input).unwrap();
     session.save(doc, Some(&output)).unwrap();
     assert!(!records::metadata_present(&records::sidecar(&output)).unwrap());
     assert!(!records::metadata_present(&records::view_sidecar(&output)).unwrap());
     assert!(AlignmentLink::read_view(&output).is_err());
-    for (path, bytes) in previous {
-        assert_eq!(std::fs::read(path).unwrap(), bytes);
-    }
+    assert_eq!(std::fs::read_to_string(&other).unwrap(), ">a\nCC\n>b\nCC\n");
     assert!(basecraft_ops::records::replay(root).unwrap().ok());
 }
 
@@ -112,7 +86,7 @@ fn publication_error_after_main_write_disables_extraction_and_keeps_previous_ass
     AlignmentLink::associate(&output, session.tree(doc).unwrap(), &other).unwrap();
     let old = AlignmentLink::read_view(&output).unwrap();
     let old_snapshot = old
-        .checked_snapshot(&output, session.tree(doc).unwrap())
+        .checked_alignment(&output, session.tree(doc).unwrap())
         .unwrap();
     let old_bytes = std::fs::read(&old_snapshot).unwrap();
     let old_metadata = std::fs::read(records::view_sidecar(&output)).unwrap();
@@ -141,8 +115,10 @@ fn publication_error_after_main_write_disables_extraction_and_keeps_previous_ass
     assert_eq!(AlignmentLink::read(&input).unwrap().source, source);
 }
 
+/// D25: a linked alignment is checked when it is used, not when the tree is
+/// saved; Save As carries the link and the change shows on use.
 #[test]
-fn damaged_explicit_view_is_checked_before_overwriting_an_existing_destination() {
+fn a_changed_linked_alignment_shows_on_use_after_save_as() {
     crate::isolated_profile::isolate!();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
@@ -151,29 +127,18 @@ fn damaged_explicit_view_is_checked_before_overwriting_an_existing_destination()
     alignment(&source, "AA");
     alignment(&other, "CC");
     let input = inferred(root, "input", &source);
-    let output = inferred(root, "output", &other);
+    let output = root.join("output.nwk");
     let mut session = Session::new(root);
     let doc = session.open(&input).unwrap();
     AlignmentLink::associate(&input, session.tree(doc).unwrap(), &other).unwrap();
-    let view = AlignmentLink::read_view(&input).unwrap();
-    std::fs::write(
-        view.checked_snapshot(&input, session.tree(doc).unwrap())
-            .unwrap(),
-        "damaged",
-    )
-    .unwrap();
-    let previous_tree = std::fs::read(&output).unwrap();
-    let previous_metadata = std::fs::read(records::sidecar(&output)).unwrap();
-    let before = snapshots(root).len();
-    assert!(session.save(doc, Some(&output)).is_err());
-    assert_eq!(std::fs::read(&output).unwrap(), previous_tree);
-    assert_eq!(
-        std::fs::read(records::sidecar(&output)).unwrap(),
-        previous_metadata
-    );
-    assert_eq!(snapshots(root).len(), before);
-    assert_eq!(AlignmentLink::read_view(&output).unwrap().source, other);
-    assert!(!records::metadata_present(&records::view_sidecar(&output)).unwrap());
+    alignment(&other, "GG");
+    session.save(doc, Some(&output)).unwrap();
+    let view = AlignmentLink::read_view(&output).unwrap();
+    assert_eq!(view.source, other);
+    assert!(matches!(
+        AlignmentLink::checked_view_in(None, &output, session.tree(doc).unwrap()),
+        Err(basecraft_ops::Error::AlignmentChanged { .. })
+    ));
 }
 
 #[cfg(unix)]
@@ -234,10 +199,9 @@ fn save_as_with_explicit_view_remains_portable_and_preserves_source_hashes() {
     assert_eq!(origin.source, moved.join("source.afa"));
     assert_eq!(view.source, moved.join("other.afa"));
     assert_eq!(origin.source_hash, original.source_hash);
-    assert_eq!(origin.snapshot_hash, original.snapshot_hash);
     assert_eq!(origin.alignment_version, original.alignment_version);
-    assert!(origin.checked_snapshot(&path, &tree).is_ok());
-    assert!(view.checked_snapshot(&path, &tree).is_ok());
+    assert!(origin.checked_alignment(&path, &tree).is_ok());
+    assert!(view.checked_alignment(&path, &tree).is_ok());
 }
 
 #[cfg(unix)]
@@ -253,7 +217,7 @@ fn save_as_over_symlink_to_original_replaces_alias_associations() {
     let input = inferred(root, "input", &source);
     let output = root.join("alias.nwk");
     std::os::unix::fs::symlink(&input, &output).unwrap();
-    AlignmentLink::create(&output, &other, &other, 3, true, None).unwrap();
+    AlignmentLink::create(&output, &other, 3, true).unwrap();
     let mut session = Session::new(root);
     let doc = session.open(&input).unwrap();
     AlignmentLink::associate(&output, session.tree(doc).unwrap(), &other).unwrap();
@@ -268,7 +232,7 @@ fn save_as_over_symlink_to_original_replaces_alias_associations() {
     let link = AlignmentLink::read_view(&output).unwrap();
     assert_eq!(link.source, source);
     assert!(
-        link.checked_snapshot(&output, session.tree(doc).unwrap())
+        link.checked_alignment(&output, session.tree(doc).unwrap())
             .is_ok()
     );
     assert_eq!(

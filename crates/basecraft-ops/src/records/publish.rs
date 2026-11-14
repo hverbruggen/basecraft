@@ -13,25 +13,43 @@ pub(crate) struct History<'a> {
     pub(crate) root: &'a Path,
     pub(crate) project: Option<&'a crate::project::Project>,
     pub(crate) storage_root: &'a Path,
-    pub(crate) events: Vec<LogEntry>,
+    /// The document's journal entries since its file was last saved.
+    pub(crate) unsaved: &'a [LogEntry],
+    /// Events already in the document's records: those read when it was
+    /// opened, then those this session saved.
+    pub(crate) recorded: [&'a [LogEntry]; 2],
     pub(crate) pending: &'a [LogEntry],
     pub(crate) key: &'a str,
     /// Every edit in effect, oldest first.
     pub(crate) effective: Vec<basecraft_protocol::provenance::EditActivity>,
-    pub(crate) origin: Option<&'a Publication>,
+    /// Records the session knows, with the ids of the edits in effect in each.
+    pub(crate) known: [Option<(String, Vec<String>)>; 2],
     pub(crate) origin_bundle: &'a Path,
     pub(crate) delimitation: bool,
 }
 
+/// A save's history record, staged; the caller publishes it.
+pub(crate) struct StagedRecord {
+    pub(crate) write: crate::documents::PreparedWrite,
+    /// The ids of the edits in effect in the record.
+    pub(crate) effective: Vec<String>,
+}
+
 impl History<'_> {
-    /// Stage the history publication for a save; the caller publishes it.
+    /// Every event of the document this session knows, oldest first.
+    fn events(&self) -> impl Iterator<Item = &LogEntry> {
+        self.recorded
+            .into_iter()
+            .flatten()
+            .chain(self.unsaved)
+            .chain(self.pending)
+    }
+
+    /// Stage the history record for a save; the caller publishes it. The
+    /// record holds the events since the last save and links to its parent.
     /// Pending recovery baselines join the journal with the Save record, so
     /// they count as recorded events here.
-    pub(crate) fn save(
-        &self,
-        target: &Path,
-        save: &LogEntry,
-    ) -> Result<crate::documents::PreparedWrite> {
+    pub(crate) fn save(&self, target: &Path, save: &LogEntry) -> Result<StagedRecord> {
         use basecraft_protocol::provenance::{ArtifactRevision, Completeness};
         let _scope = crate::records::input_evidence::lock_in(self.project)?;
         let bundle = if let Some(hidden) =
@@ -53,40 +71,24 @@ impl History<'_> {
         } else {
             &source_bundle
         };
-        let mut previous = if previous_bundle.join("manifest.json").is_file() {
-            let publication: Publication = basecraft_protocol::records::decode(
-                &crate::records::provenance::read_record(&previous_bundle.join("manifest.json"))?,
-            )?;
-            if publication.schema_version != 1 {
-                return Err(invalid("unsupported parent provenance version"));
-            }
-            Some(publication)
-        } else {
-            None
-        };
+        let mut previous = crate::records::provenance::latest(previous_bundle)?.map(|(p, _)| p);
         // A newly allocated output-support record is not the accepted document
         // history. Prefer the opened origin when the writer has just bound one.
         if previous_bundle != &source_bundle
             && previous
                 .as_ref()
                 .is_some_and(|p| p.events.is_empty() && p.effective_edits.is_empty())
-            && source_bundle.join("manifest.json").is_file()
+            && let Some((publication, _)) = crate::records::provenance::latest(&source_bundle)?
         {
             previous_bundle = &source_bundle;
-            let publication: Publication = basecraft_protocol::records::decode(
-                &crate::records::provenance::read_record(&source_bundle.join("manifest.json"))?,
-            )?;
-            if publication.schema_version != 1 {
-                return Err(crate::Error::Unsupported(
-                    "unsupported parent provenance version".into(),
-                ));
-            }
             previous = Some(publication);
         }
+        // The open of this session, not one in the saved history.
         let baseline_hash = self
-            .events
+            .unsaved
             .iter()
             .chain(self.pending)
+            .chain(self.recorded[1])
             .find(|e| e.doc == self.key && matches!(e.op, Op::Open { .. }))
             .and_then(|e| e.result.hashes.first())
             .map(|(_, hash)| hash);
@@ -165,11 +167,9 @@ impl History<'_> {
             }
             if bundle.join("input.json").is_file() {
                 let current = crate::records::input_evidence::read_input(&bundle)?;
-                if let Some(dependencies) = Some(&current.upstream) {
-                    for dependency in dependencies {
-                        if !upstream.contains(dependency) {
-                            upstream.push(dependency.clone());
-                        }
+                for dependency in &current.upstream {
+                    if !upstream.contains(dependency) {
+                        upstream.push(dependency.clone());
                     }
                 }
             }
@@ -220,12 +220,13 @@ impl History<'_> {
                 })
             };
         let mut inputs = Vec::new();
-        for event in self
-            .events
-            .iter()
-            .chain(self.pending)
-            .filter(|e| e.doc == self.key && matches!(e.op, Op::Open { .. }))
-        {
+        let unsaved = || {
+            self.unsaved
+                .iter()
+                .chain(self.pending)
+                .filter(|e| e.doc == self.key)
+        };
+        for event in unsaved().filter(|e| matches!(e.op, Op::Open { .. })) {
             for (key, hash) in &event.result.hashes {
                 inputs.push(ArtifactRevision {
                     id: format!("{}:input:{}", event.id, inputs.len()),
@@ -241,12 +242,7 @@ impl History<'_> {
                 });
             }
         }
-        for event in self
-            .events
-            .iter()
-            .chain(self.pending)
-            .filter(|event| event.doc == self.key)
-        {
+        for event in unsaved() {
             if let Op::CreateSangerReview { review } | Op::SangerUpdate { review } = &event.op {
                 let source = crate::session::objects_dir(self.storage_root)
                     .join(review.hash.trim_start_matches("b3:"));
@@ -282,15 +278,9 @@ impl History<'_> {
                 reference: None,
             });
         }
-        // Public reports use logical names and anonymous agents. Original local
-        // journals retain exact paths for recovery; those paths are not portable.
-        let mut events: Vec<_> = self
-            .events
-            .iter()
-            .chain(self.pending)
-            .filter(|e| e.doc == self.key)
-            .cloned()
-            .collect();
+        // Records use logical names and anonymous agents. The recovery
+        // journal keeps exact paths; those paths are not portable.
+        let mut events: Vec<_> = unsaved().cloned().collect();
         // A save's own record is staged with its history, before the journal append.
         if !events.iter().any(|event| event.id == save.id) {
             events.push(save.clone());
@@ -308,32 +298,44 @@ impl History<'_> {
             }
             portable(event);
         }
-        let mut effective_edits = self.effective.clone();
-        if let Some(previous) = self.origin.cloned().or(previous)
-            && previous.session != self.session
-        {
-            let mut inherited = previous.effective_edits;
-            inherited.extend(effective_edits);
-            effective_edits = inherited;
-            let mut inherited_events = previous.events;
-            inherited_events.extend(events);
-            events = inherited_events;
-            for input in previous.inputs {
-                if !inputs.iter().any(|a| a.id == input.id) {
-                    inputs.push(input);
-                }
-            }
-        }
+        let mut current = self.effective.clone();
         events.iter_mut().for_each(portable);
-        for activity in &mut effective_edits {
+        for activity in &mut current {
             redact_operation_paths(&mut activity.operation);
         }
+        // The record lists only what changed against its parent: edits that
+        // now take effect, and parent edits undone since.
+        let parent_effective: Vec<String> = match &previous {
+            None => Vec::new(),
+            Some(parent) => match self.known.iter().flatten().find(|(id, _)| *id == parent.id) {
+                Some((_, ids)) => ids.clone(),
+                None => {
+                    crate::records::provenance::SavedHistory::read(previous_bundle, parent.clone())?
+                        .effective
+                        .into_iter()
+                        .map(|edit| edit.id)
+                        .collect()
+                }
+            },
+        };
+        let current_ids: Vec<String> = current.iter().map(|edit| edit.id.clone()).collect();
+        let now: std::collections::HashSet<_> = current_ids.iter().collect();
+        let before: std::collections::HashSet<_> = parent_effective.iter().collect();
+        let withdrawn = parent_effective
+            .iter()
+            .filter(|id| !now.contains(id))
+            .cloned()
+            .collect();
+        let effective_edits: Vec<_> = current
+            .iter()
+            .filter(|edit| !before.contains(&edit.id))
+            .cloned()
+            .collect();
         let mut parent_hashes = std::collections::BTreeMap::new();
         for parent in &parents {
-            let path = bundle.join("records").join(format!("{parent}.json"));
+            let path = crate::records::provenance::record_path(&bundle, parent)?;
             parent_hashes.insert(parent.clone(), basecraft_io::hash_file(&path)?);
         }
-        crate::records::contributions::project(&events, &mut effective_edits);
         let input_bytes_available = inputs.iter().all(|input| input.retained.is_some());
         let publication = Publication {
             schema_version: 1,
@@ -347,6 +349,7 @@ impl History<'_> {
             outputs,
             events,
             effective_edits,
+            withdrawn,
             completeness: Completeness {
                 ancestry_known: false,
                 input_bytes_available,
@@ -355,7 +358,16 @@ impl History<'_> {
             },
             report_template_version: 2,
         };
-        crate::records::provenance::stage(&bundle, &publication)
+        let history = self
+            .recorded
+            .into_iter()
+            .flatten()
+            .chain(&publication.events);
+        let write = crate::records::provenance::stage(&bundle, &publication, history, &current)?;
+        Ok(StagedRecord {
+            write,
+            effective: current_ids,
+        })
     }
 
     /// Add a captured input revision and its recorded producing activity to an
@@ -367,10 +379,9 @@ impl History<'_> {
     ) -> Result<()> {
         let _scope = crate::records::input_evidence::lock_in(self.project)?;
         let activity = self
-            .events
-            .iter()
-            .rev()
-            .find(|event| event.doc == self.key && event.op.is_run(run.id()))
+            .events()
+            .filter(|event| event.doc == self.key && event.op.is_run(run.id()))
+            .last()
             .ok_or_else(|| invalid("analysis has no recorded activity"))?
             .clone();
         snapshot.publish_operation_activity(run, &activity)
@@ -421,16 +432,15 @@ impl History<'_> {
         };
         let mut upstream = Vec::new();
         for dependency in snapshot.origin_bundles() {
-            let bytes = crate::records::read_record(&dependency.join("manifest.json"))?;
-            let parent: Publication = basecraft_protocol::records::decode(&bytes)?;
+            let (parent, hash) = crate::records::latest_record(dependency)?;
             upstream.push(basecraft_protocol::input_records::UpstreamLink {
                 bundle: crate::records::relative(
                     &bundle.canonicalize()?,
                     &dependency.canonicalize()?,
                 )?
                 .into(),
-                id: parent.id.clone(),
-                hash: basecraft_io::hash_bytes(&bytes),
+                id: parent.id,
+                hash,
             });
         }
         let extraction = basecraft_protocol::records::ExtractionRecord {
@@ -476,7 +486,7 @@ impl History<'_> {
             }),
             reference,
         };
-        let (events, effective_edits) = portable_analysis_activity(snapshot, activity);
+        let (events, effective_edits, withdrawn) = portable_analysis_activity(snapshot, activity)?;
         let publication = Publication {
             schema_version: 1,
             id: activity.id.clone(),
@@ -496,6 +506,7 @@ impl History<'_> {
             }],
             events,
             effective_edits,
+            withdrawn,
             completeness: Completeness {
                 ancestry_known: false,
                 input_bytes_available: true,
@@ -534,19 +545,44 @@ fn portable(event: &mut LogEntry) {
     }
 }
 
+/// What an analysis run records of its input and its own activity: the
+/// events and edits not in the input's saved history, the saved edits the
+/// input no longer has, and the activity. The saved history stays in the
+/// input's own records, which the run's input record links to (D24).
 pub(crate) fn portable_analysis_activity(
     snapshot: &crate::records::document_record::DocumentRecord,
     activity: &LogEntry,
-) -> (
+) -> Result<(
     Vec<LogEntry>,
     Vec<basecraft_protocol::provenance::EditActivity>,
-) {
+    Vec<String>,
+)> {
     use basecraft_protocol::provenance::EditActivity;
-    let mut events = snapshot.events.clone();
-    if !events.iter().any(|event| event.id == activity.id) {
-        events.push(activity.clone());
+    let mut saved_events = std::collections::HashSet::new();
+    let mut saved_edits = Vec::new();
+    for (bundle, origin) in &snapshot.origins {
+        let history = crate::records::SavedHistory::read(bundle, origin.clone())?;
+        saved_events.extend(history.events.into_iter().map(|event| event.id));
+        saved_edits.extend(history.effective.into_iter().map(|edit| edit.id));
     }
-    let mut effective = snapshot.effective.clone();
+    let mut events: Vec<_> = snapshot
+        .events
+        .iter()
+        .filter(|event| !saved_events.contains(&event.id) && event.id != activity.id)
+        .cloned()
+        .collect();
+    events.push(activity.clone());
+    let withdrawn = saved_edits
+        .iter()
+        .filter(|id| !snapshot.effective.iter().any(|edit| &edit.id == *id))
+        .cloned()
+        .collect();
+    let mut effective: Vec<_> = snapshot
+        .effective
+        .iter()
+        .filter(|edit| !saved_edits.contains(&edit.id))
+        .cloned()
+        .collect();
     effective.push(EditActivity {
         id: activity.id.clone(),
         operation: activity.op.clone(),
@@ -555,7 +591,7 @@ pub(crate) fn portable_analysis_activity(
     for edit in &mut effective {
         redact_operation_paths(&mut edit.operation);
     }
-    (events, effective)
+    Ok((events, effective, withdrawn))
 }
 
 fn redact_operation_paths(operation: &mut Op) {

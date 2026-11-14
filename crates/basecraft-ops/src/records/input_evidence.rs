@@ -155,15 +155,12 @@ pub(crate) fn reference_input_locked(
     let source_bundle = crate::records::provenance::bundle_for_result(&source, project);
     let mut upstream = Vec::new();
     for dependency in dependencies.iter().chain(std::iter::once(&source_bundle)) {
-        let manifest = dependency.join("manifest.json");
-        if manifest.is_file() {
-            let bytes = crate::records::provenance::read_record(&manifest)?;
-            let record: Publication = basecraft_protocol::records::decode(&bytes)?;
+        if let Some((record, hash)) = crate::records::provenance::latest(dependency)? {
             upstream.push(basecraft_protocol::input_records::UpstreamLink {
                 bundle: (crate::records::input_evidence::relative(run.directory(), dependency)?)
                     .into(),
-                id: record.id.clone(),
-                hash: basecraft_io::hash_bytes(&bytes),
+                id: record.id,
+                hash,
             });
         }
     }
@@ -202,6 +199,7 @@ pub(crate) fn reference_input_locked(
         outputs: vec![],
         events: vec![],
         effective_edits: vec![],
+        withdrawn: Vec::new(),
         completeness: Completeness {
             ancestry_known: false,
             input_bytes_available: true,
@@ -296,6 +294,8 @@ impl EvidenceCheck {
 struct Inspection {
     observations: BTreeMap<PathBuf, String>,
     issues: Vec<InspectionIssue>,
+    /// Each run's result name, read once per check.
+    names: BTreeMap<PathBuf, String>,
 }
 
 impl Inspection {
@@ -345,6 +345,15 @@ impl Inspection {
     }
 
     fn name(&mut self, run: &Path) -> String {
+        if let Some(name) = self.names.get(run) {
+            return name.clone();
+        }
+        let name = self.read_name(run);
+        self.names.insert(run.to_path_buf(), name.clone());
+        name
+    }
+
+    fn read_name(&mut self, run: &Path) -> String {
         let path = run.join("run.json");
         let result = self.record(&path).and_then(|bytes| {
             let value: serde_json::Value = basecraft_protocol::records::decode(&bytes)?;
@@ -543,15 +552,14 @@ fn write_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 
 /// Lock files only coordinate running processes and hold no data. Deleting
-/// the folder while basecraft is closed loses nothing.
+/// the folder while basecraft is closed loses nothing. A key's lock is one
+/// of a fixed table of 65,536 files chosen by its hash, so the folder never grows
+/// past it; keys that share a file wait for each other.
 fn lock_path(key: &Path) -> Result<PathBuf> {
     let paths =
         basecraft_platform::paths::AppPaths::discover().map_err(|e| invalid(e.to_string()))?;
     let key = basecraft_io::hash_bytes(key.as_os_str().as_encoded_bytes());
-    Ok(paths
-        .state
-        .join("locks")
-        .join(key.trim_start_matches("b3:")))
+    Ok(paths.state.join("locks").join(&key["b3:".len()..][..4]))
 }
 
 fn open_lock(path: &Path) -> Result<std::fs::File> {
@@ -566,13 +574,12 @@ fn open_lock(path: &Path) -> Result<std::fs::File> {
         .open(path)?)
 }
 
-/// Reserved keys, each with whether it is held exclusively. Ledgers (run
-/// folders) are always reserved exclusively, reads included, since a read is
-/// often followed by a write. Store keys are only taken for store-level
-/// changes and by saves, up front.
+/// The lock files this scope holds, all exclusively: a read is often
+/// followed by a write, and a shared hold cannot be raised safely. Store
+/// keys are only taken for store-level changes and by saves, up front.
 #[derive(Default)]
 struct Scope {
-    held: std::cell::RefCell<BTreeMap<PathBuf, (std::fs::File, bool)>>,
+    held: std::cell::RefCell<BTreeMap<PathBuf, std::fs::File>>,
     /// The project of the session this scope works for (rule 2.5): ledger
     /// writes inside it index inputs at the project's root.
     project: std::cell::RefCell<Option<PathBuf>>,
@@ -606,8 +613,7 @@ impl Drop for BackgroundWait {
     }
 }
 
-/// A thread-confined mutation scope. Readers reserve shared, writers exclusive;
-/// nested operations reuse the scope. Cooperating writers hold keys briefly, so
+/// A thread-confined mutation scope; nested operations reuse it. Cooperating writers hold keys briefly, so
 /// a reservation waits up to 2 s (a minute in the background); contention then
 /// ends in Busy, never deadlock.
 pub struct Locks(HeldLocks);
@@ -640,7 +646,7 @@ impl Locks {
     }
     fn record(&self, directory: &Path) -> Result<()> {
         let directory = lexical(&std::path::absolute(directory)?);
-        self.reserve([directory], true)
+        self.reserve([directory])
     }
     fn input(
         &self,
@@ -683,32 +689,29 @@ impl Locks {
         }
         Ok(())
     }
-    fn reserve(&self, paths: impl IntoIterator<Item = PathBuf>, exclusive: bool) -> Result<()> {
+    fn reserve(&self, paths: impl IntoIterator<Item = PathBuf>) -> Result<()> {
         let mut held = self.0.held.borrow_mut();
-        for path in paths.into_iter().collect::<std::collections::BTreeSet<_>>() {
+        // In lock-file order, so two scopes never wait for each other in turn.
+        let mut locks = BTreeMap::new();
+        for path in paths {
             let path = if path.is_absolute() {
                 path.canonicalize().unwrap_or(path)
             } else {
                 path
             };
-            if let Some((_, held_exclusive)) = held.get(&path) {
-                // flock conversion is not atomic: never upgrade a shared hold.
-                // A scope that will write reserves exclusively up front.
-                if exclusive && !*held_exclusive {
-                    return Err(crate::Error::Busy(format!(
-                        "this save did not reserve {} before changing it",
-                        path.display()
-                    )));
-                }
+            locks.insert(lock_path(&path)?, path);
+        }
+        for (lock, path) in locks {
+            if held.contains_key(&lock) {
                 continue;
             }
-            let file = open_lock(&lock_path(&path)?)?;
-            Self::acquire(&file, exclusive, &path)?;
-            held.insert(path, (file, exclusive));
+            let file = open_lock(&lock)?;
+            Self::acquire(&file, &path)?;
+            held.insert(lock, file);
         }
         Ok(())
     }
-    fn acquire(file: &std::fs::File, exclusive: bool, path: &Path) -> Result<()> {
+    fn acquire(file: &std::fs::File, path: &Path) -> Result<()> {
         let started = std::time::Instant::now();
         let background = BACKGROUND.with(|slot| slot.borrow().clone());
         let limit = if background.is_some() {
@@ -717,12 +720,7 @@ impl Locks {
             RESERVATION_WAIT
         };
         loop {
-            let acquired = if exclusive {
-                file.try_lock_exclusive()?
-            } else {
-                FileExt::try_lock_shared(file)?
-            };
-            if acquired {
+            if file.try_lock_exclusive()? {
                 return Ok(());
             }
             if background
@@ -743,18 +741,23 @@ impl Locks {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
     }
+    /// A file's keys: its path, which stays the same when a save replaces
+    /// the file or creates it, and while it exists its inode, which every
+    /// other name of it shares. Both go in one reservation, in lock order.
     pub(crate) fn source(&self, path: &Path) -> Result<()> {
-        let absolute = lexical(&std::path::absolute(path)?);
-        let mut keys = vec![absolute.clone()];
-        if let Ok(canonical) = absolute.canonicalize() {
-            keys.push(canonical);
-        }
-        if let Ok(meta) = stamp(path)
-            && let (Some(dev), Some(ino)) = (meta.device, meta.inode)
+        let mut keys = vec![
+            crate::records::save_guard::target_path(path)
+                .or_else(|_| std::path::absolute(path).map(|path| lexical(&path)))?,
+        ];
+        if let Ok(FileStamp {
+            device: Some(device),
+            inode: Some(inode),
+            ..
+        }) = stamp(path)
         {
-            keys.push(PathBuf::from(format!("inode:{dev}:{ino}")));
+            keys.push(PathBuf::from(format!("inode:{device}:{inode}")));
         }
-        self.reserve(keys, true)
+        self.reserve(keys)
     }
 }
 
@@ -775,22 +778,20 @@ impl SaveLock {
 
 /// Reserve, then select and inspect; the check is carried into the save.
 /// `writes` are stores this save will change (its history bundle's store);
-/// they are reserved exclusively first. Other selected stores are reserved
-/// shared unless `changes_stores` (a policy that edits ledgers) is set.
+/// they are reserved first, then the target, then the stores selected for it.
 pub(crate) fn lock_save(
     target: &Path,
-    changes_stores: bool,
     writes: &[PathBuf],
     project: Option<&Path>,
 ) -> Result<SaveLock> {
     let locks = lock()?;
     locks.set_project(project);
-    // Holding the target's keys stops any new reference to it, so the stores
+    // Holding the target's key stops any new reference to it, so the stores
     // the index lists for it stay the right set.
-    locks.reserve(writes.iter().cloned(), true)?;
+    locks.reserve(writes.iter().cloned())?;
     locks.source(target)?;
     let (canonical, selected, inspection) = selection(target, project)?;
-    locks.reserve(selected.iter().cloned(), changes_stores)?;
+    locks.reserve(selected.iter().cloned())?;
     let check = inspect(&canonical, &selected, inspection)?;
     Ok(SaveLock {
         _locks: locks,
@@ -1161,17 +1162,15 @@ fn inspect(target: &Path, stores: &[PathBuf], mut inspection: Inspection) -> Res
                 continue;
             }
             let mut dependent = false;
-            if let Some(parents) = Some(&input.upstream) {
-                for parent in parents {
-                    let path = &parent.bundle;
-                    match depends_on_inspected(&run.join(path), &analyses, &mut inspection) {
-                        Ok(found) => dependent |= found,
-                        Err(error) => inspection.issue(
-                            InspectionCode::DependencyUnavailable,
-                            &run.join(path),
-                            error,
-                        ),
-                    }
+            for parent in &input.upstream {
+                let path = &parent.bundle;
+                match depends_on_inspected(&run.join(path), &analyses, &mut inspection) {
+                    Ok(found) => dependent |= found,
+                    Err(error) => inspection.issue(
+                        InspectionCode::DependencyUnavailable,
+                        &run.join(path),
+                        error,
+                    ),
                 }
             }
             if dependent {
@@ -1750,7 +1749,7 @@ pub fn package(
                     artifact.retained.as_ref().map(|name| directory.join(name))
                 };
                 if let Some(original) = original {
-                    species_paths.insert(normalized_path(&original), artifact.hash.clone());
+                    species_paths.insert(lexical(&original), artifact.hash.clone());
                 }
             }
         }
@@ -1840,18 +1839,16 @@ pub fn package(
         // Immutable scientific reports stay byte-for-byte; only the derived
         // workspace metadata is relocated for use without its originals.
         crate::files::map_delimitation_paths(&mut work, |path| {
-            species_paths
-                .get(&normalized_path(Path::new(path)))
-                .map_or_else(
-                    || path.to_owned(),
-                    |hash| {
-                        final_bundle
-                            .join("artifacts")
-                            .join(hash.trim_start_matches("b3:"))
-                            .display()
-                            .to_string()
-                    },
-                )
+            species_paths.get(&lexical(Path::new(path))).map_or_else(
+                || path.to_owned(),
+                |hash| {
+                    final_bundle
+                        .join("artifacts")
+                        .join(hash.trim_start_matches("b3:"))
+                        .display()
+                        .to_string()
+                },
+            )
         });
         work.exchange_fields
             .remove("basecraft_display_evidence_run");
@@ -1932,33 +1929,23 @@ pub fn package(
             project, result,
         ))?
     {
-        let link = crate::records::links::AlignmentLink::read_in(project, result)?;
-        let input_path = link.checked_snapshot(result, &tree.doc)?;
+        let (link, input_path) =
+            crate::records::links::AlignmentLink::checked_in(project, result, &tree.doc)?;
         let indexed = std::sync::Arc::new(basecraft_io::fasta::IndexedFasta::open(&input_path)?);
         let alignment = basecraft_docs::AlignmentDoc::from_fasta("Exported input", &indexed);
-        let mut canonical = tempfile::Builder::new()
-            .suffix(".afa")
-            .tempfile_in(staging.path())?;
-        crate::files::write_alignment(&alignment, canonical.as_file_mut())?;
-        canonical.as_file().sync_all()?;
-        let source_artifact = publication
-            .inputs
-            .first()
-            .ok_or_else(|| invalid("tree export has no source"))?;
-        let source_path = target_bundle.join(
-            source_artifact
-                .retained
-                .as_ref()
-                .ok_or_else(|| invalid("exported source is not retained"))?,
-        );
-        let paths = crate::records::links::AlignmentLink::create(
+        // The package carries the alignment the tree is linked to, with the
+        // copy's other records.
+        let canonical =
+            crate::project::Project::document_record_with(None, &copied, ".alignment.afa");
+        crate::files::companion_folder(&canonical)?;
+        basecraft_io::write_atomic(&canonical, |w| crate::files::write_alignment(&alignment, w))?;
+        let mut paths = crate::records::links::AlignmentLink::create(
             &copied,
-            &source_path,
-            canonical.path(),
+            &canonical,
             link.alignment_version,
             link.inferred,
-            None,
         )?;
+        paths.push(canonical);
         for path in paths {
             publication
                 .outputs
@@ -2004,20 +1991,6 @@ pub fn package(
     // Publish a new directory without replacing a destination created concurrently.
     basecraft_platform::atomic::rename_noreplace(staging.path(), destination)?;
     Ok(())
-}
-
-fn normalized_path(path: &Path) -> PathBuf {
-    let mut result = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::ParentDir => {
-                result.pop();
-            }
-            Component::CurDir => {}
-            other => result.push(other.as_os_str()),
-        }
-    }
-    result
 }
 
 /// Copy checked bytes into the package's content-addressed artifact directory.
@@ -2239,37 +2212,35 @@ pub(crate) fn ancestors(
         if let Some(origin) = &input.origin_run {
             stack.push((location.join(origin), false));
         }
-        if let Some(upstream) = Some(&input.upstream) {
-            for reference in upstream {
-                if records.len() + stack.len() >= 10_000 {
-                    return Err(invalid("evidence ancestry exceeds 10,000 references"));
-                }
-                let directory = location.join(&reference.bundle).canonicalize()?;
-                let id = &reference.id;
-                if id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
-                    return Err(invalid("unsafe ancestor identity"));
-                }
-                stack.push((directory.clone(), false));
-                if !seen_records.insert((directory.clone(), id.to_owned())) {
-                    continue;
-                }
-                let bytes = crate::records::provenance::read_record(
-                    &directory.join("records").join(format!("{id}.json")),
-                )?;
-                bytes_read = bytes_read.saturating_add(bytes.len());
-                if bytes_read > 128 << 20 {
-                    return Err(invalid("evidence ancestry exceeds 128 MiB"));
-                }
-                if reference.hash != basecraft_io::hash_bytes(&bytes) {
-                    return Err(invalid("ancestor record hash differs"));
-                }
-                let publication: basecraft_protocol::provenance::Publication =
-                    basecraft_protocol::records::decode(&bytes)?;
-                if &publication.id != id || publication.schema_version != 1 {
-                    return Err(invalid("unsupported or inconsistent ancestor record"));
-                }
-                records.push((directory, publication));
+        for reference in &input.upstream {
+            if records.len() + stack.len() >= 10_000 {
+                return Err(invalid("evidence ancestry exceeds 10,000 references"));
             }
+            let directory = location.join(&reference.bundle).canonicalize()?;
+            let id = &reference.id;
+            if id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+                return Err(invalid("unsafe ancestor identity"));
+            }
+            stack.push((directory.clone(), false));
+            if !seen_records.insert((directory.clone(), id.to_owned())) {
+                continue;
+            }
+            let bytes = crate::records::provenance::read_record(
+                &directory.join("records").join(format!("{id}.json")),
+            )?;
+            bytes_read = bytes_read.saturating_add(bytes.len());
+            if bytes_read > 128 << 20 {
+                return Err(invalid("evidence ancestry exceeds 128 MiB"));
+            }
+            if reference.hash != basecraft_io::hash_bytes(&bytes) {
+                return Err(invalid("ancestor record hash differs"));
+            }
+            let publication: basecraft_protocol::provenance::Publication =
+                basecraft_protocol::records::decode(&bytes)?;
+            if &publication.id != id || publication.schema_version != 1 {
+                return Err(invalid("unsupported or inconsistent ancestor record"));
+            }
+            records.push((directory, publication));
         }
     }
     Ok(records)
@@ -2316,13 +2287,11 @@ pub(crate) fn link_generated_input_locked(
 ) -> Result<()> {
     let mut upstream = Vec::new();
     for dependency in dependencies {
-        let bytes = crate::records::provenance::read_record(&dependency.join("manifest.json"))?;
-        let publication: basecraft_protocol::provenance::Publication =
-            basecraft_protocol::records::decode(&bytes)?;
+        let (publication, hash) = crate::records::provenance::latest_record(dependency)?;
         upstream.push(basecraft_protocol::input_records::UpstreamLink {
             bundle: (crate::records::input_evidence::relative(run.directory(), dependency)?).into(),
-            id: publication.id.clone(),
-            hash: basecraft_io::hash_bytes(&bytes),
+            id: publication.id,
+            hash,
         });
     }
     crate::records::input_evidence::write_json(

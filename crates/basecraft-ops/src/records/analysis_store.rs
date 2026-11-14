@@ -11,9 +11,6 @@ use basecraft_protocol::records::{StoreFormat, StoreMarker};
 
 use crate::{Result, error::invalid};
 
-#[cfg(test)]
-mod publication_tests;
-
 #[derive(Clone, Debug)]
 pub struct ArtifactRun {
     directory: PathBuf,
@@ -237,37 +234,6 @@ impl ArtifactRun {
         let _ = std::fs::remove_file(source);
         Ok(destination)
     }
-
-    /// Explicit secondary export of an already retained artifact. Stage on the
-    /// chosen filesystem and never replace a destination created by another writer.
-    /// The caller owns destination preflight and records the declared export.
-    pub fn publish_secondary(&self, name: &str, destination: &Path) -> Result<()> {
-        let source = self.artifact(name)?;
-        let metadata = std::fs::symlink_metadata(&source)?;
-        if !metadata.is_file() || metadata.file_type().is_symlink() {
-            return Err(invalid("secondary artifact must be an ordinary file"));
-        }
-        let parent = destination
-            .parent()
-            .ok_or_else(|| invalid("secondary output has no parent"))?;
-        let mut candidate = tempfile::NamedTempFile::new_in(parent)?;
-
-        let mut hashing = crate::files::HashingWriter::new(candidate.as_file_mut());
-        let size = std::io::copy(&mut std::fs::File::open(&source)?, &mut hashing)?;
-        if size != metadata.len() {
-            return Err(invalid("secondary artifact changed during export"));
-        }
-        if hashing.hash() != basecraft_io::hash_file(&source)? {
-            return Err(invalid("secondary artifact changed during export"));
-        }
-        candidate.as_file().sync_all()?;
-        candidate
-            .persist_noclobber(destination)
-            .map_err(|e| e.error)?;
-        basecraft_platform::files::sync_directory(parent)?;
-
-        Ok(())
-    }
 }
 
 impl ArtifactRun {
@@ -446,15 +412,6 @@ impl ArtifactRun {
     }
 }
 
-pub(crate) fn bind_existing(run: &Path, id: &str, result: &Path) -> Result<()> {
-    let artifact_run = ArtifactRun {
-        directory: run.into(),
-        working_directory: result.parent().unwrap_or(Path::new(".")).canonicalize()?,
-        id: id.into(),
-    };
-    artifact_run.bind(result)
-}
-
 impl ArtifactRun {
     /// Promote a staged primary/component output without replacing existing data.
     /// Its basename is preserved; allocation remains anchored to the final folder.
@@ -590,17 +547,15 @@ pub(crate) fn publish_delimitation(
             if dependency == run {
                 continue;
             }
-            let bytes = crate::records::provenance::read_record(&dependency.join("manifest.json"))?;
-            let publication: basecraft_protocol::provenance::Publication =
-                basecraft_protocol::records::decode(&bytes)?;
+            let (publication, hash) = crate::records::provenance::latest_record(&dependency)?;
             let reference = basecraft_protocol::input_records::UpstreamLink {
                 bundle: (crate::records::input_evidence::relative(
                     &placement.logical(&run)?,
                     &dependency,
                 )?)
                 .into(),
-                id: publication.id.clone(),
-                hash: basecraft_io::hash_bytes(&bytes),
+                id: publication.id,
+                hash,
             };
             if !upstream.contains(&reference) {
                 upstream.push(reference);

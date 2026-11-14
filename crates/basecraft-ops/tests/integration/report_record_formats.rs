@@ -70,10 +70,11 @@ fn check_export(report: &Report, directory: &Path, capture: Option<&str>) {
     );
 }
 fn check_provenance(publication: &Publication, directory: &Path, capture: Option<&str>) -> Report {
-    let report = DocumentRecord::from_publication(publication)
+    let history = records::SavedHistory::of(publication.clone());
+    let report = DocumentRecord::from_history(publication, history.clone())
         .report()
         .unwrap();
-    records::write_reports(directory, publication).unwrap();
+    records::write_reports(directory, publication, history).unwrap();
     let reports = directory.join("reports");
     check_file(
         &reports,
@@ -102,6 +103,7 @@ fn empty_publication() -> Publication {
         outputs: vec![],
         events: vec![],
         effective_edits: vec![],
+        withdrawn: vec![],
         completeness: Completeness {
             ancestry_known: false,
             input_bytes_available: false,
@@ -320,7 +322,12 @@ fn provenance_regeneration_and_partial_writes() {
         std::fs::remove_file(reports.join(obstructed)).unwrap();
         std::fs::create_dir(reports.join(obstructed)).unwrap();
         let before = snapshot(&reports);
-        let error = records::write_reports(folder.path(), &publication).unwrap_err();
+        let error = records::write_reports(
+            folder.path(),
+            &publication,
+            records::SavedHistory::of(publication.clone()),
+        )
+        .unwrap_err();
         // Reports stage together; an obstructed name stops the renames there.
         assert!(
             matches!(error, basecraft_ops::Error::Damaged { .. }),
