@@ -119,6 +119,13 @@ class Mcp:
             self.process.stderr.close()
 
 
+def document_record(project, file):
+    """Where basecraft keeps its record of `file`, a file in `project` (D23):
+    the project's `.basecraft/documents/<project-relative path>.json`."""
+    key = Path(file).relative_to(project).as_posix()
+    return project / ".basecraft" / "documents" / f"{key}.json"
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True)
@@ -437,7 +444,8 @@ def main():
                 work["exchange_fields"]["basecraft_alignment_snapshot"] = snapshot
             for specimen in work["specimens"]:
                 specimen["sources"] = {key: "unverified" for key in keys}
-            side = Path(str(path) + ".basecraft.json")
+            side = document_record(project, path)
+            side.parent.mkdir(parents=True, exist_ok=True)
             payload = {"basecraft": writer, "version": 1, "exchange_hash": exchange_hash,
                        "delimitation": {"path_base": str(project.resolve()), "workspace": work}}
             side.write_text(json.dumps(payload))
@@ -471,13 +479,19 @@ def main():
             assert py.delimitation_linked_alignment(live) == expected
             py.redo(live)
             assert py.delimitation_linked_alignment(live) == expected
-        # Existing companion validation remains authoritative.
+        # A record written for other bytes is ignored, with a warning, and
+        # the hint comes from the file alone (D23 review finding 8).
         payload["exchange_hash"] = "damaged"
         side.write_text(json.dumps(payload))
-        assert readonly.tool("open", {"path": str(path)})["isError"]
+        opened = readonly.tool("open", {"path": str(path)})
+        assert not opened["isError"], opened
+        doc = opened["structuredContent"]["document"]
+        warnings = readonly.tool("document_record", {"document": doc})["structuredContent"]["warnings"]
+        assert any("companion file was ignored" in w for w in warnings), warnings
+        assert readonly.tool("delimitation_linked_alignment", {"document": doc})["structuredContent"] == {"path": None}
     finally:
         readonly.close()
-    record("Linked-alignment hints agree across CLI, read-only MCP and persistent/convenience Python; null/empty/spelling, saved/live, refusal and no writes")
+    record("Linked-alignment hints agree across CLI, read-only MCP and persistent/convenience Python; null/empty/spelling, saved/live, ignored stale record and no writes")
     if args.only_linked_alignment:
         receipt["status"] = "passed"
         receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
@@ -589,7 +603,7 @@ def main():
                 for route in ("cli", "mcp", "python", "convenience"):
                     output = project / f"mixed-{route}-{suffix}.spart"
                     assert not output.exists(), output
-                    assert not Path(str(output) + ".basecraft.json").exists(), output
+                    assert not document_record(project, output).exists(), output
                 assert {path: Path(path).read_bytes() for path in paths} == before_sources
         # Keep security checks on selection keys before joining them as well.
         outside = root / "outside.spart"
@@ -922,7 +936,7 @@ def main():
                 assert state["displaced_labels"] == [], (tree_file, state)
         finally:
             reopened.close()
-        sides = [json.loads((project / f"{tree_file}.basecraft.json").read_text())["tree"]["annotations"]
+        sides = [json.loads(document_record(project, project / tree_file).read_text())["tree"]["annotations"]
                  for tree_file in ("labels-cli.nwk", "labels-mcp.nwk")]
         assert sides[0] == sides[1] and list(sides[0]) == ["1"], sides
         record("Displaced labels: CLI and MCP reroot, report, place, save and reopen alike")
