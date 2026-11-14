@@ -555,7 +555,7 @@ impl AlignmentLinkExt for AlignmentLink {
         };
         let metadata = hidden_sidecar(run.directory(), tree);
         crate::records::input_evidence::write_json(&metadata, &link)?;
-        run.bind(tree)?;
+        run.bind(tree, &basecraft_io::hash_file(tree)?)?;
         Ok(vec![metadata])
     }
 

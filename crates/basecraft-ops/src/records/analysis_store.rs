@@ -349,7 +349,7 @@ impl ArtifactRun {
 
     /// Refresh a previously discovered binding after a successful document save.
     /// This is a writer operation; it never certifies bytes on passive opening.
-    pub(crate) fn refresh_binding(result: &Path) -> Result<()> {
+    pub(crate) fn refresh_binding(result: &Path, hash: &str) -> Result<()> {
         if let Some(directory) = Self::for_result(result)? {
             let store = directory
                 .parent()
@@ -370,13 +370,14 @@ impl ArtifactRun {
                 working_directory,
                 id,
             }
-            .bind(result)?;
+            .bind(result, hash)?;
         }
         Ok(())
     }
 
-    /// Bind only after primary and supporting outputs plus manifest are durable.
-    pub fn bind(&self, result: &Path) -> Result<()> {
+    /// Bind only after primary and supporting outputs plus manifest are
+    /// durable. `hash` is the result's hash, which the caller already has.
+    pub fn bind(&self, result: &Path, hash: &str) -> Result<()> {
         let store = self
             .directory
             .parent()
@@ -405,7 +406,7 @@ impl ArtifactRun {
                     .to_str()
                     .ok_or_else(|| invalid("result filename is not UTF-8"))?
                     .into(),
-                result_hash: basecraft_io::hash_file(result)?,
+                result_hash: hash.into(),
                 extra: BTreeMap::new(),
             })?,
         )
@@ -528,7 +529,7 @@ pub(crate) fn publish_delimitation(
             std::io::copy(&mut std::fs::File::open(target)?, w)?;
             Ok(())
         })?;
-        crate::records::input_evidence::write_json(&run.artifact("input.json")?, &input)?;
+        crate::records::input_evidence::write_input(run.directory(), &input)?;
         run.write_run(
             basecraft_protocol::records::AnalysisRunStatus::Saved,
             target
@@ -537,7 +538,7 @@ pub(crate) fn publish_delimitation(
                 .map(str::to_owned),
         )?;
         placement.register(run)?;
-        run.bind(target)?;
+        run.bind(target, main_hash)?;
     }
     if let Some(run) = crate::records::analysis_store::ArtifactRun::for_result(target)? {
         let mut input = crate::records::input_evidence::read_input(&run)?;
@@ -564,7 +565,7 @@ pub(crate) fn publish_delimitation(
         if !upstream.is_empty() {
             input.upstream = upstream;
         }
-        crate::records::input_evidence::write_json(&run.join("input.json"), &input)?;
+        crate::records::input_evidence::write_input(&run, &input)?;
     }
     Ok(())
 }

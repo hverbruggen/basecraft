@@ -22,6 +22,7 @@ mod pyrodigal_plugin;
 mod referenced_inputs;
 mod registered_jobs;
 mod registry;
+mod run_cost;
 mod run_folder;
 mod runtime_install;
 mod sanger_caller;

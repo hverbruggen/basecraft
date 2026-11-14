@@ -974,7 +974,7 @@ fn record_document_run(
     let outputs: Vec<_> = outcome
         .artifacts
         .iter()
-        .map(|artifact| std::path::PathBuf::from(&artifact.path))
+        .map(|artifact| (artifact.path.clone().into(), artifact.digest.clone()))
         .collect();
     let (actor, record) = job
         .prepared

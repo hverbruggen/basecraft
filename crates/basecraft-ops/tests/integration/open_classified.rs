@@ -225,7 +225,7 @@ fn classified_route_reads_main_once_without_passive_sync() {
         if bound {
             ArtifactRun::create(&path, "bound-tree")
                 .unwrap()
-                .bind(&path)
+                .bind(&path, &basecraft_io::hash_file(&path).unwrap())
                 .unwrap();
         }
         let key = path.canonicalize().unwrap();
@@ -278,7 +278,8 @@ fn bound_tree_errors_warn_and_preserve_the_standard_tree() {
     let path = dir.path().join("bound.nwk");
     std::fs::write(&path, b"(a,b);\n").unwrap();
     let run = ArtifactRun::create(&path, "bound-tree").unwrap();
-    run.bind(&path).unwrap();
+    run.bind(&path, &basecraft_io::hash_file(&path).unwrap())
+        .unwrap();
     // A valid adjacent sidecar cannot rescue a mismatched bound main file.
     let tree = basecraft_docs::TreeDoc::from_newick("bound", "(a,b);").unwrap();
     let mut sidecar = Vec::new();

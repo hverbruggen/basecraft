@@ -71,8 +71,8 @@ fn reference_run(root: &std::path::Path, source: &std::path::Path, id: &str) -> 
     )
     .unwrap();
     let hash = basecraft_io::hash_file(source).unwrap();
-    records::write_json(
-        &run.directory().join("input.json"),
+    records::write_input(
+        run.directory(),
         &SubmittedInput {
             schema_version: 1,
             source: Some(InputReference {
@@ -339,12 +339,14 @@ fn nested_collection_bindings_reopen_without_changing_sibling_bindings() {
     let output = temp.path().join("single.txt");
     let run = ArtifactRun::create(&output, "nested").unwrap();
     std::fs::write(&output, b"single").unwrap();
-    run.bind(&output).unwrap();
+    run.bind(&output, &basecraft_io::hash_file(&output).unwrap())
+        .unwrap();
     let collection = temp.path().join("collection/subdir");
     std::fs::create_dir_all(&collection).unwrap();
     let member = collection.join("member.txt");
     std::fs::write(&member, b"member").unwrap();
-    run.bind(&member).unwrap();
+    run.bind(&member, &basecraft_io::hash_file(&member).unwrap())
+        .unwrap();
     for path in [&output, &member] {
         assert_eq!(
             ArtifactRun::for_result(path).unwrap().as_deref(),
@@ -415,7 +417,7 @@ fn multi_input_verification_uses_only_declared_owners_and_never_bypasses_breaks(
     assert!(records::verified_source(main.directory(), &wrong_size).is_err());
     let mut broken = records::read_input(same_hash.directory()).unwrap();
     broken.state = "broken".into();
-    records::write_json(&same_hash.directory().join("input.json"), &broken).unwrap();
+    records::write_input(same_hash.directory(), &broken).unwrap();
     for dependencies in [
         dependencies.to_vec(),
         dependencies.into_iter().rev().collect(),
@@ -440,7 +442,7 @@ fn multi_input_verification_uses_only_declared_owners_and_never_bypasses_breaks(
     let undeclared = make_ledger(&source_a);
     let mut altered = records::read_input(undeclared.directory()).unwrap();
     altered.source = Some(reference.clone());
-    records::write_json(&undeclared.directory().join("input.json"), &altered).unwrap();
+    records::write_input(undeclared.directory(), &altered).unwrap();
     records::link_generated_input(
         &main,
         &[undeclared.directory().to_owned()],
@@ -482,7 +484,7 @@ fn preserved_primary_is_not_replaced_by_a_matching_ancestor_with_missing_origina
     let preserved = main.directory().join("preserved-input");
     std::fs::write(&preserved, bytes).unwrap();
     input.state = "preserved".into();
-    records::write_json(&main.directory().join("input.json"), &input).unwrap();
+    records::write_input(main.directory(), &input).unwrap();
     std::fs::remove_file(&source).unwrap();
     assert_eq!(
         records::verified_source(main.directory(), &reference).unwrap(),
@@ -492,7 +494,7 @@ fn preserved_primary_is_not_replaced_by_a_matching_ancestor_with_missing_origina
     // A matching explicit break still fails closed, even with a good primary.
     let mut broken = records::read_input(ancestor.directory()).unwrap();
     broken.state = "broken".into();
-    records::write_json(&ancestor.directory().join("input.json"), &broken).unwrap();
+    records::write_input(ancestor.directory(), &broken).unwrap();
     assert!(
         records::verified_source(main.directory(), &reference)
             .unwrap_err()

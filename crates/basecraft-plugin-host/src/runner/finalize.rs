@@ -2,7 +2,7 @@
 use super::{
     ArtifactDestination, ArtifactRevision, BTreeMap, CollectionExportIntent, CollectionIntent,
     Error, InvokeResult, OperationOutcome, Path, PathBuf, PreparedOperation, PublishedArtifact,
-    Result, records, verify_collection,
+    Result, check_members, records, verify_collection,
 };
 
 /// Files published into the project: destination, the run's copy if it
@@ -107,7 +107,7 @@ impl PreparedOperation {
                         ));
                     }
                 } else if !path.exists() {
-                    verify_collection(&staging, &expected)?;
+                    check_members(&staging, &expected)?;
                     for member in expected.keys() {
                         basecraft_platform::files::sync_file(&staging.join(member))?;
                     }
@@ -135,8 +135,10 @@ impl PreparedOperation {
                             })
                         },
                     )?;
+                } else {
+                    // A repair adopts what an earlier attempt moved there.
+                    verify_collection(&path, &expected)?;
                 }
-                verify_collection(&path, &expected)?;
                 record_collection(outcome, role, &path, &expected);
                 for member in expected.keys() {
                     moved.insert(retained.join(member), path.join(member));
@@ -159,7 +161,7 @@ impl PreparedOperation {
                         .collect();
                     verify_collection(&retained, &present)?;
                 } else {
-                    verify_collection(&staging, &expected)?;
+                    check_members(&staging, &expected)?;
                     records::write_json(
                         &intent,
                         &serde_json::to_value(CollectionIntent {
@@ -481,7 +483,7 @@ impl PreparedOperation {
                 .publish_operation_activity(&self.run, &activity)?;
         }
         for artifact in &outcome.artifacts {
-            self.run.bind(Path::new(&artifact.path))?;
+            self.run.bind(Path::new(&artifact.path), &artifact.digest)?;
         }
         Ok(())
     }
@@ -550,7 +552,7 @@ impl PreparedOperation {
             .extension()
             .is_some_and(|extension| extension.eq_ignore_ascii_case("nwk"))
         {
-            self.finalise_exported_tree(role, &destination_path)?;
+            self.finalise_exported_tree(role, &destination_path, hash)?;
         }
         Ok(())
     }

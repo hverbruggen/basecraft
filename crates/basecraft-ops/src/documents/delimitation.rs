@@ -306,7 +306,8 @@ mod tests {
         let run =
             crate::records::analysis_store::ArtifactRun::create(&target, "partial-test").unwrap();
         std::fs::write(&target, SPART).unwrap();
-        run.bind(&target).unwrap();
+        run.bind(&target, &basecraft_io::hash_file(&target).unwrap())
+            .unwrap();
         let side = files::companion_path(None, &target);
         std::fs::create_dir(&side).unwrap();
         assert!(

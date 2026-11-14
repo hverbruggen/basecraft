@@ -31,7 +31,7 @@ pub fn retain(root: &Path, request: &Value, outcome: &mut Value) {
     }
     let mut first = first.unwrap();
     first.upstream = serde_json::from_value(json!(upstream)).unwrap();
-    records::write_json(&run.artifact("input.json").unwrap(), &first).unwrap();
+    records::write_input(run.directory(), &first).unwrap();
     let mut artifacts = vec![];
     let mut outputs = vec![];
     for entry in std::fs::read_dir(&reports).unwrap() {
@@ -53,7 +53,8 @@ pub fn retain(root: &Path, request: &Value, outcome: &mut Value) {
     let publication = serde_json::from_value(json!({"schema_version":1,"id":run.id(),"session":"test","parents":[],"parent_hashes":{},"created":"2026-10-28T00:00:00Z","origin":"test","inputs":inputs,"outputs":outputs,"events":[],"effective_edits":[],"withdrawn":[],"completeness":{"ancestry_known":false,"input_bytes_available":true,"execution_specification_available":true,"replay_verified":false},"report_template_version":2})).unwrap();
     records::publish(run.directory(), &publication).unwrap();
     for artifact in artifacts {
-        run.bind(Path::new(artifact["path"].as_str().unwrap()))
+        let path = Path::new(artifact["path"].as_str().unwrap());
+        run.bind(path, &basecraft_io::hash_file(path).unwrap())
             .unwrap();
     }
 }

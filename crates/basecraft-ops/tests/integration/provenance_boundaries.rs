@@ -97,7 +97,8 @@ fn hidden_binding_errors_never_fall_back_to_adjacent_metadata() {
         &metadata,
     )
     .unwrap();
-    run.bind(&path).unwrap();
+    run.bind(&path, &basecraft_io::hash_file(&path).unwrap())
+        .unwrap();
     assert!(files::load_tree(&path).is_ok());
     let sidecar = run.artifact("forest.nwk.basecraft.json").unwrap();
     std::fs::remove_file(&sidecar).unwrap();
@@ -435,7 +436,8 @@ fn saving_a_forest_preserves_other_members_and_refreshes_bound_identity() {
         .write(&mut metadata)
         .unwrap();
     std::fs::write(run.artifact("forest.nwk.basecraft.json").unwrap(), metadata).unwrap();
-    run.bind(&file).unwrap();
+    run.bind(&file, &basecraft_io::hash_file(&file).unwrap())
+        .unwrap();
     let mut session = Session::new(dir.path());
     let doc = session.open(&file).unwrap();
     session

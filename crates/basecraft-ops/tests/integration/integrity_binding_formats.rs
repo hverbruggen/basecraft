@@ -19,7 +19,8 @@ fn result_binding_writer_bytes_and_selective_reader() {
         let result = root.path().join(name);
         std::fs::create_dir_all(result.parent().unwrap()).unwrap();
         std::fs::write(&result, b"bound result bytes").unwrap();
-        run.bind(&result).unwrap();
+        run.bind(&result, &basecraft_io::hash_file(&result).unwrap())
+            .unwrap();
         let key = basecraft_io::hash_bytes(name.as_bytes());
         let binding = root
             .path()

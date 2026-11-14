@@ -189,7 +189,7 @@ impl History<'_> {
                     Ok(())
                 })?;
             }
-            crate::records::input_evidence::write_json(&bundle.join("input.json"), &input)?;
+            crate::records::input_evidence::write_input(&bundle, &input)?;
         }
         let retain =
             |path: &Path, hash: &str, revision: String, name: String| -> Result<ArtifactRevision> {
@@ -468,7 +468,7 @@ impl History<'_> {
             origin_run: None,
             extra: BTreeMap::from([("extraction".into(), serde_json::to_value(extraction)?)]),
         };
-        crate::records::write_json(&bundle.join("input.json"), &input)?;
+        crate::records::write_input(&bundle, &input)?;
         run.write_run(
             basecraft_protocol::records::AnalysisRunStatus::Saved,
             path.file_name()
@@ -487,6 +487,7 @@ impl History<'_> {
             reference,
         };
         let (events, effective_edits, withdrawn) = portable_analysis_activity(snapshot, activity)?;
+        let output_hash = basecraft_io::hash_file(path)?;
         let publication = Publication {
             schema_version: 1,
             id: activity.id.clone(),
@@ -499,7 +500,7 @@ impl History<'_> {
             outputs: vec![ArtifactRevision {
                 id: format!("{}:result", activity.id),
                 logical_name: name(&path.to_string_lossy()),
-                hash: basecraft_io::hash_file(path)?,
+                hash: output_hash.clone(),
                 size: std::fs::metadata(path)?.len(),
                 retained: None,
                 reference: None,
@@ -516,7 +517,7 @@ impl History<'_> {
             report_template_version: 2,
         };
         crate::records::publish(&bundle, &publication)?;
-        run.bind(path)?;
+        run.bind(path, &output_hash)?;
         Ok(())
     }
 }

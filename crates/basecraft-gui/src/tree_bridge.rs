@@ -864,7 +864,13 @@ impl qobject::TreeController {
                 &tree_path,
                 session.tree(doc)?,
                 &source,
-            )?;
+            )?
+            .into_iter()
+            .map(|path| -> basecraft_ops::Result<_> {
+                let hash = basecraft_io::hash_file(&path)?;
+                Ok((path, hash))
+            })
+            .collect::<basecraft_ops::Result<Vec<_>>>()?;
             session.record_tool_run(
                 doc,
                 basecraft_protocol::Actor::Human {

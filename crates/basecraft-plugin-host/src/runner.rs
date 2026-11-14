@@ -360,7 +360,7 @@ impl PreparedOperation {
                 if root.join(&*path) == retained {
                     continue;
                 }
-                let hash = file_tool::freeze_file(&root.join(&*path), &retained)?;
+                let (hash, _) = file_tool::freeze_file(&root.join(&*path), &retained)?;
                 self.ledger_inputs.push(records::retained_file(
                     &self.run,
                     &name,
@@ -699,8 +699,8 @@ impl PreparedOperation {
 
     /// An exported tree gets what the retained member has: its run binding,
     /// producer support semantics and the link to the alignment it came from.
-    fn finalise_exported_tree(&self, role: &str, tree: &Path) -> Result<()> {
-        self.run.bind(tree)?;
+    fn finalise_exported_tree(&self, role: &str, tree: &Path, hash: &str) -> Result<()> {
+        self.run.bind(tree, hash)?;
         file_tool::write_tree_companion(
             tree,
             file_tool::producer_support(&self.operation.descriptor, &self.parameters),
@@ -752,7 +752,7 @@ impl PreparedOperation {
     pub(crate) fn tool_run<'a>(
         &'a self,
         inputs: &'a [(String, String)],
-        outputs: &'a [PathBuf],
+        outputs: &'a [(PathBuf, String)],
     ) -> (
         basecraft_protocol::Actor,
         basecraft_ops::session::ToolRunRecord<'a>,
@@ -902,7 +902,23 @@ fn sources_from_upstream(directory: &Path) -> Result<Vec<PathBuf>> {
         .collect())
 }
 
+/// Whether the collection at `root` holds exactly the `expected` members
+/// with those hashes, each an ordinary file with one link.
 fn verify_collection(root: &Path, expected: &BTreeMap<PathBuf, String>) -> Result<()> {
+    check_members(root, expected)?;
+    for (relative, hash) in expected {
+        if basecraft_io::hash_file(&root.join(relative))? != *hash {
+            return Err(Error::Protocol(
+                "collection bytes changed after validation".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// [`verify_collection`] without reading the members, for a collection
+/// whose hashes validation has just taken.
+fn check_members(root: &Path, expected: &BTreeMap<PathBuf, String>) -> Result<()> {
     let metadata = root.symlink_metadata()?;
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
         return Err(Error::Protocol("collection root is unsafe".into()));
@@ -914,11 +930,10 @@ fn verify_collection(root: &Path, expected: &BTreeMap<PathBuf, String>) -> Resul
             "collection members differ from validated output".into(),
         ));
     }
-    for (relative, hash) in expected {
-        let path = root.join(relative);
-        if link_count(&path)? != 1 || basecraft_io::hash_file(&path)? != *hash {
+    for relative in expected.keys() {
+        if link_count(&root.join(relative))? != 1 {
             return Err(Error::Protocol(
-                "collection bytes changed after validation".into(),
+                "collection member has another link after validation".into(),
             ));
         }
     }

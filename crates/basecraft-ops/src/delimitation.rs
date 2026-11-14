@@ -47,7 +47,7 @@ pub fn publish_workspace(
 ) -> Result<()> {
     let name = stage_workspace(target, work, run)?;
     run.publish_primary(&name)?;
-    run.bind(target)
+    run.bind(target, &basecraft_io::hash_file(target)?)
 }
 
 /// Which specimens of a new workspace were linked to the project roster.
@@ -154,7 +154,7 @@ pub fn publish_workspace_to(
     let staged = run.staging(&stage_workspace(target, work, run)?)?;
     let hash = basecraft_io::hash_file(&staged)?;
     crate::records::move_file(&staged, target, &hash, &run.artifact(WORKSPACE_RECEIPT)?)?;
-    run.bind(target)
+    run.bind(target, &hash)
 }
 
 /// Stage the SPART and its sidecar in the run; returns the staged name.

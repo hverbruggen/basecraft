@@ -109,23 +109,22 @@ pub fn retained_file(
     })
 }
 
-/// Move a run's file to a new file in the project, never replacing one
-/// (D26). The receipt names the file's inode before the move, so a later
-/// repair adopts only the file this run moved.
+/// Move a run's file, whose hash the caller knows, to a new file in the
+/// project, never replacing one (D26). The receipt names the file's inode
+/// before the move, so a later repair adopts only the file this run moved.
+/// A copy across file systems is checked against `hash`.
 pub fn move_file(source: &Path, destination: &Path, hash: &str, receipt: &Path) -> Result<()> {
-    let check = |file: &Path| {
-        if basecraft_io::hash_file(file)? == hash {
-            Ok(())
-        } else {
-            Err(invalid("member changed before export"))
-        }
-    };
-    check(source)?;
     move_into_project(
         source,
         destination,
         |file| write_receipt(receipt, destination, hash, file),
-        check,
+        |copy| {
+            if basecraft_io::hash_file(copy)? == hash {
+                Ok(())
+            } else {
+                Err(invalid("member changed before export"))
+            }
+        },
     )
 }
 

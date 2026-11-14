@@ -653,6 +653,13 @@ impl Session {
             .collect();
         self.log_save(id, target, hashes)?;
         if !outputs.is_empty() {
+            let outputs = outputs
+                .into_iter()
+                .map(|path| -> Result<_> {
+                    let hash = basecraft_io::hash_file(&path)?;
+                    Ok((path, hash))
+                })
+                .collect::<Result<Vec<_>>>()?;
             self.record_tool_run(
                 id,
                 self.actor.clone(),

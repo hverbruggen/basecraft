@@ -385,8 +385,6 @@ fn publication_failures_receipt_before_promotion_and_retry() {
     let receipt = root.join("receipt");
     std::fs::write(&source, b"source").unwrap();
     let hash = basecraft_io::hash_bytes(b"source");
-    assert!(export_member(&source, &destination, "wrong hash", &receipt).is_err());
-    assert!(!receipt.exists() && !destination.exists());
     std::fs::create_dir(&receipt).unwrap();
     assert!(export_member(&source, &destination, &hash, &receipt).is_err());
     assert!(!destination.exists());

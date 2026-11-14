@@ -148,6 +148,7 @@ fn publication_worker() {
                         &root.join("result.txt"),
                         &source,
                         &expected,
+                        None,
                         &[],
                         "stale registration",
                         None
@@ -166,6 +167,7 @@ fn publication_worker() {
                 &root.join("result.txt"),
                 &source,
                 &expected,
+                None,
                 &[],
                 "input",
                 None,
@@ -331,6 +333,7 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
                 &root.join("result.txt"),
                 &source,
                 &hash,
+                None,
                 &[],
                 "retained input",
                 None,

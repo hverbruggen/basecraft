@@ -60,31 +60,36 @@ fn base(path: &Path) -> crate::Result<PathBuf> {
 }
 
 // Placement contexts can be large alignments; only traces use owned captures.
-// A context inside the project links the history it keeps there.
+// A context inside the project links the history it keeps there. It is read
+// once, for both hashes; with `sha256`, it must still hold those bytes.
 fn source(
     path: &Path,
-    sha256: &str,
+    sha256: Option<&str>,
     anchor: &Path,
     project: Option<&crate::project::Project>,
 ) -> crate::Result<Source> {
     let path = path.canonicalize()?;
-    let hash = basecraft_io::hash_file(&path)?;
-    let ledger = inputs::reference_input_with_dependencies(
+    let stamp = inputs::stamp(&path)?;
+    let (hash, actual) = basecraft_io::hash_file_with_sha256(&path)?;
+    if inputs::stamp(&path)? != stamp
+        || sha256.is_some_and(|sha256| !actual.eq_ignore_ascii_case(sha256))
+    {
+        return Err(crate::Error::ChangedOnDisk { path });
+    }
+    let ledger = inputs::Mutation::begin_in(project)?.reference_input_with_dependencies(
         anchor,
         &path,
         &hash,
+        Some(&stamp),
         &[],
         "Explicit Sanger input reference",
         project,
     )?;
-    if !basecraft_io::sha256_file(&path)?.eq_ignore_ascii_case(sha256) {
-        return Err(crate::Error::ChangedOnDisk { path });
-    }
     let reference = inputs::read_input(ledger.directory())?.source;
     Ok(Source {
         original: path.clone(),
         path,
-        sha256: sha256.into(),
+        sha256: sha256.map_or(actual, Into::into),
         ledger: Some(ledger.directory().into()),
         reference,
     })
@@ -289,12 +294,7 @@ impl SangerRun {
                     .push(source_capture(&capture, anchor, project)?);
                 captures.push(capture);
             } else {
-                evidence.sources.push(source(
-                    path,
-                    &basecraft_io::sha256_file(path)?,
-                    anchor,
-                    project,
-                )?);
+                evidence.sources.push(source(path, None, anchor, project)?);
             }
         }
         let run = ArtifactRun::create(anchor, &ulid::Ulid::generate().to_string())?;
@@ -606,7 +606,7 @@ impl SangerReview {
         let placement = SangerPlacement::read(path)?;
         let context = source(
             &placement.source_path,
-            &placement.source_sha256,
+            Some(&placement.source_sha256),
             &self.anchor,
             project,
         )
@@ -875,6 +875,7 @@ impl SangerReview {
             vec![retained(&run, &snapshot, 0)?],
         );
         unavailable_sources(&self.evidence, &mut record);
+        let hash = basecraft_io::hash_file(path)?;
         record.outputs.push(ArtifactRevision {
             id: format!("{}:consensus", run.id()),
             logical_name: path
@@ -882,13 +883,13 @@ impl SangerReview {
                 .ok_or_else(|| invalid("Consensus has no filename"))?
                 .to_string_lossy()
                 .into_owned(),
-            hash: basecraft_io::hash_file(path)?,
+            hash: hash.clone(),
             size: std::fs::metadata(path)?.len(),
             retained: None,
             reference: None,
         });
         crate::records::provenance::publish(run.directory(), &record)?;
-        run.bind(path)?;
+        run.bind(path, &hash)?;
         self.evidence.runs = vec![run.directory().into()];
         Ok(())
     }
@@ -1284,13 +1285,15 @@ impl SangerReview {
     }
 
     pub(crate) fn bind_session_review(target: &Path, run: &ArtifactRun) -> crate::Result<()> {
-        run.bind(target).map_err(|error| crate::Error::Damaged {
-            path: target.into(),
-            detail: format!(
-                "review data saved; binding incomplete: {error}; repair evidence: {}",
-                run.directory().display()
-            ),
-        })
+        let hash = basecraft_io::hash_file(target)?;
+        run.bind(target, &hash)
+            .map_err(|error| crate::Error::Damaged {
+                path: target.into(),
+                detail: format!(
+                    "review data saved; binding incomplete: {error}; repair evidence: {}",
+                    run.directory().display()
+                ),
+            })
     }
 }
 
@@ -1511,7 +1514,7 @@ mod tests {
         let sha256 = basecraft_io::sha256_file(&context).unwrap();
         let placed = source(
             &context,
-            &sha256,
+            Some(&sha256),
             &chosen.join("review.json"),
             Some(&project),
         )
