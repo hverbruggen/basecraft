@@ -13,6 +13,11 @@ Main {
     function check(ok, message) {
         if (!ok) { console.error("OPEN_BOUNDARY " + scenario + ": " + message); Qt.exit(2); throw new Error(message) }
     }
+    // Main's DocumentOpens, which a derived window reaches only by walking its objects.
+    function opens() {
+        for (const item of test.contentData) if (item && typeof item.index_of === "function") return item
+        return null
+    }
     function slotAt(item, path) {
         if (item.adoptedSlot === true && item.path === path) return item
         for (const child of item.children || []) { const found = slotAt(child, path); if (found) return found }
@@ -66,7 +71,7 @@ Main {
             const slot = slotAt(contentItem, folder + "/sequence.gb")
             check(slot !== null, "pending slot not found")
             slot.admittedControllerChanged.connect(() => { if (!injected) Qt.callLater(() => inject(slot)) })
-        } else if (stage === 1 && injected && requestIndex(retiredToken) < 0) {
+        } else if (stage === 1 && injected && opens().index_of(retiredToken) < 0) {
             stage = 2
             Qt.callLater(() => {
                 check(documentAt(0).controller === original && documentAt(1) === null, "late ack changed surviving owner or resurrected slot")

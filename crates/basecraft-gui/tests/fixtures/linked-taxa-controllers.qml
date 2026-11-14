@@ -21,6 +21,11 @@ Main {
     property var allNames: ["specimen_01", "specimen_02", "specimen_03", "specimen_04", "specimen_05", "specimen_06", "specimen_07", "specimen_08"]
     DocumentOpens { id: adapter }
     QtObject { id: unsupported }
+    // Main's DocumentOpens, which a derived window reaches only by walking its objects.
+    function opens() {
+        for (const item of test.contentData) if (item && item !== adapter && typeof item.add_tab === "function") return item
+        return null
+    }
     function check(ok, message) {
         if (!ok) { test.objectName = "stage " + stage + ": " + message; console.error("LINKED_TAXA stage " + stage + ": " + message); Qt.exit(2); throw new Error(message) }
     }
@@ -51,11 +56,11 @@ Main {
             if (!documentAt(0)) return
             if (a === null) {
                 a = documentAt(0).controller
-                documentOpens.add_tab(folder + "/alignment.afa", "alignment")
-                documentOpens.add_tab(folder + "/tree.nwk", "tree")
-                documentOpens.add_tab(folder + "/workspace.spart", "delimitation")
-                documentOpens.add_tab(folder + "/unrelated.afa", "alignment")
-                documentOpens.add_tab(folder + "/unlinked.nwk", "tree")
+                opens().add_tab(folder + "/alignment.afa", "alignment")
+                opens().add_tab(folder + "/tree.nwk", "tree")
+                opens().add_tab(folder + "/workspace.spart", "delimitation")
+                opens().add_tab(folder + "/unrelated.afa", "alignment")
+                opens().add_tab(folder + "/unlinked.nwk", "tree")
                 duplicate = documentAt(1).controller
                 tree = documentAt(2).controller
                 workspace = documentAt(3).controller

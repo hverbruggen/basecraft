@@ -10,11 +10,9 @@ Main {
         NumberAnimation on opacity { from: 0.1; to: 0.9; duration: 100; loops: Animation.Infinite }
     }
     property string folder: OPEN_TEST_FOLDER
-    property var transitions: []
-    Connections {
-        target: test
-        function onMetadataProjectChanged() { test.transitions.push(test.metadataProject) }
-    }
+    // The window's project is B, chosen before Main opens its arguments
+    // (bindings run before Component.onCompleted).
+    readonly property bool projectChosen: { chooseProject(folder + "/B"); return true }
     Timer {
         interval: 1
         repeat: true
@@ -23,15 +21,13 @@ Main {
             const a = test.documentAt(0)
             const b = test.documentAt(1)
             if (!a || !b) return
-            if (JSON.stringify(test.transitions) !== JSON.stringify([test.folder + "/A", test.folder + "/B"])) {
-                console.error("ARGV project callback order/count", JSON.stringify(test.transitions)); Qt.exit(2); return
-            }
+            // Opening files never changes the chosen project (D10).
             if (test.metadataProject !== test.folder + "/B" || test.currentPath !== test.folder + "/B/alignment.afa"
                     || a.kind !== "sequence" || b.kind !== "alignment") {
-                console.error("ARGV completion changed project or request-order tab selection"); Qt.exit(2); return
+                console.error("ARGV changed the chosen project or the request-order tab selection"); Qt.exit(2); return
             }
             running = false
-            console.log("ARGV mixed roots, metadata/submission legacy routes and late A completion passed")
+            console.log("ARGV files from two folders, the project's metadata and submission, and a late first file passed")
             Qt.quit()
         }
     }
