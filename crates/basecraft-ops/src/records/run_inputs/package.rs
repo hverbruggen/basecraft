@@ -16,7 +16,9 @@ use crate::{
     error::{changed_on_disk, damaged, invalid, limit, unsupported},
 };
 
-/// Explicit portable export materializes referenced dependencies; ordinary analysis does not.
+/// Write a portable copy of `result` to the new folder `destination`: the
+/// result, its records and every input they name, so it can be checked and
+/// reused without the original project. Ordinary analysis copies nothing.
 pub fn package(
     result: &Path,
     destination: &Path,
@@ -41,27 +43,38 @@ pub fn package(
         .tempdir_in(parent)?;
     let bundle = crate::records::provenance::bundle_for_result(result, project);
     let mut publication = crate::records::provenance::inspect(result, project)?;
-    if let Some(index) = publication
-        .outputs
-        .iter()
-        .position(|a| Path::new(&a.logical_name).file_name() == result.file_name())
-    {
-        publication.outputs.swap(0, index);
-    }
+    result_first(&mut publication, result);
     let copied = staging.path().join(
         result
             .file_name()
             .ok_or_else(|| Error::NoFileName(result.into()))?,
     );
-    let target_bundle = crate::records::provenance::companion(&copied);
-    std::fs::create_dir_all(target_bundle.join("artifacts"))?;
+    let package = Package {
+        result,
+        project,
+        staging: staging.path(),
+        bundle: crate::records::provenance::companion(&copied),
+        companion: in_package(
+            staging.path(),
+            &crate::project::Project::document_record(None, &copied),
+        )?,
+        final_copy: parent
+            .canonicalize()?
+            .join(
+                destination
+                    .file_name()
+                    .ok_or_else(|| Error::NoFileName(destination.into()))?,
+            )
+            .join(copied.file_name().unwrap_or_default()),
+        copied,
+    };
+    std::fs::create_dir_all(package.bundle.join("artifacts"))?;
     // Rebase the whole immutable record graph, not only today's inputs.
     // Original record bytes are retained as checked artifacts; relocated records
     // get new identities and recomputed parent checksums in dependency order.
     let original_id = publication.id.clone();
-    let upstream = ancestors(&bundle)?;
     let mut roots = vec![(bundle.clone(), publication.clone())];
-    roots.extend(upstream);
+    roots.extend(ancestors(&bundle)?);
     let species =
         crate::files::Format::from_path(result).ok() == Some(crate::files::Format::Delimitation);
     let sanger = if crate::sanger_review::is_review(result) {
@@ -76,41 +89,21 @@ pub fn package(
     } else {
         None
     };
-    let mut species_paths = BTreeMap::new();
-    if species || sanger.is_some() {
-        for (directory, record) in &roots {
-            for artifact in record.inputs.iter().chain(&record.outputs) {
-                let original = if let Some(reference) = &artifact.reference {
-                    let (owner, input) = owning_ledger(directory)?;
-                    let original = input.source.as_ref().map_or_else(
-                        || directory.join(&reference.path),
-                        |source| owner.join(&source.path),
-                    );
-                    Some(original)
-                } else {
-                    artifact.retained.as_ref().map(|name| directory.join(name))
-                };
-                if let Some(original) = original {
-                    species_paths.insert(lexical(&original), artifact.hash.clone());
-                }
-            }
-        }
-    }
-    let (mut exported, archived) = export_history(&roots, &target_bundle)?;
+    let originals = if species || sanger.is_some() {
+        original_hashes(&roots)?
+    } else {
+        BTreeMap::new()
+    };
+    let (mut exported, archived) = export_history(&roots, &package.bundle)?;
     publication = exported.remove(0);
-    if let Some(index) = publication
-        .outputs
-        .iter()
-        .position(|a| Path::new(&a.logical_name).file_name() == result.file_name())
-    {
-        publication.outputs.swap(0, index);
-    }
+    result_first(&mut publication, result);
     for ancestor in exported {
         if !publication.parents.contains(&ancestor.id) {
             publication.parent_hashes.insert(
                 ancestor.id.clone(),
                 basecraft_io::hash_file(
-                    &target_bundle
+                    &package
+                        .bundle
                         .join("records")
                         .join(format!("{}.json", ancestor.id)),
                 )?,
@@ -119,73 +112,160 @@ pub fn package(
         }
     }
     publication.inputs.extend(archived);
-    // The packaged copy is a loose file of the package folder: its
-    // companion goes in the package's own .basecraft.
-    let companion = crate::files::companion_path(project, result);
-    // Records the package makes for its copy sit inside the package.
-    let in_package = |path: &Path| -> Result<String> {
-        Ok(path
-            .strip_prefix(staging.path())
-            .map_err(|_| invalid("package record lies outside the package"))?
-            .components()
-            .map(|part| part.as_os_str().to_string_lossy().into_owned())
-            .collect::<Vec<_>>()
-            .join("/"))
-    };
-    let packaged_companion = in_package(&crate::project::Project::document_record(None, &copied))?;
-    for (index, artifact) in publication.outputs.iter_mut().enumerate() {
-        // A companion is published by its file name, or, for a result bound
-        // to a run, by its path from the result's folder.
-        let beside = result
-            .parent()
-            .unwrap_or(Path::new("."))
-            .join(&artifact.logical_name);
-        let is_companion = index > 0
-            && (beside == companion
-                || companion
-                    .file_name()
-                    .is_some_and(|name| name.to_string_lossy() == artifact.logical_name.as_str()));
-        let (source, name) = if index == 0 {
-            (
-                result.to_path_buf(),
-                copied
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into_owned(),
-            )
-        } else if is_companion {
-            (companion.clone(), packaged_companion.clone())
-        } else {
-            let name = format!(
-                "support-{}-{}",
-                index,
-                beside.file_name().unwrap_or_default().to_string_lossy()
-            );
-            (beside, name)
-        };
-        let packaged = staging.path().join(&name);
-        if let Some(folder) = packaged.parent() {
-            std::fs::create_dir_all(folder)?;
-        }
-        copy(&source, &packaged)?;
-        artifact.logical_name = name;
-    }
+    package.copy_outputs(&mut publication)?;
     if species {
-        let mut work = crate::files::load_delimitation_in(project, result)?;
-        let final_folder = parent.canonicalize()?.join(
-            destination
-                .file_name()
-                .ok_or_else(|| Error::NoFileName(destination.into()))?,
-        );
-        let final_bundle = crate::records::provenance::companion(
-            &final_folder.join(copied.file_name().unwrap_or_default()),
-        );
-        // Resolve declared paths to the checked, materialized dependency closure.
-        // Immutable scientific reports stay byte-for-byte; only the derived
-        // workspace metadata is relocated for use without its originals.
+        package.species_workspace(&mut publication, &originals)?;
+    }
+    if let Some(original) = &sanger {
+        package.sanger_review(&mut publication, original, &originals)?;
+    }
+    package.tree_alignment(&mut publication)?;
+    publication.origin = format!(
+        "Portable export of revision {}. {}",
+        original_id, publication.origin
+    );
+    crate::records::provenance::publish(&package.bundle, &publication)?;
+    let issues = crate::records::provenance::verify(&package.copied, None)?;
+    if !issues.is_empty() {
+        return Err(crate::Error::Damaged {
+            path: package.copied.clone(),
+            detail: format!(
+                "export verification failed: {}; original source and records preserved",
+                issues.join("; ")
+            ),
+        });
+    }
+    if destination.exists() {
+        return Err(Error::OutputConflict(
+            "package destination appeared during export".into(),
+        ));
+    }
+    // Publish a new directory without replacing a destination created concurrently.
+    basecraft_platform::atomic::rename_noreplace(staging.path(), destination)?;
+    Ok(())
+}
+
+/// One package being written in its staging folder.
+struct Package<'a> {
+    result: &'a Path,
+    project: Option<&'a crate::project::Project>,
+    staging: &'a Path,
+    /// The copy of the result in the staging folder.
+    copied: PathBuf,
+    /// Where the copy will be once the staging folder is renamed.
+    final_copy: PathBuf,
+    /// The history bundle of the copy.
+    bundle: PathBuf,
+    /// The copy's document record, by its path in the package.
+    companion: String,
+}
+
+/// Put the output that is `result` first.
+fn result_first(publication: &mut Publication, result: &Path) {
+    if let Some(index) = publication
+        .outputs
+        .iter()
+        .position(|a| Path::new(&a.logical_name).file_name() == result.file_name())
+    {
+        publication.outputs.swap(0, index);
+    }
+}
+
+/// `path`'s place in the package folder `staging`, with `/` between parts.
+fn in_package(staging: &Path, path: &Path) -> Result<String> {
+    Ok(path
+        .strip_prefix(staging)
+        .map_err(|_| invalid("package record lies outside the package"))?
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("/"))
+}
+
+/// The hash of every original input and retained file the records in
+/// `roots` name, by its lexical path: the package keeps each under its hash.
+fn original_hashes(roots: &[(PathBuf, Publication)]) -> Result<BTreeMap<PathBuf, String>> {
+    let mut originals = BTreeMap::new();
+    for (directory, record) in roots {
+        for artifact in record.inputs.iter().chain(&record.outputs) {
+            let original = if let Some(reference) = &artifact.reference {
+                let (owner, input) = owning_ledger(directory)?;
+                Some(input.source.as_ref().map_or_else(
+                    || directory.join(&reference.path),
+                    |source| owner.join(&source.path),
+                ))
+            } else {
+                artifact.retained.as_ref().map(|name| directory.join(name))
+            };
+            if let Some(original) = original {
+                originals.insert(lexical(&original), artifact.hash.clone());
+            }
+        }
+    }
+    Ok(originals)
+}
+
+impl Package<'_> {
+    /// Copy the result and the files saved with it into the package, and
+    /// name them there.
+    fn copy_outputs(&self, publication: &mut Publication) -> Result<()> {
+        // The packaged copy is a loose file of the package folder: its
+        // companion goes in the package's own .basecraft.
+        let companion = crate::files::companion_path(self.project, self.result);
+        for (index, artifact) in publication.outputs.iter_mut().enumerate() {
+            // A companion is published by its file name, or, for a result bound
+            // to a run, by its path from the result's folder.
+            let beside = self
+                .result
+                .parent()
+                .unwrap_or(Path::new("."))
+                .join(&artifact.logical_name);
+            let is_companion = index > 0
+                && (beside == companion
+                    || companion.file_name().is_some_and(|name| {
+                        name.to_string_lossy() == artifact.logical_name.as_str()
+                    }));
+            let (source, name) = if index == 0 {
+                (
+                    self.result.to_path_buf(),
+                    self.copied
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned(),
+                )
+            } else if is_companion {
+                (companion.clone(), self.companion.clone())
+            } else {
+                let name = format!(
+                    "support-{}-{}",
+                    index,
+                    beside.file_name().unwrap_or_default().to_string_lossy()
+                );
+                (beside, name)
+            };
+            let packaged = self.staging.join(&name);
+            if let Some(folder) = packaged.parent() {
+                std::fs::create_dir_all(folder)?;
+            }
+            copy(&source, &packaged)?;
+            artifact.logical_name = name;
+        }
+        Ok(())
+    }
+
+    /// Point a species workspace's paths at the package's copies of its
+    /// inputs and write its companion there. Its scientific reports keep
+    /// their bytes; only the workspace's own paths change.
+    fn species_workspace(
+        &self,
+        publication: &mut Publication,
+        originals: &BTreeMap<PathBuf, String>,
+    ) -> Result<()> {
+        let mut work = crate::files::load_delimitation_in(self.project, self.result)?;
+        let final_bundle = crate::records::provenance::companion(&self.final_copy);
         crate::files::map_delimitation_paths(&mut work, |path| {
-            species_paths.get(&lexical(Path::new(path))).map_or_else(
+            originals.get(&lexical(Path::new(path))).map_or_else(
                 || path.to_owned(),
                 |hash| {
                     final_bundle
@@ -210,10 +290,12 @@ pub fn package(
                 source.remove("evidence_run");
             }
         }
-        let sidecar = staging.path().join(&packaged_companion);
-        let target = final_folder.join(copied.file_name().unwrap_or_default());
-        let companion =
-            crate::files::delimitation_companion(&work, &publication.outputs[0].hash, &target)?;
+        let sidecar = self.staging.join(&self.companion);
+        let companion = crate::files::delimitation_companion(
+            &work,
+            &publication.outputs[0].hash,
+            &self.final_copy,
+        )?;
         crate::files::companion_folder(&sidecar)?;
         let mut side_hash = String::new();
         basecraft_io::write_atomic(&sidecar, |w| {
@@ -222,38 +304,50 @@ pub fn package(
             side_hash = hashing.hash();
             Ok(())
         })?;
+        let size = std::fs::metadata(&sidecar)?.len();
         if let Some(artifact) = publication
             .outputs
             .iter_mut()
-            .find(|a| a.logical_name == packaged_companion)
+            .find(|a| a.logical_name == self.companion)
         {
             artifact.hash = side_hash;
-            artifact.size = std::fs::metadata(&sidecar)?.len();
+            artifact.size = size;
             artifact.retained = None;
         } else {
             publication.outputs.push(ArtifactRevision {
                 id: format!("{}:species-context", publication.id),
-                logical_name: packaged_companion.clone(),
+                logical_name: self.companion.clone(),
                 hash: side_hash,
-                size: std::fs::metadata(&sidecar)?.len(),
+                size,
                 retained: None,
                 reference: None,
             });
         }
+        Ok(())
     }
-    if let Some(original) = &sanger {
-        let review = if original == result {
-            copied.clone()
+
+    /// Copy the Sanger review `original` (the result itself, or the review a
+    /// consensus came from) and point it at the package's copies of its
+    /// traces.
+    fn sanger_review(
+        &self,
+        publication: &mut Publication,
+        original: &Path,
+        originals: &BTreeMap<PathBuf, String>,
+    ) -> Result<()> {
+        let is_result = original == self.result;
+        let review = if is_result {
+            self.copied.clone()
         } else {
-            copied.with_extension("sanger-review.json")
+            self.copied.with_extension("sanger-review.json")
         };
-        if original != result {
+        if !is_result {
             copy(original, &review)?;
         }
-        crate::sanger_review::relocate_package(original, &review, &target_bundle, &species_paths)?;
+        crate::sanger_review::relocate_package(original, &review, &self.bundle, originals)?;
         let hash = basecraft_io::hash_file(&review)?;
         let size = std::fs::metadata(&review)?.len();
-        if original == result {
+        if is_result {
             publication.outputs[0].hash = hash;
             publication.outputs[0].size = size;
             // Relocation changes the visible review, not its retained original artifact.
@@ -272,26 +366,31 @@ pub fn package(
                 reference: None,
             });
         }
+        Ok(())
     }
-    // Complete tree exports materialize their exchange association, so
-    // extraction still works with the original store absent.
-    if let Ok(tree) = crate::files::load_tree_in(project, result)
-        && crate::records::links::metadata_present(&crate::records::links::sidecar_in(
-            project, result,
-        ))?
-    {
+
+    /// A tree linked to an alignment takes a copy of that alignment and a
+    /// link to it, so extraction still works without the original store.
+    fn tree_alignment(&self, publication: &mut Publication) -> Result<()> {
+        let Ok(tree) = crate::files::load_tree_in(self.project, self.result) else {
+            return Ok(());
+        };
+        if !crate::records::links::metadata_present(&crate::records::links::sidecar_in(
+            self.project,
+            self.result,
+        ))? {
+            return Ok(());
+        }
         let (link, input_path) =
-            crate::records::links::AlignmentLink::checked_in(project, result, &tree.doc)?;
+            crate::records::links::AlignmentLink::checked_in(self.project, self.result, &tree.doc)?;
         let indexed = std::sync::Arc::new(basecraft_io::fasta::IndexedFasta::open(&input_path)?);
         let alignment = basecraft_docs::AlignmentDoc::from_fasta("Exported input", &indexed);
-        // The package carries the alignment the tree is linked to, with the
-        // copy's other records.
         let canonical =
-            crate::project::Project::document_record_with(None, &copied, ".alignment.afa");
+            crate::project::Project::document_record_with(None, &self.copied, ".alignment.afa");
         crate::files::companion_folder(&canonical)?;
         basecraft_io::write_atomic(&canonical, |w| crate::files::write_alignment(&alignment, w))?;
         let mut paths = crate::records::links::AlignmentLink::create(
-            &copied,
+            &self.copied,
             &canonical,
             link.alignment_version,
             link.inferred,
@@ -305,37 +404,15 @@ pub fn package(
                     publication.outputs.len()
                 ),
                 // Link records live in the package's .basecraft.
-                logical_name: in_package(&path)?,
+                logical_name: in_package(self.staging, &path)?,
                 hash: basecraft_io::hash_file(&path)?,
                 size: std::fs::metadata(&path)?.len(),
                 retained: None,
                 reference: None,
             });
         }
+        Ok(())
     }
-    publication.origin = format!(
-        "Portable export of revision {}. {}",
-        original_id, publication.origin
-    );
-    crate::records::provenance::publish(&target_bundle, &publication)?;
-    let issues = crate::records::provenance::verify(&copied, None)?;
-    if !issues.is_empty() {
-        return Err(crate::Error::Damaged {
-            path: copied.clone(),
-            detail: format!(
-                "export verification failed: {}; original source and records preserved",
-                issues.join("; ")
-            ),
-        });
-    }
-    if destination.exists() {
-        return Err(Error::OutputConflict(
-            "package destination appeared during export".into(),
-        ));
-    }
-    // Publish a new directory without replacing a destination created concurrently.
-    basecraft_platform::atomic::rename_noreplace(staging.path(), destination)?;
-    Ok(())
 }
 
 /// Copy checked bytes into the package's content-addressed artifact directory.

@@ -307,14 +307,14 @@ impl PreparedOperation {
             .collect();
         // Preserve leaves and delegate the primary ledger under one boundary:
         // a cooperating save must not invalidate the primary before its rewrite.
-        let mutation = records::Mutation::begin_in(self.project.as_ref())?;
+        let locks = records::lock_in(self.project.as_ref())?;
         for (binding, records) in &self.context.input_evidence {
             if !retained_bindings.contains(binding) {
                 continue;
             }
             for record in records {
                 if record.original_path.is_some() {
-                    mutation.preserve_input(&self.run_path(&record.run_directory))?;
+                    records::preserve_input(&self.run_path(&record.run_directory))?;
                 }
             }
         }
@@ -323,7 +323,7 @@ impl PreparedOperation {
         // incorrectly prefer the now-removed temporary original.
         let input_path = self.run.artifact("input.json")?;
         if input_path.is_file() {
-            let mut input = mutation.read_input(self.run.directory())?;
+            let mut input = records::read_input(self.run.directory())?;
             if let Some(source) = &input.source
                 && let Some(owner) = self
                     .context
@@ -342,10 +342,10 @@ impl PreparedOperation {
                     &self.run_path(&owner.run_directory),
                 )?);
                 input.state = basecraft_protocol::input_records::EvidenceState::Preserved;
-                mutation.write_input(self.run.directory(), &input)?;
+                records::write_input(self.run.directory(), &input)?;
             }
         }
-        drop(mutation);
+        drop(locks);
         let root = self.run.directory().to_path_buf();
         for (binding, paths) in &mut self.context.inputs {
             if !retained_bindings.contains(binding) {
@@ -373,7 +373,7 @@ impl PreparedOperation {
 
     /// Inherit a workflow stage's original ledgers, avoiding a parent/child cycle.
     pub(crate) fn inherit_input_ancestry(&self, parent: &Path) -> Result<()> {
-        let mutation = records::Mutation::begin_in(self.project.as_ref())?;
+        let _locks = records::lock_in(self.project.as_ref())?;
         let dependencies = sources_from_upstream(parent)?;
         let mut ledgers = BTreeSet::from([self.run.directory().to_path_buf()]);
         ledgers.extend(
@@ -384,7 +384,7 @@ impl PreparedOperation {
                 .map(|input| self.run_path(&input.run_directory)),
         );
         for directory in ledgers {
-            let mut input = mutation.read_input(&directory)?;
+            let mut input = records::read_input(&directory)?;
             input.analysis_run = Some(records::relative(&directory, parent)?);
             let upstream = &mut input.upstream;
             for dependency in &dependencies {
@@ -398,7 +398,7 @@ impl PreparedOperation {
                     });
                 }
             }
-            mutation.write_input(&directory, &input)?;
+            records::write_input(&directory, &input)?;
         }
         Ok(())
     }

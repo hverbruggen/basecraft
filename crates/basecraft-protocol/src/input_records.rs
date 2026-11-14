@@ -13,8 +13,7 @@ pub struct SubmittedInput {
     pub source: Option<InputReference>,
     pub submitted_hash: String,
     pub submitted_size: u64,
-    /// canonical-fasta-v1 or ungapped-fasta-v1; generated inputs retain their bytes.
-    pub transformation: String,
+    pub transformation: Transformation,
     pub state: EvidenceState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub analysis_run: Option<String>,
@@ -29,73 +28,54 @@ pub struct SubmittedInput {
     pub extra: BTreeMap<String, serde_json::Value>,
 }
 
-/// Unknown states remain readable and serialize without losing their spelling.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+/// What became of the file a run read: still referenced where it was, made
+/// by basecraft rather than read from a file, kept as a copy beside the run
+/// after the file changed, or marked broken by the user's answer to a save.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum EvidenceState {
     Referenced,
     Generated,
     Preserved,
     Broken,
-    #[serde(untagged)]
-    Unknown(String),
 }
 
-impl EvidenceState {
-    pub fn as_str(&self) -> &str {
+/// How the bytes a run was given were made from its input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum Transformation {
+    /// The file's own bytes.
+    #[serde(rename = "identity-v1")]
+    Identity,
+    #[serde(rename = "canonical-fasta-v1")]
+    CanonicalFasta,
+    /// FASTA with gap characters removed.
+    #[serde(rename = "ungapped-fasta-v1")]
+    UngappedFasta,
+    #[serde(rename = "canonical-newick-v1")]
+    CanonicalNewick,
+    #[serde(rename = "blast-query-preparation-v1")]
+    BlastQueryPreparation,
+    #[serde(rename = "sequence-arrow-buffers-v1")]
+    SequenceArrowBuffers,
+}
+
+impl Transformation {
+    /// The name saved records use.
+    pub fn as_str(self) -> &'static str {
         match self {
-            Self::Referenced => "referenced",
-            Self::Generated => "generated",
-            Self::Preserved => "preserved",
-            Self::Broken => "broken",
-            Self::Unknown(value) => value,
+            Self::Identity => "identity-v1",
+            Self::CanonicalFasta => "canonical-fasta-v1",
+            Self::UngappedFasta => "ungapped-fasta-v1",
+            Self::CanonicalNewick => "canonical-newick-v1",
+            Self::BlastQueryPreparation => "blast-query-preparation-v1",
+            Self::SequenceArrowBuffers => "sequence-arrow-buffers-v1",
         }
     }
 }
-impl From<&str> for EvidenceState {
-    fn from(value: &str) -> Self {
-        match value {
-            "referenced" => Self::Referenced,
-            "generated" => Self::Generated,
-            "preserved" => Self::Preserved,
-            "broken" => Self::Broken,
-            _ => Self::Unknown(value.into()),
-        }
-    }
-}
-impl From<String> for EvidenceState {
-    fn from(value: String) -> Self {
-        Self::from(value.as_str())
-    }
-}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct UpstreamLink {
     pub bundle: std::path::PathBuf,
     pub hash: String,
     pub id: String,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn evidence_state_keeps_unknown_values() {
-        for value in [
-            "referenced",
-            "generated",
-            "preserved",
-            "broken",
-            "future",
-            "",
-        ] {
-            let encoded = serde_json::to_string(value).unwrap();
-            let state: EvidenceState = serde_json::from_str(&encoded).unwrap();
-            assert_eq!(state.as_str(), value);
-            assert_eq!(serde_json::to_string(&state).unwrap(), encoded);
-        }
-        assert!(matches!(
-            EvidenceState::from("future"),
-            EvidenceState::Unknown(_)
-        ));
-    }
 }

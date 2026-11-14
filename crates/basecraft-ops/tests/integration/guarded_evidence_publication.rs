@@ -4,7 +4,7 @@ use crate::decided_save;
 use basecraft_ops::{
     Session,
     records::ArtifactRun,
-    records::{self, Mutation, SavePolicy},
+    records::{self, SavePolicy},
 };
 use basecraft_protocol::Op;
 use serde_json::json;
@@ -141,53 +141,51 @@ fn publication_worker() {
         if mode == "save-first" {
             barrier.send("prepared");
             barrier.expect("commit");
-            let mutation = Mutation::begin().unwrap();
+            let _locks = records::lock().unwrap();
             assert!(
-                mutation
-                    .reference_input_with_dependencies(
-                        &root.join("result.txt"),
-                        &source,
-                        &expected,
-                        None,
-                        &[],
-                        "stale registration",
-                        None
-                    )
-                    .is_err()
+                records::reference_input(
+                    &root.join("result.txt"),
+                    &source,
+                    &expected,
+                    None,
+                    &[],
+                    "stale registration",
+                    None
+                )
+                .is_err()
             );
             assert_eq!(std::fs::read(root.join("frozen.fasta")).unwrap(), ORIGINAL);
             assert!(records::conflicts(&source).unwrap().analyses.is_empty());
             barrier.send("refused");
             return;
         }
-        let mutation = Mutation::begin().unwrap();
+        let locks = records::lock().unwrap();
         let owner = ArtifactRun::create(None, &root.join("result.txt"), "owner").unwrap();
-        let ledger = mutation
-            .reference_input_with_dependencies(
-                &root.join("result.txt"),
-                &source,
-                &expected,
-                None,
-                &[],
-                "input",
-                None,
-            )
-            .unwrap();
+        let ledger = records::reference_input(
+            &root.join("result.txt"),
+            &source,
+            &expected,
+            None,
+            &[],
+            "input",
+            None,
+        )
+        .unwrap();
         // Pause at the former post-helper gap. A save must not acquire the lock
         // and preserve this ledger only for the stale record below to erase it.
-        let mut input = mutation.read_input(ledger.directory()).unwrap();
+        let mut input = records::read_input(ledger.directory()).unwrap();
         barrier.send("prepared");
         barrier.expect("commit");
         if mode == "interrupted" {
             // A real failed write after the reference publication leaves that
             // conservative reference protecting the source. There is no rollback.
-            assert!(mutation.write_input(&source, &input).is_err());
+            assert!(records::write_input(&source, &input).is_err());
             std::fs::write(
                 root.join("ledger-path"),
                 ledger.directory().as_os_str().as_encoded_bytes(),
             )
             .unwrap();
-            drop(mutation);
+            drop(locks);
             barrier.send("published");
             return;
         }
@@ -196,26 +194,26 @@ fn publication_worker() {
         if mode == "proposal" {
             input.proposal_target = Some(true);
         }
-        mutation.write_input(ledger.directory(), &input).unwrap();
+        records::write_input(ledger.directory(), &input).unwrap();
         input.source.as_mut().unwrap().path =
             records::relative(owner.directory(), &source).unwrap();
         input.extra.insert("upstream".into(), json!([{
             "bundle":records::relative(owner.directory(), ledger.directory()).unwrap(),
             "id":ledger.id(), "hash":basecraft_io::hash_file(&ledger.artifact("manifest.json").unwrap()).unwrap()
         }]));
-        mutation.write_input(owner.directory(), &input).unwrap();
+        records::write_input(owner.directory(), &input).unwrap();
         records::write_json(
             &owner.artifact("run.json").unwrap(),
             &json!({"result":"result.txt"}),
         )
         .unwrap();
-        mutation.register(&owner).unwrap();
+        records::register(&owner).unwrap();
         std::fs::write(
             root.join("ledger-path"),
             ledger.directory().as_os_str().as_encoded_bytes(),
         )
         .unwrap();
-        drop(mutation);
+        drop(locks);
         barrier.send("published");
     } else {
         let mut session = Session::recoverable(&root).unwrap();
@@ -230,7 +228,7 @@ fn publication_worker() {
             barrier.expect("resume");
         }
         if mode != "save-first" {
-            let mutation = Mutation::begin().unwrap();
+            let _locks = records::lock().unwrap();
             let conflicts = records::conflicts(&source).unwrap();
             if mode == "proposal" {
                 assert!(conflicts.analyses.is_empty());
@@ -239,7 +237,7 @@ fn publication_worker() {
                 if mode != "interrupted" {
                     assert_eq!(conflicts.analyses[0].run.file_name().unwrap(), "owner");
                     assert_eq!(conflicts.analyses[0].backing_analyses.len(), 2);
-                    let owner = mutation.read_input(&conflicts.analyses[0].run).unwrap();
+                    let owner = records::read_input(&conflicts.analyses[0].run).unwrap();
                     assert_eq!(owner.upstream.len(), 1);
                 }
             }
@@ -265,9 +263,15 @@ fn publication_worker() {
             assert_eq!(input.analysis_run.is_some(), mode != "interrupted");
             if mode == "proposal" {
                 assert_eq!(input.proposal_target, Some(true));
-                assert_eq!(input.state, "referenced".into());
+                assert_eq!(
+                    input.state,
+                    basecraft_protocol::input_records::EvidenceState::Referenced
+                );
             } else {
-                assert_eq!(input.state, "preserved".into());
+                assert_eq!(
+                    input.state,
+                    basecraft_protocol::input_records::EvidenceState::Preserved
+                );
                 // The mutable record must retain the preservation performed by
                 // the save, rather than a later stale post-helper rewrite.
                 assert_eq!(
@@ -326,22 +330,21 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
     let source = root.join("input.fasta");
     if role == "registrar" {
         let hash = basecraft_io::hash_file(&source).unwrap();
-        let mutation = Mutation::begin().unwrap();
+        let locks = records::lock().unwrap();
         let owner = ArtifactRun::create(None, &root.join("result.txt"), "owner").unwrap();
-        let leaf = mutation
-            .reference_input_with_dependencies(
-                &root.join("result.txt"),
-                &source,
-                &hash,
-                None,
-                &[],
-                "retained input",
-                None,
-            )
-            .unwrap();
-        let mut input = mutation.read_input(leaf.directory()).unwrap();
+        let leaf = records::reference_input(
+            &root.join("result.txt"),
+            &source,
+            &hash,
+            None,
+            &[],
+            "retained input",
+            None,
+        )
+        .unwrap();
+        let mut input = records::read_input(leaf.directory()).unwrap();
         input.analysis_run = Some(records::relative(leaf.directory(), owner.directory()).unwrap());
-        mutation.write_input(leaf.directory(), &input).unwrap();
+        records::write_input(leaf.directory(), &input).unwrap();
         input.extra.remove("analysis_run");
         input.source.as_mut().unwrap().path =
             records::relative(owner.directory(), &source).unwrap();
@@ -353,28 +356,28 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
                 "hash":basecraft_io::hash_file(&leaf.artifact("manifest.json").unwrap()).unwrap()
             }]),
         );
-        mutation.write_input(owner.directory(), &input).unwrap();
+        records::write_input(owner.directory(), &input).unwrap();
         records::write_json(
             &owner.artifact("run.json").unwrap(),
             &json!({"result":"result.txt"}),
         )
         .unwrap();
-        mutation.register(&owner).unwrap();
-        drop(mutation);
+        records::register(&owner).unwrap();
+        drop(locks);
 
         if mode == "retain-break" || mode == "retain-remove" {
             barrier.send("prepared");
             barrier.expect("commit");
-            let mutation = Mutation::begin().unwrap();
-            assert!(mutation.preserve_input(leaf.directory()).is_err());
+            let _locks = records::lock().unwrap();
+            assert!(records::preserve_input(leaf.directory()).is_err());
             if mode == "retain-break" {
                 assert_eq!(
-                    mutation.read_input(owner.directory()).unwrap().state,
-                    "broken".into()
+                    records::read_input(owner.directory()).unwrap().state,
+                    basecraft_protocol::input_records::EvidenceState::Broken
                 );
                 assert_eq!(
-                    mutation.read_input(leaf.directory()).unwrap().state,
-                    "broken".into()
+                    records::read_input(leaf.directory()).unwrap().state,
+                    basecraft_protocol::input_records::EvidenceState::Broken
                 );
             } else {
                 assert!(!owner.directory().exists());
@@ -383,25 +386,28 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
             barrier.send("refused");
             return;
         }
-        let mutation = Mutation::begin().unwrap();
-        mutation.preserve_input(leaf.directory()).unwrap();
-        mutation.preserve_input(leaf.directory()).unwrap();
-        let mut primary = mutation.read_input(owner.directory()).unwrap();
-        assert_eq!(primary.state, "referenced".into());
+        let locks = records::lock().unwrap();
+        records::preserve_input(leaf.directory()).unwrap();
+        records::preserve_input(leaf.directory()).unwrap();
+        let mut primary = records::read_input(owner.directory()).unwrap();
+        assert_eq!(
+            primary.state,
+            basecraft_protocol::input_records::EvidenceState::Referenced
+        );
         barrier.send("prepared");
         barrier.expect("commit");
         if mode == "retain-failure" {
             // An actual failed preserve and failed primary write release the guard
             // without erasing the successfully retained leaf or its provenance.
-            assert!(mutation.preserve_input(&source).is_err());
-            assert!(mutation.write_input(&source, &primary).is_err());
+            assert!(records::preserve_input(&source).is_err());
+            assert!(records::write_input(&source, &primary).is_err());
         } else {
             primary.origin_run =
                 Some(records::relative(owner.directory(), leaf.directory()).unwrap());
-            primary.state = "preserved".into();
-            mutation.write_input(owner.directory(), &primary).unwrap();
+            primary.state = basecraft_protocol::input_records::EvidenceState::Preserved;
+            records::write_input(owner.directory(), &primary).unwrap();
         }
-        drop(mutation);
+        drop(locks);
         barrier.send("published");
         barrier.expect("verify");
         // A compatible public retry after save must validate the retained bytes
@@ -412,7 +418,10 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
             ORIGINAL
         );
         let primary = records::read_input(owner.directory()).unwrap();
-        assert_eq!(primary.state, "preserved".into());
+        assert_eq!(
+            primary.state,
+            basecraft_protocol::input_records::EvidenceState::Preserved
+        );
         if mode == "retain-preserve" {
             assert_eq!(
                 primary.origin_run,
@@ -432,22 +441,21 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
             ));
             barrier.send("locked");
             barrier.expect("resume");
-            let mutation = Mutation::begin().unwrap();
+            let _locks = records::lock().unwrap();
             if mode == "retain-preserve" {
                 assert!(records::conflicts(&source).unwrap().analyses.is_empty());
             } else {
                 assert_eq!(
-                    mutation
-                        .read_input(
-                            &ArtifactRun::runs_for_anchor(&root.join("result.txt"), 10)
-                                .unwrap()
-                                .into_iter()
-                                .find(|path| path.file_name().unwrap() == "owner")
-                                .unwrap()
-                        )
-                        .unwrap()
-                        .state,
-                    "referenced".into()
+                    records::read_input(
+                        &ArtifactRun::runs_for_anchor(&root.join("result.txt"), 10)
+                            .unwrap()
+                            .into_iter()
+                            .find(|path| path.file_name().unwrap() == "owner")
+                            .unwrap()
+                    )
+                    .unwrap()
+                    .state,
+                    basecraft_protocol::input_records::EvidenceState::Referenced
                 );
             }
         }

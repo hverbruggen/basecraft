@@ -887,10 +887,11 @@ fn main() {
                 "chosen.gb"
             });
             std::fs::write(&chosen, original).unwrap();
-            basecraft_ops::records::reference_input_with_dependencies(
+            basecraft_ops::records::reference_input(
                 &folder.path().join("result.txt"),
                 &chosen,
                 &basecraft_io::hash_file(&chosen).unwrap(),
+                None,
                 &[],
                 "consent regression",
                 None,

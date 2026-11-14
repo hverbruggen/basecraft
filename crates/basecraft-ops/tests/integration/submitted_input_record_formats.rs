@@ -8,10 +8,11 @@ fn submitted_input_ancestry_and_source_identity() {
     let source = root.path().join("source.fa");
     std::fs::write(&source, b">a\nACGT\n").unwrap();
     let hash = basecraft_io::hash_file(&source).unwrap();
-    let original = records::reference_input_with_dependencies(
+    let original = records::reference_input(
         &root.path().join("result"),
         &source,
         &hash,
+        None,
         &[],
         "source",
         None,
@@ -22,7 +23,7 @@ fn submitted_input_ancestry_and_source_identity() {
         &generated,
         &[original.directory().into()],
         b">a\nAC\n",
-        "canonical-fasta-v1",
+        basecraft_protocol::input_records::Transformation::CanonicalFasta,
         "derived",
     )
     .unwrap();

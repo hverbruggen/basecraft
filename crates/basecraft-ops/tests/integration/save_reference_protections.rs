@@ -30,10 +30,11 @@ fn folder(root: &Path, name: &str) -> std::path::PathBuf {
 }
 
 fn reference(root: &Path, source: &Path) -> ArtifactRun {
-    records::reference_input_with_dependencies(
+    records::reference_input(
         &root.join("result.txt"),
         source,
         &basecraft_io::hash_file(source).unwrap(),
+        None,
         &[],
         "save protection regression",
         None,
@@ -265,10 +266,11 @@ fn registered_transitive_dependencies_are_included_in_session_conflict() {
         let other = data.join("independent.fasta");
         std::fs::write(&other, b">other\nTTTT\n").unwrap();
         let dependent = |ancestor: &ArtifactRun| {
-            records::reference_input_with_dependencies(
+            records::reference_input(
                 &elsewhere.join("dependent.txt"),
                 &other,
                 &basecraft_io::hash_file(&other).unwrap(),
+                None,
                 &[ancestor.directory().to_owned()],
                 "dependent regression",
                 None,

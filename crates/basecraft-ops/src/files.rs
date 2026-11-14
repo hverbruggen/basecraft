@@ -416,9 +416,7 @@ fn finish_capture(
     for (file, before) in &stamps {
         let after = match std::fs::metadata(file) {
             Ok(metadata) if !metadata.is_file() => None,
-            Ok(metadata) => Some(crate::records::run_inputs::stamp_metadata(
-                file, &metadata,
-            )?),
+            Ok(metadata) => Some(crate::records::run_inputs::stamp_metadata(file, &metadata)?),
             Err(error) if error.kind() == io::ErrorKind::NotFound => None,
             Err(error) => return Err(error.into()),
         };

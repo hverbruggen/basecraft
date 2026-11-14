@@ -5,13 +5,14 @@ use super::{
     PathBuf, PreparedOperation, RegisteredOperation, Result, SequenceTarget, SessionPolicy, Value,
     captures, contract, records, sources_from_upstream,
 };
+use basecraft_protocol::input_records::Transformation;
 use basecraft_protocol::operation::OperationErrorCode as Code;
 use basecraft_protocol::operation::{Alphabet, QueryPreparation};
 
 struct GeneratedInput {
     position: usize,
     bytes: Vec<u8>,
-    transformation: &'static str,
+    transformation: Transformation,
     extension: &'static str,
     dependencies: Vec<PathBuf>,
 }
@@ -65,7 +66,7 @@ fn document_view(
     operation: &RegisteredOperation,
     name: &str,
     alphabets: &mut BTreeMap<String, Alphabet>,
-) -> Result<(Vec<u8>, &'static str, &'static str)> {
+) -> Result<(Vec<u8>, Transformation, &'static str)> {
     let mut bytes = Vec::new();
     let view = operation.descriptor.inputs[name].view;
     if session.is_alignment(doc) {
@@ -80,15 +81,15 @@ fn document_view(
                 .validate_aligned_input()
                 .map_err(|error| Error::refused(Code::UnsupportedInput, error.to_string()))?;
             basecraft_ops::files::write_alignment(session.alignment(doc)?, &mut bytes)?;
-            Ok((bytes, "canonical-fasta-v1", "afa"))
+            Ok((bytes, Transformation::CanonicalFasta, "afa"))
         }
         InputView::UngappedFasta if session.is_alignment(doc) => {
             basecraft_ops::files::write_ungapped(session.alignment(doc)?, &mut bytes)?;
-            Ok((bytes, "ungapped-fasta-v1", "afa"))
+            Ok((bytes, Transformation::UngappedFasta, "afa"))
         }
         InputView::Newick if session.is_tree(doc) => Ok((
             session.tree(doc)?.to_newick_with_rooting().into_bytes(),
-            "canonical-newick-v1",
+            Transformation::CanonicalNewick,
             "nwk",
         )),
         _ => Err(Error::refused(
@@ -457,7 +458,7 @@ pub(super) struct FrozenSource {
     pub(super) stamp: Option<basecraft_protocol::provenance::FileStamp>,
     /// What the plugin was given: its hash, how it was made and where.
     submitted_hash: String,
-    transformation: &'static str,
+    transformation: Transformation,
     frozen: PathBuf,
 }
 
@@ -731,7 +732,7 @@ fn freeze_inputs(
                 // A sequence file is frozen unchanged; its sealed snapshot
                 // is a separate generated input recorded below.
                 InputView::Bytes | InputView::SequenceSnapshot => {
-                    ("identity-v1", original_hash.clone())
+                    (Transformation::Identity, original_hash.clone())
                 }
                 InputView::AlignedFasta | InputView::UngappedFasta => {
                     let basecraft_ops::files::Loaded::Alignment(alignment) =
@@ -757,16 +758,16 @@ fn freeze_inputs(
                     }
                     std::fs::write(&path, &output)?;
                     let view = if binding.view == InputView::AlignedFasta {
-                        "canonical-fasta-v1"
+                        Transformation::CanonicalFasta
                     } else {
-                        "ungapped-fasta-v1"
+                        Transformation::UngappedFasta
                     };
                     (view, basecraft_io::hash_bytes(&output))
                 }
                 InputView::Newick => {
                     // Validate the declared tree without substituting a fit/preparation workflow.
                     basecraft_ops::files::load_tree(&path)?;
-                    ("identity-v1", original_hash.clone())
+                    (Transformation::Identity, original_hash.clone())
                 }
             };
             sources.push(FrozenSource {
@@ -856,7 +857,7 @@ fn allocate_run(
         .as_ref()
         .map(serde_json::to_vec)
         .transpose()?;
-    let mutation = records::Mutation::begin_in(project)?;
+    let _locks = records::lock_in(project)?;
     let run = ArtifactRun::create(project, &anchor, &run_id)?;
     // What the Tasks view names the run by before the tool has run. A run
     // without exports is named by its operation.
@@ -872,7 +873,6 @@ fn allocate_run(
     let mut evidence: BTreeMap<String, Vec<InvocationInputEvidence>> = BTreeMap::new();
     for input in sources.drain(..) {
         let ledger = captures::register(
-            &mutation,
             &anchor,
             &input,
             &format!("Input for {}", operation.id),
@@ -886,18 +886,18 @@ fn allocate_run(
             frozen,
             ..
         } = input;
-        let mut record = mutation.read_input(ledger.directory())?;
+        let mut record = records::read_input(ledger.directory())?;
         record.analysis_run = Some(records::relative(ledger.directory(), run.directory())?);
         record.submitted_hash = submitted_hash;
         record.submitted_size = std::fs::metadata(&frozen)?.len();
-        record.transformation = transformation.into();
+        record.transformation = transformation;
         if sequence.is_some() {
             // The run reads this file and proposes edits to the same
             // document; saving them must not count as replacing an
             // analysis input.
             record.proposal_target = Some(true);
         }
-        mutation.write_input(ledger.directory(), &record)?;
+        records::write_input(ledger.directory(), &record)?;
         if let Some(role) = frozen_inputs
             .iter()
             .find(|(_, paths)| paths.contains(&frozen.display().to_string()))
@@ -910,7 +910,7 @@ fn allocate_run(
                     original_path: Some(source.display().to_string()),
                     source_hash: Some(original_hash.clone()),
                     submitted_hash: record.submitted_hash.clone(),
-                    transformation: record.transformation.clone(),
+                    transformation: record.transformation,
                     run_directory: ledger.directory().display().to_string(),
                 });
         }
@@ -947,8 +947,8 @@ fn allocate_run(
     if let Some((mut input, _)) = first_input {
         input.upstream = upstream;
         // The save guard names a registered run by its run.json, written above.
-        mutation.write_input(run.directory(), &input)?;
-        mutation.register(&run)?;
+        records::write_input(run.directory(), &input)?;
+        records::register(&run)?;
     }
     let mut allocated = AllocatedRun {
         run,
@@ -956,12 +956,12 @@ fn allocate_run(
         primary_input_owner,
         evidence,
     };
-    allocated.document_inputs(&mutation, generated)?;
+    allocated.document_inputs(generated)?;
     if let (Some(target), Some(payload)) = (sequence, sequence_payload.as_deref()) {
-        allocated.sequence_snapshot(&mutation, target, payload)?;
+        allocated.sequence_snapshot(target, payload)?;
     }
     if let Some(payload) = submission_payload {
-        allocated.query_preparation(&mutation, &payload, frozen_inputs)?;
+        allocated.query_preparation(&payload, frozen_inputs)?;
     }
     Ok(allocated)
 }
@@ -981,22 +981,19 @@ impl AllocatedRun {
         Ok(path)
     }
 
-    fn document_inputs(
-        &mut self,
-        mutation: &records::Mutation,
-        generated: &BTreeMap<String, Vec<GeneratedInput>>,
-    ) -> Result<()> {
+    fn document_inputs(&mut self, generated: &BTreeMap<String, Vec<GeneratedInput>>) -> Result<()> {
         for (name, inputs) in generated {
             for input in inputs {
                 let mut dependencies = sources_from_upstream(self.run.directory())?;
                 dependencies.extend(input.dependencies.iter().cloned());
-                mutation.link_generated_input(
+                records::link_generated_input(
                     &self.run,
                     &dependencies,
                     &input.bytes,
                     input.transformation,
                     "Document snapshot",
                 )?;
+                records::register(&self.run)?;
                 self.retain("submitted.fasta", "document", &input.bytes)?;
                 self.evidence
                     .entry(name.clone())
@@ -1005,7 +1002,7 @@ impl AllocatedRun {
                         original_path: None,
                         source_hash: None,
                         submitted_hash: basecraft_io::hash_bytes(&input.bytes),
-                        transformation: input.transformation.into(),
+                        transformation: input.transformation,
                         run_directory: self.run.directory().display().to_string(),
                     });
             }
@@ -1013,41 +1010,37 @@ impl AllocatedRun {
         Ok(())
     }
 
-    fn sequence_snapshot(
-        &mut self,
-        mutation: &records::Mutation,
-        target: &SequenceTarget,
-        payload: &[u8],
-    ) -> Result<()> {
+    fn sequence_snapshot(&mut self, target: &SequenceTarget, payload: &[u8]) -> Result<()> {
         let mut dependencies = sources_from_upstream(self.run.directory())?;
         dependencies.extend(target.dependencies.iter().cloned());
-        mutation.link_generated_input(
+        records::link_generated_input(
             &self.run,
             &dependencies,
             payload,
-            "sequence-arrow-buffers-v1",
+            Transformation::SequenceArrowBuffers,
             "Sequence operation snapshot",
         )?;
+        records::register(&self.run)?;
         self.retain("snapshot.arrow-pair", "snapshot", payload)?;
         Ok(())
     }
 
     fn query_preparation(
         &mut self,
-        mutation: &records::Mutation,
         payload: &[u8],
         inputs: &mut BTreeMap<String, Vec<String>>,
     ) -> Result<()> {
         // Retain the query before publishing its input ledger, as for the producer.
         let path = self.retain("query-preparation.json", "queries", payload)?;
         let dependencies = sources_from_upstream(self.run.directory())?;
-        mutation.link_generated_input(
+        records::link_generated_input(
             &self.run,
             &dependencies,
             payload,
-            "blast-query-preparation-v1",
+            Transformation::BlastQueryPreparation,
             "Frozen BLAST submission",
         )?;
+        records::register(&self.run)?;
         inputs.insert("queries".into(), vec![path.display().to_string()]);
         Ok(())
     }

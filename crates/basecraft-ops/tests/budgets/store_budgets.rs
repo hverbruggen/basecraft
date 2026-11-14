@@ -99,10 +99,11 @@ fn incomplete_decision_and_recheck() {
     let missing = store(&root, "missing");
     std::fs::remove_dir_all(&missing).unwrap();
     std::fs::create_dir(root.join("corrupt")).unwrap();
-    let run = records::reference_input_with_dependencies(
+    let run = records::reference_input(
         &root.join("corrupt/result.txt"),
         &source,
         &basecraft_io::hash_file(&source).unwrap(),
+        None,
         &[],
         "budget-test",
         None,
@@ -153,10 +154,11 @@ fn unrelated_registration_and_known_preserve() {
         return;
     };
     let (mut session, doc, source) = setup(&root);
-    let run = records::reference_input_with_dependencies(
+    let run = records::reference_input(
         &root.join("result.txt"),
         &source,
         &basecraft_io::hash_file(&source).unwrap(),
+        None,
         &[],
         "budget-test",
         None,

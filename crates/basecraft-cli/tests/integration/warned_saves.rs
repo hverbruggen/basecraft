@@ -25,10 +25,11 @@ fn headless_save_conformance() {
         std::fs::write(&source, original).unwrap();
         let folder = root.join(format!("analysis-{name}"));
         std::fs::create_dir(&folder).unwrap();
-        let run = records::reference_input_with_dependencies(
+        let run = records::reference_input(
             &folder.join("result.txt"),
             &source,
             &basecraft_io::hash_file(&source).unwrap(),
+            None,
             &[],
             "adapter save regression",
             None,
@@ -38,10 +39,11 @@ fn headless_save_conformance() {
     }
     let unrelated = root.join("unrelated.fasta");
     std::fs::write(&unrelated, original).unwrap();
-    let damaged = records::reference_input_with_dependencies(
+    let damaged = records::reference_input(
         &root.join("distant-result.txt"),
         &unrelated,
         &basecraft_io::hash_file(&unrelated).unwrap(),
+        None,
         &[],
         "incomplete adapter evidence",
         None,

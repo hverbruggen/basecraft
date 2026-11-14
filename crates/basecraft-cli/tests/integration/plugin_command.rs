@@ -144,11 +144,17 @@ fn plugin_command_runs_registered_sequence_operations() {
         transformations.push((input.state, input.transformation));
     }
     assert!(
-        transformations.contains(&("referenced".into(), "identity-v1".into())),
+        transformations.contains(&(
+            basecraft_protocol::input_records::EvidenceState::Referenced,
+            basecraft_protocol::input_records::Transformation::Identity
+        )),
         "{transformations:?}"
     );
     assert!(
-        transformations.contains(&("generated".into(), "sequence-arrow-buffers-v1".into())),
+        transformations.contains(&(
+            basecraft_protocol::input_records::EvidenceState::Generated,
+            basecraft_protocol::input_records::Transformation::SequenceArrowBuffers
+        )),
         "{transformations:?}"
     );
     assert!(saw_proposal_target && saw_retained_snapshot);

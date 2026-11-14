@@ -100,13 +100,23 @@ pub(super) struct Inspection {
 }
 
 impl Inspection {
-    pub(super) fn issue(&mut self, code: InspectionCode, location: &Path, error: impl std::fmt::Display) {
+    pub(super) fn issue(
+        &mut self,
+        code: InspectionCode,
+        location: &Path,
+        error: impl std::fmt::Display,
+    ) {
         self.issue_for(code, InspectionRelevance::Unknown, location, error);
     }
 
     /// An issue for `error`, placed at the record a damaged or missing
     /// error names, so the reason does not repeat its path.
-    pub(super) fn issue_from(&mut self, code: InspectionCode, location: &Path, error: crate::Error) {
+    pub(super) fn issue_from(
+        &mut self,
+        code: InspectionCode,
+        location: &Path,
+        error: crate::Error,
+    ) {
         match error {
             crate::Error::Damaged { path, detail } => self.issue(code, &path, detail),
             crate::Error::NotFound { path } => self.issue(code, &path, "was not found"),
@@ -236,7 +246,10 @@ pub(crate) fn check_for(target: &Path, project: Option<&Path>) -> Result<Evidenc
     inspect(&canonical, &selected, inspection)
 }
 
-pub(super) fn selection(target: &Path, project: Option<&Path>) -> Result<(PathBuf, Vec<PathBuf>, Inspection)> {
+pub(super) fn selection(
+    target: &Path,
+    project: Option<&Path>,
+) -> Result<(PathBuf, Vec<PathBuf>, Inspection)> {
     let mut inspection = Inspection::default();
     let absolute = std::path::absolute(target)?;
     let canonical = absolute.canonicalize().unwrap_or_else(|_| absolute.clone());
@@ -377,7 +390,11 @@ pub fn check_in(target: &Path, stores: &[PathBuf]) -> Result<EvidenceCheck> {
     inspect(target, stores, Inspection::default())
 }
 
-pub(super) fn inspect(target: &Path, stores: &[PathBuf], mut inspection: Inspection) -> Result<EvidenceCheck> {
+pub(super) fn inspect(
+    target: &Path,
+    stores: &[PathBuf],
+    mut inspection: Inspection,
+) -> Result<EvidenceCheck> {
     let mut scan = StoreScan::default();
     for store in stores {
         scan_store(store, target, &mut scan, &mut inspection);
@@ -562,8 +579,8 @@ mod store_scan_tests {
                 }),
                 submitted_hash: basecraft_io::hash_file(source).unwrap(),
                 submitted_size: stamp(source).unwrap().size,
-                transformation: "identity-v1".into(),
-                state: "referenced".into(),
+                transformation: basecraft_protocol::input_records::Transformation::Identity,
+                state: EvidenceState::Referenced,
                 analysis_run: None,
                 proposal_target: None,
                 upstream: Vec::new(),

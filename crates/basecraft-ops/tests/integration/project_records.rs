@@ -42,10 +42,11 @@ fn deleting_private_folders_keeps_index_history_and_recovery() {
         .in_project(Some(project.clone()));
     let doc = edit(&mut session, &saved, "T");
     session.save(doc, None).unwrap();
-    records::reference_input_with_dependencies(
+    records::reference_input(
         &folder.join("results/tree.nwk"),
         &saved,
         &basecraft_io::hash_file(&saved).unwrap(),
+        None,
         &[],
         "analysis",
         Some(&project),
@@ -123,10 +124,11 @@ fn recovery_writes_edits_not_copies() {
 }
 
 fn reference(anchor: &Path, source: &Path) -> records::ArtifactRun {
-    records::reference_input_with_dependencies(
+    records::reference_input(
         anchor,
         source,
         &basecraft_io::hash_file(source).unwrap(),
+        None,
         &[],
         "analysis",
         None,
@@ -270,10 +272,11 @@ fn a_lost_index_makes_a_project_save_ask_until_reindexed() {
     std::fs::write(&source, b">a\nACGT\n").unwrap();
     // The analysis keeps its run in the project's own store.
     let project = Project::new(&folder).unwrap();
-    let run = records::reference_input_with_dependencies(
+    let run = records::reference_input(
         &folder.join("summary.txt"),
         &source,
         &basecraft_io::hash_file(&source).unwrap(),
+        None,
         &[],
         "analysis",
         Some(&project),
@@ -307,10 +310,11 @@ fn a_foreign_basecraft_file_beside_an_input_is_not_skipped() {
     std::fs::write(data.join(".basecraft"), b"another program").unwrap();
     let source = data.join("reads.fasta");
     std::fs::write(&source, b">a\nACGT\n").unwrap();
-    let error = records::reference_input_with_dependencies(
+    let error = records::reference_input(
         &root.join("results/out.txt"),
         &source,
         &basecraft_io::hash_file(&source).unwrap(),
+        None,
         &[],
         "analysis",
         None,
@@ -339,10 +343,11 @@ fn a_project_keeps_one_index_and_a_loose_input_is_indexed_beside_it() {
     }
     let project = Project::new(&folder).unwrap();
     for source in [&inside, &outside] {
-        records::reference_input_with_dependencies(
+        records::reference_input(
             &folder.join("results/out.txt"),
             source,
             &basecraft_io::hash_file(source).unwrap(),
+            None,
             &[],
             "analysis",
             Some(&project),
@@ -411,10 +416,11 @@ fn a_hard_link_in_a_project_subfolder_is_still_matched() {
     let source = folder.join("data/reads.fasta");
     std::fs::write(&source, b">a\nACGT\n").unwrap();
     let project = Project::new(&folder).unwrap();
-    let run = records::reference_input_with_dependencies(
+    let run = records::reference_input(
         &folder.join("summary.txt"),
         &source,
         &basecraft_io::hash_file(&source).unwrap(),
+        None,
         &[],
         "analysis",
         Some(&project),

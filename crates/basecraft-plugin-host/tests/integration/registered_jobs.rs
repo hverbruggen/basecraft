@@ -968,7 +968,10 @@ fn canonical_alignment_evidence_preserves_order_headers_and_residues() {
     assert_eq!(outcome.state, RuntimeState::Completed, "{outcome:#?}");
     let run = Path::new(outcome.evidence.as_ref().unwrap());
     let record = basecraft_ops::records::read_input(run).unwrap();
-    assert_eq!(record.transformation, "canonical-fasta-v1");
+    assert_eq!(
+        record.transformation,
+        basecraft_protocol::input_records::Transformation::CanonicalFasta
+    );
     assert_eq!(
         record.source.unwrap().hash,
         basecraft_io::hash_bytes(original.as_bytes())
@@ -1362,7 +1365,7 @@ fn equal_content_retention_keeps_exact_primary_owner_and_leaf_lifecycles() {
                     options: vec![policy],
                 };
                 {
-                    let _mutation = records::Mutation::begin().unwrap();
+                    let _locks = records::lock().unwrap();
                     records::resolve(&conflict, policy).unwrap();
                 }
                 assert_eq!(std::fs::read(run.join("input.json")).unwrap(), before);

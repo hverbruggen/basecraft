@@ -222,7 +222,7 @@ impl SangerCaller {
                         original_path: None,
                         source_hash: Some(hash.clone()),
                         submitted_hash: hash,
-                        transformation: "identity-v1".into(),
+                        transformation: basecraft_protocol::input_records::Transformation::Identity,
                         run_directory: String::new(),
                     }],
                 )]),

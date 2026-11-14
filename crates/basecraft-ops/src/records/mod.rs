@@ -6,24 +6,16 @@
 pub(crate) mod analysis_store;
 pub(crate) mod contributions;
 pub(crate) mod document_record;
-pub(crate) mod run_inputs;
 pub(crate) mod jobs;
 pub(crate) mod links;
 pub(crate) mod provenance;
 pub(crate) mod publish;
 pub(crate) mod replay;
+pub(crate) mod run_inputs;
 pub(crate) mod save_guard;
 
 pub use analysis_store::ArtifactRun;
 pub use document_record::{DocumentRecord, MethodsParagraph, Report, ReportExt};
-pub use run_inputs::{
-    AffectedAnalysis, BackgroundWait, EvidenceConflict, InspectionCode, InspectionIssue,
-    InspectionRelevance, Mutation, SavePolicy, SubmittedInput, check, check_in, conflicts,
-    conflicts_in, link_generated_input, lock, preserve_input, read_input,
-    reference_input_with_dependencies, register, reindex, relative, relink, resolve, stamp,
-    verified_source, verify_ancestors, wait_in_background, write_input, write_json,
-    write_plain_json,
-};
 pub use jobs::jobs;
 pub use links::{
     AlignmentLink, AlignmentLinkExt, metadata_present, sidecar, sidecar_in, view_sidecar,
@@ -37,4 +29,11 @@ pub use provenance::{
 pub use replay::{
     PublishedWithFailure, RecoveryCompletion, RecoveryMode, RecoveryPhase, ReplayReport,
     prepare_recovery, recover, recover_verified_prefix, recovery_sessions, replay,
+};
+pub use run_inputs::{
+    AffectedAnalysis, BackgroundWait, EvidenceConflict, InspectionCode, InspectionIssue,
+    InspectionRelevance, Locks, SavePolicy, SubmittedInput, check, check_in, conflicts,
+    conflicts_in, link_generated_input, lock, lock_in, preserve_input, read_input, reference_input,
+    register, reindex, relative, relink, resolve, stamp, verified_source, verify_ancestors,
+    wait_in_background, write_input, write_json, write_plain_json,
 };

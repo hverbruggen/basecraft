@@ -14,8 +14,8 @@ pub use check::{
     InspectionRelevance, SavePolicy, check, check_in, conflicts, conflicts_in,
 };
 pub(crate) use index::foreign_basecraft;
-pub(crate) use locks::{SaveLock, lock_save};
 pub use locks::{BackgroundWait, Locks, lock, lock_in, wait_in_background};
+pub(crate) use locks::{SaveLock, lock_save};
 pub use package::package;
 pub(crate) use relink::{ancestors, source_location};
 pub use relink::{relink, verified_source, verify_ancestors};
@@ -25,7 +25,7 @@ pub use resolve::{preserve_input, resolve};
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
-use basecraft_protocol::input_records::EvidenceState;
+use basecraft_protocol::input_records::{EvidenceState, Transformation};
 use basecraft_protocol::provenance::{ArtifactRevision, FileStamp, InputReference, Publication};
 use serde::Serialize;
 
@@ -35,189 +35,109 @@ use crate::{
     records::analysis_store::ArtifactRun,
 };
 
-/// Register one clean original using the shared reference/preserve/export lifecycle.
-/// This is an explicit analysis action, never a passive-open writer. Dependencies
-/// name immutable upstream runs; no source input is copied here.
-pub fn reference_input_with_dependencies(
+/// Create a run whose input record references the original `source`, which
+/// had `hash`, and whose history names the runs in `dependencies`. The source
+/// is checked again under the record locks: by `captured_stamp`, the stamp it
+/// had when `hash` was taken, or else by hashing. No source is copied. This is
+/// an explicit analysis action, never part of opening a file.
+pub fn reference_input(
     anchor: &Path,
     source: &Path,
     hash: &str,
+    captured_stamp: Option<&FileStamp>,
     dependencies: &[PathBuf],
     origin: &str,
     project: Option<&crate::project::Project>,
 ) -> Result<ArtifactRun> {
-    Mutation::begin()?.reference_input_with_dependencies(
-        anchor,
-        source,
-        hash,
-        None,
-        dependencies,
-        origin,
-        project,
-    )
-}
-
-/// One cooperating evidence mutation boundary. Keep this value alive through
-/// related ledger/ownership writes; never call a locking wrapper while held.
-/// Files remain separate atomic writes: failure may leave conservative partial
-/// evidence, and dropping this guard does not roll those writes back.
-pub struct Mutation {
-    _locks: Locks,
-}
-
-impl Mutation {
-    pub fn begin() -> Result<Self> {
-        Ok(Self { _locks: lock()? })
+    use basecraft_protocol::provenance::Completeness;
+    let locks = lock_in(project)?;
+    let run = ArtifactRun::create(project, anchor, &ulid::Ulid::generate().to_string())?;
+    let source = source.canonicalize()?;
+    locks.source(&source)?;
+    if captured_stamp.map_or_else(
+        || {
+            basecraft_io::hash_file(&source)
+                .map(|actual| actual != hash)
+                .map_err(crate::Error::from)
+        },
+        |before| stamp(&source).map(|now| &now != before),
+    )? {
+        return Err(crate::Error::ChangedOnDisk { path: source });
     }
-
-    /// A mutation for a session that holds `project`.
-    pub fn begin_in(project: Option<&crate::project::Project>) -> Result<Self> {
-        Ok(Self {
-            _locks: lock_in(project)?,
-        })
-    }
-
-    pub fn read_input(&self, directory: &Path) -> Result<SubmittedInput> {
-        read_input(directory)
-    }
-
-    pub fn write_input(&self, directory: &Path, input: &SubmittedInput) -> Result<()> {
-        write_input(directory, input)
-    }
-
-    /// Preserve one owned leaf without reacquiring the evidence lock.
-    pub fn preserve_input(&self, bundle: &Path) -> Result<()> {
-        resolve::preserve_input_locked(bundle)
-    }
-
-    pub fn register(&self, run: &ArtifactRun) -> Result<()> {
-        register(run)
-    }
-
-    pub fn link_generated_input(
-        &self,
-        run: &ArtifactRun,
-        dependencies: &[PathBuf],
-        payload: &[u8],
-        transformation: &str,
-        result_label: &str,
-    ) -> Result<()> {
-        link_generated_input_locked(
-            run,
-            dependencies,
-            payload,
-            transformation,
-            result_label,
-            register,
-        )
-    }
-
-    /// Recheck the caller's frozen original under the held evidence lock:
-    /// by `stamp`, the one it had when `hash` was taken, or else by hashing.
-    #[allow(clippy::too_many_arguments)]
-    pub fn reference_input_with_dependencies(
-        &self,
-        anchor: &Path,
-        source: &Path,
-        hash: &str,
-        captured_stamp: Option<&FileStamp>,
-        dependencies: &[PathBuf],
-        origin: &str,
-        project: Option<&crate::project::Project>,
-    ) -> Result<ArtifactRun> {
-        use basecraft_protocol::provenance::Completeness;
-        let run = ArtifactRun::create(project, anchor, &ulid::Ulid::generate().to_string())?;
-        let source = source.canonicalize()?;
-        let reservation = lock_in(project)?;
-        reservation.source(&source)?;
-        if captured_stamp.map_or_else(
-            || {
-                basecraft_io::hash_file(&source)
-                    .map(|actual| actual != hash)
-                    .map_err(crate::Error::from)
-            },
-            |before| stamp(&source).map(|now| &now != before),
-        )? {
-            return Err(crate::Error::ChangedOnDisk { path: source });
+    let reference = InputReference {
+        path: relative(run.directory(), &source)?,
+        stamp: captured_stamp.cloned().map_or_else(|| stamp(&source), Ok)?,
+        hash: hash.into(),
+        extra: BTreeMap::new(),
+    };
+    // A referenced source inside the project keeps its history there.
+    let source_bundle = crate::records::provenance::bundle_for_result(&source, project);
+    let mut upstream = Vec::new();
+    for dependency in dependencies.iter().chain(std::iter::once(&source_bundle)) {
+        if let Some((record, hash)) = crate::records::provenance::latest(dependency)? {
+            upstream.push(basecraft_protocol::input_records::UpstreamLink {
+                bundle: (relative(run.directory(), dependency)?).into(),
+                id: record.id,
+                hash,
+            });
         }
-        let reference = InputReference {
-            path: relative(run.directory(), &source)?,
-            stamp: captured_stamp.cloned().map_or_else(|| stamp(&source), Ok)?,
-            hash: hash.into(),
-            extra: BTreeMap::new(),
-        };
-        let mut input = SubmittedInput {
-            schema_version: 1,
-            source: Some(reference.clone()),
-            submitted_hash: hash.into(),
-            submitted_size: reference.stamp.size,
-            transformation: "identity-v1".into(),
-            state: "referenced".into(),
-            analysis_run: None,
-            proposal_target: None,
-            upstream: Vec::new(),
-            origin_run: None,
-            extra: BTreeMap::new(),
-        };
-        // A referenced source inside the project keeps its history there.
-        let source_bundle = crate::records::provenance::bundle_for_result(&source, project);
-        let mut upstream = Vec::new();
-        for dependency in dependencies.iter().chain(std::iter::once(&source_bundle)) {
-            if let Some((record, hash)) = crate::records::provenance::latest(dependency)? {
-                upstream.push(basecraft_protocol::input_records::UpstreamLink {
-                    bundle: (relative(run.directory(), dependency)?).into(),
-                    id: record.id,
-                    hash,
-                });
-            }
-        }
-        if !upstream.is_empty() {
-            input.upstream = upstream;
-        }
-        write_input(run.directory(), &input)?;
-        run.write_run(
-            basecraft_protocol::records::AnalysisRunStatus::Referenced,
-            anchor
+    }
+    let input = SubmittedInput {
+        schema_version: 1,
+        source: Some(reference.clone()),
+        submitted_hash: hash.into(),
+        submitted_size: reference.stamp.size,
+        transformation: basecraft_protocol::input_records::Transformation::Identity,
+        state: EvidenceState::Referenced,
+        analysis_run: None,
+        proposal_target: None,
+        upstream,
+        origin_run: None,
+        extra: BTreeMap::new(),
+    };
+    write_input(run.directory(), &input)?;
+    run.write_run(
+        basecraft_protocol::records::AnalysisRunStatus::Referenced,
+        anchor
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(str::to_owned),
+    )?;
+    register(&run)?;
+    let publication = Publication {
+        schema_version: 1,
+        id: run.id().into(),
+        session: run.id().into(),
+        parents: vec![],
+        parent_hashes: BTreeMap::new(),
+        created: basecraft_platform::now_rfc3339(),
+        origin: origin.into(),
+        inputs: vec![ArtifactRevision {
+            id: format!("{}:source", run.id()),
+            logical_name: source
                 .file_name()
-                .and_then(|n| n.to_str())
-                .map(str::to_owned),
-        )?;
-        register(&run)?;
-        let publication = Publication {
-            schema_version: 1,
-            id: run.id().into(),
-            session: run.id().into(),
-            parents: vec![],
-            parent_hashes: BTreeMap::new(),
-            created: basecraft_platform::now_rfc3339(),
-            origin: origin.into(),
-            inputs: vec![ArtifactRevision {
-                id: format!("{}:source", run.id()),
-                logical_name: source
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into_owned(),
-                hash: hash.into(),
-                size: reference.stamp.size,
-                retained: None,
-                reference: Some(reference),
-            }],
-            outputs: vec![],
-            events: vec![],
-            effective_edits: vec![],
-            withdrawn: Vec::new(),
-            completeness: Completeness {
-                ancestry_known: false,
-                input_bytes_available: true,
-                execution_specification_available: false,
-                replay_verified: false,
-            },
-            report_template_version: 2,
-        };
-        crate::records::provenance::publish(run.directory(), &publication)?;
-        Ok(run)
-    }
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned(),
+            hash: hash.into(),
+            size: reference.stamp.size,
+            retained: None,
+            reference: Some(reference),
+        }],
+        outputs: vec![],
+        events: vec![],
+        effective_edits: vec![],
+        withdrawn: Vec::new(),
+        completeness: Completeness {
+            ancestry_known: false,
+            input_bytes_available: true,
+            execution_specification_available: false,
+            replay_verified: false,
+        },
+        report_template_version: 2,
+    };
+    crate::records::provenance::publish(run.directory(), &publication)?;
+    Ok(run)
 }
 
 pub use basecraft_protocol::input_records::SubmittedInput;
@@ -308,28 +228,15 @@ pub(super) fn validate_input(run: &Path, bytes: &[u8]) -> Result<SubmittedInput>
     }
     let record: SubmittedInput = basecraft_protocol::records::decode(bytes)
         .map_err(|e| damaged(run.join("input.json"), e.to_string()))?;
-    if record.schema_version != 1
-        || !matches!(
-            record.state.as_str(),
-            "referenced" | "generated" | "preserved" | "broken"
-        )
-    {
+    if record.schema_version != 1 {
         return Err(unsupported("unsupported input evidence record"));
     }
-    if !matches!(
-        record.transformation.as_str(),
-        "canonical-fasta-v1"
-            | "ungapped-fasta-v1"
-            | "canonical-newick-v1"
-            | "identity-v1"
-            | "blast-query-preparation-v1"
-            | "sequence-arrow-buffers-v1"
-    ) {
-        return Err(unsupported("unsupported submitted input evidence"));
-    }
-    if matches!(record.state.as_str(), "referenced" | "preserved") && record.source.is_none()
-        || record.state == EvidenceState::Generated && record.source.is_some()
-    {
+    let has_source = record.source.is_some();
+    if match record.state {
+        EvidenceState::Referenced | EvidenceState::Preserved => !has_source,
+        EvidenceState::Generated => has_source,
+        EvidenceState::Broken => false,
+    } {
         return Err(damaged(
             run.join("input.json"),
             "inconsistent submitted input evidence",
@@ -546,32 +453,15 @@ pub fn register(run: &ArtifactRun) -> Result<()> {
     index::add(store, &sources, locks.project().as_deref())
 }
 
-/// Link generated bytes and existing normal input ledgers without inventing an
-/// original reference. The caller retains the payload as a publication artifact.
+/// Write the input record of `run`, which reads generated `payload` rather
+/// than a file, linked to the histories in `dependencies`, and its run record.
+/// The caller keeps the payload as a published artifact and registers the run.
 pub fn link_generated_input(
     run: &ArtifactRun,
     dependencies: &[PathBuf],
     payload: &[u8],
-    transformation: &str,
+    transformation: Transformation,
     result_label: &str,
-) -> Result<()> {
-    Mutation::begin()?.link_generated_input(
-        run,
-        dependencies,
-        payload,
-        transformation,
-        result_label,
-    )
-}
-
-/// Same publication while the caller already holds the evidence lock through a save.
-pub(crate) fn link_generated_input_locked(
-    run: &ArtifactRun,
-    dependencies: &[PathBuf],
-    payload: &[u8],
-    transformation: &str,
-    result_label: &str,
-    register: impl FnOnce(&ArtifactRun) -> Result<()>,
 ) -> Result<()> {
     let mut upstream = Vec::new();
     for dependency in dependencies {
@@ -589,8 +479,8 @@ pub(crate) fn link_generated_input_locked(
             source: None,
             submitted_hash: basecraft_io::hash_bytes(payload),
             submitted_size: payload.len() as u64,
-            transformation: transformation.into(),
-            state: "generated".into(),
+            transformation,
+            state: EvidenceState::Generated,
             analysis_run: None,
             proposal_target: None,
             upstream,
@@ -601,8 +491,7 @@ pub(crate) fn link_generated_input_locked(
     run.write_run(
         basecraft_protocol::records::AnalysisRunStatus::Prepared,
         Some(result_label.into()),
-    )?;
-    register(run)
+    )
 }
 
 #[cfg(all(test, windows))]

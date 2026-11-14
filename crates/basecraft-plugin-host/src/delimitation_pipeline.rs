@@ -92,14 +92,14 @@ impl AlignmentWorkflow<'_> {
     }
 
     fn persist(&self) -> Result<()> {
-        let mutation = basecraft_ops::records::Mutation::begin_in(self.parent.project.as_ref())?;
+        let _locks = basecraft_ops::records::lock_in(self.parent.project.as_ref())?;
         basecraft_ops::records::write_plain_json(
             &self.parent.run.artifact("stages.json")?,
             &self.stages,
         )?;
         // Connect immutable completed stage publications to the existing parent
         // ledger. They carry their own execution identity, history and inputs.
-        let mut input = mutation.read_input(self.parent.run.directory())?;
+        let mut input = basecraft_ops::records::read_input(self.parent.run.directory())?;
         let upstream = &mut input.upstream;
         for stage in &self.stages {
             if stage.state != RuntimeState::Completed {
@@ -121,7 +121,7 @@ impl AlignmentWorkflow<'_> {
                 hash: basecraft_ops::records::latest_record(directory)?.1,
             });
         }
-        mutation.write_input(self.parent.run.directory(), &input)?;
+        basecraft_ops::records::write_input(self.parent.run.directory(), &input)?;
         Ok(())
     }
 

@@ -176,20 +176,21 @@ pub fn reference_input(
     hash: &str,
     project: Option<&crate::project::Project>,
 ) -> Result<crate::records::analysis_store::ArtifactRun> {
-    reference_input_with_dependencies(anchor, source, hash, &[], project)
+    reference_species_input(anchor, source, hash, &[], project)
 }
 
-fn reference_input_with_dependencies(
+fn reference_species_input(
     anchor: &std::path::Path,
     source: &std::path::Path,
     hash: &str,
     dependencies: &[PathBuf],
     project: Option<&crate::project::Project>,
 ) -> Result<crate::records::analysis_store::ArtifactRun> {
-    crate::records::run_inputs::reference_input_with_dependencies(
+    crate::records::run_inputs::reference_input(
         anchor,
         source,
         hash,
+        None,
         dependencies,
         "Explicit species workspace input reference",
         project,
@@ -582,7 +583,7 @@ fn combined_hypotheses(
                     .map(|run| run.directory().to_path_buf())
             })
             .transpose()?;
-        let evidence = reference_input_with_dependencies(
+        let evidence = reference_species_input(
             &anchor,
             path,
             &hash,

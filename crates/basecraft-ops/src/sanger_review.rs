@@ -960,10 +960,11 @@ mod moved_and_failed_recovery_tests {
             let path = folder.join("review.json");
             review.save(&path).unwrap();
             let before = std::fs::read(&path).unwrap();
-            let ledger = inputs::reference_input_with_dependencies(
+            let ledger = inputs::reference_input(
                 &folder.join("downstream.fa"),
                 &path,
                 &basecraft_io::hash_file(&path).unwrap(),
+                None,
                 &[],
                 "test downstream review",
                 None,

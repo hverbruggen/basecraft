@@ -8,7 +8,7 @@ use basecraft_protocol::provenance::InputReference;
 
 use super::check::{AffectedAnalysis, EvidenceConflict, SavePolicy, same_source};
 use super::relink::owning_ledger;
-use super::{Mutation, lock, read_input, relative, write_input};
+use super::{lock, read_input, relative, write_input};
 use crate::{
     Error, Result,
     error::{changed_on_disk, damaged, invalid, unsupported},
@@ -18,10 +18,7 @@ use crate::{
 /// the same checked, idempotent preserve-copy transition as a document save,
 /// without touching other analyses that happen to reference the same file.
 pub fn preserve_input(bundle: &Path) -> Result<()> {
-    Mutation::begin()?.preserve_input(bundle)
-}
-
-pub(super) fn preserve_input_locked(bundle: &Path) -> Result<()> {
+    let _locks = lock()?;
     let input = read_input(bundle)?;
     let reference = input
         .source
@@ -158,7 +155,7 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
                     if let Some(owner) = preserved.get(&reference.hash) {
                         verify_preserved(&owner.join("preserved-input"), reference)?;
                         input.origin_run = Some(relative(&affected.run, owner)?);
-                        input.state = "preserved".into();
+                        input.state = EvidenceState::Preserved;
                         input
                             .extra
                             .insert("preserved_original_bytes".into(), serde_json::json!(0));
@@ -185,14 +182,14 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
                         copied
                     };
                     preserved.insert(reference.hash.clone(), affected.run.clone());
-                    input.state = "preserved".into();
+                    input.state = EvidenceState::Preserved;
                     input
                         .extra
                         .insert("preserved_original_bytes".into(), serde_json::json!(copied));
                     write_input(&affected.run, &input)?;
                 }
                 SavePolicy::BreakEvidence => {
-                    input.state = "broken".into();
+                    input.state = EvidenceState::Broken;
                     write_input(&affected.run, &input)?;
                 }
                 SavePolicy::RemoveAnalysis => {

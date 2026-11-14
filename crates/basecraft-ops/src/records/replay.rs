@@ -1155,11 +1155,10 @@ impl RecoveryAttempt {
         };
         let finalizing = doc.written;
         let observed = if doc.written {
-            let _evidence =
-                match crate::records::run_inputs::Mutation::begin_in(self.session.project()) {
-                    Ok(guard) => guard,
-                    Err(error) => return Err(refuse(&mut self.session, error)),
-                };
+            let _locks = match crate::records::run_inputs::lock_in(self.session.project()) {
+                Ok(locks) => locks,
+                Err(error) => return Err(refuse(&mut self.session, error)),
+            };
             self.session
                 .recovery_finalize(id, doc.saved.as_ref(), decision)?
         } else {
@@ -1239,7 +1238,7 @@ impl RecoveryAttempt {
     fn publish_inner(&mut self) -> Result<RecoveryCompletion> {
         self.validate()?;
         let _target = crate::records::save_guard::lock(&self.destination)?;
-        let evidence = crate::records::run_inputs::Mutation::begin_in(self.session.project())?;
+        let _locks = crate::records::run_inputs::lock_in(self.session.project())?;
         for doc in &self.documents {
             if !doc.written {
                 return Err(crate::error::invalid(
@@ -1295,7 +1294,7 @@ impl RecoveryAttempt {
             }
             for run in stores {
                 let final_run = run.relocated(&stage, &self.destination)?;
-                evidence.register(&final_run)?;
+                crate::records::run_inputs::register(&final_run)?;
                 let store = final_run
                     .directory()
                     .parent()

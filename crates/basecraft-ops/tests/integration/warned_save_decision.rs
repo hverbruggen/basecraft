@@ -29,10 +29,11 @@ fn folder(root: &Path, name: &str) -> std::path::PathBuf {
 }
 
 fn reference(root: &Path, source: &Path) -> ArtifactRun {
-    records::reference_input_with_dependencies(
+    records::reference_input(
         &root.join("result.txt"),
         source,
         &basecraft_io::hash_file(source).unwrap(),
+        None,
         &[],
         "save protection regression",
         None,
@@ -369,10 +370,11 @@ fn late_registrar() {
     };
     let anchor = std::path::PathBuf::from(std::env::var_os("BASECRAFT_LATE_ANCHOR").unwrap());
     let source = std::path::PathBuf::from(source);
-    records::reference_input_with_dependencies(
+    records::reference_input(
         &anchor,
         &source,
         &basecraft_io::hash_file(&source).unwrap(),
+        None,
         &[],
         "late registration",
         None,
@@ -445,19 +447,21 @@ fn incomplete_inspection_keeps_descendants_ownership_and_backing() {
         let ledger = reference(&anchor, &file);
         let unrelated = root.join("other.fasta");
         std::fs::write(&unrelated, ORIGINAL).unwrap();
-        let child = records::reference_input_with_dependencies(
+        let child = records::reference_input(
             &anchor.join("child.txt"),
             &unrelated,
             &basecraft_io::hash_file(&unrelated).unwrap(),
+            None,
             &[ledger.directory().into()],
             "child",
             None,
         )
         .unwrap();
-        let grandchild = records::reference_input_with_dependencies(
+        let grandchild = records::reference_input(
             &anchor.join("grandchild.txt"),
             &unrelated,
             &basecraft_io::hash_file(&unrelated).unwrap(),
+            None,
             &[child.directory().into()],
             "grandchild",
             None,

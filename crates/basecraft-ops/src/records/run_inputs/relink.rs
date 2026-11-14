@@ -120,7 +120,7 @@ pub fn relink(bundle: &Path, original: &Path) -> Result<()> {
     reference.path = relative(&owner, &original)?;
     reference.stamp = stamp(&original)?;
     let hash = reference.hash.clone();
-    input.state = "referenced".into();
+    input.state = EvidenceState::Referenced;
     write_input(&owner, &input)?;
     // A registered run keeps one reference ledger per original beside the run.
     // Relink each ledger in this result's declared ancestry that names the same
@@ -142,7 +142,7 @@ pub fn relink(bundle: &Path, original: &Path) -> Result<()> {
         }
         source.path = relative(&directory, &original)?;
         source.stamp = stamp(&original)?;
-        ledger.state = "referenced".into();
+        ledger.state = EvidenceState::Referenced;
         write_input(&directory, &ledger)?;
     }
     Ok(())

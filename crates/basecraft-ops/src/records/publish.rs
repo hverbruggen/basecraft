@@ -460,13 +460,12 @@ impl History<'_> {
             source: reference.clone(),
             submitted_hash: hash.clone(),
             submitted_size: size,
-            transformation: "identity-v1".into(),
+            transformation: basecraft_protocol::input_records::Transformation::Identity,
             state: if reference.is_some() {
-                "referenced"
+                basecraft_protocol::input_records::EvidenceState::Referenced
             } else {
-                "generated"
-            }
-            .into(),
+                basecraft_protocol::input_records::EvidenceState::Generated
+            },
             analysis_run: None,
             proposal_target: None,
             upstream,

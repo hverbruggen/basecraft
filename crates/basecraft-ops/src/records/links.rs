@@ -502,7 +502,8 @@ impl LinkEvidence for AlignmentLink {
         let alignment = load_alignment(&source)?;
         let mut hashing = crate::files::HashingWriter::new(std::io::sink());
         crate::files::write_alignment(&alignment, &mut hashing)?;
-        let raw = input.transformation == "identity-v1";
+        let raw =
+            input.transformation == basecraft_protocol::input_records::Transformation::Identity;
         let actual = if raw {
             basecraft_io::hash_file(&source)?
         } else {

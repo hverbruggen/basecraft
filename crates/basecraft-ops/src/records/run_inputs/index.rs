@@ -12,10 +12,10 @@ use super::check::Inspection;
 use super::{InspectionCode, stamp};
 use crate::Result;
 use basecraft_platform::files::lexical;
-use std::path::{Path, PathBuf};
 use basecraft_protocol::records::{AnalysisIndex, IndexedFolders};
 use fs4::fs_std::FileExt;
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 
 /// The folder whose `.basecraft` indexes `source`, and the entry naming it
 /// there: the project's root and the project-relative path for a file inside
@@ -581,10 +581,11 @@ mod tests {
         for path in [&source, &other, &introduced] {
             std::fs::write(path, b">a\nACGT\n").unwrap();
         }
-        let run = super::super::reference_input_with_dependencies(
+        let run = super::super::reference_input(
             &root.path().join("result.txt"),
             &source,
             &basecraft_io::hash_file(&source).unwrap(),
+            None,
             &[],
             "pending update",
             None,
@@ -641,10 +642,11 @@ mod tests {
                 .unwrap();
             session.save(id, None).unwrap();
             for source in [target, alias] {
-                let result = super::super::reference_input_with_dependencies(
+                let result = super::super::reference_input(
                     &other,
                     &source,
                     &basecraft_io::hash_file(&source).unwrap(),
+                    None,
                     &[],
                     "concurrent reference",
                     None,

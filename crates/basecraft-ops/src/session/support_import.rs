@@ -96,10 +96,11 @@ impl Session {
         let mut input_run = None;
         if self.tracked {
             let anchor = self.resolve(self.doc_key(id)?);
-            let ledger = crate::records::run_inputs::reference_input_with_dependencies(
+            let ledger = crate::records::run_inputs::reference_input(
                 &anchor,
                 &source,
                 &hash,
+                None,
                 &[],
                 &format!("Support values imported into {}", self.doc_key(id)?),
                 self.project.as_ref(),

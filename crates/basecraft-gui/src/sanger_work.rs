@@ -41,10 +41,11 @@ pub(super) fn retain_reference(anchor: &Path, source: &Path) -> basecraft_ops::R
         }
         let hash = basecraft_io::hash_file(source)?;
         let project = chosen()?;
-        let run = basecraft_ops::records::reference_input_with_dependencies(
+        let run = basecraft_ops::records::reference_input(
             anchor,
             source,
             &hash,
+            None,
             &[],
             "GUI Sanger reference",
             project.as_ref(),

@@ -55,9 +55,9 @@ fn base(path: &Path) -> crate::Result<PathBuf> {
     match parent.canonicalize() {
         Ok(parent) => Ok(parent),
         // Recovery encodes for its final directory before atomic publication.
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            Ok(basecraft_platform::files::lexical(&std::path::absolute(parent)?))
-        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(
+            basecraft_platform::files::lexical(&std::path::absolute(parent)?),
+        ),
         Err(error) => Err(error.into()),
     }
 }
@@ -79,7 +79,7 @@ fn source(
     {
         return Err(crate::Error::ChangedOnDisk { path });
     }
-    let ledger = inputs::Mutation::begin_in(project)?.reference_input_with_dependencies(
+    let ledger = inputs::reference_input(
         anchor,
         &path,
         &hash,
@@ -103,7 +103,7 @@ fn source_capture(
     anchor: &Path,
     project: Option<&crate::project::Project>,
 ) -> crate::Result<Source> {
-    let ledger = inputs::Mutation::begin_in(project)?.reference_input_with_dependencies(
+    let ledger = inputs::reference_input(
         anchor,
         capture.path(),
         capture.hash(),
@@ -200,9 +200,10 @@ fn linked_input(run: &ArtifactRun, dependencies: &[PathBuf], payload: &[u8]) -> 
         run,
         dependencies,
         payload,
-        "identity-v1",
+        basecraft_protocol::input_records::Transformation::Identity,
         "Sanger review/support",
-    )
+    )?;
+    inputs::register(run)
 }
 
 fn retained(run: &ArtifactRun, path: &Path, index: usize) -> crate::Result<ArtifactRevision> {
@@ -367,7 +368,7 @@ impl SangerRun {
                     original_path: Some(inputs::relative(folder, &source.location()?)?),
                     source_hash: Some(hash.clone()),
                     submitted_hash: hash,
-                    transformation: "identity-v1".into(),
+                    transformation: basecraft_protocol::input_records::Transformation::Identity,
                     run_directory: match &source.ledger {
                         Some(ledger) => inputs::relative(folder, ledger)?,
                         None => ".".into(),
@@ -975,7 +976,9 @@ fn placement_source_matches(original: &Path, placed: &Path) -> bool {
 }
 
 fn same_file(a: &Path, b: &Path) -> crate::Result<bool> {
-    if basecraft_platform::files::lexical(&std::path::absolute(a)?) == basecraft_platform::files::lexical(&std::path::absolute(b)?) {
+    if basecraft_platform::files::lexical(&std::path::absolute(a)?)
+        == basecraft_platform::files::lexical(&std::path::absolute(b)?)
+    {
         return Ok(true);
     }
     if let (Ok(a), Ok(b)) = (a.canonicalize(), b.canonicalize())
@@ -1231,14 +1234,14 @@ impl SangerReview {
         }
         dependencies.sort();
         dependencies.dedup();
-        inputs::link_generated_input_locked(
+        inputs::link_generated_input(
             &run,
             &dependencies,
             self.draft_json.as_bytes(),
-            "identity-v1",
+            basecraft_protocol::input_records::Transformation::Identity,
             "Sanger review/support",
-            |run| publication_context.register(run),
         )?;
+        publication_context.register(&run)?;
         let bytes = self.session_bytes(logical)?;
         // Support must be complete even when public history is disabled or this
         // is an unlogged recovery write. Session may add its history afterward.

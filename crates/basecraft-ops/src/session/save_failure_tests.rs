@@ -101,10 +101,7 @@ fn new_destination_and_history_preserve_existing_bytes() {
     session.save(id, None).unwrap();
     let before = crate::records::run_inputs::stamp(&target).unwrap();
     session.save_history(id).unwrap();
-    assert_eq!(
-        crate::records::run_inputs::stamp(&target).unwrap(),
-        before
-    );
+    assert_eq!(crate::records::run_inputs::stamp(&target).unwrap(), before);
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -203,10 +200,7 @@ fn recovery_inspection_failure_retries_without_replacing_written_data() {
             Some(check.decide(crate::records::run_inputs::SavePolicy::Cancel, false)),
         )
         .unwrap();
-    assert_eq!(
-        crate::records::run_inputs::stamp(&path).unwrap(),
-        written
-    );
+    assert_eq!(crate::records::run_inputs::stamp(&path).unwrap(), written);
     let completed = recovery.publish().unwrap();
     assert_eq!(fs::read(&original).unwrap(), b">source\nACGT\n");
     assert!(
