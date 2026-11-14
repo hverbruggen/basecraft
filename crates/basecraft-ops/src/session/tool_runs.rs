@@ -45,6 +45,16 @@ impl<'a> ToolRunRecord<'a> {
         }
     }
 
+    /// `paths` with their hashes, for outputs whose writer did not hash them.
+    pub fn hashed(paths: Vec<PathBuf>) -> Result<Vec<(PathBuf, String)>> {
+        let mut hashed = Vec::new();
+        for path in paths {
+            let hash = basecraft_io::hash_file(&path)?;
+            hashed.push((path, hash));
+        }
+        Ok(hashed)
+    }
+
     /// The `tool.run` operation. Its run link is relative to `base`: the
     /// project root, or the document's own folder for a loose file. A run
     /// folder that cannot be named relative to it is refused.

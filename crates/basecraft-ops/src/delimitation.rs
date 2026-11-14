@@ -539,7 +539,7 @@ fn combined_hypotheses(
     let mut hypotheses = vec![];
     for path in paths {
         let hash = basecraft_io::hash_file(path)?;
-        let sidecar = session.companion_path(path);
+        let sidecar = crate::files::companion_path(session.companion_project(), path);
         let side_hash = if sidecar.exists() {
             Some(basecraft_io::hash_file(&sidecar)?)
         } else {
@@ -708,7 +708,9 @@ pub fn combine_to(
             "Choose at least two saved species hypothesis files",
         ));
     }
-    if output.try_exists()? || session.companion_path(output).try_exists()? {
+    if output.try_exists()?
+        || crate::files::companion_path(session.companion_project(), output).try_exists()?
+    {
         return Err(std::io::Error::new(
             std::io::ErrorKind::AlreadyExists,
             "Choose a new filename for the combined hypotheses",

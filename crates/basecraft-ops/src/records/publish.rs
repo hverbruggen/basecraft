@@ -25,8 +25,7 @@ pub(crate) struct History<'a> {
     /// Records the session knows, with the ids of the edits in effect in each.
     pub(crate) known: [Option<(String, Vec<String>)>; 2],
     pub(crate) origin_bundle: &'a Path,
-    /// The document's own file, and the run it is bound to.
-    pub(crate) file: PathBuf,
+    /// The run the document's own file is bound to.
     pub(crate) run: Option<&'a Path>,
     pub(crate) delimitation: bool,
 }
@@ -42,7 +41,7 @@ impl History<'_> {
     /// The run `target` is bound to: the kept one for the document's own
     /// file, else looked up.
     fn bound(&self, target: &Path) -> Result<Option<PathBuf>> {
-        if std::path::absolute(target)? == std::path::absolute(&self.file)? {
+        if std::path::absolute(target)? == std::path::absolute(self.root.join(self.key))? {
             Ok(self.run.map(Path::to_path_buf))
         } else {
             crate::records::analysis_store::ArtifactRun::for_result(self.project, target)

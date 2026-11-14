@@ -814,10 +814,8 @@ impl qobject::TreeController {
                     self.with_doc(|tree| {
                         use basecraft_ops::records::AlignmentLink;
                         let _ = AlignmentLink::checked_view_in(project, &path, tree);
-                        AlignmentLink::read_view_in(project, &path).map_or_else(
-                            |e| e.to_string(),
-                            |link| link.status(project, &path, tree),
-                        )
+                        let link = AlignmentLink::read_view_in(project, &path);
+                        link.map_or_else(|e| e.to_string(), |l| l.status(project, &path, tree))
                     })
                 )
                 .unwrap_or_default();
@@ -866,13 +864,8 @@ impl qobject::TreeController {
                 &tree_path,
                 session.tree(doc)?,
                 &source,
-            )?
-            .into_iter()
-            .map(|path| -> basecraft_ops::Result<_> {
-                let hash = basecraft_io::hash_file(&path)?;
-                Ok((path, hash))
-            })
-            .collect::<basecraft_ops::Result<Vec<_>>>()?;
+            )?;
+            let outputs = basecraft_ops::session::ToolRunRecord::hashed(outputs)?;
             session.record_tool_run(
                 doc,
                 basecraft_protocol::Actor::Human {

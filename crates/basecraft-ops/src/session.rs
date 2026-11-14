@@ -91,8 +91,7 @@ struct Slot {
     origin_history: crate::records::SavedHistory,
     origin_issue: Option<String>,
     origin_bundle: PathBuf,
-    /// The analysis run the document's file is bound to: found once when it
-    /// was opened (rule 2.5), and set by a save that binds it.
+    /// The run the file is bound to: found at open, set by a save binding it.
     run: Option<PathBuf>,
     /// Events this session moved into the document's records, oldest first.
     recorded: Vec<LogEntry>,
@@ -336,11 +335,6 @@ impl Session {
     /// for a recovery stage, which is published as a folder of its own.
     pub(crate) fn companion_project(&self) -> Option<&crate::project::Project> {
         self.project.as_ref().filter(|_| !self.staged)
-    }
-
-    /// Where this session keeps the companion of `file`.
-    pub fn companion_path(&self, file: &Path) -> PathBuf {
-        crate::files::companion_path(self.companion_project(), file)
     }
 
     pub fn id(&self) -> &str {
@@ -596,7 +590,6 @@ impl Session {
                 slot.last_record.clone(),
             ],
             origin_bundle: &slot.origin_bundle,
-            file: self.resolve(&slot.key),
             run: slot.run.as_deref(),
             delimitation: slot.content.kind() == files::Kind::Delimitation,
         })
