@@ -348,9 +348,7 @@ impl qobject::DocumentOpens {
     /// tab for the views that open themselves (`view`), or name the project
     /// dialog.
     fn open(mut self: Pin<&mut Self>, path: &QString, on_its_own: bool) -> QString {
-        // A request whose result never reached the window ends first, so
-        // opening its path again starts a new one instead of switching to
-        // the tab that is waiting for nothing.
+        // End requests whose result never arrived before deciding, or reopening switches to them.
         let undelivered: Vec<_> = self
             .rust()
             .opens

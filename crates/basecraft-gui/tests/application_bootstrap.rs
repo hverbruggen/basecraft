@@ -894,22 +894,13 @@ fn main() {
         }
         // The last ready sibling acknowledges on the GUI callback that opens consent.
         // Releasing A here cannot deliver its queued failure until that callback returns.
-        open_hooks::hold(
-            folder
-                .path()
-                .join("missing.gb")
-                .to_string_lossy()
-                .into_owned(),
-            folder
-                .path()
-                .join(if scenario == "quit-batch" {
-                    "D.gb"
-                } else {
-                    "C.gb"
-                })
-                .to_string_lossy()
-                .into_owned(),
-        );
+        let path = |name: &str| folder.path().join(name).to_string_lossy().into_owned();
+        let last = if scenario == "quit-batch" {
+            "D.gb"
+        } else {
+            "C.gb"
+        };
+        open_hooks::hold(path("missing.gb"), path(last));
         let source = include_str!("fixtures/open-consent.qml")
             .replace(
                 "OPEN_TEST_FOLDER",
@@ -932,15 +923,7 @@ fn main() {
             open_hooks::take_admissions().len(),
             if scenario == "quit-batch" { 3 } else { 2 }
         );
-        assert_eq!(
-            std::fs::read(folder.path().join(if scenario == "quit-batch" {
-                "D.gb"
-            } else {
-                "C.gb"
-            }))
-            .unwrap(),
-            original
-        );
+        assert_eq!(std::fs::read(folder.path().join(last)).unwrap(), original);
         if scenario.starts_with("stale-")
             || scenario == "close-discard"
             || scenario == "quit-discard"
@@ -1066,38 +1049,20 @@ fn main() {
                 .unwrap();
             std::fs::write(folder.path().join("unknown.data"), "unsupported").unwrap();
         }
+        let path = |name: &str| folder.path().join(name).to_string_lossy().into_owned();
         if let Some(fault) = match scenario {
             "fail-spawn" => Some(open_hooks::Fault::Spawn),
             "fail-worker" => Some(open_hooks::Fault::Worker),
             "fail-queue" => Some(open_hooks::Fault::Queue),
             _ => None,
         } {
-            open_hooks::fail(
-                folder
-                    .path()
-                    .join("sequence.gb")
-                    .to_string_lossy()
-                    .into_owned(),
-                fault,
-            );
+            open_hooks::fail(path("sequence.gb"), fault);
         }
         if matches!(scenario, "reorder" | "cancel-reopen" | "fail-construction") {
-            // A failed construction ends the request, which releases its
-            // worker; the tree being ready must not release it first, or its
-            // document can be installed before the failure is injected.
-            let release = if scenario == "fail-construction" {
-                String::new()
-            } else {
-                folder.path().join("tree.nwk").to_string_lossy().into_owned()
-            };
-            open_hooks::hold(
-                folder
-                    .path()
-                    .join("sequence.gb")
-                    .to_string_lossy()
-                    .into_owned(),
-                release,
-            );
+            // A failed construction must end the request before the tree's
+            // readiness can release the worker and install its document.
+            let release = (scenario != "fail-construction").then(|| path("tree.nwk"));
+            open_hooks::hold(path("sequence.gb"), release.unwrap_or_default());
         }
         let source = include_str!("fixtures/open-lifecycle.qml")
             .replace(
