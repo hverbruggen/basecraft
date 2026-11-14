@@ -584,8 +584,8 @@ impl JobManager {
         if job.prepared.sequence.is_some()
             && !job.proposal_activity_recorded.load(Ordering::Acquire)
         {
-            return Err(Error::Protocol(
-                "evidence_incomplete: proposal tool-run activity was not recorded; publication-only repair cannot restore the owning session journal".into(),
+            return Err(Error::refused(OperationErrorCode::EvidenceIncomplete,
+                "proposal tool-run activity was not recorded; publication-only repair cannot restore the owning session journal".into(),
             ));
         }
         let result = basecraft_protocol::records::decode(&basecraft_ops::records::read_record(
@@ -927,7 +927,7 @@ fn finalize_document(
     if target.save && !progress.saved {
         if let Some(generation) = progress.generation {
             if session.generation(target.doc)? != generation {
-                return Err(Error::Protocol("stale_revision: target changed after result attachment; save remains incomplete".into()));
+                return Err(Error::refused(OperationErrorCode::StaleRevision,"target changed after result attachment; save remains incomplete".into()));
             }
             session.save(target.doc, None)?;
         }
@@ -947,8 +947,8 @@ fn finalize_document(
         && progress.terminal_history != TerminalHistory::Published
     {
         if progress.generation != Some(session.generation(target.doc)?) {
-            return Err(Error::Protocol(
-                "stale_revision: target changed before terminal history publication".into(),
+            return Err(Error::refused(OperationErrorCode::StaleRevision,
+                "target changed before terminal history publication".into(),
             ));
         }
         session.save_history(target.doc)?;
@@ -1136,28 +1136,10 @@ pub fn error_code(error: &Error) -> OperationErrorCode {
         Error::Contract(ContractError::MissingSetting { .. }) => {
             return OperationErrorCode::MissingChoice;
         }
+        Error::Refused { code, .. } => return *code,
         _ => {}
     }
-    let message = error.to_string();
-    if message.contains("permission_denied") {
-        OperationErrorCode::PermissionDenied
-    } else if message.contains("plugin_disabled") {
-        OperationErrorCode::PluginDisabled
-    } else if message.contains("plugin_changed") {
-        OperationErrorCode::PluginChanged
-    } else if message.contains("plugin_unavailable") {
-        OperationErrorCode::PluginUnavailable
-    } else if message.contains("output_conflict") {
-        OperationErrorCode::OutputConflict
-    } else if message.contains("stale_revision") {
-        OperationErrorCode::StaleRevision
-    } else if message.contains("evidence_incomplete") {
-        OperationErrorCode::EvidenceIncomplete
-    } else if message.contains("unsupported_input") {
-        OperationErrorCode::UnsupportedInput
-    } else {
-        OperationErrorCode::InvalidArguments
-    }
+    OperationErrorCode::InvalidArguments
 }
 
 /// Preserve typed core failures across the CLI, MCP and registered job adapters.

@@ -1,4 +1,5 @@
 //! Publish validated artifacts and retain an outcome for repair.
+use basecraft_protocol::operation::OperationErrorCode as Code;
 use super::{
     ArtifactDestination, ArtifactRevision, BTreeMap, CollectionExportIntent, CollectionIntent,
     Error, InvokeResult, OperationOutcome, Path, PathBuf, PreparedOperation, PublishedArtifact,
@@ -102,8 +103,8 @@ impl PreparedOperation {
                         .transpose()?;
                     let current = folder(&path)?;
                     if !repair || recorded.is_none_or(|known| known.identity != current) {
-                        return Err(Error::Protocol(
-                            "output_conflict: collection destination exists".into(),
+                        return Err(Error::refused(Code::OutputConflict,
+                            "collection destination exists".into(),
                         ));
                     }
                 } else if !path.exists() {
@@ -144,8 +145,8 @@ impl PreparedOperation {
             } else {
                 if retained == staging || retained.exists() {
                     if retained != staging && (!repair || !intent.is_file()) {
-                        return Err(Error::Protocol(
-                            "output_conflict: retained collection already exists".into(),
+                        return Err(Error::refused(Code::OutputConflict,
+                            "retained collection already exists".into(),
                         ));
                     }
                     // A repair finds members already moved to the project.

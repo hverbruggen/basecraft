@@ -1,4 +1,5 @@
 //! Preparation stages: capture session bindings, freeze input bytes, then allocate ledgers.
+use basecraft_protocol::operation::OperationErrorCode as Code;
 use super::{
     Arc, ArtifactRevision, ArtifactRun, BTreeMap, DocumentTarget, Error, ExecutionFamily,
     InputReference, InputView, InvocationContext, InvocationInputEvidence, OperationRequest, Path,
@@ -29,21 +30,21 @@ fn check_alphabet(
     if !accepted.is_empty()
         && let Some(refusal) = refusal
     {
-        return Err(Error::Protocol(format!(
-            "unsupported_input: {shown}: {refusal}"
+        return Err(Error::refused(Code::UnsupportedInput,format!(
+            "{shown}: {refusal}"
         )));
     }
     if !accepted.is_empty() && !accepted.contains(&found) {
         let wanted: Vec<_> = accepted.iter().map(Alphabet::to_string).collect();
-        return Err(Error::Protocol(format!(
-            "unsupported_input: {} needs {} sequences, and {shown} holds {found} sequences",
+        return Err(Error::refused(Code::UnsupportedInput,format!(
+            "{} needs {} sequences, and {shown} holds {found} sequences",
             operation.descriptor.title,
             wanted.join(" or "),
         )));
     }
     if *alphabets.entry(name.into()).or_insert(found) != found {
-        return Err(Error::Protocol(format!(
-            "unsupported_input: {} needs the documents in {name} to share one alphabet",
+        return Err(Error::refused(Code::UnsupportedInput,format!(
+            "{} needs the documents in {name} to share one alphabet",
             operation.descriptor.title
         )));
     }
@@ -70,7 +71,7 @@ fn document_view(
             session
                 .alignment(doc)?
                 .validate_aligned_input()
-                .map_err(|error| Error::Protocol(error.to_string()))?;
+                .map_err(|error| Error::refused(Code::UnsupportedInput, error.to_string()))?;
             basecraft_ops::files::write_alignment(session.alignment(doc)?, &mut bytes)?;
             Ok((bytes, "canonical-fasta-v1", "afa"))
         }
@@ -83,8 +84,8 @@ fn document_view(
             "canonical-newick-v1",
             "nwk",
         )),
-        _ => Err(Error::Protocol(
-            "unsupported_input: document kind does not match the input view".into(),
+        _ => Err(Error::refused(Code::UnsupportedInput,
+            "document kind does not match the input view".into(),
         )),
     }
 }
@@ -153,8 +154,8 @@ fn prepare_inputs(
                     );
                     let checked = session.checked_sequence(id)?;
                     if session.generation(id)? != *generation || checked.version() != *revision {
-                        return Err(Error::Protocol(
-                            "stale_revision: snapshot target changed".into(),
+                        return Err(Error::refused(Code::StaleRevision,
+                            "snapshot target changed".into(),
                         ));
                     }
                     for (role, path) in &request.destinations {
@@ -213,15 +214,15 @@ fn prepare_inputs(
                             || session.generation(id)? != binding.generation
                             || session.revision(id)? != binding.revision
                         {
-                            return Err(Error::Protocol(
-                                "stale_revision: input document changed".into(),
+                            return Err(Error::refused(Code::StaleRevision,
+                                "input document changed".into(),
                             ));
                         }
                         if view == InputView::AlignedFasta && session.is_alignment(id) {
                             session
                                 .alignment(id)?
                                 .validate_aligned_input()
-                                .map_err(|error| Error::Protocol(error.to_string()))?;
+                                .map_err(|error| Error::refused(Code::UnsupportedInput, error.to_string()))?;
                         }
                         input_record.include_input(&session.document_record(id)?);
                         let saved = session.saved_source(id)?;
@@ -275,8 +276,8 @@ fn prepare_inputs(
                 }
                 let generated_count: usize = generated.values().map(Vec::len).sum();
                 if generated_count > 1 {
-                    return Err(Error::Protocol(
-                    "unsupported_input: save the document before combining it with other inputs"
+                    return Err(Error::refused(Code::UnsupportedInput,
+                    "save the document before combining it with other inputs"
                         .into(),
                 ));
                 }
@@ -309,8 +310,8 @@ fn prepare_target(
             Some(match reference {
                 InputReference::File { path } => {
                     if !policy.document_write {
-                        return Err(Error::Protocol(
-                            "permission_denied: saving a target document needs writes".into(),
+                        return Err(Error::refused(Code::PermissionDenied,
+                            "saving a target document needs writes".into(),
                         ));
                     }
                     (session.open(&policy.path(path, false)?)?, true)
@@ -328,8 +329,8 @@ fn prepare_target(
                         || session.generation(id)? != *generation
                         || session.revision(id)? != *revision
                     {
-                        return Err(Error::Protocol(
-                            "stale_revision: target document changed".into(),
+                        return Err(Error::refused(Code::StaleRevision,
+                            "target document changed".into(),
                         ));
                     }
                     (id, false)
@@ -399,8 +400,8 @@ pub fn recorded_request(
         .as_ref()
         .map(|r| r.lock_digest.as_str());
     if installed != recorded {
-        return Err(Error::Protocol(format!(
-            "plugin_changed: the run used runtime lock {}, and the installed runtime has {}",
+        return Err(Error::refused(Code::PluginChanged,format!(
+            "the run used runtime lock {}, and the installed runtime has {}",
             recorded.unwrap_or("none"),
             installed.unwrap_or("none")
         )));
@@ -728,7 +729,7 @@ fn freeze_inputs(
                         alignment
                             .doc
                             .validate_aligned_input()
-                            .map_err(|error| Error::Protocol(error.to_string()))?;
+                            .map_err(|error| Error::refused(Code::UnsupportedInput, error.to_string()))?;
                         basecraft_ops::files::write_alignment(&alignment.doc, &mut output)?;
                     } else {
                         basecraft_ops::files::write_ungapped(&alignment.doc, &mut output)?;

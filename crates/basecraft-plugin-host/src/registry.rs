@@ -1,5 +1,6 @@
 //! Read-only discovery and atomic managed-package selection. No install hooks.
 
+use basecraft_protocol::operation::OperationErrorCode as Code;
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -32,7 +33,7 @@ pub struct RegistryConfig {
 
 impl RegistryConfig {
     pub fn discover() -> Result<Self> {
-        let paths = AppPaths::discover().map_err(|e| Error::Protocol(e.to_string()))?;
+        let paths = AppPaths::discover().map_err(basecraft_ops::Error::from)?;
         let bundled = crate::installation::plugins();
         Ok(Self {
             bundled,
@@ -55,8 +56,8 @@ pub struct Package {
 impl Package {
     pub fn verify(&self) -> Result<()> {
         if package_digest(&self.manifest.dir)? != self.digest {
-            return Err(Error::Protocol(
-                "plugin_changed: package contents changed; refresh registry".into(),
+            return Err(Error::refused(Code::PluginChanged,
+                "package contents changed; refresh registry".into(),
             ));
         }
         if let Some(runtime) = &self.manifest.managed_runtime {
@@ -314,19 +315,19 @@ impl Registry {
 
     pub fn resolve(&self, id: &str, pins: Option<&OperationPins>) -> Result<&RegisteredOperation> {
         let operation = self.operations.get(id).ok_or_else(|| {
-            Error::Protocol(format!("plugin_unavailable: unknown operation {id}"))
+            Error::refused(Code::PluginUnavailable,format!("unknown operation {id}"))
         })?;
         if !operation.package.enabled {
-            return Err(Error::Protocol("plugin_disabled".into()));
+            return Err(Error::refused(Code::PluginDisabled, String::new()));
         }
         if pins.is_some_and(|p| p != &operation.pins(&self.generation)) {
-            return Err(Error::Protocol(
-                "plugin_changed: stale registry pins; discover again".into(),
+            return Err(Error::refused(Code::PluginChanged,
+                "stale registry pins; discover again".into(),
             ));
         }
         if operation.package.interpreter.is_none() {
-            return Err(Error::Protocol(
-                "plugin_unavailable: configure BASECRAFT_PYTHON or install python3".into(),
+            return Err(Error::refused(Code::PluginUnavailable,
+                "configure BASECRAFT_PYTHON or install python3".into(),
             ));
         }
         operation.package.verify()?;
@@ -476,8 +477,8 @@ pub fn provision_bundled_with_pixi(config: &RegistryConfig, id: &str, pixi: &Pat
     let runtime = crate::runtime::provision_with(manifest, &digest, &root, pixi)?
         .ok_or_else(|| Error::Protocol("bundled runtime missing".into()))?;
     if package_digest(&manifest.dir)? != digest {
-        return Err(Error::Protocol(
-            "plugin_changed: bundled package changed during provisioning".into(),
+        return Err(Error::refused(Code::PluginChanged,
+            "bundled package changed during provisioning".into(),
         ));
     }
     write_index(config, |index| {
@@ -519,8 +520,8 @@ pub fn install_with_pixi(config: &RegistryConfig, source: &Path, pixi: &Path) ->
         std::fs::copy(file, target)?;
     }
     if package_digest(pending.path())? != digest {
-        return Err(Error::Protocol(
-            "plugin_changed: package changed during installation".into(),
+        return Err(Error::refused(Code::PluginChanged,
+            "package changed during installation".into(),
         ));
     }
     let snapshot = Manifest::load(pending.path())?;
@@ -626,7 +627,7 @@ fn configured_python(origin: Origin) -> Option<PathBuf> {
 pub fn require_enabled(id: &str) -> Result<()> {
     let config = RegistryConfig::discover()?;
     if load_index(&config)?.disabled.contains(id) {
-        return Err(Error::Protocol("plugin_disabled".into()));
+        return Err(Error::refused(Code::PluginDisabled, String::new()));
     }
     Ok(())
 }

@@ -125,7 +125,7 @@ impl Lifecycle {
             return Ok(None);
         }
         let paths = basecraft_platform::paths::AppPaths::discover()
-            .map_err(|e| Error::Protocol(e.to_string()))?;
+            .map_err(basecraft_ops::Error::from)?;
         std::fs::create_dir_all(&paths.state)?;
         let lock = OpenOptions::new()
             .create(true)

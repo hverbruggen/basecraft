@@ -1008,7 +1008,7 @@ fn unequal_alignment_inputs_are_refused_before_execution_for_files_and_documents
             .is_err()
     );
     let mut manager = JobManager::default();
-    let expected = "plugin protocol: This operation requires aligned sequences of equal length. These sequences have different lengths; align them first.";
+    let expected = "unsupported_input: This operation requires aligned sequences of equal length. These sequences have different lengths; align them first.";
     for route in ["file", "clean", "edited", "undo"] {
         if route == "edited" {
             session
@@ -1043,7 +1043,12 @@ fn unequal_alignment_inputs_are_refused_before_execution_for_files_and_documents
             "test",
             &mut session,
         );
-        assert_eq!(result.unwrap_err().to_string(), expected, "{route}");
+        let error = result.unwrap_err();
+        assert_eq!(
+            basecraft_plugin_host::jobs::error_code(&error),
+            basecraft_protocol::operation::OperationErrorCode::UnsupportedInput
+        );
+        assert_eq!(error.to_string(), expected, "{route}");
         assert!(!root.path().join("result.json").exists());
         assert_eq!(std::fs::read_to_string(&source).unwrap(), original);
     }

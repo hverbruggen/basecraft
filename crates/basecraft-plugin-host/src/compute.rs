@@ -20,10 +20,10 @@ pub fn effective_allocation() -> crate::Result<usize> {
         return Ok(configured.clamp(1, available()));
     }
     let paths = basecraft_platform::paths::AppPaths::discover()
-        .map_err(|e| crate::Error::Protocol(format!("application paths: {e}")))?;
+        .map_err(basecraft_ops::Error::from)?;
     let prefs = basecraft_platform::settings::SettingsStore::new(paths.preferences())
         .load()
-        .map_err(|e| crate::Error::Protocol(format!("preferences: {e}")))?;
+        .map_err(basecraft_ops::Error::from)?;
     Ok((prefs.compute.local_cpu_threads as usize).clamp(1, available()))
 }
 pub fn configure(threads: usize) {

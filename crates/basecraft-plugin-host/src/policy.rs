@@ -1,6 +1,7 @@
 //! Caller-owned path/effect restrictions, shared by all operation adapters.
 //! This constrains host actions; trusted plugin code is not OS-sandboxed.
 
+use basecraft_protocol::operation::OperationErrorCode as Code;
 use basecraft_ops::access::{Access, AccessError, Denial, ResourceAction};
 use basecraft_platform::files::{identity, link_count};
 use std::collections::{BTreeMap, BTreeSet};
@@ -99,7 +100,7 @@ pub struct DocumentBinding {
 }
 
 fn denied(message: &str) -> Error {
-    Error::Protocol(format!("permission_denied: {message}"))
+    Error::refused(Code::PermissionDenied, message.into())
 }
 
 impl SessionPolicy {
@@ -199,7 +200,7 @@ impl SessionPolicy {
 
     pub fn check(&self, operation: &RegisteredOperation) -> Result<()> {
         if !operation.package.enabled {
-            return Err(Error::Protocol("plugin_disabled".into()));
+            return Err(Error::refused(Code::PluginDisabled, String::new()));
         }
         if !self.permits(operation) {
             return Err(denied("operation requires writes; session is read-only"));
@@ -220,7 +221,7 @@ impl SessionPolicy {
             .map_err(|error| match error {
                 AccessError::Denied(reason) => denied(&reason.to_string()),
                 AccessError::DestinationExists => {
-                    Error::Protocol("output_conflict: destination already exists".into())
+                    Error::refused(Code::OutputConflict,"destination already exists".into())
                 }
                 AccessError::Io(error) => error.into(),
             })
@@ -426,8 +427,8 @@ impl SessionPolicy {
                         .ok_or_else(|| denied("missing filename"))?,
                 );
             if !unique.insert(key) {
-                return Err(Error::Protocol(
-                    "output_conflict: destinations alias each other".into(),
+                return Err(Error::refused(Code::OutputConflict,
+                    "destinations alias each other".into(),
                 ));
             }
             destinations.insert(name.clone(), resolved);
