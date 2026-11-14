@@ -291,7 +291,10 @@ fn redirected_ancestor_above_root_refuses_output_bindings() {
     assert!(!root.symlink_metadata().unwrap().file_type().is_symlink());
     assert!(matches!(
         policy.path("new-output", true),
-        Err(Error::Protocol(_))
+        Err(Error::Refused {
+            code: basecraft_protocol::operation::OperationErrorCode::PermissionDenied,
+            ..
+        })
     ));
     for action in [
         ResourceAction::CreateFile,

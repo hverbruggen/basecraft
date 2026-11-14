@@ -1,7 +1,11 @@
 //! Sanger adapters for the common artifact store and one-source evidence ledgers.
 use super::{SangerReview, StoredReview};
+use crate::error::{changed_on_disk, limit, unsupported};
 use crate::{
-    error::invalid, records::analysis_store::ArtifactRun, records::input_evidence as inputs,
+    Error,
+    error::{damaged, invalid},
+    records::analysis_store::ArtifactRun,
+    records::input_evidence as inputs,
 };
 use basecraft_docs::sanger::SangerPlacementExt;
 use basecraft_docs::sanger::{SangerDraft, SangerPlacement};
@@ -140,10 +144,10 @@ impl SourceAccess for Source {
             }
             (None, None) => self.path.clone(),
             _ => {
-                return Err(crate::Error::Damaged {
-                    path: self.path.clone(),
-                    detail: "Incomplete Sanger input reference".into(),
-                });
+                return Err(damaged(
+                    self.path.clone(),
+                    "Incomplete Sanger input reference",
+                ));
             }
         };
         Ok(path)
@@ -158,7 +162,7 @@ impl SourceAccess for Source {
                 .transpose()?
                 .unwrap_or(false)
         {
-            return Err(crate::Error::ChangedOnDisk { path });
+            return Err(changed_on_disk(path));
         }
         Ok(path)
     }
@@ -170,7 +174,7 @@ impl SourceAccess for Source {
                 r.hash != capture.hash() || r.stamp.size != capture.bytes().len() as u64
             })
         {
-            return Err(crate::Error::ChangedOnDisk { path });
+            return Err(changed_on_disk(path));
         }
         Ok(capture)
     }
@@ -273,15 +277,10 @@ impl SangerRun {
         project: Option<&crate::project::Project>,
     ) -> crate::Result<Self> {
         if paths.is_empty() {
-            return Err(crate::Error::Unsupported(
-                "Sanger requires at least one input file".into(),
-            ));
+            return Err(unsupported("Sanger requires at least one input file"));
         }
         if paths.len() > 4 {
-            return Err(crate::Error::Limit {
-                what: "Sanger input files".into(),
-                limit: 4,
-            });
+            return Err(limit("Sanger input files", 4));
         }
         let mut evidence = ReviewEvidence::default();
         let mut captures = Vec::new();
@@ -461,9 +460,7 @@ impl SangerRun {
                 .find(|capture| capture.path() == source.path)
             {
                 if location.canonicalize()? != capture.path() {
-                    return Err(crate::Error::ChangedOnDisk {
-                        path: source.path.clone(),
-                    });
+                    return Err(changed_on_disk(source.path.clone()));
                 }
                 capture.check_current()?;
             } else {
@@ -548,14 +545,14 @@ fn unavailable_sources(evidence: &ReviewEvidence, record: &mut Publication) {
 
 impl SangerReview {
     /// Attach an explicit completed analysis. The exact draft itself is unchanged.
-    pub fn attach_run(&mut self, run: &SangerRun) -> Result<(), String> {
+    pub fn attach_run(&mut self, run: &SangerRun) -> crate::Result<()> {
         let mut evidence = run.evidence.clone();
         for read in &self.draft.inputs {
             let source = evidence
                 .sources
                 .iter_mut()
                 .find(|s| s.sha256.eq_ignore_ascii_case(&read.sha256))
-                .ok_or("Draft input differs from registered Sanger input")?;
+                .ok_or_else(|| invalid("Draft input differs from registered Sanger input"))?;
             source.original.clone_from(&read.path);
         }
         self.evidence = evidence;
@@ -569,9 +566,9 @@ impl SangerReview {
     }
 
     /// Link an already published public-operation run into the review ancestry.
-    pub fn attach_operation_run(&mut self, directory: &Path) -> Result<(), String> {
+    pub fn attach_operation_run(&mut self, directory: &Path) -> crate::Result<()> {
         if !directory.join("manifest.json").is_file() || !directory.join("runtime.json").is_file() {
-            return Err("Completed caller support is missing".into());
+            return Err(damaged(directory, "Completed caller support is missing"));
         }
         if !self.evidence.runs.iter().any(|run| run == directory) {
             self.evidence.runs.push(directory.to_path_buf());
@@ -599,19 +596,18 @@ impl SangerReview {
         directory: &Path,
         path: &Path,
         project: Option<&crate::project::Project>,
-    ) -> Result<(), String> {
-        let placement = SangerPlacement::read(path)?;
+    ) -> crate::Result<()> {
+        let placement: SangerPlacement = super::read_evidence(path, SangerPlacement::validate)?;
         let context = source(
             &placement.source_path,
             Some(&placement.source_sha256),
             &self.anchor,
             project,
-        )
-        .map_err(|e| e.to_string())?;
+        )?;
         self.evidence.sources.push(context);
         self.evidence.placement = Some(Support {
             path: path.into(),
-            hash: basecraft_io::hash_file(path).map_err(|e| e.to_string())?,
+            hash: basecraft_io::hash_file(path)?,
         });
         self.attach_operation_run(directory)
     }
@@ -635,7 +631,7 @@ impl SangerReview {
     pub fn use_captured_inputs(
         &mut self,
         captures: Vec<crate::sanger_review::CapturedInput>,
-    ) -> Result<(), String> {
+    ) -> crate::Result<()> {
         if captures.len() != self.draft.inputs.len()
             || self
                 .draft
@@ -644,7 +640,7 @@ impl SangerReview {
                 .zip(&captures)
                 .any(|(read, c)| !read.sha256.eq_ignore_ascii_case(c.sha256()))
         {
-            return Err("Captured traces differ from the caller's evidence".into());
+            return Err(invalid("Captured traces differ from the caller's evidence"));
         }
         self.captures = std::sync::Arc::new(std::sync::Mutex::new(
             self.draft
@@ -658,8 +654,11 @@ impl SangerReview {
     }
 
     /// Immutable trace bytes shared by drawing and tool submission.
-    pub fn captured_inputs(&self) -> Result<Vec<crate::sanger_review::CapturedInput>, String> {
-        let mut cache = self.captures.lock().map_err(|e| e.to_string())?;
+    pub fn captured_inputs(&self) -> crate::Result<Vec<crate::sanger_review::CapturedInput>> {
+        let mut cache = self
+            .captures
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut captures = Vec::new();
         for read in &self.draft.inputs {
             let source =
@@ -668,10 +667,9 @@ impl SangerReview {
                 });
             let location = source
                 .map_or_else(|| Ok(read.path.clone()), SourceAccess::location)
-                .and_then(|path| Ok(path.canonicalize()?))
-                .map_err(|e: crate::Error| e.to_string())?;
+                .and_then(|path| Ok(path.canonicalize()?))?;
             if let Some(capture) = cache.get(&read.path).filter(|c| c.path() == location) {
-                capture.check_current().map_err(|e| e.to_string())?;
+                capture.check_current()?;
                 captures.push(capture.clone());
                 continue;
             }
@@ -679,13 +677,9 @@ impl SangerReview {
                 source.capture()
             } else {
                 crate::sanger_review::CapturedInput::open(&read.path)
-            }
-            .map_err(|e| e.to_string())?;
+            }?;
             if !capture.sha256().eq_ignore_ascii_case(&read.sha256) {
-                return Err(format!(
-                    "Source AB1 changed since draft: {}",
-                    read.path.display()
-                ));
+                return Err(changed_on_disk(read.path.clone()));
             }
             cache.insert(read.path.clone(), capture.clone());
             captures.push(capture);
@@ -695,7 +689,7 @@ impl SangerReview {
 
     /// Resolve live/preserved/packaged paths into a working copy. Immutable draft
     /// JSON and its SHA-256 remain unchanged, including original path spellings.
-    pub fn working_draft(&self) -> Result<SangerDraft, String> {
+    pub fn working_draft(&self) -> crate::Result<SangerDraft> {
         let mut draft = self.draft.clone();
         for (read, capture) in draft.inputs.iter_mut().zip(self.captured_inputs()?) {
             read.path = capture.path().into();
@@ -753,8 +747,8 @@ impl SangerReview {
         Ok(())
     }
 
-    pub fn attach_placement(&mut self, run: &SangerRun, path: &Path) -> Result<(), String> {
-        let placement = SangerPlacement::read(path)?;
+    pub fn attach_placement(&mut self, run: &SangerRun, path: &Path) -> crate::Result<()> {
+        let placement: SangerPlacement = super::read_evidence(path, SangerPlacement::validate)?;
         let context = run
             .evidence
             .sources
@@ -763,24 +757,25 @@ impl SangerReview {
                 placement_source_matches(&s.original, &placement.source_path)
                     && s.sha256.eq_ignore_ascii_case(&placement.source_sha256)
             })
-            .ok_or("Placement source differs from registered alignment")?;
+            .ok_or_else(|| invalid("Placement source differs from registered alignment"))?;
         self.evidence.sources.push(context.clone());
         self.evidence.runs.extend(run.evidence.runs.clone());
         self.evidence.placement = Some(Support {
             path: path.into(),
-            hash: basecraft_io::hash_file(path).map_err(|e| e.to_string())?,
+            hash: basecraft_io::hash_file(path)?,
         });
         Ok(())
     }
 
-    pub fn placement(&self) -> Result<Option<SangerPlacement>, String> {
+    pub fn placement(&self) -> crate::Result<Option<SangerPlacement>> {
         let Some(support) = &self.evidence.placement else {
             return Ok(None);
         };
-        if basecraft_io::hash_file(&support.path).map_err(|e| e.to_string())? != support.hash {
-            return Err("Retained Sanger placement changed".into());
+        if basecraft_io::hash_file(&support.path)? != support.hash {
+            return Err(changed_on_disk(support.path.clone()));
         }
-        let mut placement = SangerPlacement::read(&support.path)?;
+        let mut placement: SangerPlacement =
+            super::read_evidence(&support.path, SangerPlacement::validate)?;
         let context = self
             .evidence
             .sources
@@ -789,8 +784,8 @@ impl SangerReview {
                 placement_source_matches(&s.original, &placement.source_path)
                     && s.sha256.eq_ignore_ascii_case(&placement.source_sha256)
             })
-            .ok_or("Placement input reference is missing")?;
-        placement.source_path = context.checked().map_err(|e| e.to_string())?;
+            .ok_or_else(|| damaged(&support.path, "Placement input reference is missing"))?;
+        placement.source_path = context.checked()?;
         Ok(Some(placement))
     }
 
@@ -835,9 +830,7 @@ impl SangerReview {
         let bytes =
             basecraft_protocol::records::encode(&self.stored_with_evidence(path, evidence)?)?;
         if bytes.len() > 64 * 1024 * 1024 {
-            return Err(invalid(
-                "Sanger review exceeds 64 MiB; previous file preserved",
-            ));
+            return Err(limit("Sanger review bytes", 64 * 1024 * 1024));
         }
         Ok(bytes)
     }
@@ -881,7 +874,7 @@ impl SangerReview {
             id: format!("{}:consensus", run.id()),
             logical_name: path
                 .file_name()
-                .ok_or_else(|| invalid("Consensus has no filename"))?
+                .ok_or_else(|| Error::NoFileName(path.to_path_buf()))?
                 .to_string_lossy()
                 .into_owned(),
             hash: hash.clone(),
@@ -934,7 +927,7 @@ fn relocate_stored(
         let key = &source.path;
         let hash = paths
             .get(key)
-            .ok_or_else(|| invalid("Sanger package is missing a referenced input"))?;
+            .ok_or_else(|| damaged(copied, "Sanger package is missing a referenced input"))?;
         source.path = PathBuf::from(inputs::relative(
             &base(copied)?,
             &bundle
@@ -947,7 +940,7 @@ fn relocate_stored(
     if let Some(placement) = &mut stored.evidence.placement {
         let hash = paths
             .get(&placement.path)
-            .ok_or_else(|| invalid("Sanger package is missing placement evidence"))?;
+            .ok_or_else(|| damaged(copied, "Sanger package is missing placement evidence"))?;
         placement.path = PathBuf::from(inputs::relative(
             &base(copied)?,
             &bundle
@@ -960,7 +953,7 @@ fn relocate_stored(
     for source in &stored.evidence.sources {
         let path = copied.parent().unwrap_or(Path::new(".")).join(&source.path);
         if !basecraft_io::sha256_file(&path)?.eq_ignore_ascii_case(&source.sha256) {
-            return Err(invalid("Sanger exported source SHA-256 differs"));
+            return Err(damaged(&path, "Sanger exported source SHA-256 differs"));
         }
     }
     Ok(())
@@ -1043,11 +1036,11 @@ impl SangerReview {
     pub fn addition_evidence(
         &self,
         project: Option<&crate::project::Project>,
-    ) -> Result<String, String> {
+    ) -> crate::Result<String> {
         let sequence = self
             .resolved_sequence()
             .filter(|s| !s.is_empty())
-            .ok_or("Resolve every review column before addition")?;
+            .ok_or_else(|| Error::NotReady("Resolve every review column before addition".into()))?;
         let paths: Vec<_> = self
             .working_draft()?
             .inputs
@@ -1060,24 +1053,20 @@ impl SangerReview {
             &paths,
             self.evidence_runs(),
             project,
-        )
-        .map_err(|e| e.to_string())?;
-        let review = run.review_snapshot(self).map_err(|e| e.to_string())?;
-        let run = run
-            .finish(std::slice::from_ref(&review))
-            .map_err(|e| e.to_string())?;
-        let (_, hash) = crate::records::provenance::latest_record(run.directory())
-            .map_err(|e| e.to_string())?;
+        )?;
+        let review = run.review_snapshot(self)?;
+        let run = run.finish(std::slice::from_ref(&review))?;
+        let (_, hash) = crate::records::provenance::latest_record(run.directory())?;
         let evidence = AdditionEvidence {
             schema_version: 1,
             bundle: run.directory().into(),
             id: run.run.id().into(),
             hash,
             review: review.clone(),
-            review_hash: basecraft_io::hash_file(&review).map_err(|e| e.to_string())?,
+            review_hash: basecraft_io::hash_file(&review)?,
             sequence_hash: basecraft_io::hash_bytes(sequence.as_bytes()),
         };
-        serde_json::to_string(&evidence).map_err(|e| e.to_string())
+        Ok(serde_json::to_string(&evidence)?)
     }
 }
 
@@ -1091,8 +1080,8 @@ pub fn check_addition(descriptor: &str, sequence: &str) -> crate::Result<Checked
     if evidence.schema_version != 1
         || evidence.sequence_hash != basecraft_io::hash_bytes(sequence.as_bytes())
     {
-        return Err(invalid(
-            "Reviewed sequence differs from its Sanger evidence",
+        return Err(Error::Outdated(
+            "Reviewed sequence differs from its Sanger evidence".into(),
         ));
     }
     let (publication, hash) = crate::records::provenance::latest_record(&evidence.bundle)?;
@@ -1100,31 +1089,32 @@ pub fn check_addition(descriptor: &str, sequence: &str) -> crate::Result<Checked
         || hash != evidence.hash
         || basecraft_io::hash_file(&evidence.review)? != evidence.review_hash
     {
-        return Err(invalid("Sanger addition evidence changed"));
+        return Err(Error::Outdated("Sanger addition evidence changed".into()));
     }
     let local = evidence
         .review
         .strip_prefix(&evidence.bundle)
-        .map_err(|_| invalid("Sanger review escapes its input run"))?;
+        .map_err(|_| damaged(&evidence.review, "Sanger review escapes its input run"))?;
     if !publication
         .inputs
         .iter()
         .any(|a| a.retained.as_deref() == local.to_str() && a.hash == evidence.review_hash)
     {
-        return Err(invalid(
+        return Err(damaged(
+            &evidence.bundle,
             "Sanger review is not retained by the selected input run",
         ));
     }
-    let review = SangerReview::load(&evidence.review).map_err(invalid)?;
+    let review = SangerReview::load(&evidence.review)?;
     if review.resolved_sequence().as_deref() != Some(sequence) {
-        return Err(invalid(
-            "Sanger review is unresolved or describes another sequence",
+        return Err(Error::Outdated(
+            "Sanger review is unresolved or describes another sequence".into(),
         ));
     }
     let mut issues = crate::records::provenance::verify_records(&evidence.bundle, &publication)?;
     issues.extend(inputs::verify_ancestors(&evidence.bundle)?);
     if !issues.is_empty() {
-        return Err(invalid(issues.join("; ")));
+        return Err(damaged(&evidence.bundle, issues.join("; ")));
     }
     Ok(CheckedAddition(evidence))
 }
@@ -1222,8 +1212,8 @@ impl SangerReview {
                     base(&set.anchor)?.join(input)
                 };
                 if same_file(target, &input)? {
-                    return Err(crate::Error::Unsupported(
-                        "Review cannot replace a source trace, draft or alignment context".into(),
+                    return Err(unsupported(
+                        "Review cannot replace a source trace, draft or alignment context",
                     ));
                 }
             }
@@ -1234,8 +1224,8 @@ impl SangerReview {
                 .filter_map(|source| source.ledger.as_ref())
             {
                 if same_file(target, &ledger.join("preserved-input"))? {
-                    return Err(crate::Error::Unsupported(
-                        "Review cannot replace preserved source evidence".into(),
+                    return Err(unsupported(
+                        "Review cannot replace preserved source evidence",
                     ));
                 }
             }
@@ -1294,14 +1284,15 @@ impl SangerReview {
         run: &ArtifactRun,
     ) -> crate::Result<()> {
         let hash = basecraft_io::hash_file(target)?;
-        run.bind(project, target, &hash)
-            .map_err(|error| crate::Error::Damaged {
-                path: target.into(),
-                detail: format!(
+        run.bind(project, target, &hash).map_err(|error| {
+            damaged(
+                target,
+                format!(
                     "review data saved; binding incomplete: {error}; repair evidence: {}",
                     run.directory().display()
                 ),
-            })
+            )
+        })
     }
 }
 
@@ -1320,11 +1311,7 @@ impl SangerReview {
         snapshot: &super::StoredCallSets,
         target: &Path,
     ) -> crate::Result<Self> {
-        let review = Self::decode_value(serde_json::to_value(snapshot)?, target);
-        review.map_err(|detail| crate::Error::Damaged {
-            path: target.into(),
-            detail,
-        })
+        Self::decode_value(serde_json::to_value(snapshot)?, target)
     }
 }
 

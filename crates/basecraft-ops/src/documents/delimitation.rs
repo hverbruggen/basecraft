@@ -5,7 +5,12 @@ use basecraft_docs::FeatureId;
 use basecraft_protocol::{DocState, Op, delimitation::DelimitationWorkspace};
 
 use super::Document;
-use crate::{Result, error::invalid, files, session::Inverse};
+use crate::{
+    Result,
+    error::{invalid, unsupported},
+    files,
+    session::Inverse,
+};
 
 impl Document for DelimitationWorkspace {
     fn accepts(&self, op: &Op) -> bool {
@@ -49,7 +54,7 @@ impl Document for DelimitationWorkspace {
     }
     fn revert(&mut self, inverse: &Inverse) -> Result<()> {
         let Inverse::Delimitation(undo) = inverse else {
-            return Err(invalid("undo of the wrong kind of edit"));
+            return Err(unsupported("undo of the wrong kind of edit"));
         };
         undo.undo(self);
         Ok(())

@@ -124,8 +124,12 @@ fn a_moved_run_folder_resolves_and_its_request_runs_again_to_the_same_hashes() {
     let changed = installed(other.path(), |contract| {
         contract["operations"][0]["description"] = Value::from("Changed");
     });
-    let refused = recorded_request(&folder, &changed).unwrap_err().to_string();
-    assert!(refused.contains("plugin_changed"), "{refused}");
+    let refused = recorded_request(&folder, &changed).unwrap_err();
+    assert_eq!(
+        basecraft_plugin_host::jobs::error_code(&refused),
+        basecraft_protocol::operation::OperationErrorCode::PluginChanged,
+        "{refused}"
+    );
 }
 
 #[test]

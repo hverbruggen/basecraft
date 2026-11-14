@@ -4,6 +4,7 @@ use super::{
     Path, PathBuf, PreparedOperation, PublishedArtifact, Result, check_members, records,
     verify_collection,
 };
+use basecraft_protocol::operation::OperationErrorCode as Code;
 
 /// Files published into the project: destination, the run's copy if it
 /// keeps one, and hash.
@@ -100,8 +101,9 @@ impl PreparedOperation {
                         .transpose()?;
                     let current = folder(&path)?;
                     if !repair || recorded.is_none_or(|known| known.identity != current) {
-                        return Err(Error::Protocol(
-                            "output_conflict: collection destination exists".into(),
+                        return Err(Error::refused(
+                            Code::OutputConflict,
+                            "collection destination exists",
                         ));
                     }
                 } else if !path.exists() {
@@ -147,8 +149,9 @@ impl PreparedOperation {
                     // The run's own collection folder exists only once this
                     // run has promoted it; only a repair finds it there.
                     if retained != staging && !repair {
-                        return Err(Error::Protocol(
-                            "output_conflict: retained collection already exists".into(),
+                        return Err(Error::refused(
+                            Code::OutputConflict,
+                            "retained collection already exists",
                         ));
                     }
                     // A repair finds members already moved to the project.
@@ -213,10 +216,10 @@ impl PreparedOperation {
                 continue;
             }
             if !expected.contains_key(member) {
-                return Err(Error::Protocol(format!(
-                    "invalid_arguments: {role} has no member {}",
-                    member.display()
-                )));
+                return Err(Error::refused(
+                    Code::InvalidArguments,
+                    format!("{role} has no member {}", member.display()),
+                ));
             }
             leaving.push((member.to_path_buf(), destination.clone()));
             // Component trees of a forest travel with their primary tree.

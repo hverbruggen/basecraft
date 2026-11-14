@@ -788,7 +788,10 @@ fn document_inputs_read_the_session_revision_and_record_history() {
         "test",
         &mut session,
     );
-    assert!(stale.unwrap_err().to_string().contains("stale_revision"));
+    assert_eq!(
+        basecraft_plugin_host::jobs::error_code(&stale.unwrap_err()),
+        basecraft_protocol::operation::OperationErrorCode::StaleRevision
+    );
     assert!(!temp.path().join("stale.json").exists());
 }
 
@@ -1019,7 +1022,7 @@ fn unequal_alignment_inputs_are_refused_before_execution_for_files_and_documents
             .is_err()
     );
     let mut manager = JobManager::default();
-    let expected = "plugin protocol: This operation requires aligned sequences of equal length. These sequences have different lengths; align them first.";
+    let expected = "This operation requires aligned sequences of equal length. These sequences have different lengths; align them first.";
     for route in ["file", "clean", "edited", "undo"] {
         if route == "edited" {
             session
@@ -1054,7 +1057,12 @@ fn unequal_alignment_inputs_are_refused_before_execution_for_files_and_documents
             "test",
             &mut session,
         );
-        assert_eq!(result.unwrap_err().to_string(), expected, "{route}");
+        let error = result.unwrap_err();
+        assert_eq!(
+            basecraft_plugin_host::jobs::error_code(&error),
+            basecraft_protocol::operation::OperationErrorCode::UnsupportedInput
+        );
+        assert_eq!(error.to_string(), expected, "{route}");
         assert!(!root.path().join("result.json").exists());
         assert_eq!(std::fs::read_to_string(&source).unwrap(), original);
     }
@@ -1432,12 +1440,13 @@ fn registered_target_preparation_preserves_permissions_and_session_identity() {
             Some(&mut session),
         )
         .err()
-        .unwrap()
-        .to_string();
-        assert!(
-            error.contains("permission_denied: saving a target document needs writes"),
+        .unwrap();
+        assert_eq!(
+            basecraft_plugin_host::jobs::error_code(&error),
+            basecraft_protocol::operation::OperationErrorCode::PermissionDenied,
             "{error}"
         );
+        assert_eq!(error.to_string(), "saving a target document needs writes");
         assert!(!session.is_open(basecraft_ops::DocId(0)));
     }
     let prepared = prepare(Some(file), true, Some(&mut session)).unwrap();
@@ -1456,17 +1465,17 @@ fn registered_target_preparation_preserves_permissions_and_session_identity() {
         (
             "doc",
             json!(usize::MAX.to_string()),
-            "stale_revision: target document changed",
+            "target document changed",
         ),
         (
             "generation",
             json!(session.generation(id).unwrap() + 1),
-            "stale_revision: target document changed",
+            "target document changed",
         ),
         (
             "revision",
             json!(session.revision(id).unwrap() + 1),
-            "stale_revision: target document changed",
+            "target document changed",
         ),
     ] {
         let mut stale = document.clone();

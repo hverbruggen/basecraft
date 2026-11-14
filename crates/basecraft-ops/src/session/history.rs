@@ -4,6 +4,7 @@ use super::{
     LogEntry, Op, OpResult, Outcome, ReplayMode, Result, Session, TYPING_WINDOW, Typing, invalid,
     restore_inverse, typing,
 };
+use crate::error::unsupported;
 
 pub(crate) enum Inverse {
     SangerSelect(String),
@@ -298,7 +299,7 @@ impl Session {
             .ok_or_else(|| invalid("unknown document"))?
             .content;
         if !content.as_document().accepts(&op) {
-            return Err(Error::Unsupported(format!(
+            return Err(unsupported(format!(
                 "{} cannot be applied to {:?}",
                 op.name(),
                 content.kind()
@@ -547,13 +548,11 @@ impl Session {
         let (of, stack, action) = match op {
             Op::Undo { of } => (of, &slot.undo, "undo"),
             Op::Redo { of } => (of, &slot.redo, "redo"),
-            _ => return Err(Error::Unsupported("expected a history operation".into())),
+            _ => return Err(unsupported("expected a history operation")),
         };
         let target = stack.last().ok_or(Error::NothingTo(action))?;
         if !of.is_empty() && *of != target.entry_id {
-            return Err(Error::Unsupported(
-                "history target is not the latest edit".into(),
-            ));
+            return Err(unsupported("history target is not the latest edit"));
         }
         if matches!(op, Op::Undo { .. }) {
             self.undo(id)

@@ -1,5 +1,6 @@
 //! Shared save reservation and accepted-byte checks. Domain serializers and
 //! recovery remain with their document owners. Lock order: target, then evidence.
+use crate::error::{changed_on_disk, unsupported};
 use std::path::{Path, PathBuf};
 
 use crate::{Result, error::invalid};
@@ -13,9 +14,7 @@ pub(crate) fn change_stamp(path: &Path) -> Result<Option<ChangeStamp>> {
         Err(error) => return Err(error.into()),
     };
     if !metadata.is_file() && !metadata.file_type().is_symlink() {
-        return Err(crate::Error::Unsupported(
-            "save target must be an ordinary file".into(),
-        ));
+        return Err(unsupported("save target must be an ordinary file"));
     }
     // One read of the file's metadata gives the stamp and the change time.
     let metadata = std::fs::metadata(path)?;
@@ -90,9 +89,7 @@ impl Drop for HeldElsewhere {
 
 pub(crate) fn check_hash(path: &Path, expected: &str) -> Result<()> {
     if basecraft_io::hash_file(path)? != expected {
-        return Err(crate::Error::ChangedOnDisk {
-            path: path.to_path_buf(),
-        });
+        return Err(changed_on_disk(path));
     }
     Ok(())
 }

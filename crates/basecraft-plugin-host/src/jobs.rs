@@ -469,8 +469,9 @@ impl JobManager {
             && let Some((existing, id)) = self.requests.get(key)
         {
             if existing != &digest {
-                return Err(Error::Protocol(
-                    "invalid_arguments: request key reused with different inputs".into(),
+                return Err(Error::refused(
+                    OperationErrorCode::InvalidArguments,
+                    "request key reused with different inputs",
                 ));
             }
             return self.get(id);
@@ -584,8 +585,9 @@ impl JobManager {
         if job.prepared.sequence.is_some()
             && !job.proposal_activity_recorded.load(Ordering::Acquire)
         {
-            return Err(Error::Protocol(
-                "evidence_incomplete: proposal tool-run activity was not recorded; publication-only repair cannot restore the owning session journal".into(),
+            return Err(Error::refused(
+                OperationErrorCode::EvidenceIncomplete,
+                "proposal tool-run activity was not recorded; publication-only repair cannot restore the owning session journal",
             ));
         }
         let basecraft_protocol::records::ValidatedResult { result, artifacts } =
@@ -923,7 +925,10 @@ fn finalize_document(
     if target.save && !progress.saved {
         if let Some(generation) = progress.generation {
             if session.generation(target.doc)? != generation {
-                return Err(Error::Protocol("stale_revision: target changed after result attachment; save remains incomplete".into()));
+                return Err(Error::refused(
+                    OperationErrorCode::StaleRevision,
+                    "target changed after result attachment; save remains incomplete",
+                ));
             }
             session.save(target.doc, None)?;
         }
@@ -943,8 +948,9 @@ fn finalize_document(
         && progress.terminal_history != TerminalHistory::Published
     {
         if progress.generation != Some(session.generation(target.doc)?) {
-            return Err(Error::Protocol(
-                "stale_revision: target changed before terminal history publication".into(),
+            return Err(Error::refused(
+                OperationErrorCode::StaleRevision,
+                "target changed before terminal history publication",
             ));
         }
         session.save_history(target.doc)?;
@@ -1125,38 +1131,21 @@ pub fn error_value(
 pub fn error_code(error: &Error) -> OperationErrorCode {
     use crate::contract::ContractError;
     match error {
-        Error::Ops(error) => return ops_error_code(error),
-        Error::Contract(ContractError::UnknownSetting { .. }) => {
-            return OperationErrorCode::UnknownSetting;
+        Error::Ops(error) => error.operation_code(),
+        Error::Io(error) => {
+            basecraft_ops::Error::Io(std::io::Error::from(error.kind())).operation_code()
         }
-        Error::Contract(ContractError::MissingSetting { .. }) => {
-            return OperationErrorCode::MissingChoice;
-        }
-        _ => {}
+        Error::Contract(ContractError::UnknownSetting { .. }) => OperationErrorCode::UnknownSetting,
+        Error::Contract(ContractError::MissingSetting { .. }) => OperationErrorCode::MissingChoice,
+        Error::Contract(ContractError::Rejected(_)) => OperationErrorCode::IncompatibleContract,
+        Error::Refused { code, .. } => *code,
+        Error::Exited(_) => OperationErrorCode::PluginUnavailable,
+        Error::Timeout(_) => OperationErrorCode::Timeout,
+        Error::Contract(ContractError::Value(_))
+        | Error::Json(_)
+        | Error::Arrow(_)
+        | Error::Manifest { .. }
+        | Error::Remote { .. }
+        | Error::Protocol(_) => OperationErrorCode::InvalidArguments,
     }
-    let message = error.to_string();
-    if message.contains("permission_denied") {
-        OperationErrorCode::PermissionDenied
-    } else if message.contains("plugin_disabled") {
-        OperationErrorCode::PluginDisabled
-    } else if message.contains("plugin_changed") {
-        OperationErrorCode::PluginChanged
-    } else if message.contains("plugin_unavailable") {
-        OperationErrorCode::PluginUnavailable
-    } else if message.contains("output_conflict") {
-        OperationErrorCode::OutputConflict
-    } else if message.contains("stale_revision") {
-        OperationErrorCode::StaleRevision
-    } else if message.contains("evidence_incomplete") {
-        OperationErrorCode::EvidenceIncomplete
-    } else if message.contains("unsupported_input") {
-        OperationErrorCode::UnsupportedInput
-    } else {
-        OperationErrorCode::InvalidArguments
-    }
-}
-
-/// Preserve typed core failures across the CLI, MCP and registered job adapters.
-pub fn ops_error_code(error: &basecraft_ops::Error) -> OperationErrorCode {
-    error.operation_code()
 }

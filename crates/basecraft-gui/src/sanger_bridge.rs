@@ -262,7 +262,13 @@ use basecraft_viewmodel::{Frame, Theme, svg};
 use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::{QByteArray, QString};
 
+use basecraft_ops::Error as OpsError;
 use work::{load_draft_review, session_view, sync_review_view};
+
+/// The refusal when an action needs an open review; `what` names it as shown.
+fn none_open(what: &str) -> OpsError {
+    OpsError::NotReady(what.into())
+}
 
 // Independent generated QML properties describe document state and caller activity.
 #[allow(clippy::struct_excessive_bools)]
@@ -469,7 +475,7 @@ impl qobject::SangerController {
             }
             Err(error) => {
                 self.as_mut().set_message_kind(QString::from("fail"));
-                self.set_message(QString::from(error));
+                self.set_message(QString::from(&error.to_string()));
                 false
             }
         }
@@ -478,7 +484,7 @@ impl qobject::SangerController {
     fn stage_done(
         mut self: std::pin::Pin<&mut Self>,
         id: u64,
-        result: Result<work::Completion, String>,
+        result: basecraft_plugin_host::Result<work::Completion>,
     ) {
         let Some(stage) = self.rust().stage.as_ref().filter(|stage| stage.id == id) else {
             return;
@@ -489,7 +495,7 @@ impl qobject::SangerController {
         self.as_mut().set_busy(false);
         self.as_mut().set_calling(false);
         let result = if cancelled {
-            Err("Sanger operation cancelled; previous review preserved".into())
+            Err(OpsError::Cancelled(work::CANCELLED.into()).into())
         } else {
             result
         };
@@ -537,7 +543,8 @@ impl qobject::SangerController {
                 } else {
                     "fail"
                 }));
-                self.as_mut().set_message(QString::from(error));
+                let shown = crate::jobs::JobError::shown(&error);
+                self.as_mut().set_message(QString::from(&shown));
                 (false, String::new())
             }
         };
@@ -692,12 +699,16 @@ impl qobject::SangerController {
         if self.rust().stage.is_some() {
             return false;
         }
-        let result = (|| -> Result<SangerReviewView, String> {
+        let result = (|| -> basecraft_ops::Result<SangerReviewView> {
             let mut r = self.as_mut().rust_mut();
-            let session = r.review_session.as_mut().ok_or("No review is open")?;
+            let session = r
+                .review_session
+                .as_mut()
+                .ok_or_else(|| none_open("No review is open"))?;
             session.select_call_set(&id.to_string())?;
-            session_view(session.review().ok_or("No review is open")?)
-        })();
+            session_view(session.current()?)
+        })()
+        .map_err(|e| crate::document_open::edit_failure(&e));
         match result {
             Ok(mut view) => {
                 {
@@ -733,7 +744,11 @@ impl qobject::SangerController {
                     .report()
                     .map_err(|e| e.to_string())
             },
-            |document| document.report(self.rust().dirty),
+            |document| {
+                document
+                    .report(self.rust().dirty)
+                    .map_err(|e| e.to_string())
+            },
         );
         crate::provenance_bridge::report_json(
             result.and_then(|report| serde_json::to_string(&report).map_err(|e| e.to_string())),
@@ -1017,13 +1032,13 @@ impl qobject::SangerController {
             .rust_mut()
             .review_session
             .as_mut()
-            .ok_or_else(|| "No review is open".to_string())
+            .ok_or_else(|| none_open("No review is open"))
             .and_then(work::ReviewDocument::addition_evidence);
         match result {
             Ok(value) => QString::from(value),
             Err(error) => {
                 self.as_mut().set_message_kind(QString::from("fail"));
-                self.as_mut().set_message(QString::from(error));
+                self.as_mut().set_message(QString::from(&error.to_string()));
                 QString::default()
             }
         }
@@ -1091,12 +1106,10 @@ impl qobject::SangerController {
             None => {}
         }
         let path = input;
-        let loaded = basecraft_ops::sanger_review::instrument_review(&path)
-            .map_err(work::ReviewFailure::Failed)
-            .and_then(|review| {
-                let view = session_view(&review).map_err(work::ReviewFailure::Failed)?;
-                Ok((work::ReviewDocument::new(&review)?, view))
-            });
+        let loaded = basecraft_ops::sanger_review::instrument_review(&path).and_then(|review| {
+            let view = session_view(&review)?;
+            Ok((work::ReviewDocument::new(&review)?, view))
+        });
         match loaded {
             Ok((session, mut view)) => {
                 self.as_mut().cancel_calls();
@@ -1124,7 +1137,7 @@ impl qobject::SangerController {
                 true
             }
             Err(failure) => {
-                self.review_failed(&path, "fail", failure);
+                self.review_failed(&path, "fail", &failure);
                 false
             }
         }
@@ -1136,29 +1149,28 @@ impl qobject::SangerController {
         mut self: std::pin::Pin<&mut Self>,
         path: &Path,
         kind: &str,
-        failure: work::ReviewFailure,
+        failure: &OpsError,
     ) {
-        if failure.read_only() {
+        if matches!(failure, OpsError::ReadOnlyFolder { .. }) {
             let refused = serde_json::json!({"file": path, "review": true}).to_string();
             self.as_mut().set_refused_edit(QString::from(&refused));
         }
         self.as_mut().set_message_kind(QString::from(kind));
-        self.set_message(QString::from(&String::from(failure)));
+        self.set_message(QString::from(&crate::document_open::edit_failure(failure)));
     }
 
     fn install_review_result(
         mut self: std::pin::Pin<&mut Self>,
         path: &Path,
-        result: Result<(SangerReviewView, SangerReview), String>,
+        result: basecraft_ops::Result<(SangerReviewView, SangerReview)>,
         dirty: bool,
     ) -> bool {
         self.as_mut().cancel_stage();
         self.as_mut().rust_mut().stage = None;
         self.as_mut().set_busy(false);
         self.as_mut().set_calling(false);
-        let result = result
-            .map_err(work::ReviewFailure::Failed)
-            .and_then(|(view, review)| Ok((view, work::ReviewDocument::new(&review)?)));
+        let result =
+            result.and_then(|(view, review)| Ok((view, work::ReviewDocument::new(&review)?)));
         match result {
             Ok((mut review, session)) => {
                 self.as_mut().cancel_calls();
@@ -1181,7 +1193,7 @@ impl qobject::SangerController {
                 true
             }
             Err(failure) => {
-                self.review_failed(path, "error", failure);
+                self.review_failed(path, "error", &failure);
                 false
             }
         }
@@ -1193,11 +1205,12 @@ impl qobject::SangerController {
         self.as_mut().set_busy(false);
         self.as_mut().set_calling(false);
         let path = PathBuf::from(path.to_string());
-        let result = (|| -> Result<_, String> {
+        let result = (|| -> basecraft_ops::Result<_> {
             let session = work::ReviewDocument::open(&path)?;
-            let view = session_view(session.review().ok_or("No review is open")?)?;
+            let view = session_view(session.current()?)?;
             Ok((view, session))
-        })();
+        })()
+        .map_err(|e| e.to_string());
         match result {
             Ok((mut review, session)) => {
                 self.as_mut().cancel_calls();
@@ -1246,22 +1259,22 @@ impl qobject::SangerController {
             self.as_mut().set_calling(false);
             self.as_mut().set_busy(false);
         }
-        let paths = (|| -> Result<Vec<String>, String> {
+        let paths = (|| -> basecraft_ops::Result<Vec<String>> {
             let source = self
                 .review_payload()
                 .filter(|session| session.draft.inputs.len() == 1)
-                .ok_or("Open one AB1 trace before drafting a consensus")?
+                .ok_or_else(|| none_open("Open one AB1 trace before drafting a consensus"))?
                 .working_draft()?
                 .inputs[0]
                 .path
                 .to_string_lossy()
                 .into_owned();
             let mut paths = vec![source];
-            let additional: Vec<String> = serde_json::from_str(&additional_paths_json.to_string())
-                .map_err(|e| e.to_string())?;
+            let additional: Vec<String> = serde_json::from_str(&additional_paths_json.to_string())?;
             paths.extend(additional);
             Ok(paths)
-        })();
+        })()
+        .map_err(|e| e.to_string());
         match paths {
             Ok(paths) => self.prepare_reads(
                 &QString::from(serde_json::json!(paths).to_string()),
@@ -1350,8 +1363,9 @@ impl qobject::SangerController {
             .rust_mut()
             .review_session
             .as_mut()
-            .ok_or_else(|| "No Sanger review is open".to_string())
-            .and_then(|session| session.save(&path));
+            .ok_or_else(|| none_open("No Sanger review is open"))
+            .and_then(|session| session.save(&path))
+            .map_err(|e| e.to_string());
         match result {
             Ok(()) => {
                 self.as_mut().rust_mut().review_path = Some(path.clone());
@@ -1422,7 +1436,7 @@ impl qobject::SangerController {
 
     fn review_change(
         mut self: std::pin::Pin<&mut Self>,
-        change: impl FnOnce(&mut work::ReviewDocument) -> Result<(), String>,
+        change: impl FnOnce(&mut work::ReviewDocument) -> basecraft_ops::Result<()>,
     ) -> bool {
         if self.rust().stage.is_some() {
             return false;
@@ -1435,7 +1449,7 @@ impl qobject::SangerController {
             .rust_mut()
             .review_session
             .as_mut()
-            .ok_or_else(|| "No Sanger review is open".to_string())
+            .ok_or_else(|| none_open("No Sanger review is open"))
             .and_then(change);
         if result.is_ok() {
             self.as_mut().set_dirty(true);
@@ -1450,7 +1464,7 @@ impl qobject::SangerController {
                     r.review_session
                         .as_ref()
                         .and_then(work::ReviewDocument::review)
-                        .ok_or("No review is open")?,
+                        .ok_or_else(|| none_open("No review is open"))?,
                 );
                 let mut view = match view {
                     Ok(view) => view,
@@ -1480,7 +1494,8 @@ impl qobject::SangerController {
             }
             Err(error) => {
                 self.as_mut().set_message_kind(QString::from("error"));
-                self.as_mut().set_message(QString::from(&error));
+                self.as_mut()
+                    .set_message(QString::from(&crate::document_open::edit_failure(&error)));
             }
         }
         self.refresh();
@@ -1686,22 +1701,10 @@ impl qobject::SangerController {
     }
 
     pub fn review_undo(self: std::pin::Pin<&mut Self>) {
-        self.review_change(|document| {
-            document
-                .session
-                .undo(document.id)
-                .map(|_| ())
-                .map_err(|e| e.to_string())
-        });
+        self.review_change(|document| document.session.undo(document.id).map(|_| ()));
     }
     pub fn review_redo(self: std::pin::Pin<&mut Self>) {
-        self.review_change(|document| {
-            document
-                .session
-                .redo(document.id)
-                .map(|_| ())
-                .map_err(|e| e.to_string())
-        });
+        self.review_change(|document| document.session.redo(document.id).map(|_| ()));
     }
 
     pub fn export_consensus(
@@ -1722,14 +1725,15 @@ impl qobject::SangerController {
             .rust_mut()
             .review_session
             .as_mut()
-            .ok_or_else(|| "No Sanger review is open".to_string())
+            .ok_or_else(|| none_open("No Sanger review is open"))
             .and_then(|session| {
                 session.export_consensus(&output, &label.to_string())?;
                 if let Some(path) = &review_path {
                     session.save(path)?;
                 }
                 Ok(())
-            });
+            })
+            .map_err(|e| e.to_string());
         match result {
             Ok(()) => {
                 self.as_mut().set_dirty(review_path.is_none());

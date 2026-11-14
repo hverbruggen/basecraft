@@ -1,4 +1,5 @@
 //! Sanger decisions use the same journal, undo stacks and save guards as other kinds.
+use crate::error::unsupported;
 use std::path::{Path, PathBuf};
 
 use basecraft_docs::FeatureId;
@@ -46,7 +47,7 @@ impl Document for SangerReview {
     fn apply(&mut self, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {
         if let Op::SangerSelect { call_set } = op {
             let before = self.draft_sha256.clone();
-            self.select_call_set(call_set).map_err(Error::Invalid)?;
+            self.select_call_set(call_set)?;
             return Ok((Inverse::SangerSelect(before), None));
         }
         if let Op::SangerUpdate { review } = op {
@@ -60,7 +61,7 @@ impl Document for SangerReview {
             ));
         }
         let Op::SangerReview { call_set, edit } = op else {
-            return Err(Error::Unsupported(format!(
+            return Err(unsupported(format!(
                 "{} cannot be applied to a Sanger review",
                 op.name()
             )));
@@ -70,7 +71,7 @@ impl Document for SangerReview {
     }
     fn revert(&mut self, inverse: &Inverse) -> Result<()> {
         if let Inverse::SangerSelect(before) = inverse {
-            return self.select_call_set(before).map_err(Error::Invalid);
+            return self.select_call_set(before);
         }
         if let Inverse::SangerUpdate(before) = inverse {
             *self = (**before).clone();
@@ -96,9 +97,7 @@ impl Document for SangerReview {
         publication: &WritePublication,
     ) -> Result<super::PreparedWrite> {
         if format != Format::SangerReview {
-            return Err(Error::Unsupported(
-                "a Sanger review is saved as JSON".into(),
-            ));
+            return Err(unsupported("a Sanger review is saved as JSON"));
         }
         self.prepare_session_review(project, target, &publication.logical(target)?, publication)
     }

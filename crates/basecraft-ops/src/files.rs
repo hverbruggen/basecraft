@@ -1,5 +1,6 @@
 //! Opening and saving documents by file format.
 
+use crate::error::{damaged, limit, unsupported};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -79,12 +80,7 @@ pub enum Kind {
 pub fn kind(path: &Path) -> Result<Kind> {
     match Format::from_path(path)? {
         Format::SangerReview => {
-            crate::sanger_review::SangerReview::load(path).map_err(|detail| {
-                crate::Error::Damaged {
-                    path: path.into(),
-                    detail,
-                }
-            })?;
+            crate::sanger_review::SangerReview::load(path)?;
             return Ok(Kind::SangerReview);
         }
         Format::Delimitation => return Ok(Kind::Delimitation),
@@ -222,11 +218,7 @@ pub fn load_in(project: Option<&crate::project::Project>, path: &Path) -> Result
     let format = Format::from_path(path)?;
     match format {
         Format::SangerReview => crate::sanger_review::SangerReview::load(path)
-            .map(|review| Loaded::SangerReview(Box::new(review)))
-            .map_err(|detail| crate::Error::Damaged {
-                path: path.into(),
-                detail,
-            }),
+            .map(|review| Loaded::SangerReview(Box::new(review))),
         Format::GenBank => Ok(Loaded::Sequence(opened_genbank(
             genbank::open_hashed(path)?.0,
         ))),
@@ -353,17 +345,9 @@ pub(crate) fn capture_load(
         Format::GenBank => unreachable!("streamed above"),
         Format::SangerReview => {
             if main.bytes().len() > 64 * 1024 * 1024 {
-                return Err(Error::Limit {
-                    what: "Sanger review bytes".into(),
-                    limit: 64 * 1024 * 1024,
-                });
+                return Err(limit("Sanger review bytes", 64 * 1024 * 1024));
             }
-            let review = crate::sanger_review::SangerReview::decode(main.bytes(), path).map_err(
-                |detail| Error::Damaged {
-                    path: path.into(),
-                    detail,
-                },
-            )?;
+            let review = crate::sanger_review::SangerReview::decode(main.bytes(), path)?;
             Loaded::SangerReview(Box::new(review))
         }
         Format::Tree => Loaded::Tree(load_tree_bytes(
@@ -754,7 +738,7 @@ fn read_companion(
 ) -> Result<Companion> {
     let (companion, writer) = basecraft_protocol::records::decode_written::<Companion>(bytes)?;
     if companion.version != COMPANION_VERSION {
-        return Err(Error::Unsupported(format!(
+        return Err(unsupported(format!(
             "{}: {}",
             path.display(),
             basecraft_protocol::records::other_format(
@@ -765,18 +749,15 @@ fn read_companion(
         )));
     }
     if companion.exchange_hash != exchange_hash {
-        return Err(Error::Damaged {
-            path: path.into(),
-            detail: "the file it describes was changed outside basecraft".into(),
-        });
+        return Err(damaged(
+            path,
+            "the file it describes was changed outside basecraft",
+        ));
     }
     if let Some(tree) = tree
         && companion.tree.as_ref().map(|t| &t.tree_hash) != Some(&tree_hash(tree))
     {
-        return Err(Error::Damaged {
-            path: path.into(),
-            detail: "Tree metadata describes a different tree".into(),
-        });
+        return Err(damaged(path, "Tree metadata describes a different tree"));
     }
     Ok(companion)
 }
@@ -1670,10 +1651,8 @@ fn load_delimitation_bytes(
     let mut warning = None;
     if let Some(source) = captured_side {
         let side = read_companion(companion, source.bytes(), exchange_hash, None).and_then(|c| {
-            c.delimitation.ok_or_else(|| Error::Damaged {
-                path: companion.to_path_buf(),
-                detail: "the companion holds no species workspace".into(),
-            })
+            c.delimitation
+                .ok_or_else(|| damaged(companion, "the companion holds no species workspace"))
         });
         match side {
             Ok(side) => {

@@ -107,7 +107,7 @@ fn matrix_reference_generated_failure_move_and_export_use_the_common_store() {
     listing(&root, &dirty_run, "matrix-dirty");
 
     // Parameters the descriptor rejects are refused before anything runs.
-    let refused = common::refused_in(&registry, &mut session, |s| {
+    let (_, refused) = common::refused_in(&registry, &mut session, |s| {
         matrix(s, doc, "unsupported", "failed.tsv")
     });
     println!("unsupported model refused: {refused}");

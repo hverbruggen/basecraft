@@ -7,12 +7,16 @@ use crate::{Error, Result};
 pub(crate) const MEMBER_LIMIT: u64 = 256 << 20;
 const ENTRY_LIMIT: usize = 100_000;
 
-fn invalid(message: impl Into<String>) -> Error {
+fn unreadable(message: impl Into<String>) -> Error {
     Error::Table(message.into())
 }
 
+fn too_large(message: impl Into<String>) -> Error {
+    Error::TooLarge(message.into())
+}
+
 fn zip_error(error: impl std::fmt::Display) -> Error {
-    invalid(format!("spreadsheet ZIP container: {error}"))
+    unreadable(format!("spreadsheet ZIP container: {error}"))
 }
 
 pub struct Archive<'a> {
@@ -23,7 +27,7 @@ impl<'a> Archive<'a> {
     pub fn new(bytes: &'a [u8]) -> Result<Self> {
         let inner = zip::ZipArchive::new(Cursor::new(bytes)).map_err(zip_error)?;
         if inner.len() > ENTRY_LIMIT {
-            return Err(invalid("the spreadsheet has too many parts"));
+            return Err(too_large("the spreadsheet has too many parts"));
         }
         Ok(Self { inner })
     }
@@ -41,15 +45,15 @@ impl<'a> Archive<'a> {
                 || member.compressed_size() > MEMBER_LIMIT
                 || total > MEMBER_LIMIT
             {
-                return Err(invalid(
+                return Err(too_large(
                     "the spreadsheet's ZIP contents are too large to import",
                 ));
             }
             let actual =
                 std::io::copy(&mut member.by_ref().take(size + 1), &mut std::io::sink())
-                    .map_err(|e| invalid(format!("spreadsheet part {name} is damaged: {e}")))?;
+                    .map_err(|e| unreadable(format!("spreadsheet part {name} is damaged: {e}")))?;
             if actual != size {
-                return Err(invalid(format!(
+                return Err(unreadable(format!(
                     "spreadsheet part {name} has an incorrect size"
                 )));
             }
@@ -65,16 +69,16 @@ impl<'a> Archive<'a> {
         };
         let size = member.size();
         if size > MEMBER_LIMIT || member.compressed_size() > MEMBER_LIMIT {
-            return Err(invalid(format!("{name} is too large to read")));
+            return Err(too_large(format!("{name} is too large to read")));
         }
         let mut out = Vec::new();
         member
             .by_ref()
             .take(size + 1)
             .read_to_end(&mut out)
-            .map_err(|e| invalid(format!("spreadsheet part {name} is damaged: {e}")))?;
+            .map_err(|e| unreadable(format!("spreadsheet part {name} is damaged: {e}")))?;
         if out.len() as u64 != size {
-            return Err(invalid(format!("{name} has an incorrect size")));
+            return Err(unreadable(format!("{name} has an incorrect size")));
         }
         Ok(Some(out))
     }

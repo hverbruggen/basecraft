@@ -2,8 +2,6 @@
 
 pub mod review;
 
-use std::path::Path;
-
 pub use basecraft_protocol::sanger::{ReviewReference, ReviewSettings};
 
 pub use basecraft_protocol::sanger_records::{
@@ -12,7 +10,6 @@ pub use basecraft_protocol::sanger_records::{
 };
 
 pub trait SangerDraftExt: Sized {
-    fn read(path: &Path) -> Result<Self, String>;
     fn validate(&self) -> Result<(), String>;
     #[must_use]
     fn reverse_complemented(&self) -> Self;
@@ -20,21 +17,10 @@ pub trait SangerDraftExt: Sized {
 }
 
 pub trait SangerPlacementExt: Sized {
-    fn read(path: &Path) -> Result<Self, String>;
     fn validate(&self) -> Result<(), String>;
 }
 
 impl SangerDraftExt for SangerDraft {
-    fn read(path: &Path) -> Result<Self, String> {
-        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-        if bytes.len() > 32 * 1024 * 1024 {
-            return Err("Sanger evidence exceeds 32 MiB".into());
-        }
-        let draft: Self = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-        draft.validate()?;
-        Ok(draft)
-    }
-
     fn validate(&self) -> Result<(), String> {
         if self
             .signal_threshold
@@ -177,16 +163,6 @@ impl SangerDraftExt for SangerDraft {
 }
 
 impl SangerPlacementExt for SangerPlacement {
-    fn read(path: &Path) -> Result<Self, String> {
-        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-        if bytes.len() > 32 * 1024 * 1024 {
-            return Err("Sanger placement exceeds 32 MiB".into());
-        }
-        let placement: Self = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-        placement.validate()?;
-        Ok(placement)
-    }
-
     fn validate(&self) -> Result<(), String> {
         if self.status != "candidate_requires_review"
             || self.engine != "MAFFT"
@@ -237,6 +213,7 @@ impl SangerPlacementExt for SangerPlacement {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     #[test]
     fn mafft_placement_preserves_insertion_anchors() {
@@ -244,7 +221,8 @@ mod tests {
         if !path.exists() {
             return;
         }
-        let placement = SangerPlacement::read(path).unwrap();
+        let placement: SangerPlacement =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
         assert_eq!(placement.insertions, 3);
         assert_eq!(placement.map.len(), placement.fragment.len());
         let mut invalid = placement.clone();

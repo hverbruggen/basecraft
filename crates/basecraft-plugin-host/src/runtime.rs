@@ -1,4 +1,5 @@
 //! Install-time Pixi provisioning. Discovery only reads retained receipts/locks.
+use crate::error::protocol;
 use std::collections::BTreeMap;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -69,7 +70,7 @@ impl RuntimeSpec {
                 )
             })
         {
-            return Err(Error::Protocol("invalid runtime target platforms".into()));
+            return Err(protocol("invalid runtime target platforms"));
         }
         if self.channels.is_empty()
             || self.channels.len() > 16
@@ -78,7 +79,9 @@ impl RuntimeSpec {
             || self.executables.len() > 128
             || self.executables.iter().any(|c| !name(c))
         {
-            return Err(Error::Protocol("invalid runtime channels/dependency/command limits (channels must be named or absolute local file channels)".into()));
+            return Err(protocol(
+                "invalid runtime channels/dependency/command limits (channels must be named or absolute local file channels)",
+            ));
         }
         for (package, version) in self.dependencies.iter().chain(&self.pypi_dependencies) {
             if !name(package)
@@ -86,8 +89,8 @@ impl RuntimeSpec {
                 || version.len() > 256
                 || version.chars().any(char::is_control)
             {
-                return Err(Error::Protocol(
-                    "runtime dependencies require package names and bounded version strings".into(),
+                return Err(protocol(
+                    "runtime dependencies require package names and bounded version strings",
                 ));
             }
         }
@@ -103,7 +106,7 @@ impl RuntimeSpec {
                     || check.expected.len() > 8192
             })
         {
-            return Err(Error::Protocol("invalid runtime version checks".into()));
+            return Err(protocol("invalid runtime version checks"));
         }
         if let Some(lock) = &self.lock
             && (lock.is_empty()
@@ -112,9 +115,7 @@ impl RuntimeSpec {
                     .components()
                     .any(|c| !matches!(c, std::path::Component::Normal(_))))
         {
-            return Err(Error::Protocol(
-                "runtime lock must be a package-relative path".into(),
-            ));
+            return Err(protocol("runtime lock must be a package-relative path"));
         }
         // These are shared SDK dependencies. Mixing conda and PyPI ownership of
         // them can overwrite the solver's Python/Arrow ABI choices.
@@ -124,8 +125,8 @@ impl RuntimeSpec {
                 "python" | "pyarrow" | "numpy"
             )
         }) {
-            return Err(Error::Protocol(
-                "declare Python, pyarrow and numpy constraints in runtime.dependencies".into(),
+            return Err(protocol(
+                "declare Python, pyarrow and numpy constraints in runtime.dependencies",
             ));
         }
         Ok(())
@@ -145,8 +146,8 @@ impl RuntimeSpec {
             .or_insert_with(|| "*".into());
         let platform = current_platform();
         if platform == "unsupported" || !self.supports(platform) {
-            return Err(Error::Protocol(
-                "managed plugin runtime unsupported on this platform".into(),
+            return Err(protocol(
+                "managed plugin runtime unsupported on this platform",
             ));
         }
         let value = serde_json::json!({
@@ -218,8 +219,8 @@ impl Runtime {
             || !self.root.is_absolute()
             || self.interpreter != interpreter_path(&self.root)
         {
-            return Err(Error::Protocol(
-                "invalid managed runtime prefix; reinstall the plugin".into(),
+            return Err(protocol(
+                "invalid managed runtime prefix; reinstall the plugin",
             ));
         }
         for executable in std::iter::once(self.interpreter.clone()).chain(
@@ -228,7 +229,7 @@ impl Runtime {
                 .map(|n| executable_path(&self.root, n)),
         ) {
             if !executable.metadata().is_ok_and(|m| is_executable(&m)) {
-                return Err(Error::Protocol(format!(
+                return Err(protocol(format!(
                     "managed plugin runtime executable missing or not executable: {}; reinstall the plugin",
                     executable.display()
                 )));
@@ -238,25 +239,25 @@ impl Runtime {
             if !self.executables.contains(command)
                 || hash(executable_path(&self.root, command))? != *digest
             {
-                return Err(Error::Protocol(
-                    "managed runtime executable changed; reinstall the plugin".into(),
+                return Err(protocol(
+                    "managed runtime executable changed; reinstall the plugin",
                 ));
             }
         }
         if !self.interpreter.is_file()
             || hash(self.root.join("pixi.lock")).map_err(|e| {
-                Error::Protocol(format!(
+                protocol(format!(
                     "managed runtime lock unavailable: {e}; reinstall the plugin"
                 ))
             })? != self.lock_digest
             || hash(self.root.join("pixi.toml")).map_err(|e| {
-                Error::Protocol(format!(
+                protocol(format!(
                     "managed runtime manifest unavailable: {e}; reinstall the plugin"
                 ))
             })? != self.manifest_digest
         {
-            return Err(Error::Protocol(
-                "managed plugin runtime missing or changed; reinstall the plugin".into(),
+            return Err(protocol(
+                "managed plugin runtime missing or changed; reinstall the plugin",
             ));
         }
         Ok(())
@@ -366,9 +367,7 @@ pub fn provision_with(
     let frozen_lock_digest = if let Some(lock) = &spec.lock {
         let source = manifest.dir.join(lock).canonicalize()?;
         if !source.starts_with(manifest.dir.canonicalize()?) {
-            return Err(Error::Protocol(
-                "runtime lock escapes plugin package".into(),
-            ));
+            return Err(protocol("runtime lock escapes plugin package"));
         }
         std::fs::copy(source, pending.path().join("pixi.lock"))?;
         Some(basecraft_io::hash_file(&pending.path().join("pixi.lock"))?)
@@ -406,14 +405,12 @@ pub fn provision_with(
     if let Some(digest) = frozen_lock_digest
         && digest != basecraft_io::hash_file(&pending.path().join("pixi.lock"))?
     {
-        return Err(Error::Protocol(
-            "frozen runtime lock changed during installation".into(),
-        ));
+        return Err(protocol("frozen runtime lock changed during installation"));
     }
     let interpreter = interpreter_path(pending.path());
     if !interpreter.is_file() {
-        return Err(Error::Protocol(
-            "Pixi did not install the declared plugin interpreter".into(),
+        return Err(protocol(
+            "Pixi did not install the declared plugin interpreter",
         ));
     }
     let mut verify = Command::new(&interpreter);
@@ -477,8 +474,7 @@ fn checked(command: &mut Command, timeout: Duration, label: &str) -> Result<()> 
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child =
-        OwnedProcess::spawn(command).map_err(|e| Error::Protocol(format!("{label}: {e}")))?;
+    let mut child = OwnedProcess::spawn(command).map_err(|e| protocol(format!("{label}: {e}")))?;
     let output = std::sync::Arc::new(std::sync::Mutex::new(
         crate::process::CapturedOutput::default(),
     ));
@@ -501,7 +497,7 @@ fn checked(command: &mut Command, timeout: Duration, label: &str) -> Result<()> 
     while !child.exited()? {
         if start.elapsed() >= timeout {
             child.terminate();
-            return Err(Error::Protocol(format!(
+            return Err(protocol(format!(
                 "{label} timed out; prior installation unchanged"
             )));
         }
@@ -522,7 +518,7 @@ fn checked(command: &mut Command, timeout: Duration, label: &str) -> Result<()> 
         let output = output
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        return Err(Error::Protocol(format!(
+        return Err(protocol(format!(
             "{label} failed ({status}): {}",
             String::from_utf8_lossy(&output.stderr[..output.stderr.len().min(8192)]).to_string()
                 + &String::from_utf8_lossy(&output.stdout[..output.stdout.len().min(8192)])

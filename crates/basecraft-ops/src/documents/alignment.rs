@@ -6,7 +6,7 @@ use basecraft_protocol::{DocState, Op};
 
 use super::Document;
 use crate::Result;
-use crate::error::invalid;
+use crate::error::{invalid, unsupported};
 use crate::files::{self, Format, HashingWriter, OpenedAlignment};
 use crate::session::{Inverse, normalise};
 
@@ -87,7 +87,7 @@ impl Document for OpenedAlignment {
         match inverse {
             Inverse::Alignment(steps) => self.doc.undo(steps),
             Inverse::Alphabet(before) => self.doc.set_alphabet(before.clone()),
-            _ => return Err(invalid("undo of the wrong kind of edit")),
+            _ => return Err(unsupported("undo of the wrong kind of edit")),
         }
         Ok(())
     }
@@ -101,7 +101,9 @@ impl Document for OpenedAlignment {
         _publication: &super::WritePublication,
     ) -> Result<super::PreparedWrite> {
         if format != self.format {
-            return Err(invalid("saving to a different format isn't supported yet"));
+            return Err(unsupported(
+                "saving to a different format isn't supported yet",
+            ));
         }
         let mut prepared = super::PreparedWrite::default();
         let hash = prepared.push(target, |w| files::write_alignment(&self.doc, w))?;

@@ -22,6 +22,9 @@ pub enum Error {
     /// A table or spreadsheet that can't be read as one.
     #[error("{0}")]
     Table(String),
+    /// A table or spreadsheet over basecraft's size limits for import.
+    #[error("{0}")]
+    TooLarge(String),
     #[error("index cache entry {0} is unreadable")]
     BadCache(PathBuf),
 }

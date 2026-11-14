@@ -1,6 +1,7 @@
 //! Tree–alignment links: the linked file by path, size, modification time
 //! and hash, with no copy (D25), or the exact input of the run that inferred
 //! the tree.
+use crate::error::damaged;
 use crate::{Result, error::invalid};
 use basecraft_docs::TreeDoc;
 use std::{
@@ -105,10 +106,10 @@ fn previous_metadata(path: &Path) -> Result<PreviousMetadata> {
             Ok(PreviousMetadata::Symlink(std::fs::read_link(path)?))
         }
         Ok(metadata) if metadata.is_file() => Ok(PreviousMetadata::File(std::fs::read(path)?)),
-        Ok(_) => Err(crate::Error::Damaged {
-            path: path.to_path_buf(),
-            detail: format!("association metadata is not a file: {}", path.display()),
-        }),
+        Ok(_) => Err(damaged(
+            path,
+            format!("association metadata is not a file: {}", path.display()),
+        )),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(PreviousMetadata::Absent),
         Err(error) => Err(error.into()),
     }
@@ -247,9 +248,9 @@ impl PreparedLinks {
             }
             Ok((result, outputs))
         };
-        finish().map_err(|error| crate::Error::Damaged { path: recovery_path.clone(), detail: format!(
+        finish().map_err(|error| damaged(recovery_path.clone(), format!(
             "Save As incomplete; alignment association may be unavailable; recovery metadata at {}: {error}", recovery_path.display()
-        ) })
+        )))
     }
 }
 

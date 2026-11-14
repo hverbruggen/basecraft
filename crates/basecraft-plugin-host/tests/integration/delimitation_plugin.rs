@@ -419,12 +419,16 @@ fn tree_methods_update_one_canonical_spart_and_export_without_sources() {
     }
     // A second workspace never replaces the canonical one.
     let before = std::fs::read(&canonical).unwrap();
-    let refused = common::refused_in(&registry, &mut session, |s| {
+    let (code, refused) = common::refused_in(&registry, &mut session, |s| {
         json!({"operation":"basecraft.delimitation/workspace_tree@1",
             "inputs":{"tree":common::document(s, input)},
             "parameters":{},"destinations":{"workspace":"species.spart"}})
     });
-    assert!(refused.contains("output_conflict"), "{refused}");
+    assert_eq!(
+        code,
+        basecraft_protocol::operation::OperationErrorCode::OutputConflict,
+        "{refused}"
+    );
     assert_eq!(before, std::fs::read(&canonical).unwrap());
     let issues = basecraft_ops::records::verify(&canonical, None).unwrap();
     assert!(issues.is_empty(), "{issues:?}");

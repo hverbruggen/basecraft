@@ -140,7 +140,7 @@ fn a_mixed_alignment_is_refused_before_launch() {
     .unwrap();
     let mut session = Session::new(root);
     let doc = session.open(&file).unwrap();
-    let error = common::refused_in(&common::bundled(), &mut session, |s| {
+    let (_, error) = common::refused_in(&common::bundled(), &mut session, |s| {
         json!({"operation":"basecraft.fasttree/tree@1","inputs":{"alignment":common::document(s, doc)},
             "parameters":{},"destinations":{"artifacts/tree.nwk":"mixed.fasttree.nwk"}})
     });

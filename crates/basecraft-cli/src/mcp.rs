@@ -2,6 +2,7 @@
 //! Documents remain in one headless session. This does not attach to a GUI.
 use basecraft_ops::{DocId, Session};
 use basecraft_protocol::facts::Alphabet;
+use basecraft_protocol::operation::OperationErrorCode as Code;
 use basecraft_protocol::{Actor, Op};
 use serde_json::{Value, json};
 use std::{
@@ -11,6 +12,11 @@ use std::{
 };
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+/// A refusal MCP callers act on by its code.
+fn refused(code: Code, message: &str) -> Box<dyn std::error::Error> {
+    basecraft_plugin_host::Error::refused(code, message).into()
+}
 
 /// Who drives this MCP session. Edits are recorded with the matching actor
 /// kind; the client name is also the initiator of operation runs.
@@ -178,9 +184,10 @@ impl Server {
                 ))
                 .into());
             }
-            return Err(
-                "permission_denied: This server is read-only; start it with --allow-writes to enable edits".into(),
-            );
+            return Err(refused(
+                Code::PermissionDenied,
+                "This server is read-only; start it with --allow-writes to enable edits",
+            ));
         }
         match name {
             "open" => {
@@ -354,10 +361,10 @@ impl Server {
                     .as_u64()
                     .ok_or("Provide the document version you inspected")?;
                 if self.state(doc)?["version"] != version {
-                    return Err(
-                        "stale_revision: Document version changed; inspect it again before editing"
-                            .into(),
-                    );
+                    return Err(refused(
+                        Code::StaleRevision,
+                        "Document version changed; inspect it again before editing",
+                    ));
                 }
                 let op: Op = serde_json::from_value(args["operation"].clone())?;
                 basecraft_ops::renames::apply_op(&mut self.session, doc, op)?;
@@ -369,7 +376,10 @@ impl Server {
                     .as_u64()
                     .ok_or("Provide the document version you inspected")?;
                 if version != self.session.revision(doc)? {
-                    return Err("stale_revision: Document version changed; inspect it again before extraction".into());
+                    return Err(refused(
+                        Code::StaleRevision,
+                        "Document version changed; inspect it again before extraction",
+                    ));
                 }
                 let target = self.path(text(args, "path")?)?;
                 if target.try_exists()? {
@@ -894,14 +904,12 @@ fn core_error_code(
     error: &(dyn std::error::Error + 'static),
 ) -> basecraft_protocol::operation::OperationErrorCode {
     if let Some(error) = error.downcast_ref::<basecraft_ops::Error>() {
-        return basecraft_plugin_host::jobs::ops_error_code(error);
+        return error.operation_code();
     }
     if let Some(error) = error.downcast_ref::<basecraft_plugin_host::Error>() {
         return basecraft_plugin_host::jobs::error_code(error);
     }
-    basecraft_plugin_host::jobs::error_code(&basecraft_plugin_host::Error::Protocol(
-        error.to_string(),
-    ))
+    Code::InvalidArguments
 }
 
 fn structured(value: Value, failed: bool) -> Value {
@@ -1093,11 +1101,7 @@ pub fn serve(root: &Path, writable: bool, kind: ClientKind, model: &str) -> Resu
                                     Err(error) => structured(
                                         basecraft_plugin_host::jobs::error_value(
                                             "basecraft.host",
-                                            if error.to_string() == "unknown operation" {
-                                                OperationErrorCode::PluginUnavailable
-                                            } else {
-                                                OperationErrorCode::InvalidArguments
-                                            },
+                                            core_error_code(error.as_ref()),
                                             error.to_string(),
                                         ),
                                         true,
@@ -1106,8 +1110,9 @@ pub fn serve(root: &Path, writable: bool, kind: ClientKind, model: &str) -> Resu
                             }
                             let job = || {
                                 args["job"].as_str().ok_or_else(|| {
-                                    basecraft_plugin_host::Error::Protocol(
-                                        "invalid_arguments: missing string job".into(),
+                                    basecraft_plugin_host::Error::refused(
+                                        Code::InvalidArguments,
+                                        "missing string job",
                                     )
                                 })
                             };
