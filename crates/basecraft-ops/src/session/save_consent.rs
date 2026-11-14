@@ -340,33 +340,21 @@ impl PendingSaveCheck {
 }
 
 // Unsafe/unreadable destinations remain actual target errors, never waivable issues.
+/// The target's hash, read between two equal change stamps; none for a new file.
 pub(crate) fn target_revision(target: &Path) -> Result<Option<TargetRevision>> {
-    Ok(match std::fs::symlink_metadata(target) {
-        Ok(metadata) => {
-            if !metadata.is_file() && !metadata.file_type().is_symlink() {
-                return Err(crate::Error::Unsupported(
-                    "save target must be an ordinary file".into(),
-                ));
-            }
-            let stamp = crate::records::save_guard::change_stamp(target)?.ok_or_else(|| {
-                crate::Error::ChangedOnDisk {
-                    path: target.into(),
-                }
-            })?;
-            let hash = basecraft_io::hash_file(target)?;
-            if crate::records::save_guard::change_stamp(target)?.as_ref() != Some(&stamp) {
-                return Err(crate::Error::ChangedOnDisk {
-                    path: target.into(),
-                });
-            }
-            Some(TargetRevision {
-                hash,
-                stamp: stamp.0,
-            })
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => return Err(error.into()),
-    })
+    let Some(stamp) = crate::records::save_guard::change_stamp(target)? else {
+        return Ok(None);
+    };
+    let hash = basecraft_io::hash_file(target)?;
+    if crate::records::save_guard::change_stamp(target)?.as_ref() != Some(&stamp) {
+        return Err(crate::Error::ChangedOnDisk {
+            path: target.into(),
+        });
+    }
+    Ok(Some(TargetRevision {
+        hash,
+        stamp: stamp.0,
+    }))
 }
 
 /// Known-evidence writes are separate effects. An incomplete action may have

@@ -245,14 +245,17 @@ pub(crate) const BATCH_LIMIT: u64 = 8 << 20;
 fn encode(entries: &[LogEntry], sequence: u64) -> Result<Vec<u8>> {
     let mut line = Vec::new();
     for (offset, entry) in entries.iter().enumerate() {
-        let value = serde_json::to_value(entry)?;
+        // The checksum covers the entry's sorted compact JSON; the envelope's
+        // fields then join the same object, so the entry is built once.
+        let mut value = serde_json::to_value(entry)?;
         let checksum = basecraft_io::hash_bytes(&serde_json::to_vec(&value)?);
-        let value = serde_json::to_value(basecraft_protocol::records::JournalEntry {
-            basecraft: basecraft_protocol::records::writing_version(),
-            checksum,
-            sequence: sequence + offset as u64,
-            entry: value,
-        })?;
+        let fields = value.as_object_mut().expect("a journal entry is an object");
+        fields.insert("_checksum".into(), checksum.into());
+        fields.insert("_sequence".into(), (sequence + offset as u64).into());
+        fields.insert(
+            basecraft_protocol::records::WRITTEN_BY.into(),
+            basecraft_protocol::records::writing_version().into(),
+        );
         serde_json::to_writer(&mut line, &value)?;
         line.push(b'\n');
         if line.len() as u64 > BATCH_LIMIT {

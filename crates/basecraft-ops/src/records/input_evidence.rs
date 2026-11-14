@@ -294,6 +294,8 @@ impl EvidenceCheck {
 struct Inspection {
     observations: BTreeMap<PathBuf, String>,
     issues: Vec<InspectionIssue>,
+    /// Each run's result name, read once per check.
+    names: BTreeMap<PathBuf, String>,
 }
 
 impl Inspection {
@@ -343,6 +345,15 @@ impl Inspection {
     }
 
     fn name(&mut self, run: &Path) -> String {
+        if let Some(name) = self.names.get(run) {
+            return name.clone();
+        }
+        let name = self.read_name(run);
+        self.names.insert(run.to_path_buf(), name.clone());
+        name
+    }
+
+    fn read_name(&mut self, run: &Path) -> String {
         let path = run.join("run.json");
         let result = self.record(&path).and_then(|bytes| {
             let value: serde_json::Value = basecraft_protocol::records::decode(&bytes)?;
@@ -542,13 +553,13 @@ fn write_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
 
 /// Lock files only coordinate running processes and hold no data. Deleting
 /// the folder while basecraft is closed loses nothing. A key's lock is one
-/// of a fixed table of 4,096 files chosen by its hash, so the folder never grows
+/// of a fixed table of 65,536 files chosen by its hash, so the folder never grows
 /// past it; keys that share a file wait for each other.
 fn lock_path(key: &Path) -> Result<PathBuf> {
     let paths =
         basecraft_platform::paths::AppPaths::discover().map_err(|e| invalid(e.to_string()))?;
     let key = basecraft_io::hash_bytes(key.as_os_str().as_encoded_bytes());
-    Ok(paths.state.join("locks").join(&key["b3:".len()..][..3]))
+    Ok(paths.state.join("locks").join(&key["b3:".len()..][..4]))
 }
 
 fn open_lock(path: &Path) -> Result<std::fs::File> {

@@ -175,10 +175,11 @@ impl Session {
 
         // 3. Stage every file and the recovery intent; nothing is replaced yet.
         self.track(id)?;
+        let format = self.save_format(id, &target.path)?;
         let mut prepared = self.docs[id.0].content.as_document().prepare_write(
             self.companion_project(),
             &target.path,
-            self.save_format(id, &target.path)?,
+            format,
             &self.storage_root,
             &self.write_publication,
         )?;
@@ -196,7 +197,7 @@ impl Session {
 
         // 4. Nothing changed while staging, then replace and record.
         self.recheck_before_write(id, &target, consented.as_ref(), stamps, before.as_ref())?;
-        let outcome = self.save_inner(id, target.save_as.as_deref(), prepared, before.is_none());
+        let outcome = self.save_inner(id, &target.path, format, prepared, before.is_none());
         self.finish_save(
             id,
             &target.path,
@@ -487,14 +488,11 @@ impl Session {
             if review || own {
                 self.docs[id.0].saved_at = Some(self.docs[id.0].mark());
             }
-            self.docs[id.0].saved_target = Some((
-                target.to_path_buf(),
-                crate::records::input_evidence::stamp(target)?,
-                expected[0].clone(),
-            ));
+            let stamp = crate::records::input_evidence::stamp(target)?;
             if own {
-                self.docs[id.0].disk_stamp = crate::records::input_evidence::stamp(target)?;
+                self.docs[id.0].disk_stamp = stamp.clone();
             }
+            self.docs[id.0].saved_target = Some((target.to_path_buf(), stamp, expected[0].clone()));
             if self.log.is_some() {
                 #[cfg(test)]
                 super::save_failure_tests::fail_write(
@@ -602,21 +600,19 @@ impl Session {
         Ok(())
     }
 
-    pub(super) fn save_inner(
+    /// Replace the files staged in `prepared` and record the save. The
+    /// caller has tracked the document and checked the target.
+    fn save_inner(
         &mut self,
         id: DocId,
-        path: Option<&Path>,
+        target: &Path,
+        format: files::Format,
         prepared: crate::documents::PreparedWrite,
         create: bool,
     ) -> Result<()> {
-        let target = path.map_or_else(|| self.resolve(&self.docs[id.0].key), Path::to_path_buf);
-        // An unchanged ordinary save neither rewrites data nor creates history.
-
-        self.track(id)?;
-        let format = self.save_format(id, &target)?;
         let original = self.resolve(&self.docs[id.0].key);
         let document = self.docs[id.0].content.as_document();
-        let links = document.prepare_links(self.companion_project(), &original, &target, format)?;
+        let links = document.prepare_links(self.companion_project(), &original, target, format)?;
         let publication = if create
             && matches!(
                 self.write_publication,
@@ -628,7 +624,7 @@ impl Session {
         };
         #[cfg(test)]
         super::save_failure_tests::fail_write(super::save_failure_tests::WriteStep::Replace)?;
-        let write = || document.publish_write(prepared, &target, publication);
+        let write = || document.publish_write(prepared, target, publication);
         let (hashes, outputs) = if let Some(links) = links {
             links.publish(write)?
         } else {
@@ -638,7 +634,7 @@ impl Session {
             .into_iter()
             .map(|(path, hash)| (self.relative(&path), hash))
             .collect();
-        self.log_save(id, &target, hashes)?;
+        self.log_save(id, target, hashes)?;
         if !outputs.is_empty() {
             self.record_tool_run(
                 id,
