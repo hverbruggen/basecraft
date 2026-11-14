@@ -776,23 +776,23 @@ impl qobject::SubmissionController {
     }
 
     pub fn undo(mut self: Pin<&mut Self>) {
-        self.as_mut().history(true);
-    }
-
-    pub fn redo(mut self: Pin<&mut Self>) {
         self.as_mut().history(false);
     }
 
-    fn history(mut self: Pin<&mut Self>, undo: bool) {
+    pub fn redo(mut self: Pin<&mut Self>) {
+        self.as_mut().history(true);
+    }
+
+    fn history(mut self: Pin<&mut Self>, redo: bool) {
         let result = {
             let mut rust = self.as_mut().rust_mut();
             let (Some(doc), Some(session)) = (rust.doc, rust.session.as_mut()) else {
                 return;
             };
-            let done = if undo {
-                session.undo(doc)
-            } else {
+            let done = if redo {
                 session.redo(doc)
+            } else {
+                session.undo(doc)
             };
             done.and_then(|_| session.save(doc, None))
         };
@@ -800,7 +800,7 @@ impl qobject::SubmissionController {
             self.as_mut().save_error(&error);
         } else {
             self.as_mut()
-                .report("ok", if undo { "Undone" } else { "Redone" });
+                .report("ok", if redo { "Redone" } else { "Undone" });
         }
         self.refresh();
     }

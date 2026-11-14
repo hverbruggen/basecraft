@@ -664,17 +664,17 @@ impl qobject::MetadataController {
         )
     }
 
-    fn history(mut self: Pin<&mut Self>, undo: bool) {
+    fn history(mut self: Pin<&mut Self>, redo: bool) {
         let result = {
             let mut rust = self.as_mut().rust_mut();
             let Some(doc) = rust.doc else { return };
             let Some(session) = rust.session.as_mut() else {
                 return;
             };
-            let step = if undo {
-                session.undo(doc)
-            } else {
+            let step = if redo {
                 session.redo(doc)
+            } else {
+                session.undo(doc)
             };
             step.map(|_| session.save(doc, None))
         };
@@ -687,18 +687,18 @@ impl qobject::MetadataController {
             Ok(Ok(())) => {
                 self.as_mut().set_dirty(false);
                 self.as_mut()
-                    .report("ok", if undo { "Undone" } else { "Redone" });
+                    .report("ok", if redo { "Redone" } else { "Undone" });
             }
         }
         self.refresh();
     }
 
     pub fn undo(self: Pin<&mut Self>) {
-        self.history(true);
+        self.history(false);
     }
 
     pub fn redo(self: Pin<&mut Self>) {
-        self.history(false);
+        self.history(true);
     }
 
     pub fn header_preview(&self, file: &QString, separator: &QString) -> QString {
