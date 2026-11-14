@@ -7,7 +7,8 @@ use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
 use basecraft_protocol::export_records::{ProvenanceExportMap, ProvenanceExportMapping};
-use basecraft_protocol::provenance::{FileStamp, InputReference};
+use basecraft_protocol::input_records::EvidenceState;
+use basecraft_protocol::provenance::{ArtifactRevision, FileStamp, InputReference, Publication};
 use fs4::fs_std::FileExt;
 use serde::{Deserialize, Serialize};
 
@@ -107,14 +108,8 @@ impl Mutation {
         origin: &str,
         project: Option<&crate::project::Project>,
     ) -> Result<ArtifactRun> {
-        use basecraft_protocol::provenance::{
-            ArtifactRevision, Completeness, InputReference, Publication,
-        };
-        let run = crate::records::analysis_store::ArtifactRun::create(
-            project,
-            anchor,
-            &ulid::Ulid::generate().to_string(),
-        )?;
+        use basecraft_protocol::provenance::Completeness;
+        let run = ArtifactRun::create(project, anchor, &ulid::Ulid::generate().to_string())?;
         let source = source.canonicalize()?;
         let reservation = lock_in(project)?;
         reservation.source(&source)?;
@@ -129,12 +124,12 @@ impl Mutation {
             return Err(crate::Error::ChangedOnDisk { path: source });
         }
         let reference = InputReference {
-            path: crate::records::input_evidence::relative(run.directory(), &source)?,
+            path: relative(run.directory(), &source)?,
             stamp: captured_stamp.cloned().map_or_else(|| stamp(&source), Ok)?,
             hash: hash.into(),
             extra: BTreeMap::new(),
         };
-        let mut input = crate::records::input_evidence::SubmittedInput {
+        let mut input = SubmittedInput {
             schema_version: 1,
             source: Some(reference.clone()),
             submitted_hash: hash.into(),
@@ -153,11 +148,7 @@ impl Mutation {
         for dependency in dependencies.iter().chain(std::iter::once(&source_bundle)) {
             if let Some((record, hash)) = crate::records::provenance::latest(dependency)? {
                 upstream.push(basecraft_protocol::input_records::UpstreamLink {
-                    bundle: (crate::records::input_evidence::relative(
-                        run.directory(),
-                        dependency,
-                    )?)
-                    .into(),
+                    bundle: (relative(run.directory(), dependency)?).into(),
                     id: record.id,
                     hash,
                 });
@@ -166,7 +157,7 @@ impl Mutation {
         if !upstream.is_empty() {
             input.upstream = upstream;
         }
-        crate::records::input_evidence::write_input(run.directory(), &input)?;
+        write_input(run.directory(), &input)?;
         run.write_run(
             basecraft_protocol::records::AnalysisRunStatus::Referenced,
             anchor
@@ -174,7 +165,7 @@ impl Mutation {
                 .and_then(|n| n.to_str())
                 .map(str::to_owned),
         )?;
-        crate::records::input_evidence::register(&run)?;
+        register(&run)?;
         let publication = Publication {
             schema_version: 1,
             id: run.id().into(),
@@ -506,8 +497,7 @@ fn validate_input(run: &Path, bytes: &[u8]) -> Result<SubmittedInput> {
         return Err(unsupported("unsupported submitted input evidence"));
     }
     if matches!(record.state.as_str(), "referenced" | "preserved") && record.source.is_none()
-        || record.state == basecraft_protocol::input_records::EvidenceState::Generated
-            && record.source.is_some()
+        || record.state == EvidenceState::Generated && record.source.is_some()
     {
         return Err(damaged(
             run.join("input.json"),
@@ -845,10 +835,10 @@ pub(crate) fn registered_run(id: &str, expected: &str, near: &Path) -> Result<Pa
         }
         ArtifactRun::validate_store(&store)?;
         for directory in [store.join("runs"), run.clone()] {
-            let metadata = std::fs::symlink_metadata(directory)?;
-            if !metadata.is_dir() || metadata.file_type().is_symlink() {
-                return Err(damaged(&run, "Unsafe registered input run"));
-            }
+            crate::records::analysis_store::ordinary_folder(
+                &directory,
+                "Unsafe registered input run",
+            )?;
         }
         if basecraft_io::hash_file(&record)? != expected {
             return Err(damaged(record, "Registered input run checksum differs"));
@@ -1114,10 +1104,7 @@ fn scan_run(
     let input = inspection.input(&run)?;
     let mut analysis = None;
     let proposal_target = input.proposal_target == Some(true);
-    let source_matches = if input.state
-        == basecraft_protocol::input_records::EvidenceState::Referenced
-        && !proposal_target
-    {
+    let source_matches = if input.state == EvidenceState::Referenced && !proposal_target {
         input.source.as_ref().is_some_and(|reference| {
             if same_source(&run, reference, target) {
                 return true;
@@ -1449,7 +1436,7 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
                     let destination = affected.run.join("preserved-input");
                     // A public retry must never touch the live source or replace
                     // retained bytes. The owning ledger may have advanced already.
-                    if input.state == basecraft_protocol::input_records::EvidenceState::Preserved {
+                    if input.state == EvidenceState::Preserved {
                         let (owner, retained) = owning_ledger(&affected.run)?;
                         let effective = retained
                             .source
@@ -1459,7 +1446,7 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
                         preserved.insert(reference.hash.clone(), owner);
                         continue;
                     }
-                    if input.state != basecraft_protocol::input_records::EvidenceState::Referenced {
+                    if input.state != EvidenceState::Referenced {
                         return Err(outdated(
                             "input evidence changed; refresh the save decision",
                         ));
@@ -1591,7 +1578,7 @@ pub fn verified_source(bundle: &Path, reference: &InputReference) -> Result<Path
 
 pub(crate) fn source_location(bundle: &Path, reference: &InputReference) -> Result<PathBuf> {
     let (mut location, mut input) = owning_ledger(bundle)?;
-    if input.state == basecraft_protocol::input_records::EvidenceState::Broken {
+    if input.state == EvidenceState::Broken {
         return Err(damaged(location, "evidence chain explicitly broken"));
     }
     let primary_matches = input.source.as_ref().is_some_and(|source| {
@@ -1617,7 +1604,7 @@ pub(crate) fn source_location(bundle: &Path, reference: &InputReference) -> Resu
         }) {
             // Check every declared matching owner before selecting one: an
             // intact same-hash sibling must not hide an explicit evidence break.
-            if candidate.state == basecraft_protocol::input_records::EvidenceState::Broken {
+            if candidate.state == EvidenceState::Broken {
                 return Err(damaged(owner, "evidence chain explicitly broken"));
             }
             if matching.is_none() {
@@ -1636,7 +1623,7 @@ pub(crate) fn source_location(bundle: &Path, reference: &InputReference) -> Resu
     if effective.hash != reference.hash {
         return Err(damaged(location, "input reference identity changed"));
     }
-    let path = if input.state == basecraft_protocol::input_records::EvidenceState::Preserved {
+    let path = if input.state == EvidenceState::Preserved {
         location.join("preserved-input")
     } else {
         location.join(&effective.path)
@@ -1677,9 +1664,7 @@ pub fn relink(bundle: &Path, original: &Path) -> Result<()> {
             continue;
         }
         let mut ledger = read_input(&directory)?;
-        if ledger.state == basecraft_protocol::input_records::EvidenceState::Broken
-            || ledger.origin_run.is_some()
-        {
+        if ledger.state == EvidenceState::Broken || ledger.origin_run.is_some() {
             continue;
         }
         let Some(source) = ledger.source.as_mut() else {
@@ -1978,21 +1963,19 @@ pub fn package(
         )?;
         paths.push(canonical);
         for path in paths {
-            publication
-                .outputs
-                .push(basecraft_protocol::provenance::ArtifactRevision {
-                    id: format!(
-                        "{}:package-link:{}",
-                        publication.id,
-                        publication.outputs.len()
-                    ),
-                    // Link records live in the package's .basecraft.
-                    logical_name: in_package(&path)?,
-                    hash: basecraft_io::hash_file(&path)?,
-                    size: std::fs::metadata(&path)?.len(),
-                    retained: None,
-                    reference: None,
-                });
+            publication.outputs.push(ArtifactRevision {
+                id: format!(
+                    "{}:package-link:{}",
+                    publication.id,
+                    publication.outputs.len()
+                ),
+                // Link records live in the package's .basecraft.
+                logical_name: in_package(&path)?,
+                hash: basecraft_io::hash_file(&path)?,
+                size: std::fs::metadata(&path)?.len(),
+                retained: None,
+                reference: None,
+            });
         }
     }
     publication.origin = format!(
@@ -2021,11 +2004,7 @@ pub fn package(
 }
 
 /// Copy checked bytes into the package's content-addressed artifact directory.
-fn materialize(
-    directory: &Path,
-    target: &Path,
-    artifact: &mut basecraft_protocol::provenance::ArtifactRevision,
-) -> Result<()> {
+fn materialize(directory: &Path, target: &Path, artifact: &mut ArtifactRevision) -> Result<()> {
     let (source, referenced) = match (&artifact.reference, &artifact.retained) {
         (Some(reference), _) => (verified_source(directory, reference)?, true),
         (None, Some(retained)) => (directory.join(retained), false),
@@ -2054,8 +2033,6 @@ fn materialize(
 type RecordKey = (PathBuf, String);
 /// A publication and the bytes it was read from.
 type ReadRecord = (Publication, Vec<u8>);
-type Publication = basecraft_protocol::provenance::Publication;
-type ArtifactRevision = basecraft_protocol::provenance::ArtifactRevision;
 
 /// Bounded, iterative postorder traversal of each bundle's parent graph. Export
 /// records are explicit relocations, while original immutable JSON stays intact
@@ -2208,9 +2185,7 @@ fn copy(source: &Path, destination: &Path) -> Result<()> {
 /// Walk only declared immutable ancestor records. No ancestor input is copied.
 /// The mutable evidence ledger stays in its owning run so later preservation or
 /// explicit evidence-break decisions remain visible to descendants.
-pub(crate) fn ancestors(
-    bundle: &Path,
-) -> Result<Vec<(PathBuf, basecraft_protocol::provenance::Publication)>> {
+pub(crate) fn ancestors(bundle: &Path) -> Result<Vec<(PathBuf, Publication)>> {
     let mut stack = vec![(bundle.to_path_buf(), false)];
     let mut states = std::collections::HashMap::new();
     let mut seen_records = std::collections::HashSet::new();
@@ -2261,9 +2236,8 @@ pub(crate) fn ancestors(
             if reference.hash != basecraft_io::hash_bytes(&bytes) {
                 return Err(damaged(path, "ancestor record hash differs"));
             }
-            let publication: basecraft_protocol::provenance::Publication =
-                basecraft_protocol::records::decode(&bytes)
-                    .map_err(|e| damaged(&path, e.to_string()))?;
+            let publication: Publication = basecraft_protocol::records::decode(&bytes)
+                .map_err(|e| damaged(&path, e.to_string()))?;
             if publication.schema_version != 1 {
                 return Err(unsupported("unsupported ancestor record"));
             }
@@ -2319,14 +2293,14 @@ pub(crate) fn link_generated_input_locked(
     for dependency in dependencies {
         let (publication, hash) = crate::records::provenance::latest_record(dependency)?;
         upstream.push(basecraft_protocol::input_records::UpstreamLink {
-            bundle: (crate::records::input_evidence::relative(run.directory(), dependency)?).into(),
+            bundle: (relative(run.directory(), dependency)?).into(),
             id: publication.id,
             hash,
         });
     }
-    crate::records::input_evidence::write_input(
+    write_input(
         run.directory(),
-        &crate::records::input_evidence::SubmittedInput {
+        &SubmittedInput {
             schema_version: 1,
             source: None,
             submitted_hash: basecraft_io::hash_bytes(payload),
