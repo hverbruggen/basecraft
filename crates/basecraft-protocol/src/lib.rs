@@ -29,6 +29,7 @@ pub mod records;
 pub mod report_records;
 pub mod sanger;
 pub mod sanger_records;
+pub mod schemas;
 pub mod submission;
 pub mod submission_records;
 pub mod tree;
