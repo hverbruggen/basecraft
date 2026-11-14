@@ -1,7 +1,5 @@
 //! Real argv project prelude and existing project-owner preservation.
-use crate::{
-    app_bridge, application, application_test_bridge, bridge, metadata_bridge, submission_bridge,
-};
+use crate::{application, application_test_bridge, bridge, metadata_bridge, submission_bridge};
 use cxx_qt::{QObject, Threading, casting::Downcast};
 use cxx_qt_lib::{QByteArray, QQmlApplicationEngine, QString, QUrl};
 use std::{
@@ -55,7 +53,7 @@ pub fn run(folder: &Path) {
     bridge::qobject::configure_canvas_graphics();
     let mut app = application::new(&std::env::args().collect::<Vec<_>>(), true);
     let mut app = app.as_mut().unwrap();
-    app_bridge::barriers::configure(
+    crate::open_hooks::hold(
         folder.join("A/sequence.gb").to_string_lossy().into_owned(),
         String::new(),
     );
@@ -163,7 +161,7 @@ pub fn run(folder: &Path) {
             submission.open_identity().unwrap(),
         )
     };
-    app_bridge::barriers::release_and_wait();
+    crate::open_hooks::release_and_wait();
     assert_eq!(app.as_mut().exec(), 0, "real argv dispatcher");
     // SAFETY: engine still owns the captured root and children; event processing
     // has stopped and no references escape this test.
@@ -191,7 +189,7 @@ pub fn run(folder: &Path) {
         "canvas completion cleared project-owner history"
     );
     assert_eq!(
-        app_bridge::testing::take().len(),
+        crate::open_hooks::take_admissions().len(),
         2,
         "legacy metadata/submission created a canvas candidate"
     );

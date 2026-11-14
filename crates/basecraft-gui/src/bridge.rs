@@ -987,21 +987,6 @@ impl qobject::GenomeController {
         self.install_opened(candidate)
     }
 
-    #[cfg(test)]
-    pub(crate) fn open_identity(&self) -> Option<(String, DocId, u64, u64)> {
-        let session = self.rust().session.as_ref()?;
-        let doc = self.rust().doc?;
-        if !session.is_open(doc) {
-            return None;
-        }
-        Some((
-            session.id().into(),
-            doc,
-            session.generation(doc).unwrap(),
-            session.revision(doc).unwrap(),
-        ))
-    }
-
     pub(crate) fn install_opened(
         mut self: Pin<&mut Self>,
         candidate: crate::document_open::Candidate,
