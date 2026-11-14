@@ -1101,10 +1101,12 @@ pub fn package(
     }
     let issues = verify(result, project)?;
     if !issues.is_empty() {
-        return Err(invalid(issues.join("; ")));
+        return Err(crate::error::damaged(result, issues.join("; ")));
     }
     if destination.exists() {
-        return Err(invalid("package destination already exists"));
+        return Err(crate::Error::OutputConflict(
+            "package destination already exists".into(),
+        ));
     }
     let parent = destination
         .parent()

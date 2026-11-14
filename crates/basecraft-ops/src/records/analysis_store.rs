@@ -9,7 +9,10 @@ use std::{
 
 use basecraft_protocol::records::{StoreFormat, StoreMarker};
 
-use crate::{Result, error::invalid};
+use crate::{
+    Error, Result,
+    error::{damaged, invalid, limit, unsupported},
+};
 
 #[derive(Clone, Debug)]
 pub struct ArtifactRun {
@@ -29,10 +32,7 @@ fn component(name: &str) -> Result<()> {
 fn directory(path: &Path) -> Result<()> {
     match std::fs::symlink_metadata(path) {
         Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => Ok(()),
-        Ok(_) => Err(invalid(format!(
-            "unsafe artifact directory: {}",
-            path.display()
-        ))),
+        Ok(_) => Err(damaged(path, "unsafe artifact directory")),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             std::fs::create_dir(path)?;
             Ok(())
@@ -44,7 +44,7 @@ fn directory(path: &Path) -> Result<()> {
 impl ArtifactRun {
     /// Enumerate owned runs without creating storage. Exceeding the bound is an
     /// explicit incomplete query, never a silently truncated inventory.
-    pub fn runs_for_anchor(anchor: &Path, limit: usize) -> Result<Vec<PathBuf>> {
+    pub fn runs_for_anchor(anchor: &Path, bound: usize) -> Result<Vec<PathBuf>> {
         let parent = anchor
             .parent()
             .filter(|path| !path.as_os_str().is_empty())
@@ -55,7 +55,7 @@ impl ArtifactRun {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(error) => return Err(error.into()),
             Ok(metadata) if !metadata.is_dir() || metadata.file_type().is_symlink() => {
-                return Err(invalid("unsafe analysis metadata directory"));
+                return Err(damaged(hidden, "unsafe analysis metadata directory"));
             }
             Ok(_) => {}
         }
@@ -67,19 +67,17 @@ impl ArtifactRun {
         let runs = store.join("runs");
         let metadata = std::fs::symlink_metadata(&runs)?;
         if !metadata.is_dir() || metadata.file_type().is_symlink() {
-            return Err(invalid("unsafe analysis runs directory"));
+            return Err(damaged(runs, "unsafe analysis runs directory"));
         }
         let mut found = Vec::new();
-        for (index, entry) in std::fs::read_dir(runs)?.enumerate() {
-            if index >= limit {
-                return Err(invalid(
-                    "analysis run lookup limit exceeded; inventory incomplete",
-                ));
+        for (index, entry) in std::fs::read_dir(&runs)?.enumerate() {
+            if index >= bound {
+                return Err(limit("analysis runs listed", bound as u64));
             }
             let entry = entry?;
             let metadata = entry.file_type()?;
             if metadata.is_symlink() {
-                return Err(invalid("symlink in owned analysis runs"));
+                return Err(damaged(entry.path(), "symlink in owned analysis runs"));
             }
             if metadata.is_dir() {
                 found.push(entry.path());
@@ -146,18 +144,21 @@ impl ArtifactRun {
     pub fn validate_store(store: &Path) -> Result<()> {
         let metadata = std::fs::symlink_metadata(store)?;
         if !metadata.is_dir() || metadata.file_type().is_symlink() {
-            return Err(invalid("analysis namespace is not an ordinary directory"));
+            return Err(damaged(
+                store,
+                "analysis namespace is not an ordinary directory",
+            ));
         }
         let marker = store.join("store.json");
         let metadata = std::fs::symlink_metadata(&marker)?;
         if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 4096 {
-            return Err(invalid("analysis namespace has an unsafe marker"));
+            return Err(damaged(marker, "analysis namespace has an unsafe marker"));
         }
         let (value, writer) = basecraft_protocol::records::decode_written::<serde_json::Value>(
             &std::fs::read(marker)?,
         )?;
         if value["format"] != "basecraft.analysis-store" || value["schema_version"] != 1 {
-            return Err(invalid(format!(
+            return Err(unsupported(format!(
                 "foreign or unsupported analysis namespace; nothing was migrated ({})",
                 basecraft_protocol::records::other_format(&writer, &value["schema_version"], 1)
             )));
@@ -171,6 +172,10 @@ impl ArtifactRun {
     }
     pub fn directory(&self) -> &Path {
         &self.directory
+    }
+    /// The store holding this run, `<store>/runs/<id>`.
+    pub(crate) fn store(&self) -> &Path {
+        self.directory.ancestors().nth(2).unwrap_or(&self.directory)
     }
     /// The file `name` in the run folder.
     pub fn artifact(&self, name: &str) -> Result<PathBuf> {
@@ -243,16 +248,12 @@ impl ArtifactRun {
         let source = self.staging(name)?;
         let metadata = std::fs::symlink_metadata(&source)?;
         if !metadata.is_file() || metadata.file_type().is_symlink() {
-            return Err(invalid("staged artifact must be an ordinary file"));
+            return Err(unsupported("staged artifact must be an ordinary file"));
         }
         basecraft_platform::files::sync_file(&source)?;
         let destination = self.artifact(name)?;
         std::fs::hard_link(&source, &destination)?;
-        basecraft_platform::files::sync_directory(
-            destination
-                .parent()
-                .ok_or_else(|| invalid("artifact has no parent"))?,
-        )?;
+        basecraft_platform::files::sync_directory(&self.directory)?;
         // Keep the pending hardlink if cleanup fails; publication already succeeded.
         let _ = std::fs::remove_file(source);
         Ok(destination)
@@ -312,7 +313,7 @@ impl ArtifactRun {
         let absolute = parent.join(
             result
                 .file_name()
-                .ok_or_else(|| invalid("result filename missing"))?,
+                .ok_or_else(|| Error::NoFileName(result.into()))?,
         );
         let base = records_base(project, &absolute)?;
         let relative = absolute
@@ -331,36 +332,41 @@ impl ArtifactRun {
             }
             Err(error) => return Err(error.into()),
             Ok(metadata) if !metadata.is_file() || metadata.file_type().is_symlink() => {
-                return Err(invalid("unsafe result binding"));
+                return Err(damaged(binding, "unsafe result binding"));
             }
             Ok(_) => {}
         }
         if std::fs::symlink_metadata(&hidden)?.file_type().is_symlink() {
-            return Err(invalid("hidden analysis directory is a symlink"));
+            return Err(damaged(hidden, "hidden analysis directory is a symlink"));
         }
         Self::validate_store(&store)?;
         for directory in [store.join("bindings"), store.join("runs")] {
             let metadata = directory.symlink_metadata()?;
             if !metadata.is_dir() || metadata.file_type().is_symlink() {
-                return Err(invalid("unsafe analysis binding namespace"));
+                return Err(damaged(directory, "unsafe analysis binding namespace"));
             }
         }
         let bound: basecraft_protocol::records::ResultBinding =
             basecraft_protocol::records::decode(&crate::records::provenance::read_record(
                 &binding,
-            )?)?;
-        if bound.schema_version != 1 || Some(bound.result.as_str()) != relative.to_str() {
-            return Err(invalid("unsupported or mismatched result binding"));
+            )?)
+            .map_err(|e| damaged(&binding, e.to_string()))?;
+        if bound.schema_version != 1 {
+            return Err(unsupported("unsupported result binding"));
+        }
+        if Some(bound.result.as_str()) != relative.to_str() || component(&bound.run).is_err() {
+            return Err(damaged(&binding, "mismatched result binding"));
         }
         if expected_hash.is_some_and(|hash| bound.result_hash != hash) {
-            return Err(invalid(
+            return Err(damaged(
+                &binding,
                 "result contents differ from the hidden binding; metadata was not applied",
             ));
         }
-        component(&bound.run)?;
         // A run that is gone, or whose folder moved away, leaves no binding.
         let missing = || match expected_hash {
-            Some(_) => Err(invalid(
+            Some(_) => Err(damaged(
+                &binding,
                 "bound analysis run is missing; metadata was not applied",
             )),
             None => Ok(None),
@@ -372,7 +378,7 @@ impl ArtifactRun {
                     .components()
                     .any(|part| !matches!(part, Component::Normal(_) | Component::ParentDir))
                 {
-                    return Err(invalid("unsafe result binding home"));
+                    return Err(damaged(&binding, "unsafe result binding home"));
                 }
                 let Ok(folder) = base.join(home).canonicalize() else {
                     return missing();
@@ -397,7 +403,7 @@ impl ArtifactRun {
         }
         let metadata = run.symlink_metadata()?;
         if !metadata.is_dir() || metadata.file_type().is_symlink() {
-            return Err(invalid("unsafe analysis run"));
+            return Err(damaged(run, "unsafe analysis run"));
         }
         Ok(Some(run))
     }
@@ -429,7 +435,7 @@ impl ArtifactRun {
         Self::existing(run)?.bind(Some(project), result, &hash)?;
         let name = result
             .file_name()
-            .ok_or_else(|| invalid("result filename missing"))?;
+            .ok_or_else(|| Error::NoFileName(result.into()))?;
         let key = basecraft_io::hash_bytes(name.as_encoded_bytes());
         let folder = result.parent().unwrap_or(Path::new(".")).canonicalize()?;
         std::fs::remove_file(
@@ -469,17 +475,11 @@ impl ArtifactRun {
         result: &Path,
         hash: &str,
     ) -> Result<()> {
-        let parent = result
-            .parent()
-            .ok_or_else(|| invalid("result parent missing"))?
-            .canonicalize()?;
-        let absolute = parent.join(
-            result
-                .file_name()
-                .ok_or_else(|| invalid("result filename missing"))?,
-        );
+        let no_file = || Error::NoFileName(result.into());
+        let parent = result.parent().ok_or_else(no_file)?.canonicalize()?;
+        let absolute = parent.join(result.file_name().ok_or_else(no_file)?);
         if !absolute.starts_with(&self.working_directory) {
-            return Err(invalid(
+            return Err(unsupported(
                 "binding result lies outside store working directory",
             ));
         }
@@ -488,16 +488,12 @@ impl ArtifactRun {
             .strip_prefix(&base)
             .map_err(|_| invalid("binding result lies outside its records folder"))?;
         let (store, home) = if base == self.working_directory {
-            let store = self.directory.parent().and_then(Path::parent);
-            (
-                store.ok_or_else(|| invalid("run has no store"))?.into(),
-                None,
-            )
+            (self.store().into(), None)
         } else {
             if project.is_some_and(|project| base == project.root())
                 && !self.working_directory.starts_with(&base)
             {
-                return Err(invalid("the run lies outside the project (rule 2.5)"));
+                return Err(unsupported("the run lies outside the project (rule 2.5)"));
             }
             let home = crate::records::input_evidence::relative(&base, &self.working_directory)?;
             (Self::store_at(&base)?, Some(home))
@@ -513,7 +509,7 @@ impl ArtifactRun {
                 home,
                 result: name
                     .to_str()
-                    .ok_or_else(|| invalid("result filename is not UTF-8"))?
+                    .ok_or_else(|| unsupported("result filename is not UTF-8"))?
                     .into(),
                 result_hash: hash.into(),
                 extra: BTreeMap::new(),
@@ -568,7 +564,7 @@ pub(crate) fn retained_source(root: &Path, hash: &str) -> Result<Option<PathBuf>
     ArtifactRun::validate_store(&store)?;
     for (index, entry) in std::fs::read_dir(store.join("runs"))?.enumerate() {
         if index >= 4096 {
-            return Err(invalid("replay analysis-store run limit exceeded"));
+            return Err(limit("runs in an analysis store", 4096));
         }
         let entry = entry?;
         if !entry.file_type()?.is_dir() {
@@ -607,7 +603,9 @@ impl ArtifactRun {
         let source = self.staging(name)?;
         let metadata = source.symlink_metadata()?;
         if !metadata.is_dir() || metadata.file_type().is_symlink() {
-            return Err(invalid("staged collection is not an ordinary directory"));
+            return Err(unsupported(
+                "staged collection is not an ordinary directory",
+            ));
         }
         let destination = self.artifact(name)?;
         basecraft_platform::atomic::rename_noreplace(&source, &destination)?;
