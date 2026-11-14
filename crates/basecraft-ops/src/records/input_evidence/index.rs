@@ -601,7 +601,7 @@ mod tests {
         std::fs::write(&target, b">a\nACGT\n").unwrap();
         std::fs::write(&other, b">b\nACGT\n").unwrap();
         std::fs::hard_link(&target, &alias).unwrap();
-        let _first = super::super::lock_save(&target, false, &[], None).unwrap();
+        let _first = super::super::lock_save(&target, &[], None).unwrap();
         std::thread::spawn(move || {
             let mut session = crate::Session::new(other.parent().unwrap());
             let id = session.open(&other).unwrap();
@@ -623,18 +623,6 @@ mod tests {
         })
         .join()
         .unwrap();
-    }
-
-    #[test]
-    fn a_shared_hold_is_never_upgraded() {
-        crate::isolated_profile::isolate!();
-        let root = tempfile::tempdir().unwrap();
-        let locks = super::super::lock().unwrap();
-        locks.reserve([root.path().to_path_buf()], false).unwrap();
-        assert!(matches!(
-            locks.reserve([root.path().to_path_buf()], true),
-            Err(crate::Error::Busy(_))
-        ));
     }
 
     #[test]

@@ -155,7 +155,6 @@ impl Session {
         let written = Self::written_stores(&target.path)?;
         let mut evidence_lock = crate::records::input_evidence::lock_save(
             &target.path,
-            policy != SavePolicy::Cancel,
             &written,
             self.project.as_ref().map(crate::project::Project::root),
         )?;
@@ -737,7 +736,6 @@ impl Session {
     pub(super) fn derived_target(&self, path: &Path) -> Result<DerivedTarget> {
         let mut evidence = crate::records::input_evidence::lock_save(
             path,
-            false,
             &[],
             self.project.as_ref().map(crate::project::Project::root),
         )?;
