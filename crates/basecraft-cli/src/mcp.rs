@@ -904,7 +904,7 @@ fn core_error_code(
     error: &(dyn std::error::Error + 'static),
 ) -> basecraft_protocol::operation::OperationErrorCode {
     if let Some(error) = error.downcast_ref::<basecraft_ops::Error>() {
-        return basecraft_plugin_host::jobs::ops_error_code(error);
+        return error.operation_code();
     }
     if let Some(error) = error.downcast_ref::<basecraft_plugin_host::Error>() {
         return basecraft_plugin_host::jobs::error_code(error);

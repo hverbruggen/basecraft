@@ -1135,7 +1135,7 @@ pub fn error_value(
 pub fn error_code(error: &Error) -> OperationErrorCode {
     use crate::contract::ContractError;
     match error {
-        Error::Ops(error) => ops_error_code(error),
+        Error::Ops(error) => error.operation_code(),
         Error::Io(error) => {
             basecraft_ops::Error::Io(std::io::Error::from(error.kind())).operation_code()
         }
@@ -1152,9 +1152,4 @@ pub fn error_code(error: &Error) -> OperationErrorCode {
         | Error::Remote { .. }
         | Error::Protocol(_) => OperationErrorCode::InvalidArguments,
     }
-}
-
-/// Preserve typed core failures across the CLI, MCP and registered job adapters.
-pub fn ops_error_code(error: &basecraft_ops::Error) -> OperationErrorCode {
-    error.operation_code()
 }

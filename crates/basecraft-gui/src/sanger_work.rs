@@ -195,7 +195,7 @@ fn directory(outcome: &OperationOutcome) -> Result<&Path> {
 fn edit_analysis(review: &mut SangerReview, edit: ReviewOp) -> basecraft_ops::Result<()> {
     let mut owner = ReviewDocument::new(review)?;
     owner.apply(edit)?;
-    *review = owner.session.sanger_review(owner.id)?.clone();
+    *review = owner.current()?.clone();
     Ok(())
 }
 fn evaluate(session: &mut SangerReview, view: &mut SangerReviewView) -> basecraft_ops::Result<()> {
@@ -433,12 +433,14 @@ impl ReviewDocument {
         Ok(Self { session, id })
     }
     pub fn report(&self, _dirty: bool) -> basecraft_ops::Result<basecraft_ops::records::Report> {
-        self.session
-            .sanger_review(self.id)?
+        self.current()?
             .report_with_history(&self.session.document_record(self.id)?)
     }
+    pub fn current(&self) -> basecraft_ops::Result<&SangerReview> {
+        self.session.sanger_review(self.id)
+    }
     pub fn review(&self) -> Option<&SangerReview> {
-        self.session.sanger_review(self.id).ok()
+        self.current().ok()
     }
     /// A review decision, as the CLI's `sanger decide` and MCP make it.
     pub fn apply(&mut self, edit: ReviewOp) -> basecraft_ops::Result<()> {
@@ -466,9 +468,7 @@ impl ReviewDocument {
     }
     pub fn addition_evidence(&mut self) -> basecraft_ops::Result<String> {
         let project = chosen()?;
-        self.session
-            .sanger_review(self.id)?
-            .addition_evidence(project.as_ref())
+        self.current()?.addition_evidence(project.as_ref())
     }
 }
 

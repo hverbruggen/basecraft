@@ -287,24 +287,20 @@ fn finish(id: u64, cancelled: bool, ended: Ended) {
 
 const INTERRUPTED: &str = "Interrupted by an internal failure";
 
-/// A job's work panicked. Each error type a job returns says how it shows this.
-pub(crate) struct Interrupted;
-
-impl From<Interrupted> for String {
-    fn from(_: Interrupted) -> Self {
+/// A job's error: text for the job list, and the value a panicked job returns.
+pub(crate) trait JobError: std::fmt::Display + Send + 'static {
+    fn interrupted() -> Self;
+}
+impl JobError for String {
+    fn interrupted() -> Self {
         INTERRUPTED.into()
     }
 }
-
-impl From<Interrupted> for basecraft_plugin_host::Error {
-    fn from(_: Interrupted) -> Self {
+impl JobError for basecraft_plugin_host::Error {
+    fn interrupted() -> Self {
         Self::Io(std::io::Error::other(INTERRUPTED))
     }
 }
-
-/// What a job's error must offer: text for the job list, and a value for a panic.
-pub(crate) trait JobError: std::fmt::Display + From<Interrupted> + Send + 'static {}
-impl<E: std::fmt::Display + From<Interrupted> + Send + 'static> JobError for E {}
 
 /// The one place the desktop app starts a thread. `body` runs once.
 pub(crate) fn spawn(name: &str, body: impl FnOnce() + Send + 'static) -> std::io::Result<()> {
@@ -334,7 +330,7 @@ fn run<T, R: Send + 'static, E: JobError>(
     let worker = handle.clone();
     let started = spawn("basecraft-job", move || {
         let result = catch_unwind(AssertUnwindSafe(|| work(&worker)))
-            .unwrap_or_else(|_| Err(Interrupted.into()));
+            .unwrap_or_else(|_| Err(E::interrupted()));
         if let (Some(id), Some(summary)) = (entry, &summary) {
             finish(id, worker.cancelled(), summary(&result));
         }
@@ -385,12 +381,7 @@ pub(crate) fn start_listed<T, R: Outcome + Send + 'static, E: JobError>(
     work: impl FnOnce(&Work) -> Result<R, E> + Send + 'static,
     done: impl FnOnce(Pin<&mut T>, Result<R, E>) + Send + 'static,
 ) -> std::io::Result<Work> {
-    run(
-        owner,
-        Some((listing, Box::new(summarize::<R, E>))),
-        work,
-        done,
-    )
+    run(owner, Some((listing, Box::new(summarize))), work, done)
 }
 
 /// Run `task` with the document's Session moved off the window thread. The
@@ -444,7 +435,7 @@ fn session_job<T, R: Send + 'static>(
                 .take()
                 .ok_or(INTERRUPTED)?;
             let result = catch_unwind(AssertUnwindSafe(|| task(&mut session, work)))
-                .unwrap_or_else(|_| Err(Interrupted.into()));
+                .unwrap_or_else(|_| Err(INTERRUPTED.into()));
             Ok((session, result))
         },
         move |object, result| {

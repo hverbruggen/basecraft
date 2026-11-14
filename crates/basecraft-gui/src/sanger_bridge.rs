@@ -705,11 +705,7 @@ impl qobject::SangerController {
                 .as_mut()
                 .ok_or_else(|| none_open("No review is open"))?;
             session.select_call_set(&id.to_string())?;
-            session_view(
-                session
-                    .review()
-                    .ok_or_else(|| none_open("No review is open"))?,
-            )
+            session_view(session.current()?)
         })()
         .map_err(|e| crate::document_open::edit_failure(&e));
         match result {
@@ -1210,11 +1206,7 @@ impl qobject::SangerController {
         let path = PathBuf::from(path.to_string());
         let result = (|| -> basecraft_ops::Result<_> {
             let session = work::ReviewDocument::open(&path)?;
-            let view = session_view(
-                session
-                    .review()
-                    .ok_or_else(|| none_open("No review is open"))?,
-            )?;
+            let view = session_view(session.current()?)?;
             Ok((view, session))
         })()
         .map_err(|e| e.to_string());

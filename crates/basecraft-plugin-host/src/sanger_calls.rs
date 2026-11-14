@@ -18,12 +18,16 @@ use basecraft_protocol::operation::{
     InputReference, InvocationInputEvidence, OperationErrorCode as Code, OperationRequest,
     RuntimeState,
 };
+use serde_json::json;
+use std::path::{Path, PathBuf};
 
 fn refused(code: Code, message: impl Into<String>) -> Error {
     Error::refused(code, message)
 }
-use serde_json::json;
-use std::path::{Path, PathBuf};
+
+fn unavailable(message: impl Into<String>) -> Error {
+    Error::refused(Code::PluginUnavailable, message)
+}
 
 #[derive(Default)]
 pub struct SangerCaller {
@@ -57,7 +61,7 @@ fn engine(
     let _ = process.finish();
     let answer = answer?;
     if let Some(problem) = answer["problem"].as_str() {
-        return Err(refused(Code::PluginUnavailable, problem));
+        return Err(unavailable(problem));
     }
     match (answer["name"].as_str(), answer["sha256"].as_str()) {
         (Some(name), Some(sha256)) => Ok((name.into(), sha256.into())),
@@ -162,14 +166,10 @@ impl SangerCaller {
             })
         });
         let operation = callers.next().ok_or_else(|| {
-            refused(
-                Code::PluginUnavailable,
-                "Install a single-trace caller plugin to compute alternative calls",
-            )
+            unavailable("Install a single-trace caller plugin to compute alternative calls")
         })?;
         if callers.next().is_some() {
-            return Err(refused(
-                Code::PluginUnavailable,
+            return Err(unavailable(
                 "More than one single-trace caller is installed",
             ));
         }
@@ -177,12 +177,11 @@ impl SangerCaller {
         if !operation.package.enabled {
             return Err(refused(Code::PluginDisabled, format!("{name} is disabled")));
         }
-        let interpreter = operation.package.interpreter.as_ref().ok_or_else(|| {
-            refused(
-                Code::PluginUnavailable,
-                format!("{name} Python runtime is unavailable"),
-            )
-        })?;
+        let interpreter = operation
+            .package
+            .interpreter
+            .as_ref()
+            .ok_or_else(|| unavailable(format!("{name} Python runtime is unavailable")))?;
         let (program, engine_sha256) = engine(operation, interpreter)?;
         let parameters = crate::contract::normalize_parameters(
             &operation.descriptor,
