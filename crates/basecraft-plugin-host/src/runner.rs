@@ -17,10 +17,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use basecraft_ops::{
-    records,
-    records::{ArtifactDestination, ArtifactRun},
-};
+use basecraft_ops::{records, records::ArtifactRun};
 use basecraft_protocol::{
     operation::{
         ExecutionFamily, InputReference, InputView, InvocationContext, InvocationInputEvidence,

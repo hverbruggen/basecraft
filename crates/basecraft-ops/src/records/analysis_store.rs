@@ -18,14 +18,6 @@ pub struct ArtifactRun {
     id: String,
 }
 
-/// The default is hidden permanent metadata; working-directory output is opt-in.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ArtifactDestination {
-    #[default]
-    Metadata,
-    WorkingDirectory,
-}
-
 fn component(name: &str) -> Result<()> {
     let mut parts = Path::new(name).components();
     if !matches!(parts.next(), Some(Component::Normal(_))) || parts.next().is_some() {
@@ -180,13 +172,10 @@ impl ArtifactRun {
     pub fn directory(&self) -> &Path {
         &self.directory
     }
-    /// The folder whose `.basecraft` holds this run.
-    pub fn working_directory(&self) -> &Path {
-        &self.working_directory
-    }
-
+    /// The file `name` in the run folder.
     pub fn artifact(&self, name: &str) -> Result<PathBuf> {
-        self.destination(ArtifactDestination::Metadata, name)
+        component(name)?;
+        Ok(self.directory.join(name))
     }
 
     /// Write this run's `run.json` with its status and the result it is named by.
@@ -209,14 +198,6 @@ impl ArtifactRun {
         )
     }
 
-    pub fn destination(&self, location: ArtifactDestination, name: &str) -> Result<PathBuf> {
-        component(name)?;
-        Ok(match location {
-            ArtifactDestination::Metadata => self.directory.join(name),
-            ArtifactDestination::WorkingDirectory => self.working_directory.join(name),
-        })
-    }
-
     /// Stream here, close/sync successfully, then publish. Pending data is never
     /// advertised as a completed artifact and is retained on failure/cancel.
     pub fn staging(&self, name: &str) -> Result<PathBuf> {
@@ -224,16 +205,16 @@ impl ArtifactRun {
         Ok(self.directory.join("pending").join(name))
     }
 
-    /// Same-filesystem no-clobber publication. Unlike `rename`/`write_atomic` this
-    /// cannot replace another run or user file. Cross-filesystem export fails.
-    pub fn publish(&self, name: &str, location: ArtifactDestination) -> Result<PathBuf> {
+    /// Move a staged file into the run folder without replacing one.
+    /// Unlike `rename`/`write_atomic` this cannot replace another file.
+    pub fn publish(&self, name: &str) -> Result<PathBuf> {
         let source = self.staging(name)?;
         let metadata = std::fs::symlink_metadata(&source)?;
         if !metadata.is_file() || metadata.file_type().is_symlink() {
             return Err(invalid("staged artifact must be an ordinary file"));
         }
         basecraft_platform::files::sync_file(&source)?;
-        let destination = self.destination(location, name)?;
+        let destination = self.artifact(name)?;
         std::fs::hard_link(&source, &destination)?;
         basecraft_platform::files::sync_directory(
             destination
@@ -491,14 +472,6 @@ impl ArtifactRun {
                 extra: BTreeMap::new(),
             })?,
         )
-    }
-}
-
-impl ArtifactRun {
-    /// Promote a staged primary/component output without replacing existing data.
-    /// Its basename is preserved; allocation remains anchored to the final folder.
-    pub fn publish_primary(&self, name: &str) -> Result<PathBuf> {
-        self.publish(name, ArtifactDestination::WorkingDirectory)
     }
 }
 

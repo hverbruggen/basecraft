@@ -1,8 +1,8 @@
 //! Publish validated artifacts and retain an outcome for repair.
 use super::{
-    ArtifactDestination, ArtifactRevision, BTreeMap, CollectionExportIntent, Error, InvokeResult,
-    OperationOutcome, Path, PathBuf, PreparedOperation, PublishedArtifact, Result, check_members,
-    records, verify_collection,
+    ArtifactRevision, BTreeMap, CollectionExportIntent, Error, InvokeResult, OperationOutcome,
+    Path, PathBuf, PreparedOperation, PublishedArtifact, Result, check_members, records,
+    verify_collection,
 };
 
 /// Files published into the project: destination, the run's copy if it
@@ -308,7 +308,7 @@ impl PreparedOperation {
                 if &staging != path {
                     std::fs::rename(path, &staging)?;
                 }
-                self.run.publish(&name, ArtifactDestination::Metadata)?;
+                self.run.publish(&name)?;
                 outcome.artifacts.push(PublishedArtifact {
                     role: role.clone(),
                     path: retained.display().to_string(),

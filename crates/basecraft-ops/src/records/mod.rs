@@ -14,7 +14,7 @@ pub(crate) mod publish;
 pub(crate) mod replay;
 pub(crate) mod save_guard;
 
-pub use analysis_store::{ArtifactDestination, ArtifactRun};
+pub use analysis_store::ArtifactRun;
 pub use document_record::{DocumentRecord, MethodsParagraph, Report, ReportExt};
 pub use input_evidence::{
     AffectedAnalysis, BackgroundWait, EvidenceConflict, InspectionCode, InspectionIssue,

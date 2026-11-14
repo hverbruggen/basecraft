@@ -1,6 +1,6 @@
 use crate::decided_save;
 
-use basecraft_ops::records::{ArtifactDestination, ArtifactRun};
+use basecraft_ops::records::ArtifactRun;
 
 #[test]
 fn hidden_runs_reserve_stage_and_publish_without_replacing_files() {
@@ -12,22 +12,11 @@ fn hidden_runs_reserve_stage_and_publish_without_replacing_files() {
     assert!(run.artifact("../escape").is_err());
     assert!(run.artifact("/escape").is_err());
     std::fs::write(run.staging("bootstrap.nex").unwrap(), "replicates").unwrap();
-    let hidden = run
-        .publish("bootstrap.nex", ArtifactDestination::default())
-        .unwrap();
+    let hidden = run.publish("bootstrap.nex").unwrap();
     assert_eq!(std::fs::read_to_string(hidden).unwrap(), "replicates");
     std::fs::write(run.staging("bootstrap.nex").unwrap(), "replacement").unwrap();
-    assert!(
-        run.publish("bootstrap.nex", ArtifactDestination::Metadata)
-            .is_err()
-    );
+    assert!(run.publish("bootstrap.nex").is_err());
     assert!(run.staging("bootstrap.nex").unwrap().is_file());
-    std::fs::write(run.staging("visible.nex").unwrap(), "explicit export").unwrap();
-    assert_eq!(
-        run.publish("visible.nex", ArtifactDestination::WorkingDirectory)
-            .unwrap(),
-        temp.path().join("visible.nex")
-    );
     assert!(!temp.path().join("bootstrap.nex").exists());
 }
 
@@ -58,7 +47,7 @@ fn symlink_namespace_and_staged_symlinks_are_rejected() {
     std::fs::remove_file(temp.path().join(".basecraft")).unwrap();
     let run = ArtifactRun::create(None, &temp.path().join("out"), "run").unwrap();
     std::os::unix::fs::symlink("/etc/passwd", run.staging("bad").unwrap()).unwrap();
-    assert!(run.publish("bad", ArtifactDestination::Metadata).is_err());
+    assert!(run.publish("bad").is_err());
 }
 
 fn reference_run(root: &std::path::Path, source: &std::path::Path, id: &str) -> ArtifactRun {
