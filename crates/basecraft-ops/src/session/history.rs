@@ -244,10 +244,29 @@ impl Session {
     }
 
     pub(super) fn write_entries(&mut self, entries: &[LogEntry]) -> Result<()> {
+        let lines = if self.log.is_some() {
+            crate::log::Lines::of(entries)?
+        } else {
+            crate::log::Lines::default()
+        };
+        self.write_lines(entries, lines)
+    }
+
+    /// [`Session::write_entries`] for entries already encoded as `lines`.
+    pub(super) fn write_lines(
+        &mut self,
+        entries: &[LogEntry],
+        lines: crate::log::Lines,
+    ) -> Result<()> {
         let mut batch = std::mem::take(&mut self.pending_baselines);
+        let written = self.log.is_some().then(|| {
+            let mut all = crate::log::Lines::of(&batch)?;
+            all.extend(lines);
+            Ok::<_, crate::Error>(all)
+        });
         batch.extend_from_slice(entries);
-        if let Some(log) = &mut self.log
-            && let Err(error) = log.append_batch(&batch)
+        if let (Some(log), Some(all)) = (&mut self.log, written)
+            && let Err(error) = all.and_then(|all| log.append_lines(&all))
         {
             batch.truncate(batch.len() - entries.len());
             self.pending_baselines = batch;

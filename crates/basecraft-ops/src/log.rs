@@ -67,7 +67,12 @@ impl LogWriter {
     /// One checked write with rollback on ordinary I/O failure. A power loss
     /// remains a journal recovery event, not a filesystem transaction.
     pub fn append_batch(&mut self, entries: &[LogEntry]) -> Result<()> {
-        let Some(entry) = entries.first() else {
+        self.append_lines(&Lines::of(entries)?)
+    }
+
+    /// [`LogWriter::append_batch`] for entries already encoded.
+    pub(crate) fn append_lines(&mut self, lines: &Lines) -> Result<()> {
+        let Some(month) = lines.month.clone() else {
             return Ok(());
         };
         if self.poisoned {
@@ -75,7 +80,6 @@ impl LogWriter {
                 "journal durability is uncertain; close this session and inspect recovery",
             ));
         }
-        let month = entry.t.get(..7).unwrap_or("unknown").to_string();
         if self
             .open
             .as_ref()
@@ -92,7 +96,7 @@ impl LogWriter {
             let file = OpenOptions::new().create(true).append(true).open(path)?;
             self.open = Some((month, (self.wrap)(file)));
         }
-        let line = encode(entries, self.sequence)?;
+        let line = lines.numbered(self.sequence)?;
         if let Some((_, f)) = &mut self.open {
             // One write per line: with O_APPEND, a crash can't interleave
             // half lines.
@@ -131,7 +135,7 @@ impl LogWriter {
                 }
                 return Err(error.into());
             }
-            self.sequence += entries.len() as u64;
+            self.sequence += lines.lines.len() as u64;
         }
         Ok(())
     }
@@ -189,8 +193,8 @@ impl LogWriter {
         let mut segment = 0;
         let mut written = Vec::new();
         let mut lines = Vec::new();
-        for (sequence, entry) in (0u64..).zip(&kept) {
-            lines.extend(encode(std::slice::from_ref(entry), sequence)?);
+        for (sequence, line) in (0u64..).zip(&Lines::of(&kept)?.lines) {
+            numbered(&mut lines, line, sequence);
             if lines.len() as u64 >= BATCH_LIMIT {
                 written.push(self.write_segment(&month, &stream, segment, &lines)?);
                 lines.clear();
@@ -240,42 +244,78 @@ fn stream_of(file: &Path) -> String {
 /// The most bytes one journal batch may take.
 pub(crate) const BATCH_LIMIT: u64 = 8 << 20;
 
-/// `entries` as journal lines numbered from `sequence`, refused past
-/// [`BATCH_LIMIT`].
-fn encode(entries: &[LogEntry], sequence: u64) -> Result<Vec<u8>> {
-    let mut line = Vec::new();
-    for (offset, entry) in entries.iter().enumerate() {
-        // The checksum covers the entry's sorted compact JSON; the envelope's
-        // fields then join the same object, so the entry is built once.
-        let mut value = serde_json::to_value(entry)?;
-        let checksum = basecraft_io::hash_bytes(&serde_json::to_vec(&value)?);
-        let fields = value.as_object_mut().expect("a journal entry is an object");
-        fields.insert("_checksum".into(), checksum.into());
-        fields.insert("_sequence".into(), (sequence + offset as u64).into());
-        fields.insert(
-            basecraft_protocol::records::WRITTEN_BY.into(),
-            basecraft_protocol::records::writing_version().into(),
-        );
-        serde_json::to_writer(&mut line, &value)?;
-        line.push(b'\n');
-        if line.len() as u64 > BATCH_LIMIT {
-            return Err(crate::Error::Limit {
-                what: "operation journal batch".into(),
-                limit: BATCH_LIMIT,
-            });
-        }
-    }
-    Ok(line)
+/// Journal lines, each without the sequence number the writer adds when it
+/// appends them, so a batch is encoded once to check its size and to write.
+#[derive(Default)]
+pub(crate) struct Lines {
+    /// The month of the first entry, which names the journal file.
+    month: Option<String>,
+    /// Each line and where its sequence number goes.
+    lines: Vec<(Vec<u8>, usize)>,
 }
 
-/// Whether `entries` fit in one journal batch. Counted with the widest
-/// sequence numbers, so a batch that fits here fits when written.
-pub(crate) fn fits_one_batch(entries: &[LogEntry]) -> Result<bool> {
-    match encode(entries, u64::MAX >> 1) {
-        Ok(_) => Ok(true),
-        Err(crate::Error::Limit { .. }) => Ok(false),
-        Err(error) => Err(error),
+impl Lines {
+    pub(crate) fn of(entries: &[LogEntry]) -> Result<Self> {
+        let mut lines = Self {
+            month: entries
+                .first()
+                .map(|entry| entry.t.get(..7).unwrap_or("unknown").to_owned()),
+            lines: Vec::new(),
+        };
+        for entry in entries {
+            // The checksum covers the entry's sorted compact JSON; the
+            // envelope's fields then join the same object.
+            let mut value = serde_json::to_value(entry)?;
+            let checksum = basecraft_io::hash_bytes(&serde_json::to_vec(&value)?);
+            // Keys sort, so `_sequence` follows `{"_checksum":"…",`.
+            let at = r#"{"_checksum":""#.len() + checksum.len() + r#"","#.len();
+            let fields = value.as_object_mut().expect("a journal entry is an object");
+            fields.insert("_checksum".into(), checksum.into());
+            fields.insert(
+                basecraft_protocol::records::WRITTEN_BY.into(),
+                basecraft_protocol::records::writing_version().into(),
+            );
+            let mut line = serde_json::to_vec(&value)?;
+            line.push(b'\n');
+            lines.lines.push((line, at));
+        }
+        Ok(lines)
     }
+
+    /// Add `other`'s lines after these.
+    pub(crate) fn extend(&mut self, other: Self) {
+        self.month = self.month.take().or(other.month);
+        self.lines.extend(other.lines);
+    }
+
+    /// Whether the lines fit in one journal batch, counted with the widest
+    /// sequence numbers, so lines that fit here fit when written.
+    pub(crate) fn fit(&self) -> bool {
+        let widest = format!(r#""_sequence":{},"#, u64::MAX >> 1).len();
+        let bytes: usize = self.lines.iter().map(|(line, _)| line.len() + widest).sum();
+        bytes as u64 <= BATCH_LIMIT
+    }
+
+    /// The lines numbered from `sequence`, refused past [`BATCH_LIMIT`].
+    fn numbered(&self, sequence: u64) -> Result<Vec<u8>> {
+        let mut bytes = Vec::new();
+        for (number, line) in (sequence..).zip(&self.lines) {
+            numbered(&mut bytes, line, number);
+            if bytes.len() as u64 > BATCH_LIMIT {
+                return Err(crate::Error::Limit {
+                    what: "operation journal batch".into(),
+                    limit: BATCH_LIMIT,
+                });
+            }
+        }
+        Ok(bytes)
+    }
+}
+
+fn numbered(out: &mut Vec<u8>, (line, at): &(Vec<u8>, usize), number: u64) {
+    out.extend_from_slice(&line[..*at]);
+    out.extend_from_slice(format!(r#""_sequence":{number},"#).as_bytes());
+    out.extend_from_slice(&line[*at..]);
 }
 
 /// Every entry under a project's log directory, from all hosts. Within a

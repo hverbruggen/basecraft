@@ -204,7 +204,8 @@ impl Session {
         decided.state = batch.candidate.as_document().fingerprint();
         batch.entries.insert(0, offered);
         batch.entries.push(decided);
-        if !crate::log::fits_one_batch(&batch.entries)? {
+        let lines = crate::log::Lines::of(&batch.entries)?;
+        if !lines.fit() {
             // The offer and its edits must land in one journal batch. Record
             // the offer as refused instead; an offer too large even for
             // that fails here unrecorded.
@@ -224,7 +225,7 @@ impl Session {
                 limit: crate::log::BATCH_LIMIT,
             });
         }
-        let applied = self.commit_proposals(batch)?;
+        let applied = self.commit_proposals(batch, Some(lines))?;
         Ok(ProposalResult { applied, skipped })
     }
 
@@ -243,7 +244,7 @@ impl Session {
         }
         let candidate = slot.content.as_document().proposal_candidate()?;
         let batch = self.stage_proposals(id, ops, &self.actor, candidate)?;
-        self.commit_proposals(batch)
+        self.commit_proposals(batch, None)
     }
 
     fn stage_proposals(
@@ -287,7 +288,12 @@ impl Session {
         })
     }
 
-    fn commit_proposals(&mut self, batch: PreparedBatch) -> Result<Vec<String>> {
+    /// `lines` are the entries already encoded, if they were.
+    fn commit_proposals(
+        &mut self,
+        batch: PreparedBatch,
+        lines: Option<crate::log::Lines>,
+    ) -> Result<Vec<String>> {
         let PreparedBatch {
             doc,
             generation,
@@ -319,7 +325,10 @@ impl Session {
             .collect();
         self.track(doc)?;
         self.docs[doc.0].undo.reserve(applied.len());
-        self.write_entries(&entries)?;
+        match lines {
+            Some(lines) => self.write_lines(&entries, lines)?,
+            None => self.write_entries(&entries)?,
+        }
         // All fallible preparation precedes the durable batch. Installing the
         // already checked payload requires no post-append downcast or I/O.
         let slot = &mut self.docs[doc.0];
@@ -457,7 +466,7 @@ mod tests {
         session.apply(doc, remove("partition-3")).unwrap();
         let after_edit = session.delimitation(doc).unwrap().clone();
         let events = session.document_record(doc).unwrap().events.clone();
-        assert!(session.commit_proposals(batch).is_err());
+        assert!(session.commit_proposals(batch, None).is_err());
         assert_eq!(session.delimitation(doc).unwrap(), &after_edit);
         assert_eq!(session.document_record(doc).unwrap().events.clone(), events);
         assert_eq!(session.generation(doc).unwrap(), 1);
