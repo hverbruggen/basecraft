@@ -98,7 +98,7 @@ impl Session {
             evidence,
             additional_evidence,
             publication,
-            finalization: false,
+            after_write: false,
             session: self.id.clone(),
             document: id.0,
             document_key: self.docs[id.0].key.clone(),
@@ -168,7 +168,7 @@ impl Session {
             self.evidence_check(&target)?,
             target_revision(&target)?,
         )?;
-        check.scope.finalization = true;
+        check.scope.after_write = true;
         check.scope_revision = check.scope.revision()?;
         Ok(check)
     }
@@ -184,7 +184,7 @@ impl Session {
     /// Finish recovering a document already written: check again, and take
     /// the answer if one is needed. The caller holds the target's lock, then
     /// the run input locks. The document is not written again.
-    pub(crate) fn recovery_finalize(
+    pub(crate) fn finish_recovered_document(
         &self,
         id: DocId,
         expected: Option<&SaveCheck>,

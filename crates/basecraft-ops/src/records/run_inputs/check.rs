@@ -592,17 +592,17 @@ mod store_scan_tests {
     }
 
     #[test]
-    fn a_damaged_ledger_is_an_issue_at_its_path_without_repeating_it() {
+    fn a_damaged_input_record_is_unchecked_at_its_path_without_repeating_it() {
         let root = tempfile::tempdir().unwrap();
         let source = root.path().join("input.nwk");
         std::fs::write(&source, "(a:1,b:1);").unwrap();
         let run = fixture(root.path(), &source);
-        let ledger = run.directory().join("input.json");
-        std::fs::write(&ledger, b"{").unwrap();
+        let record = run.directory().join("input.json");
+        std::fs::write(&record, b"{").unwrap();
         let check = check_in(&source, &[run.store().into()]).unwrap();
         let issue = &check.issues[0];
         assert_eq!(issue.code, UncheckedKind::LedgerInvalid);
-        assert_eq!(issue.location, ledger);
+        assert_eq!(issue.location, record);
         assert!(
             !issue.reason.contains(&*root.path().to_string_lossy()),
             "{}",

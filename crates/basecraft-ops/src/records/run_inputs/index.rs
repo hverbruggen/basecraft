@@ -197,8 +197,8 @@ pub(super) fn is_private(store: &Path) -> bool {
 }
 
 /// The store an input record path `<store>/runs/<run>/input.json` belongs to.
-pub(super) fn store_of(ledger: &Path) -> Option<&Path> {
-    let runs = ledger.parent()?.parent()?;
+pub(super) fn store_of(record: &Path) -> Option<&Path> {
+    let runs = record.parent()?.parent()?;
     let store = runs.parent()?;
     (runs.file_name()? == "runs" && store.file_name()? == "analyses-v1").then_some(store)
 }
@@ -566,6 +566,48 @@ mod tests {
                     path.display()
                 );
             }
+        })
+        .join()
+        .unwrap();
+    }
+
+    /// A run whose input record names the run that holds its preserved
+    /// original (`origin_run`) locks that run's record too while its own is
+    /// written, so no save changes the owner meanwhile.
+    #[test]
+    fn writing_a_delegating_record_locks_the_owner() {
+        crate::isolated_profile::isolate!();
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source.fasta");
+        std::fs::write(&source, b">a\nACGT\n").unwrap();
+        let hash = basecraft_io::hash_file(&source).unwrap();
+        let reference = |name: &str| {
+            super::super::reference_input(
+                &root.path().join(name),
+                &source,
+                &hash,
+                None,
+                &[],
+                name,
+                None,
+            )
+            .unwrap()
+        };
+        let owner = reference("owner.txt");
+        let delegate = reference("delegate.txt");
+        let plain = super::super::read_input(delegate.directory()).unwrap();
+        let mut delegating = plain.clone();
+        delegating.origin_run =
+            Some(super::super::relative(delegate.directory(), owner.directory()).unwrap());
+        let locks = super::super::lock().unwrap();
+        locks.record(owner.directory()).unwrap();
+        let directory = delegate.directory().to_path_buf();
+        std::thread::spawn(move || {
+            super::super::write_input(&directory, &plain).unwrap();
+            assert!(matches!(
+                super::super::write_input(&directory, &delegating),
+                Err(crate::Error::Busy(_))
+            ));
         })
         .join()
         .unwrap();

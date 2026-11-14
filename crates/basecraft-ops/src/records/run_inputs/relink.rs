@@ -130,11 +130,11 @@ pub fn relink(bundle: &Path, original: &Path) -> Result<()> {
         if directory == owner || !directory.join("input.json").is_file() {
             continue;
         }
-        let mut ledger = read_input(&directory)?;
-        if ledger.state == InputState::Broken || ledger.origin_run.is_some() {
+        let mut record = read_input(&directory)?;
+        if record.state == InputState::Broken || record.origin_run.is_some() {
             continue;
         }
-        let Some(source) = ledger.source.as_mut() else {
+        let Some(source) = record.source.as_mut() else {
             continue;
         };
         if source.hash != hash {
@@ -142,8 +142,8 @@ pub fn relink(bundle: &Path, original: &Path) -> Result<()> {
         }
         source.path = relative(&directory, &original)?;
         source.stamp = stamp(&original)?;
-        ledger.state = InputState::Referenced;
-        write_input(&directory, &ledger)?;
+        record.state = InputState::Referenced;
+        write_input(&directory, &record)?;
     }
     Ok(())
 }

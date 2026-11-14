@@ -198,10 +198,8 @@ original-writer byte fixture was found, not that there are no behavioral tests.
 | **AU23** `<target>.run.json` on mPTP failure, plus `<target>.mptp-<id>/input.json` | [mptp_adapter.py](../plugins/delimitation/mptp_adapter.py) `invoke` writes failure dict; native `inspect_tree` through `run_native` writes input inspection → adapter reads metrics/tips; human/artifact consumers inspect failure | Failure `{job, command}` has **no outer version** and is not full DelimitationResult; inspection is AU10 typed result; new failure record, no rewrite/extension merge | Protocol `producer_records::MptpFailure`; [mptp-failure.schema.json](mptp-failure.schema.json); current failed-process producer golden; native inspection uses AU10 |
 
 AU08–AU20 and AU23 refine EX16 rather than inventing additional
-host records. DS02 also has writers in the delimitation engine and wrapper:
-engine `main` writes version 1, wrapper `invoke` recalculates exchange hashes and
-rewrites that wrapper from selected fields after publishing SPART. Version 2 is
-used by ops path-base-aware writes. These are not interchangeable byte formats.
+host records. The delimitation engine's `write_companion` writes the same
+`Companion` record as DS02, version 1.
 DS12's concrete owner is `SangerRun::prepare_with_dependencies` and `parameters`
 (not a type named `ReviewRun`). DS14 is retired; recovery uses the shared
 Session journal. `decode` accepts version 1 or 2 and rejects

@@ -437,8 +437,8 @@ pub fn reindex(project: &Path) -> Result<Reindexed> {
 /// names, directly or through the runs it depends on.
 pub fn register(run: &ArtifactRun) -> Result<()> {
     let store = run.store();
-    let ledger = run.directory().join("input.json");
-    if !ledger.try_exists()? {
+    let record = run.directory().join("input.json");
+    if !record.try_exists()? {
         return Ok(());
     }
     let input = read_input(run.directory())?;
@@ -455,7 +455,9 @@ pub fn register(run: &ArtifactRun) -> Result<()> {
 
 /// Write the input record of `run`, which reads generated `payload` rather
 /// than a file, linked to the histories in `dependencies`, and its run record.
-/// The caller keeps the payload as a published artifact and registers the run.
+/// The caller keeps the payload as a published artifact, registers the run,
+/// and holds `lock` across this call and `register`, so no save sees the run
+/// half written.
 pub fn link_generated_input(
     run: &ArtifactRun,
     dependencies: &[PathBuf],

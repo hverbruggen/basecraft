@@ -196,6 +196,8 @@ pub struct SangerRun {
 }
 
 fn linked_input(run: &ArtifactRun, dependencies: &[PathBuf], payload: &[u8]) -> crate::Result<()> {
+    // One lock scope across the input record, the run record and the index.
+    let _locks = inputs::lock()?;
     inputs::link_generated_input(
         run,
         dependencies,

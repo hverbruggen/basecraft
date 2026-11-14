@@ -1272,7 +1272,7 @@ impl RecoveryAttempt {
                 Err(error) => return Err(refuse(&mut self.session, error)),
             };
             self.session
-                .recovery_finalize(id, doc.saved.as_ref(), decision)?
+                .finish_recovered_document(id, doc.saved.as_ref(), decision)?
         } else {
             let path = if decision.is_some() {
                 Some(self.session_path(document)?)
@@ -1358,7 +1358,7 @@ impl RecoveryAttempt {
                 ));
             }
             self.session
-                .recovery_finalize(doc.id, doc.saved.as_ref(), None)?;
+                .finish_recovered_document(doc.id, doc.saved.as_ref(), None)?;
         }
         let stage = self.validate()?.to_path_buf();
         let stores = self.session.recovery_stores()?;

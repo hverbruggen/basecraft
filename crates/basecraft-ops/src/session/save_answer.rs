@@ -35,7 +35,9 @@ pub(crate) struct SaveScope {
     pub(crate) additional_evidence: Vec<InputCheck>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) publication: Option<(PathBuf, ObjectIdentity)>,
-    pub(crate) finalization: bool,
+    /// The check made after a recovery wrote the document.
+    #[serde(rename = "finalization")]
+    pub(crate) after_write: bool,
     pub(crate) session: String,
     pub(crate) document: usize,
     pub(crate) document_key: String,
