@@ -9,13 +9,6 @@ use std::{collections::BTreeMap, path::PathBuf};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Expected members recorded before ordinary collection retention.
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct CollectionIntent {
-    pub schema: u32,
-    pub members: BTreeMap<PathBuf, String>,
-}
-
 /// A collection's project destination and members, recorded before the
 /// collection's folder moves there (D26).
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]

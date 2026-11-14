@@ -672,12 +672,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     ),
                 ),
                 (
-                    "collection-intent",
-                    schemars::schema_for!(
-                        basecraft_protocol::publication_records::CollectionIntent
-                    ),
-                ),
-                (
                     "collection-export-intent",
                     schemars::schema_for!(
                         basecraft_protocol::publication_records::CollectionExportIntent
@@ -722,8 +716,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     schemars::schema_for!(basecraft_protocol::report_records::Report),
                 ),
                 (
-                    "validated-artifacts",
-                    schemars::schema_for!(Vec<(String, std::path::PathBuf, String)>),
+                    "validated-result",
+                    schemars::schema_for!(basecraft_protocol::records::ValidatedResult),
                 ),
                 (
                     "workflow-stages",

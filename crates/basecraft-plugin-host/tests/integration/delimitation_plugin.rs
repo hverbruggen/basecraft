@@ -143,12 +143,11 @@ fn exact_identity_precedes_public_tree_inference_and_restores_specimens() {
         if std::env::var_os("BASECRAFT_CAPTURE_WORKFLOW_RECORDS").is_some() {
             let fixtures =
                 Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/records-v1");
-            for (file, name) in [
-                ("stages.json", "workflow-stages.json"),
-                ("validated-artifacts.json", "validated-artifacts.json"),
-            ] {
-                std::fs::copy(common::evidence(&outcome).join(file), fixtures.join(name)).unwrap();
-            }
+            std::fs::copy(
+                common::evidence(&outcome).join("stages.json"),
+                fixtures.join("workflow-stages.json"),
+            )
+            .unwrap();
         }
         assert_eq!(stages.len(), 3);
         for stage in &stages {

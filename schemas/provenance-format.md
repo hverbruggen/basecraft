@@ -68,9 +68,9 @@ writes; a completed data replacement with a failed ancillary write reports
 Non-cooperating applications can still race the final filesystem replacement;
 network/cloud synchronization is not a distributed transaction protocol.
 
-Jobs persist `.basecraft/jobs/RUN/manifest.json` (of the run's project, or the
-`.basecraft` that holds the run) plus `input.snapshot` before
-launch and use that retained snapshot as the tool input. Terminal status, submitted
+A job's record is its run's own `runtime.json` (D28), in the run folder in the
+`.basecraft` of the run's project, or of the folder of a loose input; the
+retained input snapshot is written there before launch and used as the tool input. Terminal status, submitted
 document generation, effective parameters, plugin version, observed tool identity,
 CPU allocation, output hashes and diagnostics remain inspectable after temporary
 worker cleanup. A running record left by a dead owner is interrupted, never marked

@@ -5,7 +5,7 @@ use basecraft_protocol::{
     sanger_records::*, submission_records::*,
 };
 use serde::{Serialize, de::DeserializeOwned};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 type Encoder = fn(&[u8], bool) -> Vec<u8>;
 fn encode<T: DeserializeOwned + Serialize + schemars::JsonSchema>(
@@ -78,11 +78,6 @@ fn current_records_round_trip() {
             encode::<Vec<basecraft_protocol::operation::OperationOutcome>>,
             false,
         ),
-        (
-            "validated-artifacts",
-            encode::<Vec<(String, PathBuf, String)>>,
-            false,
-        ),
         ("pending-save", encode::<PendingSave>, true),
         ("analysis-index", encode::<AnalysisIndex>, false),
         ("indexed-folders", encode::<IndexedFolders>, false),
@@ -92,7 +87,6 @@ fn current_records_round_trip() {
         ("binding", encode::<ResultBinding>, true),
         ("run-", encode::<AnalysisRun>, true),
         ("collection-export", encode::<CollectionExportIntent>, true),
-        ("collection-intent", encode::<CollectionIntent>, true),
         ("member-export", encode::<MemberExportReceipt>, true),
         ("link-repair", encode::<AlignmentLinkRecovery>, true),
         ("link-guard", encode::<AlignmentLinkUnavailable>, true),

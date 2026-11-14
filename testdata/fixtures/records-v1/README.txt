@@ -112,9 +112,9 @@ string. Unix guard fixtures have typed OsString round-trip assertions on Unix;
 other platforms inspect their exact JSON bytes. This does not add cross-platform
 native-filename decoding or change the production selected-field reader.
 
-EX11/EX12/EX13 original publication captures
+EX12/EX13 original publication captures
 -----------------------------------------
-collection-intent.json, collection-export.json, member-export.json and
+collection-export.json, member-export.json and
 member-export-empty.json were captured before typed producer substitution by
 runner::record_format_tests::publication_original_producer_bytes. The real
 finalize/export_member helpers validated and published test-prepared synthetic

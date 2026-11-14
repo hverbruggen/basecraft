@@ -23,7 +23,6 @@ pub const STAMPED: &[&str] = &[
     "AnalysisIndex",
     "AnalysisRun",
     "CollectionExportIntent",
-    "CollectionIntent",
     "Companion",
     "IndexedFolders",
     "InstallationIndex",
@@ -49,6 +48,7 @@ pub const STAMPED: &[&str] = &[
     "Submission",
     "SubmissionPackage",
     "SubmittedInput",
+    "ValidatedResult",
     "ValidationSummary",
     "WorkflowFailure",
 ];
@@ -438,6 +438,15 @@ pub struct RunRuntime {
     pub manifest_digest: String,
     pub reported_versions: BTreeMap<String, String>,
     pub executable_digests: BTreeMap<String, String>,
+}
+
+/// A run folder's `validated.json`: the plugin's result as the host accepted
+/// it, and each file validation accepted, as (output role, path, hash). A
+/// repair publishes from it.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct ValidatedResult {
+    pub result: crate::plugin::InvokeResult,
+    pub artifacts: Vec<(String, PathBuf, String)>,
 }
 
 /// Existing rollback-durability poison marker. Recovery refuses its presence,

@@ -1,8 +1,8 @@
 //! Publish validated artifacts and retain an outcome for repair.
 use super::{
-    ArtifactDestination, ArtifactRevision, BTreeMap, CollectionExportIntent, CollectionIntent,
-    Error, InvokeResult, OperationOutcome, Path, PathBuf, PreparedOperation, PublishedArtifact,
-    Result, check_members, records, verify_collection,
+    ArtifactDestination, ArtifactRevision, BTreeMap, CollectionExportIntent, Error, InvokeResult,
+    OperationOutcome, Path, PathBuf, PreparedOperation, PublishedArtifact, Result, check_members,
+    records, verify_collection,
 };
 
 /// Files published into the project: destination, the run's copy if it
@@ -59,9 +59,6 @@ impl PreparedOperation {
             } else {
                 self.run.artifact(role)?
             };
-            let intent = self
-                .run
-                .artifact(&format!("collection-{role}-intent.json"))?;
             let mut expected = BTreeMap::new();
             for (_, path, hash) in &members {
                 let relative = path.strip_prefix(&staging).map_err(|_| {
@@ -147,7 +144,9 @@ impl PreparedOperation {
                 }
             } else {
                 if retained == staging || retained.exists() {
-                    if retained != staging && (!repair || !intent.is_file()) {
+                    // The run's own collection folder exists only once this
+                    // run has promoted it; only a repair finds it there.
+                    if retained != staging && !repair {
                         return Err(Error::Protocol(
                             "output_conflict: retained collection already exists".into(),
                         ));
@@ -164,13 +163,6 @@ impl PreparedOperation {
                     verify_collection(&retained, &present)?;
                 } else {
                     check_members(&staging, &expected)?;
-                    records::write_json(
-                        &intent,
-                        &serde_json::to_value(CollectionIntent {
-                            schema: 1,
-                            members: expected.clone(),
-                        })?,
-                    )?;
                     for path in expected.keys() {
                         basecraft_platform::files::sync_file(&staging.join(path))?;
                     }

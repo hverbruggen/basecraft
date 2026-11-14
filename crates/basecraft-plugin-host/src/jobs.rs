@@ -588,14 +588,10 @@ impl JobManager {
                 "evidence_incomplete: proposal tool-run activity was not recorded; publication-only repair cannot restore the owning session journal".into(),
             ));
         }
-        let result = basecraft_protocol::records::decode(&basecraft_ops::records::read_record(
-            &job.prepared.run.artifact("validated.json")?,
-        )?)?;
-        let artifacts = serde_json::from_slice::<Vec<(String, std::path::PathBuf, String)>>(
-            &basecraft_ops::records::read_record(
-                &job.prepared.run.artifact("validated-artifacts.json")?,
-            )?,
-        )?;
+        let basecraft_protocol::records::ValidatedResult { result, artifacts } =
+            basecraft_protocol::records::decode(&basecraft_ops::records::read_record(
+                &job.prepared.run.artifact("validated.json")?,
+            )?)?;
         outcome.state = RuntimeState::Finalizing;
         let mut repaired = outcome.clone();
         drop(outcome);

@@ -9,7 +9,7 @@ pub use prepare::recorded_request;
 
 use basecraft_ops::records::AlignmentLinkExt;
 use basecraft_platform::files::link_count;
-use basecraft_protocol::publication_records::{CollectionExportIntent, CollectionIntent};
+use basecraft_protocol::publication_records::CollectionExportIntent;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{
@@ -592,9 +592,12 @@ impl PreparedOperation {
                 &plan,
             )?;
         }
-        records::write_json(&self.run.artifact("validated.json")?, result)?;
-        records::write_plain_json(&self.run.artifact("validated-artifacts.json")?, &validated)?;
-        Ok(validated)
+        let record = basecraft_protocol::records::ValidatedResult {
+            result: result.clone(),
+            artifacts: validated,
+        };
+        records::write_json(&self.run.artifact("validated.json")?, &record)?;
+        Ok(record.artifacts)
     }
 
     /// Record a receipt after each write; later failure remains partial and all
@@ -643,9 +646,11 @@ impl PreparedOperation {
     /// Publish the species workspace in a validated run's result as a new
     /// SPART file in the project.
     fn publish_workspace(&self, destination: &str) -> Result<(PathBuf, Option<String>)> {
-        let validated: Vec<(String, PathBuf, String)> = serde_json::from_slice(
-            &basecraft_ops::records::read_record(&self.run.artifact("validated-artifacts.json")?)?,
-        )?;
+        let validated =
+            basecraft_protocol::records::decode::<basecraft_protocol::records::ValidatedResult>(
+                &basecraft_ops::records::read_record(&self.run.artifact("validated.json")?)?,
+            )?
+            .artifacts;
         let name = self.species_result_name();
         let (role, staged, hash) = validated
             .iter()
