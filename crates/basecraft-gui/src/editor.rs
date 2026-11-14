@@ -302,3 +302,43 @@ macro_rules! figure_export {
     };
 }
 pub(crate) use figure_export;
+
+/// Number the names the duplicate-name offer named (D29) in an open
+/// alignment or tree, as one undo step.
+macro_rules! number_names {
+    ($controller:ty) => {
+        impl $controller {
+            pub fn number_duplicates(mut self: std::pin::Pin<&mut Self>) -> bool {
+                let result = {
+                    let mut r = self.as_mut().rust_mut();
+                    let r = &mut *r;
+                    let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
+                        return false;
+                    };
+                    crate::document_open::duplicates(session, doc).and_then(|found| {
+                        let Some(found) = found else { return Ok(0) };
+                        basecraft_ops::renames::make_unique(session, doc, &found)
+                            .map(|()| found.renames.len())
+                    })
+                };
+                self.as_mut().set_duplicate_names(cxx_qt_lib::QString::default());
+                match result {
+                    Ok(count) => {
+                        let dirty =
+                            crate::document_open::unsaved(self.rust().session.as_ref(), self.rust().doc);
+                        self.as_mut().set_dirty(dirty);
+                        self.as_mut().after_history();
+                        self.as_mut().done(&format!("Numbered {count} names"));
+                        self.refresh();
+                        true
+                    }
+                    Err(e) => {
+                        self.fail(&e.to_string());
+                        false
+                    }
+                }
+            }
+        }
+    };
+}
+pub(crate) use number_names;

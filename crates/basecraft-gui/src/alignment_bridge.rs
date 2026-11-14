@@ -44,6 +44,8 @@ pub mod qobject {
         #[qproperty(bool, dirty)]
         /// The copy offer for an edit a read-only folder refused (D13), or "".
         #[qproperty(QString, refused_edit)]
+        /// The offer to number names several entries share (D29), or "".
+        #[qproperty(QString, duplicate_names)]
         /// Asks what the document is when basecraft cannot tell (D12), or "".
         #[qproperty(QString, alphabet_question)]
         #[qproperty(QString, zoom_text)]
@@ -72,6 +74,9 @@ pub mod qobject {
         /// End the closed tab's session now (Main.qml `removeDocument`).
         #[qinvokable]
         fn close_session(self: Pin<&mut AlignmentController>);
+        /// Number the names the duplicate-name offer named; whether it worked.
+        #[qinvokable]
+        fn number_duplicates(self: Pin<&mut AlignmentController>) -> bool;
         /// Where records of work on this document go (its session's folder).
         #[qinvokable]
         fn record_folder(self: &AlignmentController) -> QString;
@@ -376,6 +381,7 @@ crate::editor::editor_state!(AlignmentRust [drawn documents] {
     gap_runs: Vec<(u64, u64)> = Vec::new(),
     gap_scan_key: Option<(String, u64)> = None,
     review_snapshot_dir: Option<tempfile::TempDir> = None,
+    duplicate_names: QString = QString::default(),
     save_state: crate::editor_save::SaveState = crate::editor_save::SaveState::default(),
     view: AlignmentView = AlignmentView::new(800.0, 600.0),
 });
@@ -422,6 +428,7 @@ fn f(v: f64) -> f32 {
 }
 
 crate::editor::document_editor!(qobject::AlignmentController, alignment [fresh fail]);
+crate::editor::number_names!(qobject::AlignmentController);
 crate::editor::figure_export!(qobject::AlignmentController, alignment);
 
 fn has_figure_selection(view: &AlignmentView) -> bool {
@@ -479,6 +486,12 @@ impl crate::document_open::DocumentEditor for qobject::AlignmentController {
     }
     fn set_refused(self: Pin<&mut Self>, refused: QString) {
         self.set_refused_edit(refused);
+    }
+    fn open_document(&self) -> Option<(&Session, basecraft_ops::DocId)> {
+        self.rust().session.as_ref().zip(self.rust().doc)
+    }
+    fn offer_numbering(self: Pin<&mut Self>, offer: QString) {
+        self.set_duplicate_names(offer);
     }
     fn alphabet_question(&self) -> Option<String> {
         let (session, doc) = self.rust().session.as_ref().zip(self.rust().doc)?;

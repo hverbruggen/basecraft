@@ -446,10 +446,58 @@ pub(crate) trait DocumentEditor: cxx_qt::Threading + Sized + 'static {
         None
     }
     fn set_question(self: std::pin::Pin<&mut Self>, _question: cxx_qt_lib::QString) {}
+    /// The open session and document, for the duplicate-name offer (D29).
+    fn open_document(&self) -> Option<(&Session, basecraft_ops::DocId)> {
+        None
+    }
+    fn offer_numbering(self: std::pin::Pin<&mut Self>, _offer: cxx_qt_lib::QString) {}
+}
+
+/// The rows, tips or records of `doc` that share a name, and what numbering
+/// them would do (D29). `ops::renames` finds them.
+pub(crate) fn duplicates(
+    session: &Session,
+    doc: basecraft_ops::DocId,
+) -> basecraft_ops::Result<Option<basecraft_ops::renames::DuplicateNames>> {
+    if session.is_tree(doc) || session.is_alignment(doc) {
+        basecraft_ops::renames::duplicates(session, doc)
+    } else {
+        let path = session.root().join(session.doc_key(doc)?);
+        basecraft_ops::renames::duplicate_records(session, &path)
+    }
+}
+
+/// The offer to number duplicate names, in plain words, or "" when every
+/// name is unique.
+fn duplicate_offer(session: &Session, doc: basecraft_ops::DocId) -> String {
+    let Ok(Some(found)) = duplicates(session, doc) else {
+        return String::new();
+    };
+    let things = if session.is_tree(doc) {
+        "tips"
+    } else if session.is_alignment(doc) {
+        "rows"
+    } else {
+        "records"
+    };
+    let example = found.names.first().map_or_else(String::new, |name| {
+        format!(" ({name}.1, {name}.2)")
+    });
+    let mut offer = format!(
+        "Some {things} share a name: {}. Number them{example} so each can be edited?",
+        found.names.join(", ")
+    );
+    let relink = found.links.len() + found.submissions.len();
+    if relink > 0 {
+        offer.push_str(&format!(
+            " {relink} specimen links or submissions use these names and will need relinking."
+        ));
+    }
+    offer
 }
 
 /// After an editor installed the document at `path`: ask its alphabet
-/// question (D12), and redo the edit a read-only folder refused on the
+/// question (D12), offer to number duplicate names (D29), and redo the edit a read-only folder refused on the
 /// original (D13) on the next turn, so the install itself changes nothing.
 /// Redoing a stated alphabet answers the question.
 pub(crate) fn installed<T: DocumentEditor>(mut this: std::pin::Pin<&mut T>, path: &Path) {
@@ -459,6 +507,12 @@ pub(crate) fn installed<T: DocumentEditor>(mut this: std::pin::Pin<&mut T>, path
         .filter(|_| !matches!(redo, Some(basecraft_protocol::Op::SetAlphabet { .. })));
     this.as_mut()
         .set_question(cxx_qt_lib::QString::from(&question.unwrap_or_default()));
+    let offer = this
+        .open_document()
+        .map(|(session, doc)| duplicate_offer(session, doc))
+        .unwrap_or_default();
+    this.as_mut()
+        .offer_numbering(cxx_qt_lib::QString::from(&offer));
     if let Some(op) = redo {
         let _ = this.qt_thread().queue(move |this| {
             this.apply_edit(op);

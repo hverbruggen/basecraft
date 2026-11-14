@@ -144,7 +144,7 @@ ApplicationWindow {
     property var currentDocument: null
     property bool projectingDocument: false
     property var current: null
-    onCurrentChanged: alphabetQuestion.dialog().controller = current
+    onCurrentChanged: { alphabetQuestion.dialog().controller = current; duplicateNames.dialog().controller = current }
     property var currentView: null
     readonly property var traceDocument: traceOpen ? currentDocument : null
     readonly property var alignmentDocument: alignmentOpen ? currentDocument : null
@@ -292,6 +292,7 @@ ApplicationWindow {
         textRepresentation.dialog().open()
     }
     OnDemand { id: alphabetQuestion; objectName: "alphabetQuestion"; sourceComponent: Component { AlphabetDialog {} } }
+    OnDemand { id: duplicateNames; objectName: "duplicateNames"; sourceComponent: Component { DuplicateNamesDialog {} } }
     OnDemand { id: readOnlyCopy; objectName: "readOnlyCopy"; sourceComponent: Component { ReadOnlyCopyDialog { onSaveCopy: refused => window.saveCopy(refused) } } }
     OnDemand { id: otherProject; objectName: "otherProject"; sourceComponent: Component { AppContentDialog {
         id: otherProjectItem
@@ -465,6 +466,7 @@ ApplicationWindow {
         function onLabel_questionChanged() { labelPlacement.dialog().controller = window.current }
         function onRefused_editChanged() { readOnlyCopy.dialog().owner = window.current }
         function onAlphabet_questionChanged() { alphabetQuestion.dialog().controller = window.current }
+        function onDuplicate_namesChanged() { duplicateNames.dialog().controller = window.current }
         function onTaxaSelected(names) {
             for (let i = 0; i < docs.count; i++) {
                 const d = window.documentAt(i)

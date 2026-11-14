@@ -49,6 +49,8 @@ pub mod qobject {
         #[qproperty(bool, dirty)]
         /// The copy offer for an edit a read-only folder refused (D13), or "".
         #[qproperty(QString, refused_edit)]
+        /// The offer to number names several entries share (D29), or "".
+        #[qproperty(QString, duplicate_names)]
         #[qproperty(QString, zoom_text)]
         #[qproperty(f64, hscroll_pos)]
         #[qproperty(f64, hscroll_size)]
@@ -79,6 +81,9 @@ pub mod qobject {
         /// End the closed tab's session now (Main.qml `removeDocument`).
         #[qinvokable]
         fn close_session(self: Pin<&mut TreeController>);
+        /// Number the names the duplicate-name offer named; whether it worked.
+        #[qinvokable]
+        fn number_duplicates(self: Pin<&mut TreeController>) -> bool;
         /// Show the tree in `path` with `edits`, a JSON list of drawing
         /// edits, replayed on it. Nothing is written.
         #[qinvokable]
@@ -323,6 +328,7 @@ crate::editor::editor_state!(TreeRust [drawn documents] {
     branch_width: i32 = 0,
     has_support: bool = false,
     display_only: bool = false,
+    duplicate_names: QString = QString::default(),
     save_state: crate::editor_save::SaveState = crate::editor_save::SaveState::default(),
     view: TreeView = TreeView::new(800.0, 600.0),
 });
@@ -442,6 +448,7 @@ fn checked_annotation(
 }
 
 crate::editor::document_editor!(qobject::TreeController, tree [fresh fail]);
+crate::editor::number_names!(qobject::TreeController);
 crate::editor::figure_export!(qobject::TreeController, tree);
 
 fn has_figure_selection(view: &TreeView) -> bool {
@@ -506,6 +513,12 @@ impl crate::document_open::DocumentEditor for qobject::TreeController {
     }
     fn set_refused(self: Pin<&mut Self>, refused: QString) {
         self.set_refused_edit(refused);
+    }
+    fn open_document(&self) -> Option<(&Session, basecraft_ops::DocId)> {
+        self.rust().session.as_ref().zip(self.rust().doc)
+    }
+    fn offer_numbering(self: Pin<&mut Self>, offer: QString) {
+        self.set_duplicate_names(offer);
     }
 }
 

@@ -92,6 +92,8 @@ pub mod qobject {
         #[qproperty(bool, dirty)]
         /// The copy offer for an edit a read-only folder refused (D13), or "".
         #[qproperty(QString, refused_edit)]
+        /// The offer to number names several entries share (D29), or "".
+        #[qproperty(QString, duplicate_names)]
         /// Asks what the document is when basecraft cannot tell (D12), or "".
         #[qproperty(QString, alphabet_question)]
         #[qproperty(QString, zoom_text)]
@@ -104,6 +106,9 @@ pub mod qobject {
         /// End the closed tab's session now (Main.qml `removeDocument`).
         #[qinvokable]
         fn close_session(self: Pin<&mut GenomeController>);
+        /// Number the names the duplicate-name offer named; whether it worked.
+        #[qinvokable]
+        fn number_duplicates(self: Pin<&mut GenomeController>) -> bool;
         /// Where records of work on this document go (its session's folder).
         #[qinvokable]
         fn record_folder(self: &GenomeController) -> QString;
@@ -470,6 +475,7 @@ crate::editor::editor_state!(ControllerRust [drawn documents] {
     overview_pos: f64 = 0.0,
     overview_size: f64 = 1.0,
     scroll_size: f64 = 1.0,
+    duplicate_names: QString = QString::default(),
     save_state: crate::editor_save::SaveState = crate::editor_save::SaveState::default(),
     view: GenomeView = GenomeView::new(800.0, 600.0),
 });
@@ -570,6 +576,12 @@ impl crate::document_open::DocumentEditor for qobject::GenomeController {
     }
     fn set_refused(self: Pin<&mut Self>, refused: QString) {
         self.set_refused_edit(refused);
+    }
+    fn open_document(&self) -> Option<(&Session, basecraft_ops::DocId)> {
+        self.rust().session.as_ref().zip(self.rust().doc)
+    }
+    fn offer_numbering(self: Pin<&mut Self>, offer: QString) {
+        self.set_duplicate_names(offer);
     }
     fn alphabet_question(&self) -> Option<String> {
         let (session, doc) = self.rust().session.as_ref().zip(self.rust().doc)?;
@@ -1209,6 +1221,36 @@ impl qobject::GenomeController {
 
     fn after_history(self: Pin<&mut Self>) {
         self.clamp_cursor();
+    }
+
+    /// Number the records that share a name in the file itself (D29), then
+    /// open it again. Only names change, so the saved document must have no
+    /// unsaved edits; the numbering check runs in a session of its own,
+    /// because this editor reopens the file straight after.
+    pub fn number_duplicates(mut self: Pin<&mut Self>) -> bool {
+        self.as_mut().set_duplicate_names(QString::default());
+        if crate::document_open::unsaved(self.rust().session.as_ref(), self.rust().doc) {
+            self.fail("Save or undo the changes before numbering the records");
+            return false;
+        }
+        let path = self.rust().file_path.clone();
+        let file = PathBuf::from(path.to_string());
+        let result = match &self.rust().session {
+            Some(session) => basecraft_ops::renames::duplicate_records(session, &file)
+                .and_then(|found| {
+                    let Some(found) = found else { return Ok(()) };
+                    let numbering = Session::unlogged(session.root());
+                    basecraft_ops::renames::number_records(&numbering, &file, &found)
+                }),
+            None => return false,
+        };
+        match result {
+            Ok(()) => self.open_file(&path),
+            Err(e) => {
+                self.fail(&e.to_string());
+                false
+            }
+        }
     }
 
     pub fn state_alphabet(self: Pin<&mut Self>, answer: &QString) -> bool {
