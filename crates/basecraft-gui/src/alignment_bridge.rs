@@ -422,6 +422,15 @@ impl Drop for ActiveTool {
 }
 
 
+/// The names of the rows the selection covers.
+fn selected_names(view: &AlignmentView, alignment: &basecraft_docs::AlignmentDoc) -> Vec<String> {
+    view.selection.map_or_else(Vec::new, |block| {
+        (block.rows.0..block.rows.1)
+            .map(|i| alignment.row(i).name.clone())
+            .collect()
+    })
+}
+
 #[allow(clippy::cast_possible_truncation)]
 fn f(v: f64) -> f32 {
     v as f32
@@ -429,6 +438,7 @@ fn f(v: f64) -> f32 {
 
 crate::editor::document_editor!(qobject::AlignmentController, alignment [fresh fail]);
 crate::editor::number_names!(qobject::AlignmentController);
+crate::editor::taxa_editor!(qobject::AlignmentController, alignment, basecraft_docs::AlignmentDoc);
 crate::editor::figure_export!(qobject::AlignmentController, alignment);
 
 fn has_figure_selection(view: &AlignmentView) -> bool {
@@ -505,30 +515,6 @@ impl crate::document_open::DocumentEditor for qobject::AlignmentController {
 impl qobject::AlignmentController {
     pub fn record_folder(&self) -> QString {
         crate::document_open::record_folder(self.rust().session.as_ref())
-    }
-
-    pub fn accessible_page(&self, page: i32) -> QString {
-        let result = crate::bridge::checked_document!(
-            self.qt_thread(),
-            self.with_doc(|d| basecraft_viewmodel::accessible::alignment(d, page))
-        );
-        let value = result.map_or_else(
-            || serde_json::json!({"page": 0, "pages": 1, "text": "No document loaded"}),
-            |p| serde_json::json!({"page": p.page, "pages": p.pages, "text": p.text}),
-        );
-        QString::from(&value.to_string())
-    }
-
-    fn with_doc<T>(&self, f: impl FnOnce(&AlignmentDoc) -> T) -> basecraft_ops::Result<Option<T>> {
-        let r = self.rust();
-        match (&r.session, r.doc) {
-            (Some(s), Some(d)) => Ok(Some(f(s.alignment(d)?))),
-            _ => Ok(None),
-        }
-    }
-
-    fn check_document(&self) -> basecraft_ops::Result<()> {
-        self.with_doc(|_| ()).map(|_| ())
     }
 
     /// Rebuild the frame, status line and scroll bars.
@@ -725,92 +711,6 @@ impl qobject::AlignmentController {
         self.export_figure_with(path, scope, publication, Some(width), include_selection);
     }
 
-    #[cfg(test)]
-    #[allow(dead_code)] // Read by the real-controller bootstrap journey.
-    pub(crate) fn linked_taxa_snapshot(&self) -> Vec<String> {
-        let mut taxa: Vec<_> = self.rust().view.linked_taxa.iter().cloned().collect();
-        taxa.sort();
-        taxa
-    }
-
-    pub fn highlight_taxa(mut self: Pin<&mut Self>, names: &QString) {
-        if let Ok(taxa) =
-            serde_json::from_str::<std::collections::HashSet<String>>(&names.to_string())
-        {
-            self.as_mut().rust_mut().view.linked_taxa = taxa;
-            self.refresh();
-        }
-    }
-
-    fn emit_taxa(mut self: Pin<&mut Self>) {
-        let access_thread = self.qt_thread();
-        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
-            crate::bridge::checked_document!(sync self, session.alignment(doc));
-        }
-        let taxa = {
-            let r = self.rust();
-            let (Some(session), Some(doc)) = (&r.session, r.doc) else {
-                return;
-            };
-            let alignment = crate::bridge::checked_document!(access_thread, session.alignment(doc));
-            let names: Vec<_> = r.view.selection.map_or_else(Vec::new, |block| {
-                (block.rows.0..block.rows.1)
-                    .map(|i| alignment.row(i).name.clone())
-                    .collect()
-            });
-            serde_json::to_string(&names).unwrap_or_default()
-        };
-        if taxa != self.rust().last_taxa {
-            self.as_mut().rust_mut().last_taxa.clone_from(&taxa);
-            self.taxa_selected(QString::from(&taxa));
-        }
-    }
-
-    pub fn create_delimitation(mut self: Pin<&mut Self>, method: &QString) -> bool {
-        if self.rust().busy {
-            return false;
-        }
-        let Some(doc) = self.rust().doc else {
-            return false;
-        };
-        let Some(session) = self.as_mut().rust_mut().session.take() else {
-            return false;
-        };
-        let method = method.to_string();
-        self.as_mut().set_busy(true);
-        self.as_mut().notify("Creating species workspace");
-        let qt_thread = self.qt_thread();
-        let mut session = Some(session);
-        let spawn = crate::jobs::with_session(
-            qt_thread.clone(),
-            &mut session,
-            move |session, work| {
-                crate::delimitation_bridge::create_workspace_in_session(session, work, doc, &method)
-            },
-            move |mut this, session, result| {
-                this.as_mut().rust_mut().session = Some(session);
-                this.as_mut().set_busy(false);
-                match result {
-                    Ok(path) => {
-                        this.as_mut().done("Species workspace created");
-                        this.workspace_created(QString::from(path));
-                    }
-                    Err(error) => {
-                        this.as_mut().fail(&error);
-                        this.workspace_created(QString::default());
-                    }
-                }
-            },
-        );
-        if let Err(error) = spawn {
-            self.as_mut().rust_mut().session = session;
-            self.as_mut().set_busy(false);
-            self.fail(&error);
-            return false;
-        }
-        true
-    }
-
     pub(crate) fn install_opened(
         mut self: Pin<&mut Self>,
         candidate: crate::document_open::Candidate,
@@ -839,11 +739,6 @@ impl qobject::AlignmentController {
         crate::document_open::installed(self.as_mut(), &path);
         self.refresh();
         Ok(())
-    }
-
-    pub fn resize(mut self: Pin<&mut Self>, width: f64, height: f64) {
-        self.as_mut().rust_mut().view.resize(f(width), f(height));
-        self.refresh();
     }
 
     pub fn wheel(mut self: Pin<&mut Self>, x: f64, y: f64, dy: f64, dx: f64, modifiers: i32) {
@@ -1053,11 +948,6 @@ impl qobject::AlignmentController {
 
     pub fn zoom_out(mut self: Pin<&mut Self>) {
         self.as_mut().rust_mut().view.zoom_step(1.0 / ZOOM_STEP);
-        self.refresh();
-    }
-
-    pub fn fit(mut self: Pin<&mut Self>) {
-        self.as_mut().rust_mut().view.fit();
         self.refresh();
     }
 

@@ -342,3 +342,126 @@ macro_rules! number_names {
     };
 }
 pub(crate) use number_names;
+
+/// What the alignment and tree editors share as views of named taxa: their
+/// document, its text for screen readers, the taxa selected and linked to
+/// other views, and creating a species workspace from the document. The
+/// bridge module supplies `selected_names(view, document)`.
+macro_rules! taxa_editor {
+    ($controller:ty, $getter:ident, $document:ty) => {
+        impl $controller {
+            fn with_doc<T>(&self, f: impl FnOnce(&$document) -> T) -> basecraft_ops::Result<Option<T>> {
+                let r = self.rust();
+                match (&r.session, r.doc) {
+                    (Some(s), Some(d)) => Ok(Some(f(s.$getter(d)?))),
+                    _ => Ok(None),
+                }
+            }
+            fn check_document(&self) -> basecraft_ops::Result<()> {
+                self.with_doc(|_| ()).map(|_| ())
+            }
+            pub fn accessible_page(&self, page: i32) -> cxx_qt_lib::QString {
+                let result = crate::bridge::checked_document!(
+                    self.qt_thread(),
+                    self.with_doc(|d| basecraft_viewmodel::accessible::$getter(d, page))
+                );
+                let value = result.map_or_else(
+                    || serde_json::json!({"page": 0, "pages": 1, "text": "No document loaded"}),
+                    |p| serde_json::json!({"page": p.page, "pages": p.pages, "text": p.text}),
+                );
+                cxx_qt_lib::QString::from(&value.to_string())
+            }
+
+            #[cfg(test)]
+            #[allow(dead_code)] // Read by the real-controller bootstrap journey.
+            pub(crate) fn linked_taxa_snapshot(&self) -> Vec<String> {
+                let mut taxa: Vec<_> = self.rust().view.linked_taxa.iter().cloned().collect();
+                taxa.sort();
+                taxa
+            }
+            /// Highlight the taxa another view selected, a JSON list of names.
+            pub fn highlight_taxa(mut self: std::pin::Pin<&mut Self>, names: &cxx_qt_lib::QString) {
+                if let Ok(taxa) =
+                    serde_json::from_str::<std::collections::HashSet<String>>(&names.to_string())
+                {
+                    self.as_mut().rust_mut().view.linked_taxa = taxa;
+                    self.refresh();
+                }
+            }
+            /// Tell linked views which taxa are selected here, when that changed.
+            fn emit_taxa(mut self: std::pin::Pin<&mut Self>) {
+                let access_thread = self.qt_thread();
+                if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+                    crate::bridge::checked_document!(sync self, session.$getter(doc));
+                }
+                let taxa = {
+                    let r = self.rust();
+                    let (Some(session), Some(doc)) = (&r.session, r.doc) else {
+                        return;
+                    };
+                    let document = crate::bridge::checked_document!(access_thread, session.$getter(doc));
+                    serde_json::to_string(&selected_names(&r.view, document)).unwrap_or_default()
+                };
+                if taxa != self.rust().last_taxa {
+                    self.as_mut().rust_mut().last_taxa.clone_from(&taxa);
+                    self.taxa_selected(cxx_qt_lib::QString::from(&taxa));
+                }
+            }
+
+            pub fn create_delimitation(mut self: std::pin::Pin<&mut Self>, method: &cxx_qt_lib::QString) -> bool {
+                if self.rust().busy {
+                    return false;
+                }
+                let Some(doc) = self.rust().doc else {
+                    return false;
+                };
+                let Some(session) = self.as_mut().rust_mut().session.take() else {
+                    return false;
+                };
+                let method = method.to_string();
+                self.as_mut().set_busy(true);
+                self.as_mut().notify("Creating species workspace");
+                let qt_thread = self.qt_thread();
+                let mut session = Some(session);
+                let spawn = crate::jobs::with_session(
+                    qt_thread.clone(),
+                    &mut session,
+                    move |session, work| {
+                        crate::delimitation_bridge::create_workspace_in_session(session, work, doc, &method)
+                    },
+                    move |mut this, session, result| {
+                        this.as_mut().rust_mut().session = Some(session);
+                        this.as_mut().set_busy(false);
+                        match result {
+                            Ok(path) => {
+                                this.as_mut().done("Species workspace created");
+                                this.workspace_created(cxx_qt_lib::QString::from(path));
+                            }
+                            Err(error) => {
+                                this.as_mut().fail(&error);
+                                this.workspace_created(cxx_qt_lib::QString::default());
+                            }
+                        }
+                    },
+                );
+                if let Err(error) = spawn {
+                    self.as_mut().rust_mut().session = session;
+                    self.as_mut().set_busy(false);
+                    self.fail(&error);
+                    return false;
+                }
+                true
+            }
+
+            pub fn resize(mut self: std::pin::Pin<&mut Self>, width: f64, height: f64) {
+                self.as_mut().rust_mut().view.resize(f(width), f(height));
+                self.refresh();
+            }
+            pub fn fit(mut self: std::pin::Pin<&mut Self>) {
+                self.as_mut().rust_mut().view.fit();
+                self.refresh();
+            }
+        }
+    };
+}
+pub(crate) use taxa_editor;
