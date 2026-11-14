@@ -1,7 +1,7 @@
 //! Document loading and baseline tracking.
 use super::Session;
 use super::{DocId, Op, OpResult, Path, PathBuf, Result, Slot, files, invalid};
-use crate::error::{changed_on_disk, damaged};
+use crate::error::{changed_on_disk, damaged, unsupported};
 
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct SavedMark(pub(super) Option<String>);
@@ -204,20 +204,15 @@ impl Session {
         )?;
         let mut hashes = Vec::new();
         for (path, hash) in written {
-            let name = basecraft_platform::files::inside(&path, stage.path()).ok_or_else(|| {
-                crate::Error::Unsupported("Recovery writer escaped its staging folder".into())
-            })?;
+            let name = basecraft_platform::files::inside(&path, stage.path())
+                .ok_or_else(|| unsupported("Recovery writer escaped its staging folder"))?;
             let name = if Path::new(key).is_absolute() {
                 original.parent().expect("source parent").join(
                     basecraft_platform::files::inside(
                         &path,
                         target.parent().expect("checkpoint parent"),
                     )
-                    .ok_or_else(|| {
-                        crate::Error::Unsupported(
-                            "Recovery writer escaped its document folder".into(),
-                        )
-                    })?,
+                    .ok_or_else(|| unsupported("Recovery writer escaped its document folder"))?,
                 )
             } else {
                 name

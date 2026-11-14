@@ -1,4 +1,5 @@
 //! Sanger decisions use the same journal, undo stacks and save guards as other kinds.
+use crate::error::unsupported;
 use std::path::{Path, PathBuf};
 
 use basecraft_docs::FeatureId;
@@ -60,7 +61,7 @@ impl Document for SangerReview {
             ));
         }
         let Op::SangerReview { call_set, edit } = op else {
-            return Err(Error::Unsupported(format!(
+            return Err(unsupported(format!(
                 "{} cannot be applied to a Sanger review",
                 op.name()
             )));
@@ -96,9 +97,7 @@ impl Document for SangerReview {
         publication: &WritePublication,
     ) -> Result<super::PreparedWrite> {
         if format != Format::SangerReview {
-            return Err(Error::Unsupported(
-                "a Sanger review is saved as JSON".into(),
-            ));
+            return Err(unsupported("a Sanger review is saved as JSON"));
         }
         self.prepare_session_review(target, &publication.logical(target)?, publication)
     }

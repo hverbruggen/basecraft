@@ -309,9 +309,9 @@ pub(crate) fn execute_sequence(
         // Handled by the opened sequence, which keeps the alphabet.
         Op::SetAlphabet { .. } => Err(unsupported("set the alphabet on the open document")),
         Op::MetadataEdit { .. } => Err(unsupported("this needs the project metadata")),
-        Op::SangerReview { .. } | Op::SangerSelect { .. } | Op::SangerUpdate { .. } => Err(
-            crate::Error::Unsupported("choose a Sanger review document".into()),
-        ),
+        Op::SangerReview { .. } | Op::SangerSelect { .. } | Op::SangerUpdate { .. } => {
+            Err(unsupported("choose a Sanger review document"))
+        }
         Op::SubmissionEdit { .. } => Err(unsupported("this needs a submission document")),
         Op::JobFinished { .. } => Err(unsupported("use log_job_finished")),
         Op::ProposalOffer { .. } | Op::ProposalDecide { .. } => {

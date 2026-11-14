@@ -1,6 +1,6 @@
 //! Sanger adapters for the common artifact store and one-source evidence ledgers.
 use super::{SangerReview, StoredReview};
-use crate::error::{changed_on_disk, limit};
+use crate::error::{changed_on_disk, limit, unsupported};
 use crate::{
     Error,
     error::{damaged, invalid},
@@ -271,9 +271,7 @@ impl SangerRun {
         project: Option<&crate::project::Project>,
     ) -> crate::Result<Self> {
         if paths.is_empty() {
-            return Err(crate::Error::Unsupported(
-                "Sanger requires at least one input file".into(),
-            ));
+            return Err(unsupported("Sanger requires at least one input file"));
         }
         if paths.len() > 4 {
             return Err(limit("Sanger input files", 4));
@@ -1211,8 +1209,8 @@ impl SangerReview {
                     base(&set.anchor)?.join(input)
                 };
                 if same_file(target, &input)? {
-                    return Err(crate::Error::Unsupported(
-                        "Review cannot replace a source trace, draft or alignment context".into(),
+                    return Err(unsupported(
+                        "Review cannot replace a source trace, draft or alignment context",
                     ));
                 }
             }
@@ -1223,8 +1221,8 @@ impl SangerReview {
                 .filter_map(|source| source.ledger.as_ref())
             {
                 if same_file(target, &ledger.join("preserved-input"))? {
-                    return Err(crate::Error::Unsupported(
-                        "Review cannot replace preserved source evidence".into(),
+                    return Err(unsupported(
+                        "Review cannot replace preserved source evidence",
                     ));
                 }
             }

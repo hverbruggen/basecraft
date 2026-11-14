@@ -6,7 +6,7 @@ mod captured;
 mod edit;
 pub use captured::CapturedInput;
 mod storage;
-use crate::error::{damaged, limit};
+use crate::error::{damaged, invalid, limit, unsupported};
 use basecraft_docs::sanger::SangerDraftExt;
 pub use storage::{CheckedAddition, SangerRun, check_addition, record_addition};
 pub(crate) use storage::{is_review, relocate_package};
@@ -326,9 +326,7 @@ impl SangerReview {
         let stored: StoredCallSets =
             serde_json::from_value(value).map_err(|e| damaged(&e.to_string()))?;
         if stored.version != 3 {
-            return Err(Error::Unsupported(
-                "Unsupported Sanger review version".into(),
-            ));
+            return Err(unsupported("Unsupported Sanger review version"));
         }
         if stored.sets.is_empty() || stored.sets.len() > 32 {
             return Err(damaged("Invalid number of Sanger call sets"));
@@ -378,9 +376,7 @@ impl SangerReview {
             .canonicalize()?;
         let mut evidence = stored.evidence;
         if evidence.schema_version != 1 {
-            return Err(Error::Unsupported(
-                "Unsupported Sanger support version".into(),
-            ));
+            return Err(unsupported("Unsupported Sanger support version"));
         }
         evidence.map_paths(|p| Ok(parent.join(p)))?;
         let mut session = Self {
@@ -429,7 +425,7 @@ impl SangerReview {
     /// Keep older computed sets and their decisions when a new producer is used.
     pub fn retain_call_set(&mut self, session: Self) -> Result<()> {
         if !session.retained.is_empty() {
-            return Err(Error::Invalid("Sanger call sets cannot be nested".into()));
+            return Err(invalid("Sanger call sets cannot be nested"));
         }
         if self.retained.len() >= 31 {
             return Err(limit("Sanger call sets", 32));
@@ -440,9 +436,7 @@ impl SangerReview {
                 .sha256
                 .eq_ignore_ascii_case(&session.draft.inputs[0].sha256)
         {
-            return Err(Error::Invalid(
-                "Sanger call sets refer to different source bytes".into(),
-            ));
+            return Err(invalid("Sanger call sets refer to different source bytes"));
         }
         if !self
             .call_sets()
@@ -462,7 +456,7 @@ impl SangerReview {
             .retained
             .iter()
             .position(|set| set.draft_sha256 == id)
-            .ok_or_else(|| Error::Invalid("Unknown Sanger call set".into()))?;
+            .ok_or_else(|| invalid("Unknown Sanger call set"))?;
         let mut retained = std::mem::take(&mut self.retained);
         std::mem::swap(self, &mut retained[index]);
         // Selection swaps the same two positions; inverse selection restores exact ordering.

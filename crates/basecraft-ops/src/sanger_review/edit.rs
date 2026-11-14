@@ -1,5 +1,6 @@
 //! Adapt the review owner's fields to the pure document edit implementation.
 use super::{Change, ReviewOp, SangerReview};
+use crate::error::{invalid, unsupported};
 use basecraft_docs::sanger::review::{ReviewState, ReviewStateMut};
 
 impl SangerReview {
@@ -37,7 +38,7 @@ impl SangerReview {
         self.retained
             .iter_mut()
             .find(|set| set.draft_sha256 == id)
-            .ok_or_else(|| crate::Error::Invalid("Unknown Sanger call set".into()))
+            .ok_or_else(|| invalid("Unknown Sanger call set"))
     }
 
     pub(crate) fn apply_session_edit(
@@ -68,9 +69,7 @@ impl SangerReview {
             events,
         } = inverse
         else {
-            return Err(crate::Error::Unsupported(
-                "undo of the wrong kind of edit".into(),
-            ));
+            return Err(unsupported("undo of the wrong kind of edit"));
         };
         let set = self.call_set_mut(call_set)?;
         set.install_change(change, false)

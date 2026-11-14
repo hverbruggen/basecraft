@@ -68,7 +68,7 @@ impl Document for OpenedMetadata {
         _publication: &super::WritePublication,
     ) -> Result<super::PreparedWrite> {
         if format != Format::Metadata {
-            return Err(crate::Error::Unsupported(format!(
+            return Err(unsupported(format!(
                 "project metadata is saved as {}",
                 crate::metadata::MANIFEST
             )));

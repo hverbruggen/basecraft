@@ -6,6 +6,7 @@
 //! [`ChangeSet`] and the issues found. Callers show it for review and apply
 //! it as one `metadata.edit` operation, so GUI, CLI, Python and MCP edits
 //! share undo, replay and history.
+use crate::error::{damaged, invalid, unsupported};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -19,7 +20,6 @@ use basecraft_protocol::metadata::{
 use serde::{Deserialize, Serialize};
 
 use crate::Error;
-use crate::error::{damaged, invalid};
 
 use crate::{Result, Session};
 pub use basecraft_docs::metadata::{
@@ -1195,7 +1195,7 @@ pub fn document_key(project: &Path, path: &Path) -> Result<String> {
     relative
         .to_str()
         .map(str::to_string)
-        .ok_or_else(|| Error::Unsupported("file names must be UTF-8".into()))
+        .ok_or_else(|| unsupported("file names must be UTF-8"))
 }
 
 fn checked_metadata(session: &Session, doc: crate::DocId) -> Result<&ProjectMetadata> {

@@ -1,6 +1,6 @@
 //! Opening and saving documents by file format.
 
-use crate::error::{damaged, limit};
+use crate::error::{damaged, limit, unsupported};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -736,7 +736,7 @@ fn read_companion(
 ) -> Result<Companion> {
     let (companion, writer) = basecraft_protocol::records::decode_written::<Companion>(bytes)?;
     if companion.version != COMPANION_VERSION {
-        return Err(Error::Unsupported(format!(
+        return Err(unsupported(format!(
             "{}: {}",
             path.display(),
             basecraft_protocol::records::other_format(

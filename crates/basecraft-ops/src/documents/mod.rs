@@ -3,7 +3,7 @@
 //! Seven payloads share identity, journal, undo and save ownership. Each payload
 //! supplies its own edits and serializer; scientific review history stays specialised.
 
-use crate::error::damaged;
+use crate::error::{damaged, unsupported};
 use std::path::{Path, PathBuf};
 
 use basecraft_docs::FeatureId;
@@ -284,14 +284,10 @@ pub(crate) trait Document {
     /// Detached proposal staging retains the same payload and writer metadata.
     /// Unsupported kinds cannot be mutated through the proposal route.
     fn proposal_candidate(&self) -> Result<crate::files::Loaded> {
-        Err(crate::Error::Unsupported(
-            "this document kind does not support proposals".into(),
-        ))
+        Err(unsupported("this document kind does not support proposals"))
     }
     fn apply_proposal(&mut self, _op: &Op) -> Result<(Inverse, Option<FeatureId>)> {
-        Err(crate::Error::Unsupported(
-            "this document kind does not support proposals".into(),
-        ))
+        Err(unsupported("this document kind does not support proposals"))
     }
     fn revision(&self, generation: u64) -> u64;
     fn fingerprint(&self) -> DocState;

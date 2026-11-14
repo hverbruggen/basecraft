@@ -1,5 +1,5 @@
 //! Inspectable portable save history. No bundle content is ever executed.
-use crate::error::{damaged, limit};
+use crate::error::{damaged, limit, unsupported};
 use crate::{Result, error::invalid};
 use basecraft_protocol::{
     Actor, DocState, LogEntry, OpResult,
@@ -278,9 +278,7 @@ pub fn latest(bundle: &Path) -> Result<Option<(Publication, String)>> {
     let pointer: basecraft_protocol::provenance::LatestRecord =
         basecraft_protocol::records::decode(&read_record(&manifest)?)?;
     if pointer.schema_version != 1 {
-        return Err(crate::Error::Unsupported(
-            "unsupported provenance schema version".into(),
-        ));
+        return Err(unsupported("unsupported provenance schema version"));
     }
     let (publication, hash) = read_publication(bundle, &pointer.id, &mut (64 << 20))?;
     if hash != pointer.hash {
@@ -789,9 +787,7 @@ fn link_selected_inputs<'a>(
             continue;
         }
         if dependency.schema_version != 1 {
-            return Err(crate::Error::Unsupported(
-                "Unsupported selected input dependency".into(),
-            ));
+            return Err(unsupported("Unsupported selected input dependency"));
         }
         let id = dependency.id.as_str();
         if id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
