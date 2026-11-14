@@ -304,6 +304,60 @@ impl HistoryGap {
     }
 }
 
+/// `latest` and the records it descends from, each after its parents. A
+/// parent that is missing or whose bytes differ from the hash its child
+/// recorded is a gap, not an error.
+fn ancestry(bundle: &Path, latest: Publication) -> Result<(Vec<Publication>, Vec<HistoryGap>)> {
+    let mut budget = 128u64 << 20;
+    let mut seen = std::collections::HashSet::from([latest.id.clone()]);
+    let mut gaps = Vec::new();
+    let mut order = Vec::new();
+    let mut stack = vec![(latest, false)];
+    while let Some((record, expanded)) = stack.pop() {
+        if expanded {
+            order.push(record);
+            continue;
+        }
+        let mut parents = Vec::new();
+        for id in record.parents.iter().rev() {
+            if parents.iter().any(|(known, _)| known == id) {
+                return Err(invalid("duplicate parent identity"));
+            }
+            parents.push((id.clone(), record.parent_hashes.get(id).cloned()));
+        }
+        let before = record.created.clone();
+        stack.push((record, true));
+        for (id, expected) in parents {
+            if !seen.insert(id.clone()) {
+                continue;
+            }
+            if seen.len() > 10_000 {
+                return Err(crate::Error::Limit {
+                    what: "history records".into(),
+                    limit: 10_000,
+                });
+            }
+            let gap = |reason| HistoryGap {
+                record: id.clone(),
+                before: before.clone(),
+                reason,
+            };
+            match read_publication(bundle, &id, &mut budget) {
+                Ok((parent, hash)) if expected.as_deref() == Some(hash.as_str()) => {
+                    stack.push((parent, false));
+                }
+                Ok(_) => gaps.push(gap("has changed since it was saved")),
+                Err(crate::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                    gaps.push(gap("is missing"));
+                }
+                Err(error @ crate::Error::Limit { .. }) => return Err(error),
+                Err(_) => gaps.push(gap("cannot be read")),
+            }
+        }
+    }
+    Ok((order, gaps))
+}
+
 /// A document's saved history: every record up to the latest, read through
 /// the parent links, oldest first.
 #[derive(Clone, Debug, Default)]
@@ -318,55 +372,7 @@ impl SavedHistory {
     /// Read the records `latest` descends from. A parent that is missing or
     /// whose bytes differ from its recorded hash is a gap, not an error.
     pub fn read(bundle: &Path, latest: Publication) -> Result<Self> {
-        let mut budget = 128u64 << 20;
-        let mut seen = std::collections::HashSet::from([latest.id.clone()]);
-        let mut gaps = Vec::new();
-        // Parents end up in `order` before the records that name them.
-        let mut order = Vec::new();
-        let mut stack = vec![(latest, false)];
-        while let Some((record, expanded)) = stack.pop() {
-            if expanded {
-                order.push(record);
-                continue;
-            }
-            let parents: Vec<_> = record
-                .parents
-                .iter()
-                .rev()
-                .map(|id| (id.clone(), record.parent_hashes.get(id).cloned()))
-                .collect();
-            let before = record.created.clone();
-            stack.push((record, true));
-            for (id, expected) in parents {
-                if !seen.insert(id.clone()) {
-                    continue;
-                }
-                if seen.len() > 10_000 {
-                    return Err(crate::Error::Limit {
-                        what: "history records".into(),
-                        limit: 10_000,
-                    });
-                }
-                let gap = |reason| HistoryGap {
-                    record: id.clone(),
-                    before: before.clone(),
-                    reason,
-                };
-                match read_publication(bundle, &id, &mut budget) {
-                    Ok((parent, hash)) if expected.as_deref() == Some(hash.as_str()) => {
-                        stack.push((parent, false));
-                    }
-                    Ok(_) => gaps.push(gap("has changed since it was saved")),
-                    Err(crate::Error::Io(error))
-                        if error.kind() == std::io::ErrorKind::NotFound =>
-                    {
-                        gaps.push(gap("is missing"));
-                    }
-                    Err(error @ crate::Error::Limit { .. }) => return Err(error),
-                    Err(_) => gaps.push(gap("cannot be read")),
-                }
-            }
-        }
+        let (order, gaps) = ancestry(bundle, latest)?;
         let mut history = Self {
             gaps,
             ..Self::default()
@@ -484,58 +490,28 @@ pub fn verify(result: &Path, project: Option<&crate::project::Project>) -> Resul
 
 pub(crate) fn verify_records(bundle: &Path, current: &Publication) -> Result<Vec<String>> {
     let mut issues = Vec::new();
-    let mut states = std::collections::HashMap::<String, u8>::new();
-    let mut hashes = std::collections::HashMap::<String, String>::new();
-    // Every event of the records reached; effective edits may name an event
-    // of an earlier record, such as an edit redone after a save.
-    let mut events = std::collections::HashMap::<String, basecraft_protocol::Op>::new();
-    let mut effective = Vec::new();
-    // Queue only identities and expected checksums, never parsed publications.
-    let mut stack = vec![(current.id.clone(), None, false)];
-    let mut scheduled = 1usize;
-    let mut record_budget = 128u64 << 20;
+    let (stored, _) = read_publication(bundle, &current.id, &mut (64 << 20))?;
+    if serde_json::to_value(&stored)? != serde_json::to_value(current)? {
+        issues.push(format!(
+            "{}: immutable publication record differs",
+            current.id
+        ));
+    }
+    let (records, gaps) = ancestry(bundle, stored)?;
+    issues.extend(
+        gaps.iter()
+            .map(|gap| format!("{}: ancestor record {}", gap.record, gap.reason)),
+    );
+    // Effective edits may name an event of an earlier record, such as an
+    // edit redone after a save.
+    let mut events = std::collections::HashMap::new();
     let mut artifact_bytes = 0u64;
-    while let Some((id, expected_hash, leaving)) = stack.pop() {
-        if leaving {
-            states.insert(id, 2);
-            continue;
-        }
-        if states.get(&id) == Some(&1) {
-            return Err(invalid("provenance ancestry contains a cycle"));
-        }
-        if let Some(hash) = hashes.get(&id) {
-            if expected_hash
-                .as_ref()
-                .is_some_and(|expected| expected != hash)
-            {
-                issues.push(format!("{id}: ancestor record hash differs"));
-            }
-            continue;
-        }
-        safe_relative(bundle, &format!("records/{id}.json"))?;
-        let (publication, hash) = read_publication(bundle, &id, &mut record_budget)?;
-        if expected_hash
-            .as_ref()
-            .is_some_and(|expected| *expected != hash)
-        {
-            issues.push(format!("{id}: ancestor record hash differs"));
-        }
-        hashes.insert(id.clone(), hash);
-        if id == current.id && serde_json::to_value(&publication)? != serde_json::to_value(current)?
-        {
-            issues.push(format!("{id}: immutable publication record differs"));
-        }
+    for publication in &records {
         let own: std::collections::HashSet<_> = publication.events.iter().map(|e| &e.id).collect();
         if own.len() != publication.events.len() {
-            issues.push(format!("{id}: duplicate event identities"));
+            issues.push(format!("{}: duplicate event identities", publication.id));
         }
-        events.extend(
-            publication
-                .events
-                .iter()
-                .map(|e| (e.id.clone(), e.op.clone())),
-        );
-        effective.extend(publication.effective_edits.iter().cloned());
+        events.extend(publication.events.iter().map(|e| (&e.id, &e.op)));
         for artifact in publication.inputs.iter().chain(&publication.outputs) {
             if let Some(relative) = &artifact.retained {
                 let retained = safe_relative(bundle, relative)?;
@@ -562,30 +538,9 @@ pub(crate) fn verify_records(bundle: &Path, current: &Publication) -> Result<Vec
                 }
             }
         }
-        let mut parents = std::collections::HashSet::new();
-        states.insert(id.clone(), 1);
-        stack.push((id, None, true));
-        for parent in &publication.parents {
-            if !parents.insert(parent) {
-                return Err(invalid("duplicate parent identity"));
-            }
-            scheduled += 1;
-            if scheduled > 10_000 {
-                return Err(crate::Error::Limit {
-                    what: "provenance ancestry references".into(),
-                    limit: 10_000,
-                });
-            }
-            let expected = publication
-                .parent_hashes
-                .get(parent)
-                .cloned()
-                .ok_or_else(|| invalid("ancestor record hash missing"))?;
-            stack.push((parent.clone(), Some(expected), false));
-        }
     }
-    for activity in effective {
-        if events.get(&activity.id) != Some(&activity.operation) {
+    for activity in records.iter().flat_map(|record| &record.effective_edits) {
+        if events.get(&activity.id) != Some(&&activity.operation) {
             issues.push(format!(
                 "{}: effective activity has no matching event",
                 activity.id

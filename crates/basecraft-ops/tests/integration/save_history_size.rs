@@ -145,7 +145,11 @@ fn a_reopened_file_shows_its_whole_history_and_a_lost_record_as_a_gap() {
     );
     let report = record.report().unwrap();
     assert_eq!(report.history[0].summary, "Earlier history missing");
-    assert!(basecraft_ops::records::verify(&file, None).is_err());
+    let issues = basecraft_ops::records::verify(&file, None).unwrap();
+    assert!(
+        issues.iter().any(|issue| issue.contains("is missing")),
+        "{issues:?}"
+    );
 }
 
 #[test]
