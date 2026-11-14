@@ -2,7 +2,7 @@
 use crate::{provenance::InputReference, sanger::ReviewOp};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, path::PathBuf};
+use std::path::PathBuf;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SavedReview {
@@ -60,44 +60,6 @@ pub struct ReviewSupport {
 pub struct SangerRequest {
     pub operation: String,
     pub sources: Vec<PathBuf>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum SangerJobStatus {
-    Running,
-    Failed,
-    Cancelled,
-    Interrupted,
-    SupportRetained,
-    ReviewRequiresAttention,
-    #[serde(untagged)]
-    Unknown(String),
-}
-
-/// Execution and job-index share this shape. Recovery omits `artifact_run`.
-/// In `.basecraft/jobs`, paths are relative to the home that holds that
-/// `.basecraft`, `/`-separated.
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct SangerJobRecord {
-    pub schema_version: u32,
-    pub id: String,
-    pub owner_instance: String,
-    pub status: SangerJobStatus,
-    pub operation: String,
-    pub started: String,
-    pub source: SangerJobSource,
-    pub outputs: BTreeMap<String, String>,
-    pub primary_output: Option<PathBuf>,
-    pub diagnostics: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub artifact_run: Option<PathBuf>,
-    #[serde(flatten)]
-    pub extra: BTreeMap<String, serde_json::Value>,
-}
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct SangerJobSource {
-    pub path: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

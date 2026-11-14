@@ -27,7 +27,7 @@ fn store_writer_bytes_and_validation() {
         return;
     }
     let root = std::path::PathBuf::from(std::env::var_os("BASECRAFT_STORE_CHILD").unwrap());
-    let run = ArtifactRun::create(&root.join("result.json"), "first").unwrap();
+    let run = ArtifactRun::create(None, &root.join("result.json"), "first").unwrap();
     let store = run.directory().parent().unwrap().parent().unwrap();
     let marker = store.join("store.json");
     let original = std::fs::read(&marker).unwrap();

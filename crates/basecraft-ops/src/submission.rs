@@ -1378,19 +1378,26 @@ fn verified_reports(
                 .as_str()
                 .ok_or_else(|| damaged(run, "missing validation artifact path"))?,
         );
+        // The run was made in the project the caller chose, or, without
+        // one, in the submission's folder; its reports are bound there.
+        let chosen = crate::project::Project::new(root)?;
+        let run = run.canonicalize()?;
+        let bound_in = |project| {
+            crate::records::provenance::bundle_for_result(&path, project)
+                .canonicalize()
+                .is_ok_and(|bundle| bundle == run)
+        };
+        let project = bound_in(Some(&chosen)).then_some(&chosen);
         if artifact["role"] != "reports"
             || basecraft_io::hash_file(&path)? != artifact["digest"].as_str().unwrap_or_default()
-            || crate::records::provenance::bundle_for_result(&path, None).canonicalize()?
-                != run.canonicalize()?
+            || !(project.is_some() || bound_in(None))
         {
             return Err(damaged(
                 run,
                 "validation artifact or publication evidence differs",
             ));
         }
-        // The submission's folder is the project the caller chose.
-        let project = crate::project::Project::new(root)?;
-        let issues = crate::records::provenance::verify(&path, Some(&project))?;
+        let issues = crate::records::provenance::verify(&path, project)?;
         if !issues.is_empty() {
             return Err(damaged(
                 path.clone(),

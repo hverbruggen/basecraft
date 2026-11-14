@@ -1,8 +1,8 @@
 //! Publish validated artifacts and retain an outcome for repair.
 use super::{
-    ArtifactDestination, ArtifactRevision, BTreeMap, CollectionExportIntent, CollectionIntent,
-    Error, InvokeResult, OperationOutcome, Path, PathBuf, PreparedOperation, PublishedArtifact,
-    Result, records, verify_collection,
+    ArtifactRevision, BTreeMap, CollectionExportIntent, Error, InvokeResult, OperationOutcome,
+    Path, PathBuf, PreparedOperation, PublishedArtifact, Result, check_members, records,
+    verify_collection,
 };
 use basecraft_protocol::operation::OperationErrorCode as Code;
 
@@ -60,9 +60,6 @@ impl PreparedOperation {
             } else {
                 self.run.artifact(role)?
             };
-            let intent = self
-                .run
-                .artifact(&format!("collection-{role}-intent.json"))?;
             let mut expected = BTreeMap::new();
             for (_, path, hash) in &members {
                 let relative = path.strip_prefix(&staging).map_err(|_| {
@@ -90,6 +87,7 @@ impl PreparedOperation {
                         .iter()
                         .any(|artifact| artifact.path == member)
                 });
+                let moved_now = !path.exists();
                 if path.exists() && !(repair && published && intent.is_file()) {
                     // Not yet in the outcome: adopt only the folder this run
                     // moved, by the identity its intent recorded.
@@ -109,7 +107,7 @@ impl PreparedOperation {
                         ));
                     }
                 } else if !path.exists() {
-                    verify_collection(&staging, &expected)?;
+                    check_members(&staging, &expected)?;
                     for member in expected.keys() {
                         basecraft_platform::files::sync_file(&staging.join(member))?;
                     }
@@ -138,14 +136,19 @@ impl PreparedOperation {
                         },
                     )?;
                 }
-                verify_collection(&path, &expected)?;
+                if !moved_now {
+                    // A repair adopts what an earlier attempt moved there.
+                    verify_collection(&path, &expected)?;
+                }
                 record_collection(outcome, role, &path, &expected);
                 for member in expected.keys() {
                     moved.insert(retained.join(member), path.join(member));
                 }
             } else {
                 if retained == staging || retained.exists() {
-                    if retained != staging && (!repair || !intent.is_file()) {
+                    // The run's own collection folder exists only once this
+                    // run has promoted it; only a repair finds it there.
+                    if retained != staging && !repair {
                         return Err(Error::refused(
                             Code::OutputConflict,
                             "retained collection already exists",
@@ -162,14 +165,7 @@ impl PreparedOperation {
                         .collect();
                     verify_collection(&retained, &present)?;
                 } else {
-                    verify_collection(&staging, &expected)?;
-                    records::write_json(
-                        &intent,
-                        &serde_json::to_value(CollectionIntent {
-                            schema: 1,
-                            members: expected.clone(),
-                        })?,
-                    )?;
+                    check_members(&staging, &expected)?;
                     for path in expected.keys() {
                         basecraft_platform::files::sync_file(&staging.join(path))?;
                     }
@@ -315,7 +311,7 @@ impl PreparedOperation {
                 if &staging != path {
                     std::fs::rename(path, &staging)?;
                 }
-                self.run.publish(&name, ArtifactDestination::Metadata)?;
+                self.run.publish(&name)?;
                 outcome.artifacts.push(PublishedArtifact {
                     role: role.clone(),
                     path: retained.display().to_string(),
@@ -484,7 +480,9 @@ impl PreparedOperation {
                 .publish_operation_activity(&self.run, &activity)?;
         }
         for artifact in &outcome.artifacts {
-            self.run.bind(Path::new(&artifact.path))?;
+            let path = Path::new(&artifact.path);
+            self.run
+                .bind(self.project.as_ref(), path, &artifact.digest)?;
         }
         Ok(())
     }
@@ -553,7 +551,7 @@ impl PreparedOperation {
             .extension()
             .is_some_and(|extension| extension.eq_ignore_ascii_case("nwk"))
         {
-            self.finalise_exported_tree(role, &destination_path)?;
+            self.finalise_exported_tree(role, &destination_path, hash)?;
         }
         Ok(())
     }

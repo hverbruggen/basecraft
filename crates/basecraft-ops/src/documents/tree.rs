@@ -119,12 +119,17 @@ impl Document for OpenedTree {
 
     fn finish_write(
         &self,
+        project: Option<&crate::project::Project>,
         target: &Path,
-        _: &[(PathBuf, String)],
+        written: &[(PathBuf, String)],
         _: Option<&crate::records::analysis_store::ArtifactRun>,
         _: &super::WritePublication,
     ) -> Result<()> {
-        crate::records::analysis_store::ArtifactRun::refresh_binding(target)
+        let hash = match written.iter().find(|(path, _)| path == target) {
+            Some((_, hash)) => hash.clone(),
+            None => basecraft_io::hash_file(target)?,
+        };
+        crate::records::analysis_store::ArtifactRun::refresh_binding(project, target, &hash)
     }
 
     fn saved_hashes(

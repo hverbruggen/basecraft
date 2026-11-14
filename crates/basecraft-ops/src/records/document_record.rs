@@ -34,23 +34,15 @@ impl std::ops::DerefMut for DocumentRecord {
     }
 }
 
-/// The latest saved record of `path` and its whole history, when the record
-/// describes the file's current contents; otherwise why not.
+/// The latest saved record in `bundle` and its whole history, when the
+/// record describes the file's current contents (`hashes`); otherwise why not.
 pub fn read_origin(
-    path: &Path,
+    bundle: &Path,
     hashes: &[(String, String)],
-    project: Option<&crate::project::Project>,
 ) -> (Option<(Publication, SavedHistory)>, Option<String>) {
-    if let Err(e) = crate::records::analysis_store::ArtifactRun::for_result(path) {
-        return (
-            None,
-            Some(format!("Hidden analysis binding could not be read: {e}")),
-        );
-    }
-    let bundle = crate::records::provenance::bundle_for_result(path, project);
-    match crate::records::provenance::latest(&bundle) {
+    match crate::records::provenance::latest(bundle) {
         Ok(None) => (None, None),
-        Ok(Some((p, _))) if !hashes.is_empty() && hashes.iter().all(|(_, hash)| p.outputs.iter().any(|a| &a.hash == hash)) => match SavedHistory::read(&bundle, p.clone()) {
+        Ok(Some((p, _))) if !hashes.is_empty() && hashes.iter().all(|(_, hash)| p.outputs.iter().any(|a| &a.hash == hash)) => match SavedHistory::read(bundle, p.clone()) {
             Ok(history) => (Some((p, history)), None),
             Err(e) => (None, Some(format!("The saved history could not be read: {e}"))),
         },
@@ -94,10 +86,7 @@ impl DocumentRecord {
         }
         if !upstream.is_empty() {
             input.upstream = upstream;
-            crate::records::input_evidence::write_json(
-                &run.directory().join("input.json"),
-                &input,
-            )?;
+            crate::records::input_evidence::write_input(run.directory(), &input)?;
         }
         crate::records::provenance::publish(run.directory(), &publication)
     }
@@ -126,8 +115,10 @@ impl DocumentRecord {
     }
 
     /// `project` is the session's chosen project, or none for a loose file.
+    /// With `hash`, the file must still hold those bytes when it is read.
     pub fn from_file(
         path: &Path,
+        hash: Option<&str>,
         project: Option<&crate::project::Project>,
     ) -> crate::Result<Self> {
         let path = path.canonicalize()?;
@@ -136,6 +127,15 @@ impl DocumentRecord {
         let root = crate::project::Project::base_of(project, &path)?;
         let mut session = crate::Session::recoverable(&root)?.in_project(project.cloned());
         let doc = session.open(&path)?;
+        if hash.is_some_and(|hash| {
+            session
+                .saved_source(doc)
+                .ok()
+                .flatten()
+                .is_none_or(|(_, _, opened)| opened != hash)
+        }) {
+            return Err(crate::Error::ChangedOnDisk { path });
+        }
         session.document_record(doc)
     }
 
@@ -148,12 +148,12 @@ impl DocumentRecord {
         project: Option<&crate::project::Project>,
     ) -> crate::Result<Report> {
         if crate::metadata::is_manifest(path) || crate::submission::is_submission(path) {
-            return Self::from_file(path, project)?.report();
+            return Self::from_file(path, None, project)?.report();
         }
         if let Some(review) = crate::sanger_review::saved_review(path) {
-            return review?.report_with_history(&Self::from_file(path, project)?);
+            return review?.report_with_history(&Self::from_file(path, None, project)?);
         }
-        Self::from_file(path, project)?.report()
+        Self::from_file(path, None, project)?.report()
     }
 
     /// The record of a saved revision: `latest` and the history it ends.

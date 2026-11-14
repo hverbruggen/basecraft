@@ -19,10 +19,20 @@ pub fn companion(path: &Path) -> PathBuf {
 /// The final fallback is the original companion spelling, even if it does not
 /// exist. Selection does not validate content or establish complete provenance.
 pub fn bundle_for_result(result: &Path, project: Option<&crate::project::Project>) -> PathBuf {
-    if let Ok(Some(hidden)) = crate::records::analysis_store::ArtifactRun::for_result(result)
+    let run = crate::records::analysis_store::ArtifactRun::for_result(project, result);
+    bundle_of(project, result, run.ok().flatten().as_deref())
+}
+
+/// [`bundle_for_result`] for a result whose bound `run`, if any, is known.
+pub fn bundle_of(
+    project: Option<&crate::project::Project>,
+    result: &Path,
+    run: Option<&Path>,
+) -> PathBuf {
+    if let Some(hidden) = run
         && hidden.join("manifest.json").is_file()
     {
-        return hidden;
+        return hidden.to_path_buf();
     }
     let standalone = companion(result);
     if standalone.join("manifest.json").is_file() {
@@ -107,23 +117,22 @@ pub fn retained_file(
     })
 }
 
-/// Move a run's file to a new file in the project, never replacing one
-/// (D26). The receipt names the file's inode before the move, so a later
-/// repair adopts only the file this run moved.
+/// Move a run's file, whose hash the caller knows, to a new file in the
+/// project, never replacing one (D26). The receipt names the file's inode
+/// before the move, so a later repair adopts only the file this run moved.
+/// A copy across file systems is checked against `hash`.
 pub fn move_file(source: &Path, destination: &Path, hash: &str, receipt: &Path) -> Result<()> {
-    let check = |file: &Path| {
-        if basecraft_io::hash_file(file)? == hash {
-            Ok(())
-        } else {
-            Err(invalid("member changed before export"))
-        }
-    };
-    check(source)?;
     move_into_project(
         source,
         destination,
         |file| write_receipt(receipt, destination, hash, file),
-        check,
+        |copy| {
+            if basecraft_io::hash_file(copy)? == hash {
+                Ok(())
+            } else {
+                Err(invalid("member changed before export"))
+            }
+        },
     )
 }
 
@@ -245,7 +254,7 @@ fn copy_atomic(source: &Path, target: &Path) -> Result<()> {
 
 pub fn inspect(result: &Path, project: Option<&crate::project::Project>) -> Result<Publication> {
     // A damaged hidden binding is an error, never a reason to use stale legacy context.
-    crate::records::analysis_store::ArtifactRun::for_result(result)?;
+    crate::records::analysis_store::ArtifactRun::for_result(project, result)?;
     let bundle = bundle_for_result(result, project);
     let manifest = bundle.join("manifest.json");
     if project.is_none() && !manifest.is_file() {
@@ -548,7 +557,8 @@ pub fn verify(result: &Path, project: Option<&crate::project::Project>) -> Resul
     if publication.outputs.is_empty() {
         return Err(invalid("publication has no output"));
     }
-    let hidden = crate::records::analysis_store::ArtifactRun::for_result(result)?.is_some();
+    let hidden =
+        crate::records::analysis_store::ArtifactRun::for_result(project, result)?.is_some();
     // The companion is published by its file name; it lives where
     // `companion_path` keeps it, not beside the result.
     let companion = crate::files::companion_path(project, result);
@@ -1082,7 +1092,7 @@ pub fn package(
     destination: &Path,
     project: Option<&crate::project::Project>,
 ) -> Result<()> {
-    if crate::records::analysis_store::ArtifactRun::for_result(result)?.is_some()
+    if crate::records::analysis_store::ArtifactRun::for_result(project, result)?.is_some()
         || bundle_for_result(result, project)
             .join("input.json")
             .is_file()

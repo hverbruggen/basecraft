@@ -394,7 +394,7 @@ fn saved_metadata_and_submission_reports_use_their_document_readers() {
     session.save(submission, None).unwrap();
     for path in [metadata::manifest_path(dir.path()), submission_path] {
         let saved = basecraft_ops::records::DocumentRecord::saved_report(&path, None).unwrap();
-        let ordinary = basecraft_ops::records::DocumentRecord::from_file(&path, None)
+        let ordinary = basecraft_ops::records::DocumentRecord::from_file(&path, None, None)
             .unwrap()
             .report()
             .unwrap();

@@ -11,8 +11,8 @@ pub struct ToolRunRecord<'a> {
     pub params: serde_json::Value,
     /// Inputs with the hashes of exactly what the tool was given.
     pub inputs: &'a [(String, String)],
-    /// Outputs, hashed here.
-    pub outputs: &'a [PathBuf],
+    /// Outputs with their hashes.
+    pub outputs: &'a [(PathBuf, String)],
     /// The run that already retains the exact input, if the caller made one.
     pub input_run: Option<basecraft_protocol::records::ActivityInputRun>,
     /// The edits this run made in the document, for proposals and imports.
@@ -31,7 +31,7 @@ impl<'a> ToolRunRecord<'a> {
         activity: (&'a str, &'a str),
         params: serde_json::Value,
         inputs: &'a [(String, String)],
-        outputs: &'a [PathBuf],
+        outputs: &'a [(PathBuf, String)],
     ) -> Self {
         Self {
             activity,
@@ -43,6 +43,16 @@ impl<'a> ToolRunRecord<'a> {
             referenced: false,
             run: None,
         }
+    }
+
+    /// `paths` with their hashes, for outputs whose writer did not hash them.
+    pub fn hashed(paths: Vec<PathBuf>) -> Result<Vec<(PathBuf, String)>> {
+        let mut hashed = Vec::new();
+        for path in paths {
+            let hash = basecraft_io::hash_file(&path)?;
+            hashed.push((path, hash));
+        }
+        Ok(hashed)
     }
 
     /// The `tool.run` operation. Its run link is relative to `base`: the
@@ -128,9 +138,9 @@ impl Session {
         }
         let mut hashes = record.inputs.to_vec();
         let mut keys = Vec::new();
-        for path in record.outputs {
+        for (path, hash) in record.outputs {
             let key = self.relative(path);
-            hashes.push((key.clone(), basecraft_io::hash_file(path)?));
+            hashes.push((key.clone(), hash.clone()));
             keys.push(key);
         }
         let op = record.op(&self.run_base(id)?, keys, input_run, contributions)?;

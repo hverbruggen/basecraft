@@ -256,8 +256,9 @@ fn bound_tree_verifies_owned_snapshot_after_main_mutation_or_removal() {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("bound.nwk");
             std::fs::write(&path, original).unwrap();
-            let run = ArtifactRun::create(&path, "bound-tree").unwrap();
-            run.bind(&path).unwrap();
+            let run = ArtifactRun::create(None, &path, "bound-tree").unwrap();
+            run.bind(None, &path, &basecraft_io::hash_file(&path).unwrap())
+                .unwrap();
             let expected = files::load_tree(&path).unwrap();
             if metadata {
                 let mut bytes = Vec::new();
@@ -314,8 +315,9 @@ fn bound_tree_session_with_missing_metadata_reads_main_once() {
     let path = dir.path().join("bound.nwk");
     let bytes = b"(a,b);\n";
     std::fs::write(&path, bytes).unwrap();
-    let run = ArtifactRun::create(&path, "bound-tree").unwrap();
-    run.bind(&path).unwrap();
+    let run = ArtifactRun::create(None, &path, "bound-tree").unwrap();
+    run.bind(None, &path, &basecraft_io::hash_file(&path).unwrap())
+        .unwrap();
     let key = path.canonicalize().unwrap();
     counters::reset();
     let mut session = Session::unlogged(dir.path());
@@ -356,8 +358,9 @@ fn bound_tree_snapshot_verification_keeps_binding_run_namespace_and_metadata_gua
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("bound.nwk");
         std::fs::write(&path, original).unwrap();
-        let run = ArtifactRun::create(&path, "bound-tree").unwrap();
-        run.bind(&path).unwrap();
+        let run = ArtifactRun::create(None, &path, "bound-tree").unwrap();
+        run.bind(None, &path, &basecraft_io::hash_file(&path).unwrap())
+            .unwrap();
         let source = Source::open(&path).unwrap();
         let source = if fault == "snapshot" {
             Source::from_vec(b"(other,tree);\n".to_vec())

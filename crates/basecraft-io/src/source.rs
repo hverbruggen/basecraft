@@ -67,19 +67,14 @@ impl Source {
         bytes
             .try_reserve_exact(len)
             .map_err(std::io::Error::other)?;
-        let mut block = [0; 16 * 1024];
+        // Read straight into the buffer, a block at a time, so `consume`
+        // sees each block while it is still in cache.
         loop {
-            let count = match file.read(&mut block) {
-                Ok(0) => break,
-                Ok(count) => count,
-                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(error) => return Err(error.into()),
-            };
-            bytes
-                .try_reserve_exact(count)
-                .map_err(std::io::Error::other)?;
-            consume(&block[..count])?;
-            bytes.extend_from_slice(&block[..count]);
+            let start = bytes.len();
+            if (&mut file).take(1 << 20).read_to_end(&mut bytes)? == 0 {
+                break;
+            }
+            consume(&bytes[start..])?;
         }
         crate::counters::record_read(path, bytes.len() as u64);
         Ok(Self(std::sync::Arc::new(bytes)))

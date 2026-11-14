@@ -198,7 +198,7 @@ fn two_profiles_add_to_one_index_at_once() {
     };
     let data = data_and_results(&root);
     // Both writers add to one store, so they write the same index file.
-    records::ArtifactRun::create(&root.join("results/out.txt"), "first").unwrap();
+    records::ArtifactRun::create(None, &root.join("results/out.txt"), "first").unwrap();
     let writers: Vec<_> = ["a", "b"]
         .into_iter()
         .map(|who| {

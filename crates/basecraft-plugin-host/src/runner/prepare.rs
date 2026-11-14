@@ -453,8 +453,20 @@ pub const CONTACT_EMAIL: &str = "BASECRAFT_CONTACT_EMAIL";
 struct FrozenInputs {
     scratch: tempfile::TempDir,
     inputs: BTreeMap<String, Vec<String>>,
-    sources: Vec<(PathBuf, String, String, &'static str, PathBuf)>,
+    sources: Vec<FrozenSource>,
     submission_plan: Option<basecraft_ops::blast::Plan>,
+}
+
+/// One input file as the run received it.
+pub(super) struct FrozenSource {
+    pub(super) source: PathBuf,
+    /// The source's hash, and its stamp when it was read.
+    pub(super) hash: String,
+    pub(super) stamp: Option<basecraft_protocol::provenance::FileStamp>,
+    /// What the plugin was given: its hash, how it was made and where.
+    submitted_hash: String,
+    transformation: &'static str,
+    frozen: PathBuf,
 }
 
 struct AllocatedRun {
@@ -531,7 +543,6 @@ impl PreparedOperation {
             &policy,
             &inputs,
             &mut frozen,
-            captured,
             project.as_ref(),
         )?;
         let run_id = run.id().to_owned();
@@ -693,7 +704,7 @@ fn freeze_inputs(
                         .unwrap_or("input")
                 }
             ));
-            let original_hash = captures::freeze(
+            let (original_hash, stamp) = captures::freeze(
                 &source,
                 &path,
                 captured,
@@ -724,10 +735,12 @@ fn freeze_inputs(
                     &source.display().to_string(),
                 )?);
             }
-            let transformation = match binding.view {
+            let (transformation, submitted_hash) = match binding.view {
                 // A sequence file is frozen unchanged; its sealed snapshot
                 // is a separate generated input recorded below.
-                InputView::Bytes | InputView::SequenceSnapshot => "identity-v1",
+                InputView::Bytes | InputView::SequenceSnapshot => {
+                    ("identity-v1", original_hash.clone())
+                }
                 InputView::AlignedFasta | InputView::UngappedFasta => {
                     let basecraft_ops::files::Loaded::Alignment(alignment) =
                         basecraft_ops::files::load(&path)?
@@ -750,27 +763,28 @@ fn freeze_inputs(
                     } else {
                         basecraft_ops::files::write_ungapped(&alignment.doc, &mut output)?;
                     }
-                    std::fs::write(&path, output)?;
-                    if binding.view == InputView::AlignedFasta {
+                    std::fs::write(&path, &output)?;
+                    let view = if binding.view == InputView::AlignedFasta {
                         "canonical-fasta-v1"
                     } else {
                         "ungapped-fasta-v1"
-                    }
+                    };
+                    (view, basecraft_io::hash_bytes(&output))
                 }
                 InputView::Newick => {
                     // Validate the declared tree without substituting a fit/preparation workflow.
                     basecraft_ops::files::load_tree(&path)?;
-                    "identity-v1"
+                    ("identity-v1", original_hash.clone())
                 }
             };
-            let submitted_hash = basecraft_io::hash_file(&path)?;
-            sources.push((
+            sources.push(FrozenSource {
                 source,
-                original_hash,
+                hash: original_hash,
+                stamp,
                 submitted_hash,
                 transformation,
-                path.clone(),
-            ));
+                frozen: path.clone(),
+            });
             values.push(path.display().to_string());
         }
         for input in generated.get(&name).into_iter().flatten() {
@@ -786,8 +800,8 @@ fn freeze_inputs(
         target.input.1 = match &target.saved {
             Some(saved) => sources
                 .iter()
-                .find(|(source, ..)| source == saved)
-                .map(|(_, _, submitted, ..)| submitted.clone()),
+                .find(|frozen| &frozen.source == saved)
+                .map(|frozen| frozen.submitted_hash.clone()),
             None => generated
                 .values()
                 .flatten()
@@ -817,7 +831,6 @@ fn allocate_run(
     policy: &SessionPolicy,
     inputs: &PreparationInputs,
     frozen: &mut FrozenInputs,
-    captured: &[basecraft_ops::sanger_review::CapturedInput],
     project: Option<&basecraft_ops::project::Project>,
 ) -> Result<AllocatedRun> {
     let sequence = &inputs.sequence;
@@ -852,21 +865,35 @@ fn allocate_run(
         .map(serde_json::to_vec)
         .transpose()?;
     let mutation = records::Mutation::begin_in(project)?;
-    let run = ArtifactRun::create(&anchor, &run_id)?;
+    let run = ArtifactRun::create(project, &anchor, &run_id)?;
+    // What the Tasks view names the run by before the tool has run. A run
+    // without exports is named by its operation.
+    let source = inputs.document.as_ref().map(|target| target.path.clone());
+    let source = source.or_else(|| sources.first().map(|input| input.source.clone()));
+    let result = exported_name
+        .clone()
+        .unwrap_or_else(|| operation.id.clone());
+    run.write_tool_run(result, source.as_deref())?;
     let mut ledger_inputs = Vec::new();
     let mut upstream = Vec::new();
     let mut first_input = None;
     let mut evidence: BTreeMap<String, Vec<InvocationInputEvidence>> = BTreeMap::new();
-    for (source, original_hash, submitted_hash, transformation, frozen) in sources.drain(..) {
+    for input in sources.drain(..) {
         let ledger = captures::register(
             &mutation,
             &anchor,
-            &source,
-            &original_hash,
-            captured,
+            &input,
             &format!("Input for {}", operation.id),
             project,
         )?;
+        let FrozenSource {
+            source,
+            hash: original_hash,
+            submitted_hash,
+            transformation,
+            frozen,
+            ..
+        } = input;
         let mut record = mutation.read_input(ledger.directory())?;
         record.analysis_run = Some(records::relative(ledger.directory(), run.directory())?);
         record.submitted_hash = submitted_hash;
@@ -927,17 +954,8 @@ fn allocate_run(
     let primary_input_owner = first_input.as_ref().map(|(_, owner)| owner.clone());
     if let Some((mut input, _)) = first_input {
         input.upstream = upstream;
+        // The save guard names a registered run by its run.json, written above.
         mutation.write_input(run.directory(), &input)?;
-        // The save guard names a registered run by its run.json and treats a
-        // missing one as damage, as for every other registered run. A run
-        // without exports is named by its operation.
-        let result = exported_name
-            .clone()
-            .unwrap_or_else(|| operation.id.clone());
-        run.write_run(
-            basecraft_protocol::records::AnalysisRunStatus::Prepared,
-            Some(result),
-        )?;
         mutation.register(&run)?;
     }
     let mut allocated = AllocatedRun {

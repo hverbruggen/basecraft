@@ -148,6 +148,7 @@ fn publication_worker() {
                         &root.join("result.txt"),
                         &source,
                         &expected,
+                        None,
                         &[],
                         "stale registration",
                         None
@@ -160,12 +161,13 @@ fn publication_worker() {
             return;
         }
         let mutation = Mutation::begin().unwrap();
-        let owner = ArtifactRun::create(&root.join("result.txt"), "owner").unwrap();
+        let owner = ArtifactRun::create(None, &root.join("result.txt"), "owner").unwrap();
         let ledger = mutation
             .reference_input_with_dependencies(
                 &root.join("result.txt"),
                 &source,
                 &expected,
+                None,
                 &[],
                 "input",
                 None,
@@ -325,12 +327,13 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
     if role == "registrar" {
         let hash = basecraft_io::hash_file(&source).unwrap();
         let mutation = Mutation::begin().unwrap();
-        let owner = ArtifactRun::create(&root.join("result.txt"), "owner").unwrap();
+        let owner = ArtifactRun::create(None, &root.join("result.txt"), "owner").unwrap();
         let leaf = mutation
             .reference_input_with_dependencies(
                 &root.join("result.txt"),
                 &source,
                 &hash,
+                None,
                 &[],
                 "retained input",
                 None,

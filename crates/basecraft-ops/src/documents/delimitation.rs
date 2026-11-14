@@ -80,9 +80,11 @@ impl Document for DelimitationWorkspace {
                 "a delimitation workspace requires SPART or SPART-XML",
             ));
         }
-        let new_run = if crate::records::analysis_store::ArtifactRun::for_result(target)?.is_none()
+        let new_run = if crate::records::analysis_store::ArtifactRun::for_result(project, target)?
+            .is_none()
         {
             Some(crate::records::analysis_store::ArtifactRun::create(
+                project,
                 target,
                 &ulid::Ulid::generate().to_string(),
             )?)
@@ -114,12 +116,14 @@ impl Document for DelimitationWorkspace {
     }
     fn finish_write(
         &self,
+        project: Option<&crate::project::Project>,
         target: &Path,
         hashes: &[(PathBuf, String)],
         run: Option<&crate::records::analysis_store::ArtifactRun>,
         publication: &super::WritePublication,
     ) -> Result<()> {
         crate::records::analysis_store::publish_delimitation(
+            project,
             self,
             target,
             &hashes[0].1,
@@ -259,7 +263,7 @@ mod tests {
             );
             assert_eq!(std::fs::read(&written[0].0).unwrap(), main);
             assert_eq!(std::fs::read(&written[1].0).unwrap(), side);
-            let run = crate::records::analysis_store::ArtifactRun::for_result(&target)
+            let run = crate::records::analysis_store::ArtifactRun::for_result(None, &target)
                 .unwrap()
                 .unwrap();
             // A SPART input is kept under a SPART name.
@@ -297,7 +301,7 @@ mod tests {
                 written
             );
             assert_eq!(
-                crate::records::analysis_store::ArtifactRun::for_result(&target).unwrap(),
+                crate::records::analysis_store::ArtifactRun::for_result(None, &target).unwrap(),
                 Some(run)
             );
         }
@@ -309,9 +313,11 @@ mod tests {
         let target = dir.path().join("partial.spart");
         let work = basecraft_io::spart::parse_text(SPART).unwrap();
         let run =
-            crate::records::analysis_store::ArtifactRun::create(&target, "partial-test").unwrap();
+            crate::records::analysis_store::ArtifactRun::create(None, &target, "partial-test")
+                .unwrap();
         std::fs::write(&target, SPART).unwrap();
-        run.bind(&target).unwrap();
+        run.bind(None, &target, &basecraft_io::hash_file(&target).unwrap())
+            .unwrap();
         let side = files::companion_path(None, &target);
         std::fs::create_dir(&side).unwrap();
         assert!(

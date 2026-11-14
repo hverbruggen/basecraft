@@ -220,7 +220,7 @@ fn structural_redo_keeps_decisions_and_shared_ancestry() {
     let id = session.open(&path).unwrap();
     edit(&mut session, id, 'A');
     session.save(id, None).unwrap();
-    let record = basecraft_ops::records::DocumentRecord::from_file(&path, None).unwrap();
+    let record = basecraft_ops::records::DocumentRecord::from_file(&path, None, None).unwrap();
     assert!(
         record
             .report()

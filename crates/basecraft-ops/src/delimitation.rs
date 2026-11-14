@@ -39,18 +39,6 @@ pub fn linked_alignment(session: &Session, doc: DocId) -> Result<Option<&str>> {
     }))
 }
 
-/// Publish a new canonical exchange file without replacing a user file. The
-/// authoritative workspace is hidden; native per-fit SPARTs stay in their runs.
-pub fn publish_workspace(
-    target: &std::path::Path,
-    work: &basecraft_protocol::delimitation::DelimitationWorkspace,
-    run: &crate::records::analysis_store::ArtifactRun,
-) -> Result<()> {
-    let name = stage_workspace(target, work, run)?;
-    run.publish_primary(&name)?;
-    run.bind(target)
-}
-
 /// Which specimens of a new workspace were linked to the project roster.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RosterLinks {
@@ -148,6 +136,7 @@ pub const WORKSPACE_RECEIPT: &str = "workspace-export.json";
 /// may lie anywhere in the project; never replaces an existing file. The
 /// staged file moves there with a receipt; the run keeps no copy (D26).
 pub fn publish_workspace_to(
+    project: Option<&crate::project::Project>,
     target: &std::path::Path,
     work: &basecraft_protocol::delimitation::DelimitationWorkspace,
     run: &crate::records::analysis_store::ArtifactRun,
@@ -155,7 +144,7 @@ pub fn publish_workspace_to(
     let staged = run.staging(&stage_workspace(target, work, run)?)?;
     let hash = basecraft_io::hash_file(&staged)?;
     crate::records::move_file(&staged, target, &hash, &run.artifact(WORKSPACE_RECEIPT)?)?;
-    run.bind(target)
+    run.bind(project, target, &hash)
 }
 
 /// Stage the SPART and its sidecar in the run; returns the staged name.
@@ -209,6 +198,7 @@ fn reference_input_with_dependencies(
 
 /// Retain declared contributing ledgers, not copies of clean original inputs.
 pub(crate) fn dependencies(
+    project: Option<&crate::project::Project>,
     work: &basecraft_protocol::delimitation::DelimitationWorkspace,
 ) -> Result<Vec<PathBuf>> {
     let mut runs = BTreeSet::new();
@@ -230,7 +220,9 @@ pub(crate) fn dependencies(
             if report["hash"].as_str() != Some(basecraft_io::hash_file(path)?.as_str()) {
                 return Err(changed_on_disk(path));
             }
-            if let Some(run) = crate::records::analysis_store::ArtifactRun::for_result(path)? {
+            if let Some(run) =
+                crate::records::analysis_store::ArtifactRun::for_result(project, path)?
+            {
                 runs.insert(run);
             }
         }
@@ -545,7 +537,7 @@ fn combined_hypotheses(
     let mut hypotheses = vec![];
     for path in paths {
         let hash = basecraft_io::hash_file(path)?;
-        let sidecar = session.companion_path(path);
+        let sidecar = crate::files::companion_path(session.companion_project(), path);
         let side_hash = if sidecar.exists() {
             Some(basecraft_io::hash_file(&sidecar)?)
         } else {
@@ -714,7 +706,9 @@ pub fn combine_to(
             "Choose at least two saved species hypothesis files".into(),
         ));
     }
-    if output.try_exists()? || session.companion_path(output).try_exists()? {
+    if output.try_exists()?
+        || crate::files::companion_path(session.companion_project(), output).try_exists()?
+    {
         return Err(std::io::Error::new(
             std::io::ErrorKind::AlreadyExists,
             "Choose a new filename for the combined hypotheses",

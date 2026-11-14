@@ -59,12 +59,13 @@ pub fn write_atomic_observed(
 /// BLAKE3 hash of a file's content, as `b3:<hex>`.
 pub fn hash_file(path: &Path) -> Result<String> {
     let file = std::fs::File::open(path)?;
-    hash_reader(file, path)
+    hash_reader(file, path, |_| {})
 }
 
 const HASH_BUFFER_SIZE: usize = 1 << 20;
 
-fn hash_reader(mut reader: impl Read, path: &Path) -> Result<String> {
+/// BLAKE3 of what `reader` yields; `also` sees each block as well.
+fn hash_reader(mut reader: impl Read, path: &Path, mut also: impl FnMut(&[u8])) -> Result<String> {
     let mut hasher = Hasher::new();
     let mut buffer = vec![0u8; HASH_BUFFER_SIZE];
     let mut bytes_read = 0;
@@ -76,6 +77,7 @@ fn hash_reader(mut reader: impl Read, path: &Path) -> Result<String> {
             Err(error) => return Err(error.into()),
         };
         hasher.update(&buffer[..count]);
+        also(&buffer[..count]);
         bytes_read += count as u64;
     }
     counters::record_read(path, bytes_read);
@@ -94,21 +96,16 @@ pub fn sha256_bytes(bytes: &[u8]) -> String {
 
 /// SHA-256 used to verify Tracy draft provenance against its source AB1 files.
 pub fn sha256_file(path: &Path) -> Result<String> {
+    Ok(hash_file_with_sha256(path)?.1)
+}
+
+/// A file's BLAKE3 hash, as [`hash_file`], and its SHA-256 as lowercase
+/// hexadecimal, in one read.
+pub fn hash_file_with_sha256(path: &Path) -> Result<(String, String)> {
     use sha2::{Digest, Sha256};
-    let mut file = std::fs::File::open(path)?;
-    let mut digest = Sha256::new();
-    let mut buffer = vec![0u8; 64 * 1024];
-    let mut bytes_read = 0;
-    loop {
-        let count = file.read(&mut buffer)?;
-        if count == 0 {
-            break;
-        }
-        bytes_read += count as u64;
-        digest.update(&buffer[..count]);
-    }
-    counters::record_read(path, bytes_read);
-    Ok(format!("{:x}", digest.finalize()))
+    let mut sha = Sha256::new();
+    let hash = hash_reader(std::fs::File::open(path)?, path, |block| sha.update(block))?;
+    Ok((hash, format!("{:x}", sha.finalize())))
 }
 
 /// Incremental BLAKE3, giving the same `b3:<hex>` form as [`hash_bytes`].
@@ -198,7 +195,7 @@ mod hash_tests {
                 fail_at_end,
             };
             counters::reset();
-            let result = hash_reader(reader, file.path());
+            let result = hash_reader(reader, file.path(), |_| {});
             if fail_at_end {
                 assert!(matches!(result, Err(Error::Io(error))
                     if error.kind() == io::ErrorKind::PermissionDenied));

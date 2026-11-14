@@ -111,7 +111,7 @@ fn realigns_with_mafft_and_logs_the_run() {
         std::fs::read_to_string(&methods_path).unwrap(),
         "User-authored explanation.\n"
     );
-    let reopened = basecraft_ops::records::DocumentRecord::from_file(&output, None).unwrap();
+    let reopened = basecraft_ops::records::DocumentRecord::from_file(&output, None, None).unwrap();
     assert!(
         reopened
             .report()

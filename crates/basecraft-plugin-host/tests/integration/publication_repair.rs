@@ -245,7 +245,7 @@ fn assert_reopened_completion(workspace: &std::path::Path, run_id: &str, hypothe
         1
     );
     let portable_record =
-        basecraft_ops::records::DocumentRecord::from_file(&portable_result, None).unwrap();
+        basecraft_ops::records::DocumentRecord::from_file(&portable_result, None, None).unwrap();
     assert!(
         portable_record
             .report()

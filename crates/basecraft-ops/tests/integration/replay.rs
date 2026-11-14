@@ -465,7 +465,10 @@ fn alignment_session_replays_exactly() {
                 ("basecraft.mafft", "align"),
                 serde_json::json!({}),
                 &[("x.aln.fasta (ungapped)".into(), "b3:00".into())],
-                &[root.join("x.mafft.fasta")],
+                &[(
+                    root.join("x.mafft.fasta"),
+                    basecraft_io::hash_file(&root.join("x.mafft.fasta")).unwrap(),
+                )],
             ),
         )
         .unwrap();

@@ -21,6 +21,13 @@
         "$ref": "#/$defs/ArtifactRevision"
       }
     },
+    "process_instance": {
+      "description": "A tool run's process, written when the run is made, so the Tasks view\ncan tell this process's runs from earlier ones before the tool ran.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "result": {
       "description": "Always emitted, including null for a non-UTF-8 reference anchor filename.",
       "type": [
@@ -32,6 +39,13 @@
       "type": "integer",
       "format": "uint32",
       "minimum": 0
+    },
+    "source": {
+      "description": "The file or document a tool run was started on, relative to the run\nfolder.",
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "status": {
       "$ref": "#/$defs/AnalysisRunStatus"

@@ -661,8 +661,10 @@ mod tests {
             let output = root.path().join(name);
             std::fs::write(&output, b">a\nACGT\n").unwrap();
             let run =
-                crate::records::analysis_store::ArtifactRun::create(&output, &name[..1]).unwrap();
-            run.bind(&output).unwrap();
+                crate::records::analysis_store::ArtifactRun::create(None, &output, &name[..1])
+                    .unwrap();
+            run.bind(None, &output, &basecraft_io::hash_file(&output).unwrap())
+                .unwrap();
         }
         let savers: Vec<_> = ["a.fasta", "b.fasta"]
             .into_iter()

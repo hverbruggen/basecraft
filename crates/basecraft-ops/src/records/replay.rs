@@ -1288,6 +1288,9 @@ impl RecoveryAttempt {
             // The stage was a loose folder; each recovered document's
             // companion now moves to where the project keeps it.
             for output in &completion.outputs {
+                if let Some(project) = self.session.project() {
+                    crate::records::ArtifactRun::settle_binding(project, output)?;
+                }
                 crate::files::settle_companion(self.session.project(), output)?;
             }
             for run in stores {

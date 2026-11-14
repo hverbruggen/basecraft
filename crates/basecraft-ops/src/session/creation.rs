@@ -201,6 +201,7 @@ impl Session {
                 }),
             },
         )?;
+        let project = self.project.clone();
         self.docs[id.0]
             .content_mut()
             .sanger_review_mut()
@@ -208,7 +209,7 @@ impl Session {
                 id,
                 expected: files::Kind::SangerReview,
             })?
-            .publish_consensus(path)
+            .publish_consensus(project.as_ref(), path)
     }
 
     /// Record an explicit analysis continuation without creating a parallel history.
@@ -239,6 +240,7 @@ impl Slot {
             key,
             content,
             origin_bundle,
+            run: None,
             disk_stamp,
             generation: 0,
             pending_check: super::save_consent::PendingSaveCheck::default(),

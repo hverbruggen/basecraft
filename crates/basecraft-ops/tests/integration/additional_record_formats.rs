@@ -152,22 +152,12 @@ fn sanger_invocation_original_records() {
         None,
     )
     .unwrap();
-    for (file, name) in [
-        ("request.json", "sanger-request.json"),
-        ("execution.json", "sanger-execution.json"),
-    ] {
-        let bytes = std::fs::read(run.directory().join(file)).unwrap();
-        if std::env::var_os("BASECRAFT_CAPTURE_ADDITIONAL_RECORDS").is_some() {
-            golden(name, &bytes);
-        }
-        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        let operation = if file == "execution.json" {
-            "basecraft.sanger-review/fixture"
-        } else {
-            "fixture"
-        };
-        assert_eq!(value["operation"], operation);
+    let bytes = std::fs::read(run.directory().join("request.json")).unwrap();
+    if std::env::var_os("BASECRAFT_CAPTURE_ADDITIONAL_RECORDS").is_some() {
+        golden("sanger-request.json", &bytes);
     }
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["operation"], "fixture");
     run.failed("fixture failure").unwrap();
 }
 

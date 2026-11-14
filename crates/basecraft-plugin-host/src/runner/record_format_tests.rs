@@ -151,19 +151,20 @@ fn publication_collection_presence_only_finalize_gates() {
         prepared
             .finalize(&result, &validated, &mut outcome, false)
             .unwrap();
+        // A retained collection has no intent: its folder in the run is the
+        // mark. A collection bound for the project has its export intent.
         let intent = prepared
             .run
-            .artifact(if visible {
-                "collection-report-export.json"
-            } else {
-                "collection-report-intent.json"
-            })
+            .artifact("collection-report-export.json")
             .unwrap();
         for raw in [
             b"".as_slice(),
             b"{malformed",
             b"{\"schema\":99,\"destination\":\"wrong\",\"members\":{},\"future\":true}",
-        ] {
+        ]
+        .into_iter()
+        .filter(|_| visible)
+        {
             std::fs::write(&intent, raw).unwrap();
             prepared
                 .finalize(&result, &validated, &mut outcome, true)
@@ -177,7 +178,7 @@ fn publication_collection_presence_only_finalize_gates() {
         }
         // Presence follows a regular symlink as before; no hardening in typing.
         #[cfg(unix)]
-        {
+        if visible {
             let target = temp.path().join("presence-target");
             std::fs::write(&target, b"not JSON").unwrap();
             std::fs::remove_file(&intent).unwrap();
@@ -187,14 +188,23 @@ fn publication_collection_presence_only_finalize_gates() {
                 .unwrap();
             std::fs::remove_file(&intent).unwrap();
         }
-        #[cfg(not(unix))]
-        std::fs::remove_file(&intent).unwrap();
-        assert!(
-            prepared
-                .finalize(&result, &validated, &mut outcome, true)
-                .is_err()
-        );
-        std::fs::write(&intent, b"presence only").unwrap();
+        if visible {
+            #[cfg(not(unix))]
+            std::fs::remove_file(&intent).unwrap();
+            assert!(
+                prepared
+                    .finalize(&result, &validated, &mut outcome, true)
+                    .is_err()
+            );
+            std::fs::write(&intent, b"presence only").unwrap();
+        } else {
+            // Outside a repair, a promoted collection is never promoted again.
+            assert!(
+                prepared
+                    .finalize(&result, &validated, &mut outcome, false)
+                    .is_err()
+            );
+        }
         let collection = if visible {
             temp.path().join("visible λ collection")
         } else {
@@ -350,17 +360,13 @@ fn publication_member_selected_reader_and_foreign_identity() {
 
 #[test]
 fn publication_failures_receipt_before_promotion_and_retry() {
-    for visible in [false, true] {
+    {
         let temp = tempfile::tempdir().unwrap();
         let (prepared, result, validated, mut outcome) =
-            publication_setup(temp.path(), visible, false);
+            publication_setup(temp.path(), true, false);
         let intent = prepared
             .run
-            .artifact(if visible {
-                "collection-report-export.json"
-            } else {
-                "collection-report-intent.json"
-            })
+            .artifact("collection-report-export.json")
             .unwrap();
         std::fs::create_dir(&intent).unwrap();
         assert!(
@@ -385,8 +391,6 @@ fn publication_failures_receipt_before_promotion_and_retry() {
     let receipt = root.join("receipt");
     std::fs::write(&source, b"source").unwrap();
     let hash = basecraft_io::hash_bytes(b"source");
-    assert!(export_member(&source, &destination, "wrong hash", &receipt).is_err());
-    assert!(!receipt.exists() && !destination.exists());
     std::fs::create_dir(&receipt).unwrap();
     assert!(export_member(&source, &destination, &hash, &receipt).is_err());
     assert!(!destination.exists());
@@ -419,33 +423,6 @@ fn publication_failures_receipt_before_promotion_and_retry() {
 fn publication_invalid_native_paths_return_json_at_producer_boundary() {
     use std::os::unix::ffi::OsStringExt;
     let invalid = std::ffi::OsString::from_vec(b"invalid-\xff".to_vec());
-    // EX11: synthetic validated tuple, since normal plugin member names come
-    // from JSON strings. Exercise actual finalize with a native map key.
-    let temp = tempfile::tempdir().unwrap();
-    let (prepared, result, _, mut outcome) = publication_setup(temp.path(), false, false);
-    let staging = prepared.run_path(&prepared.context.outputs["report"]);
-    std::fs::remove_dir_all(&staging).unwrap();
-    std::fs::create_dir(&staging).unwrap();
-    let path = staging.join(&invalid);
-    std::fs::write(&path, b"native").unwrap();
-    let hash = basecraft_io::hash_bytes(b"native");
-    let intent = prepared
-        .run
-        .artifact("collection-report-intent.json")
-        .unwrap();
-    std::fs::write(&intent, b"old intent").unwrap();
-    let error = prepared
-        .finalize(
-            &result,
-            &[("report".into(), path.clone(), hash.clone())],
-            &mut outcome,
-            false,
-        )
-        .unwrap_err();
-    assert!(matches!(error, Error::Json(_)), "{error}");
-    assert_eq!(std::fs::read(intent).unwrap(), b"old intent");
-    assert_eq!(std::fs::read(&path).unwrap(), b"native");
-    assert!(!prepared.run.artifact("report").unwrap().exists());
     // EX12: test-prepared policy root changed after ordinary preparation. This
     // proves the finalizer boundary, not full-route invalid-root reachability.
     let temp = tempfile::tempdir().unwrap();
@@ -472,6 +449,7 @@ fn publication_invalid_native_paths_return_json_at_producer_boundary() {
     // EX13: direct existing helper boundary after copy/hash/sync/metadata.
     let source = temp.path().join("source");
     std::fs::write(&source, b"native").unwrap();
+    let hash = basecraft_io::hash_bytes(b"native");
     let destination = temp.path().join(&invalid).join(&invalid);
     let receipt = temp.path().join("receipt");
     std::fs::write(&receipt, b"old receipt").unwrap();

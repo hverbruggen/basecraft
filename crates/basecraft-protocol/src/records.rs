@@ -23,11 +23,9 @@ pub const STAMPED: &[&str] = &[
     "AnalysisIndex",
     "AnalysisRun",
     "CollectionExportIntent",
-    "CollectionIntent",
     "Companion",
     "IndexedFolders",
     "InstallationIndex",
-    "LocalJobIndex",
     "MemberExportReceipt",
     "MetadataManifest",
     "OperationOutcome",
@@ -43,7 +41,6 @@ pub const STAMPED: &[&str] = &[
     "ResultBinding",
     "RunRecord",
     "Runtime",
-    "SangerJobRecord",
     "SangerRequest",
     "SavedCallSets",
     "SavedReview",
@@ -51,6 +48,7 @@ pub const STAMPED: &[&str] = &[
     "Submission",
     "SubmissionPackage",
     "SubmittedInput",
+    "ValidatedResult",
     "ValidationSummary",
     "WorkflowFailure",
 ];
@@ -442,42 +440,13 @@ pub struct RunRuntime {
     pub executable_digests: BTreeMap<String, String>,
 }
 
-/// The existing two-field plugin identity in the local index. Neither `Actor`'s
-/// tagged representation nor `OperationPins` has this shape.
+/// A run folder's `validated.json`: the plugin's result as the host accepted
+/// it, and each file validation accepted, as (output role, path, hash). A
+/// repair publishes from it.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct JobIndexPlugin {
-    pub id: String,
-    pub version: String,
-}
-
-/// Existing display path wrapper; not a hashed `InputReference` or a new path rule.
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct JobIndexSource {
-    pub path: String,
-}
-
-/// Lightweight `.basecraft/jobs/<id>/manifest.json` of the run's home (its
-/// project, or the folder that holds the run). Every path is relative to that
-/// home and `/`-separated. The pointed-to `OperationOutcome` in runtime.json
-/// stays authoritative; this is not `JobRecord`.
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct LocalJobIndex {
-    pub schema_version: u32,
-    pub id: String,
-    pub status: crate::operation::RuntimeState,
-    pub owner_instance: String,
-    pub started: String,
-    /// Explicit null for nonterminal states; never omitted by the writer.
-    pub ended: Option<String>,
-    pub plugin: JobIndexPlugin,
-    pub operation: String,
-    pub effective_parameters: Value,
-    pub initiator: String,
-    pub source: JobIndexSource,
-    pub outputs: BTreeMap<String, String>,
-    /// First runtime error message or explicit null.
-    pub diagnostics: Option<String>,
-    pub runtime_record: PathBuf,
+pub struct ValidatedResult {
+    pub result: crate::plugin::InvokeResult,
+    pub artifacts: Vec<(String, PathBuf, String)>,
 }
 
 /// Existing rollback-durability poison marker. Recovery refuses its presence,
@@ -492,13 +461,19 @@ pub struct RecoveryIntegrityError {
     pub extra: BTreeMap<String, Value>,
 }
 
-/// Existing hidden association written by `ArtifactRun::bind`. Runtime readers
-/// retain their selective version, namespace, path and content-hash checks.
+/// A result's link to the run that made it, written by `ArtifactRun::bind`
+/// in the `.basecraft` where the result's records are kept: its project's,
+/// or the one beside a loose result.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct ResultBinding {
     pub schema_version: u32,
     pub run: String,
-    /// UTF-8 relative filename, using the existing writer's path conversion.
+    /// The folder whose `.basecraft` holds the run, relative to the folder
+    /// whose `.basecraft` holds this binding; absent when they are the same.
+    /// A loose result in a subfolder of the folder a run was made in has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home: Option<String>,
+    /// The result's path, relative to the folder that holds this binding.
     pub result: String,
     pub result_hash: String,
     #[serde(flatten)]
@@ -533,6 +508,14 @@ pub struct AnalysisRun {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<Vec<crate::provenance::ArtifactRevision>>")]
     pub outputs: Option<Vec<Value>>,
+    /// A tool run's process, written when the run is made, so the Tasks view
+    /// can tell this process's runs from earlier ones before the tool ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_instance: Option<String>,
+    /// The file or document a tool run was started on, relative to the run
+    /// folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }

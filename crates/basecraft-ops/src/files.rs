@@ -351,6 +351,7 @@ pub(crate) fn capture_load(
             Loaded::SangerReview(Box::new(review))
         }
         Format::Tree => Loaded::Tree(load_tree_bytes(
+            project,
             path,
             &main,
             &files[0].2,
@@ -359,6 +360,7 @@ pub(crate) fn capture_load(
         )?),
         Format::Delimitation => {
             let (work, ignored) = load_delimitation_bytes(
+                project,
                 path,
                 main.bytes(),
                 &files[0].2,
@@ -548,7 +550,7 @@ pub fn gff_sidecar(path: &Path) -> PathBuf {
 /// in the `.basecraft` of `project` or of its own folder, keyed by its
 /// relative path ([`crate::project::Project::document_record`]).
 pub fn companion_path(project: Option<&crate::project::Project>, path: &Path) -> PathBuf {
-    if let Ok(Some(run)) = crate::records::analysis_store::ArtifactRun::for_result(path) {
+    if let Ok(Some(run)) = crate::records::analysis_store::ArtifactRun::for_result(project, path) {
         return run_companion(&run, path);
     }
     crate::project::Project::document_record(project, path)
@@ -657,7 +659,7 @@ pub(crate) fn settle_companion(
     if loose == kept || !loose.is_file() {
         return Ok(());
     }
-    if crate::records::analysis_store::ArtifactRun::for_result(document)?.is_some() {
+    if crate::records::analysis_store::ArtifactRun::for_result(project, document)?.is_some() {
         // The save wrote the companion into the result's run; the loose one
         // is the input recovery replayed from.
         std::fs::remove_file(&loose)?;
@@ -782,6 +784,7 @@ pub(crate) fn load_tree_from(
         Err(error) => (None, Some(error.to_string())),
     };
     load_tree_bytes(
+        project,
         path,
         source,
         &basecraft_io::hash_bytes(source.bytes()),
@@ -793,6 +796,7 @@ pub(crate) fn load_tree_from(
 /// `captured_side` is the companion and its bytes, read with the main
 /// file; `side_issue` says why the companion could not be read.
 fn load_tree_bytes(
+    project: Option<&crate::project::Project>,
     path: &Path,
     source: &Source,
     exchange_hash: &str,
@@ -818,8 +822,11 @@ fn load_tree_bytes(
             return Err(Error::Io(io::Error::other(issue)));
         }
         // A broken hidden binding never falls back to the companion beside the file.
-        let run =
-            crate::records::analysis_store::ArtifactRun::for_result_with_hash(path, exchange_hash)?;
+        let run = crate::records::analysis_store::ArtifactRun::for_result_with_hash(
+            project,
+            path,
+            exchange_hash,
+        )?;
         let bound = run.is_some();
         let (sidecar, side) = match run {
             Some(run) => {
@@ -1607,11 +1614,18 @@ pub fn load_delimitation_in(
     let (source, hash) = Source::open_hashed(path)?;
     let companion = companion_path(project, path);
     let side = read_optional(&companion)?;
-    load_delimitation_bytes(path, source.bytes(), &hash, (&companion, side.as_ref()))
-        .map(|(work, _)| work)
+    load_delimitation_bytes(
+        project,
+        path,
+        source.bytes(),
+        &hash,
+        (&companion, side.as_ref()),
+    )
+    .map(|(work, _)| work)
 }
 
 fn load_delimitation_bytes(
+    project: Option<&crate::project::Project>,
     path: &Path,
     bytes: &[u8],
     exchange_hash: &str,
@@ -1628,7 +1642,7 @@ fn load_delimitation_bytes(
         basecraft_io::spart::parse_text(text)?
     };
     // A broken hidden binding never falls back to the companion beside the file.
-    let hidden = crate::records::analysis_store::ArtifactRun::for_result(path)?;
+    let hidden = crate::records::analysis_store::ArtifactRun::for_result(project, path)?;
     if hidden.is_some() && captured_side.is_none() {
         return Err(crate::error::invalid(
             "Hidden species workspace metadata is missing; restore its folder context or explicitly open a standalone SPART copy",

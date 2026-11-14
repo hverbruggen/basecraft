@@ -9,10 +9,9 @@ use crate::{
 };
 use basecraft_docs::sanger::SangerPlacementExt;
 use basecraft_docs::sanger::{SangerDraft, SangerPlacement};
+use basecraft_protocol::operation::RuntimeState;
 use basecraft_protocol::provenance::{ArtifactRevision, Completeness, Publication};
-use basecraft_protocol::sanger_records::{
-    SangerJobRecord, SangerJobSource, SangerJobStatus, SangerRequest,
-};
+use basecraft_protocol::sanger_records::SangerRequest;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -64,31 +63,36 @@ fn base(path: &Path) -> crate::Result<PathBuf> {
 }
 
 // Placement contexts can be large alignments; only traces use owned captures.
-// A context inside the project links the history it keeps there.
+// A context inside the project links the history it keeps there. It is read
+// once, for both hashes; with `sha256`, it must still hold those bytes.
 fn source(
     path: &Path,
-    sha256: &str,
+    sha256: Option<&str>,
     anchor: &Path,
     project: Option<&crate::project::Project>,
 ) -> crate::Result<Source> {
     let path = path.canonicalize()?;
-    let hash = basecraft_io::hash_file(&path)?;
-    let ledger = inputs::reference_input_with_dependencies(
+    let stamp = inputs::stamp(&path)?;
+    let (hash, actual) = basecraft_io::hash_file_with_sha256(&path)?;
+    if inputs::stamp(&path)? != stamp
+        || sha256.is_some_and(|sha256| !actual.eq_ignore_ascii_case(sha256))
+    {
+        return Err(crate::Error::ChangedOnDisk { path });
+    }
+    let ledger = inputs::Mutation::begin_in(project)?.reference_input_with_dependencies(
         anchor,
         &path,
         &hash,
+        Some(&stamp),
         &[],
         "Explicit Sanger input reference",
         project,
     )?;
-    if !basecraft_io::sha256_file(&path)?.eq_ignore_ascii_case(sha256) {
-        return Err(changed_on_disk(path));
-    }
     let reference = inputs::read_input(ledger.directory())?.source;
     Ok(Source {
         original: path.clone(),
         path,
-        sha256: sha256.into(),
+        sha256: sha256.map_or(actual, Into::into),
         ledger: Some(ledger.directory().into()),
         reference,
     })
@@ -99,9 +103,11 @@ fn source_capture(
     anchor: &Path,
     project: Option<&crate::project::Project>,
 ) -> crate::Result<Source> {
-    let ledger = inputs::Mutation::begin_in(project)?.reference_captured(
+    let ledger = inputs::Mutation::begin_in(project)?.reference_input_with_dependencies(
         anchor,
-        capture,
+        capture.path(),
+        capture.hash(),
+        Some(capture.stamp()),
         &[],
         "Explicit Sanger input reference",
         project,
@@ -288,15 +294,10 @@ impl SangerRun {
                     .push(source_capture(&capture, anchor, project)?);
                 captures.push(capture);
             } else {
-                evidence.sources.push(source(
-                    path,
-                    &basecraft_io::sha256_file(path)?,
-                    anchor,
-                    project,
-                )?);
+                evidence.sources.push(source(path, None, anchor, project)?);
             }
         }
-        let run = ArtifactRun::create(anchor, &ulid::Ulid::generate().to_string())?;
+        let run = ArtifactRun::create(project, anchor, &ulid::Ulid::generate().to_string())?;
         let mut dependencies: Vec<_> = evidence
             .sources
             .iter()
@@ -330,7 +331,7 @@ impl SangerRun {
             started: basecraft_platform::now_rfc3339(),
         };
         result.write_run_record()?;
-        result.status(SangerJobStatus::Running, None, None)?;
+        result.status(RuntimeState::Running, None)?;
         Ok(result)
     }
 
@@ -349,10 +350,6 @@ impl SangerRun {
     }
     pub fn artifact(&self, name: &str) -> crate::Result<PathBuf> {
         self.run.artifact(name)
-    }
-
-    fn job_path(&self) -> PathBuf {
-        crate::records::job_index_path(&self.base, self.run.id())
     }
 
     /// The stage's run record, as every tool run has one: its sources with
@@ -391,46 +388,47 @@ impl SangerRun {
         inputs::write_json(&self.run.artifact("execution.json")?, &record)
     }
 
-    fn status(
-        &self,
-        status: SangerJobStatus,
-        result: Option<&Path>,
-        diagnostic: Option<&str>,
-    ) -> crate::Result<()> {
-        let value = serde_json::to_value(SangerJobRecord {
-            schema_version: 1,
-            id: self.run.id().into(),
-            owner_instance: basecraft_platform::process_instance().into(),
-            status,
-            operation: self.operation.clone(),
-            started: self.started.clone(),
-            // Paths relative to the home, so the record travels with it.
-            source: SangerJobSource {
-                path: self
-                    .evidence
-                    .sources
-                    .first()
-                    .map(|s| inputs::relative(&self.base, &s.location()?).map(PathBuf::from))
-                    .transpose()?,
+    /// Write the stage's status as its run's `runtime.json`, the record
+    /// the Tasks view lists (D28).
+    fn status(&self, state: RuntimeState, diagnostic: Option<&str>) -> crate::Result<()> {
+        let operation = self.operation.clone();
+        let errors = diagnostic.map(|message| basecraft_protocol::operation::OperationError {
+            code: basecraft_protocol::operation::OperationErrorCode::ToolFailure,
+            message: message.into(),
+            field: None,
+            operation: operation.clone(),
+            run_id: Some(self.run.id().into()),
+            evidence: None,
+        });
+        inputs::write_json(
+            &self.run.artifact("runtime.json")?,
+            &basecraft_protocol::operation::OperationOutcome {
+                schema: 1,
+                operation,
+                run_id: self.run.id().into(),
+                state,
+                pins: basecraft_protocol::operation::OperationPins {
+                    generation: String::new(),
+                    package_digest: String::new(),
+                    descriptor_digest: String::new(),
+                },
+                requested_parameters: serde_json::Value::Null,
+                effective_parameters: serde_json::Value::Null,
+                data: None,
+                artifacts: Vec::new(),
+                proposals: None,
+                warnings: Vec::new(),
+                errors: errors.into_iter().collect(),
+                evidence: Some(self.run.directory().display().to_string()),
             },
-            outputs: std::collections::BTreeMap::new(),
-            primary_output: result
-                .map(|path| inputs::relative(&self.base, path).map(PathBuf::from))
-                .transpose()?,
-            diagnostics: diagnostic.map(str::to_owned),
-            artifact_run: Some(inputs::relative(&self.base, self.run.directory())?.into()),
-            extra: std::collections::BTreeMap::new(),
-        })?;
-        let path = self.job_path();
-        std::fs::create_dir_all(path.parent().ok_or_else(|| invalid("job has no parent"))?)?;
-        inputs::write_json(&path, &value)
+        )
     }
 
     pub fn failed(&self, diagnostic: &str) -> crate::Result<()> {
         if self.terminal.get() {
             return Err(invalid("Sanger run already terminated"));
         }
-        self.status(SangerJobStatus::Failed, None, Some(diagnostic))?;
+        self.status(RuntimeState::Failed, Some(diagnostic))?;
         self.terminal.set(true);
         Ok(())
     }
@@ -439,7 +437,7 @@ impl SangerRun {
         if self.terminal.get() {
             return Err(invalid("Sanger run already terminated"));
         }
-        self.status(SangerJobStatus::Cancelled, None, Some(diagnostic))?;
+        self.status(RuntimeState::Cancelled, Some(diagnostic))?;
         self.terminal.set(true);
         Ok(())
     }
@@ -499,7 +497,7 @@ impl SangerRun {
         publication.events.push(entry);
         crate::records::provenance::publish(self.directory(), &publication)?;
         self.evidence.runs.push(self.directory().into());
-        self.status(SangerJobStatus::SupportRetained, None, None)?;
+        self.status(RuntimeState::Completed, None)?;
         self.terminal.set(true);
         Ok(self)
     }
@@ -511,8 +509,7 @@ impl Drop for SangerRun {
             // Best effort during unwinding/early validation failure. The durable
             // reservation and pre-execution record survive even if this write fails.
             let _ = self.status(
-                SangerJobStatus::Interrupted,
-                None,
+                RuntimeState::Interrupted,
                 Some("Sanger support was not published; owned files retained"),
             );
         }
@@ -603,7 +600,7 @@ impl SangerReview {
         let placement: SangerPlacement = super::read_evidence(path, SangerPlacement::validate)?;
         let context = source(
             &placement.source_path,
-            &placement.source_sha256,
+            Some(&placement.source_sha256),
             &self.anchor,
             project,
         )?;
@@ -838,9 +835,13 @@ impl SangerReview {
         Ok(bytes)
     }
 
-    pub(crate) fn publish_consensus(&mut self, path: &Path) -> crate::Result<()> {
+    pub(crate) fn publish_consensus(
+        &mut self,
+        project: Option<&crate::project::Project>,
+        path: &Path,
+    ) -> crate::Result<()> {
         self.ensure_sources(path)?;
-        let run = ArtifactRun::create(path, &ulid::Ulid::generate().to_string())?;
+        let run = ArtifactRun::create(project, path, &ulid::Ulid::generate().to_string())?;
         let mut dependencies = self.evidence.runs.clone();
         for set in &self.retained {
             dependencies.extend(set.evidence.runs.clone());
@@ -868,6 +869,7 @@ impl SangerReview {
             vec![retained(&run, &snapshot, 0)?],
         );
         unavailable_sources(&self.evidence, &mut record);
+        let hash = basecraft_io::hash_file(path)?;
         record.outputs.push(ArtifactRevision {
             id: format!("{}:consensus", run.id()),
             logical_name: path
@@ -875,13 +877,13 @@ impl SangerReview {
                 .ok_or_else(|| Error::NoFileName(path.to_path_buf()))?
                 .to_string_lossy()
                 .into_owned(),
-            hash: basecraft_io::hash_file(path)?,
+            hash: hash.clone(),
             size: std::fs::metadata(path)?.len(),
             retained: None,
             reference: None,
         });
         crate::records::provenance::publish(run.directory(), &record)?;
-        run.bind(path)?;
+        run.bind(project, path, &hash)?;
         self.evidence.runs = vec![run.directory().into()];
         Ok(())
     }
@@ -1194,6 +1196,7 @@ impl SangerReview {
     /// owner replaces the target, then `bind_session_review` links the run.
     pub(crate) fn prepare_session_review(
         &self,
+        project: Option<&crate::project::Project>,
         target: &Path,
         logical: &Path,
         publication_context: &crate::documents::WritePublication,
@@ -1227,8 +1230,10 @@ impl SangerReview {
                 }
             }
         }
-        let run = ArtifactRun::create(target, &ulid::Ulid::generate().to_string())?;
-        let mut dependencies: Vec<_> = ArtifactRun::for_result(target)?.into_iter().collect();
+        let run = ArtifactRun::create(project, target, &ulid::Ulid::generate().to_string())?;
+        let mut dependencies: Vec<_> = ArtifactRun::for_result(project, target)?
+            .into_iter()
+            .collect();
         for set in std::iter::once(self).chain(self.retained.iter()) {
             dependencies.extend(set.evidence.runs.clone());
             dependencies.extend(
@@ -1273,8 +1278,13 @@ impl SangerReview {
         Ok(prepared)
     }
 
-    pub(crate) fn bind_session_review(target: &Path, run: &ArtifactRun) -> crate::Result<()> {
-        run.bind(target).map_err(|error| {
+    pub(crate) fn bind_session_review(
+        project: Option<&crate::project::Project>,
+        target: &Path,
+        run: &ArtifactRun,
+    ) -> crate::Result<()> {
+        let hash = basecraft_io::hash_file(target)?;
+        run.bind(project, target, &hash).map_err(|error| {
             damaged(
                 target,
                 format!(
@@ -1499,7 +1509,7 @@ mod tests {
         let sha256 = basecraft_io::sha256_file(&context).unwrap();
         let placed = source(
             &context,
-            &sha256,
+            Some(&sha256),
             &chosen.join("review.json"),
             Some(&project),
         )
@@ -1526,9 +1536,10 @@ mod tests {
             .unwrap();
         assert!(partial.is_file());
         let job: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(run.job_path()).unwrap()).unwrap();
-        assert_eq!(job["status"], "failed");
-        assert!(job["primary_output"].is_null());
+            serde_json::from_slice(&std::fs::read(run.artifact("runtime.json").unwrap()).unwrap())
+                .unwrap();
+        assert_eq!(job["state"], "failed");
+        assert_eq!(job["artifacts"], serde_json::json!([]));
         assert!(trace.is_file());
     }
 
@@ -1699,7 +1710,7 @@ mod tests {
                 .unwrap();
             let directory = run.directory().to_path_buf();
             std::fs::write(run.artifact("partial").unwrap(), b"recover me").unwrap();
-            let job = run.job_path();
+            let job = run.artifact("runtime.json").unwrap();
             if cancelled {
                 run.cancelled("explicit cancellation").unwrap();
                 assert!(
@@ -1716,7 +1727,7 @@ mod tests {
             let record: serde_json::Value =
                 serde_json::from_slice(&std::fs::read(job).unwrap()).unwrap();
             assert_eq!(
-                record["status"],
+                record["state"],
                 if cancelled {
                     "cancelled"
                 } else {

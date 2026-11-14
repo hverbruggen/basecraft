@@ -590,14 +590,10 @@ impl JobManager {
                 "proposal tool-run activity was not recorded; publication-only repair cannot restore the owning session journal",
             ));
         }
-        let result = basecraft_protocol::records::decode(&basecraft_ops::records::read_record(
-            &job.prepared.run.artifact("validated.json")?,
-        )?)?;
-        let artifacts = serde_json::from_slice::<Vec<(String, std::path::PathBuf, String)>>(
-            &basecraft_ops::records::read_record(
-                &job.prepared.run.artifact("validated-artifacts.json")?,
-            )?,
-        )?;
+        let basecraft_protocol::records::ValidatedResult { result, artifacts } =
+            basecraft_protocol::records::decode(&basecraft_ops::records::read_record(
+                &job.prepared.run.artifact("validated.json")?,
+            )?)?;
         outcome.state = RuntimeState::Finalizing;
         let mut repaired = outcome.clone();
         drop(outcome);
@@ -980,7 +976,7 @@ fn record_document_run(
     let outputs: Vec<_> = outcome
         .artifacts
         .iter()
-        .map(|artifact| std::path::PathBuf::from(&artifact.path))
+        .map(|artifact| (artifact.path.clone().into(), artifact.digest.clone()))
         .collect();
     let (actor, record) = job
         .prepared

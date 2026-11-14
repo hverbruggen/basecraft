@@ -48,8 +48,20 @@ impl Session {
             .filter(|(_, stamp)| stamp.is_none())
             .map(|(path, _)| self.relative(path))
             .collect();
-        let (origin, mut origin_issue) =
-            crate::records::document_record::read_origin(path, &hashes, self.project.as_ref());
+        let project = self.companion_project();
+        let run = crate::records::analysis_store::ArtifactRun::for_result(project, path);
+        let bundle = crate::records::provenance::bundle_of(
+            project,
+            path,
+            run.as_ref().ok().and_then(Option::as_deref),
+        );
+        let (origin, mut origin_issue) = match &run {
+            Ok(_) => crate::records::document_record::read_origin(&bundle, &hashes),
+            Err(e) => (
+                None,
+                Some(format!("Hidden analysis binding could not be read: {e}")),
+            ),
+        };
         for warning in content
             .as_document()
             .opening_warning()
@@ -80,12 +92,8 @@ impl Session {
             })
             .collect::<Result<_>>()?;
         let disk_stamp = captured.stamps[0].1.clone().expect("main file stamp");
-        let mut slot = Slot::new(
-            key.clone(),
-            content,
-            crate::records::provenance::bundle_for_result(path, self.project.as_ref()),
-            disk_stamp,
-        );
+        let mut slot = Slot::new(key.clone(), content, bundle, disk_stamp);
+        slot.run = run.ok().flatten();
         slot.accepted_hashes.clone_from(&hashes);
         slot.absent_sidecars = absent_sidecars;
         if let Some((origin, history)) = origin {

@@ -47,7 +47,7 @@ fn synthetic_large_clean_source_has_metadata_only_evidence_and_relocates() {
     let result = folder.join("aligned.fasta");
     let mut session = Session::recoverable(&folder).unwrap();
     common::align_copy(&registry, &mut session, &source, &result);
-    let run = ArtifactRun::for_result(&result).unwrap().unwrap();
+    let run = ArtifactRun::for_result(None, &result).unwrap().unwrap();
     // The clean source is referenced in place: its bytes are never copied.
     assert_eq!(
         records::read_input(&run).unwrap().state,
@@ -125,7 +125,9 @@ fn common_save_route_preserves_actual_original_and_dirty_submitted_input() {
     assert_eq!(std::fs::read(&source).unwrap(), old);
     let dirty_output = dir.path().join("dirty.fasta");
     let dirty = common::align_document(&registry, &mut session, doc, &dirty_output);
-    let run = ArtifactRun::for_result(&dirty_output).unwrap().unwrap();
+    let run = ArtifactRun::for_result(None, &dirty_output)
+        .unwrap()
+        .unwrap();
     assert_eq!(run, common::evidence(&dirty));
     assert_eq!(
         records::read_input(&run).unwrap().state,
@@ -143,7 +145,7 @@ fn common_save_route_preserves_actual_original_and_dirty_submitted_input() {
         .unwrap();
     assert_eq!(std::fs::read(&source).unwrap(), old);
     decided_save::save_with_policy(&mut session, doc, None, SavePolicy::PreserveCopy).unwrap();
-    let run = ArtifactRun::for_result(&output).unwrap().unwrap();
+    let run = ArtifactRun::for_result(None, &output).unwrap().unwrap();
     assert_eq!(std::fs::read(common::verified_input(&run)).unwrap(), old);
     assert_eq!(
         basecraft_ops::records::verify(&output, None).unwrap(),
@@ -196,7 +198,7 @@ fn downstream_evidence_follows_preservation_and_complete_export_keeps_dependency
     );
     let package = root.path().join("portable");
     basecraft_ops::records::package(&second, &package, None).unwrap();
-    let first_run = ArtifactRun::for_result(&first).unwrap().unwrap();
+    let first_run = ArtifactRun::for_result(None, &first).unwrap().unwrap();
     std::fs::write(common::verified_input(&first_run), ">a\nTTTT\n>b\nTTTT\n").unwrap();
     assert_ne!(
         basecraft_ops::records::verify(&second, None).unwrap(),

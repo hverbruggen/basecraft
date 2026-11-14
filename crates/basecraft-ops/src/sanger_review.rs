@@ -1042,7 +1042,7 @@ mod moved_and_failed_recovery_tests {
         std::fs::write(&binding, previous_binding).unwrap();
         review.save(&path).unwrap();
         assert!(
-            crate::records::analysis_store::ArtifactRun::for_result(&path)
+            crate::records::analysis_store::ArtifactRun::for_result(None, &path)
                 .unwrap()
                 .is_some()
         );
@@ -1113,7 +1113,7 @@ mod moved_and_failed_recovery_tests {
             Some(&ReviewChoice::Edit(if parent_saved { 'T' } else { 'A' }))
         );
         assert!(
-            crate::records::analysis_store::ArtifactRun::for_result(&path)
+            crate::records::analysis_store::ArtifactRun::for_result(None, &path)
                 .unwrap()
                 .is_some()
         );

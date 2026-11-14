@@ -28,6 +28,7 @@ pub fn reference_input_with_dependencies(
         anchor,
         source,
         hash,
+        None,
         dependencies,
         origin,
         project,
@@ -59,7 +60,7 @@ impl Mutation {
     }
 
     pub fn write_input(&self, directory: &Path, input: &SubmittedInput) -> Result<()> {
-        write_json(&directory.join("input.json"), input)
+        write_input(directory, input)
     }
 
     /// Preserve one owned leaf without reacquiring the evidence lock.
@@ -89,127 +90,122 @@ impl Mutation {
         )
     }
 
-    /// Recheck the caller's frozen original hash under the held evidence lock.
+    /// Recheck the caller's frozen original under the held evidence lock:
+    /// by `stamp`, the one it had when `hash` was taken, or else by hashing.
+    #[allow(clippy::too_many_arguments)]
     pub fn reference_input_with_dependencies(
         &self,
         anchor: &Path,
         source: &Path,
         hash: &str,
+        captured_stamp: Option<&FileStamp>,
         dependencies: &[PathBuf],
         origin: &str,
         project: Option<&crate::project::Project>,
     ) -> Result<ArtifactRun> {
-        reference_input_locked(anchor, source, hash, dependencies, origin, None, project)
-    }
-}
-
-pub(crate) fn reference_input_locked(
-    anchor: &Path,
-    source: &Path,
-    hash: &str,
-    dependencies: &[PathBuf],
-    origin: &str,
-    captured_stamp: Option<&FileStamp>,
-    project: Option<&crate::project::Project>,
-) -> Result<ArtifactRun> {
-    use basecraft_protocol::provenance::{
-        ArtifactRevision, Completeness, InputReference, Publication,
-    };
-    let run = crate::records::analysis_store::ArtifactRun::create(
-        anchor,
-        &ulid::Ulid::generate().to_string(),
-    )?;
-    let source = source.canonicalize()?;
-    let reservation = lock_in(project)?;
-    reservation.source(&source)?;
-    if captured_stamp.map_or_else(
-        || {
-            basecraft_io::hash_file(&source)
-                .map(|actual| actual != hash)
-                .map_err(crate::Error::from)
-        },
-        |before| stamp(&source).map(|now| &now != before),
-    )? {
-        return Err(crate::Error::ChangedOnDisk { path: source });
-    }
-    let reference = InputReference {
-        path: crate::records::input_evidence::relative(run.directory(), &source)?,
-        stamp: captured_stamp.cloned().map_or_else(|| stamp(&source), Ok)?,
-        hash: hash.into(),
-        extra: BTreeMap::new(),
-    };
-    let mut input = crate::records::input_evidence::SubmittedInput {
-        schema_version: 1,
-        source: Some(reference.clone()),
-        submitted_hash: hash.into(),
-        submitted_size: reference.stamp.size,
-        transformation: "identity-v1".into(),
-        state: "referenced".into(),
-        analysis_run: None,
-        proposal_target: None,
-        upstream: Vec::new(),
-        origin_run: None,
-        extra: BTreeMap::new(),
-    };
-    // A referenced source inside the project keeps its history there.
-    let source_bundle = crate::records::provenance::bundle_for_result(&source, project);
-    let mut upstream = Vec::new();
-    for dependency in dependencies.iter().chain(std::iter::once(&source_bundle)) {
-        if let Some((record, hash)) = crate::records::provenance::latest(dependency)? {
-            upstream.push(basecraft_protocol::input_records::UpstreamLink {
-                bundle: (crate::records::input_evidence::relative(run.directory(), dependency)?)
-                    .into(),
-                id: record.id,
-                hash,
-            });
+        use basecraft_protocol::provenance::{
+            ArtifactRevision, Completeness, InputReference, Publication,
+        };
+        let run = crate::records::analysis_store::ArtifactRun::create(
+            project,
+            anchor,
+            &ulid::Ulid::generate().to_string(),
+        )?;
+        let source = source.canonicalize()?;
+        let reservation = lock_in(project)?;
+        reservation.source(&source)?;
+        if captured_stamp.map_or_else(
+            || {
+                basecraft_io::hash_file(&source)
+                    .map(|actual| actual != hash)
+                    .map_err(crate::Error::from)
+            },
+            |before| stamp(&source).map(|now| &now != before),
+        )? {
+            return Err(crate::Error::ChangedOnDisk { path: source });
         }
-    }
-    if !upstream.is_empty() {
-        input.upstream = upstream;
-    }
-    crate::records::input_evidence::write_json(&run.artifact("input.json")?, &input)?;
-    run.write_run(
-        basecraft_protocol::records::AnalysisRunStatus::Referenced,
-        anchor
-            .file_name()
-            .and_then(|n| n.to_str())
-            .map(str::to_owned),
-    )?;
-    crate::records::input_evidence::register(&run)?;
-    let publication = Publication {
-        schema_version: 1,
-        id: run.id().into(),
-        session: run.id().into(),
-        parents: vec![],
-        parent_hashes: BTreeMap::new(),
-        created: basecraft_platform::now_rfc3339(),
-        origin: origin.into(),
-        inputs: vec![ArtifactRevision {
-            id: format!("{}:source", run.id()),
-            logical_name: source
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned(),
+        let reference = InputReference {
+            path: crate::records::input_evidence::relative(run.directory(), &source)?,
+            stamp: captured_stamp.cloned().map_or_else(|| stamp(&source), Ok)?,
             hash: hash.into(),
-            size: reference.stamp.size,
-            retained: None,
-            reference: Some(reference),
-        }],
-        outputs: vec![],
-        events: vec![],
-        effective_edits: vec![],
-        withdrawn: Vec::new(),
-        completeness: Completeness {
-            ancestry_known: false,
-            input_bytes_available: true,
-            execution_specification_available: false,
-            replay_verified: false,
-        },
-        report_template_version: 2,
-    };
-    crate::records::provenance::publish(run.directory(), &publication)?;
-    Ok(run)
+            extra: BTreeMap::new(),
+        };
+        let mut input = crate::records::input_evidence::SubmittedInput {
+            schema_version: 1,
+            source: Some(reference.clone()),
+            submitted_hash: hash.into(),
+            submitted_size: reference.stamp.size,
+            transformation: "identity-v1".into(),
+            state: "referenced".into(),
+            analysis_run: None,
+            proposal_target: None,
+            upstream: Vec::new(),
+            origin_run: None,
+            extra: BTreeMap::new(),
+        };
+        // A referenced source inside the project keeps its history there.
+        let source_bundle = crate::records::provenance::bundle_for_result(&source, project);
+        let mut upstream = Vec::new();
+        for dependency in dependencies.iter().chain(std::iter::once(&source_bundle)) {
+            if let Some((record, hash)) = crate::records::provenance::latest(dependency)? {
+                upstream.push(basecraft_protocol::input_records::UpstreamLink {
+                    bundle: (crate::records::input_evidence::relative(
+                        run.directory(),
+                        dependency,
+                    )?)
+                    .into(),
+                    id: record.id,
+                    hash,
+                });
+            }
+        }
+        if !upstream.is_empty() {
+            input.upstream = upstream;
+        }
+        crate::records::input_evidence::write_input(run.directory(), &input)?;
+        run.write_run(
+            basecraft_protocol::records::AnalysisRunStatus::Referenced,
+            anchor
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(str::to_owned),
+        )?;
+        crate::records::input_evidence::register(&run)?;
+        let publication = Publication {
+            schema_version: 1,
+            id: run.id().into(),
+            session: run.id().into(),
+            parents: vec![],
+            parent_hashes: BTreeMap::new(),
+            created: basecraft_platform::now_rfc3339(),
+            origin: origin.into(),
+            inputs: vec![ArtifactRevision {
+                id: format!("{}:source", run.id()),
+                logical_name: source
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+                hash: hash.into(),
+                size: reference.stamp.size,
+                retained: None,
+                reference: Some(reference),
+            }],
+            outputs: vec![],
+            events: vec![],
+            effective_edits: vec![],
+            withdrawn: Vec::new(),
+            completeness: Completeness {
+                ancestry_known: false,
+                input_bytes_available: true,
+                execution_specification_available: false,
+                replay_verified: false,
+            },
+            report_template_version: 2,
+        };
+        crate::records::provenance::publish(run.directory(), &publication)?;
+        Ok(run)
+    }
 }
 
 pub use basecraft_protocol::input_records::SubmittedInput;
@@ -515,39 +511,51 @@ pub fn write_plain_json(path: &Path, value: &impl Serialize) -> Result<()> {
 }
 
 fn write_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
-    if path.file_name().is_some_and(|name| name == "input.json")
-        && let Some(store) = index::store_of(path)
-    {
+    Ok(basecraft_io::write_atomic(path, |w| w.write_all(bytes))?)
+}
+
+/// Write the `input.json` of the run in `directory`, holding its record and
+/// every source it depends on locked for the rest of the scope, so no save
+/// replaces them meanwhile. When what it links to changes (its source or the
+/// runs it names), its store's analysis index lists the run under every
+/// source it now depends on, and so do the runs elsewhere that were listed
+/// under its old source.
+pub fn write_input(directory: &Path, input: &SubmittedInput) -> Result<()> {
+    let path = directory.join("input.json");
+    let bytes = basecraft_protocol::records::encode(input)?;
+    if let Some(store) = index::store_of(&path) {
         // Lock order: the ledger and its inputs, then each index briefly.
         let locks = lock()?;
-        locks.record(path.parent().unwrap())?;
-        if let Ok(input) = basecraft_protocol::records::decode::<SubmittedInput>(bytes) {
-            let mut sources = std::collections::BTreeSet::new();
-            locks.input(
-                path.parent().unwrap(),
-                &input,
-                &mut std::collections::BTreeSet::new(),
-                &mut sources,
-            )?;
+        let mut sources = std::collections::BTreeSet::new();
+        locks.input(
+            directory,
+            input,
+            &mut std::collections::BTreeSet::new(),
+            &mut sources,
+        )?;
+        let old = read_input(directory).ok();
+        let links = |input: &SubmittedInput| {
+            (
+                input.source.clone(),
+                input.analysis_run.clone(),
+                input.upstream.clone(),
+                input.origin_run.clone(),
+            )
+        };
+        if old.as_ref().is_none_or(|old| links(old) != links(input)) {
             let project = locks.project();
             let project = project.as_deref();
             index::add(store, &sources, project)?;
-            // Runs elsewhere that depend on this one are listed with its old
-            // input; list them with the new one too.
-            if let Ok(old) = read_input(path.parent().unwrap())
-                && let Some(reference) = &old.source
-            {
-                let previous = path.parent().unwrap().join(&reference.path);
+            if let Some(reference) = old.as_ref().and_then(|old| old.source.as_ref()) {
+                let previous = directory.join(&reference.path);
                 for dependent in index::listed(&previous, project)? {
                     index::add(&dependent, &sources, project)?;
                 }
             }
         }
-        basecraft_io::write_atomic(path, |w| w.write_all(bytes))?;
-        basecraft_platform::files::sync_directory(path.parent().unwrap())?;
-    } else {
-        basecraft_io::write_atomic(path, |w| w.write_all(bytes))?;
     }
+    basecraft_io::write_atomic(&path, |w| w.write_all(&bytes))?;
+    basecraft_platform::files::sync_directory(directory)?;
     Ok(())
 }
 
@@ -671,11 +679,7 @@ impl Locks {
             sources.extend(index::spellings(&path));
         }
         let mut dependencies = Vec::new();
-        let origin = input.extra.get("origin_run").map(|value| value.as_str());
-        if origin == Some(None) {
-            return Err(invalid("invalid origin_run"));
-        }
-        dependencies.extend(origin.flatten().map(Path::new));
+        dependencies.extend(input.origin_run.as_deref().map(Path::new));
         dependencies.extend(input.analysis_run.as_deref().map(Path::new));
         dependencies.extend(input.upstream.iter().map(|link| link.bundle.as_path()));
         for relative in dependencies {
@@ -1452,7 +1456,7 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
                         input
                             .extra
                             .insert("preserved_original_bytes".into(), serde_json::json!(0));
-                        write_json(&affected.run.join("input.json"), &input)?;
+                        write_input(&affected.run, &input)?;
                         continue;
                     }
                     let copied = if destination.try_exists()? {
@@ -1481,11 +1485,11 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
                     input
                         .extra
                         .insert("preserved_original_bytes".into(), serde_json::json!(copied));
-                    write_json(&affected.run.join("input.json"), &input)?;
+                    write_input(&affected.run, &input)?;
                 }
                 SavePolicy::BreakEvidence => {
                     input.state = "broken".into();
-                    write_json(&affected.run.join("input.json"), &input)?;
+                    write_input(&affected.run, &input)?;
                 }
                 SavePolicy::RemoveAnalysis => {
                     let store = affected
@@ -1647,7 +1651,7 @@ pub fn relink(bundle: &Path, original: &Path) -> Result<()> {
     reference.stamp = stamp(&original)?;
     let hash = reference.hash.clone();
     input.state = "referenced".into();
-    write_json(&owner.join("input.json"), &input)?;
+    write_input(&owner, &input)?;
     // A registered run keeps one reference ledger per original beside the run.
     // Relink each ledger in this result's declared ancestry that names the same
     // bytes; an explicitly broken ledger stays broken.
@@ -1671,7 +1675,7 @@ pub fn relink(bundle: &Path, original: &Path) -> Result<()> {
         source.path = relative(&directory, &original)?;
         source.stamp = stamp(&original)?;
         ledger.state = "referenced".into();
-        write_json(&directory.join("input.json"), &ledger)?;
+        write_input(&directory, &ledger)?;
     }
     Ok(())
 }
@@ -1869,8 +1873,13 @@ pub fn package(
         let companion =
             crate::files::delimitation_companion(&work, &publication.outputs[0].hash, &target)?;
         crate::files::companion_folder(&sidecar)?;
-        basecraft_io::write_atomic(&sidecar, |w| companion.write(w))?;
-        let side_hash = basecraft_io::hash_file(&sidecar)?;
+        let mut side_hash = String::new();
+        basecraft_io::write_atomic(&sidecar, |w| {
+            let mut hashing = crate::files::HashingWriter::new(w);
+            companion.write(&mut hashing)?;
+            side_hash = hashing.hash();
+            Ok(())
+        })?;
         if let Some(artifact) = publication
             .outputs
             .iter_mut()
@@ -2141,8 +2150,9 @@ fn export_history(
         let path = target
             .join("records")
             .join(format!("{}.json", publication.id));
-        write_json(&path, &publication)?;
-        hashes.insert(key.clone(), basecraft_io::hash_file(&path)?);
+        let bytes = basecraft_protocol::records::encode(&publication)?;
+        write_bytes(&path, &bytes)?;
+        hashes.insert(key.clone(), basecraft_io::hash_bytes(&bytes));
         rebased.insert(key, publication);
     }
     let bytes = basecraft_protocol::records::encode(&ProvenanceExportMap {
@@ -2294,8 +2304,8 @@ pub(crate) fn link_generated_input_locked(
             hash,
         });
     }
-    crate::records::input_evidence::write_json(
-        &run.artifact("input.json")?,
+    crate::records::input_evidence::write_input(
+        run.directory(),
         &crate::records::input_evidence::SubmittedInput {
             schema_version: 1,
             source: None,
@@ -2322,9 +2332,9 @@ mod store_scan_tests {
     use super::*;
 
     fn fixture(root: &Path, source: &Path) -> ArtifactRun {
-        let run = ArtifactRun::create(&root.join("species.spart"), "scan-test").unwrap();
-        write_json(
-            &run.artifact("input.json").unwrap(),
+        let run = ArtifactRun::create(None, &root.join("species.spart"), "scan-test").unwrap();
+        write_input(
+            run.directory(),
             &SubmittedInput {
                 schema_version: 1,
                 source: Some(InputReference {
