@@ -21,7 +21,7 @@ pub(crate) fn descriptor(operation: &str) -> Result<OperationDescriptor, String>
         .operations
         .get(operation)
         .map(|registered| registered.descriptor.clone())
-        .ok_or_else(|| format!("plugin_unavailable: unknown operation {operation}"))
+        .ok_or_else(|| format!("unknown operation {operation}"))
 }
 
 /// The manifest of the bundled plugin in folder `name`, or why it did not load.
