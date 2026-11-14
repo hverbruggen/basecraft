@@ -368,7 +368,9 @@ fn terminal_report_publication_failure_repairs_without_duplicate_completion_or_d
     let bundle = records::bundle_for_result(&workspace, None);
     let authored = bundle.join("methods.md");
     std::fs::write(&authored, "User-authored Methods.\n").unwrap();
-    let fault = bundle.join("reports/history.md");
+    // The history folder cannot take a new record until the fault goes.
+    let fault = bundle.join("manifest.json");
+    let latest = std::fs::read(&fault).unwrap();
     std::fs::remove_file(&fault).unwrap();
     std::fs::create_dir(&fault).unwrap();
     let mut jobs = JobManager::default();
@@ -386,6 +388,7 @@ fn terminal_report_publication_failure_repairs_without_duplicate_completion_or_d
     assert!(recovery.join("pending-save.json").is_file());
     assert_eq!(std::fs::read(&workspace).unwrap(), before);
     std::fs::remove_dir(&fault).unwrap();
+    std::fs::write(&fault, latest).unwrap();
     assert_eq!(
         jobs.repair(&accepted.run_id).unwrap().state,
         RuntimeState::Finalizing

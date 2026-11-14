@@ -1,6 +1,7 @@
 //! Revision-scoped evidence and deterministic, readable reports. Queries never write files.
 use std::{collections::HashSet, fmt::Write as _, path::Path};
 
+use crate::records::provenance::{HistoryGap, SavedHistory};
 use basecraft_protocol::{Actor, LogEntry, Op, provenance::Publication};
 use serde::{Deserialize, Serialize};
 
@@ -17,6 +18,9 @@ pub struct DocumentRecord {
     /// file's own folder for a loose file.
     #[serde(skip)]
     pub(crate) run_root: Option<std::path::PathBuf>,
+    /// Saved records the history names but that could not be read.
+    #[serde(skip)]
+    pub(crate) gaps: Vec<HistoryGap>,
 }
 impl std::ops::Deref for DocumentRecord {
     type Target = RecordData;
@@ -30,11 +34,13 @@ impl std::ops::DerefMut for DocumentRecord {
     }
 }
 
+/// The latest saved record of `path` and its whole history, when the record
+/// describes the file's current contents; otherwise why not.
 pub fn read_origin(
     path: &Path,
     hashes: &[(String, String)],
     project: Option<&crate::project::Project>,
-) -> (Option<Publication>, Option<String>) {
+) -> (Option<(Publication, SavedHistory)>, Option<String>) {
     if let Err(e) = crate::records::analysis_store::ArtifactRun::for_result(path) {
         return (
             None,
@@ -42,12 +48,13 @@ pub fn read_origin(
         );
     }
     let bundle = crate::records::provenance::bundle_for_result(path, project);
-    if !bundle.join("manifest.json").exists() {
-        return (None, None);
-    }
-    match crate::records::provenance::inspect(path, project) {
-        Ok(p) if !hashes.is_empty() && hashes.iter().all(|(_, hash)| p.outputs.iter().any(|a| &a.hash == hash)) => (Some(p), None),
-        Ok(_) => (None, Some("The saved record describes different file contents. Earlier ancestry is unavailable for this revision.".into())),
+    match crate::records::provenance::latest(&bundle) {
+        Ok(None) => (None, None),
+        Ok(Some((p, _))) if !hashes.is_empty() && hashes.iter().all(|(_, hash)| p.outputs.iter().any(|a| &a.hash == hash)) => match SavedHistory::read(&bundle, p.clone()) {
+            Ok(history) => (Some((p, history)), None),
+            Err(e) => (None, Some(format!("The saved history could not be read: {e}"))),
+        },
+        Ok(Some(_)) => (None, Some("The saved record describes different file contents. Earlier ancestry is unavailable for this revision.".into())),
         Err(e) => (None, Some(format!("The saved record could not be read: {e}"))),
     }
 }
@@ -60,10 +67,8 @@ impl DocumentRecord {
         run: &crate::records::analysis_store::ArtifactRun,
         activity: &LogEntry,
     ) -> crate::Result<()> {
-        let manifest = run.directory().join("manifest.json");
-        let mut publication: Publication = basecraft_protocol::records::decode(
-            &crate::records::provenance::read_record(&manifest)?,
-        )?;
+        let (mut publication, _) = crate::records::provenance::latest(run.directory())?
+            .ok_or_else(|| crate::error::invalid("the analysis run has no record yet"))?;
         let (events, effective) = super::publish::portable_analysis_activity(self, activity);
         publication.events = events;
         publication.effective_edits = effective;
@@ -114,6 +119,7 @@ impl DocumentRecord {
             },
             origins: Vec::new(),
             run_root: None,
+            gaps: Vec::new(),
         }
     }
 
@@ -154,25 +160,39 @@ impl DocumentRecord {
         Self::from_file(path, project)?.report()
     }
 
-    pub fn from_publication(p: &Publication) -> Self {
+    /// The record of a saved revision: `latest` and the history it ends.
+    pub fn from_history(latest: &Publication, history: SavedHistory) -> Self {
         let mut record = Self::empty(
-            p.outputs
+            latest
+                .outputs
                 .first()
                 .map_or("Document", |a| a.logical_name.as_str()),
         );
-        record.revision.clone_from(&p.id);
-        record.events.clone_from(&p.events);
-        record.effective.clone_from(&p.effective_edits);
+        record.revision.clone_from(&latest.id);
+        record.data.events = history.events;
+        record.data.effective = history.effective;
         crate::records::contributions::project(&record.data.events, &mut record.data.effective);
-        if p.completeness.ancestry_known {
+        if latest.completeness.ancestry_known {
             record.warnings.clear();
         }
-        if !p.completeness.execution_specification_available {
+        if !latest.completeness.execution_specification_available {
             record
                 .warnings
                 .push("Complete execution specifications are not available for every step.".into());
         }
         record
+            .data
+            .warnings
+            .extend(history.gaps.iter().map(HistoryGap::describe));
+        record.gaps = history.gaps;
+        record
+    }
+
+    /// The record of a saved file as its history folder holds it, without
+    /// opening the file.
+    pub fn saved(result: &Path, project: Option<&crate::project::Project>) -> crate::Result<Self> {
+        let (latest, history) = crate::records::provenance::saved_history(result, project)?;
+        Ok(Self::from_history(&latest, history))
     }
 
     /// Include an explicitly contributing input revision, retaining independent origins.
@@ -205,6 +225,7 @@ impl DocumentRecord {
                 self.origins.push(origin.clone());
             }
         }
+        self.gaps.extend(input.gaps.iter().cloned());
         self.deduplicate();
     }
 
@@ -245,6 +266,22 @@ impl DocumentRecord {
             "History of {}\nRevision: {}\n\n",
             self.document, self.revision
         );
+        // A lost or changed record: what came before it is unknown.
+        for gap in &self.gaps {
+            let _ = writeln!(
+                history_text,
+                "{}  Earlier history missing [Source]",
+                gap.before
+            );
+            history.push(HistoryRow {
+                id: gap.record.clone(),
+                time: gap.before.clone(),
+                summary: "Earlier history missing".into(),
+                status: "Source".into(),
+                contributing: false,
+                details: gap.describe(),
+            });
+        }
         // A proposal is one row: its offer, the edits applied and the
         // decision fold into the offer's row.
         let mut decisions = std::collections::HashMap::new();

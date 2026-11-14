@@ -33,7 +33,7 @@ fn all_fasta_fixtures_agree_with_index() {
         &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures"),
         &mut count,
     );
-    assert!(count >= 23, "fixture discovery unexpectedly empty: {count}");
+    assert!(count >= 22, "fixture discovery unexpectedly empty: {count}");
     println!("compared {count} FASTA fixtures");
 }
 

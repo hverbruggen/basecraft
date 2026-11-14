@@ -133,8 +133,7 @@ fn a_file_run_leaves_one_tool_run_that_points_at_its_run_record() {
     let (_temp, registry, project) = setup(|_| {}, "input.txt", b"abc\n");
     let outcome = run(&registry, &project, count("input.txt"));
     let folder = PathBuf::from(outcome.evidence.clone().unwrap());
-    let publication: basecraft_protocol::provenance::Publication =
-        serde_json::from_slice(&std::fs::read(folder.join("manifest.json")).unwrap()).unwrap();
+    let (publication, _) = basecraft_ops::records::latest_record(&folder).unwrap();
     let tool_runs: Vec<_> = publication
         .events
         .iter()

@@ -454,8 +454,9 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     );
                 }
                 ProvenanceCommand::Methods { result, output } => {
-                    let publication = basecraft_ops::records::inspect(&result, project.as_ref())?;
-                    basecraft_ops::records::write_reports(&output, &publication)?;
+                    let (publication, history) =
+                        basecraft_ops::records::saved_history(&result, project.as_ref())?;
+                    basecraft_ops::records::write_reports(&output, &publication, history)?;
                 }
                 ProvenanceCommand::Package { result, output } => {
                     basecraft_ops::records::package(&result, &output, project.as_ref())?;
@@ -938,6 +939,10 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 (
                     "provenance-publication",
                     schemars::schema_for!(basecraft_protocol::provenance::Publication),
+                ),
+                (
+                    "provenance-latest",
+                    schemars::schema_for!(basecraft_protocol::provenance::LatestRecord),
                 ),
                 (
                     "delimitation-request",

@@ -29,8 +29,9 @@ pub use links::{
     view_sidecar_in,
 };
 pub use provenance::{
-    bundle_for_result, companion, export_file, file_run_entry, inspect, package, publish,
-    publish_run, read_record, retained_file, verify, verify_export, write_reports,
+    HistoryGap, SavedHistory, bundle_for_result, companion, export_file, file_run_entry, inspect,
+    latest, latest_record, package, publish, publish_run, read_record, retained_file,
+    saved_history, verify, verify_export, write_reports,
 };
 pub use replay::{
     PublishedWithFailure, RecoveryCompletion, RecoveryMode, RecoveryPhase, ReplayReport,

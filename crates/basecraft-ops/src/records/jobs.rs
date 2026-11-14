@@ -483,6 +483,7 @@ mod tests {
             .collect(),
             events: vec![],
             effective_edits: vec![],
+            withdrawn: Vec::new(),
             completeness: basecraft_protocol::provenance::Completeness {
                 ancestry_known: false,
                 input_bytes_available: true,

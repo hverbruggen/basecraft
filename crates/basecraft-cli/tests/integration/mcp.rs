@@ -165,8 +165,9 @@ fn script_clients_record_script_edits() {
         "{}",
         String::from_utf8_lossy(&edited.stderr)
     );
-    let events = basecraft_ops::records::inspect(&file, Some(&project_of(&file)))
+    let events = basecraft_ops::records::saved_history(&file, Some(&project_of(&file)))
         .unwrap()
+        .1
         .events;
     let actors: Vec<&Actor> = events
         .iter()

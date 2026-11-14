@@ -691,10 +691,14 @@ impl Session {
             self.history(id)
                 .and_then(|history| history.save(target, &entry, &[], None))
         });
-        let (prepared, mut history_error) = match history {
-            Some(Ok(prepared)) => (prepared, None),
-            Some(Err(error)) => (crate::documents::PreparedWrite::default(), Some(error)),
-            None => (crate::documents::PreparedWrite::default(), None),
+        let (prepared, effective, mut history_error) = match history {
+            Some(Ok(staged)) => (staged.write, Some(staged.effective), None),
+            Some(Err(error)) => (
+                crate::documents::PreparedWrite::default(),
+                None,
+                Some(error),
+            ),
+            None => (crate::documents::PreparedWrite::default(), None, None),
         };
         let mut journal_written = false;
         let published = prepared.publish_with(|| {
@@ -709,6 +713,11 @@ impl Session {
             Err(error) if !journal_written => return Err(error),
             Err(error) => history_error = Some(error),
             Ok(_) => {}
+        }
+        if history_error.is_none()
+            && let Some(effective) = effective
+        {
+            self.recorded_save(id, target, &entry, effective);
         }
         if let Some(error) = history_error {
             return Err(Error::Damaged {
@@ -770,6 +779,41 @@ impl Session {
 }
 
 impl Session {
+    /// A save's history record is published. For the document's own file its
+    /// events move from the unsaved list to the recorded one, and the
+    /// recovery journal keeps only what is still unsaved (D24).
+    fn recorded_save(
+        &mut self,
+        id: DocId,
+        target: &Path,
+        entry: &basecraft_protocol::LogEntry,
+        effective: Vec<String>,
+    ) {
+        if target != self.resolve(&self.docs[id.0].key) {
+            return;
+        }
+        let slot = &mut self.docs[id.0];
+        slot.last_record = Some((entry.id.clone(), effective));
+        let saved = std::mem::take(&mut slot.unsaved);
+        slot.recorded.extend(saved);
+        let key = slot.key.clone();
+        let save = entry.id.clone();
+        if self.storage_root != self.root
+            && let Some(log) = &mut self.log
+        {
+            // The Save entry is the document's recovery baseline from now on.
+            // The save is done either way: a journal that could not be cut
+            // back still recovers the same edits, it is only longer.
+            let mut before_save = true;
+            let _ = log.keep(|kept| {
+                if kept.id == save {
+                    before_save = false;
+                }
+                kept.doc != key || !before_save
+            });
+        }
+    }
+
     /// The Save record is durable: it becomes the recovery baseline and, for the
     /// document's own file, the accepted revision.
     fn accept_logged_save(

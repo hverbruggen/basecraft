@@ -15,6 +15,7 @@ fn publication(id: &str, parents: &[&str]) -> Publication {
         outputs: vec![],
         events: vec![],
         effective_edits: vec![],
+        withdrawn: Vec::new(),
         completeness: Completeness {
             ancestry_known: true,
             input_bytes_available: true,

@@ -83,16 +83,25 @@ def main():
     parser.add_argument("--metadata-only", action="store_true")
     args = parser.parse_args()
     bundle = args.bundle or discover(args.result)
-    publication = record(bundle / "manifest.json")
-    if publication["schema_version"] != 1 or not publication["outputs"]:
-        raise ValueError("unsupported or empty publication")
     if not args.metadata_only:
         try:
             from blake3 import blake3
         except ImportError as error:
             raise ValueError("hash verification needs blake3; --metadata-only checks records and sizes without verifying hashes") from error
+    # manifest.json names the latest record; each record holds one save.
+    latest = record(bundle / "manifest.json")
+    if latest.get("schema_version") != 1 or not re.fullmatch(r"[A-Za-z0-9-]+", latest["id"]):
+        raise ValueError("unsupported or unsafe history manifest")
+    publication = record(relative(bundle, f"records/{latest['id']}.json"))
+    if publication["schema_version"] != 1 or not publication["outputs"]:
+        raise ValueError("unsupported or empty publication")
 
     total_bytes = 0
+    if not args.metadata_only:
+        hashing = blake3()
+        hashing.update(relative(bundle, f"records/{latest['id']}.json").read_bytes())
+        if "b3:" + hashing.hexdigest() != latest["hash"]:
+            raise ValueError("latest record checksum differs")
 
     def digest(path):
         if args.metadata_only:
@@ -177,7 +186,27 @@ def main():
         else:
             live = relative(args.result.parent, artifact["logical_name"])
         check(live, artifact)
-    print(json.dumps({"publication": publication["id"], "effective_operations": [a["operation"] for a in publication["effective_edits"]], "completeness": publication["completeness"], "hashes_checked": not args.metadata_only, "records_checked": len(seen)}, indent=2))
+    # The edits in effect: each record adds its own and withdraws undone ones,
+    # parents first.
+    effective = []
+    order = []
+    walk = [(publication, False)]
+    walked = set()
+    while walk:
+        current, done = walk.pop()
+        if done:
+            order.append(current)
+            continue
+        walk.append((current, True))
+        for parent in reversed(current["parents"]):
+            if parent not in walked:
+                walked.add(parent)
+                walk.append((record(relative(bundle, f"records/{parent}.json")), False))
+    for current in order:
+        withdrawn = set(current["withdrawn"])
+        effective = [a for a in effective if a["id"] not in withdrawn]
+        effective += [a for a in current["effective_edits"] if all(a["id"] != e["id"] for e in effective)]
+    print(json.dumps({"publication": publication["id"], "effective_operations": [a["operation"] for a in effective], "completeness": publication["completeness"], "hashes_checked": not args.metadata_only, "records_checked": len(seen)}, indent=2))
 
 
 if __name__ == "__main__":

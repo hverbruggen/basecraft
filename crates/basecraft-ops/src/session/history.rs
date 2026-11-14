@@ -244,14 +244,24 @@ impl Session {
     }
 
     pub(super) fn write_entries(&mut self, entries: &[LogEntry]) -> Result<()> {
-        let mut batch = self.pending_baselines.clone();
+        let mut batch = std::mem::take(&mut self.pending_baselines);
         batch.extend_from_slice(entries);
-        if let Some(log) = &mut self.log {
-            log.append_batch(&batch)?;
+        if let Some(log) = &mut self.log
+            && let Err(error) = log.append_batch(&batch)
+        {
+            batch.truncate(batch.len() - entries.len());
+            self.pending_baselines = batch;
+            return Err(error);
         }
-        self.pending_baselines.clear();
+        self.journaled += batch.len() as u64;
         if self.tracked {
-            self.events.extend(batch);
+            // Each document keeps its own entries until its next save. A file
+            // opened twice has two slots under one key; both see its entries.
+            for entry in batch {
+                for slot in self.docs.iter_mut().filter(|slot| slot.key == entry.doc) {
+                    slot.unsaved.push(entry.clone());
+                }
+            }
         }
         Ok(())
     }

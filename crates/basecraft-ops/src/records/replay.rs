@@ -125,7 +125,12 @@ fn replay_session(
         let checkpoint = e.source.as_ref().is_some_and(|source| source.checkpoint);
         let baseline = match &e.op {
             Op::Open { path } if !checkpoint || replaced.contains(e.doc.as_str()) => Some(path),
-            Op::Save { path } if replaced.contains(e.doc.as_str()) => Some(path),
+            // A journal cut back after a save starts the document there.
+            Op::Save { path }
+                if replaced.contains(e.doc.as_str()) || !docs.contains_key(e.doc.as_str()) =>
+            {
+                Some(path)
+            }
             _ => None,
         };
         if let Some(path) = baseline {

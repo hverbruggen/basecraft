@@ -603,17 +603,15 @@ pub(crate) fn publish_delimitation(
             if dependency == run {
                 continue;
             }
-            let bytes = crate::records::provenance::read_record(&dependency.join("manifest.json"))?;
-            let publication: basecraft_protocol::provenance::Publication =
-                basecraft_protocol::records::decode(&bytes)?;
+            let (publication, hash) = crate::records::provenance::latest_record(&dependency)?;
             let reference = basecraft_protocol::input_records::UpstreamLink {
                 bundle: (crate::records::input_evidence::relative(
                     &placement.logical(&run)?,
                     &dependency,
                 )?)
                 .into(),
-                id: publication.id.clone(),
-                hash: basecraft_io::hash_bytes(&bytes),
+                id: publication.id,
+                hash,
             };
             if !upstream.contains(&reference) {
                 upstream.push(reference);

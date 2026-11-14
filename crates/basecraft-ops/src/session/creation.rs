@@ -1,7 +1,6 @@
 //! New sequences share the ordinary session, typed history, save and recovery owners.
 use super::{
-    DocId, Loaded, Op, OpResult, Opened, Result, Retained, SequenceDoc, Session, Slot, UNDO_STEPS,
-    files, invalid,
+    DocId, Loaded, Op, OpResult, Opened, Result, SequenceDoc, Session, Slot, files, invalid,
 };
 use std::sync::Arc;
 
@@ -247,7 +246,7 @@ impl Slot {
             pending_check: super::save_consent::PendingSaveCheck::default(),
             undo: vec![],
             redo: vec![],
-            settled: Retained::new(UNDO_STEPS),
+            settled: Vec::new(),
             baseline: None,
             baseline_logged: false,
             accepted_hashes: vec![],
@@ -258,7 +257,11 @@ impl Slot {
             saved_target: None,
             absent_sidecars: vec![],
             origin: None,
+            origin_history: crate::records::SavedHistory::default(),
             origin_issue: None,
+            recorded: Vec::new(),
+            unsaved: Vec::new(),
+            last_record: None,
             drop_newer_fields: false,
         }
     }

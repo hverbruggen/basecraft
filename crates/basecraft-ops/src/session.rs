@@ -30,8 +30,6 @@ mod history;
 mod open;
 use open::SavedMark;
 mod proposals;
-mod retained;
-use retained::Retained;
 #[cfg(test)]
 mod retention_tests;
 mod save;
@@ -75,7 +73,7 @@ struct Slot {
     undo: Vec<Applied>,
     redo: Vec<Applied>,
     /// Edits older than the undo limit: still in effect, no longer undoable.
-    settled: Retained<basecraft_protocol::provenance::EditActivity>,
+    settled: Vec<basecraft_protocol::provenance::EditActivity>,
     baseline: Option<LogEntry>,
     baseline_logged: bool,
     accepted_hashes: Vec<(String, String)>,
@@ -87,9 +85,19 @@ struct Slot {
     /// The previous Save As target this session wrote, so a partial Save As can retry it.
     saved_target: Option<(PathBuf, basecraft_protocol::provenance::FileStamp, String)>,
     absent_sidecars: Vec<String>,
+    /// The latest saved record when the document was opened, and the
+    /// history it ends.
     origin: Option<basecraft_protocol::provenance::Publication>,
+    origin_history: crate::records::SavedHistory,
     origin_issue: Option<String>,
     origin_bundle: PathBuf,
+    /// Events this session moved into the document's records, oldest first.
+    recorded: Vec<LogEntry>,
+    /// The document's journal entries since its file was last saved.
+    unsaved: Vec<LogEntry>,
+    /// The record this session last saved for the document's own file, and
+    /// the ids of the edits in effect in it.
+    last_record: Option<(String, Vec<String>)>,
     disk_stamp: basecraft_protocol::provenance::FileStamp,
     /// The next save may drop fields a later basecraft wrote (D14).
     drop_newer_fields: bool,
@@ -97,8 +105,6 @@ struct Slot {
 
 /// Undo reaches back at least this many steps; older edits are settled.
 const UNDO_STEPS: usize = 10_000;
-/// Journal events kept in memory; older ones move to a temporary file.
-const EVENTS_IN_MEMORY: usize = 4_096;
 
 impl Slot {
     /// Settle the oldest undo steps beyond the limit, whole groups at a time.
@@ -136,16 +142,16 @@ impl Slot {
         if undo { &mut self.undo } else { &mut self.redo }
     }
 
-    /// Every edit in effect, oldest first.
-    fn effective(&self) -> Result<Vec<basecraft_protocol::provenance::EditActivity>> {
-        let mut effective = self.settled.matching(|_| true)?;
+    /// Every edit this session made that is in effect, oldest first.
+    fn effective(&self) -> Vec<basecraft_protocol::provenance::EditActivity> {
+        let mut effective = self.settled.clone();
         effective.extend(self.undo.iter().map(|applied| {
             basecraft_protocol::provenance::EditActivity {
                 id: applied.entry_id.clone(),
                 operation: applied.op.clone(),
             }
         }));
-        Ok(effective)
+        effective
     }
 }
 
@@ -194,7 +200,8 @@ pub struct Session {
     write_publication: crate::documents::WritePublication,
     evidence_actions: Mutex<Vec<save_decision::EvidenceAction>>,
     replay_mode: ReplayMode,
-    events: Retained<LogEntry>,
+    /// Journal entries written so far, a change token for readers.
+    journaled: u64,
     pending_baselines: Vec<LogEntry>,
     id: String,
     host: String,
@@ -226,7 +233,7 @@ impl Session {
             write_publication: crate::documents::WritePublication::Immediate,
             evidence_actions: Mutex::new(Vec::new()),
             replay_mode: ReplayMode::Live,
-            events: Retained::new(EVENTS_IN_MEMORY),
+            journaled: 0,
             pending_baselines: Vec::new(),
             project: None,
             staged: false,
@@ -565,17 +572,26 @@ impl Session {
     /// What provenance publication reads about one document.
     fn history(&self, id: DocId) -> Result<crate::records::publish::History<'_>> {
         let slot = self.slot(id)?;
+        let mut effective = slot.origin_history.effective.clone();
+        effective.extend(slot.effective());
         Ok(crate::records::publish::History {
             session: &self.id,
             tracked: self.tracked,
             root: &self.root,
             project: self.project.as_ref(),
             storage_root: &self.storage_root,
-            events: self.events.matching(|event| event.doc == slot.key)?,
+            unsaved: &slot.unsaved,
+            recorded: [&slot.origin_history.events, &slot.recorded],
             pending: &self.pending_baselines,
             key: &slot.key,
-            effective: slot.effective()?,
-            origin: slot.origin.as_ref(),
+            effective,
+            known: [
+                slot.origin.as_ref().map(|origin| {
+                    let ids = slot.origin_history.effective.iter().map(|e| e.id.clone());
+                    (origin.id.clone(), ids.collect())
+                }),
+                slot.last_record.clone(),
+            ],
             origin_bundle: &slot.origin_bundle,
             delimitation: slot.content.kind() == files::Kind::Delimitation,
         })

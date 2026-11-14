@@ -44,8 +44,9 @@ fn scenario(name: &str, fixture: &str, open_reads: u64, edit: impl Fn(u32) -> Op
     counters::reset();
     session.save(doc, None).unwrap();
     // Saving reads the original once; history keeps fingerprints, not copies.
-    // Staged data and history files sync on worker threads, outside this count.
-    record(name, "save", &file, (1, original_size, 1, 0));
+    // Staged data and history files sync on worker threads, outside this count;
+    // the recovery journal, cut back to what is still unsaved, syncs once.
+    record(name, "save", &file, (1, original_size, 1, 1));
 }
 
 fn record(name: &str, stage: &str, file: &Path, expected: (u64, u64, u64, u64)) {

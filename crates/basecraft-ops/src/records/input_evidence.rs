@@ -155,15 +155,12 @@ pub(crate) fn reference_input_locked(
     let source_bundle = crate::records::provenance::bundle_for_result(&source, project);
     let mut upstream = Vec::new();
     for dependency in dependencies.iter().chain(std::iter::once(&source_bundle)) {
-        let manifest = dependency.join("manifest.json");
-        if manifest.is_file() {
-            let bytes = crate::records::provenance::read_record(&manifest)?;
-            let record: Publication = basecraft_protocol::records::decode(&bytes)?;
+        if let Some((record, hash)) = crate::records::provenance::latest(dependency)? {
             upstream.push(basecraft_protocol::input_records::UpstreamLink {
                 bundle: (crate::records::input_evidence::relative(run.directory(), dependency)?)
                     .into(),
-                id: record.id.clone(),
-                hash: basecraft_io::hash_bytes(&bytes),
+                id: record.id,
+                hash,
             });
         }
     }
@@ -202,6 +199,7 @@ pub(crate) fn reference_input_locked(
         outputs: vec![],
         events: vec![],
         effective_edits: vec![],
+        withdrawn: Vec::new(),
         completeness: Completeness {
             ancestry_known: false,
             input_bytes_available: true,
@@ -2317,13 +2315,11 @@ pub(crate) fn link_generated_input_locked(
 ) -> Result<()> {
     let mut upstream = Vec::new();
     for dependency in dependencies {
-        let bytes = crate::records::provenance::read_record(&dependency.join("manifest.json"))?;
-        let publication: basecraft_protocol::provenance::Publication =
-            basecraft_protocol::records::decode(&bytes)?;
+        let (publication, hash) = crate::records::provenance::latest_record(dependency)?;
         upstream.push(basecraft_protocol::input_records::UpstreamLink {
             bundle: (crate::records::input_evidence::relative(run.directory(), dependency)?).into(),
-            id: publication.id.clone(),
-            hash: basecraft_io::hash_bytes(&bytes),
+            id: publication.id,
+            hash,
         });
     }
     crate::records::input_evidence::write_json(

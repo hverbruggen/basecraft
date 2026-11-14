@@ -141,6 +141,103 @@ impl LogWriter {
     }
 }
 
+impl LogWriter {
+    /// This writer's segment files, oldest first.
+    fn segments(&self) -> Result<Vec<PathBuf>> {
+        let mut files: Vec<PathBuf> = match fs::read_dir(&self.dir) {
+            Ok(entries) => entries
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|f| f.extension().is_some_and(|e| e == "jsonl"))
+                .filter(|f| stream_of(f) == self.stream)
+                .collect(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => return Err(error.into()),
+        };
+        files.sort();
+        Ok(files)
+    }
+
+    /// Rewrite the journal with only the entries `keep` accepts, in order, as
+    /// a new stream; then remove the old one. After a crash part way, both
+    /// streams may be there: readers skip entries they already read, so the
+    /// journal reads as it did before.
+    pub fn keep(&mut self, mut keep: impl FnMut(&LogEntry) -> bool) -> Result<()> {
+        if self.poisoned {
+            return Err(crate::error::invalid(
+                "journal durability is uncertain; close this session and inspect recovery",
+            ));
+        }
+        let old = self.segments()?;
+        let Some(last) = old.last() else {
+            return Ok(());
+        };
+        let mut kept = Vec::new();
+        for file in &old {
+            let segment = verified_prefix(file)?;
+            if let Some(problem) = segment.problem {
+                return Err(crate::Error::Damaged {
+                    path: file.clone(),
+                    detail: problem,
+                });
+            }
+            kept.extend(segment.entries.into_iter().filter(|entry| keep(entry)));
+        }
+        // The newest month keeps the new stream after the old one in name order.
+        let name = last.file_name().unwrap_or_default().to_string_lossy();
+        let month = name.get(..7).unwrap_or("unknown").to_owned();
+        // Later than the old stream, so it sorts after it.
+        let previous: ulid::Ulid = self.stream.parse().unwrap_or_default();
+        let stream = ulid::Ulid::generate()
+            .max(previous.increment().unwrap_or_else(|next| next))
+            .to_string();
+        let mut segment = 0;
+        let mut written = Vec::new();
+        let mut lines = Vec::new();
+        for (sequence, entry) in (0u64..).zip(&kept) {
+            lines.extend(encode(std::slice::from_ref(entry), sequence)?);
+            if lines.len() as u64 >= BATCH_LIMIT {
+                written.push(self.write_segment(&month, &stream, segment, &lines)?);
+                lines.clear();
+                segment += 1;
+            }
+        }
+        written.push(self.write_segment(&month, &stream, segment, &lines)?);
+        basecraft_platform::files::sync_directory(&self.dir)?;
+        let path = written.last().expect("one segment");
+        self.open = Some((month, OpenOptions::new().append(true).open(path)?));
+        self.stream = stream;
+        self.segment = segment;
+        self.sequence = kept.len() as u64;
+        // Newest first: a crash part way leaves a prefix of the old stream.
+        for file in old.iter().rev() {
+            fs::remove_file(file)?;
+        }
+        basecraft_platform::files::sync_directory(&self.dir)?;
+        Ok(())
+    }
+
+    fn write_segment(
+        &self,
+        month: &str,
+        stream: &str,
+        segment: u64,
+        lines: &[u8],
+    ) -> Result<PathBuf> {
+        let path = self
+            .dir
+            .join(format!("{month}-{stream}-{segment:06}.jsonl"));
+        basecraft_io::write_atomic(&path, |w| w.write_all(lines))?;
+        Ok(path)
+    }
+}
+
+/// The stream a segment file belongs to: `<month>-<stream>-<segment>.jsonl`.
+fn stream_of(file: &Path) -> String {
+    let stem = file.file_stem().unwrap_or_default().to_string_lossy();
+    let named = stem.rsplit_once('-').map_or(&*stem, |(named, _)| named);
+    named.get(8..).unwrap_or(named).to_owned()
+}
+
 /// The most bytes one journal batch may take.
 pub(crate) const BATCH_LIMIT: u64 = 8 << 20;
 
@@ -213,6 +310,9 @@ fn read_entries(root: &Path, lenient: bool) -> Result<(Vec<(LogEntry, String)>, 
         .collect();
     hosts.sort();
     let mut sequences = std::collections::HashMap::<String, u64>::new();
+    // A journal rewritten by `LogWriter::keep` can hold an entry twice after
+    // a crash; the first is the one read.
+    let mut seen = std::collections::HashSet::new();
     for host in hosts.into_iter().filter(|h| h.is_dir()) {
         // Monthly files sort by name.
         let mut files: Vec<PathBuf> = fs::read_dir(&host)?
@@ -242,7 +342,7 @@ fn read_entries(root: &Path, lenient: bool) -> Result<(Vec<(LogEntry, String)>, 
                         Ok(e) => {
                             let value: serde_json::Value = serde_json::from_str(&line)?;
                             if let Some(sequence) = value["_sequence"].as_u64() {
-                                let expected = sequences.entry(e.session.clone()).or_insert(0);
+                                let expected = sequences.entry(stream_of(&file)).or_insert(0);
                                 if sequence != *expected {
                                     return Err(crate::Error::Damaged {
                                         path: file.clone(),
@@ -250,6 +350,9 @@ fn read_entries(root: &Path, lenient: bool) -> Result<(Vec<(LogEntry, String)>, 
                                     });
                                 }
                                 *expected += 1;
+                            }
+                            if !seen.insert(e.id.clone()) {
+                                continue;
                             }
                             let writer = value[basecraft_protocol::records::WRITTEN_BY].as_str();
                             entries.push((e, writer.unwrap_or_default().to_owned()));
@@ -282,8 +385,8 @@ pub fn verified_prefix(path: &Path) -> Result<VerifiedPrefix> {
     verified_segment(path, None)
 }
 
-/// With `sequences`, each session's events must continue its numbering from
-/// earlier segments, as in `read_all`.
+/// With `sequences`, each stream's events must continue its numbering from
+/// its earlier segments, as in `read_all`.
 fn verified_segment(
     path: &Path,
     mut sequences: Option<&mut std::collections::HashMap<String, u64>>,
@@ -321,7 +424,7 @@ fn verified_segment(
                     return Err(crate::error::invalid("journal sequence gap"));
                 }
                 if let Some(sequences) = sequences.as_deref_mut() {
-                    let expected = sequences.entry(event.session.clone()).or_insert(0);
+                    let expected = sequences.entry(stream_of(path)).or_insert(0);
                     if sequence != *expected {
                         return Err(crate::error::invalid(
                             "journal sequence gap or reordered segment",
@@ -366,6 +469,7 @@ pub fn verified_session_prefix(root: &Path) -> Result<VerifiedPrefix> {
         .collect();
     hosts.sort();
     let mut sequences = std::collections::HashMap::<String, u64>::new();
+    let mut seen = std::collections::HashSet::new();
     for host in hosts {
         let mut files: Vec<PathBuf> = fs::read_dir(&host)?
             .filter_map(|e| e.ok().map(|e| e.path()))
@@ -374,7 +478,12 @@ pub fn verified_session_prefix(root: &Path) -> Result<VerifiedPrefix> {
         files.sort();
         for file in files {
             let segment = verified_segment(&file, Some(&mut sequences))?;
-            prefix.entries.extend(segment.entries);
+            prefix.entries.extend(
+                segment
+                    .entries
+                    .into_iter()
+                    .filter(|entry| seen.insert(entry.id.clone())),
+            );
             prefix.verified_bytes += segment.verified_bytes;
             if prefix.verified_bytes > 128 << 20 {
                 return Err(crate::Error::Limit {
@@ -870,6 +979,43 @@ mod activity_tests {
         let prefix = verified_prefix(&journal).unwrap();
         assert_eq!(prefix.entries, entries[..1]);
         assert!(prefix.problem.unwrap().contains("checksum mismatch"));
+    }
+
+    #[test]
+    fn a_rewrite_cut_short_reads_as_the_journal_before_it() {
+        let root = tempfile::tempdir().unwrap();
+        let line = include_str!("../../../testdata/fixtures/records-v1/journal-entry.jsonl")
+            .lines()
+            .next()
+            .unwrap();
+        let entries: Vec<LogEntry> = ["01A", "01B", "01C"]
+            .iter()
+            .map(|id| LogEntry {
+                id: (*id).into(),
+                ..parse_entry(line).unwrap()
+            })
+            .collect();
+        let mut writer = LogWriter::new(root.path(), "host");
+        writer.append_batch(&entries).unwrap();
+        let old = writer.segments().unwrap();
+        let bytes: Vec<_> = old.iter().map(|path| fs::read(path).unwrap()).collect();
+        writer.keep(|entry| entry.id != "01A").unwrap();
+        assert_eq!(read_all(root.path()).unwrap(), entries[1..]);
+        writer.append(&entries[0]).unwrap();
+        assert_eq!(
+            read_all(root.path()).unwrap(),
+            [&entries[1..], &entries[..1]].concat()
+        );
+        // A crash before the old stream was removed: both streams are there,
+        // and the journal reads as the old one.
+        for (path, bytes) in old.iter().zip(&bytes) {
+            fs::write(path, bytes).unwrap();
+        }
+        assert_eq!(read_all(root.path()).unwrap(), entries);
+        assert_eq!(
+            verified_session_prefix(root.path()).unwrap().entries,
+            entries
+        );
     }
 
     #[test]
