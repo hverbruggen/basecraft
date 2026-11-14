@@ -161,6 +161,14 @@ with Session("/path/to/project", writes=True) as session:
 | `submit(op, ...)`, `run(op, ...)` | operation tool | Same arguments as `operations.submit` without `project` |
 | `call(name, arguments)` | any tool | Returns `structuredContent` |
 
+The CLI commands, the MCP tools and these methods come from one command table.
+Every command is a tool named by its words joined with `_`, and a method of the
+same name: `basecraft tree reroot FILE --outgroup a` is the tool `tree_reroot`
+and `session.tree_reroot(doc, outgroup=["a"])`, taking the document's number
+instead of a file. Positional arguments follow the table's order, which each
+tool lists under `_meta` as `basecraft/arguments`. On the command line a command saves the documents it changed; in
+a session nothing is saved until you call `save`.
+
 `writes` defaults to `False`. A read-only session refuses `apply`, `undo`,
 `redo`, `save` and operations that declare document or artifact writes, and
 `operations()` leaves those operations out. The typed edit schema for `apply`
@@ -186,12 +194,11 @@ These commands read saved files. They do not run tools or write records.
 | Command | Purpose |
 | --- | --- |
 | `basecraft history FILE [--json]` | History for the file's exact current contents |
-| `basecraft methods FILE [--json] [--output PATH]` | Methods text; `--output` exports the report |
+| `basecraft methods FILE [--json] [--output DIR]` | Methods text; `--output` exports the report the History window exports |
 | `basecraft provenance inspect RESULT` | Recorded inputs, settings and steps of a saved result |
 | `basecraft provenance verify RESULT` | Check recorded hashes and ancestry |
-| `basecraft provenance methods RESULT --output DIR` | Write the methods reports |
 | `basecraft provenance package RESULT --output DIR` | Copy a verified result with its exact inputs |
-| `basecraft replay [PROJECT]` | Replay the project's operation log and check every step |
+| `basecraft replay --project PROJECT` | Replay the project's operation log and check every step |
 | `basecraft recover SESSION --output DIR` | Rebuild an unsaved session into a new folder |
 
 From Python, `basecraft.records.document_record(path)` and
@@ -236,14 +243,11 @@ text, ignores whitespace and refuses to overwrite an existing destination.
 RNA, protein and gapped input are rejected explicitly. The initial sequence is
 retained in the typed `doc.create_sequence` record for recovery and replay.
 
-In a writable Python session, `session.create_sequence("sample", "ACGT")`
-returns the new document's state. Use its `document` identifier with the existing
-edit and save methods; save to a new `.gb` path. Saving writes a copy and does
-not bind the unsaved document ID to that destination. Reopen the saved file and
-use its returned document ID for subsequent edits and ordinary saves. MCP exposes the
-same method as `sequence_create` with `name` and `sequence` arguments and requires
-`--allow-writes`. Creating a document does not create a source file; recovery
-follows the session's configured recovery policy.
+In a writable Python session, `session.create_sequence("sample", "ACGT",
+"sample.gb")` creates the sequence, saves it as the new file and returns the
+document's state. Reopen the saved file for later edits. MCP offers the same
+command as `new_sequence` with `name`, `sequence` and `output`, and requires
+`--allow-writes`.
 
 See [headless save decisions](headless-saving.md) for structured save checks,
 one-attempt acknowledgement, independent known-analysis policies and warnings.
