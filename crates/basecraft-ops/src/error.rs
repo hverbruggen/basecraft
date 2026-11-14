@@ -183,6 +183,7 @@ impl Error {
             Self::Access(crate::access::AccessError::Io(e))
             | Self::Io(e)
             | Self::Format(basecraft_io::Error::Io(e)) => io_code(e),
+            Self::Format(basecraft_io::Error::TooLarge(_)) => Code::Limit,
             Self::Format(_) => Code::FormatError,
             Self::Json(_)
             | Self::Invalid(_)

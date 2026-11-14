@@ -9,8 +9,12 @@ use std::path::Path;
 
 use crate::{Error, Result};
 
-fn invalid(message: impl Into<String>) -> Error {
+fn unreadable(message: impl Into<String>) -> Error {
     Error::Table(message.into())
+}
+
+fn too_large(message: impl Into<String>) -> Error {
+    Error::TooLarge(message.into())
 }
 
 /// Escape one field for Basecraft TSV.
@@ -42,7 +46,7 @@ fn unescape(field: &str, line: usize) -> Result<String> {
             Some('n') => out.push('\n'),
             Some('r') => out.push('\r'),
             other => {
-                return Err(invalid(format!(
+                return Err(unreadable(format!(
                     "line {line}: unknown escape \\{}",
                     other.map(String::from).unwrap_or_default()
                 )));
@@ -81,7 +85,7 @@ impl Sheet {
 
 fn text(bytes: &[u8], what: &str) -> Result<String> {
     let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
-    String::from_utf8(bytes.to_vec()).map_err(|_| invalid(format!("{what} is not UTF-8 text")))
+    String::from_utf8(bytes.to_vec()).map_err(|_| unreadable(format!("{what} is not UTF-8 text")))
 }
 
 /// Read a Basecraft TSV table. Every row must have the header's width.
@@ -90,7 +94,7 @@ pub fn read_tsv(bytes: &[u8]) -> Result<Sheet> {
     let mut lines = text.split('\n').enumerate();
     let header = lines.next().map(|(_, l)| l.strip_suffix('\r').unwrap_or(l));
     let Some(header) = header.filter(|h| !h.is_empty()) else {
-        return Err(invalid("table has no header row"));
+        return Err(unreadable("table has no header row"));
     };
     let headers = header
         .split('\t')
@@ -107,7 +111,7 @@ pub fn read_tsv(bytes: &[u8]) -> Result<Sheet> {
             .map(|f| unescape(f, index + 1))
             .collect::<Result<Vec<_>>>()?;
         if fields.len() != headers.len() {
-            return Err(invalid(format!(
+            return Err(unreadable(format!(
                 "line {}: {} fields, the header has {}",
                 index + 1,
                 fields.len(),
@@ -160,7 +164,7 @@ pub fn read_delimited(bytes: &[u8], delimiter: char) -> Result<Sheet> {
         }
     }
     if quoted {
-        return Err(invalid("a quoted field is not closed"));
+        return Err(unreadable("a quoted field is not closed"));
     }
     if started {
         record.push(field);
@@ -173,7 +177,7 @@ fn sheet_from_records(records: Vec<Vec<String>>, date_cells: &[(usize, usize)]) 
     let mut records = records.into_iter();
     let mut headers: Vec<String> = records
         .next()
-        .ok_or_else(|| invalid("spreadsheet is empty"))?
+        .ok_or_else(|| unreadable("spreadsheet is empty"))?
         .into_iter()
         .map(|h| h.trim().to_string())
         .collect();
@@ -182,14 +186,14 @@ fn sheet_from_records(records: Vec<Vec<String>>, date_cells: &[(usize, usize)]) 
         headers.pop();
     }
     if headers.is_empty() {
-        return Err(invalid(
+        return Err(unreadable(
             "spreadsheet has no column headers in its first row",
         ));
     }
     let mut seen = std::collections::BTreeSet::new();
     for header in &headers {
         if !header.is_empty() && !seen.insert(header.as_str()) {
-            return Err(invalid(format!("column header {header:?} appears twice")));
+            return Err(unreadable(format!("column header {header:?} appears twice")));
         }
     }
     let width = headers.len();
@@ -230,7 +234,7 @@ pub fn read_spreadsheet(path: &Path) -> Result<Sheet> {
         }
         "tsv" | "tab" | "txt" => read_delimited(&std::fs::read(path)?, '\t'),
         "ods" | "xlsx" | "xlsm" => read_workbook(path, &ext),
-        _ => Err(invalid(format!(
+        _ => Err(unreadable(format!(
             "{} is not a spreadsheet Basecraft reads (.ods, .xlsx, .csv or .tsv)",
             path.display()
         ))),
@@ -260,7 +264,7 @@ impl Cells {
             || column >= 16_384
             || self.text_bytes > crate::archive::MEMBER_LIMIT
         {
-            return Err(invalid("the spreadsheet is too large to import"));
+            return Err(too_large("the spreadsheet is too large to import"));
         }
         self.width = width;
         if self.rows.len() <= row {
@@ -307,7 +311,7 @@ fn read_workbook(path: &Path, ext: &str) -> Result<Sheet> {
             .take(crate::archive::MEMBER_LIMIT + 1)
             .read_to_end(&mut bytes)?;
         if bytes.len() as u64 > crate::archive::MEMBER_LIMIT {
-            return Err(invalid("the spreadsheet file is too large to import"));
+            return Err(too_large("the spreadsheet file is too large to import"));
         }
         let mut archive = crate::archive::Archive::new(&bytes)?;
         archive.validate()?;
@@ -315,14 +319,14 @@ fn read_workbook(path: &Path, ext: &str) -> Result<Sheet> {
         if ext == "ods" {
             let content = archive
                 .read("content.xml")?
-                .ok_or_else(|| invalid("the .ods file has no content.xml"))?;
+                .ok_or_else(|| unreadable("the .ods file has no content.xml"))?;
             preflight_ods(&content)?;
             let mut workbook = Ods::new(Cursor::new(&bytes)).map_err(workbook_error)?;
             let name = workbook
                 .sheet_names()
                 .first()
                 .cloned()
-                .ok_or_else(|| invalid("the workbook has no sheets"))?;
+                .ok_or_else(|| unreadable("the workbook has no sheets"))?;
             let range = workbook.worksheet_range(&name).map_err(workbook_error)?;
             if let Some((row, column)) = range.start() {
                 for (r, c, value) in range.used_cells() {
@@ -336,7 +340,7 @@ fn read_workbook(path: &Path, ext: &str) -> Result<Sheet> {
                 .sheet_names()
                 .first()
                 .cloned()
-                .ok_or_else(|| invalid("the workbook has no sheets"))?;
+                .ok_or_else(|| unreadable("the workbook has no sheets"))?;
             let mut reader = workbook
                 .worksheet_cells_reader(&name)
                 .map_err(workbook_error)?;
@@ -348,11 +352,16 @@ fn read_workbook(path: &Path, ext: &str) -> Result<Sheet> {
         }
         cells.into_sheet()
     };
-    result().map_err(|e| invalid(format!("could not read {}: {e}", path.display())))
+    let context = |e: &dyn std::fmt::Display| format!("could not read {}: {e}", path.display());
+    result().map_err(|e| match e {
+        Error::TooLarge(m) => Error::TooLarge(context(&m)),
+        Error::Io(io) => Error::Io(std::io::Error::new(io.kind(), context(&io))),
+        other => Error::Table(context(&other)),
+    })
 }
 
 fn workbook_error(error: impl std::fmt::Display) -> Error {
-    invalid(format!("spreadsheet could not be decoded: {error}"))
+    unreadable(format!("spreadsheet could not be decoded: {error}"))
 }
 
 fn cell_text(value: calamine::Data) -> Result<(String, bool)> {
@@ -369,11 +378,11 @@ fn cell_text(value: calamine::Data) -> Result<(String, bool)> {
         Data::DateTime(value) => {
             let serial = value.as_f64();
             if !serial.is_finite() || !(0.0..3_000_000.0).contains(&serial) {
-                return Err(invalid("a spreadsheet date is outside the supported range"));
+                return Err(unreadable("a spreadsheet date is outside the supported range"));
             }
             let date = value
                 .as_datetime()
-                .ok_or_else(|| invalid("a spreadsheet date cannot be represented"))?;
+                .ok_or_else(|| unreadable("a spreadsheet date cannot be represented"))?;
             let text = format!("{date:?}");
             (
                 text.strip_suffix("T00:00:00").unwrap_or(&text).to_string(),
@@ -389,7 +398,7 @@ fn cell_text(value: calamine::Data) -> Result<(String, bool)> {
 /// text and whitespace before handing it over. This inspects allocation sizes;
 /// cell values and workbook semantics are decoded only by calamine.
 fn preflight_ods(bytes: &[u8]) -> Result<()> {
-    let text = std::str::from_utf8(bytes).map_err(|_| invalid("content.xml is not UTF-8"))?;
+    let text = std::str::from_utf8(bytes).map_err(|_| unreadable("content.xml is not UTF-8"))?;
     let doc = roxmltree::Document::parse_with_options(
         text,
         roxmltree::ParsingOptions {
@@ -397,7 +406,7 @@ fn preflight_ods(bytes: &[u8]) -> Result<()> {
             ..Default::default()
         },
     )
-    .map_err(|e| invalid(format!("content.xml could not be read: {e}")))?;
+    .map_err(|e| unreadable(format!("content.xml could not be read: {e}")))?;
     let mut total_cells = 0usize;
     let mut total_text = 0u64;
     let mut stored_cells = 0usize;
@@ -454,7 +463,7 @@ fn preflight_ods(bytes: &[u8]) -> Result<()> {
                 row_stored = if used { column } else { previous_column }.min(16_384);
                 if used {
                     if column > 16_384 || rows > 1_048_576 {
-                        return Err(invalid("the spreadsheet is too large to import"));
+                        return Err(too_large("the spreadsheet is too large to import"));
                     }
                     width = width.max(column);
                     used_rows = rows;
@@ -467,19 +476,19 @@ fn preflight_ods(bytes: &[u8]) -> Result<()> {
                 if text_size > crate::archive::MEMBER_LIMIT
                     || total_text > crate::archive::MEMBER_LIMIT
                 {
-                    return Err(invalid(
+                    return Err(too_large(
                         "the spreadsheet's expanded text is too large to import",
                     ));
                 }
             }
             stored_cells = stored_cells.saturating_add(row_stored);
             if stored_cells > Cells::LIMIT || used_rows.saturating_mul(width) > Cells::LIMIT {
-                return Err(invalid("the spreadsheet is too large to import"));
+                return Err(too_large("the spreadsheet is too large to import"));
             }
         }
         total_cells = total_cells.saturating_add(used_rows.saturating_mul(width));
         if total_cells > Cells::LIMIT {
-            return Err(invalid("the spreadsheet is too large to import"));
+            return Err(too_large("the spreadsheet is too large to import"));
         }
     }
     Ok(())
@@ -493,7 +502,7 @@ fn ods_repeat(node: roxmltree::Node<'_, '_>, name: &str) -> Result<usize> {
                 .parse::<usize>()
                 .ok()
                 .filter(|n| *n > 0)
-                .ok_or_else(|| invalid(format!("invalid ODS {name}")))
+                .ok_or_else(|| unreadable(format!("invalid ODS {name}")))
         })
 }
 
@@ -802,8 +811,9 @@ mod tests {
             r#"<worksheet><sheetData><row r="1"><c r="XFD1" t="s"><v>0</v></c></row><row r="1048576"><c r="A1048576" t="s"><v>2</v></c></row></sheetData></worksheet>"#,
             false,
         );
-        let error = read_fixture(&bytes, "xlsx").unwrap_err().to_string();
-        assert!(error.contains("too large"), "{error}");
+        let error = read_fixture(&bytes, "xlsx").unwrap_err();
+        assert!(matches!(error, Error::TooLarge(_)), "{error}");
+        assert!(error.to_string().contains("import.xlsx"), "{error}");
         assert!(read_fixture(&xlsx_fixture("<worksheet>", false), "xlsx").is_err());
         // Library support for other Excel formats does not expand the API.
         assert!(read_fixture(b"", "xls").is_err());
