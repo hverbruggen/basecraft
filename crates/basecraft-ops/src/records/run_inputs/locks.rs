@@ -7,8 +7,8 @@ use basecraft_platform::files::lexical;
 use basecraft_protocol::provenance::FileStamp;
 use fs4::fs_std::FileExt;
 
-use super::check::{EvidenceCheck, check_for, inspect, selection};
-use super::{SubmittedInput, index, read_input, stamp};
+use super::check::{InputCheck, check_for, inspect, selection};
+use super::{RunInput, index, read_input, stamp};
 use crate::{Result, error::limit};
 
 /// Lock files only coordinate running processes and hold no data. Deleting
@@ -39,7 +39,7 @@ pub(super) fn open_lock(path: &Path) -> Result<std::fs::File> {
 #[derive(Default)]
 struct Scope {
     held: std::cell::RefCell<BTreeMap<PathBuf, std::fs::File>>,
-    /// The project of the session this scope works for (rule 2.5): ledger
+    /// The project of the session this scope works for (rule 2.5): input record
     /// writes inside it index inputs at the project's root.
     project: std::cell::RefCell<Option<PathBuf>>,
 }
@@ -118,7 +118,7 @@ impl Locks {
     pub(super) fn input(
         &self,
         directory: &Path,
-        input: &SubmittedInput,
+        input: &RunInput,
         seen: &mut std::collections::BTreeSet<PathBuf>,
         sources: &mut std::collections::BTreeSet<PathBuf>,
     ) -> Result<()> {
@@ -223,12 +223,12 @@ impl Locks {
 
 pub(crate) struct SaveLock {
     _locks: Locks,
-    check: Option<EvidenceCheck>,
+    check: Option<InputCheck>,
     project: Option<PathBuf>,
 }
 
 impl SaveLock {
-    pub(crate) fn check(&mut self, target: &Path) -> Result<EvidenceCheck> {
+    pub(crate) fn check(&mut self, target: &Path) -> Result<InputCheck> {
         let project = self.project.clone();
         self.check
             .take()

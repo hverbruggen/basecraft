@@ -46,7 +46,7 @@ pub const STAMPED: &[&str] = &[
     "StoreMarker",
     "Submission",
     "SubmissionPackage",
-    "SubmittedInput",
+    "RunInput",
     "ValidatedResult",
     "ValidationSummary",
     "WorkflowFailure",

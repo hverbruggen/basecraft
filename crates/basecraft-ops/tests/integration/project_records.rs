@@ -295,7 +295,7 @@ fn a_lost_index_makes_a_project_save_ask_until_reindexed() {
     let done = records::reindex(&folder).unwrap();
     assert_eq!((done.stores, done.folders), (1, 1));
     let check = match session.save(doc, None).unwrap_err() {
-        basecraft_ops::Error::EvidenceConflict(conflict) => conflict,
+        basecraft_ops::Error::InputConflict(conflict) => conflict,
         other => panic!("{other:?}"),
     };
     assert_eq!(check.analyses[0].run, run.directory());
@@ -371,7 +371,7 @@ fn a_project_keeps_one_index_and_a_loose_input_is_indexed_beside_it() {
     let doc = edit(&mut session, &inside, "T");
     assert!(matches!(
         session.save(doc, None),
-        Err(basecraft_ops::Error::EvidenceConflict(_))
+        Err(basecraft_ops::Error::InputConflict(_))
     ));
 }
 
@@ -431,7 +431,7 @@ fn a_hard_link_in_a_project_subfolder_is_still_matched() {
     let mut session = Session::new(&folder).in_project(Some(project));
     let doc = edit(&mut session, &alias, "T");
     let conflict = match session.save(doc, None).unwrap_err() {
-        basecraft_ops::Error::EvidenceConflict(conflict) => conflict,
+        basecraft_ops::Error::InputConflict(conflict) => conflict,
         other => panic!("{other:?}"),
     };
     assert_eq!(conflict.analyses[0].run, run.directory());

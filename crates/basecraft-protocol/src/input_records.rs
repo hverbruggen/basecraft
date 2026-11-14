@@ -8,13 +8,13 @@ use serde::{Deserialize, Serialize};
 use crate::provenance::InputReference;
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct SubmittedInput {
+pub struct RunInput {
     pub schema_version: u32,
     pub source: Option<InputReference>,
     pub submitted_hash: String,
     pub submitted_size: u64,
     pub transformation: Transformation,
-    pub state: EvidenceState,
+    pub state: InputState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub analysis_run: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -33,7 +33,7 @@ pub struct SubmittedInput {
 /// after the file changed, or marked broken by the user's answer to a save.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum EvidenceState {
+pub enum InputState {
     Referenced,
     Generated,
     Preserved,

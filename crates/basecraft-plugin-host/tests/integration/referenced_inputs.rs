@@ -51,7 +51,7 @@ fn synthetic_large_clean_source_has_metadata_only_evidence_and_relocates() {
     // The clean source is referenced in place: its bytes are never copied.
     assert_eq!(
         records::read_input(&run).unwrap().state,
-        basecraft_protocol::input_records::EvidenceState::Referenced
+        basecraft_protocol::input_records::InputState::Referenced
     );
     assert!(!run.join("submitted.fasta").exists());
     assert!(!run.join("preserved-input").exists());
@@ -118,10 +118,7 @@ fn common_save_route_preserves_actual_original_and_dirty_submitted_input() {
         )
         .unwrap();
     let conflict = session.save(doc, None).unwrap_err();
-    assert!(matches!(
-        conflict,
-        basecraft_ops::Error::EvidenceConflict(_)
-    ));
+    assert!(matches!(conflict, basecraft_ops::Error::InputConflict(_)));
     assert_eq!(std::fs::read(&source).unwrap(), old);
     let dirty_output = dir.path().join("dirty.fasta");
     let dirty = common::align_document(&registry, &mut session, doc, &dirty_output);
@@ -131,7 +128,7 @@ fn common_save_route_preserves_actual_original_and_dirty_submitted_input() {
     assert_eq!(run, common::evidence(&dirty));
     assert_eq!(
         records::read_input(&run).unwrap().state,
-        basecraft_protocol::input_records::EvidenceState::Generated
+        basecraft_protocol::input_records::InputState::Generated
     );
     // The unsaved bytes that were analysed are retained with the run.
     assert!(
@@ -255,7 +252,7 @@ fn save_as_descendants_receive_each_explicit_evidence_decision() {
                         .analyses
                         .iter()
                         .all(|a| records::read_input(&a.run).unwrap().state
-                            == basecraft_protocol::input_records::EvidenceState::Broken)
+                            == basecraft_protocol::input_records::InputState::Broken)
                 );
                 assert_ne!(
                     basecraft_ops::records::verify(&last, None).unwrap(),

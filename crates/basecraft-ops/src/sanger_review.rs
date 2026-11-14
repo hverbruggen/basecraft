@@ -994,7 +994,7 @@ mod moved_and_failed_recovery_tests {
             if policy == SavePolicy::PreserveCopy {
                 assert_eq!(
                     input.state,
-                    basecraft_protocol::input_records::EvidenceState::Preserved
+                    basecraft_protocol::input_records::InputState::Preserved
                 );
                 assert_eq!(
                     std::fs::read(ledger.directory().join("preserved-input")).unwrap(),
@@ -1003,7 +1003,7 @@ mod moved_and_failed_recovery_tests {
             } else {
                 assert_eq!(
                     input.state,
-                    basecraft_protocol::input_records::EvidenceState::Broken
+                    basecraft_protocol::input_records::InputState::Broken
                 );
             }
             assert_eq!(

@@ -31,9 +31,9 @@ pub use replay::{
     prepare_recovery, recover, recover_verified_prefix, recovery_sessions, replay,
 };
 pub use run_inputs::{
-    AffectedAnalysis, BackgroundWait, EvidenceConflict, InspectionCode, InspectionIssue,
-    InspectionRelevance, Locks, SavePolicy, SubmittedInput, check, check_in, conflicts,
-    conflicts_in, link_generated_input, lock, lock_in, preserve_input, read_input, reference_input,
-    register, reindex, relative, relink, resolve, stamp, verified_source, verify_ancestors,
-    wait_in_background, write_input, write_json, write_plain_json,
+    AffectedAnalysis, BackgroundWait, InputConflict, Locks, Relevance, RunInput, SavePolicy,
+    UncheckedKind, UncheckedRecord, check, check_in, conflicts, conflicts_in, link_generated_input,
+    lock, lock_in, preserve_input, read_input, reference_input, register, reindex, relative,
+    relink, resolve, stamp, verified_source, verify_ancestors, wait_in_background, write_input,
+    write_json, write_plain_json,
 };

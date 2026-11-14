@@ -60,8 +60,8 @@ pub(crate) fn error_value(error: &Error) -> Value {
             value["completion"] = json!(failure.completion);
             value["cause"] = error_value(&failure.cause);
         }
-        Error::EvidenceConflict(conflict) => value["conflict"] = json!(conflict),
-        Error::EvidenceCheckIncomplete(evidence) => value["evidence"] = json!(evidence),
+        Error::InputConflict(conflict) => value["conflict"] = json!(conflict),
+        Error::InputCheckIncomplete(evidence) => value["evidence"] = json!(evidence),
         Error::SaveCheckRequired(check) | Error::SaveDecisionStale(check) => {
             value["check"] = json!(check);
         }
@@ -74,9 +74,9 @@ pub(crate) fn error_value(error: &Error) -> Value {
 mod tests {
     use super::*;
     use basecraft_ops::{
-        records::{EvidenceConflict, InspectionCode, InspectionIssue, InspectionRelevance},
+        records::{InputConflict, Relevance, UncheckedKind, UncheckedRecord},
         records::{PublishedWithFailure, RecoveryCompletion},
-        session::{EvidenceAction, SaveWarning},
+        session::{AppliedAnswer, SaveWarning},
     };
 
     #[test]
@@ -85,17 +85,17 @@ mod tests {
             destination: "recovered".into(),
             outputs: vec!["recovered/a.spart".into(), "recovered/nested/b.xml".into()],
             warnings: vec![SaveWarning::EvidenceNotChecked {
-                issues: vec![InspectionIssue {
-                    code: InspectionCode::StoreUnavailable,
+                issues: vec![UncheckedRecord {
+                    code: UncheckedKind::StoreUnavailable,
                     location: "unavailable-store".into(),
-                    relevance: InspectionRelevance::Unknown,
+                    relevance: Relevance::Unknown,
                     reason: "store is unavailable".into(),
                 }],
             }],
             damage: Some("retained verified prefix before torn entry".into()),
             registered_stores: vec!["recovered/.basecraft/analyses-v1".into()],
-            evidence_actions: vec![EvidenceAction {
-                conflict: EvidenceConflict {
+            evidence_actions: vec![AppliedAnswer {
+                conflict: InputConflict {
                     target: "recovered/a.spart".into(),
                     analyses: Vec::new(),
                     options: vec![SavePolicy::Cancel, SavePolicy::BreakEvidence],
@@ -327,7 +327,7 @@ mod typed_error_tests {
             (Error::Empty("empty.fa".into()), "empty_document"),
             (Error::NothingTo("undo"), "nothing_to_do"),
             (
-                Error::EvidenceConflict(Box::new(basecraft_ops::records::EvidenceConflict {
+                Error::InputConflict(Box::new(basecraft_ops::records::InputConflict {
                     target: "input.fa".into(),
                     analyses: vec![],
                     options: vec![],

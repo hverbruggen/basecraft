@@ -9,7 +9,7 @@ use basecraft_protocol::provenance::{ArtifactRevision, Publication};
 
 use crate::records::links::AlignmentLinkExt;
 
-use super::relink::{ancestors, owning_ledger, verified_source};
+use super::relink::{ancestors, owning_input, verified_source};
 use super::write_bytes;
 use crate::{
     Error, Result,
@@ -189,7 +189,7 @@ fn original_hashes(roots: &[(PathBuf, Publication)]) -> Result<BTreeMap<PathBuf,
     for (directory, record) in roots {
         for artifact in record.inputs.iter().chain(&record.outputs) {
             let original = if let Some(reference) = &artifact.reference {
-                let (owner, input) = owning_ledger(directory)?;
+                let (owner, input) = owning_input(directory)?;
                 Some(input.source.as_ref().map_or_else(
                     || directory.join(&reference.path),
                     |source| owner.join(&source.path),

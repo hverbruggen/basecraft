@@ -4,12 +4,12 @@
 //! indexed in a `.basecraft` beside it (rules 6.0 and 2.5). Entries sit in 256
 //! buckets by a hash of the path, one file per store in each bucket, so a save
 //! reads one small folder. Writers only add entries, before they change a
-//! ledger, so the index may list more than is current, never less. Readers
+//! input record, so the index may list more than is current, never less. Readers
 //! take the union of every file in a bucket, copies a sync tool made included,
 //! so no writer's entry is lost to another writer or machine. Each store lists
 //! the buckets it is indexed in, so a lost index is noticed and rebuilt.
-use super::check::Inspection;
-use super::{InspectionCode, stamp};
+use super::check::CheckLog;
+use super::{UncheckedKind, stamp};
 use crate::Result;
 use basecraft_platform::files::lexical;
 use basecraft_protocol::records::{AnalysisIndex, IndexedFolders};
@@ -137,7 +137,7 @@ fn existing<T: serde::de::DeserializeOwned>(
 fn write(path: &Path, value: &impl serde::Serialize) -> Result<()> {
     let bytes = basecraft_protocol::records::encode(value)?;
     basecraft_io::write_atomic(path, |w| w.write_all(&bytes))?;
-    // The entry must be durable before the ledger it covers changes.
+    // The entry must be durable before the input record it covers changes.
     basecraft_platform::files::sync_directory(path.parent().unwrap())?;
     Ok(())
 }
@@ -196,7 +196,7 @@ pub(super) fn is_private(store: &Path) -> bool {
         .any(|root| store.starts_with(root.canonicalize().unwrap_or_else(|_| lexical(root))))
 }
 
-/// The store a ledger path `<store>/runs/<run>/input.json` belongs to.
+/// The store an input record path `<store>/runs/<run>/input.json` belongs to.
 pub(super) fn store_of(ledger: &Path) -> Option<&Path> {
     let runs = ledger.parent()?.parent()?;
     let store = runs.parent()?;
@@ -229,10 +229,10 @@ pub(super) fn add(store: &Path, sources: &BTreeSet<PathBuf>, project: Option<&Pa
 }
 
 /// Rebuild `store`'s entries from the sources `collect` reads from its
-/// ledgers: its file in each bucket and its list of buckets are replaced, and
+/// input records: its file in each bucket and its list of buckets are replaced, and
 /// its file in buckets no longer used is removed. The store's lock is held
-/// from before the ledgers are read, so a writer adding meanwhile waits and
-/// adds after. `collect` also says whether every ledger was readable; if not,
+/// from before the input records are read, so a writer adding meanwhile waits and
+/// adds after. `collect` also says whether every input record was readable; if not,
 /// entries are only added. Copies a sync tool made are left.
 pub(super) fn rebuild(
     store: &Path,
@@ -380,11 +380,11 @@ fn list_buckets(store: &Path, indexed: &BTreeSet<PathBuf>, replace: bool) -> Res
 }
 
 /// The index files in `bucket`, each with the store it names.
-fn stores_in(bucket: &Path, inspection: &mut Inspection) -> Vec<(PathBuf, AnalysisIndex)> {
+fn stores_in(bucket: &Path, log: &mut CheckLog) -> Vec<(PathBuf, AnalysisIndex)> {
     let found = match copies(bucket, "") {
         Ok(found) => found,
         Err(error) => {
-            inspection.issue(InspectionCode::RegistryUnavailable, bucket, error);
+            log.issue(UncheckedKind::RegistryUnavailable, bucket, error);
             return Vec::new();
         }
     };
@@ -394,7 +394,7 @@ fn stores_in(bucket: &Path, inspection: &mut Inspection) -> Vec<(PathBuf, Analys
         match read(&path, |i: &AnalysisIndex| i.schema_version) {
             Ok(index) => indexes.push((lexical(&home.join(&index.store)), index)),
             Err(error) => {
-                inspection.issue(InspectionCode::RegistryUnavailable, &path, error);
+                log.issue(UncheckedKind::RegistryUnavailable, &path, error);
             }
         }
     }
@@ -421,7 +421,7 @@ pub(super) fn listed(source: &Path, project: Option<&Path>) -> Result<Vec<PathBu
 /// under either spelling of the path; a writer that did not know the project
 /// indexed beside the file. A file with several hard links also matches the
 /// entries in its folder's index for files that are the same file. Stores that
-/// no longer exist are left out: their ledgers went with them. When the
+/// no longer exist are left out: their input records went with them. When the
 /// project's root store lists this bucket of the project's index but the
 /// bucket does not name the store, the index was lost: the store is inspected
 /// and the check is incomplete, so the save asks.
@@ -429,7 +429,7 @@ pub(super) fn select(
     target: &Path,
     absolute: &Path,
     project: Option<&Path>,
-    inspection: &mut Inspection,
+    log: &mut CheckLog,
 ) -> Vec<PathBuf> {
     let linked = basecraft_platform::files::link_count(target).unwrap_or(1) > 1;
     let identity = stamp(target).ok().and_then(|s| Some((s.device?, s.inode?)));
@@ -444,15 +444,15 @@ pub(super) fn select(
     let mut selected = BTreeSet::new();
     for (home, entry) in places {
         if let Some(reason) = foreign_basecraft(&home) {
-            inspection.issue(
-                InspectionCode::RegistryUnavailable,
+            log.issue(
+                UncheckedKind::RegistryUnavailable,
                 &home.join(".basecraft"),
                 format!("{reason}; analyses of files here cannot be checked"),
             );
             continue;
         }
         let bucket = bucket(&home, &entry);
-        let indexes = stores_in(&bucket, inspection);
+        let indexes = stores_in(&bucket, log);
         for (store, index) in &indexes {
             if index.files.contains(&entry) {
                 selected.insert(store.clone());
@@ -461,7 +461,7 @@ pub(super) fn select(
         if linked {
             // Other names of the same file sit in other buckets of this index.
             for other in copies_of_dirs(&index_root(&home)) {
-                for (store, index) in stores_in(&other, inspection) {
+                for (store, index) in stores_in(&other, log) {
                     if index.files.iter().any(|f| same_file(&home.join(f))) {
                         selected.insert(store);
                     }
@@ -469,7 +469,7 @@ pub(super) fn select(
             }
         }
         if project == Some(home.as_path()) {
-            lost(&home, &bucket, &indexes, &mut selected, inspection);
+            lost(&home, &bucket, &indexes, &mut selected, log);
         }
     }
     selected.retain(|store| store.try_exists().ok() != Some(false));
@@ -498,7 +498,7 @@ fn lost(
     bucket: &Path,
     indexes: &[(PathBuf, AnalysisIndex)],
     selected: &mut BTreeSet<PathBuf>,
-    inspection: &mut Inspection,
+    log: &mut CheckLog,
 ) {
     let mut stores = vec![project.join(".basecraft/analyses-v1")];
     let mut scanned = SCANNED
@@ -519,16 +519,16 @@ fn lost(
                 selected.insert(store);
             }
             Ok(_) => {}
-            Err(error) => inspection.issue(
-                InspectionCode::RegistryUnavailable,
+            Err(error) => log.issue(
+                UncheckedKind::RegistryUnavailable,
                 &store.join("indexed-folders.json"),
                 error,
             ),
         }
     }
     if found {
-        inspection.issue(
-            InspectionCode::RegistryUnavailable,
+        log.issue(
+            UncheckedKind::RegistryUnavailable,
             bucket,
             format!(
                 "the analysis index here is missing; `basecraft --project {} records reindex` rebuilds it",
@@ -592,7 +592,7 @@ mod tests {
         )
         .unwrap();
         let locks = super::super::lock().unwrap();
-        // A ledger writer reserves the ledger and every input it names.
+        // An input record writer reserves the input record and every input it names.
         locks.record(run.directory()).unwrap();
         locks.source(&source).unwrap();
         locks.source(&introduced).unwrap();

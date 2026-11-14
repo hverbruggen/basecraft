@@ -463,16 +463,16 @@ impl History<'_> {
             coordinates: "zero-based-half-open; segments in biological order; reverse-complement after splicing".into(),
             extra: BTreeMap::new(),
         };
-        let input = crate::records::SubmittedInput {
+        let input = crate::records::RunInput {
             schema_version: 1,
             source: reference.clone(),
             submitted_hash: hash.clone(),
             submitted_size: size,
             transformation: basecraft_protocol::input_records::Transformation::Identity,
             state: if reference.is_some() {
-                basecraft_protocol::input_records::EvidenceState::Referenced
+                basecraft_protocol::input_records::InputState::Referenced
             } else {
-                basecraft_protocol::input_records::EvidenceState::Generated
+                basecraft_protocol::input_records::InputState::Generated
             },
             analysis_run: None,
             proposal_target: None,

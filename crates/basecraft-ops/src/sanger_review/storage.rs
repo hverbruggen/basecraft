@@ -135,7 +135,7 @@ impl SourceAccess for Source {
                 let path = inputs::source_location(ledger, reference)?;
                 if !path.try_exists()?
                     && inputs::read_input(ledger)?.state
-                        == basecraft_protocol::input_records::EvidenceState::Referenced
+                        == basecraft_protocol::input_records::InputState::Referenced
                 {
                     self.path.clone()
                 } else {
@@ -1356,7 +1356,7 @@ mod tests {
         let ledger = review.evidence.sources[0].ledger.as_ref().unwrap();
         assert_eq!(
             inputs::read_input(ledger).unwrap().state,
-            basecraft_protocol::input_records::EvidenceState::Referenced
+            basecraft_protocol::input_records::InputState::Referenced
         );
         assert!(!ledger.join("preserved-input").exists());
         assert!(

@@ -10,8 +10,8 @@ mod resolve;
 
 pub(crate) use check::check_for;
 pub use check::{
-    AffectedAnalysis, EvidenceCheck, EvidenceConflict, InspectionCode, InspectionIssue,
-    InspectionRelevance, SavePolicy, check, check_in, conflicts, conflicts_in,
+    AffectedAnalysis, InputCheck, InputConflict, Relevance, SavePolicy, UncheckedKind,
+    UncheckedRecord, check, check_in, conflicts, conflicts_in,
 };
 pub(crate) use index::foreign_basecraft;
 pub use locks::{BackgroundWait, Locks, lock, lock_in, wait_in_background};
@@ -25,7 +25,7 @@ pub use resolve::{preserve_input, resolve};
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
-use basecraft_protocol::input_records::{EvidenceState, Transformation};
+use basecraft_protocol::input_records::{InputState, Transformation};
 use basecraft_protocol::provenance::{ArtifactRevision, FileStamp, InputReference, Publication};
 use serde::Serialize;
 
@@ -82,13 +82,13 @@ pub fn reference_input(
             });
         }
     }
-    let input = SubmittedInput {
+    let input = RunInput {
         schema_version: 1,
         source: Some(reference.clone()),
         submitted_hash: hash.into(),
         submitted_size: reference.stamp.size,
         transformation: basecraft_protocol::input_records::Transformation::Identity,
-        state: EvidenceState::Referenced,
+        state: InputState::Referenced,
         analysis_run: None,
         proposal_target: None,
         upstream,
@@ -140,7 +140,7 @@ pub fn reference_input(
     Ok(run)
 }
 
-pub use basecraft_protocol::input_records::SubmittedInput;
+pub use basecraft_protocol::input_records::RunInput;
 
 pub fn stamp(path: &Path) -> Result<FileStamp> {
     stamp_metadata(path, &std::fs::metadata(path)?)
@@ -212,13 +212,13 @@ pub fn relative(base: &Path, target: &Path) -> Result<String> {
         .ok_or_else(|| unsupported("input path is not UTF-8"))
 }
 
-pub fn read_input(run: &Path) -> Result<SubmittedInput> {
+pub fn read_input(run: &Path) -> Result<RunInput> {
     locks::hold_record(run)?;
     let bytes = crate::records::provenance::read_record(&run.join("input.json"))?;
     validate_input(run, &bytes)
 }
 
-pub(super) fn validate_input(run: &Path, bytes: &[u8]) -> Result<SubmittedInput> {
+pub(super) fn validate_input(run: &Path, bytes: &[u8]) -> Result<RunInput> {
     let metadata = std::fs::symlink_metadata(run.join("input.json"))?;
     if !metadata.is_file() || metadata.file_type().is_symlink() {
         return Err(damaged(
@@ -226,16 +226,16 @@ pub(super) fn validate_input(run: &Path, bytes: &[u8]) -> Result<SubmittedInput>
             "unsafe input evidence record",
         ));
     }
-    let record: SubmittedInput = basecraft_protocol::records::decode(bytes)
+    let record: RunInput = basecraft_protocol::records::decode(bytes)
         .map_err(|e| damaged(run.join("input.json"), e.to_string()))?;
     if record.schema_version != 1 {
         return Err(unsupported("unsupported input evidence record"));
     }
     let has_source = record.source.is_some();
     if match record.state {
-        EvidenceState::Referenced | EvidenceState::Preserved => !has_source,
-        EvidenceState::Generated => has_source,
-        EvidenceState::Broken => false,
+        InputState::Referenced | InputState::Preserved => !has_source,
+        InputState::Generated => has_source,
+        InputState::Broken => false,
     } {
         return Err(damaged(
             run.join("input.json"),
@@ -270,11 +270,11 @@ pub(super) fn write_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
 /// runs it names), its store's analysis index lists the run under every
 /// source it now depends on, and so do the runs elsewhere that were listed
 /// under its old source.
-pub fn write_input(directory: &Path, input: &SubmittedInput) -> Result<()> {
+pub fn write_input(directory: &Path, input: &RunInput) -> Result<()> {
     let path = directory.join("input.json");
     let bytes = basecraft_protocol::records::encode(input)?;
     if let Some(store) = index::store_of(&path) {
-        // Lock order: the ledger and its inputs, then each index briefly.
+        // Lock order: the input record and its inputs, then each index briefly.
         let locks = lock()?;
         let mut sources = std::collections::BTreeSet::new();
         locks.input(
@@ -284,7 +284,7 @@ pub fn write_input(directory: &Path, input: &SubmittedInput) -> Result<()> {
             &mut sources,
         )?;
         let old = read_input(directory).ok();
-        let links = |input: &SubmittedInput| {
+        let links = |input: &RunInput| {
             (
                 input.source.clone(),
                 input.analysis_run.clone(),
@@ -383,7 +383,7 @@ fn stores_under(root: &Path) -> Result<Vec<PathBuf>> {
     Ok(stores)
 }
 
-/// What `reindex` rebuilt, and the ledgers it could not read.
+/// What `reindex` rebuilt, and the input records it could not read.
 #[derive(Debug, Serialize)]
 pub struct Reindexed {
     pub stores: usize,
@@ -392,8 +392,8 @@ pub struct Reindexed {
 }
 
 /// Rebuild the analysis index of every folder that the stores in `project`
-/// use, from the stores' ledgers: the repair for a damaged or lost index.
-/// A store with an unreadable ledger only gains entries, since that ledger's
+/// use, from the stores' input records: the repair for a damaged or lost index.
+/// A store with an unreadable input record only gains entries, since that input record's
 /// inputs are unknown.
 pub fn reindex(project: &Path) -> Result<Reindexed> {
     let project = project.canonicalize()?;
@@ -433,7 +433,7 @@ pub fn reindex(project: &Path) -> Result<Reindexed> {
     Ok(done)
 }
 
-/// Caller holds `lock`. List the run's store beside every input its ledger
+/// Caller holds `lock`. List the run's store beside every input its input record
 /// names, directly or through the runs it depends on.
 pub fn register(run: &ArtifactRun) -> Result<()> {
     let store = run.store();
@@ -474,13 +474,13 @@ pub fn link_generated_input(
     }
     write_input(
         run.directory(),
-        &SubmittedInput {
+        &RunInput {
             schema_version: 1,
             source: None,
             submitted_hash: basecraft_io::hash_bytes(payload),
             submitted_size: payload.len() as u64,
             transformation,
-            state: EvidenceState::Generated,
+            state: InputState::Generated,
             analysis_run: None,
             proposal_target: None,
             upstream,

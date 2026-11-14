@@ -55,7 +55,7 @@ fn matrix_reference_generated_failure_move_and_export_use_the_common_store() {
     let input = records::read_input(&run).unwrap();
     assert_eq!(
         input.state,
-        basecraft_protocol::input_records::EvidenceState::Referenced
+        basecraft_protocol::input_records::InputState::Referenced
     );
     assert_eq!(
         input.source.unwrap().hash,
@@ -90,7 +90,7 @@ fn matrix_reference_generated_failure_move_and_export_use_the_common_store() {
     let input = records::read_input(&dirty_run).unwrap();
     assert_eq!(
         input.state,
-        basecraft_protocol::input_records::EvidenceState::Generated
+        basecraft_protocol::input_records::InputState::Generated
     );
     assert!(input.source.is_none());
     let generated = dirty_run.join("submitted.fasta");

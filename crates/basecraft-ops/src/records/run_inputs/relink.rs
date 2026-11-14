@@ -2,17 +2,17 @@
 //! run to an original that moved.
 use std::path::{Path, PathBuf};
 
-use basecraft_protocol::input_records::EvidenceState;
+use basecraft_protocol::input_records::InputState;
 use basecraft_protocol::provenance::{InputReference, Publication};
 
-use super::{SubmittedInput, lock, read_input, relative, stamp, write_input};
+use super::{RunInput, lock, read_input, relative, stamp, write_input};
 use crate::{
     Result,
     error::{changed_on_disk, damaged, invalid, limit, unsupported},
 };
 
 /// Follow only the bounded Save As delegation, never a source file or cache.
-pub(super) fn owning_ledger(bundle: &Path) -> Result<(PathBuf, SubmittedInput)> {
+pub(super) fn owning_input(bundle: &Path) -> Result<(PathBuf, RunInput)> {
     let mut location = bundle.canonicalize()?;
     let mut input = read_input(&location)?;
     let mut visited = std::collections::HashSet::from([location.clone()]);
@@ -44,14 +44,14 @@ pub fn verified_source(bundle: &Path, reference: &InputReference) -> Result<Path
 }
 
 pub(crate) fn source_location(bundle: &Path, reference: &InputReference) -> Result<PathBuf> {
-    let (mut location, mut input) = owning_ledger(bundle)?;
-    if input.state == EvidenceState::Broken {
+    let (mut location, mut input) = owning_input(bundle)?;
+    if input.state == InputState::Broken {
         return Err(damaged(location, "evidence chain explicitly broken"));
     }
     let primary_matches = input.source.as_ref().is_some_and(|source| {
         source.hash == reference.hash && source.stamp.size == reference.stamp.size
     });
-    // Multi-input publications retain one ordinary ledger per original. Follow
+    // Multi-input publications retain one ordinary input record per original. Follow
     // only declared, bounded, hash-checked ancestry, with no filesystem scan.
     let mut matching = None;
     for (directory, publication) in ancestors(bundle)? {
@@ -65,13 +65,13 @@ pub(crate) fn source_location(bundle: &Path, reference: &InputReference) -> Resu
         if !declared {
             continue;
         }
-        let (owner, candidate) = owning_ledger(&directory)?;
+        let (owner, candidate) = owning_input(&directory)?;
         if candidate.source.as_ref().is_some_and(|source| {
             source.hash == reference.hash && source.stamp.size == reference.stamp.size
         }) {
             // Check every declared matching owner before selecting one: an
             // intact same-hash sibling must not hide an explicit evidence break.
-            if candidate.state == EvidenceState::Broken {
+            if candidate.state == InputState::Broken {
                 return Err(damaged(owner, "evidence chain explicitly broken"));
             }
             if matching.is_none() {
@@ -90,7 +90,7 @@ pub(crate) fn source_location(bundle: &Path, reference: &InputReference) -> Resu
     if effective.hash != reference.hash {
         return Err(damaged(location, "input reference identity changed"));
     }
-    let path = if input.state == EvidenceState::Preserved {
+    let path = if input.state == InputState::Preserved {
         location.join("preserved-input")
     } else {
         location.join(&effective.path)
@@ -103,7 +103,7 @@ pub fn relink(bundle: &Path, original: &Path) -> Result<()> {
     let locks = lock()?;
     locks.source(original)?;
     let local = read_input(bundle)?;
-    let (owner, mut input) = owning_ledger(bundle)?;
+    let (owner, mut input) = owning_input(bundle)?;
     if local.source.as_ref().map(|r| &r.hash) != input.source.as_ref().map(|r| &r.hash) {
         return Err(damaged(owner, "delegated input reference identity changed"));
     }
@@ -120,18 +120,18 @@ pub fn relink(bundle: &Path, original: &Path) -> Result<()> {
     reference.path = relative(&owner, &original)?;
     reference.stamp = stamp(&original)?;
     let hash = reference.hash.clone();
-    input.state = EvidenceState::Referenced;
+    input.state = InputState::Referenced;
     write_input(&owner, &input)?;
-    // A registered run keeps one reference ledger per original beside the run.
-    // Relink each ledger in this result's declared ancestry that names the same
-    // bytes; an explicitly broken ledger stays broken.
+    // A registered run keeps one input record per original beside the run.
+    // Relink each input record in this result's declared ancestry that names the same
+    // bytes; an explicitly broken input record stays broken.
     for (directory, _) in ancestors(bundle)? {
         let directory = directory.canonicalize()?;
         if directory == owner || !directory.join("input.json").is_file() {
             continue;
         }
         let mut ledger = read_input(&directory)?;
-        if ledger.state == EvidenceState::Broken || ledger.origin_run.is_some() {
+        if ledger.state == InputState::Broken || ledger.origin_run.is_some() {
             continue;
         }
         let Some(source) = ledger.source.as_mut() else {
@@ -142,14 +142,14 @@ pub fn relink(bundle: &Path, original: &Path) -> Result<()> {
         }
         source.path = relative(&directory, &original)?;
         source.stamp = stamp(&original)?;
-        ledger.state = EvidenceState::Referenced;
+        ledger.state = InputState::Referenced;
         write_input(&directory, &ledger)?;
     }
     Ok(())
 }
 
 /// Walk only declared immutable ancestor records. No ancestor input is copied.
-/// The mutable evidence ledger stays in its owning run so later preservation or
+/// The mutable input record stays in its owning run so later preservation or
 /// explicit evidence-break decisions remain visible to descendants.
 pub(crate) fn ancestors(bundle: &Path) -> Result<Vec<(PathBuf, Publication)>> {
     let mut stack = vec![(bundle.to_path_buf(), false)];

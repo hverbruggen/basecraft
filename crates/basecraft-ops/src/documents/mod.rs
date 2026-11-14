@@ -400,7 +400,8 @@ pub(crate) use submission::companions as submission_companions;
 // Shared by staged support import and drawing-edit replay on detached TreeDocs.
 pub(crate) use tree::execute_tree;
 
-/// Placement only: no consent, policy, source or overwrite authority enters a writer.
+/// Where a writer puts its files. It carries no save answer and no right to
+/// overwrite; the session decides those before writing.
 #[derive(Default)]
 pub(crate) enum WritePublication {
     #[default]

@@ -121,11 +121,11 @@ fn known_policy_and_incomplete_acknowledgement_are_independent() {
         assert_eq!(check.evidence().conflict.analyses.len(), 1);
         assert!(matches!(
             session.save_with_decision(doc, None, check.decide(SavePolicy::Cancel, true)),
-            Err(Error::EvidenceConflict(_))
+            Err(Error::InputConflict(_))
         ));
         assert_eq!(
             records::read_input(known.directory()).unwrap().state,
-            basecraft_protocol::input_records::EvidenceState::Referenced
+            basecraft_protocol::input_records::InputState::Referenced
         );
         let check = session.check_save(doc, None).unwrap();
         let check = required(
@@ -143,7 +143,7 @@ fn known_policy_and_incomplete_acknowledgement_are_independent() {
         );
         assert_eq!(
             records::read_input(known.directory()).unwrap().state,
-            basecraft_protocol::input_records::EvidenceState::Preserved
+            basecraft_protocol::input_records::InputState::Preserved
         );
     });
 }
@@ -228,7 +228,7 @@ fn save_as_rechecks_and_save_new_never_overwrites() {
             .unwrap_err();
         assert!(!matches!(
             error,
-            Error::SaveCheckRequired(_) | Error::EvidenceCheckIncomplete(_)
+            Error::SaveCheckRequired(_) | Error::InputCheckIncomplete(_)
         ));
         assert_eq!(std::fs::read(&new).unwrap(), b"keep me");
         std::fs::remove_file(&new).unwrap();
@@ -254,7 +254,7 @@ fn preservation_and_changed_source_failures_are_not_waivable() {
             error,
             Error::SaveCheckRequired(_)
                 | Error::SaveDecisionStale(_)
-                | Error::EvidenceCheckIncomplete(_)
+                | Error::InputCheckIncomplete(_)
         ));
         assert_eq!(std::fs::read(&file).unwrap(), ORIGINAL);
         std::fs::remove_dir(known.directory().join("preserved-input")).unwrap();
@@ -270,11 +270,11 @@ fn preservation_and_changed_source_failures_are_not_waivable() {
             error,
             Error::SaveCheckRequired(_)
                 | Error::SaveDecisionStale(_)
-                | Error::EvidenceCheckIncomplete(_)
+                | Error::InputCheckIncomplete(_)
         ));
         assert_eq!(
             records::read_input(known.directory()).unwrap().state,
-            basecraft_protocol::input_records::EvidenceState::Referenced
+            basecraft_protocol::input_records::InputState::Referenced
         );
         assert_eq!(std::fs::read(&file).unwrap(), b">external\nTTTT\n");
         assert_recovery(&mut session, root);
@@ -297,7 +297,7 @@ fn partial_preservation_then_failed_save_remains_recoverable_and_retryable() {
             error,
             Error::SaveCheckRequired(_)
                 | Error::SaveDecisionStale(_)
-                | Error::EvidenceCheckIncomplete(_)
+                | Error::InputCheckIncomplete(_)
         ));
         assert_eq!(std::fs::read(&file).unwrap(), ORIGINAL);
         assert_eq!(
@@ -401,7 +401,7 @@ fn session_tokens_support_adapter_round_trip_and_cannot_be_replayed() {
             .unwrap();
         assert!(matches!(
             session.save_with_decision(doc, None, first),
-            Err(Error::EvidenceConflict(_))
+            Err(Error::InputConflict(_))
         ));
         assert!(matches!(
             session.save_with_decision(doc, None, duplicate),
@@ -409,7 +409,7 @@ fn session_tokens_support_adapter_round_trip_and_cannot_be_replayed() {
         ));
         assert_eq!(
             records::read_input(known.directory()).unwrap().state,
-            basecraft_protocol::input_records::EvidenceState::Referenced
+            basecraft_protocol::input_records::InputState::Referenced
         );
         assert_eq!(std::fs::read(&file).unwrap(), ORIGINAL);
         assert!(matches!(

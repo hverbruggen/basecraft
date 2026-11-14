@@ -1,16 +1,17 @@
-//! Transient save decisions. No consent is written to disk or deserialised.
+//! Checking a save and taking the user's answer. Answers live only in
+//! memory; none is written to disk or read from it.
 use std::path::{Path, PathBuf};
 
 use super::save::SaveMode;
-pub use super::save_consent::{EvidenceAction, SaveCheck, SaveDecision, SaveOutcome, SaveWarning};
-use super::save_consent::{PendingSaveCheck, SaveScope, target_revision};
+pub use super::save_answer::{AppliedAnswer, SaveCheck, SaveDecision, SaveOutcome, SaveWarning};
+use super::save_answer::{PendingSaveCheck, SaveScope, target_revision};
 use super::{DocId, Session};
-use crate::records::run_inputs::{EvidenceCheck, SavePolicy};
+use crate::records::run_inputs::{InputCheck, SavePolicy};
 use crate::{Result, error::invalid};
 
 impl Session {
-    /// Advisory and side-effect-free. No lock is retained across caller UI.
-    /// The authoritative save always repeats this inspection under its guard.
+    /// What saving `id` (to `path`, or its own file) would affect. Writes
+    /// nothing and holds no lock; the save checks again under its locks.
     pub fn check_save(&self, id: DocId, path: Option<&Path>) -> Result<SaveCheck> {
         if !self.is_open(id) {
             return Err(invalid("save document is not open"));
@@ -26,9 +27,9 @@ impl Session {
         self.publish_save_check(id, check)
     }
 
-    /// Bind a wire acknowledgement to the Session's one pending check for this
-    /// document. This does not rescan. `save_with_decision`/`save_new_with_decision`
-    /// consume its consent on entry and recheck under the normal guard.
+    /// The user's answer to the document's pending check, named by `token`.
+    /// Nothing is checked again here; `save_with_decision` and
+    /// `save_new_with_decision` use the answer up and check again.
     pub fn decide_save(
         &self,
         id: DocId,
@@ -71,8 +72,8 @@ impl Session {
         &self,
         id: DocId,
         target: &Path,
-        evidence: EvidenceCheck,
-        target_revision: Option<super::save_consent::TargetRevision>,
+        evidence: InputCheck,
+        target_revision: Option<super::save_answer::TargetRevision>,
     ) -> Result<SaveCheck> {
         let target = crate::records::save_guard::target_path(target)?;
         let publication = match &self.write_publication {
@@ -107,8 +108,8 @@ impl Session {
             target,
             target_revision,
         };
-        // The digest includes all typed evidence and document/target context.
-        // It is private consent, never reconstructed from a wire snapshot.
+        // The check's revision covers everything in it, so an answer counts
+        // only while nothing it saw has changed.
         SaveCheck::from_scope(scope)
     }
 
@@ -150,15 +151,15 @@ impl Session {
     }
 
     /// The analysis check for a save of `target` from this session.
-    fn evidence_check(&self, target: &Path) -> Result<EvidenceCheck> {
+    fn evidence_check(&self, target: &Path) -> Result<InputCheck> {
         crate::records::run_inputs::check_for(
             target,
             self.project.as_ref().map(crate::project::Project::root),
         )
     }
 
-    /// Check only, not consent. Called under the evidence guard
-    /// immediately after a successful write or authorized finalization.
+    /// The check after a recovery wrote document `id`, made under the run
+    /// input locks. It is a check, not an answer.
     pub(crate) fn recovery_snapshot(&self, id: DocId) -> Result<SaveCheck> {
         let target = self.resolve(&self.docs[id.0].key);
         let mut check = self.save_check_scope(
@@ -180,8 +181,9 @@ impl Session {
         }
     }
 
-    /// Caller holds the pinned final target reservation, then evidence guard.
-    /// Reauthorizes only publication: never serializes a successful document again.
+    /// Finish recovering a document already written: check again, and take
+    /// the answer if one is needed. The caller holds the target's lock, then
+    /// the run input locks. The document is not written again.
     pub(crate) fn recovery_finalize(
         &self,
         id: DocId,
@@ -196,7 +198,7 @@ impl Session {
         self.check_save_source(id, None)?;
         let fresh = self.recovery_snapshot(id)?;
         let decided = decision.is_some();
-        self.docs[id.0].pending_check.authorize_finalization(
+        self.docs[id.0].pending_check.apply_recovery_answer(
             &fresh,
             expected,
             decision.map(|decision| (decision, valid)),
@@ -209,7 +211,7 @@ impl Session {
                     .evidence_groups()
                     .any(|group| !group.conflict.analyses.is_empty())
             {
-                observed.require_final_decision();
+                observed.require_new_answer();
             }
             Ok(observed)
         } else {
@@ -245,7 +247,7 @@ impl Session {
 }
 
 impl Session {
-    pub(crate) fn recovery_actions(&self) -> Result<Vec<EvidenceAction>> {
+    pub(crate) fn recovery_actions(&self) -> Result<Vec<AppliedAnswer>> {
         Ok(self
             .evidence_actions
             .lock()
@@ -348,7 +350,7 @@ mod tests {
     }
 
     #[test]
-    fn changed_full_parent_identity_spends_receipt_and_returns_stale_scope() {
+    fn changed_parent_folder_uses_up_the_answer_and_returns_the_new_check() {
         let Some(root) = isolated_identity_profile::enter() else {
             return;
         };
@@ -368,7 +370,7 @@ mod tests {
             )
             .unwrap_err();
         let crate::Error::SaveDecisionStale(fresh) = error else {
-            panic!("expected stale receipt")
+            panic!("expected a stale answer")
         };
         assert_eq!(fresh.scope.publication.as_ref().unwrap().1, new_identity);
         assert!(!fresh.same_scope(&check));

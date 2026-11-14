@@ -521,7 +521,7 @@ pub fn verify(result: &Path, project: Option<&crate::project::Project>) -> Resul
     let mut issues = verify_records(&bundle, &publication)?;
     if bundle.join("input.json").is_file() {
         if crate::records::run_inputs::read_input(&bundle)?.state
-            == basecraft_protocol::input_records::EvidenceState::Broken
+            == basecraft_protocol::input_records::InputState::Broken
         {
             issues.push("Input evidence explicitly broken".into());
         }
@@ -716,13 +716,13 @@ fn link_selected_inputs<'a>(
             .outputs
             .first()
             .ok_or_else(|| invalid("input publication has no result"))?;
-        crate::records::run_inputs::SubmittedInput {
+        crate::records::run_inputs::RunInput {
             schema_version: 1,
             source: None,
             submitted_hash: output.hash.clone(),
             submitted_size: output.size,
             transformation: basecraft_protocol::input_records::Transformation::Identity,
-            state: basecraft_protocol::input_records::EvidenceState::Generated,
+            state: basecraft_protocol::input_records::InputState::Generated,
             analysis_run: None,
             proposal_target: None,
             upstream: Vec::new(),

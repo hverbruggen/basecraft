@@ -265,12 +265,12 @@ fn publication_worker() {
                 assert_eq!(input.proposal_target, Some(true));
                 assert_eq!(
                     input.state,
-                    basecraft_protocol::input_records::EvidenceState::Referenced
+                    basecraft_protocol::input_records::InputState::Referenced
                 );
             } else {
                 assert_eq!(
                     input.state,
-                    basecraft_protocol::input_records::EvidenceState::Preserved
+                    basecraft_protocol::input_records::InputState::Preserved
                 );
                 // The mutable record must retain the preservation performed by
                 // the save, rather than a later stale post-helper rewrite.
@@ -373,11 +373,11 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
             if mode == "retain-break" {
                 assert_eq!(
                     records::read_input(owner.directory()).unwrap().state,
-                    basecraft_protocol::input_records::EvidenceState::Broken
+                    basecraft_protocol::input_records::InputState::Broken
                 );
                 assert_eq!(
                     records::read_input(leaf.directory()).unwrap().state,
-                    basecraft_protocol::input_records::EvidenceState::Broken
+                    basecraft_protocol::input_records::InputState::Broken
                 );
             } else {
                 assert!(!owner.directory().exists());
@@ -392,7 +392,7 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
         let mut primary = records::read_input(owner.directory()).unwrap();
         assert_eq!(
             primary.state,
-            basecraft_protocol::input_records::EvidenceState::Referenced
+            basecraft_protocol::input_records::InputState::Referenced
         );
         barrier.send("prepared");
         barrier.expect("commit");
@@ -404,7 +404,7 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
         } else {
             primary.origin_run =
                 Some(records::relative(owner.directory(), leaf.directory()).unwrap());
-            primary.state = basecraft_protocol::input_records::EvidenceState::Preserved;
+            primary.state = basecraft_protocol::input_records::InputState::Preserved;
             records::write_input(owner.directory(), &primary).unwrap();
         }
         drop(locks);
@@ -420,7 +420,7 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
         let primary = records::read_input(owner.directory()).unwrap();
         assert_eq!(
             primary.state,
-            basecraft_protocol::input_records::EvidenceState::Preserved
+            basecraft_protocol::input_records::InputState::Preserved
         );
         if mode == "retain-preserve" {
             assert_eq!(
@@ -455,7 +455,7 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
                     )
                     .unwrap()
                     .state,
-                    basecraft_protocol::input_records::EvidenceState::Referenced
+                    basecraft_protocol::input_records::InputState::Referenced
                 );
             }
         }

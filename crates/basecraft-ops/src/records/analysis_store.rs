@@ -7,7 +7,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-use basecraft_protocol::input_records::EvidenceState;
+use basecraft_protocol::input_records::InputState;
 use basecraft_protocol::records::{
     AnalysisRun, AnalysisRunStatus, ResultBinding, StoreFormat, StoreMarker,
 };
@@ -15,7 +15,7 @@ use basecraft_protocol::records::{
 use crate::{
     Error, Result,
     error::{damaged, invalid, limit, unsupported},
-    records::run_inputs::{SubmittedInput, read_input, relative, write_input, write_json},
+    records::run_inputs::{RunInput, read_input, relative, write_input, write_json},
 };
 
 #[derive(Clone, Debug)]
@@ -564,11 +564,11 @@ pub(crate) fn retained_source(root: &Path, hash: &str) -> Result<Option<PathBuf>
         }
         let input = read_input(&run)?;
         // A delegating ledger is also Preserved but holds no bytes; keep looking.
-        let retained = if input.state == EvidenceState::Preserved
+        let retained = if input.state == InputState::Preserved
             && input.source.as_ref().is_some_and(|r| r.hash == hash)
         {
             run.join("preserved-input")
-        } else if input.state == EvidenceState::Generated && input.submitted_hash == hash {
+        } else if input.state == InputState::Generated && input.submitted_hash == hash {
             match submitted_input(&run) {
                 Some(path) => path,
                 None => continue,
@@ -613,13 +613,13 @@ pub(crate) fn publish_delimitation(
     placement: &crate::documents::WritePublication,
 ) -> Result<()> {
     if let Some(run) = new_run {
-        let input = SubmittedInput {
+        let input = RunInput {
             schema_version: 1,
             source: None,
             submitted_hash: main_hash.to_owned(),
             submitted_size: std::fs::metadata(target)?.len(),
             transformation: basecraft_protocol::input_records::Transformation::Identity,
-            state: basecraft_protocol::input_records::EvidenceState::Generated,
+            state: basecraft_protocol::input_records::InputState::Generated,
             analysis_run: None,
             proposal_target: None,
             upstream: Vec::new(),

@@ -243,7 +243,7 @@ impl Slot {
             run: None,
             disk_stamp,
             generation: 0,
-            pending_check: super::save_consent::PendingSaveCheck::default(),
+            pending_check: super::save_answer::PendingSaveCheck::default(),
             undo: vec![],
             redo: vec![],
             settled: Vec::new(),

@@ -1345,7 +1345,7 @@ fn verified_reports(
             || evidence.submitted_hash != expected
             || evidence.transformation
                 != basecraft_protocol::input_records::Transformation::Identity
-            || ledger.state == basecraft_protocol::input_records::EvidenceState::Broken
+            || ledger.state == basecraft_protocol::input_records::InputState::Broken
             || ledger.submitted_hash != expected
             || ledger.transformation != basecraft_protocol::input_records::Transformation::Identity
         {

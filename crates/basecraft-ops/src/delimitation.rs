@@ -285,7 +285,7 @@ pub fn checked_alignment(
 
 fn checked_workspace_input(run: &std::path::Path, hash: &str) -> Result<PathBuf> {
     let input = crate::records::run_inputs::read_input(run)?;
-    if input.state == basecraft_protocol::input_records::EvidenceState::Broken {
+    if input.state == basecraft_protocol::input_records::InputState::Broken {
         return Err(damaged(
             run,
             "Workspace input evidence was explicitly broken",
@@ -319,7 +319,7 @@ pub fn checked_display_tree(
     };
     let run = std::path::Path::new(run);
     let input = crate::records::run_inputs::read_input(run)?;
-    if input.state == basecraft_protocol::input_records::EvidenceState::Broken {
+    if input.state == basecraft_protocol::input_records::InputState::Broken {
         return Err(damaged(run, "Display tree evidence was explicitly broken"));
     }
     let source = if let Some(reference) = &input.source {

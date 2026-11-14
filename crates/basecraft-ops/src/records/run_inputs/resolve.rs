@@ -3,18 +3,18 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use basecraft_protocol::input_records::EvidenceState;
+use basecraft_protocol::input_records::InputState;
 use basecraft_protocol::provenance::InputReference;
 
-use super::check::{AffectedAnalysis, EvidenceConflict, SavePolicy, same_source};
-use super::relink::owning_ledger;
+use super::check::{AffectedAnalysis, InputConflict, SavePolicy, same_source};
+use super::relink::owning_input;
 use super::{lock, read_input, relative, write_input};
 use crate::{
     Error, Result,
     error::{changed_on_disk, damaged, invalid, unsupported},
 };
 
-/// Retain one owned input ledger before a temporary source disappears. Uses
+/// Retain one owned input record before a temporary source disappears. Uses
 /// the same checked, idempotent preserve-copy transition as a document save,
 /// without touching other analyses that happen to reference the same file.
 pub fn preserve_input(bundle: &Path) -> Result<()> {
@@ -26,7 +26,7 @@ pub fn preserve_input(bundle: &Path) -> Result<()> {
         .ok_or_else(|| unsupported("input has no source reference"))?;
     let target = bundle.join(&reference.path);
     resolve(
-        &EvidenceConflict {
+        &InputConflict {
             target,
             analyses: vec![AffectedAnalysis {
                 run: bundle.into(),
@@ -43,11 +43,11 @@ pub fn preserve_input(bundle: &Path) -> Result<()> {
 }
 
 /// Resolve a group under the caller's existing mutation guard. Two target
-/// groups can contain the very same backing ledger. Removal of that exact
-/// ledger is performed once; equal hashes/names never identify two ledgers.
+/// groups can contain the very same backing input record. Removal of that exact
+/// input record is performed once; equal hashes/names never identify two input records.
 /// The original groups remain intact in the Session receipt and action report.
 pub(crate) fn resolve_group(
-    conflict: &EvidenceConflict,
+    conflict: &InputConflict,
     policy: SavePolicy,
     removed: &mut std::collections::BTreeSet<PathBuf>,
 ) -> Result<()> {
@@ -82,13 +82,13 @@ pub(crate) fn resolve_group(
 
 /// Apply explicit decisions before overwrite. A partial decision failure aborts
 /// the save; earlier preserved copies/removed metadata remain recoverable.
-pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
+pub fn resolve(conflict: &InputConflict, policy: SavePolicy) -> Result<()> {
     let _locks = lock()?;
     if conflict.analyses.is_empty() {
         return Ok(());
     }
     if policy == SavePolicy::Cancel {
-        return Err(crate::Error::EvidenceConflict(Box::new(conflict.clone())));
+        return Err(crate::Error::InputConflict(Box::new(conflict.clone())));
     }
     if !conflict.options.contains(&policy) {
         return Err(unsupported(
@@ -105,8 +105,8 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
         };
         let mut backing: Vec<_> = backing.iter().collect();
         if policy == SavePolicy::PreserveCopy {
-            // A leaf input ledger can own shared bytes without a cycle. The
-            // logical run already depends on that ledger; delegate toward the
+            // A leaf input record can own shared bytes without a cycle. The
+            // logical run already depends on that input record; delegate toward the
             // leaf, never from it back to its parent analysis.
             backing.sort_by_key(|analysis| (!analysis.direct, &analysis.run == logical_owner));
         }
@@ -132,9 +132,9 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
                     }
                     let destination = affected.run.join("preserved-input");
                     // A public retry must never touch the live source or replace
-                    // retained bytes. The owning ledger may have advanced already.
-                    if input.state == EvidenceState::Preserved {
-                        let (owner, retained) = owning_ledger(&affected.run)?;
+                    // retained bytes. The owning input record may have advanced already.
+                    if input.state == InputState::Preserved {
+                        let (owner, retained) = owning_input(&affected.run)?;
                         let effective = retained
                             .source
                             .as_ref()
@@ -143,7 +143,7 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
                         preserved.insert(reference.hash.clone(), owner);
                         continue;
                     }
-                    if input.state != EvidenceState::Referenced {
+                    if input.state != InputState::Referenced {
                         return Err(outdated(
                             "input evidence changed; refresh the save decision",
                         ));
@@ -155,7 +155,7 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
                     if let Some(owner) = preserved.get(&reference.hash) {
                         verify_preserved(&owner.join("preserved-input"), reference)?;
                         input.origin_run = Some(relative(&affected.run, owner)?);
-                        input.state = EvidenceState::Preserved;
+                        input.state = InputState::Preserved;
                         input
                             .extra
                             .insert("preserved_original_bytes".into(), serde_json::json!(0));
@@ -163,7 +163,7 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
                         continue;
                     }
                     let copied = if destination.try_exists()? {
-                        // A previous ledger write may have failed after publication.
+                        // A previous input record write may have failed after publication.
                         verify_preserved(&destination, reference)?;
                         0
                     } else {
@@ -182,14 +182,14 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
                         copied
                     };
                     preserved.insert(reference.hash.clone(), affected.run.clone());
-                    input.state = EvidenceState::Preserved;
+                    input.state = InputState::Preserved;
                     input
                         .extra
                         .insert("preserved_original_bytes".into(), serde_json::json!(copied));
                     write_input(&affected.run, &input)?;
                 }
                 SavePolicy::BreakEvidence => {
-                    input.state = EvidenceState::Broken;
+                    input.state = InputState::Broken;
                     write_input(&affected.run, &input)?;
                 }
                 SavePolicy::RemoveAnalysis => {

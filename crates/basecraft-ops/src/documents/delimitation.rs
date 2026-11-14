@@ -275,7 +275,7 @@ mod tests {
             assert_eq!(input.submitted_size, main.len() as u64);
             assert_eq!(
                 input.state,
-                basecraft_protocol::input_records::EvidenceState::Generated
+                basecraft_protocol::input_records::InputState::Generated
             );
             // Match the pre-extraction sorted JSON record bytes, including the
             // newline added by write_json. Golden typed-record tests also apply.

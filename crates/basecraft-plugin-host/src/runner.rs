@@ -341,7 +341,7 @@ impl PreparedOperation {
                     self.run.directory(),
                     &self.run_path(&owner.run_directory),
                 )?);
-                input.state = basecraft_protocol::input_records::EvidenceState::Preserved;
+                input.state = basecraft_protocol::input_records::InputState::Preserved;
                 records::write_input(self.run.directory(), &input)?;
             }
         }

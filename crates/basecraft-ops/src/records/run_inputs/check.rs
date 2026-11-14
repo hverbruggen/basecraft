@@ -4,11 +4,11 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use basecraft_platform::files::lexical;
-use basecraft_protocol::input_records::EvidenceState;
+use basecraft_protocol::input_records::InputState;
 use basecraft_protocol::provenance::InputReference;
 use serde::{Deserialize, Serialize};
 
-use super::{SubmittedInput, index, stamp, validate_input};
+use super::{RunInput, index, stamp, validate_input};
 use crate::{
     Error, Result,
     error::{damaged, limit},
@@ -32,23 +32,24 @@ pub struct AffectedAnalysis {
     pub source_hash: String,
     pub can_preserve: bool,
     pub direct: bool,
-    /// Backing decisions for a logical analysis; empty for a direct ledger.
+    /// Backing decisions for a logical analysis; empty for a direct input record.
     /// Each child retains its own hash/direct guard.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub backing_analyses: Vec<AffectedAnalysis>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct EvidenceConflict {
+pub struct InputConflict {
     pub target: PathBuf,
     pub analyses: Vec<AffectedAnalysis>,
     pub options: Vec<SavePolicy>,
 }
 
-/// Failure of an inspection, never authority to ignore a save/write failure.
+/// Why a record could not be checked. Never a reason to ignore a failed
+/// save or write.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum InspectionCode {
+pub enum UncheckedKind {
     RegistryUnavailable,
     StoreUnavailable,
     RunUnavailable,
@@ -61,16 +62,16 @@ pub enum InspectionCode {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum InspectionRelevance {
+pub enum Relevance {
     Relevant,
     Unknown,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct InspectionIssue {
-    pub code: InspectionCode,
+pub struct UncheckedRecord {
+    pub code: UncheckedKind,
     pub location: PathBuf,
-    pub relevance: InspectionRelevance,
+    pub relevance: Relevance,
     /// No distance-based unrelatedness inference is made. An unreadable record
     /// can hide a direct reference, an alias, an owner or an ancestor edge.
     pub reason: String,
@@ -78,45 +79,42 @@ pub struct InspectionIssue {
 
 /// Advisory snapshot. It performs no registration, preservation or writes.
 #[derive(Clone, Debug, Serialize)]
-pub struct EvidenceCheck {
-    pub conflict: EvidenceConflict,
-    pub issues: Vec<InspectionIssue>,
+pub struct InputCheck {
+    pub conflict: InputConflict,
+    pub issues: Vec<UncheckedRecord>,
     /// Ephemeral digest of inspected inventory, including damaged bytes.
     pub inventory_revision: String,
 }
 
-impl EvidenceCheck {
+impl InputCheck {
     pub fn is_complete(&self) -> bool {
         self.issues.is_empty()
     }
 }
 
 #[derive(Default)]
-pub(super) struct Inspection {
-    observations: BTreeMap<PathBuf, String>,
-    issues: Vec<InspectionIssue>,
+/// What one check has read: each record's hash (or why it could not be
+/// read), the records it could not check, and each run's result name.
+pub(super) struct CheckLog {
+    read: BTreeMap<PathBuf, String>,
+    issues: Vec<UncheckedRecord>,
     /// Each run's result name, read once per check.
     names: BTreeMap<PathBuf, String>,
 }
 
-impl Inspection {
+impl CheckLog {
     pub(super) fn issue(
         &mut self,
-        code: InspectionCode,
+        code: UncheckedKind,
         location: &Path,
         error: impl std::fmt::Display,
     ) {
-        self.issue_for(code, InspectionRelevance::Unknown, location, error);
+        self.issue_for(code, Relevance::Unknown, location, error);
     }
 
     /// An issue for `error`, placed at the record a damaged or missing
     /// error names, so the reason does not repeat its path.
-    pub(super) fn issue_from(
-        &mut self,
-        code: InspectionCode,
-        location: &Path,
-        error: crate::Error,
-    ) {
+    pub(super) fn issue_from(&mut self, code: UncheckedKind, location: &Path, error: crate::Error) {
         match error {
             crate::Error::Damaged { path, detail } => self.issue(code, &path, detail),
             crate::Error::NotFound { path } => self.issue(code, &path, "was not found"),
@@ -126,12 +124,12 @@ impl Inspection {
 
     pub(super) fn issue_for(
         &mut self,
-        code: InspectionCode,
-        relevance: InspectionRelevance,
+        code: UncheckedKind,
+        relevance: Relevance,
         location: &Path,
         error: impl std::fmt::Display,
     ) {
-        self.issues.push(InspectionIssue {
+        self.issues.push(UncheckedRecord {
             code,
             location: location.into(),
             relevance,
@@ -150,7 +148,7 @@ impl Inspection {
     }
 
     pub(super) fn observe(&mut self, path: &Path, result: &Result<Vec<u8>>) {
-        self.observations.insert(
+        self.read.insert(
             path.into(),
             match result {
                 Ok(bytes) => basecraft_io::hash_bytes(bytes),
@@ -159,7 +157,7 @@ impl Inspection {
         );
     }
 
-    fn input(&mut self, run: &Path) -> Result<SubmittedInput> {
+    fn input(&mut self, run: &Path) -> Result<RunInput> {
         // Keep the existing unsafe-record and schema validation in one owner.
         let bytes = self.record(&run.join("input.json"))?;
         validate_input(run, &bytes)
@@ -187,8 +185,8 @@ impl Inspection {
             Ok(name) => name,
             Err(error) => {
                 self.issue_for(
-                    InspectionCode::DisplayMetadataUnavailable,
-                    InspectionRelevance::Relevant,
+                    UncheckedKind::DisplayMetadataUnavailable,
+                    Relevance::Relevant,
                     &path,
                     error,
                 );
@@ -198,7 +196,7 @@ impl Inspection {
     }
 }
 
-impl std::fmt::Display for EvidenceConflict {
+impl std::fmt::Display for InputConflict {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // CLI/SDK callers receive a structured conflict without an interactive prompt.
         write!(
@@ -222,66 +220,67 @@ pub(super) fn same_source(run: &Path, reference: &InputReference, target: &Path)
 }
 
 /// Metadata-only UI query. Matching metadata is a signal, never a hash verdict.
-pub fn conflicts(target: &Path) -> Result<EvidenceConflict> {
+pub fn conflicts(target: &Path) -> Result<InputConflict> {
     conservative(check(target)?)
 }
 
-fn conservative(check: EvidenceCheck) -> Result<EvidenceConflict> {
+fn conservative(check: InputCheck) -> Result<InputConflict> {
     if !check.is_complete() {
-        return Err(crate::Error::EvidenceCheckIncomplete(Box::new(check)));
+        return Err(crate::Error::InputCheckIncomplete(Box::new(check)));
     }
     Ok(check.conflict)
 }
 
-/// Side-effect-free full inspection; callers must recheck under `lock` before
-/// acting. Failure of the lock or of an actual write is never an inspection issue.
-pub fn check(target: &Path) -> Result<EvidenceCheck> {
+/// Check which analyses used `target`, writing nothing; callers check again
+/// under `lock` before acting. A failed lock or write is an error, never an
+/// unchecked record.
+pub fn check(target: &Path) -> Result<InputCheck> {
     check_for(target, None)
 }
 
 /// As [`check`], for a session that holds `project`: a lost index of a folder
 /// that the project's root store names makes the check incomplete.
-pub(crate) fn check_for(target: &Path, project: Option<&Path>) -> Result<EvidenceCheck> {
-    let (canonical, selected, inspection) = selection(target, project)?;
-    inspect(&canonical, &selected, inspection)
+pub(crate) fn check_for(target: &Path, project: Option<&Path>) -> Result<InputCheck> {
+    let (canonical, selected, log) = selection(target, project)?;
+    inspect(&canonical, &selected, log)
 }
 
 pub(super) fn selection(
     target: &Path,
     project: Option<&Path>,
-) -> Result<(PathBuf, Vec<PathBuf>, Inspection)> {
-    let mut inspection = Inspection::default();
+) -> Result<(PathBuf, Vec<PathBuf>, CheckLog)> {
+    let mut log = CheckLog::default();
     let absolute = std::path::absolute(target)?;
     let canonical = absolute.canonicalize().unwrap_or_else(|_| absolute.clone());
-    let selected = index::select(&canonical, &absolute, project, &mut inspection);
-    Ok((canonical, selected, inspection))
+    let selected = index::select(&canonical, &absolute, project, &mut log);
+    Ok((canonical, selected, log))
 }
 
 #[derive(Default)]
 struct StoreScan {
-    runs: Vec<(PathBuf, SubmittedInput)>,
+    runs: Vec<(PathBuf, RunInput)>,
     analyses: Vec<AffectedAnalysis>,
     metadata_bytes: u64,
 }
 
-fn scan_store(store: &Path, target: &Path, scan: &mut StoreScan, inspection: &mut Inspection) {
+fn scan_store(store: &Path, target: &Path, scan: &mut StoreScan, log: &mut CheckLog) {
     basecraft_io::counters::record_store_inspection(store);
     // The marker can be damaged in different ways with the same parse error.
     // Its observed bytes participate in consent, even when validation fails.
-    let _ = inspection.record_bounded(&store.join("store.json"), 4096);
+    let _ = log.record_bounded(&store.join("store.json"), 4096);
     let result = ArtifactRun::validate_store(store)
         .and_then(|()| Ok(std::fs::read_dir(store.join("runs"))?));
     let entries = match result {
         Ok(entries) => entries,
         Err(error) => {
-            inspection.issue(InspectionCode::StoreUnavailable, store, error);
+            log.issue(UncheckedKind::StoreUnavailable, store, error);
             return;
         }
     };
     for (count, entry) in entries.enumerate() {
         if count >= 4096 {
-            inspection.issue(
-                InspectionCode::LimitExceeded,
+            log.issue(
+                UncheckedKind::LimitExceeded,
                 store,
                 "store exceeds 4096 runs; explicit inspection required",
             );
@@ -290,34 +289,32 @@ fn scan_store(store: &Path, target: &Path, scan: &mut StoreScan, inspection: &mu
         let entry = match entry {
             Ok(entry) => entry,
             Err(error) => {
-                inspection.issue(InspectionCode::RunUnavailable, &store.join("runs"), error);
+                log.issue(UncheckedKind::RunUnavailable, &store.join("runs"), error);
                 continue;
             }
         };
         let run = entry.path();
-        match scan_run(&entry, target, &mut scan.metadata_bytes, inspection) {
+        match scan_run(&entry, target, &mut scan.metadata_bytes, log) {
             Ok(Some((input, analysis, bytes))) => {
                 scan.metadata_bytes = bytes;
                 scan.runs.push((run, input));
                 scan.analyses.extend(analysis);
             }
             Ok(None) => {}
-            Err(error) => inspection.issue_from(
-                InspectionCode::LedgerInvalid,
-                &run.join("input.json"),
-                error,
-            ),
+            Err(error) => {
+                log.issue_from(UncheckedKind::LedgerInvalid, &run.join("input.json"), error)
+            }
         }
     }
 }
 
-type RunScan = (SubmittedInput, Option<AffectedAnalysis>, u64);
+type RunScan = (RunInput, Option<AffectedAnalysis>, u64);
 
 fn scan_run(
     entry: &std::fs::DirEntry,
     target: &Path,
     metadata_bytes: &mut u64,
-    inspection: &mut Inspection,
+    log: &mut CheckLog,
 ) -> Result<Option<RunScan>> {
     let kind = entry.file_type()?;
     if kind.is_file() {
@@ -336,17 +333,17 @@ fn scan_run(
     let bytes = metadata_bytes.saturating_add(std::fs::metadata(run.join("input.json"))?.len());
     *metadata_bytes = bytes;
     if bytes > 64 << 20 {
-        inspection.issue(
-            InspectionCode::LimitExceeded,
+        log.issue(
+            UncheckedKind::LimitExceeded,
             &run.join("input.json"),
             "known analysis metadata exceeds 64 MiB query limit",
         );
         return Ok(None);
     }
-    let input = inspection.input(&run)?;
+    let input = log.input(&run)?;
     let mut analysis = None;
     let proposal_target = input.proposal_target == Some(true);
-    let source_matches = if input.state == EvidenceState::Referenced && !proposal_target {
+    let source_matches = if input.state == InputState::Referenced && !proposal_target {
         input.source.as_ref().is_some_and(|reference| {
             if same_source(&run, reference, target) {
                 return true;
@@ -357,7 +354,7 @@ fn scan_run(
                 .map_err(crate::Error::from)
                 .and_then(|_| stamp(&source))
             {
-                inspection.issue(InspectionCode::IdentityUnverified, &source, error);
+                log.issue(UncheckedKind::IdentityUnverified, &source, error);
             }
             false
         })
@@ -371,7 +368,7 @@ fn scan_run(
                 && s.modified_nanos == reference.stamp.modified_nanos
         });
         analysis = Some(AffectedAnalysis {
-            result: inspection.name(&run),
+            result: log.name(&run),
             run,
             source_hash: reference.hash.clone(),
             can_preserve,
@@ -382,29 +379,25 @@ fn scan_run(
     Ok(Some((input, analysis, bytes)))
 }
 
-pub fn conflicts_in(target: &Path, stores: &[PathBuf]) -> Result<EvidenceConflict> {
+pub fn conflicts_in(target: &Path, stores: &[PathBuf]) -> Result<InputConflict> {
     conservative(check_in(target, stores)?)
 }
 
-pub fn check_in(target: &Path, stores: &[PathBuf]) -> Result<EvidenceCheck> {
-    inspect(target, stores, Inspection::default())
+pub fn check_in(target: &Path, stores: &[PathBuf]) -> Result<InputCheck> {
+    inspect(target, stores, CheckLog::default())
 }
 
-pub(super) fn inspect(
-    target: &Path,
-    stores: &[PathBuf],
-    mut inspection: Inspection,
-) -> Result<EvidenceCheck> {
+pub(super) fn inspect(target: &Path, stores: &[PathBuf], mut log: CheckLog) -> Result<InputCheck> {
     let mut scan = StoreScan::default();
     for store in stores {
-        scan_store(store, target, &mut scan, &mut inspection);
+        scan_store(store, target, &mut scan, &mut log);
     }
     let mut analyses = scan.analyses;
     let mut known_runs = scan.runs;
     known_runs.sort_by(|a, b| a.0.cmp(&b.0));
     analyses.sort_by(|a, b| a.run.cmp(&b.run));
     // Metadata-only transitive closure: preserving the direct original repairs
-    // descendants through their owning ledger, while removal lists every record
+    // descendants through their owning input record, while removal lists every record
     // that would otherwise be left with a missing ancestor.
     loop {
         let before = analyses.len();
@@ -415,19 +408,17 @@ pub(super) fn inspect(
             let mut dependent = false;
             for parent in &input.upstream {
                 let path = &parent.bundle;
-                match depends_on_inspected(&run.join(path), &analyses, &mut inspection) {
+                match depends_on_inspected(&run.join(path), &analyses, &mut log) {
                     Ok(found) => dependent |= found,
-                    Err(error) => inspection.issue_from(
-                        InspectionCode::DependencyUnavailable,
-                        &run.join(path),
-                        error,
-                    ),
+                    Err(error) => {
+                        log.issue_from(UncheckedKind::DependencyUnavailable, &run.join(path), error)
+                    }
                 }
             }
             if dependent {
                 analyses.push(AffectedAnalysis {
                     run: run.clone(),
-                    result: inspection.name(run),
+                    result: log.name(run),
                     source_hash: String::new(),
                     can_preserve: true,
                     direct: false,
@@ -448,8 +439,8 @@ pub(super) fn inspect(
             if known_runs.iter().any(|(path, _)| lexical(path) == owner) {
                 owners.insert(run.clone(), owner);
             } else {
-                inspection.issue(
-                    InspectionCode::DependencyUnavailable,
+                log.issue(
+                    UncheckedKind::DependencyUnavailable,
                     &owner,
                     "analysis owner is unavailable in inspected inventory",
                 );
@@ -464,7 +455,7 @@ pub(super) fn inspect(
             .unwrap_or_else(|| analysis.run.clone());
         groups.entry(owner).or_default().push(analysis);
     }
-    // A logical analysis owns all its dedicated ledgers, including inputs other
+    // A logical analysis owns all its dedicated input records, including inputs other
     // than the overwritten file. Break/remove apply to that whole inventory;
     // preserve only touches the direct references marked above.
     for (run, _) in &known_runs {
@@ -474,7 +465,7 @@ pub(super) fn inspect(
         {
             backing.push(AffectedAnalysis {
                 run: run.clone(),
-                result: inspection.name(run),
+                result: log.name(run),
                 source_hash: String::new(),
                 can_preserve: true,
                 direct: false,
@@ -487,7 +478,7 @@ pub(super) fn inspect(
         .map(|(owner, mut backing)| {
             backing.sort_by_key(|a| a.run != owner);
             Ok(AffectedAnalysis {
-                result: inspection.name(&owner),
+                result: log.name(&owner),
                 run: owner,
                 source_hash: backing
                     .iter()
@@ -507,25 +498,24 @@ pub(super) fn inspect(
     if !analyses.is_empty() && analyses.iter().all(|a| a.can_preserve) {
         options.insert(1, SavePolicy::PreserveCopy);
     }
-    let conflict = EvidenceConflict {
+    let conflict = InputConflict {
         target: target.into(),
         analyses,
         options,
     };
-    inspection
-        .issues
+    log.issues
         .sort_by(|a, b| a.location.cmp(&b.location).then(a.reason.cmp(&b.reason)));
-    inspection.issues.dedup();
+    log.issues.dedup();
     let inventory_revision = basecraft_io::hash_bytes(&serde_json::to_vec(&(
         stores,
         &conflict,
         &known_runs,
-        &inspection.observations,
-        &inspection.issues,
+        &log.read,
+        &log.issues,
     ))?);
-    Ok(EvidenceCheck {
+    Ok(InputCheck {
         conflict,
-        issues: inspection.issues,
+        issues: log.issues,
         inventory_revision,
     })
 }
@@ -535,7 +525,7 @@ pub(super) fn inspect(
 fn depends_on_inspected(
     bundle: &Path,
     analyses: &[AffectedAnalysis],
-    inspection: &mut Inspection,
+    log: &mut CheckLog,
 ) -> Result<bool> {
     let mut location = lexical(bundle);
     let mut seen = std::collections::HashSet::new();
@@ -551,7 +541,7 @@ fn depends_on_inspected(
                 path: location.join("input.json"),
             });
         }
-        let input = inspection.input(&location)?;
+        let input = log.input(&location)?;
         let Some(origin) = &input.origin_run else {
             return Ok(false);
         };
@@ -569,7 +559,7 @@ mod store_scan_tests {
         let run = ArtifactRun::create(None, &root.join("species.spart"), "scan-test").unwrap();
         write_input(
             run.directory(),
-            &SubmittedInput {
+            &RunInput {
                 schema_version: 1,
                 source: Some(InputReference {
                     path: relative(run.directory(), source).unwrap(),
@@ -580,7 +570,7 @@ mod store_scan_tests {
                 submitted_hash: basecraft_io::hash_file(source).unwrap(),
                 submitted_size: stamp(source).unwrap().size,
                 transformation: basecraft_protocol::input_records::Transformation::Identity,
-                state: EvidenceState::Referenced,
+                state: InputState::Referenced,
                 analysis_run: None,
                 proposal_target: None,
                 upstream: Vec::new(),
@@ -607,7 +597,7 @@ mod store_scan_tests {
         std::fs::write(&ledger, b"{").unwrap();
         let check = check_in(&source, &[run.store().into()]).unwrap();
         let issue = &check.issues[0];
-        assert_eq!(issue.code, InspectionCode::LedgerInvalid);
+        assert_eq!(issue.code, UncheckedKind::LedgerInvalid);
         assert_eq!(issue.location, ledger);
         assert!(
             !issue.reason.contains(&*root.path().to_string_lossy()),
@@ -625,19 +615,19 @@ mod store_scan_tests {
             let run = fixture(root.path(), &source);
             let store = run.directory().parent().unwrap().parent().unwrap();
             let mut scan = StoreScan::default();
-            let mut inspection = Inspection::default();
-            scan_store(store, &source, &mut scan, &mut inspection);
+            let mut log = CheckLog::default();
+            scan_store(store, &source, &mut scan, &mut log);
             assert_eq!(scan.analyses.len(), 1);
             if delete {
                 std::fs::remove_dir_all(store).unwrap();
             } else {
                 std::fs::rename(store, root.path().join("moved-store")).unwrap();
             }
-            // Controlled transition between two actual inspection boundaries.
+            // The store changes between two scans of one check.
             // Never discard successfully inspected evidence on a later failure.
-            scan_store(store, &source, &mut scan, &mut inspection);
+            scan_store(store, &source, &mut scan, &mut log);
             assert_eq!(scan.analyses.len(), 1);
-            assert_eq!(inspection.issues[0].code, InspectionCode::StoreUnavailable);
+            assert_eq!(log.issues[0].code, UncheckedKind::StoreUnavailable);
             let check = check_in(&source, &[store.into()]).unwrap();
             assert!(!check.is_complete());
             assert!(conflicts_in(&source, &[store.into()]).is_err());
@@ -681,7 +671,7 @@ mod store_scan_tests {
         std::fs::remove_file(run.artifact("run.json").unwrap()).unwrap();
         assert!(matches!(
             conflicts_in(&source, &[store.into()]),
-            Err(crate::Error::EvidenceCheckIncomplete(_))
+            Err(crate::Error::InputCheckIncomplete(_))
         ));
         std::fs::write(run.artifact("input.json").unwrap(), "damaged").unwrap();
         assert!(conflicts_in(&source, &[store.into()]).is_err());

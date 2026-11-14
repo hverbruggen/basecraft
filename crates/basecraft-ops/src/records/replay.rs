@@ -983,9 +983,9 @@ fn open_baseline(
     })
 }
 
-/// Lifetime owner only. Session Slots retain all receipt authority. Dropping or
-/// cancelling removes only this attempt's disposable stage; originals survive.
-/// A failed pre-publication call leaves the attempt available for a fresh check.
+/// A recovery in progress, written into a staging folder. Dropping or
+/// cancelling it removes only that folder; the originals stay. If a step
+/// before publishing fails, the attempt can be checked and tried again.
 pub struct RecoveryAttempt {
     session: Session,
     staging: Option<tempfile::TempDir>,
@@ -1014,8 +1014,8 @@ struct RecoveryDocument {
 pub enum RecoveryPhase {
     /// A writer has not completed. A failed write may still have partial effects.
     PendingWrite,
-    /// The writer completed; only finalization remains. Evidence may need fresh
-    /// consent, or an unobservable/changed stage may require reconstruction.
+    /// The document is written; only its records remain. The user may need to
+    /// answer a new save check, or a changed staging folder may need rebuilding.
     NeedsFinalization,
     /// The directory rename completed. Sync/registration may subsequently have
     /// failed; use the publish result for completion or `PublishedWithFailure`.
@@ -1032,7 +1032,7 @@ pub struct RecoveryDocumentStatus {
     pub written: bool,
 }
 
-/// In-memory snapshot only. No receipt, Session access or validation authority.
+/// Where a recovery attempt stands, as last recorded in memory.
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct RecoveryStatus {
     pub destination: PathBuf,
@@ -1040,7 +1040,7 @@ pub struct RecoveryStatus {
     pub documents: Vec<RecoveryDocumentStatus>,
     pub damage: Option<String>,
     pub warnings: Vec<crate::session::SaveWarning>,
-    pub evidence_actions: Vec<crate::session::EvidenceAction>,
+    pub evidence_actions: Vec<crate::session::AppliedAnswer>,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -1050,7 +1050,7 @@ pub struct RecoveryCompletion {
     pub warnings: Vec<crate::session::SaveWarning>,
     pub damage: Option<String>,
     pub registered_stores: Vec<PathBuf>,
-    pub evidence_actions: Vec<crate::session::EvidenceAction>,
+    pub evidence_actions: Vec<crate::session::AppliedAnswer>,
 }
 
 /// Rename completed, but a later independent sync/registration did not. The
@@ -1112,9 +1112,8 @@ fn artifacts(root: &Path) -> Result<Vec<ArtifactObservation>> {
 }
 
 impl RecoveryAttempt {
-    /// Read stored progress without filesystem IO, hashing, validation or
-    /// minting/consuming a receipt. `NeedsFinalization` is not a readiness claim:
-    /// only publish can validate current artifacts/evidence and promote them.
+    /// The recorded progress, without reading any file. `NeedsFinalization`
+    /// does not mean ready: only `publish` checks the files and moves them.
     /// Published does not distinguish successful completion from post-rename
     /// failure; those details remain in the existing publish result.
     pub fn status(&self) -> Result<RecoveryStatus> {
@@ -1162,7 +1161,7 @@ impl RecoveryAttempt {
     pub fn warnings(&self) -> &[crate::session::SaveWarning] {
         &self.warnings
     }
-    pub fn evidence_actions(&self) -> Result<Vec<crate::session::EvidenceAction>> {
+    pub fn evidence_actions(&self) -> Result<Vec<crate::session::AppliedAnswer>> {
         self.session.recovery_actions()
     }
     pub fn document_for_check(&self, check: &crate::session::SaveCheck) -> Option<usize> {
@@ -1245,7 +1244,7 @@ impl RecoveryAttempt {
         document: usize,
         decision: Option<crate::session::SaveDecision>,
     ) -> Result<()> {
-        // A refusal before saving withdraws the consent; a failed withdrawal wins.
+        // A refusal before saving withdraws the answer; if withdrawing fails, that error wins.
         let refuse = |session: &mut Session, error: Error| {
             decision
                 .as_ref()
@@ -1286,8 +1285,8 @@ impl RecoveryAttempt {
                     .save_with_decision(id, path.as_deref(), decision),
                 None => self.session.save_recovery(id),
             };
-            // Failed writes can leave partial owned output; Session retains its
-            // existing acceptance rules. This is an observation, never consent.
+            // A failed write can leave part of its output; the session decides
+            // what to keep. Recording the outcome here answers nothing.
             let outcome = match outcome {
                 Ok(outcome) => outcome,
                 Err(error) => {
@@ -1341,7 +1340,7 @@ impl RecoveryAttempt {
         {
             for doc in &mut self.documents {
                 if let Some(observation) = &mut doc.saved {
-                    observation.require_final_decision();
+                    observation.require_new_answer();
                 }
             }
         }

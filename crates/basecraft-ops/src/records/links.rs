@@ -491,7 +491,7 @@ impl LinkEvidence for AlignmentLink {
             .ok_or_else(|| invalid("reference association has no submitted input"))?;
         let run = self.evidence_run(project, tree_path)?;
         let input = crate::records::run_inputs::read_input(&run)?;
-        if input.state == basecraft_protocol::input_records::EvidenceState::Broken {
+        if input.state == basecraft_protocol::input_records::InputState::Broken {
             return Err(invalid("alignment evidence explicitly broken"));
         }
         let source = if let Some(reference) = &input.source {
@@ -522,7 +522,6 @@ impl LinkEvidence for AlignmentLink {
         {
             let paths = basecraft_platform::paths::AppPaths::discover()
                 .map_err(|e| invalid(e.to_string()))?;
-            paths.remove_old_caches();
             let folder = paths.display_cache();
             std::fs::create_dir_all(&folder)?;
             let digest = submitted
@@ -694,19 +693,17 @@ impl AlignmentLinkExt for AlignmentLink {
                 crate::records::run_inputs::read_input(&run).map(|input| (run, input))
             }) {
                 Ok((_, input))
-                    if input.state
-                        == basecraft_protocol::input_records::EvidenceState::Generated =>
+                    if input.state == basecraft_protocol::input_records::InputState::Generated =>
                 {
                     format!("{status}; exact submitted input retained")
                 }
                 Ok((_, input))
-                    if input.state
-                        == basecraft_protocol::input_records::EvidenceState::Preserved =>
+                    if input.state == basecraft_protocol::input_records::InputState::Preserved =>
                 {
                     format!("{status}; original preserved (verify before use)")
                 }
                 Ok((_, input))
-                    if input.state == basecraft_protocol::input_records::EvidenceState::Broken =>
+                    if input.state == basecraft_protocol::input_records::InputState::Broken =>
                 {
                     format!("{status}; evidence explicitly broken")
                 }
