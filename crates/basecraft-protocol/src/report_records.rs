@@ -1,21 +1,9 @@
-//! Fresh report-output shapes; existing selected-field ownership readers are separate.
+//! The files a report export writes, and the document record they describe.
 //!
-//! Writers convert objects through `serde_json::Value` to retain recursive key
-//! ordering. Provenance appends one LF; standalone exports do not. These types
-//! describe current outputs, not historical acceptance or lossless rewrites.
+//! Writers convert objects through `serde_json::Value` to keep keys sorted at
+//! every depth.
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-
-/// Publication report metadata, distinct from a standalone report export.
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct ProvenanceReportManifest {
-    pub schema_version: u32,
-    pub publication: String,
-    pub template_version: u32,
-    pub output_hashes: Vec<String>,
-    pub redactions: Vec<String>,
-    pub citations: Vec<String>,
-}
 
 /// Standalone report metadata; document and revision retain their exact strings.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -28,7 +16,7 @@ pub struct ReportExportManifest {
     pub coordinates: String,
 }
 
-/// One paragraph's activity references, shared by both unversioned map arrays.
+/// One paragraph's activity references in a report's source map.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct ReportSourceMapEntry {
     pub paragraph: usize,

@@ -1,9 +1,11 @@
 """A headless Basecraft project session over the CLI's MCP stdio server.
 
 ``Session`` launches ``basecraft mcp <project>`` and speaks the same MCP tools
-that external assistants use: document open/read/apply/undo/redo/save, the
-document record, installed operations and their owned jobs. It never attaches
-to a running GUI and does not see unsaved GUI edits.
+that external assistants use: the commands of basecraft's one command table
+(the same as the CLI's), installed operations and their owned jobs. Every
+command is a method named like its tool: ``session.tree_reroot(doc,
+outgroup=["a"])``. It never attaches to a running GUI and does not see unsaved
+GUI edits.
 
 Schemas, defaults, permissions, execution and provenance belong to the host.
 This module only frames requests and maps structured errors to OperationError.
@@ -11,6 +13,7 @@ This module only frames requests and maps structured errors to OperationError.
 from __future__ import annotations
 
 import json
+import os
 import queue
 import subprocess
 import threading
@@ -72,13 +75,16 @@ def request(operation, *, inputs=None, parameters=None, destinations=None, pins=
     return value
 
 
-def _field(role):
-    """A field role by name, or a column name, as the host's FieldTarget."""
-    if isinstance(role, dict):
-        return role
-    if role in ("specimen", "taxon", "record", "ignore"):
-        return {"role": role}
-    return {"role": "column", "column": role}
+def _plain(value):
+    """Paths as text, inside lists and maps too, as the host reads them."""
+    if isinstance(value, os.PathLike):
+        return os.fspath(value)
+    if isinstance(value, (list, tuple)):
+        return [_plain(item) for item in value]
+    if isinstance(value, dict):
+        return {os.fspath(key) if isinstance(key, os.PathLike) else key: _plain(item)
+                for key, item in value.items()}
+    return value
 
 
 class Job:
@@ -292,6 +298,29 @@ class Session:
             self._tools = None
             return self.call("basecraft.host.registry_refresh.v1")
 
+    def __getattr__(self, name):
+        """A command of the table as a method; arguments in the table's order."""
+        if name.startswith("_"):
+            raise AttributeError(name)
+        tool = next((t for t in self.tools() if t["name"] == name), None)
+        if tool is None:
+            raise AttributeError(f"Basecraft has no command {name}")
+        order = tool.get("_meta", {}).get("basecraft/arguments", [])
+
+        def command(*args, **kwargs):
+            if len(args) > len(order):
+                raise TypeError(f"{name} takes at most {len(order)} positional arguments")
+            arguments = dict(zip(order, args))
+            if twice := arguments.keys() & kwargs.keys():
+                raise TypeError(f"{name} got {', '.join(sorted(twice))} twice")
+            arguments.update(kwargs)
+            return self.call(name, {key: _plain(value) for key, value in arguments.items()
+                                    if value is not None})
+
+        command.__name__ = name
+        command.__doc__ = tool.get("description")
+        return command
+
     # Tools
 
     def call(self, name, arguments=None, *, check=True, timeout=None):
@@ -343,31 +372,6 @@ class Session:
             arguments["selection"] = {str(p): list(ids) for p, ids in selection.items()}
         return self.call("delimitation_combine", arguments)
 
-    def documents(self):
-        return self.call("documents")
-
-    def state(self, document):
-        return self.call("state", {"document": document})
-
-    def read(self, document, start=None, end=None, row=None):
-        """Read residues ``start..end`` (row for alignments), tree tips/style (including saved label evidence) or a delimitation."""
-        arguments = {"document": document}
-        for key, value in (("start", start), ("end", end), ("row", row)):
-            if value is not None:
-                arguments[key] = value
-        return self.call("read", arguments)
-
-    def apply(self, document, version, operation):
-        """Apply one typed edit to the version you inspected; logged and undoable."""
-        return self.call("apply", {"document": document, "version": version,
-                                   "operation": operation})
-
-    def undo(self, document):
-        return self.call("undo", {"document": document})
-
-    def redo(self, document):
-        return self.call("redo", {"document": document})
-
     def save_check(self, document, path=None):
         """Inspect a save without writing; the token belongs to this live Session.
 
@@ -399,60 +403,23 @@ class Session:
             arguments["drop_newer_fields"] = True
         return self.call("save", arguments)
 
-    def create_sequence(self, name, sequence):
-        """Create an unsaved IUPAC DNA sequence; save it to a new .gb path."""
-        return self.call("sequence_create", {"name": str(name), "sequence": str(sequence)})
-
-    def sanger_review_create(self, read, output=None):
-        """Start a review of a Sanger read (.ab1) from its instrument calls.
-
-        With ``output`` the review is saved there as a new review file. Returns
-        the review document's state.
-        """
-        arguments = {"read": str(read)}
-        if output is not None:
-            arguments["output"] = str(output)
-        return self.call("sanger_review_create", arguments)
-
-    def sanger_decide(self, document, columns, choice):
-        """Decide draft columns (from 1: "12", "12,15", "12-14"): accept,
-        reject, pending, or the base to put there."""
-        return self.call("sanger_decide", {"document": document, "columns": str(columns),
-                                           "choice": str(choice)})
-
-    def sanger_export(self, document, output, label):
-        """Export the decided consensus as FASTA under ``label``."""
-        return self.call("sanger_export", {"document": document, "output": str(output),
-                                           "label": str(label)})
-
-    def tree_labels(self, document, fields):
-        """Label an open tree's tips from the specimen table, by ``fields`` in order."""
-        return self.call("tree_labels", {"document": document, "fields": [str(f) for f in fields]})
-
-    def delimitation_figures(self, document, output):
-        """Write the workspace's comparison figures (all, then one per hypothesis) to ``output``."""
-        return self.call("delimitation_figures", {"document": document, "output": str(output)})
-
-    def delimitation_display_tree(self, document, tree):
-        """Attach the tree file ``tree`` as an open species workspace's display tree."""
-        return self.call("delimitation_display_tree", {"document": document, "tree": str(tree)})
-
-    def sanger_add(self, document, alignment, label):
-        """Add the decided consensus to an open alignment as a new row ``label``."""
-        return self.call("sanger_add", {"document": document, "alignment": alignment,
-                                        "label": str(label)})
-
-    def document_record(self, document):
-        """History and methods for this session's current revision, including unsaved edits."""
-        return self.call("document_record", {"document": document})
-
     def file_record(self, path):
         """History and methods for a saved project file as it is on disk.
 
         Also reads saved Sanger reviews, which do not open as documents. The
         same report as ``basecraft history --json``; writes nothing.
         """
-        return self.call("file_record", {"path": str(path)})
+        return self.call("history", {"path": str(path), "json": True})
+
+    def create_sequence(self, name, sequence, output):
+        """Create an IUPAC DNA sequence and save it as the new GenBank file ``output``."""
+        return self.call("new_sequence", {"name": str(name), "sequence": str(sequence),
+                                          "output": str(output)})
+
+    def sanger_review_create(self, read, output):
+        """Start a review of a Sanger read (.ab1) from its instrument calls,
+        saved as the new review file ``output``. Returns its state."""
+        return self.call("sanger_review", {"read": str(read), "output": str(output)})
 
     def extract(self, document, path, start, end, *, version, segments=(), reverse=False,
                 record=None):
@@ -463,7 +430,7 @@ class Session:
         ``record`` optionally checks the name of the open (first) record of a
         file of several; other records can't be extracted yet.
         """
-        args = {"document": document, "version": version, "path": str(path),
+        args = {"document": document, "version": version, "output": str(path),
                 "start": start, "end": end, "segments": list(segments), "reverse": reverse}
         if record is not None:
             args["record"] = record
@@ -482,45 +449,43 @@ class Session:
             params["labels"] = list(labels)
         return self.apply(document, version, {"op": "tree.place_label", "params": params})
 
-    def import_support(self, document, path, name=""):
-        """Add the support values of another project tree file to an open tree.
-
-        One undoable edit; the source is recorded as a referenced input. An empty
-        name keeps the source's set names. Returns the tree state with ``added``
-        and ``matched``.
-        """
-        return self.call("import_support", {"document": document, "path": str(path),
-                                            "name": name})
-
     # Project specimen metadata
 
     def open_metadata(self, create=False):
         """Open the project's specimen metadata document; ``create`` writes empty tables first."""
         return self.call("metadata_open", {"create": bool(create)})
 
+    def _metadata(self, document):
+        """Refuse unless ``document`` is the project's metadata document."""
+        if self.state(document)["kind"] != "metadata":
+            raise _failure("wrong_document_kind", f"Document {document} is not the project metadata")
+
     def plan_header_import(self, document, fasta, separator, fields, *, name="Python",
                            create_specimens=True, overwrite=False):
         """Plan an import from structured FASTA headers without applying it.
 
-        ``fields`` lists each header field's role: ``"specimen"``, ``"taxon"``,
-        ``"record"``, ``"ignore"`` or a column name such as ``"eventDate"``.
+        ``document`` is the open metadata document. ``fields`` lists each header
+        field's role: ``"specimen"``, ``"taxon"``, ``"record"``, ``"ignore"`` or a
+        column name such as ``"eventDate"``. ``name`` names the pattern as the
+        import settings do; the plan does not depend on it.
         """
-        request = {"document": str(fasta),
-                   "pattern": {"name": name, "separator": separator,
-                               "fields": [_field(f) for f in fields]},
-                   "options": {"create_specimens": create_specimens, "overwrite": overwrite}}
-        return self.call("metadata_plan_headers", {"document": document, "request": request})
+        del name
+        self._metadata(document)
+        return self.call("metadata_import_headers", {
+            "path": str(fasta), "separator": separator, "fields": list(fields),
+            "no_new_specimens": not create_specimens, "overwrite": overwrite})
 
     def plan_sheet_import(self, document, path, *, mapping=None, fasta=None,
                           create_specimens=True, overwrite=False):
         """Plan a spreadsheet import; ``mapping`` maps headers to roles as in headers."""
-        request = {"path": str(path),
-                   "options": {"create_specimens": create_specimens, "overwrite": overwrite}}
+        self._metadata(document)
+        arguments = {"path": str(path), "no_new_specimens": not create_specimens,
+                     "overwrite": overwrite}
         if mapping is not None:
-            request["mapping"] = {header: _field(role) for header, role in mapping.items()}
+            arguments["map"] = [f"{header}={role}" for header, role in mapping.items()]
         if fasta is not None:
-            request["document"] = str(fasta)
-        return self.call("metadata_plan_sheet", {"document": document, "request": request})
+            arguments["sequences"] = str(fasta)
+        return self.call("metadata_import_sheet", arguments)
 
     def apply_metadata(self, document, changes):
         """Apply a reviewed plan's ``changes`` as one undoable metadata edit."""
@@ -529,21 +494,50 @@ class Session:
             "edit": {"action": "apply", "changes": changes}}})
 
     def metadata_consumer(self, document, request):
-        """Inspect partitions/labels or plan links/promotion; apply the returned typed
-        operation to its target using ``apply`` at the current version, then save.
-        See ``metadata_consumer`` MCP tool for the shared request contract.
-        """
-        return self.call("metadata_consumer", {"document": document, "request": request})
+        """Inspect partitions or labels, or plan links or promotion; apply the returned
+        typed operation to its target at its current version, then save.
+        ``document`` is the open metadata document."""
+        self._metadata(document)
+        return self.call("metadata_consumer", {"request": request})
 
     def insdc_source(self, document, specimen):
-        """INSDC source qualifiers derived for a specimen."""
-        return self.call("metadata_insdc", {"document": document, "specimen": specimen})
+        """INSDC source qualifiers derived for a specimen of the metadata ``document``."""
+        self._metadata(document)
+        return self.call("metadata_insdc", {"specimen": specimen})
+
+    # Species workspaces
+
+    def species_analysis(self, document, method, input, *, rooted=False, settings=None,
+                         hypothesis=None, timeout=None):
+        """Run a species analysis on an open workspace, as the window does.
+
+        ``method`` is a name such as ``"ptp"`` or ``"display_nj"``. The run is a job
+        of this session aimed at the workspace, whose history records it and which
+        receives its hypotheses; a display tree is attached as the workspace's
+        display tree. Save the workspace afterwards. Returns the run's outcome.
+        """
+        arguments = {"document": document, "method": method, "input": str(input),
+                     "rooted": rooted}
+        if settings is not None:
+            arguments["settings"] = settings
+        if hypothesis is not None:
+            arguments["hypothesis"] = hypothesis
+        prepared = self.call("delimitation_analysis_request", arguments)
+        request = prepared["request"]
+        outcome = self.run(request["operation"], inputs=request["inputs"],
+                           parameters=request["parameters"],
+                           destinations=request["destinations"], target=request["target"],
+                           timeout=timeout)
+        if prepared["output"] is not None:
+            self.call("delimitation_display_tree",
+                      {"document": document, "tree": prepared["output"]})
+        return outcome
 
     # GenBank marker submissions
 
     def create_submission(self, path, alignment):
         """Create and open a submission document (``*.submission.json``) for an alignment."""
-        return self.call("submission_create", {"path": str(path), "alignment": str(alignment)})
+        return self.call("submission_new", {"path": str(path), "alignment": str(alignment)})
 
     def edit_submission(self, document, edit):
         """Apply one ``submission.edit`` (a dict with ``action``) as an undoable edit."""
@@ -567,10 +561,6 @@ class Session:
         """Apply a complete preview as one undo step; reject stale/changed inputs."""
         return self.edit_submission(document, {"action": "apply_inclusion", "plan": plan})
 
-    def submission_inclusion_presets(self, save=None):
-        """Read named project rules; optionally save a rule in the shared import settings."""
-        return self.call("submission_inclusion_presets", {"save": save} if save is not None else {})
-
     def export_submission(self, document, output):
         """Write the submission package to ``output`` inside the project."""
         return self.call("submission_export", {"document": document, "output": str(output)})
@@ -593,7 +583,7 @@ class Session:
 
     def plan_accessions(self, document, text):
         """Match an NCBI accession list to the submission's records."""
-        return self.call("submission_plan_accessions", {"document": document, "text": text})
+        return self.call("submission_accessions", {"document": document, "text": text})
 
     def record_accessions(self, document, accessions):
         """Record planned accessions as one undoable edit."""

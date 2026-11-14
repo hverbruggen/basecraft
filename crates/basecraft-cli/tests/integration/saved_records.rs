@@ -253,7 +253,7 @@ fn saved_reviews_report_through_cli_and_mcp_as_in_the_gui() {
 
     // Read-only MCP can inspect a review through the common document interface.
     let mut mcp = Mcp::start(&project, &profile, false);
-    let record = mcp.tool("file_record", &json!({"path":"multi.json"}));
+    let record = mcp.tool("history", &json!({"path":"multi.json","json":true}));
     assert_eq!(record["isError"], false, "{record}");
     assert_eq!(record["structuredContent"], gui_report(&v2));
     let opened = mcp.tool("open", &json!({"path":"multi.json"}));
@@ -366,7 +366,8 @@ fn support_import_runs_headlessly_with_the_same_reference_evidence() {
         ],
     )))
     .unwrap();
-    assert_eq!(imported, json!({"added":["Bootstrap"],"matched":2}));
+    assert_eq!(imported["added"], json!(["Bootstrap"]));
+    assert_eq!(imported["matched"], 2);
     assert_eq!(import_event(&target)["sets"], json!(["Bootstrap"]));
     ok(&cli(
         &profile,
@@ -458,7 +459,7 @@ fn sequence_extraction_cli_mcp_and_python_share_source_and_mapping_semantics() {
     let opened = mcp.tool("open", &json!({"path":"gene.fasta"}));
     let doc = opened["structuredContent"]["document"].clone();
     let version = opened["structuredContent"]["version"].clone();
-    let mut args = json!({"document":doc,"version":version,"path":"mcp.gb","start":1,"end":7,"segments":[[1,3],[5,7]],"reverse":true});
+    let mut args = json!({"document":doc,"version":version,"output":"mcp.gb","start":1,"end":7,"segments":[[1,3],[5,7]],"reverse":true});
     let extracted = mcp.tool("extract", &args);
     assert_ne!(extracted["isError"], true, "{extracted}");
     assert_eq!(std::fs::read(project.join("mcp.gb")).unwrap(), expected);
@@ -467,9 +468,18 @@ fn sequence_extraction_cli_mcp_and_python_share_source_and_mapping_semantics() {
         true,
         "existing destination was replaced"
     );
-    args["path"] = json!("stale.gb");
+    args["output"] = json!("stale.gb");
     args["version"] = json!(999);
     assert_eq!(mcp.tool("extract", &args)["isError"], true);
+    assert!(!project.join("stale.gb").exists());
+    // A live session names the version it inspected.
+    let mut unversioned = args.clone();
+    unversioned.as_object_mut().unwrap().remove("version");
+    let refused = mcp.tool("extract", &unversioned);
+    assert_eq!(
+        refused["structuredContent"]["errors"][0]["code"],
+        "invalid_arguments"
+    );
     assert!(!project.join("stale.gb").exists());
     mcp.close();
     let mut readonly = Mcp::start(&project, &profile, false);

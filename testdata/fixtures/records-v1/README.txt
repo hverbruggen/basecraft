@@ -129,8 +129,6 @@ All four captures use pretty recursively sorted JSON and one terminal LF.
 
 Report-output original writer captures
 -------------------------------------
-provenance-report-{empty,real}-{manifest,source-map}.json come from the
-unchanged provenance::write_reports writer (one terminal LF).
 export-report-{empty,real,custom}-{manifest,source-map,citations}.json come
 from unchanged Report::export (no appended LF). Empty uses synthetic valid
 Publication/DocumentRecord inputs. Real uses FASTA edit/undo/redo plus two

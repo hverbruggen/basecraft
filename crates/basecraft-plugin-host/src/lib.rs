@@ -21,6 +21,7 @@ pub mod runner;
 pub mod runtime;
 pub mod sanger_calls;
 pub mod snapshot;
+pub mod species_analysis;
 #[cfg(windows)]
 mod windows_transport;
 

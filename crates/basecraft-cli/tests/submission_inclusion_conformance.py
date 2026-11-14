@@ -65,7 +65,7 @@ def main():
         assert mcp.tool('submission_inclusion_presets', {})['structuredContent'] == []
     finally:
         mcp.close()
-    cli('inclusion-preset', json.dumps(rule))
+    cli('inclusion-presets', '--save', json.dumps(rule))
     with Session(root, command=str(binary)) as session:
         assert session.submission_inclusion_presets() == [rule]
     # Saving presets changes metadata evidence, so the original plan must now be stale.

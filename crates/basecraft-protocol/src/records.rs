@@ -32,7 +32,6 @@ pub const STAMPED: &[&str] = &[
     "OperationRequest",
     "PendingSave",
     "ProvenanceExportMap",
-    "ProvenanceReportManifest",
     "Publication",
     "QueryPlan",
     "RecoveryIntegrityError",

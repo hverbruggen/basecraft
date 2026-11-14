@@ -1,10 +1,5 @@
 //! Original writer oracles intentionally use literal JSON, independently of protocol types.
-use basecraft_ops::records::ReportExt;
-use basecraft_ops::{
-    records,
-    records::{DocumentRecord, MethodsParagraph, Report},
-};
-use basecraft_protocol::provenance::{Completeness, Publication};
+use basecraft_ops::records::{DocumentRecord, MethodsParagraph, Report, ReportExt};
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -27,9 +22,6 @@ fn map(report: &Report) -> Value {
 }
 fn export_manifest(report: &Report) -> Value {
     json!({"schema_version":1,"revision":report.revision,"document":report.document,"unsaved":report.unsaved,"template_version":report.template_version,"coordinates":"raw zero-based half-open; summaries one-based"})
-}
-fn provenance_manifest(publication: &Publication, report: &Report) -> Value {
-    json!({"schema_version":1,"publication":publication.id,"template_version":2,"output_hashes":publication.outputs.iter().map(|a| &a.hash).collect::<Vec<_>>(),"redactions":["machine-local paths","host","user"],"citations":report.citations})
 }
 fn check_file(directory: &Path, name: &str, expected: &[u8], capture: Option<&str>) {
     let bytes = std::fs::read(directory.join(name)).unwrap();
@@ -68,50 +60,6 @@ fn check_export(report: &Report, directory: &Path, capture: Option<&str>) {
         std::fs::read(directory.join("report.json")).unwrap(),
         basecraft_protocol::records::encode(report).unwrap()
     );
-}
-fn check_provenance(publication: &Publication, directory: &Path, capture: Option<&str>) -> Report {
-    let history = records::SavedHistory::of(publication.clone());
-    let report = DocumentRecord::from_history(publication, history.clone())
-        .report()
-        .unwrap();
-    records::write_reports(directory, publication, history).unwrap();
-    let reports = directory.join("reports");
-    check_file(
-        &reports,
-        "manifest.json",
-        &basecraft_protocol::records::encode(&provenance_manifest(publication, &report)).unwrap(),
-        capture,
-    );
-    check_file(
-        &reports,
-        "source-map.json",
-        &pretty(&map(&report), true),
-        capture,
-    );
-    report
-}
-fn empty_publication() -> Publication {
-    Publication {
-        schema_version: 1,
-        id: "publication-λ-\"\\\n".into(),
-        session: "fixture".into(),
-        parents: vec![],
-        parent_hashes: std::collections::BTreeMap::new(),
-        created: "2026-01-01T00:00:00Z".into(),
-        origin: "import".into(),
-        inputs: vec![],
-        outputs: vec![],
-        events: vec![],
-        effective_edits: vec![],
-        withdrawn: vec![],
-        completeness: Completeness {
-            ancestry_known: false,
-            input_bytes_available: false,
-            execution_specification_available: false,
-            replay_verified: false,
-        },
-        report_template_version: 77,
-    }
 }
 fn custom_report() -> Report {
     let mut report = DocumentRecord::empty("C:\\fixture\\λ\"\n.fasta")
@@ -287,68 +235,6 @@ fn export_partial_writes_keep_order_and_authored_text() {
         assert_eq!(after["methods.md"], b"authored");
     }
 }
-#[test]
-fn provenance_regeneration_and_partial_writes() {
-    crate::isolated_profile::isolate!();
-    let dir = tempfile::tempdir().unwrap();
-    let publication = empty_publication();
-    let bundle = dir.path().join("bundle");
-    check_provenance(&publication, &bundle, None);
-    std::fs::write(bundle.join("reports/methods.md"), b"authored").unwrap();
-    for name in ["manifest.json", "source-map.json"] {
-        std::fs::write(bundle.join("reports").join(name), b"corrupt").unwrap();
-    }
-    check_provenance(&publication, &bundle, None);
-    assert_eq!(
-        std::fs::read(bundle.join("reports/methods.md")).unwrap(),
-        b"authored"
-    );
-    let expected = snapshot(&bundle.join("reports"));
-    let generated = [
-        "history.md",
-        "methods.generated.md",
-        "parameters.tsv",
-        "source-map.json",
-        "manifest.json",
-    ];
-    for (obstructed, stage) in [("source-map.json", 3), ("manifest.json", 4)] {
-        let folder = tempfile::tempdir_in(dir.path()).unwrap();
-        let reports = folder.path().join("reports");
-        std::fs::create_dir(&reports).unwrap();
-        for name in generated {
-            std::fs::write(reports.join(name), format!("old-{name}")).unwrap();
-        }
-        std::fs::write(reports.join("methods.md"), b"authored").unwrap();
-        std::fs::remove_file(reports.join(obstructed)).unwrap();
-        std::fs::create_dir(reports.join(obstructed)).unwrap();
-        let before = snapshot(&reports);
-        let error = records::write_reports(
-            folder.path(),
-            &publication,
-            records::SavedHistory::of(publication.clone()),
-        )
-        .unwrap_err();
-        // Reports stage together; an obstructed name stops the renames there.
-        assert!(
-            matches!(error, basecraft_ops::Error::Damaged { .. }),
-            "{error}"
-        );
-        let after = snapshot(&reports);
-        for (i, name) in generated.iter().enumerate() {
-            assert_eq!(
-                after[*name],
-                if i < stage {
-                    expected[*name].clone()
-                } else {
-                    before[*name].clone()
-                },
-                "{obstructed}: {name}"
-            );
-        }
-        assert_eq!(after["methods.md"], b"authored");
-    }
-}
-#[cfg(unix)]
 #[test]
 fn export_follows_existing_manifest_symlink() {
     crate::isolated_profile::isolate!();

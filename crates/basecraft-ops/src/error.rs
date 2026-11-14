@@ -127,6 +127,16 @@ pub enum Error {
     NoProject(&'static str),
     #[error("{0} is not a label field; give specimen, genus, species, accession or column:NAME")]
     NotALabelField(String),
+    /// A command argument is missing.
+    #[error("give {0}")]
+    MissingArgument(&'static str),
+    /// A command argument has the wrong form.
+    #[error("{name} must be {expected}")]
+    WrongArgument { name: String, expected: String },
+    /// A failure of a crate that builds on this one, such as the plugin host,
+    /// in a command of the shared table.
+    #[error(transparent)]
+    Host(Box<dyn std::error::Error + Send + Sync>),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -218,7 +228,10 @@ impl Error {
                 crate::delimitation::DisplayTreeError::NotText(_)
                 | crate::delimitation::DisplayTreeError::NotOneTree { .. },
             )
-            | Self::NotALabelField(_) => Code::InvalidArguments,
+            | Self::NotALabelField(_)
+            | Self::MissingArgument(_)
+            | Self::WrongArgument { .. }
+            | Self::Host(_) => Code::InvalidArguments,
             Self::MissingChoice(_)
             | Self::NoProject(_)
             | Self::DisplayTree(crate::delimitation::DisplayTreeError::NoneAttached) => {

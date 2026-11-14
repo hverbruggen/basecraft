@@ -46,10 +46,9 @@ fn new_sequence_cli_refuses_overwrite_and_mcp_uses_shared_creation() {
             json!({"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}),
             call(
                 1,
-                "sequence_create",
-                json!({"name":"mcp_sample","sequence":"acgt"}),
+                "new_sequence",
+                json!({"name":"mcp_sample","sequence":"acgt","output":"mcp.gb"}),
             ),
-            call(2, "save", json!({"document":0,"path":"mcp.gb"})),
         ];
         let mut input = child.stdin.take().unwrap();
         for message in messages {
@@ -64,7 +63,6 @@ fn new_sequence_cli_refuses_overwrite_and_mcp_uses_shared_creation() {
             .map(|s| serde_json::from_str(s).unwrap())
             .collect();
         assert_eq!(replies[1]["result"]["isError"], !writes, "{replies:?}");
-        assert_eq!(replies[2]["result"]["isError"], !writes, "{replies:?}");
     }
     let record = std::fs::read_to_string(root.path().join("mcp.gb")).unwrap();
     assert!(record.contains("mcp_sample"));

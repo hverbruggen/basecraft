@@ -6,7 +6,6 @@ use basecraft_protocol::{
     provenance::{ArtifactRevision, Completeness, Publication},
 };
 use std::collections::{BTreeMap, HashSet};
-use std::fmt::Write as _;
 use std::path::{Component, Path, PathBuf};
 
 /// The saved history of a loose file: in the `.basecraft` beside it,
@@ -994,69 +993,6 @@ pub fn saved_history(
     let latest = inspect(result, project)?;
     let history = SavedHistory::read(&bundle_for_result(result, project), latest.clone())?;
     Ok((latest, history))
-}
-
-/// Write the readable reports of a saved revision into `output`, at the
-/// user's request; nothing writes them on save.
-pub fn write_reports(
-    output: &Path,
-    publication: &Publication,
-    history: SavedHistory,
-) -> Result<()> {
-    let record =
-        crate::records::document_record::DocumentRecord::from_history(publication, history);
-    let mut prepared = crate::documents::PreparedWrite::default();
-    std::fs::create_dir_all(output.join("reports"))?;
-    let report = record.report()?;
-    let mut params = String::from("activity\toperation\tparameters_json\n");
-    for activity in &record.effective {
-        let _ = writeln!(
-            params,
-            "{}\t{}\t{}",
-            activity.id,
-            activity.operation.name(),
-            serde_json::to_string(&activity.operation)?
-        );
-    }
-    let mappings = report
-        .paragraphs
-        .iter()
-        .enumerate()
-        .map(|(index, paragraph)| {
-            serde_json::to_value(basecraft_protocol::report_records::ReportSourceMapEntry {
-                paragraph: index + 1,
-                activities: paragraph.activity_ids.clone(),
-            })
-        })
-        .collect::<serde_json::Result<Vec<_>>>()?;
-    for (name, bytes) in [
-        ("history.md", report.history_text.as_bytes()),
-        ("methods.generated.md", report.methods.as_bytes()),
-        ("parameters.tsv", params.as_bytes()),
-    ] {
-        prepared.push(&output.join("reports").join(name), |w| w.write_all(bytes))?;
-    }
-    // A list carries no version; the report manifest beside it does.
-    let mut map = serde_json::to_vec_pretty(&mappings)?;
-    map.push(b'\n');
-    prepared.push(&output.join("reports/source-map.json"), |w| {
-        w.write_all(&map)
-    })?;
-    stage_json(
-        &mut prepared,
-        &output.join("reports/manifest.json"),
-        &serde_json::to_value(
-            basecraft_protocol::report_records::ProvenanceReportManifest {
-                schema_version: 1,
-                publication: publication.id.clone(),
-                template_version: 2,
-                output_hashes: publication.outputs.iter().map(|a| a.hash.clone()).collect(),
-                redactions: vec!["machine-local paths".into(), "host".into(), "user".into()],
-                citations: report.citations,
-            },
-        )?,
-    )?;
-    prepared.publish().map(|_| ())
 }
 
 /// The README of an exported history folder.

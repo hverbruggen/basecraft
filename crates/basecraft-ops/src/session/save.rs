@@ -71,6 +71,13 @@ impl Session {
         .map(|_| ())
     }
 
+    /// Whether `id` has edits its own file lacks. A new document has no file
+    /// of its own until it is saved to one, so it has none.
+    pub fn needs_save(&self, id: DocId) -> Result<bool> {
+        let slot = self.slot(id)?;
+        Ok(slot.saved_at.is_some() && !slot.is_clean())
+    }
+
     /// Let the next save of `id` drop fields a later basecraft wrote into
     /// the files it replaces, which it otherwise refuses (D14).
     pub fn drop_newer_fields(&mut self, id: DocId) -> Result<()> {

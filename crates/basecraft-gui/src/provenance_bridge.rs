@@ -102,12 +102,10 @@ fn run(
                 }
             }
             "methods" => {
-                let (publication, history) = records::saved_history(result, project)?;
-                records::write_reports(destination, &publication, history)?;
-                Ok(format!(
-                    "Generated reports: {}",
-                    destination.join("reports").display()
-                ))
+                // D30: the same export as the History window's report export.
+                let report = records::DocumentRecord::saved_report(result, project)?;
+                records::ReportExt::export(&report, destination)?;
+                Ok(format!("Generated reports: {}", destination.display()))
             }
             "package" => {
                 records::package(result, destination, project)?;
@@ -382,16 +380,18 @@ mod tests {
                 .contains("seq.replace")
         );
         assert!(run("verify", &file, root, None).is_ok());
+        // D30: the History window's report files, beside the user's own.
         let export = root.join("export");
-        std::fs::create_dir_all(export.join("reports")).unwrap();
-        let authored = export.join("reports/methods.md");
+        std::fs::create_dir_all(&export).unwrap();
+        let authored = export.join("methods.md");
         std::fs::write(&authored, "My laboratory notes").unwrap();
         run("methods", &file, &export, None).unwrap();
         assert_eq!(
             std::fs::read_to_string(authored).unwrap(),
             "My laboratory notes"
         );
-        assert!(export.join("reports/methods.generated.md").is_file());
+        assert!(export.join("methods.generated.md").is_file());
+        assert!(export.join("manifest.json").is_file());
         let package = root.join("package");
         run("package", &file, &package, None).unwrap();
         assert!(package.join("sequence.fasta").is_file());
