@@ -53,8 +53,7 @@
       "minimum": 0
     },
     "transformation": {
-      "description": "canonical-fasta-v1 or ungapped-fasta-v1; generated inputs retain their bytes.",
-      "type": "string"
+      "$ref": "#/$defs/Transformation"
     },
     "upstream": {
       "type": "array",
@@ -74,20 +73,13 @@
   ],
   "$defs": {
     "EvidenceState": {
-      "description": "Unknown states remain readable and serialize without losing their spelling.",
-      "anyOf": [
-        {
-          "type": "string",
-          "enum": [
-            "referenced",
-            "generated",
-            "preserved",
-            "broken"
-          ]
-        },
-        {
-          "type": "string"
-        }
+      "description": "What became of the file a run read: still referenced where it was, made\nby basecraft rather than read from a file, kept as a copy beside the run\nafter the file changed, or marked broken by the user's answer to a save.",
+      "type": "string",
+      "enum": [
+        "referenced",
+        "generated",
+        "preserved",
+        "broken"
       ]
     },
     "FileStamp": {
@@ -151,6 +143,18 @@
         "path",
         "stamp",
         "hash"
+      ]
+    },
+    "Transformation": {
+      "description": "How the bytes a run was given were made from its input: the file's own\nbytes (`identity-v1`), canonical or ungapped FASTA, canonical Newick, a\nprepared BLAST query, or a sequence snapshot.",
+      "type": "string",
+      "enum": [
+        "identity-v1",
+        "canonical-fasta-v1",
+        "ungapped-fasta-v1",
+        "canonical-newick-v1",
+        "blast-query-preparation-v1",
+        "sequence-arrow-buffers-v1"
       ]
     },
     "UpstreamLink": {

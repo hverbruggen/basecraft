@@ -40,15 +40,15 @@ pub enum EvidenceState {
     Broken,
 }
 
-/// How the bytes a run was given were made from its input.
+/// How the bytes a run was given were made from its input: the file's own
+/// bytes (`identity-v1`), canonical or ungapped FASTA, canonical Newick, a
+/// prepared BLAST query, or a sequence snapshot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum Transformation {
-    /// The file's own bytes.
     #[serde(rename = "identity-v1")]
     Identity,
     #[serde(rename = "canonical-fasta-v1")]
     CanonicalFasta,
-    /// FASTA with gap characters removed.
     #[serde(rename = "ungapped-fasta-v1")]
     UngappedFasta,
     #[serde(rename = "canonical-newick-v1")]
