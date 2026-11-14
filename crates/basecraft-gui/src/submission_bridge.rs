@@ -43,7 +43,7 @@ pub mod qobject {
         type SubmissionController = super::SubmissionRust;
         #[qsignal]
         #[cxx_name = "saveQuestion"]
-        fn save_question(self: Pin<&mut SubmissionController>);
+        fn save_question(self: Pin<&mut SubmissionController>, check: QString);
         #[qinvokable]
         fn check_save(self: &SubmissionController, path: &QString) -> QString;
         #[qinvokable]

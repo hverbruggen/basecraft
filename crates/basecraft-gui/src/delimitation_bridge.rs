@@ -154,6 +154,9 @@ pub mod qobject {
         fn save(self: Pin<&mut DelimitationController>);
         #[qinvokable]
         fn save_as(self: Pin<&mut DelimitationController>, path: &QString) -> bool;
+        /// Save to its own file or `path`: `{"saved": bool}`. Workspaces ask no question.
+        #[qinvokable]
+        fn request_save(self: Pin<&mut DelimitationController>, path: &QString) -> QString;
         #[qinvokable]
         fn export_svg(self: Pin<&mut DelimitationController>, path: &QString);
         #[qinvokable]
@@ -1375,6 +1378,14 @@ impl qobject::DelimitationController {
     pub fn save(mut self: Pin<&mut Self>) {
         let path = self.rust().file_path.clone();
         self.as_mut().save_as(&path);
+    }
+    pub fn request_save(mut self: Pin<&mut Self>, path: &QString) -> QString {
+        let target = if path.is_empty() {
+            self.rust().file_path.clone()
+        } else {
+            path.clone()
+        };
+        crate::editor_save::saved_json(self.as_mut().save_as(&target))
     }
     pub fn save_as(mut self: Pin<&mut Self>, path: &QString) -> bool {
         if !self.as_mut().workspace_available() {

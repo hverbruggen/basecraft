@@ -248,6 +248,9 @@ pub mod qobject {
         );
         #[qinvokable]
         fn save(self: Pin<&mut SangerController>);
+        /// Save the review to its file or `path`: `{"saved": bool}`.
+        #[qinvokable]
+        fn request_save(self: Pin<&mut SangerController>, path: &QString) -> QString;
     }
 }
 
@@ -1995,6 +1998,25 @@ impl qobject::SangerController {
                 self.as_mut().set_message(QString::from(&error.to_string()));
             }
         }
+    }
+
+    pub fn request_save(mut self: std::pin::Pin<&mut Self>, path: &QString) -> QString {
+        let target = if path.is_empty() {
+            self.rust()
+                .review_path
+                .as_ref()
+                .map(|path| QString::from(path.to_string_lossy().as_ref()))
+        } else {
+            Some(path.clone())
+        };
+        let saved = if let Some(target) = target {
+            self.as_mut().save_review(&target)
+        } else {
+            // Reports that the review needs a file first.
+            self.as_mut().save();
+            false
+        };
+        crate::editor_save::saved_json(saved)
     }
 
     pub fn save(mut self: std::pin::Pin<&mut Self>) {

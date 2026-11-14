@@ -201,6 +201,9 @@ pub mod qobject {
         fn redo(self: Pin<&mut GenomeController>);
         #[qinvokable]
         fn save(self: Pin<&mut GenomeController>);
+        /// Save, or the question to answer first (editor_save.rs).
+        #[qinvokable]
+        fn request_save(self: Pin<&mut GenomeController>, path: &QString) -> QString;
         #[qinvokable]
         fn check_save(self: &GenomeController, path: &QString) -> QString;
         #[qinvokable]

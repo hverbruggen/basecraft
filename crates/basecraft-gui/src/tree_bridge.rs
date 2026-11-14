@@ -177,6 +177,9 @@ pub mod qobject {
         fn redo(self: Pin<&mut TreeController>);
         #[qinvokable]
         fn save(self: Pin<&mut TreeController>);
+        /// Save, or the question to answer first (editor_save.rs).
+        #[qinvokable]
+        fn request_save(self: Pin<&mut TreeController>, path: &QString) -> QString;
         #[qinvokable]
         fn check_save(self: &TreeController, path: &QString) -> QString;
         #[qinvokable]

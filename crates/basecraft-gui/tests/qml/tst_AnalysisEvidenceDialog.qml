@@ -86,12 +86,19 @@ TestCase {
     Component {
         id: saveController
         QtObject {
-            signal saveQuestion()
+            signal saveQuestion(string check)
             property int saves: 0
+            property int checks: 0
+            property bool clear: false
+            function request_save(path) {
+                if (clear) { saves++; return JSON.stringify({saved: true}) }
+                return check_save(path)
+            }
             property string owner: "original"
             property string message: "Save check changed"
             property bool incomplete: true
             function check_save(path) {
+                checks++
                 return JSON.stringify({check: {session: owner, document: 0, token: "receipt", target: path,
                     evidence: {conflict: {analyses: [], options: []}, issues: incomplete ? [{location: "store", reason: "offline"}] : []}}})
             }
@@ -121,4 +128,37 @@ TestCase {
         tryCompare(dialog, "opened", false)
     }
 
+    function test_a_save_with_nothing_to_ask_saves_at_once() {
+        const controller = createTemporaryObject(saveController, testCase, {clear: true})
+        const item = createTemporaryObject(autoSaveComponent, testCase, {controller: controller, fileUrls: controller, evidenceService: controller, automatic: false})
+        const finished = createTemporaryObject(signalSpyComponent, testCase, {target: item, signalName: "finished"})
+        item.save()
+        compare(controller.saves, 1)
+        compare(controller.checks, 0)
+        compare(finished.count, 1)
+        compare(finished.signalArguments[0][0], true)
+        verify(!findChild(item, "autoSaveEvidenceDialog").opened)
+    }
+    function test_a_save_that_needs_an_answer_shows_its_check() {
+        const controller = createTemporaryObject(saveController, testCase)
+        const item = createTemporaryObject(autoSaveComponent, testCase, {controller: controller, fileUrls: controller, evidenceService: controller, automatic: false})
+        item.save()
+        const dialog = findChild(item, "autoSaveEvidenceDialog")
+        tryCompare(dialog, "opened", true)
+        compare(controller.checks, 1)
+        compare(controller.saves, 0)
+        compare(dialog.check.token, "receipt")
+    }
+    function test_an_editors_question_is_shown_without_checking_again() {
+        const controller = createTemporaryObject(saveController, testCase)
+        const item = createTemporaryObject(autoSaveComponent, testCase, {controller: controller, fileUrls: controller, evidenceService: controller})
+        const question = controller.check_save("")
+        controller.checks = 0
+        controller.saveQuestion(question)
+        const dialog = findChild(item, "autoSaveEvidenceDialog")
+        tryCompare(dialog, "opened", true)
+        compare(controller.checks, 0)
+        compare(dialog.check.session, "original")
+    }
+    Component { id: signalSpyComponent; SignalSpy {} }
 }

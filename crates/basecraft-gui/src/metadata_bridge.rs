@@ -42,7 +42,7 @@ pub mod qobject {
         type MetadataController = super::MetadataRust;
         #[qsignal]
         #[cxx_name = "saveQuestion"]
-        fn save_question(self: Pin<&mut MetadataController>);
+        fn save_question(self: Pin<&mut MetadataController>, check: QString);
         #[qinvokable]
         fn check_save(self: &MetadataController, path: &QString) -> QString;
         #[qinvokable]

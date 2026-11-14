@@ -1055,7 +1055,7 @@ ApplicationWindow {
         evidenceSave.target = path || ""
         const step = owner ? documentOpens.save_step(documentOpens.target_index(owner.token, owner.path), false) : ""
         if (!path && step === "destination") evidenceSave.chooseDestination()
-        else evidenceSave.inspect(true)
+        else evidenceSave.save()
     }
     AutoSaveEvidence {
         id: evidenceSave

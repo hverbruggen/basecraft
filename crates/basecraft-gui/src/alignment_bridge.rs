@@ -255,6 +255,9 @@ pub mod qobject {
         fn redo(self: Pin<&mut AlignmentController>);
         #[qinvokable]
         fn save(self: Pin<&mut AlignmentController>);
+        /// Save, or the question to answer first (editor_save.rs).
+        #[qinvokable]
+        fn request_save(self: Pin<&mut AlignmentController>, path: &QString) -> QString;
         #[qinvokable]
         fn check_save(self: &AlignmentController, path: &QString) -> QString;
         #[qinvokable]
