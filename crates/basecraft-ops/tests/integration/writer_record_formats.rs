@@ -51,7 +51,7 @@ fn document_writer_bytes_require_a_version_bump() {
         files::write_main(&opened, &mut bytes).unwrap();
         golden(format, "sequence", &path, bytes);
         let mut bytes = Vec::new();
-        if let Some(result) = files::write_sidecar(&opened, &mut bytes) {
+        if let Some(result) = files::write_sidecar(&opened, &path, &mut bytes) {
             result.unwrap();
             golden("gff3", "sequence", &path, bytes);
         }

@@ -202,3 +202,32 @@ fn after_a_save_the_journal_holds_only_unsaved_edits() {
         basecraft_ops::records::recover(&recovery, &dir.path().join("out"), None).unwrap();
     assert_eq!(std::fs::read(&restored[0]).unwrap(), b">gene\nTTATACGT\n");
 }
+
+/// D27: a FASTA gets a GFF3 beside it only when there is something to say,
+/// and a GFF3 that exists is written again, even empty, never deleted.
+#[test]
+fn a_gff3_is_written_only_when_there_are_features_or_one_exists() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("gene.fasta");
+    let gff = dir.path().join("gene.gff3");
+    std::fs::write(&file, ">gene\nACGTACGTACGT\n").unwrap();
+    let mut session = Session::recoverable(dir.path()).unwrap();
+    let doc = session.open(&file).unwrap();
+    session.apply(doc, Op::seq_replace(0, 1, "T")).unwrap();
+    session.save(doc, None).unwrap();
+    assert!(!gff.exists(), "no features, no GFF3");
+    let feature = basecraft_protocol::Feature {
+        kind: "gene".into(),
+        location: basecraft_protocol::Location::simple(1, 6, basecraft_protocol::Strand::Forward),
+        qualifiers: Vec::new(),
+    };
+    let added = session.apply(doc, Op::feature_add(feature)).unwrap();
+    session.save(doc, None).unwrap();
+    assert!(std::fs::read_to_string(&gff).unwrap().contains("gene"));
+    session
+        .apply(doc, Op::feature_remove(added.feature.unwrap().0))
+        .unwrap();
+    session.save(doc, None).unwrap();
+    let written = std::fs::read_to_string(&gff).unwrap();
+    assert!(!written.contains("\tgene\t"), "{written}");
+}
