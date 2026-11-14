@@ -63,9 +63,8 @@ fn compile_shaders(out_dir: &Path) {
 fn main() {
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
     compile_shaders(&out_dir);
-    // The versioned QtGui directory holds <rhi/qrhi.h>; CMake would add it
-    // through Qt6::GuiPrivate.
-    // Framework builds of Qt (macOS) keep it inside QtGui.framework instead.
+    // The versioned QtGui directory holds <rhi/qrhi.h>; CMake would add it through
+    // Qt6::GuiPrivate. Framework builds of Qt (macOS) keep it inside QtGui.framework.
     let version = qmake_query("QT_VERSION");
     let mut gui_private = PathBuf::from(qmake_query("QT_INSTALL_HEADERS"))
         .join("QtGui")
@@ -76,7 +75,6 @@ fn main() {
     if !gui_private.is_dir() && framework.is_dir() {
         gui_private = framework;
     }
-    let shader_dir = out_dir.join("shaders");
     let builder = CxxQtBuilder::new_qml_module(QmlModule::new("Basecraft").qml_files([
         "qml/Main.qml",
         "tools/ScriptedRun.qml",
@@ -168,6 +166,8 @@ fn main() {
         "qml/SubmissionDialog.qml",
         "qml/SubmitterDialog.qml",
     ]))
+    // cxx-qt watches its include root; the default, the crate folder, reran this on any edit.
+    .crate_include_root(Some("cpp".into()))
     .qrc("icons.qrc")
     .qrc("controls.qrc")
     .qt_module("Quick")
@@ -199,7 +199,7 @@ fn main() {
     // its cc::Build may change between minor versions.
     let builder = unsafe {
         builder.cc_builder(|cc| {
-            cc.include(&shader_dir);
+            cc.include(out_dir.join("shaders"));
             cc.include("cpp");
             cc.include(&gui_private);
             cc.include(gui_private.join("QtGui"));

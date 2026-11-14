@@ -26,23 +26,24 @@ install-distance:
 hooks:
     git config core.hooksPath .githooks
 
-# Format, lint, test. The pre-commit hook runs the first two.
-check:
-    python3 -m unittest discover -s testdata/compact
-    python3 -m unittest discover -s benches
+# Format and lint. Run before handoff. The pre-commit hook runs the first two.
+lint:
     cargo fmt --all --check
     cargo clippy --workspace --all-targets -- -D warnings
     cargo clippy -p basecraft-ops --all-targets --features test-counters,test-heap -- -D warnings
-    python3 tools/isolated_tests.py
-    cargo test --workspace --doc
-    cargo test -p basecraft-ops --features test-counters --test budgets
-    cargo test -p basecraft-io --features test-heap --lib heap::tests
-    cargo test -p basecraft-ops --features test-heap --test heap_budgets
-    cargo test -p basecraft-ops --features test-heap,test-counters --test open_memory
     pixi run ruff check python plugins
 
+# Tests. The budget, heap and memory tests share one feature build.
+check:
+    python3 -m unittest discover -s testdata/compact
+    python3 -m unittest discover -s benches
+    python3 tools/isolated_tests.py
+    cargo test --workspace --doc
+    cargo test -p basecraft-io --features test-counters,test-heap --lib heap::tests
+    cargo test -p basecraft-ops --features test-counters,test-heap --test budgets --test heap_budgets --test open_memory --test tree_edit_memory --test sanger_edit_memory --test save_cost
+
 # Everything. Run before every push.
-ci: check schemas-check deny protocol-license replay qml-test
+ci: lint check schemas-check deny protocol-license replay qml-test
     python3 benches/run.py --compact --samples 3 --gate gross
     {{just_executable()}} fixtures-unchanged
 
@@ -89,17 +90,39 @@ protocol-license:
         exit 1
     fi
 
-# QML component tests, headless. File reads let sequencing tests load production QML.
-qml-test:
+# QML component tests, headless, at every scale at once. Run before merge and
+# push. File reads let sequencing tests load production QML.
+qml-test *scales="1 1.25 1.5 2":
     #!/usr/bin/env bash
     set -euo pipefail
     # Start the real application offscreen first: a QML load error in Main.qml
     # must fail here, not only when someone opens the app.
     cargo test -p basecraft-gui --test application_bootstrap -- --app-starts
-    for scale in 1 1.25 1.5 2; do
+    logs=$(mktemp -d)
+    trap 'kill $(jobs -p) 2>/dev/null || true; wait; rm -rf "$logs"' EXIT
+    runner="$(qmake6 -query QT_HOST_BINS)/qmltestrunner"
+    declare -A scale_of
+    for scale in {{scales}}; do
         QML_XHR_ALLOW_FILE_READ=1 QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME= QT_QUICK_CONTROLS_STYLE=Basic QT_SCALE_FACTOR="$scale" \
-            "$(qmake6 -query QT_HOST_BINS)/qmltestrunner" -input crates/basecraft-gui/tests/qml
+            "$runner" -input crates/basecraft-gui/tests/qml > "$logs/$scale.log" 2>&1 &
+        scale_of[$!]=$scale
     done
+    failed=""
+    for pid in "${!scale_of[@]}"; do
+        wait "$pid" || failed+=" ${scale_of[$pid]}"
+    done
+    for scale in {{scales}}; do
+        echo "Scale $scale: $(grep -h '^Totals:' "$logs/$scale.log" || echo 'no totals'); $(grep -c '^QWARN' "$logs/$scale.log" || true) QWARN"
+    done
+    for scale in $failed; do
+        echo "== QML tests at scale $scale failed:"
+        cat "$logs/$scale.log"
+    done
+    [ -z "$failed" ]
+
+# QML component tests at scale 1 only, for each change.
+qml-test-quick:
+    {{just_executable()}} qml-test 1
 
 # Replay tests for every operation type.
 replay:
