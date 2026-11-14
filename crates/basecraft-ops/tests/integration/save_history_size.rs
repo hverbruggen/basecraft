@@ -203,3 +203,38 @@ fn a_gff3_is_written_only_when_there_are_features_or_one_exists() {
     let written = std::fs::read_to_string(&gff).unwrap();
     assert!(!written.contains("\tgene\t"), "{written}");
 }
+
+/// D24 for analysis runs: an extraction's record holds the extraction and
+/// the input's unsaved edits; the input's saved history stays in its own
+/// records, and the result's history reads it through the run's input link.
+#[test]
+fn a_run_links_to_its_input_history_instead_of_copying_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = edited_and_saved(dir.path(), 2);
+    let mut session = Session::recoverable(dir.path()).unwrap();
+    let doc = session.open(&file).unwrap();
+    session.apply(doc, Op::seq_replace(5, 6, "G")).unwrap();
+    let output = dir.path().join("part.gb");
+    session
+        .extract(doc, (0, 8), &[], false, &output, None)
+        .unwrap();
+    let record = basecraft_ops::records::inspect(&output, None).unwrap();
+    let saved = basecraft_ops::records::saved_history(&file, None)
+        .unwrap()
+        .1;
+    assert!(
+        record
+            .events
+            .iter()
+            .all(|event| !saved.events.iter().any(|old| old.id == event.id)),
+        "the run copied saved history"
+    );
+    // The two saved edits, the unsaved one and the extraction.
+    let (_, history) = basecraft_ops::records::saved_history(&output, None).unwrap();
+    assert_eq!(history.effective.len(), 4, "{:?}", history.effective);
+    assert!(history.gaps.is_empty());
+    assert_eq!(
+        basecraft_ops::records::verify(&output, None).unwrap(),
+        Vec::<String>::new()
+    );
+}

@@ -488,7 +488,7 @@ impl History<'_> {
             }),
             reference,
         };
-        let (events, effective_edits) = portable_analysis_activity(snapshot, activity);
+        let (events, effective_edits, withdrawn) = portable_analysis_activity(snapshot, activity)?;
         let publication = Publication {
             schema_version: 1,
             id: activity.id.clone(),
@@ -508,7 +508,7 @@ impl History<'_> {
             }],
             events,
             effective_edits,
-            withdrawn: Vec::new(),
+            withdrawn,
             completeness: Completeness {
                 ancestry_known: false,
                 input_bytes_available: true,
@@ -547,19 +547,44 @@ fn portable(event: &mut LogEntry) {
     }
 }
 
+/// What an analysis run records of its input and its own activity: the
+/// events and edits not in the input's saved history, the saved edits the
+/// input no longer has, and the activity. The saved history stays in the
+/// input's own records, which the run's input record links to (D24).
 pub(crate) fn portable_analysis_activity(
     snapshot: &crate::records::document_record::DocumentRecord,
     activity: &LogEntry,
-) -> (
+) -> Result<(
     Vec<LogEntry>,
     Vec<basecraft_protocol::provenance::EditActivity>,
-) {
+    Vec<String>,
+)> {
     use basecraft_protocol::provenance::EditActivity;
-    let mut events = snapshot.events.clone();
-    if !events.iter().any(|event| event.id == activity.id) {
-        events.push(activity.clone());
+    let mut saved_events = std::collections::HashSet::new();
+    let mut saved_edits = Vec::new();
+    for (bundle, origin) in &snapshot.origins {
+        let history = crate::records::SavedHistory::read(bundle, origin.clone())?;
+        saved_events.extend(history.events.into_iter().map(|event| event.id));
+        saved_edits.extend(history.effective.into_iter().map(|edit| edit.id));
     }
-    let mut effective = snapshot.effective.clone();
+    let mut events: Vec<_> = snapshot
+        .events
+        .iter()
+        .filter(|event| !saved_events.contains(&event.id) && event.id != activity.id)
+        .cloned()
+        .collect();
+    events.push(activity.clone());
+    let withdrawn = saved_edits
+        .iter()
+        .filter(|id| !snapshot.effective.iter().any(|edit| &edit.id == *id))
+        .cloned()
+        .collect();
+    let mut effective: Vec<_> = snapshot
+        .effective
+        .iter()
+        .filter(|edit| !saved_edits.contains(&edit.id))
+        .cloned()
+        .collect();
     effective.push(EditActivity {
         id: activity.id.clone(),
         operation: activity.op.clone(),
@@ -568,7 +593,7 @@ pub(crate) fn portable_analysis_activity(
     for edit in &mut effective {
         redact_operation_paths(&mut edit.operation);
     }
-    (events, effective)
+    Ok((events, effective, withdrawn))
 }
 
 fn redact_operation_paths(operation: &mut Op) {

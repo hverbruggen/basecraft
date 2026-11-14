@@ -69,14 +69,16 @@ impl DocumentRecord {
     ) -> crate::Result<()> {
         let (mut publication, _) = crate::records::provenance::latest(run.directory())?
             .ok_or_else(|| crate::error::invalid("the analysis run has no record yet"))?;
-        let (events, effective) = super::publish::portable_analysis_activity(self, activity);
+        let (events, effective, withdrawn) =
+            super::publish::portable_analysis_activity(self, activity)?;
         publication.events = events;
         publication.effective_edits = effective;
+        publication.withdrawn = withdrawn;
         // Preserve upstream bundles used by the submitted revision for packaging.
         let mut input = crate::records::input_evidence::read_input(run.directory())?;
         let mut upstream = input.upstream.clone();
         for (bundle, origin) in &self.origins {
-            let bytes = basecraft_protocol::records::encode(origin)?;
+            let record = crate::records::provenance::record_path(bundle, &origin.id)?;
             let reference = basecraft_protocol::input_records::UpstreamLink {
                 bundle: (crate::records::input_evidence::relative(
                     run.directory(),
@@ -84,7 +86,7 @@ impl DocumentRecord {
                 )?)
                 .into(),
                 id: origin.id.clone(),
-                hash: basecraft_io::hash_bytes(&bytes),
+                hash: basecraft_io::hash_file(&record)?,
             };
             if !upstream.contains(&reference) {
                 upstream.push(reference);

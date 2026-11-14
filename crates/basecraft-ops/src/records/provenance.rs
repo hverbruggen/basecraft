@@ -4,7 +4,7 @@ use basecraft_protocol::{
     Actor, DocState, LogEntry, OpResult,
     provenance::{ArtifactRevision, Completeness, Publication},
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write as _;
 use std::path::{Component, Path, PathBuf};
 
@@ -371,18 +371,63 @@ pub struct SavedHistory {
 impl SavedHistory {
     /// Read the records `latest` descends from. A parent that is missing or
     /// whose bytes differ from its recorded hash is a gap, not an error.
+    /// The documents a folder's records were made from come first: the
+    /// records its input record links to (an analysis run's input, a Save As
+    /// source), read the same way.
     pub fn read(bundle: &Path, latest: Publication) -> Result<Self> {
-        let (order, gaps) = ancestry(bundle, latest)?;
-        let mut history = Self {
-            gaps,
-            ..Self::default()
-        };
-        let mut seen = std::collections::HashSet::new();
-        for mut record in order {
-            record.events.retain(|event| seen.insert(event.id.clone()));
-            history.add(record);
-        }
+        let mut history = Self::default();
+        history.read_into(bundle, latest, &mut HashSet::new(), &mut HashSet::new())?;
         Ok(history)
+    }
+
+    fn read_into(
+        &mut self,
+        bundle: &Path,
+        latest: Publication,
+        events: &mut HashSet<String>,
+        records: &mut HashSet<(PathBuf, String)>,
+    ) -> Result<()> {
+        let upstream = crate::records::input_evidence::read_input(bundle)
+            .map(|input| input.upstream)
+            .unwrap_or_default();
+        for link in upstream {
+            let folder = bundle.join(&link.bundle);
+            let folder = folder.canonicalize().unwrap_or(folder);
+            if !records.insert((folder.clone(), link.id.clone())) {
+                continue;
+            }
+            if records.len() > 10_000 {
+                return Err(crate::Error::Limit {
+                    what: "history records".into(),
+                    limit: 10_000,
+                });
+            }
+            let gap = |reason| HistoryGap {
+                record: link.id.clone(),
+                before: latest.created.clone(),
+                reason,
+            };
+            match read_publication(&folder, &link.id, &mut (64 << 20)) {
+                Ok((input, hash)) if hash == link.hash => {
+                    self.read_into(&folder, input, events, records)?;
+                }
+                Ok(_) => self.gaps.push(gap("has changed since it was saved")),
+                Err(crate::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                    self.gaps.push(gap("is missing"));
+                }
+                Err(error @ crate::Error::Limit { .. }) => return Err(error),
+                Err(_) => self.gaps.push(gap("cannot be read")),
+            }
+        }
+        let (order, gaps) = ancestry(bundle, latest)?;
+        self.gaps.extend(gaps);
+        for mut record in order {
+            record
+                .events
+                .retain(|event| events.insert(event.id.clone()));
+            self.add(record);
+        }
+        Ok(())
     }
 
     /// The history of a record with no parents.
@@ -753,10 +798,16 @@ pub fn publish_run(
     inputs: Vec<ArtifactRevision>,
     outputs: Vec<ArtifactRevision>,
 ) -> Result<Publication> {
-    let (events, effective_edits) = latest(bundle)
+    let (events, effective_edits, withdrawn) = latest(bundle)
         .ok()
         .flatten()
-        .map(|(previous, _)| (previous.events, previous.effective_edits))
+        .map(|(previous, _)| {
+            (
+                previous.events,
+                previous.effective_edits,
+                previous.withdrawn,
+            )
+        })
         .unwrap_or_default();
     let publication = Publication {
         schema_version: 1,
@@ -770,7 +821,7 @@ pub fn publish_run(
         outputs,
         events,
         effective_edits,
-        withdrawn: Vec::new(),
+        withdrawn,
         completeness: Completeness {
             ancestry_known: false,
             input_bytes_available: true,
