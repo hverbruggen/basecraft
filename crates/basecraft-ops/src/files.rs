@@ -279,7 +279,7 @@ pub(crate) fn capture_load(
     if format == Format::GenBank {
         let stamps = vec![(
             path.to_path_buf(),
-            Some(crate::records::input_evidence::stamp(path)?),
+            Some(crate::records::run_inputs::stamp(path)?),
         )];
         let (first, hash) = genbank::open_hashed(path)?;
         return finish_capture(
@@ -312,7 +312,7 @@ pub(crate) fn capture_load(
                 let error = io::Error::new(io::ErrorKind::InvalidInput, "not an ordinary file");
                 return Err(basecraft_io::Error::Io(error).into());
             }
-            Ok(metadata) => Some(crate::records::input_evidence::stamp_metadata(
+            Ok(metadata) => Some(crate::records::run_inputs::stamp_metadata(
                 &file, &metadata,
             )?),
             Err(error) if error.kind() == io::ErrorKind::NotFound && file != path => None,
@@ -416,9 +416,7 @@ fn finish_capture(
     for (file, before) in &stamps {
         let after = match std::fs::metadata(file) {
             Ok(metadata) if !metadata.is_file() => None,
-            Ok(metadata) => Some(crate::records::input_evidence::stamp_metadata(
-                file, &metadata,
-            )?),
+            Ok(metadata) => Some(crate::records::run_inputs::stamp_metadata(file, &metadata)?),
             Err(error) if error.kind() == io::ErrorKind::NotFound => None,
             Err(error) => return Err(error.into()),
         };
@@ -725,7 +723,7 @@ pub(crate) fn companion_folder(companion: &Path) -> Result<()> {
         .ancestors()
         .find(|dir| dir.file_name().is_some_and(|name| name == ".basecraft"))
         .and_then(Path::parent);
-    if let Some(reason) = base.and_then(crate::records::input_evidence::foreign_basecraft) {
+    if let Some(reason) = base.and_then(crate::records::run_inputs::foreign_basecraft) {
         return Err(crate::error::invalid(format!(
             "Basecraft can't keep this document's facts in {}: {reason}",
             base.unwrap_or(folder).display()

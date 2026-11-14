@@ -107,7 +107,7 @@ impl Session {
         let key = format!("new-review-{}.json", self.next_id());
         let mut review = review.clone();
         let anchor = review.storage_anchor().to_path_buf();
-        let _scope = crate::records::input_evidence::lock_in(self.project.as_ref())?;
+        let _scope = crate::records::run_inputs::lock_in(self.project.as_ref())?;
         if review.ensure_sources(&anchor).is_err() {
             // A read-only source folder must not prevent review. Durable private
             // evidence outlives the disposable session recovery directory.
@@ -243,7 +243,7 @@ impl Slot {
             run: None,
             disk_stamp,
             generation: 0,
-            pending_check: super::save_consent::PendingSaveCheck::default(),
+            pending_check: super::save_answer::PendingSaveCheck::default(),
             undo: vec![],
             redo: vec![],
             settled: Vec::new(),

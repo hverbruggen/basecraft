@@ -86,9 +86,9 @@ pub enum Error {
     #[error(transparent)]
     AppPaths(#[from] basecraft_platform::paths::PathError),
     #[error("{0}")]
-    EvidenceConflict(Box<crate::records::input_evidence::EvidenceConflict>),
+    InputConflict(Box<crate::records::run_inputs::InputConflict>),
     #[error("could not check all analysis evidence")]
-    EvidenceCheckIncomplete(Box<crate::records::input_evidence::EvidenceCheck>),
+    InputCheckIncomplete(Box<crate::records::run_inputs::InputCheck>),
     #[error("explicit save decision required")]
     SaveCheckRequired(Box<crate::session::SaveCheck>),
     #[error("review the refreshed save check")]
@@ -239,8 +239,8 @@ impl Error {
             }
             Self::UnknownFormat(_) => Code::UnknownFormat,
             Self::Empty(_) => Code::EmptyDocument,
-            Self::EvidenceConflict(_) => Code::AnalysisInputConflict,
-            Self::EvidenceCheckIncomplete(_) | Self::SaveCheckRequired(_) => {
+            Self::InputConflict(_) => Code::AnalysisInputConflict,
+            Self::InputCheckIncomplete(_) | Self::SaveCheckRequired(_) => {
                 Code::EvidenceCheckIncomplete
             }
             Self::SaveDecisionStale(_) => Code::SaveDecisionStale,

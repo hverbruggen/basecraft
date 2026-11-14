@@ -117,7 +117,7 @@ macro_rules! confirmed_save {
                     Ok(saved) => crate::editor_save::saved_json(saved),
                     Err(error) => match crate::editor_save::question(&error) {
                         Some(check) => crate::editor_save::check_json(Ok(check)),
-                        None if matches!(error, basecraft_ops::Error::EvidenceConflict(_)) => self.check_save(path),
+                        None if matches!(error, basecraft_ops::Error::InputConflict(_)) => self.check_save(path),
                         None => {
                             let message = format!("Save failed: {error}");
                             self.fail(&message);
@@ -227,7 +227,7 @@ macro_rules! auto_save {
                 self.as_mut().report("error", &format!("Changed but not saved: {error}"));
                 // The question carries its check, so the window shows it without checking again.
                 let check = crate::editor_save::question(error).or_else(|| {
-                    let conflict = matches!(error, basecraft_ops::Error::EvidenceConflict(_));
+                    let conflict = matches!(error, basecraft_ops::Error::InputConflict(_));
                     let (session, doc) = self.rust().session.as_ref().zip(self.rust().doc).filter(|_| conflict)?;
                     session.check_save(doc, None).ok()
                 });

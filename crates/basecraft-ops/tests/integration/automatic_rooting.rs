@@ -1,4 +1,4 @@
-//! Independent REV-0003 probes against the automatic-rooting public API.
+//! Automatic rooting: saved and reloaded roots, refusals, and distances.
 use basecraft_docs::TreeDoc;
 use basecraft_ops::{DocId, Session, files};
 use basecraft_protocol::Op;

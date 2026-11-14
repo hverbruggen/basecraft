@@ -59,7 +59,7 @@ schemas! {
     "submission-edit" => submission::SubmissionEdit,
     "submission-package" => submission_records::SubmissionPackage,
     "submission-validation" => submission_records::ValidationSummary,
-    "submitted-input" => input_records::SubmittedInput,
+    "submitted-input" => input_records::RunInput,
     "activity-input-run" => records::ActivityInputRun,
     "activity-contributions" => records::ActivityContributions,
     "extraction-record" => records::ExtractionRecord,

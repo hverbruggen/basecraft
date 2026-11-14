@@ -1,5 +1,5 @@
 use basecraft_ops::{records, records::ArtifactRun};
-use basecraft_protocol::input_records::EvidenceState;
+use basecraft_protocol::input_records::InputState;
 
 #[test]
 fn submitted_input_ancestry_and_source_identity() {
@@ -8,10 +8,11 @@ fn submitted_input_ancestry_and_source_identity() {
     let source = root.path().join("source.fa");
     std::fs::write(&source, b">a\nACGT\n").unwrap();
     let hash = basecraft_io::hash_file(&source).unwrap();
-    let original = records::reference_input_with_dependencies(
+    let original = records::reference_input(
         &root.path().join("result"),
         &source,
         &hash,
+        None,
         &[],
         "source",
         None,
@@ -22,12 +23,12 @@ fn submitted_input_ancestry_and_source_identity() {
         &generated,
         &[original.directory().into()],
         b">a\nAC\n",
-        "canonical-fasta-v1",
+        basecraft_protocol::input_records::Transformation::CanonicalFasta,
         "derived",
     )
     .unwrap();
     let input = records::read_input(generated.directory()).unwrap();
-    assert_eq!(input.state, EvidenceState::Generated);
+    assert_eq!(input.state, InputState::Generated);
     assert_eq!(input.upstream.len(), 1);
     assert_eq!(input.upstream[0].id, original.id());
     assert_eq!(input.submitted_hash, basecraft_io::hash_bytes(b">a\nAC\n"));

@@ -103,13 +103,6 @@ impl AppPaths {
     pub fn display_cache(&self) -> PathBuf {
         self.cache.join("analysis-inputs")
     }
-
-    /// Delete cache folders older builds wrote and nothing reads any more.
-    pub fn remove_old_caches(&self) {
-        for name in ["index", "hash", "display-trees", "activity"] {
-            let _ = std::fs::remove_dir_all(self.cache.join(name));
-        }
-    }
 }
 
 #[cfg(test)]
@@ -128,31 +121,6 @@ mod tests {
         assert_eq!(paths.preferences(), profile.join("config/preferences.toml"));
         assert_eq!(paths.state, temp.path().join("state override"));
         assert!(!profile.exists());
-    }
-    #[test]
-    fn old_caches_go_and_the_display_cache_stays() {
-        let temp = tempfile::tempdir().unwrap();
-        let paths = AppPaths::from_environment(|key| {
-            (key == "BASECRAFT_PROFILE_DIR").then(|| temp.path().as_os_str().into())
-        })
-        .unwrap();
-        for name in [
-            "index",
-            "hash",
-            "display-trees",
-            "activity",
-            "analysis-inputs",
-        ] {
-            std::fs::create_dir_all(paths.cache.join(name)).unwrap();
-            std::fs::write(paths.cache.join(name).join("entry"), b"x").unwrap();
-        }
-        paths.remove_old_caches();
-        let left: Vec<_> = std::fs::read_dir(&paths.cache)
-            .unwrap()
-            .map(|e| e.unwrap().path())
-            .collect();
-        assert_eq!(left, [paths.display_cache()]);
-        paths.remove_old_caches();
     }
     #[test]
     fn relative_overrides_are_rejected() {

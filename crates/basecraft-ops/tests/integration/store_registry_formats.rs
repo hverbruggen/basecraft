@@ -78,10 +78,11 @@ fn store_writer_bytes_and_validation() {
     let source = data.join("reads.fasta");
     std::fs::write(&source, b">a\nACGT\n").unwrap();
     std::fs::create_dir(root.join("results")).unwrap();
-    records::reference_input_with_dependencies(
+    records::reference_input(
         &root.join("results/tree.nwk"),
         &source,
         &basecraft_io::hash_file(&source).unwrap(),
+        None,
         &[],
         "index format",
         None,
@@ -125,13 +126,14 @@ fn store_writer_bytes_and_validation() {
     // A damaged index stops new analyses of files beside it and is left as is.
     std::fs::write(&index, b"{broken").unwrap();
     assert!(
-        records::reference_input_with_dependencies(
+        records::reference_input(
             &root.join("results/tree.nwk"),
             &source,
             &basecraft_io::hash_file(&source).unwrap(),
+            None,
             &[],
             "index format",
-            None,
+            None
         )
         .is_err()
     );

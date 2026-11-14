@@ -424,7 +424,7 @@ fn file_stamp(path: &Path) -> Result<basecraft_protocol::provenance::FileStamp> 
     Ok(basecraft_protocol::provenance::FileStamp {
         device: None,
         inode: None,
-        ..crate::records::input_evidence::stamp(path)?
+        ..crate::records::run_inputs::stamp(path)?
     })
 }
 
@@ -490,19 +490,20 @@ impl LinkEvidence for AlignmentLink {
             .as_deref()
             .ok_or_else(|| invalid("reference association has no submitted input"))?;
         let run = self.evidence_run(project, tree_path)?;
-        let input = crate::records::input_evidence::read_input(&run)?;
-        if input.state == basecraft_protocol::input_records::EvidenceState::Broken {
+        let input = crate::records::run_inputs::read_input(&run)?;
+        if input.state == basecraft_protocol::input_records::InputState::Broken {
             return Err(invalid("alignment evidence explicitly broken"));
         }
         let source = if let Some(reference) = &input.source {
-            crate::records::input_evidence::verified_source(&run, reference)?
+            crate::records::run_inputs::verified_source(&run, reference)?
         } else {
             run.join("submitted.fasta")
         };
         let alignment = load_alignment(&source)?;
         let mut hashing = crate::files::HashingWriter::new(std::io::sink());
         crate::files::write_alignment(&alignment, &mut hashing)?;
-        let raw = input.transformation == "identity-v1";
+        let raw =
+            input.transformation == basecraft_protocol::input_records::Transformation::Identity;
         let actual = if raw {
             basecraft_io::hash_file(&source)?
         } else {
@@ -521,7 +522,6 @@ impl LinkEvidence for AlignmentLink {
         {
             let paths = basecraft_platform::paths::AppPaths::discover()
                 .map_err(|e| invalid(e.to_string()))?;
-            paths.remove_old_caches();
             let folder = paths.display_cache();
             std::fs::create_dir_all(&folder)?;
             let digest = submitted
@@ -573,7 +573,7 @@ impl AlignmentLinkExt for AlignmentLink {
         run: &crate::records::analysis_store::ArtifactRun,
     ) -> Result<Vec<PathBuf>> {
         names(input)?;
-        let record = crate::records::input_evidence::read_input(run.directory())?;
+        let record = crate::records::run_inputs::read_input(run.directory())?;
         let link = Self {
             schema: 2,
             source: relative_to(&std::path::absolute(source)?, tree)?,
@@ -589,7 +589,7 @@ impl AlignmentLinkExt for AlignmentLink {
             extra: BTreeMap::new(),
         };
         let metadata = hidden_sidecar(run.directory(), tree);
-        crate::records::input_evidence::write_json(&metadata, &link)?;
+        crate::records::run_inputs::write_json(&metadata, &link)?;
         run.bind(project, tree, &basecraft_io::hash_file(tree)?)?;
         Ok(vec![metadata])
     }
@@ -690,28 +690,26 @@ impl AlignmentLinkExt for AlignmentLink {
         let mut status = format!("{label}: {}", self.source.display());
         if self.schema == 2 {
             return match self.evidence_run(project, tree_path).and_then(|run| {
-                crate::records::input_evidence::read_input(&run).map(|input| (run, input))
+                crate::records::run_inputs::read_input(&run).map(|input| (run, input))
             }) {
                 Ok((_, input))
-                    if input.state
-                        == basecraft_protocol::input_records::EvidenceState::Generated =>
+                    if input.state == basecraft_protocol::input_records::InputState::Generated =>
                 {
                     format!("{status}; exact submitted input retained")
                 }
                 Ok((_, input))
-                    if input.state
-                        == basecraft_protocol::input_records::EvidenceState::Preserved =>
+                    if input.state == basecraft_protocol::input_records::InputState::Preserved =>
                 {
                     format!("{status}; original preserved (verify before use)")
                 }
                 Ok((_, input))
-                    if input.state == basecraft_protocol::input_records::EvidenceState::Broken =>
+                    if input.state == basecraft_protocol::input_records::InputState::Broken =>
                 {
                     format!("{status}; evidence explicitly broken")
                 }
                 Ok((run, input)) => {
                     if input.source.as_ref().is_some_and(|r| {
-                        crate::records::input_evidence::stamp(&run.join(&r.path)).is_ok_and(|s| {
+                        crate::records::run_inputs::stamp(&run.join(&r.path)).is_ok_and(|s| {
                             s.size == r.stamp.size
                                 && s.modified_seconds == r.stamp.modified_seconds
                                 && s.modified_nanos == r.stamp.modified_nanos

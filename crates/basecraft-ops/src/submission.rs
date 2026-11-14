@@ -1339,15 +1339,15 @@ fn verified_reports(
             .original_path
             .as_deref()
             .ok_or_else(|| damaged(run, "validation input has no source path"))?;
-        let ledger =
-            crate::records::input_evidence::read_input(&run.join(&evidence.run_directory))?;
+        let ledger = crate::records::run_inputs::read_input(&run.join(&evidence.run_directory))?;
         if run.join(original).canonicalize()? != current.canonicalize()?
             || evidence.source_hash.as_deref() != Some(expected.as_str())
             || evidence.submitted_hash != expected
-            || evidence.transformation != "identity-v1"
-            || ledger.state == basecraft_protocol::input_records::EvidenceState::Broken
+            || evidence.transformation
+                != basecraft_protocol::input_records::Transformation::Identity
+            || ledger.state == basecraft_protocol::input_records::InputState::Broken
             || ledger.submitted_hash != expected
-            || ledger.transformation != "identity-v1"
+            || ledger.transformation != basecraft_protocol::input_records::Transformation::Identity
         {
             return Err(Error::Outdated(
                 "stale or unrelated validation inputs; validate the exported package again".into(),

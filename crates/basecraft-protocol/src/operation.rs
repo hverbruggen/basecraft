@@ -354,7 +354,7 @@ pub struct InvocationInputEvidence {
     pub original_path: Option<String>,
     pub source_hash: Option<String>,
     pub submitted_hash: String,
-    pub transformation: String,
+    pub transformation: crate::input_records::Transformation,
     pub run_directory: String,
 }
 

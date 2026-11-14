@@ -1,4 +1,4 @@
-//! Independent REV-0004 probes: failures describe the required persistence contract.
+//! Save As and failed saves keep a tree's alignment and view links right.
 use basecraft_ops::records::AlignmentLinkExt;
 use basecraft_ops::{Session, files, records, records::AlignmentLink};
 

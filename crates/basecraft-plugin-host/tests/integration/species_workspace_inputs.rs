@@ -1,5 +1,5 @@
-//! Independent storage review probes and regression coverage for their corrections.
-// Preserve the independently reviewed assertions verbatim.
+//! A species workspace keeps the inputs of its analyses through moves,
+//! saves and the user's answers to them.
 #![allow(clippy::assert_is_empty)]
 use crate::common;
 use crate::isolated_profile;
@@ -34,7 +34,7 @@ fn referenced_hash(outcome: &basecraft_protocol::operation::OperationOutcome) ->
 }
 
 #[test]
-fn rereview_alignment_move_and_explicit_evidence_decisions() {
+fn alignment_move_and_explicit_evidence_decisions() {
     use basecraft_ops::records::{SavePolicy, conflicts, resolve};
     isolated_profile::isolate!();
     for policy in [SavePolicy::BreakEvidence, SavePolicy::RemoveAnalysis] {
@@ -77,7 +77,7 @@ fn rereview_alignment_move_and_explicit_evidence_decisions() {
 }
 
 #[test]
-fn rereview_legacy_sidecar_break_and_remove_reach_combined_workspace() {
+fn legacy_sidecar_break_and_remove_reach_combined_workspace() {
     use basecraft_ops::records::{SavePolicy, conflicts, read_input, resolve};
     isolated_profile::isolate!();
     for policy in [SavePolicy::BreakEvidence, SavePolicy::RemoveAnalysis] {
@@ -111,7 +111,7 @@ fn rereview_legacy_sidecar_break_and_remove_reach_combined_workspace() {
                 SavePolicy::BreakEvidence => {
                     assert_eq!(
                         read_input(&affected.run).unwrap().state,
-                        basecraft_protocol::input_records::EvidenceState::Broken
+                        basecraft_protocol::input_records::InputState::Broken
                     );
                 }
                 SavePolicy::RemoveAnalysis => assert!(!affected.run.exists()),
@@ -330,7 +330,7 @@ fn preserved_alignment_remains_usable_by_workspace_default_input() {
     assert!(!owner.join("submitted.fasta").exists());
     assert_eq!(
         basecraft_ops::records::read_input(&owner).unwrap().state,
-        basecraft_protocol::input_records::EvidenceState::Referenced
+        basecraft_protocol::input_records::InputState::Referenced
     );
     assert_eq!(
         basecraft_ops::delimitation::checked_alignment(&clean, &canonical)

@@ -91,10 +91,11 @@ fn a_referenced_input_inside_the_project_keeps_its_history_link() {
     let bundle = project.provenance_bundle(&first).unwrap();
     let hash = basecraft_io::hash_file(&first).unwrap();
 
-    let run = records::reference_input_with_dependencies(
+    let run = records::reference_input(
         &chosen.join("second.fasta"),
         &first,
         &hash,
+        None,
         &[],
         "second analysis",
         Some(&project),

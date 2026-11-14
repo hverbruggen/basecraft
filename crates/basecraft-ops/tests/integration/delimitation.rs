@@ -451,7 +451,7 @@ fn hidden_workspace_moves_with_its_folder_and_passive_open_writes_nothing() {
     let input = basecraft_ops::records::read_input(run.directory()).unwrap();
     assert_eq!(
         input.state,
-        basecraft_protocol::input_records::EvidenceState::Referenced
+        basecraft_protocol::input_records::InputState::Referenced
     );
     assert_eq!(input.source.as_ref().unwrap().hash, hash);
     assert!(hash.starts_with("b3:"));

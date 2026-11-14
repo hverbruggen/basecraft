@@ -77,7 +77,7 @@ impl Lifecycle {
             .parent()
             .ok_or_else(|| protocol("missing query evidence directory"))?;
         let input = basecraft_ops::records::read_input(run)?;
-        if input.state != basecraft_protocol::input_records::EvidenceState::Generated
+        if input.state != basecraft_protocol::input_records::InputState::Generated
             || Some(input.transformation.as_str()) != transformation
             || input.submitted_hash != basecraft_io::hash_file(query)?
         {

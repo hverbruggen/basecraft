@@ -330,7 +330,7 @@ pub fn align_document(
 /// The analyses in a save conflict, without the reference ledger a registered
 /// run keeps for each of its inputs; that ledger is listed beside its run.
 pub fn analyses(
-    conflict: &basecraft_ops::records::EvidenceConflict,
+    conflict: &basecraft_ops::records::InputConflict,
 ) -> Vec<&basecraft_ops::records::AffectedAnalysis> {
     conflict
         .analyses

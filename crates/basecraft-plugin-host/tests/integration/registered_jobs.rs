@@ -968,7 +968,10 @@ fn canonical_alignment_evidence_preserves_order_headers_and_residues() {
     assert_eq!(outcome.state, RuntimeState::Completed, "{outcome:#?}");
     let run = Path::new(outcome.evidence.as_ref().unwrap());
     let record = basecraft_ops::records::read_input(run).unwrap();
-    assert_eq!(record.transformation, "canonical-fasta-v1");
+    assert_eq!(
+        record.transformation,
+        basecraft_protocol::input_records::Transformation::CanonicalFasta
+    );
     assert_eq!(
         record.source.unwrap().hash,
         basecraft_io::hash_bytes(original.as_bytes())
@@ -1229,7 +1232,7 @@ fn retained_inputs_survive_job_drop_and_temporary_source_removal() {
 /// paths, ledgers and submitted transformations. Path ordering must not own data.
 #[test]
 fn equal_content_retention_keeps_exact_primary_owner_and_leaf_lifecycles() {
-    use basecraft_ops::records::{self, AffectedAnalysis, EvidenceConflict, SavePolicy};
+    use basecraft_ops::records::{self, AffectedAnalysis, InputConflict, SavePolicy};
     crate::isolated_profile::isolate!();
     for retain_primary in [false, true] {
         for reverse_paths in [false, true] {
@@ -1301,7 +1304,7 @@ fn equal_content_retention_keeps_exact_primary_owner_and_leaf_lifecycles() {
                     );
                     assert_eq!(
                         primary.state,
-                        basecraft_protocol::input_records::EvidenceState::Preserved
+                        basecraft_protocol::input_records::InputState::Preserved
                     );
                     assert_eq!(
                         std::fs::read(owner.join("preserved-input")).unwrap(),
@@ -1314,11 +1317,11 @@ fn equal_content_retention_keeps_exact_primary_owner_and_leaf_lifecycles() {
                     );
                     assert_eq!(
                         primary.state,
-                        basecraft_protocol::input_records::EvidenceState::Referenced
+                        basecraft_protocol::input_records::InputState::Referenced
                     );
                     assert_eq!(
                         records::read_input(owner).unwrap().state,
-                        basecraft_protocol::input_records::EvidenceState::Referenced
+                        basecraft_protocol::input_records::InputState::Referenced
                     );
                 }
                 assert_eq!(
@@ -1349,7 +1352,7 @@ fn equal_content_retention_keeps_exact_primary_owner_and_leaf_lifecycles() {
                 // primary/owner. Full logical analysis closure still includes B.
                 let before = std::fs::read(run.join("input.json")).unwrap();
                 let owner_before = std::fs::read(owner.join("input.json")).unwrap();
-                let conflict = EvidenceConflict {
+                let conflict = InputConflict {
                     target: temp.path().join(other),
                     analyses: vec![AffectedAnalysis {
                         run: sibling.into(),
@@ -1362,7 +1365,7 @@ fn equal_content_retention_keeps_exact_primary_owner_and_leaf_lifecycles() {
                     options: vec![policy],
                 };
                 {
-                    let _mutation = records::Mutation::begin().unwrap();
+                    let _locks = records::lock().unwrap();
                     records::resolve(&conflict, policy).unwrap();
                 }
                 assert_eq!(std::fs::read(run.join("input.json")).unwrap(), before);
@@ -1373,7 +1376,7 @@ fn equal_content_retention_keeps_exact_primary_owner_and_leaf_lifecycles() {
                 if policy == SavePolicy::BreakEvidence {
                     assert_eq!(
                         records::read_input(sibling).unwrap().state,
-                        basecraft_protocol::input_records::EvidenceState::Broken
+                        basecraft_protocol::input_records::InputState::Broken
                     );
                 } else {
                     assert!(!sibling.exists());

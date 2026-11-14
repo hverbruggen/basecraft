@@ -180,7 +180,7 @@
           "type": "string"
         },
         "transformation": {
-          "type": "string"
+          "$ref": "#/$defs/Transformation"
         }
       },
       "required": [
@@ -297,6 +297,18 @@
       "required": [
         "name",
         "version"
+      ]
+    },
+    "Transformation": {
+      "description": "How the bytes a run was given were made from its input: the file's own\nbytes (`identity-v1`), canonical or ungapped FASTA, canonical Newick, a\nprepared BLAST query, or a sequence snapshot.",
+      "type": "string",
+      "enum": [
+        "identity-v1",
+        "canonical-fasta-v1",
+        "ungapped-fasta-v1",
+        "canonical-newick-v1",
+        "blast-query-preparation-v1",
+        "sequence-arrow-buffers-v1"
       ]
     }
   }
