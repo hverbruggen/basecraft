@@ -308,7 +308,6 @@ crate::editor::editor_state!(SangerRust [drawn] {
     failed_reads: QString = QString::default(),
 });
 
-
 impl qobject::SangerController {
     pub fn close_session(mut self: std::pin::Pin<&mut Self>) {
         self.as_mut().rust_mut().review_session = None;

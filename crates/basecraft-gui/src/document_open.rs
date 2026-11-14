@@ -480,20 +480,18 @@ fn duplicate_offer(session: &Session, doc: basecraft_ops::DocId) -> String {
     } else {
         "records"
     };
-    let example = found.names.first().map_or_else(String::new, |name| {
-        format!(" ({name}.1, {name}.2)")
-    });
-    let mut offer = format!(
-        "Some {things} share a name: {}. Number them{example} so each can be edited?",
+    let example = found
+        .names
+        .first()
+        .map_or_else(String::new, |name| format!(" ({name}.1, {name}.2)"));
+    let relink = match found.links.len() + found.submissions.len() {
+        0 => String::new(),
+        n => format!(" {n} specimen links or submissions use these names and will need relinking."),
+    };
+    format!(
+        "Some {things} share a name: {}. Number them{example} so each can be edited?{relink}",
         found.names.join(", ")
-    );
-    let relink = found.links.len() + found.submissions.len();
-    if relink > 0 {
-        offer.push_str(&format!(
-            " {relink} specimen links or submissions use these names and will need relinking."
-        ));
-    }
-    offer
+    )
 }
 
 /// After an editor installed the document at `path`: ask its alphabet

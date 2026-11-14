@@ -302,8 +302,7 @@ use serde_json::{Value, json};
 
 use crate::bridge::{
     ALT, CTRL, KEY_0, KEY_DOWN, KEY_EQUAL, KEY_ESCAPE, KEY_LEFT, KEY_MINUS, KEY_PLUS, KEY_RIGHT,
-    KEY_UP, KEY_Y, KEY_Z, SHIFT, WHEEL_ZOOM, ZOOM_STEP, css, file_folder, file_name,
-    took,
+    KEY_UP, KEY_Y, KEY_Z, SHIFT, WHEEL_ZOOM, ZOOM_STEP, css, file_folder, file_name, took,
 };
 
 crate::editor::editor_state!(TreeRust [drawn documents] {
@@ -332,7 +331,6 @@ crate::editor::editor_state!(TreeRust [drawn documents] {
     save_state: crate::editor_save::SaveState = crate::editor_save::SaveState::default(),
     view: TreeView = TreeView::new(800.0, 600.0),
 });
-
 
 fn selected_names(view: &TreeView, tree: &TreeDoc) -> Vec<String> {
     view.selected_names(tree)
@@ -506,8 +504,10 @@ impl qobject::TreeController {
         let mut r = self.as_mut().rust_mut();
         let r = &mut *r;
         if let (Some(session), Some(doc)) = (&r.session, r.doc) {
-            r.view
-                .sync(crate::bridge::checked_document!(access_thread, session.tree(doc)));
+            r.view.sync(crate::bridge::checked_document!(
+                access_thread,
+                session.tree(doc)
+            ));
         }
     }
 }
@@ -528,7 +528,6 @@ impl crate::document_open::DocumentEditor for qobject::TreeController {
 }
 
 impl qobject::TreeController {
-
     /// Rebuild the frame, status line and scroll bars.
     fn refresh(mut self: Pin<&mut Self>) {
         if !self.as_mut().refresh_start() {
@@ -1755,7 +1754,6 @@ impl qobject::TreeController {
     pub fn export_svg(self: Pin<&mut Self>, path: &QString) {
         self.export_figure(path, 2, false);
     }
-
 }
 
 impl TreeRust {

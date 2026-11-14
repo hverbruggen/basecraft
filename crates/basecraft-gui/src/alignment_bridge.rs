@@ -421,7 +421,6 @@ impl Drop for ActiveTool {
     }
 }
 
-
 /// The names of the rows the selection covers.
 fn selected_names(view: &AlignmentView, alignment: &basecraft_docs::AlignmentDoc) -> Vec<String> {
     view.selection.map_or_else(Vec::new, |block| {
@@ -438,13 +437,19 @@ fn f(v: f64) -> f32 {
 
 crate::editor::document_editor!(qobject::AlignmentController, alignment [fresh fail]);
 crate::editor::number_names!(qobject::AlignmentController);
-crate::editor::taxa_editor!(qobject::AlignmentController, alignment, basecraft_docs::AlignmentDoc);
+crate::editor::taxa_editor!(
+    qobject::AlignmentController,
+    alignment,
+    basecraft_docs::AlignmentDoc
+);
 crate::editor::figure_export!(qobject::AlignmentController, alignment);
 
 fn has_figure_selection(view: &AlignmentView) -> bool {
     view.selection.is_some()
 }
 
+// Every editor's figure goes through the shared export, which takes a Result.
+#[allow(clippy::unnecessary_wraps)]
 fn figure_svg(
     view: &mut AlignmentView,
     alignment: &basecraft_docs::AlignmentDoc,
@@ -456,8 +461,7 @@ fn figure_svg(
     let mut view = if scope == 0 {
         view.visible_figure_view(alignment, include_selection)
     } else {
-        view
-            .figure_view_with_selection(alignment, scope == 1, include_selection)
+        view.figure_view_with_selection(alignment, scope == 1, include_selection)
     };
     let mut frame = Frame::new();
     view.build(alignment, theme, &mut frame);

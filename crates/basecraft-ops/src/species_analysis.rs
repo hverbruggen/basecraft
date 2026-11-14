@@ -72,7 +72,7 @@ impl Method {
     }
 
     /// The run starts from the alignment: the host infers the tree first.
-    fn from_alignment(self) -> bool {
+    fn starts_from_alignment(self) -> bool {
         matches!(
             self,
             Self::GmycAlignmentSingle | Self::GmycAlignmentMultiple | Self::Asap
@@ -170,13 +170,13 @@ pub fn run(
             params.insert(key.clone(), value.clone());
         }
     }
-    if !method.from_alignment()
+    if !method.starts_from_alignment()
         && !method.is_display()
         && params.get("deduplicate").and_then(Value::as_bool) == Some(true)
     {
         return Err(Error::Unsupported("Exact sequence deduplication requires a verified alignment and representative tree. Tree-only preprocessing is unavailable; use alignment GMYC/ASAP, or prepare and root a representative tree with its mapping before fitting. No tips were removed.".into()));
     }
-    if method.from_alignment() {
+    if method.starts_from_alignment() {
         let unique = params
             .get("deduplicate")
             .or_else(|| params.get("unique_haplotypes"))
@@ -197,7 +197,9 @@ pub fn run(
         params.insert("method".into(), tree_method.into());
     }
     if method == Method::DisplayIqtree {
-        let model = params.remove("iqtree_model").unwrap_or_else(|| "MFP".into());
+        let model = params
+            .remove("iqtree_model")
+            .unwrap_or_else(|| "MFP".into());
         params.insert("model".into(), model);
         params.insert("keep_identical".into(), true.into());
     }

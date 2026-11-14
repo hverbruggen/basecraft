@@ -38,7 +38,13 @@ fn a_fit_passes_only_declared_settings_and_writes_beside_the_workspace() {
         &tree,
         r#"{"seed": 7, "replicates": "", "colour": "red", "mapping": "m.tsv"}"#,
     );
-    let ptp = run(&session, doc, &asked, &declared(&["rooted", "seed", "replicates"])).unwrap();
+    let ptp = run(
+        &session,
+        doc,
+        &asked,
+        &declared(&["rooted", "seed", "replicates"]),
+    )
+    .unwrap();
     assert_eq!(ptp.operation, "basecraft.delimitation/ptp@1");
     assert_eq!(ptp.input, tree);
     // An empty setting and undeclared ones are left out; a request's seed wins.

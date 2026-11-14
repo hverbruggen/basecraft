@@ -323,7 +323,6 @@ impl crate::document_open::DocumentEditor for qobject::DelimitationController {
 }
 
 impl qobject::DelimitationController {
-
     pub fn accessible_page(&self, page: i32) -> QString {
         let access_thread = self.qt_thread();
         let state = self.rust();
@@ -1592,8 +1591,8 @@ impl qobject::DelimitationController {
                 hypothesis: &hypothesis,
                 shown_tree: Path::new(&shown),
             };
-            let run = analysis::run(session, doc, &request, &declared)
-                .map_err(|e| e.to_string())?;
+            let run =
+                analysis::run(session, doc, &request, &declared).map_err(|e| e.to_string())?;
             let role = input_role(&run.operation, &run.input)?;
             let exports = if display_job {
                 vec![(primary_member(&run.operation)?, run.output.clone())]

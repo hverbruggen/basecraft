@@ -321,11 +321,14 @@ macro_rules! number_names {
                             .map(|()| found.renames.len())
                     })
                 };
-                self.as_mut().set_duplicate_names(cxx_qt_lib::QString::default());
+                self.as_mut()
+                    .set_duplicate_names(cxx_qt_lib::QString::default());
                 match result {
                     Ok(count) => {
-                        let dirty =
-                            crate::document_open::unsaved(self.rust().session.as_ref(), self.rust().doc);
+                        let dirty = crate::document_open::unsaved(
+                            self.rust().session.as_ref(),
+                            self.rust().doc,
+                        );
                         self.as_mut().set_dirty(dirty);
                         self.as_mut().after_history();
                         self.as_mut().done(&format!("Numbered {count} names"));

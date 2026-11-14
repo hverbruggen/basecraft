@@ -50,25 +50,45 @@ pub(crate) fn run() {
     tree.as_mut().ladderize(true);
     assert!(*tree.dirty(), "an edit leaves the tree unsaved");
     tree.as_mut().undo();
-    assert!(!*tree.dirty(), "undoing back to the saved tree leaves it clean");
+    assert!(
+        !*tree.dirty(),
+        "undoing back to the saved tree leaves it clean"
+    );
     tree.as_mut().redo();
-    assert!(*tree.dirty(), "redoing the edit leaves the tree unsaved again");
+    assert!(
+        *tree.dirty(),
+        "redoing the edit leaves the tree unsaved again"
+    );
     tree.as_mut().close_session();
 
     let path = folder.path().join("named.afa");
     std::fs::write(&path, ">a\nAC-T\n>a\nACGT\n>b\nACGA\n").unwrap();
-    let mut alignment = object(objects[1]).downcast_pin::<AlignmentController>().unwrap();
+    let mut alignment = object(objects[1])
+        .downcast_pin::<AlignmentController>()
+        .unwrap();
     alignment.as_mut().install_fresh(candidate(&path)).unwrap();
     let offer = alignment.duplicate_names().to_string();
     assert!(offer.contains("rows share a name: a."), "{offer}");
     assert!(alignment.as_mut().number_duplicates());
     assert!(alignment.duplicate_names().is_empty());
     assert!(*alignment.dirty(), "numbering is an edit");
-    let rows = format!("{}{}", alignment.accessible_page(0), alignment.accessible_page(1));
-    assert!(rows.contains("Row 1: a.1.") && rows.contains("Row 2: a.2."), "{rows}");
+    let rows = format!(
+        "{}{}",
+        alignment.accessible_page(0),
+        alignment.accessible_page(1)
+    );
+    assert!(
+        rows.contains("Row 1: a.1.") && rows.contains("Row 2: a.2."),
+        "{rows}"
+    );
     alignment.as_mut().undo();
-    assert!(!*alignment.dirty(), "undoing the numbering leaves the alignment clean");
+    assert!(
+        !*alignment.dirty(),
+        "undoing the numbering leaves the alignment clean"
+    );
     alignment.as_mut().close_session();
     drop(engine);
-    println!("Undo back to the saved state leaves a tree clean; duplicate rows are numbered in one step");
+    println!(
+        "Undo back to the saved state leaves a tree clean; duplicate rows are numbered in one step"
+    );
 }

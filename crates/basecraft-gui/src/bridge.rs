@@ -529,6 +529,8 @@ fn has_figure_selection(view: &GenomeView) -> bool {
     view.selection.is_some()
 }
 
+// Every editor's figure goes through the shared export, which takes a Result.
+#[allow(clippy::unnecessary_wraps)]
 fn figure_svg(
     view: &mut GenomeView,
     sequence: &basecraft_docs::SequenceDoc,
@@ -1236,12 +1238,13 @@ impl qobject::GenomeController {
         let path = self.rust().file_path.clone();
         let file = PathBuf::from(path.to_string());
         let result = match &self.rust().session {
-            Some(session) => basecraft_ops::renames::duplicate_records(session, &file)
-                .and_then(|found| {
+            Some(session) => {
+                basecraft_ops::renames::duplicate_records(session, &file).and_then(|found| {
                     let Some(found) = found else { return Ok(()) };
                     let numbering = Session::unlogged(session.root());
                     basecraft_ops::renames::number_records(&numbering, &file, &found)
-                }),
+                })
+            }
             None => return false,
         };
         match result {
