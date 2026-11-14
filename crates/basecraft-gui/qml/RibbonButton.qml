@@ -12,5 +12,8 @@ AppCommandButton {
     defaultKeyHint: appWindow ? appWindow.commandList.key(commandId) : ""
     enabled: appWindow !== null && appWindow.current !== null
     iconName: appWindow ? appWindow.commandList.icon(commandId) : ""
-    Component.onCompleted: appWindow.registerRibbonCommand(commandAction)
+    // A button outside the main window cannot register; the ribbon journey
+    // fails on this line.
+    Component.onCompleted: if (appWindow) appWindow.registerRibbonCommand(commandAction)
+        else console.warn("RibbonButton failed to register " + commandId)
 }

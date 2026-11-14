@@ -771,10 +771,11 @@ ApplicationWindow {
                     // A multi-line error must never grow the top bar.
                     maximumLineCount: 1
                     text: window.current ? String(window.current.message || "").split("\n")[0] : ""
-                    // Green for done, red for failed, plain for hints.
+                    // Green for done, red for failed, plain for hints. A species
+                    // workspace has no message colours: plain.
                     color: !window.current ? shell.foreground
-                        : window.current.message_kind === "ok" ? window.current.ok_color
-                        : window.current.message_kind === "error" ? window.current.error_color
+                        : window.current.message_kind === "ok" ? window.current.ok_color || shell.foreground
+                        : window.current.message_kind === "error" ? window.current.error_color || shell.foreground
                         : shell.foreground
                     // A message goes away by itself after 10 seconds.
                     Timer {

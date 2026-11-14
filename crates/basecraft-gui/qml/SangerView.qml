@@ -319,6 +319,7 @@ FocusScope {
     FileDialog {
         onVisibleChanged: if (visible) currentFolder = doc.activeFolder()
         id: saveReviewDialog
+        objectName: "saveReviewDialog"
         title: "Save Sanger review"
         fileMode: FileDialog.SaveFile
         defaultSuffix: "json"

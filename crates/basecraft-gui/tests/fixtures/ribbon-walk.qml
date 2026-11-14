@@ -464,6 +464,51 @@ Main {
             ctl.select_group(hypothesis.id, hypothesis.groups[0].id, false)
             check(caption() === "Rename species…", "species menu did not follow the selection")
         })
+        // Saves through the window for the two kinds without a check of their
+        // own: a Sanger review (Save review as, then the close question's
+        // Save) and a species workspace (the Save command, then the close
+        // question's Save). Both used to stop at a missing check_save.
+        const review = folder + "/forward.sanger-review.json"
+        let reviewTabs = 0
+        list.push(() => {
+            const trace = documentAt(4)
+            check(trace.controller.review_mode, "the trace is not a review")
+            trace.accept()
+            check(trace.controller.dirty, "accepting a base did not change the review")
+            const saveAs = trace.data.find(o => o && o.objectName === "saveReviewDialog")
+            saveAs.selectedFile = walk.shell.local_file_url(review)
+            saveAs.accepted()
+        })
+        list.push(until(() => !documentAt(4).controller.dirty, "Save review as did not save"))
+        list.push(() => {
+            const trace = documentAt(4)
+            trace.issue(true)
+            trace.accept()
+            check(trace.controller.dirty, "the second accept did not change the review")
+            reviewTabs = documentTabs().count
+            closeTab(4)
+            dialog("closeDocumentDialog").accept()
+        })
+        list.push(until(() => documentTabs().count === reviewTabs - 1, "the close question's Save did not close the review"))
+        const workspace = folder + "/hypotheses.spart"
+        const renamed = name => {
+            const view = documentAt(tabOf(workspace))
+            const hypothesis = view.hypotheses[0]
+            view.controller.action("rename", JSON.stringify({hypothesis: hypothesis.id, name: name}))
+            check(view.controller.dirty, "renaming a hypothesis did not change the workspace: " + view.controller.message)
+        }
+        list.push(() => {
+            show(tabOf(workspace))
+            renamed("renamed_by_the_walk")
+            command("file.save").trigger()
+        })
+        list.push(until(() => !documentAt(tabOf(workspace)).controller.dirty, "the Save command did not save the workspace"))
+        list.push(() => {
+            renamed("renamed_again_by_the_walk")
+            closeTab(tabOf(workspace))
+            dialog("closeDocumentDialog").accept()
+        })
+        list.push(until(() => tabOf(workspace) < 0, "the close question's Save did not close the workspace"))
         // Every dialog built on demand builds without a QML warning.
         list.push(() => {
             const loaders = walk.contentData.filter(item => item && item.sourceComponent !== undefined && typeof item.dialog === "function")

@@ -42,8 +42,6 @@ mod document_open;
 mod editor;
 #[path = "editor_history/mod.rs"]
 mod editor_history;
-#[path = "save_request/mod.rs"]
-mod save_request;
 #[path = "../src/editor_save.rs"]
 mod editor_save;
 #[path = "../src/figure_png.rs"]
@@ -74,6 +72,8 @@ mod provenance_bridge;
 mod release_check;
 #[path = "../src/sanger_bridge.rs"]
 mod sanger_bridge;
+#[path = "save_request/mod.rs"]
+mod save_request;
 #[path = "../src/settings_bridge.rs"]
 #[allow(unused_imports)] // harness=false omits the included module's #[test] bodies.
 mod settings_bridge;
@@ -195,14 +195,17 @@ fn ribbon_journey() {
     }
     let log = String::from_utf8_lossy(&run.stderr);
     // Layout loops that predate this test: forms sized from their content and
-    // the Sanger review's canvas, and the tree overview, which shows when the
-    // tree overflows and so narrows the view it measures (timing-dependent
-    // offscreen). Anything else fails the journey.
+    // the Sanger review's canvas. And the tree view's overview at the narrow
+    // window step: it shows when the tree overflows, which narrows the view it
+    // measures. It appears when the view has its full height before its width
+    // settles. Only the tree's overview is tolerated, not the other three.
     let known = |line: &str| {
         line.contains("Dialog: Binding loop detected for property \"implicitWidth\"")
             || line.contains("SangerView.qml")
-            || line
-                .contains("DocumentOverview: Binding loop detected for property \"viewportWidth\"")
+            || line.contains("TreeCanvas.qml")
+                && line.contains(
+                    "DocumentOverview: Binding loop detected for property \"viewportWidth\"",
+                )
             || line.contains("QQuickAnchors: Binding loop detected for property \"bottomMargin\"")
     };
     let warnings: Vec<_> = log
@@ -225,6 +228,15 @@ fn ribbon_journey() {
         run.status.success() && log.contains("RIBBON_WALK passed") && warnings.is_empty(),
         "ribbon journey failed ({:?}); warnings: {warnings:#?}\n{log}",
         run.status
+    );
+    // The window saved the Sanger review to the file chosen in Save review as,
+    // and the species workspace with its second name, from the close question.
+    let review = folder.path().join("forward.sanger-review.json");
+    assert!(review.is_file(), "Save review as wrote no review file");
+    let workspace = std::fs::read_to_string(folder.path().join("hypotheses.spart")).unwrap();
+    assert!(
+        workspace.contains("renamed_again_by_the_walk"),
+        "the close question did not save the workspace:\n{workspace}"
     );
     // The journey saved one inserted gap: same records and residues, the text
     // changed. Nothing reached the read-only folder.
