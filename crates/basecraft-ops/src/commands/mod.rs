@@ -17,7 +17,7 @@
 use std::path::{Path, PathBuf};
 
 use serde::de::DeserializeOwned;
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 
 use crate::{DocId, Error, Result, Session};
 
@@ -477,12 +477,11 @@ impl<'a> Call<'a> {
         } else {
             let name = path
                 .file_name()
-                .ok_or_else(|| Error::Invalid(format!("{text} has no file name")))?;
+                .ok_or_else(|| Error::NoFileName(path.clone()))?;
             match path.parent().map(Path::canonicalize) {
                 Some(Ok(parent)) => parent.join(name),
-                Some(Err(_)) | None if !self.live => path.clone(),
-                Some(Err(error)) => return Err(error.into()),
-                None => return Err(Error::Invalid(format!("{text} has no folder"))),
+                Some(Err(error)) if self.live => return Err(error.into()),
+                _ => path.clone(),
             }
         };
         if self.live && !resolved.starts_with(self.session.root()) {
@@ -499,9 +498,10 @@ impl<'a> Call<'a> {
                 )
             })
             .unwrap_or_default();
-            return Err(Error::Invalid(format!(
-                "Path lies outside the configured project{holder}"
-            )));
+            return Err(wrong(
+                text,
+                &format!("inside the configured project{holder}"),
+            ));
         }
         Ok(resolved)
     }
@@ -520,10 +520,13 @@ impl<'a> Call<'a> {
         state(self.session, doc)
     }
 
-    /// The state of `doc` with `extra`'s fields added.
-    pub fn state_with(&self, doc: DocId, extra: Value) -> Result<Value> {
+    /// The state of `doc` with the fields of `extra`, a value that serializes
+    /// as an object, added.
+    pub fn state_with(&self, doc: DocId, extra: &impl serde::Serialize) -> Result<Value> {
         let mut state = self.state(doc)?;
-        if let (Some(state), Value::Object(extra)) = (state.as_object_mut(), extra) {
+        if let (Some(state), Value::Object(extra)) =
+            (state.as_object_mut(), serde_json::to_value(extra)?)
+        {
             state.extend(extra);
         }
         Ok(state)
@@ -546,15 +549,44 @@ pub fn open_at(session: &Session, path: &Path) -> Result<Option<DocId>> {
     Ok(None)
 }
 
+/// A few named fields of a command's answer.
+pub(super) type Fields<T> = std::collections::BTreeMap<&'static str, T>;
+
 fn missing(name: &'static str) -> Error {
     Error::MissingArgument(name)
 }
 
-fn wrong(name: &str, expected: &str) -> Error {
+pub(super) fn wrong(name: &str, expected: &str) -> Error {
     Error::WrongArgument {
         name: name.to_owned(),
         expected: expected.to_owned(),
     }
+}
+
+/// What a client sees of a document. Fields a kind lacks are left out.
+#[derive(serde::Serialize)]
+struct State<'a> {
+    document: usize,
+    path: &'a str,
+    kind: &'static str,
+    version: u64,
+    generation: u64,
+    state: basecraft_protocol::DocState,
+    can_undo: bool,
+    can_redo: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    alphabet: Option<basecraft_protocol::facts::Fact<basecraft_protocol::facts::Alphabet>>,
+    /// D12: per-sequence values when the sequences are not of one kind.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sequence_alphabets: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    displaced_labels: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    call_sets: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    selected_call_set: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    decisions: Option<Value>,
 }
 
 /// What a client sees of document `doc`.
@@ -575,36 +607,43 @@ pub fn state(session: &Session, doc: DocId) -> Result<Value> {
     } else {
         "sequence"
     };
-    let mut state = json!({
-        "document": doc.0,
-        "path": session.doc_key(doc)?,
-        "kind": kind,
-        "version": session.revision(doc)?,
-        "generation": session.generation(doc)?,
-        "state": session.state(doc)?,
-        "can_undo": session.can_undo(doc)?,
-        "can_redo": session.can_redo(doc)?,
-    });
-    if let Ok(alphabet) = session.alphabet(doc) {
-        // D12: per-sequence values when the sequences are not of one kind.
-        if matches!(alphabet.value, Alphabet::Mixed | Alphabet::Undetermined) {
-            state["sequence_alphabets"] = json!(session.sequence_alphabets(doc)?);
-        }
-        state["alphabet"] = json!(alphabet);
-    }
-    if let Ok(tree) = session.tree(doc) {
-        state["displaced_labels"] = json!(tree.displaced_labels());
-    }
-    if let Ok(review) = session.sanger_review(doc) {
-        state["call_sets"] = json!(review.call_sets());
-        state["selected_call_set"] = json!(review.draft_sha256);
-        state["decisions"] = json!(
-            (0..review.draft.columns.len())
-                .map(|i| review.decision(i))
-                .collect::<Vec<_>>()
-        );
-    }
-    Ok(state)
+    let alphabet = session.alphabet(doc).ok();
+    let mixed = alphabet
+        .as_ref()
+        .is_some_and(|a| matches!(a.value, Alphabet::Mixed | Alphabet::Undetermined));
+    let review = session.sanger_review(doc).ok();
+    let state = State {
+        document: doc.0,
+        path: session.doc_key(doc)?,
+        kind,
+        version: session.revision(doc)?,
+        generation: session.generation(doc)?,
+        state: session.state(doc)?,
+        can_undo: session.can_undo(doc)?,
+        can_redo: session.can_redo(doc)?,
+        sequence_alphabets: if mixed {
+            Some(serde_json::to_value(session.sequence_alphabets(doc)?)?)
+        } else {
+            None
+        },
+        alphabet,
+        displaced_labels: session
+            .tree(doc)
+            .ok()
+            .map(|tree| serde_json::to_value(tree.displaced_labels()))
+            .transpose()?,
+        call_sets: review
+            .map(|r| serde_json::to_value(r.call_sets()))
+            .transpose()?,
+        selected_call_set: review.map(|r| r.draft_sha256.as_str()),
+        decisions: review
+            .map(|r| {
+                let decisions: Vec<_> = (0..r.draft.columns.len()).map(|i| r.decision(i)).collect();
+                serde_json::to_value(decisions)
+            })
+            .transpose()?,
+    };
+    Ok(serde_json::to_value(state)?)
 }
 
 /// JSON a person wrote: the text, `@FILE` for a file's contents, or `-` for

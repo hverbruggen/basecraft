@@ -15,7 +15,7 @@ use basecraft_protocol::{LogEntry, Op, ops::ProposalDecision};
 use crate::session::{DocId, Session, objects_dir};
 use crate::{Error, Result, log};
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, serde::Serialize)]
 pub struct ReplayReport {
     pub sessions: usize,
     pub entries: usize,

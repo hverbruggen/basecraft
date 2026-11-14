@@ -1,6 +1,6 @@
 //! Commands on the project: its specimen metadata, GenBank marker
 //! submissions and species workspaces. Each needs the project.
-use std::collections::{BTreeMap, btree_map::Entry};
+use std::collections::{BTreeMap, BTreeSet};
 
 use basecraft_protocol::metadata::{FieldTarget, HeaderPattern, MetadataEdit, SpreadsheetMapping};
 use basecraft_protocol::submission::{FrameChoice, SubmissionEdit};
@@ -15,261 +15,105 @@ const fn file(help: &'static str) -> Arg {
     Arg::new("path", File, help).positional()
 }
 
+/// An argument given in order on the command line.
+const fn given(name: &'static str, kind: super::Kind, help: &'static str) -> Arg {
+    Arg::new(name, kind, help).positional()
+}
+
 const OBJECT: &str = r#"{"type":"object"}"#;
 
+#[rustfmt::skip]
 pub(super) const COMMANDS: &[Command] = &[
-    Command {
-        name: "metadata init",
+    Command { name: "metadata init", writes: true, routes: All, run: metadata_init,
         help: "Create empty specimen metadata tables in the project's `metadata/` folder.",
-        args: &[],
-        writes: true,
-        routes: All,
-        run: metadata_init,
-    },
-    Command {
-        name: "metadata show",
+        args: &[] },
+    Command { name: "metadata show", writes: false, routes: All, run: metadata_show,
         help: "The project's specimen metadata: roster, taxa, identifications and links, with notices from reading it.",
-        args: &[],
-        writes: false,
-        routes: All,
-        run: metadata_show,
-    },
-    Command {
-        name: "metadata import-headers",
+        args: &[] },
+    Command { name: "metadata import-headers", writes: false, routes: All, run: import_headers,
         help: "Plan an import from structured FASTA headers, or with apply, apply the plan as one undoable edit.",
-        args: &[
-            file("The FASTA file, inside the project."),
-            arg("separator", Text, "The field separator, such as `|`."),
+        args: &[file("The FASTA file, inside the project."), arg("separator", Text, "The field separator, such as `|`."),
             arg("fields", List, "What each field holds: specimen, taxon, record, ignore (or -), or a column name such as eventDate."),
             arg("save_pattern", Text, "Remember the pattern under this name.").optional(),
-            IMPORT_NEW,
-            IMPORT_OVERWRITE,
-            IMPORT_APPLY,
-        ],
-        writes: false,
-        routes: All,
-        run: import_headers,
-    },
-    Command {
-        name: "metadata import-sheet",
+            IMPORT_NEW, IMPORT_OVERWRITE, IMPORT_APPLY] },
+    Command { name: "metadata import-sheet", writes: false, routes: All, run: import_sheet,
         help: "Plan an import from a spreadsheet (.ods, .xlsx, .csv or .tsv), or with apply, apply the plan as one undoable edit. Returns the plan with the mapping used.",
-        args: &[
-            file("The spreadsheet."),
+        args: &[file("The spreadsheet."),
             arg("map", Texts, "HEADER=TARGET, repeatable. TARGET is specimen, record, taxon, ignore or a column name. Without any, the mapping is guessed from the headers.").optional(),
             arg("sequences", File, "The sequence file whose records the `record` column names.").optional(),
             arg("save_mapping", Text, "Remember the mapping under this name.").optional(),
-            IMPORT_NEW,
-            IMPORT_OVERWRITE,
-            IMPORT_APPLY,
-        ],
-        writes: false,
-        routes: All,
-        run: import_sheet,
-    },
-    Command {
-        name: "metadata template",
+            IMPORT_NEW, IMPORT_OVERWRITE, IMPORT_APPLY] },
+    Command { name: "metadata template", writes: true, routes: All, run: metadata_template,
         help: "Write an .ods template, every cell text, pre-filled for each record of a sequence file in the project.",
-        args: &[file("The sequence file."), arg("output", NewFile, "The new .ods file.")],
-        writes: true,
-        routes: All,
-        run: metadata_template,
-    },
-    Command {
-        name: "metadata status",
+        args: &[file("The sequence file."), arg("output", NewFile, "The new .ods file.")] },
+    Command { name: "metadata status", writes: false, routes: All, run: metadata_status,
         help: "List a sequence file's records that are not linked to a specimen.",
-        args: &[file("The sequence file.")],
-        writes: false,
-        routes: All,
-        run: metadata_status,
-    },
-    Command {
-        name: "metadata insdc",
+        args: &[file("The sequence file.")] },
+    Command { name: "metadata insdc", writes: false, routes: All, run: metadata_insdc,
         help: "Derive a specimen's INSDC source qualifiers from its Darwin Core columns and current identification, with the required ones still missing.",
-        args: &[Arg::new("specimen", Text, "The specimen's roster ID.").positional()],
-        writes: false,
-        routes: All,
-        run: metadata_insdc,
-    },
-    Command {
-        name: "metadata consumer",
+        args: &[given("specimen", Text, "The specimen's roster ID.")] },
+    Command { name: "metadata consumer", writes: false, routes: All, run: metadata_consumer,
         help: "Inspect project partitions or metadata labels, or plan explicit workspace roster links or result promotion. request: {action: partitions} | {action: link_records, document: project path, links: {record ID: roster ID}} | {action: labels, document, records: [scientific ID], fields: [specimen|genus|species|accession|{column:{name}}]} | {action: link_workspace, workspace: project path, links: {workspace ID: roster ID}} | {action: promote_partition, workspace, hypothesis, id}. A plan returns its target and typed operation; apply makes the edit. Missing or conflicting roster links refuse promotion.",
-        args: &[
-            Arg::new("request", Json(OBJECT), "The request.").positional(),
-            arg("apply", Flag, "Apply the planned edit to its target."),
-        ],
-        writes: false,
-        routes: All,
-        run: metadata_consumer,
-    },
-    Command {
-        name: "submission new",
+        args: &[given("request", Json(OBJECT), "The request."), arg("apply", Flag, "Apply the planned edit to its target.")] },
+    Command { name: "submission new", writes: true, routes: All, run: submission_new,
         help: "Create a GenBank marker submission document (NAME.submission.json) for an aligned FASTA inside the project, and open it. Edit it with submission edit (see schemas/submission-edit.schema.json).",
-        args: &[
-            Arg::new("path", NewFile, "The new submission file.").positional(),
-            arg("alignment", File, "The aligned FASTA file."),
-        ],
-        writes: true,
-        routes: All,
-        run: submission_new,
-    },
-    Command {
-        name: "submission show",
+        args: &[given("path", NewFile, "The new submission file."), arg("alignment", File, "The aligned FASTA file.")] },
+    Command { name: "submission show", writes: false, routes: All, run: submission_show,
         help: "The submission document as JSON.",
-        args: &[document("The submission.")],
-        writes: false,
-        routes: All,
-        run: submission_show,
-    },
-    Command {
-        name: "submission review",
+        args: &[document("The submission.")] },
+    Command { name: "submission review", writes: false, routes: All, run: submission_review,
         help: "Prepare a submission's records from its source alignment and the project metadata and list every local issue: extraction (ungapped, ambiguity kept, terminal unknowns, masked columns, export IDs), specimen source qualifiers, organism names, features, and reading frames detected per record (confirm them with submission frames). Accession-aware row choices and evidence are local unverified heuristics. Before export, confirm the selection with the edit {action: confirm_selection, selection_hash: <returned selection_hash>}; source, selection or evidence changes need confirming again. Blocking issues keep the package from being ready.",
-        args: &[document("The submission.")],
-        writes: false,
-        routes: All,
-        run: submission_review,
-    },
-    Command {
-        name: "submission edit",
+        args: &[document("The submission.")] },
+    Command { name: "submission edit", writes: true, routes: All, run: submission_edit,
         help: "Apply one submission.edit ({action: set_rows | set_batch | set_frames | set_export | set_publication | set_source | set_accessions | confirm_selection | apply_inclusion, ...}) as one undoable edit.",
-        args: &[
-            document("The submission."),
-            Arg::new("edit", Json(OBJECT), "The edit, such as {\"action\":\"set_rows\",\"rows\":[{\"record\":\"x\",\"decision\":\"exclude\"}]}.").positional(),
-        ],
-        writes: true,
-        routes: All,
-        run: submission_edit,
-    },
-    Command {
-        name: "submission frames",
+        args: &[document("The submission."),
+            given("edit", Json(OBJECT), "The edit, such as {\"action\":\"set_rows\",\"rows\":[{\"record\":\"x\",\"decision\":\"exclude\"}]}.")] },
+    Command { name: "submission frames", writes: true, routes: All, run: submission_frames,
         help: "Confirm reading frames: the detected frame of every record that has exactly one, or set RECORD=CODON_START. Returns the frames.",
-        args: &[
-            document("The submission."),
-            arg("confirm_detected", Flag, "Confirm every uniquely detected frame not yet confirmed."),
-            arg("set", Texts, "RECORD=1|2|3, repeatable.").optional(),
-        ],
-        writes: true,
-        routes: All,
-        run: submission_frames,
-    },
-    Command {
-        name: "submission export",
+        args: &[document("The submission."), arg("confirm_detected", Flag, "Confirm every uniquely detected frame not yet confirmed."),
+            arg("set", Texts, "RECORD=1|2|3, repeatable.").optional()] },
+    Command { name: "submission export", writes: true, routes: All, run: submission_export,
         help: "Write the submission package (genbank/ .fsa .src .tbl .sbt, records, specimens, coordinate map, README, package.json) to a folder in the project. Needs the current selection confirmed. Same inputs give identical files. Returns the input hash and status.",
-        args: &[document("The submission."), arg("output", NewFile, "The package folder.")],
-        writes: true,
-        routes: All,
-        run: submission_export,
-    },
-    Command {
-        name: "submission validation-request",
+        args: &[document("The submission."), arg("output", NewFile, "The package folder.")] },
+    Command { name: "submission validation-request", writes: true, routes: All, run: validation_request,
         help: "The OperationRequest that validates an exported package with table2asn. Run it as the operation basecraft.table2asn/validate@1, then pass its outcome to submission record-validation.",
-        args: &[Arg::new("package", File, "The package folder.").positional()],
-        writes: true,
-        routes: All,
-        run: validation_request,
-    },
-    Command {
-        name: "submission record-validation",
+        args: &[given("package", File, "The package folder.")] },
+    Command { name: "submission record-validation", writes: true, routes: All, run: record_validation,
         help: "Read a finished table2asn run's reports into the package: issues mapped to records and specimens, status (passed, errors, unavailable, failed), .sqn and .gbf copied to genbank/. Local validation only, not archive acceptance.",
-        args: &[
-            Arg::new("package", File, "The package folder.").positional(),
-            arg("outcome", Json(OBJECT), "The run's outcome."),
-        ],
-        writes: true,
-        routes: All,
-        run: record_validation,
-    },
-    Command {
-        name: "submission accessions",
+        args: &[given("package", File, "The package folder."), arg("outcome", Json(OBJECT), "The run's outcome.")] },
+    Command { name: "submission accessions", writes: false, routes: All, run: submission_accessions,
         help: "Match the accession list NCBI returned (lines with a sequence ID and an accession) to the submission's records; with apply, record them as one undoable edit.",
-        args: &[
-            document("The submission."),
-            Arg::new("list", File, "The accession list file.").positional().optional(),
+        args: &[document("The submission."), given("list", File, "The accession list file.").optional(),
             arg("text", Text, "The accession list itself, instead of a file.").optional(),
-            arg("apply", Flag, "Record the matched accessions."),
-        ],
-        writes: false,
-        routes: All,
-        run: submission_accessions,
-    },
-    Command {
-        name: "submission accession-table",
+            arg("apply", Flag, "Record the matched accessions.")] },
+    Command { name: "submission accession-table", writes: true, routes: All, run: accession_table,
         help: "Write a publication table of records, specimens, organisms and accessions.",
-        args: &[document("The submission."), arg("output", NewFile, "The new table file.")],
-        writes: true,
-        routes: All,
-        run: accession_table,
-    },
-    Command {
-        name: "submission submitter",
+        args: &[document("The submission."), arg("output", NewFile, "The new table file.")] },
+    Command { name: "submission submitter", writes: false, routes: All, run: submitter,
         help: "The submitter contact preference used for .sbt files and the required fields still missing; with set (fields such as first_name, last_name, email, institution, city, country), update it.",
-        args: &[arg("set", Json(OBJECT), "Fields to change.").optional()],
-        writes: false,
-        routes: All,
-        run: submitter,
-    },
-    Command {
-        name: "submission inclusion-preview",
+        args: &[arg("set", Json(OBJECT), "Fields to change.").optional()] },
+    Command { name: "submission inclusion-preview", writes: false, routes: All, run: inclusion_preview,
         help: "Preview identifier inclusion with a typed rule (whole identifier or one-based literal field; exact, contains, starts, ends, wildcard or regex). Manual decisions are kept by default; missing or empty fields are unresolved. Apply the whole returned plan with the edit {action: apply_inclusion, plan: ...}; stale or changed plans are refused. Matching is not accession verification. Writes nothing.",
-        args: &[
-            document("The submission."),
-            Arg::new("rule", Json(OBJECT), "The rule.").positional(),
-        ],
-        writes: false,
-        routes: All,
-        run: inclusion_preview,
-    },
-    Command {
-        name: "submission inclusion-presets",
+        args: &[document("The submission."), given("rule", Json(OBJECT), "The rule.")] },
+    Command { name: "submission inclusion-presets", writes: false, routes: All, run: inclusion_presets,
         help: "The project's named inclusion rules; with save, first save a named rule in the shared metadata import settings.",
-        args: &[arg("save", Json(OBJECT), "A named rule to save.").optional()],
-        writes: false,
-        routes: All,
-        run: inclusion_presets,
-    },
-    Command {
-        name: "delimitation linked-alignment",
+        args: &[arg("save", Json(OBJECT), "A named rule to save.").optional()] },
+    Command { name: "delimitation linked-alignment", writes: false, routes: All, run: linked_alignment,
         help: "The species workspace's unverified alignment hint: path, a string or null, keeping an explicit empty string. Does not read or check that path.",
-        args: &[document("The species workspace.")],
-        writes: false,
-        routes: All,
-        run: linked_alignment,
-    },
-    Command {
-        name: "delimitation candidates",
+        args: &[document("The species workspace.")] },
+    Command { name: "delimitation candidates", writes: false, routes: All, run: candidates,
         help: "Saved species hypotheses in recommendation order; writes nothing.",
-        args: &[Arg::new("paths", Files, "The hypothesis files.").positional()],
-        writes: false,
-        routes: All,
-        run: candidates,
-    },
-    Command {
-        name: "delimitation name",
+        args: &[given("paths", Files, "The hypothesis files.")] },
+    Command { name: "delimitation name", writes: false, routes: All, run: combined_name,
         help: "Suggest a free combined SPART filename beside the last input; writes nothing.",
-        args: &[Arg::new("paths", Files, "The hypothesis files.").positional()],
-        writes: false,
-        routes: All,
-        run: combined_name,
-    },
-    Command {
-        name: "delimitation combine",
+        args: &[given("paths", Files, "The hypothesis files.")] },
+    Command { name: "delimitation combine", writes: true, routes: All, run: combine,
         help: "Combine saved hypotheses into a new SPART or SPART XML file. Without selection all are kept; a selection maps input paths to hypothesis IDs, and inputs it leaves out keep none. An existing output or companion is refused.",
-        args: &[
-            Arg::new("paths", Files, "Two or more hypothesis files.").positional(),
-            arg("output", NewFile, "The new file."),
-            arg("selection", Json(SELECTION), "Input path to the hypothesis IDs to keep.").optional(),
-        ],
-        writes: true,
-        routes: All,
-        run: combine,
-    },
-    Command {
-        name: "delimitation display-tree",
+        args: &[given("paths", Files, "Two or more hypothesis files."), arg("output", NewFile, "The new file."),
+            arg("selection", Json(SELECTION), "Input path to the hypothesis IDs to keep.").optional()] },
+    Command { name: "delimitation display-tree", writes: true, routes: All, run: display_tree,
         help: "Attach a tree file (one tree, Newick or NEXUS) as the display tree of a species workspace; the file is kept as its evidence.",
-        args: &[document("The species workspace."), arg("tree", File, "The tree file.")],
-        writes: true,
-        routes: All,
-        run: display_tree,
-    },
+        args: &[document("The species workspace."), arg("tree", File, "The tree file.")] },
 ];
 
 const SELECTION: &str =
@@ -329,7 +173,10 @@ fn target(name: &str) -> Result<FieldTarget> {
         column if metadata::valid_column_name(column) => FieldTarget::Column {
             column: column.into(),
         },
-        other => return Err(Error::Invalid(format!("{other:?} is not a field target"))),
+        other => {
+            let expected = "specimen, taxon, record, ignore or a column name";
+            return Err(super::wrong(other, expected));
+        }
     })
 }
 
@@ -413,7 +260,7 @@ fn import_sheet(call: &mut Call) -> Result<Value> {
         let pairs = mapping.iter().map(|m| {
             let (header, name) = m
                 .split_once('=')
-                .ok_or_else(|| Error::Invalid(format!("{m:?} is not HEADER=TARGET")))?;
+                .ok_or_else(|| super::wrong("map", "HEADER=TARGET"))?;
             Ok((header.to_owned(), target(name)?))
         });
         Some(pairs.collect::<Result<BTreeMap<_, _>>>()?)
@@ -473,10 +320,10 @@ fn metadata_consumer(call: &mut Call) -> Result<Value> {
     call.require_writes()?;
     let operation = plan
         .get("operation")
-        .ok_or_else(|| Error::Invalid("this request is read-only".into()))?;
+        .ok_or_else(|| super::wrong("apply", "left out for a request that only reads"))?;
     let target = plan["target"]
         .as_str()
-        .ok_or_else(|| Error::Invalid("missing plan target".into()))?;
+        .ok_or(Error::MissingArgument("the plan's target"))?;
     let target = if target == call.session.doc_key(doc)? {
         doc
     } else {
@@ -546,10 +393,10 @@ fn submission_frames(call: &mut Call) -> Result<Value> {
     for item in call.texts("set")? {
         let (record, start) = item
             .rsplit_once('=')
-            .ok_or_else(|| Error::Invalid(format!("{item:?} is not RECORD=CODON_START")))?;
+            .ok_or_else(|| super::wrong("set", "RECORD=CODON_START"))?;
         let codon_start = start
             .parse()
-            .map_err(|_| Error::Invalid(format!("{item:?}: CODON_START is 1, 2 or 3")))?;
+            .map_err(|_| super::wrong("set", "RECORD=1, RECORD=2 or RECORD=3"))?;
         frames.push(FrameChoice {
             record: record.into(),
             codon_start,
@@ -596,7 +443,7 @@ fn submission_accessions(call: &mut Call) -> Result<Value> {
     let text = match (call.optional_path("list")?, call.optional_text("text")?) {
         (Some(list), None) => std::fs::read_to_string(list)?,
         (None, Some(text)) => text.to_owned(),
-        _ => return Err(Error::Invalid("give the accession list or its text".into())),
+        _ => return Err(Error::MissingArgument("list or text, one of them")),
     };
     let submitter = submission::submitter_preference()?;
     let plan = submission::plan_accessions(call.session, doc, &text, &submitter)?;
@@ -632,7 +479,7 @@ fn submitter(call: &mut Call) -> Result<Value> {
         let mut value = serde_json::to_value(&submitter)?;
         for (name, field) in set {
             if value.get(&name).is_none() {
-                return Err(Error::Invalid(format!("{name} is not a submitter field")));
+                return Err(super::wrong(&name, "a submitter field"));
             }
             value[name] = field;
         }
@@ -681,30 +528,19 @@ fn combined_name(call: &mut Call) -> Result<Value> {
 fn combine(call: &mut Call) -> Result<Value> {
     let paths = call.paths("paths")?;
     let output = call.path("output")?;
-    let keep = call
-        .json::<delimitation::CombineSelection>("selection")?
-        .map(|keep| {
-            let mut selected = delimitation::CombineSelection::new();
-            for (path, ids) in keep {
-                let text = path
-                    .to_str()
-                    .ok_or_else(|| Error::Invalid("Selection path must be UTF-8".into()))?;
-                // Relative and absolute spellings of one input would collide
-                // only after canonicalization, so resolve before comparing.
-                match selected.entry(call.resolve(text)?) {
-                    Entry::Vacant(entry) => {
-                        entry.insert(ids);
-                    }
-                    Entry::Occupied(_) => {
-                        return Err(Error::Invalid(
-                            "Hypothesis selection names the same input through multiple path aliases".into(),
-                        ));
-                    }
-                }
+    let mut keep = None;
+    if let Some(selection) = call.json::<BTreeMap<String, BTreeSet<String>>>("selection")? {
+        let mut selected = delimitation::CombineSelection::new();
+        for (path, ids) in selection {
+            // Relative and absolute spellings of one input collide only once
+            // resolved, so resolve before comparing.
+            if selected.insert(call.resolve(&path)?, ids).is_some() {
+                let expected = "one entry per input, not several path aliases of one";
+                return Err(super::wrong("selection", expected));
             }
-            Ok(selected)
-        })
-        .transpose()?;
+        }
+        keep = Some(selected);
+    }
     let doc = delimitation::combine_to(call.session, &paths, &output, keep.as_ref())?;
     Ok(json!({"output": output, "document": doc.0}))
 }
@@ -714,5 +550,5 @@ fn display_tree(call: &mut Call) -> Result<Value> {
     let tree = call.path("tree")?;
     delimitation::attach_display_tree(call.session, doc, &tree)?;
     let shown = call.session.delimitation(doc)?.view.display_tree.clone();
-    call.state_with(doc, json!({"display_tree": shown}))
+    call.state_with(doc, &super::Fields::from([("display_tree", shown)]))
 }
